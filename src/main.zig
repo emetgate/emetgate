@@ -1,6 +1,6 @@
 const std = @import("std");
 const synapse = @import("synapse");
-const stdio = @import("stdio.zig");
+const stdio = synapse.stdio;
 
 const ts = synapse.tree_sitter;
 const skeleton = synapse.skeleton;
