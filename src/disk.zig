@@ -57,7 +57,16 @@ pub const Guard = struct {
     }
 };
 
+const Hook = struct {
+    context: *anyopaque,
+    run: *const fn (context: *anyopaque) anyerror!void,
+};
+
 pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
+    return replaceWithHook(gpa, io, path_abs, data, expected_base, null);
+}
+
+fn replaceWithHook(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, before_replace: ?Hook) !void {
     if (builtin.os.tag != .windows) return error.Unsupported;
 
     const guard = try Guard.open(path_abs);
@@ -77,13 +86,28 @@ pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data:
     try writeDurably(io, temp, data);
     errdefer std.Io.Dir.deleteFileAbsolute(io, temp) catch {};
 
+    if (before_replace) |hook| try hook.run(hook.context);
     try replace(path_abs, temp, backup);
     guard.close();
     guard_open = false;
+
+    const displaced = hashFile(gpa, io, backup) catch return error.WrittenButUnverified;
+    if (!std.mem.eql(u8, &displaced, &expected_base)) {
+        try restore(backup, path_abs);
+        return error.BaseChanged;
+    }
     std.Io.Dir.deleteFileAbsolute(io, backup) catch {};
 
-    const written = try hashFile(gpa, io, path_abs);
-    if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) return error.CommitVerifyFailed;
+    const written = hashFile(gpa, io, path_abs) catch return error.WrittenButUnverified;
+    if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) return error.WrittenButUnverified;
+}
+
+fn restore(backup: []const u8, path_abs: []const u8) !void {
+    var backup_w: WidePath = undefined;
+    var path_w: WidePath = undefined;
+    if (win.MoveFileExW(try toWide(&backup_w, backup), try toWide(&path_w, path_abs), win.movefile_replace_existing | win.movefile_write_through) == .FALSE) {
+        return error.RestoreFailed;
+    }
 }
 
 fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
@@ -107,9 +131,7 @@ fn replace(path_abs: []const u8, temp: []const u8, backup: []const u8) !void {
         win.error_sharing_violation, win.error_lock_violation => return error.FileLocked,
         win.error_access_denied => return error.AccessDenied,
         win.error_unable_to_move_replacement_2 => {
-            if (win.MoveFileExW(backup_name, replaced, win.movefile_replace_existing | win.movefile_write_through) == .FALSE) {
-                return error.RestoreFailed;
-            }
+            try restore(backup, path_abs);
             return error.ReplaceFailed;
         },
         else => return error.ReplaceFailed,
@@ -310,6 +332,31 @@ test "a file held open by another process is refused with FileLocked and succeed
 
     try replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, base);
     try fixture.expectContent(updated);
+    try fixture.expectEntries(1);
+}
+
+const external_save = "export function f() { return 42; } // saved by another tool\n";
+
+const RecreateTarget = struct {
+    fixture: *Fixture,
+
+    fn run(context: *anyopaque) anyerror!void {
+        const self: *RecreateTarget = @ptrCast(@alignCast(context));
+        try self.fixture.tmp.dir.deleteFile(testing.io, "target.ts");
+        try self.fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "target.ts", .data = external_save });
+    }
+};
+
+test "a file deleted and recreated while guarded keeps the external content and reports BaseChanged" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fixture = try Fixture.init(original);
+    defer fixture.deinit();
+
+    var recreate: RecreateTarget = .{ .fixture = &fixture };
+    const hook: Hook = .{ .context = &recreate, .run = RecreateTarget.run };
+    try testing.expectError(error.BaseChanged, replaceWithHook(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), hook));
+
+    try fixture.expectContent(external_save);
     try fixture.expectEntries(1);
 }
 
