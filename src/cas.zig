@@ -127,9 +127,9 @@ fn hashOfRef(snapshot: *Snapshot, ref_text: []const u8) !symbol.Hash {
 }
 
 test "replaces exactly one body in memory and leaves the file on disk untouched" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const doc = try test_util.loadFixture(&runtime, "functions.ts");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const doc = try test_util.loadFixture(runtime,"functions.ts");
     defer doc.destroy();
 
     const old_body = "{\n  return a + b;\n}";
@@ -151,9 +151,9 @@ test "replaces exactly one body in memory and leaves the file on disk untouched"
 }
 
 test "a source with syntax errors is refused before resolution" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const doc = try test_util.loadFixture(&runtime, "broken.ts");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const doc = try test_util.loadFixture(runtime,"broken.ts");
     defer doc.destroy();
 
     try testing.expectError(error.SourceHasErrors, mutate(doc, "broken", "{ return a; }", .current));
@@ -167,18 +167,18 @@ test "a source with syntax errors is refused before resolution" {
     };
     for (broken_sources) |source| {
         errdefer std.debug.print("accepted broken source: \"{s}\"\n", .{source});
-        const base = try test_util.snapshotOf(&runtime, source);
+        const base = try test_util.snapshotOf(runtime,source);
         defer base.destroy();
         try testing.expectError(error.SourceHasErrors, mutate(base, "ok", "{ return 2; }", .current));
     }
 }
 
 test "error precedence: each check wins over every later one" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const broken = try test_util.snapshotOf(&runtime, "function ok() { return 1; }\nfunction bad( {\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const broken = try test_util.snapshotOf(runtime,"function ok() { return 1; }\nfunction bad( {\n");
     defer broken.destroy();
-    const valid = try test_util.snapshotOf(&runtime, "function dup() {}\nfunction dup() {}\nfunction f() { return 1; }\nfunction g() { return 2; }\n");
+    const valid = try test_util.snapshotOf(runtime,"function dup() {}\nfunction dup() {}\nfunction f() { return 1; }\nfunction g() { return 2; }\n");
     defer valid.destroy();
 
     try testing.expectError(error.SourceHasErrors, mutate(broken, "missing", "{ oops", .stale));
@@ -190,9 +190,9 @@ test "error precedence: each check wins over every later one" {
 }
 
 test "unknown, under-qualified and ambiguous targets are refused" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime,
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,
         \\function dup() {}
         \\function dup() {}
         \\class Box { get size(): number { return 1; } set size(v: number) {} }
@@ -206,11 +206,11 @@ test "unknown, under-qualified and ambiguous targets are refused" {
 }
 
 test "a stale hash is refused, an unrelated edit elsewhere is not" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const original = try test_util.snapshotOf(&runtime, "function f() { return 1; }\nfunction g() { return 2; }\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const original = try test_util.snapshotOf(runtime,"function f() { return 1; }\nfunction g() { return 2; }\n");
     defer original.destroy();
-    const elsewhere = try test_util.snapshotOf(&runtime, "function f() { return 1; }\nfunction g() { return 20; }\n");
+    const elsewhere = try test_util.snapshotOf(runtime,"function f() { return 1; }\nfunction g() { return 20; }\n");
     defer elsewhere.destroy();
 
     try testing.expectError(error.HashMismatch, mutate(original, "f", "{ return 3; }", .stale));
@@ -224,9 +224,9 @@ test "a stale hash is refused, an unrelated edit elsewhere is not" {
 }
 
 test "broken replacement bodies are refused and never spliced" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const doc = try test_util.loadFixture(&runtime, "functions.ts");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const doc = try test_util.loadFixture(runtime,"functions.ts");
     defer doc.destroy();
 
     const broken_bodies = [_][]const u8{
@@ -243,9 +243,9 @@ test "broken replacement bodies are refused and never spliced" {
 }
 
 test "a body that parses but spills outside its slot is a BodyEscape" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime, "function f() { return 1; }\nfunction g() { return 2; }\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,"function f() { return 1; }\nfunction g() { return 2; }\n");
     defer base.destroy();
 
     const escapes = [_][]const u8{
@@ -263,9 +263,9 @@ test "a body that parses but spills outside its slot is a BodyEscape" {
 }
 
 test "only the addressed accessor changes when getter and setter share a name" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const doc = try test_util.loadFixture(&runtime, "functions.ts");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const doc = try test_util.loadFixture(runtime,"functions.ts");
     defer doc.destroy();
 
     const getter_before = try hashOfRef(doc, "Repository.label@get");
@@ -280,9 +280,9 @@ test "only the addressed accessor changes when getter and setter share a name" {
 }
 
 test "an expression-bodied arrow accepts an expression or a block" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime, "export const square = (n: number) => n * n;\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,"export const square = (n: number) => n * n;\n");
     defer base.destroy();
 
     const as_expression = try mutate(base, "square", "n ** 2", .current);
@@ -295,9 +295,9 @@ test "an expression-bodied arrow accepts an expression or a block" {
 }
 
 test "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const before_snapshot = try test_util.snapshotOf(&runtime, "function f() { return 1; }\nfunction g() { return 2; }\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const before_snapshot = try test_util.snapshotOf(runtime,"function f() { return 1; }\nfunction g() { return 2; }\n");
     defer before_snapshot.destroy();
     const before = try before_snapshot.symbols();
     const f_body = (try before.resolve(.{ .name = "f" })).body;
@@ -311,7 +311,7 @@ test "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbo
     };
     for (same_shape) |source| {
         errdefer std.debug.print("lock accepted: \"{s}\"\n", .{source});
-        const after_snapshot = try test_util.snapshotOf(&runtime, source);
+        const after_snapshot = try test_util.snapshotOf(runtime,source);
         defer after_snapshot.destroy();
         try testing.expectError(error.BodyEscape, expectUntouchedOutside(before.*, (try after_snapshot.symbols()).*, cut, cut));
     }
@@ -320,8 +320,8 @@ test "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbo
 }
 
 test "regression: attacks from the adversarial review stay refused" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
 
     const Attack = struct {
         name: []const u8,
@@ -346,16 +346,16 @@ test "regression: attacks from the adversarial review stay refused" {
     };
     for (attacks) |attack| {
         errdefer std.debug.print("attack not refused as expected: {s}\n", .{attack.name});
-        const base = try test_util.snapshotOf(&runtime, attack.source);
+        const base = try test_util.snapshotOf(runtime,attack.source);
         defer base.destroy();
         try testing.expectError(attack.expected, mutate(base, attack.ref, attack.body, .current));
     }
 }
 
 test "replacement bodies are normalised: a BOM and surrounding whitespace are ignored" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime, "function f() { return 1; }\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,"function f() { return 1; }\n");
     defer base.destroy();
 
     const bodies = [_][]const u8{
@@ -373,9 +373,9 @@ test "replacement bodies are normalised: a BOM and surrounding whitespace are ig
 }
 
 test "mutating one declarator leaves a sibling declarator's hash intact" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime, "export const a = () => 1, b = () => 2;\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,"export const a = () => 1, b = () => 2;\n");
     defer base.destroy();
 
     const b_before = try hashOfRef(base, "b");
@@ -386,9 +386,9 @@ test "mutating one declarator leaves a sibling declarator's hash intact" {
 }
 
 test "chained mutations: the returned hash is the next expected hash" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime, "function f() { return 1; }\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,"function f() { return 1; }\n");
     defer base.destroy();
 
     const first = try mutate(base, "f", "{ return 2; }", .current);
@@ -404,9 +404,9 @@ test "chained mutations: the returned hash is the next expected hash" {
 }
 
 test "ownership: every failed apply leaves exactly the base alive, a success adds one snapshot" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime, "function dup() {}\nfunction dup() {}\nfunction f() { return 1; }\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,"function dup() {}\nfunction dup() {}\nfunction f() { return 1; }\n");
     defer base.destroy();
 
     const Failure = struct { ref: []const u8, body: []const u8, hash: HashSource };
@@ -430,9 +430,9 @@ test "ownership: every failed apply leaves exactly the base alive, a success add
 }
 
 test "ownership: a patched snapshot owns its memory and outlives the base it came from" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
-    const base = try test_util.snapshotOf(&runtime, "function f() { return 1; }\nfunction g() { return 2; }\n");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime,"function f() { return 1; }\nfunction g() { return 2; }\n");
     const patched = try mutate(base, "f", "{ return 10; }", .current);
     base.destroy();
     defer patched.snapshot.destroy();

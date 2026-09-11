@@ -8,7 +8,7 @@ const max_source_len = std.math.maxInt(u32);
 
 pub const Snapshot = struct {
     runtime: *Runtime,
-    source: []u8,
+    source: []const u8,
     tree: ts.Tree,
     table: ?symbol.Table = null,
 
@@ -49,10 +49,10 @@ pub const Snapshot = struct {
 const testing = std.testing;
 
 test "loads a fixture from disk into a snapshot that owns its source and tree" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
 
-    const snapshot = try test_util.loadFixture(&runtime, "functions.ts");
+    const snapshot = try test_util.loadFixture(runtime,"functions.ts");
     defer snapshot.destroy();
 
     try testing.expect(snapshot.source.len > 0);
@@ -63,10 +63,10 @@ test "loads a fixture from disk into a snapshot that owns its source and tree" {
 }
 
 test "a syntactically broken fixture loads but reports the error and refuses a symbol table" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
 
-    const snapshot = try test_util.loadFixture(&runtime, "broken.ts");
+    const snapshot = try test_util.loadFixture(runtime,"broken.ts");
     defer snapshot.destroy();
 
     try testing.expect(snapshot.tree.root().hasError());
@@ -75,18 +75,18 @@ test "a syntactically broken fixture loads but reports the error and refuses a s
 }
 
 test "a missing file surfaces FileNotFound and creates no snapshot" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
 
-    try testing.expectError(error.FileNotFound, test_util.loadFixture(&runtime, "does-not-exist.ts"));
+    try testing.expectError(error.FileNotFound, test_util.loadFixture(runtime,"does-not-exist.ts"));
     try testing.expectEqual(@as(usize, 0), runtime.live_snapshots);
 }
 
 test "the symbol table is built once, cached, and released with its snapshot" {
-    var runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(&runtime);
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
 
-    const snapshot = try test_util.loadFixture(&runtime, "functions.ts");
+    const snapshot = try test_util.loadFixture(runtime,"functions.ts");
     const first = try snapshot.symbols();
     const second = try snapshot.symbols();
     try testing.expect(first == second);

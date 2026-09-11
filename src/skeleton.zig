@@ -138,7 +138,7 @@ fn skeletonOfSource(parser: ts.Parser, source: []const u8) ![]u8 {
 }
 
 fn expectSkeleton(source: []const u8, expected: []const u8) !void {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -153,7 +153,7 @@ fn expectSkeleton(source: []const u8, expected: []const u8) !void {
 }
 
 test "functions.ts skeleton matches the golden file byte for byte" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -169,7 +169,7 @@ test "functions.ts skeleton matches the golden file byte for byte" {
 }
 
 test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -197,7 +197,7 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
 }
 
 test "sources with syntax errors are refused instead of guessed at" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -263,7 +263,7 @@ test "CRLF line endings and a UTF-8 BOM are preserved around the cuts" {
 }
 
 test "a source without functions is returned unchanged" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();

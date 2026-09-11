@@ -99,7 +99,7 @@ pub const Walker = struct {
 const testing = std.testing;
 
 test "walker visits every node in pre-order with depth and field names" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     const t = try test_util.TestTree.init("let x = f(1);");
@@ -139,7 +139,7 @@ test "walker visits every node in pre-order with depth and field names" {
 }
 
 test "walker honours skipChildren and never escapes a subtree root" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     const t = try test_util.TestTree.init("function a() { inner(); }\nfunction b() {}");
@@ -160,7 +160,7 @@ test "walker honours skipChildren and never escapes a subtree root" {
 }
 
 test "walker on a leaf yields only the leaf, and an early skipChildren is ignored" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     const t = try test_util.TestTree.init("x;");

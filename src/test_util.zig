@@ -38,13 +38,13 @@ pub fn openFixture(parser: ts.Parser, name: []const u8) !Fixture {
     return .{ .source = source, .tree = try parser.parse(source) };
 }
 
-pub fn openRuntime() !Runtime {
-    return Runtime.init(std.testing.allocator);
+pub fn openRuntime() !*Runtime {
+    return Runtime.create(std.testing.allocator);
 }
 
 pub fn closeRuntime(runtime: *Runtime) void {
     const live = runtime.live_snapshots;
-    runtime.deinit() catch |err| std.debug.panic("runtime closed with {d} live snapshots: {t}", .{ live, err });
+    runtime.destroy() catch |err| std.debug.panic("runtime closed with {d} live snapshots: {t}", .{ live, err });
 }
 
 pub fn snapshotOf(runtime: *Runtime, source: []const u8) !*Snapshot {

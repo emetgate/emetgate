@@ -27,10 +27,10 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_writer: std.Io.File.Writer = .initStreaming(stdio.stdout(), init.io, &buffer);
     const out = &stdout_writer.interface;
 
-    var runtime = try Runtime.init(init.gpa);
-    defer runtime.deinit() catch |err| std.debug.panic("runtime closed with live snapshots: {t}", .{err});
+    const runtime = try Runtime.create(init.gpa);
+    defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
 
-    const status = dispatch(init, &runtime, args, out) catch |err| return fail(err);
+    const status = dispatch(init, runtime, args, out) catch |err| return fail(err);
     out.flush() catch |err| return fail(err);
     return status;
 }

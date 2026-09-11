@@ -131,7 +131,7 @@ pub const Node = struct {
 const testing = std.testing;
 
 test "typescript grammar is ABI compatible with the core" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     try testing.expectEqual(@as(u32, 14), c.ts_language_abi_version(typescript()));
@@ -140,7 +140,7 @@ test "typescript grammar is ABI compatible with the core" {
 }
 
 test "parses a function declaration into named, field-addressable nodes" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     const t = try test_util.TestTree.init("function add(a: number, b: number): number { return a + b; }");
@@ -161,7 +161,7 @@ test "parses a function declaration into named, field-addressable nodes" {
 }
 
 test "broken syntax is flagged on the root" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     const t = try test_util.TestTree.init("function broken( {");
@@ -171,7 +171,7 @@ test "broken syntax is flagged on the root" {
 }
 
 test "bridge accounts a tree that outlives its parser as live memory until deleted" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     const parser = try Parser.init(typescript());

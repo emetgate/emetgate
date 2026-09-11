@@ -26,8 +26,8 @@ pub const Stats = struct {
     bytes: usize,
 };
 
-pub fn install(allocator: std.mem.Allocator) void {
-    if (backing != null) @panic("tree-sitter allocator bridge is already installed");
+pub fn install(allocator: std.mem.Allocator) error{BridgeAlreadyInstalled}!void {
+    if (backing != null) return error.BridgeAlreadyInstalled;
     backing = allocator;
     c.ts_set_allocator(&tsMalloc, &tsCalloc, &tsRealloc, &tsFree);
 }
@@ -116,7 +116,7 @@ fn slotsOf(ptr: ?*anyopaque) [*]u64 {
 }
 
 test "calloc zeroes, realloc preserves contents across grow and shrink, free releases" {
-    install(testing.allocator);
+    try install(testing.allocator);
     defer uninstall();
 
     var slots = slotsOf(tsCalloc(4, @sizeOf(u64)));
@@ -138,7 +138,7 @@ test "calloc zeroes, realloc preserves contents across grow and shrink, free rel
 }
 
 test "null realloc allocates, zero realloc keeps a live block, null free is a no-op" {
-    install(testing.allocator);
+    try install(testing.allocator);
     defer uninstall();
 
     const from_null = tsRealloc(null, 8);
@@ -157,7 +157,7 @@ test "null realloc allocates, zero realloc keeps a live block, null free is a no
 }
 
 test "payloads honour the malloc alignment contract" {
-    install(testing.allocator);
+    try install(testing.allocator);
     defer uninstall();
 
     const ptr = tsMalloc(3).?;

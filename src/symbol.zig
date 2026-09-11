@@ -556,7 +556,7 @@ fn resolveText(table: Table, text: []const u8) !*const Symbol {
 }
 
 test "collects every function-like boundary in the fixture, in source order" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -587,7 +587,7 @@ test "collects every function-like boundary in the fixture, in source order" {
 }
 
 test "bodyless signatures are not function boundaries" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(
         \\interface Clock { now(): number; }
@@ -601,7 +601,7 @@ test "bodyless signatures are not function boundaries" {
 }
 
 test "names resolve through type assertions, parentheses and compound assignment" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(
         \\const asserted = (() => {}) as Handler;
@@ -622,7 +622,7 @@ test "names resolve through type assertions, parentheses and compound assignment
 }
 
 test "arrow functions in default parameters are not nested in the body" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init("function outer(cb = () => 1) { const run = () => cb(); }");
     defer t.deinit();
@@ -635,7 +635,7 @@ test "arrow functions in default parameters are not nested in the body" {
 }
 
 test "byte offsets stay exact after multi-byte UTF-8 text" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -653,7 +653,7 @@ test "byte offsets stay exact after multi-byte UTF-8 text" {
 }
 
 test "symbol table of the fixture names every addressable function with its container" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -681,7 +681,7 @@ test "symbol table of the fixture names every addressable function with its cont
 }
 
 test "service fixture: private, static, decorated-class and parameter-property members" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -700,7 +700,7 @@ test "service fixture: private, static, decorated-class and parameter-property m
 }
 
 test "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(
         \\class Box {
@@ -742,7 +742,7 @@ test "static, instance, getter and setter collisions are distinct refs; true dup
 }
 
 test "containers: dotted namespaces, bound class expressions, nested objects and enclosing functions" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(
         \\namespace Outer.Inner {
@@ -779,7 +779,7 @@ test "containers: dotted namespaces, bound class expressions, nested objects and
 }
 
 test "sources with syntax errors never produce a symbol table" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
@@ -819,7 +819,7 @@ test "hash is BLAKE3-128 of the function node and ignores edits elsewhere in the
     try testing.expectError(error.InvalidHash, parseHash("abc"));
     try testing.expectError(error.InvalidHash, parseHash("zz1349b9f5f9a1a6a0404dea36dcc949"));
 
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const original = try test_util.TestTree.init("function f(a: number) { return a; }\nfunction g() {}");
     defer original.deinit();
@@ -843,7 +843,7 @@ test "hash is BLAKE3-128 of the function node and ignores edits elsewhere in the
 }
 
 test "hash covers decorators, export, modifiers and the binding, not only the function node" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
     const Pair = struct { ref: []const u8, plain: []const u8, changed: []const u8 };
@@ -869,7 +869,7 @@ test "hash covers decorators, export, modifiers and the binding, not only the fu
 }
 
 test "declarators sharing one statement get independent hashes that still cover the keyword" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const base = try test_util.TestTree.init("const a = () => 1, b = () => 2;\n");
     defer base.deinit();
@@ -899,7 +899,7 @@ test "declarators sharing one statement get independent hashes that still cover 
 }
 
 test "dotted namespace names are normalised from identifiers, ignoring spacing and comments" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(
         \\namespace A . B { export function f() {} }
@@ -916,7 +916,7 @@ test "dotted namespace names are normalised from identifiers, ignoring spacing a
 }
 
 test "every unambiguous symbol resolves back to itself through its canonical text" {
-    alloc_bridge.install(testing.allocator);
+    try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
