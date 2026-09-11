@@ -57,6 +57,10 @@ pub const Session = struct {
         return @intCast(self.stack.items.len - 1);
     }
 
+    pub fn baseHash(self: *const Session) symbol.Hash {
+        return symbol.hashOf(self.stack.items[0].snapshot.source);
+    }
+
     pub fn isDirty(self: *const Session) bool {
         const base = self.stack.items[0].snapshot.source;
         const top_source = self.stack.items[self.stack.items.len - 1].snapshot.source;
@@ -244,6 +248,22 @@ test "isDirty reports whether the top differs from the base, not how deep the st
     try testing.expect(!session.isDirty());
     try session.rollbackTo(base);
     try testing.expect(!session.isDirty());
+}
+
+test "baseHash is the hash of the bytes on disk at load time and survives applies and rollbacks" {
+    const disk = @import("disk.zig");
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const session = try loadFixtureSession(runtime);
+    defer session.destroy();
+    const base = session.checkpoint();
+
+    const on_disk = try disk.hashFile(testing.allocator, testing.io, test_util.fixture_dir ++ "functions.ts");
+    try testing.expectEqual(on_disk, session.baseHash());
+    _ = try applyText(session, "add", bodies[0]);
+    try testing.expectEqual(on_disk, session.baseHash());
+    try session.rollbackTo(base);
+    try testing.expectEqual(on_disk, session.baseHash());
 }
 
 const cycles = 1000;

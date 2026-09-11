@@ -9,6 +9,7 @@ pub const cas = @import("cas.zig");
 pub const session = @import("session.zig");
 pub const shadow = @import("shadow.zig");
 pub const sandbox = @import("sandbox.zig");
+pub const disk = @import("disk.zig");
 pub const stdio = @import("stdio.zig");
 
 test {
