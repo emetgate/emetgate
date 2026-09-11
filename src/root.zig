@@ -6,6 +6,7 @@ pub const loader = @import("loader.zig");
 pub const symbol = @import("symbol.zig");
 pub const skeleton = @import("skeleton.zig");
 pub const cas = @import("cas.zig");
+pub const session = @import("session.zig");
 pub const stdio = @import("stdio.zig");
 
 test {
