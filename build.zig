@@ -18,14 +18,38 @@ pub fn build(b: *std.Build) void {
     });
     c_api.addIncludePath(b.path(ts_core_root ++ "/include"));
 
+    const c_module = c_api.createModule();
     const synapse = b.addModule("synapse", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "c", .module = c_api.createModule() }},
+        .imports = &.{.{ .name = "c", .module = c_module }},
     });
     synapse.linkLibrary(tree_sitter);
+
+    const probe = b.addExecutable(.{
+        .name = "sandbox-probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/probe/probe.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const test_options = b.addOptions();
+    test_options.addOptionPath("probe_path", probe.getEmittedBin());
+
+    const test_module = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "c", .module = c_module },
+            .{ .name = "build_options", .module = test_options.createModule() },
+        },
+    });
+    test_module.linkLibrary(tree_sitter);
 
     const exe = b.addExecutable(.{
         .name = "synapse",
@@ -42,7 +66,7 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_exe.addArgs(args);
     b.step("run", "Run the synapse CLI").dependOn(&run_exe.step);
 
-    const tests = b.addTest(.{ .root_module = synapse });
+    const tests = b.addTest(.{ .root_module = test_module });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path("."));
     const test_step = b.step("test", "Run unit and end-to-end tests");

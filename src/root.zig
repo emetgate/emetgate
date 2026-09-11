@@ -8,6 +8,7 @@ pub const skeleton = @import("skeleton.zig");
 pub const cas = @import("cas.zig");
 pub const session = @import("session.zig");
 pub const shadow = @import("shadow.zig");
+pub const sandbox = @import("sandbox.zig");
 pub const stdio = @import("stdio.zig");
 
 test {
