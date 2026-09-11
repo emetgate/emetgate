@@ -7,6 +7,7 @@ pub const Runtime = struct {
     gpa: std.mem.Allocator,
     parser: ts.Parser,
     live_snapshots: usize = 0,
+    next_checkpoint_id: u64 = 0,
 
     pub const OpenError = error{RuntimeAlreadyOpen} || ts.Error || std.mem.Allocator.Error;
     pub const CloseError = error{ LiveSnapshots, LiveAllocations };
@@ -18,6 +19,11 @@ pub const Runtime = struct {
         errdefer gpa.destroy(self);
         self.* = .{ .gpa = gpa, .parser = try ts.Parser.init(ts.typescript()) };
         return self;
+    }
+
+    pub fn nextCheckpointId(self: *Runtime) u64 {
+        defer self.next_checkpoint_id += 1;
+        return self.next_checkpoint_id;
     }
 
     pub fn destroy(self: *Runtime) CloseError!void {

@@ -22,7 +22,6 @@ const Entry = struct {
 pub const Session = struct {
     runtime: *Runtime,
     stack: std.ArrayList(Entry),
-    next_id: u64,
 
     pub const CreateError = error{SourceHasErrors} || Snapshot.CreateError;
     pub const LoadError = error{SourceHasErrors} || Snapshot.LoadError;
@@ -41,8 +40,8 @@ pub const Session = struct {
         if (base.tree.root().hasError()) return error.SourceHasErrors;
         const self = try runtime.gpa.create(Session);
         errdefer runtime.gpa.destroy(self);
-        self.* = .{ .runtime = runtime, .stack = .empty, .next_id = 1 };
-        try self.stack.append(runtime.gpa, .{ .snapshot = base, .id = 0 });
+        self.* = .{ .runtime = runtime, .stack = .empty };
+        try self.stack.append(runtime.gpa, .{ .snapshot = base, .id = runtime.nextCheckpointId() });
         return self;
     }
 
@@ -58,6 +57,12 @@ pub const Session = struct {
         return @intCast(self.stack.items.len - 1);
     }
 
+    pub fn isDirty(self: *const Session) bool {
+        const base = self.stack.items[0].snapshot.source;
+        const top_source = self.stack.items[self.stack.items.len - 1].snapshot.source;
+        return !std.mem.eql(u8, base, top_source);
+    }
+
     pub fn checkpoint(self: *const Session) Checkpoint {
         const index = self.stack.items.len - 1;
         return .{ .index = @intCast(index), .id = self.stack.items[index].id };
@@ -66,8 +71,7 @@ pub const Session = struct {
     pub fn apply(self: *Session, mutation: cas.Mutation) cas.Error!symbol.Hash {
         try self.stack.ensureUnusedCapacity(self.runtime.gpa, 1);
         const applied = try cas.apply(self.top(), mutation);
-        self.stack.appendAssumeCapacity(.{ .snapshot = applied.snapshot, .id = self.next_id });
-        self.next_id += 1;
+        self.stack.appendAssumeCapacity(.{ .snapshot = applied.snapshot, .id = self.runtime.nextCheckpointId() });
         return applied.hash;
     }
 
@@ -200,6 +204,46 @@ test "a session never starts from a broken source" {
 
     try testing.expectError(error.SourceHasErrors, newSession(runtime, "function f( {\n"));
     try testing.expectEqual(@as(usize, 0), runtime.live_snapshots);
+}
+
+test "a checkpoint from another session is refused" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const a = try newSession(runtime, "function f() { return 1; }\n");
+    defer a.destroy();
+    const b = try newSession(runtime, "function g() { return 1; }\n");
+    defer b.destroy();
+
+    const b_base = b.checkpoint();
+    _ = try applyText(a, "f", "{ return 2; }");
+    _ = try applyText(a, "f", "{ return 3; }");
+    _ = try applyText(b, "g", "{ return 2; }");
+    const b_top = b.checkpoint();
+
+    try testing.expectError(error.StaleCheckpoint, a.rollbackTo(b_top));
+    try testing.expectError(error.StaleCheckpoint, a.rollbackTo(b_base));
+    try testing.expectEqual(@as(u32, 2), a.depth());
+    try b.rollbackTo(b_base);
+    try testing.expectEqual(@as(u32, 0), b.depth());
+}
+
+test "isDirty reports whether the top differs from the base, not how deep the stack is" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const session = try newSession(runtime, "function f() { return 1; }\n");
+    defer session.destroy();
+    const base = session.checkpoint();
+
+    try testing.expect(!session.isDirty());
+    _ = try applyText(session, "f", "{ return 1; }");
+    try testing.expectEqual(@as(u32, 1), session.depth());
+    try testing.expect(!session.isDirty());
+    _ = try applyText(session, "f", "{ return 2; }");
+    try testing.expect(session.isDirty());
+    _ = try applyText(session, "f", "{ return 1; }");
+    try testing.expect(!session.isDirty());
+    try session.rollbackTo(base);
+    try testing.expect(!session.isDirty());
 }
 
 const cycles = 1000;
