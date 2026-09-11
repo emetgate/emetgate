@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{ .root_module = synapse });
     const run_tests = b.addRunArtifact(tests);
+    run_tests.setCwd(b.path("."));
     b.step("test", "Run unit tests").dependOn(&run_tests.step);
 }
 
@@ -49,6 +50,8 @@ fn buildTreeSitter(
 
     module.addCMacro("_POSIX_C_SOURCE", "200112L");
     module.addCMacro("_DEFAULT_SOURCE", "");
+    module.addCMacro("_BSD_SOURCE", "");
+    module.addCMacro("_DARWIN_C_SOURCE", "");
     module.addCMacro("TREE_SITTER_REUSE_ALLOCATOR", "");
 
     module.addCSourceFiles(.{

@@ -1,12 +1,20 @@
 const std = @import("std");
 const c = @import("c");
 
-const block_alignment: std.mem.Alignment = .fromByteUnits(@alignOf(std.c.max_align_t));
+const min_malloc_alignment = 16;
+const block_alignment: std.mem.Alignment = .fromByteUnits(@max(@alignOf(std.c.max_align_t), min_malloc_alignment));
 const header_len = block_alignment.toByteUnits();
 const Block = []align(header_len) u8;
 
+const Header = extern struct {
+    size: usize,
+    magic: usize,
+};
+
+const live_magic: usize = @truncate(0x53594E4150534521);
+
 comptime {
-    std.debug.assert(header_len >= @sizeOf(usize));
+    std.debug.assert(@sizeOf(Header) <= header_len);
 }
 
 var backing: ?std.mem.Allocator = null;
@@ -52,7 +60,7 @@ fn tsRealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
     const old_block = blockOf(ptr orelse return tsMalloc(size));
     const old_size = payloadLen(old_block);
     const new_block = backingAllocator().realloc(old_block, blockLen(size)) catch outOfMemory();
-    writeSize(new_block, size);
+    headerOf(new_block).size = size;
     _ = live_bytes.fetchSub(old_size, .monotonic);
     _ = live_bytes.fetchAdd(size, .monotonic);
     return new_block[header_len..].ptr;
@@ -60,6 +68,7 @@ fn tsRealloc(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
 
 fn tsFree(ptr: ?*anyopaque) callconv(.c) void {
     const block = blockOf(ptr orelse return);
+    headerOf(block).magic = 0;
     _ = live_blocks.fetchSub(1, .monotonic);
     _ = live_bytes.fetchSub(payloadLen(block), .monotonic);
     backingAllocator().free(block);
@@ -67,7 +76,7 @@ fn tsFree(ptr: ?*anyopaque) callconv(.c) void {
 
 fn allocate(size: usize) []u8 {
     const block = backingAllocator().alignedAlloc(u8, block_alignment, blockLen(size)) catch outOfMemory();
-    writeSize(block, size);
+    headerOf(block).* = .{ .size = size, .magic = live_magic };
     _ = live_blocks.fetchAdd(1, .monotonic);
     _ = live_bytes.fetchAdd(size, .monotonic);
     return block[header_len..];
@@ -75,12 +84,13 @@ fn allocate(size: usize) []u8 {
 
 fn blockOf(payload: *anyopaque) Block {
     const base: [*]align(header_len) u8 = @ptrFromInt(@intFromPtr(payload) - header_len);
-    const size = @as(*const usize, @ptrCast(base)).*;
-    return base[0 .. header_len + size];
+    const header: *const Header = @ptrCast(base);
+    if (header.magic != live_magic) @panic("tree-sitter released a pointer the bridge does not own");
+    return base[0 .. header_len + header.size];
 }
 
-fn writeSize(block: Block, size: usize) void {
-    @as(*usize, @ptrCast(block.ptr)).* = size;
+fn headerOf(block: Block) *Header {
+    return @ptrCast(block.ptr);
 }
 
 fn payloadLen(block: Block) usize {
@@ -109,45 +119,49 @@ test "calloc zeroes, realloc preserves contents across grow and shrink, free rel
     install(testing.allocator);
     defer uninstall();
 
-    const zeroed = slotsOf(tsCalloc(4, @sizeOf(u64)));
-    for (zeroed[0..4]) |slot| try testing.expectEqual(@as(u64, 0), slot);
-    for (zeroed[0..4], 1..) |*slot, value| slot.* = value;
+    var slots = slotsOf(tsCalloc(4, @sizeOf(u64)));
+    errdefer tsFree(slots);
+    for (slots[0..4]) |slot| try testing.expectEqual(@as(u64, 0), slot);
+    for (slots[0..4], 1..) |*slot, value| slot.* = value;
     try testing.expectEqual(Stats{ .blocks = 1, .bytes = 32 }, stats());
 
-    const grown = slotsOf(tsRealloc(zeroed, 64 * @sizeOf(u64)));
-    try testing.expectEqualSlices(u64, &.{ 1, 2, 3, 4 }, grown[0..4]);
+    slots = slotsOf(tsRealloc(slots, 64 * @sizeOf(u64)));
+    try testing.expectEqualSlices(u64, &.{ 1, 2, 3, 4 }, slots[0..4]);
     try testing.expectEqual(Stats{ .blocks = 1, .bytes = 512 }, stats());
 
-    const shrunk = slotsOf(tsRealloc(grown, 2 * @sizeOf(u64)));
-    try testing.expectEqualSlices(u64, &.{ 1, 2 }, shrunk[0..2]);
+    slots = slotsOf(tsRealloc(slots, 2 * @sizeOf(u64)));
+    try testing.expectEqualSlices(u64, &.{ 1, 2 }, slots[0..2]);
     try testing.expectEqual(Stats{ .blocks = 1, .bytes = 16 }, stats());
 
-    tsFree(shrunk);
+    tsFree(slots);
     try testing.expectEqual(Stats{ .blocks = 0, .bytes = 0 }, stats());
 }
 
-test "null realloc allocates, null free is a no-op, zero-size blocks are unique" {
+test "null realloc allocates, zero realloc keeps a live block, null free is a no-op" {
     install(testing.allocator);
     defer uninstall();
 
     const from_null = tsRealloc(null, 8);
+    defer tsFree(from_null);
+    const shrunk_to_zero = tsRealloc(tsMalloc(24), 0);
+    defer tsFree(shrunk_to_zero);
     const empty_a = tsMalloc(0);
+    defer tsFree(empty_a);
     const empty_b = tsMalloc(0);
-    try testing.expect(empty_a != empty_b);
-    try testing.expectEqual(Stats{ .blocks = 3, .bytes = 8 }, stats());
+    defer tsFree(empty_b);
 
+    try testing.expect(shrunk_to_zero != null);
+    try testing.expect(empty_a != empty_b);
+    try testing.expectEqual(Stats{ .blocks = 4, .bytes = 8 }, stats());
     tsFree(null);
-    tsFree(from_null);
-    tsFree(empty_a);
-    tsFree(empty_b);
-    try testing.expectEqual(Stats{ .blocks = 0, .bytes = 0 }, stats());
 }
 
-test "payloads honour max_align_t" {
+test "payloads honour the malloc alignment contract" {
     install(testing.allocator);
     defer uninstall();
 
     const ptr = tsMalloc(3).?;
     defer tsFree(ptr);
     try testing.expect(block_alignment.check(@intFromPtr(ptr)));
+    try testing.expect(block_alignment.toByteUnits() >= min_malloc_alignment);
 }
