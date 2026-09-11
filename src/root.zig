@@ -1,11 +1,6 @@
-const std = @import("std");
-const c = @import("c");
+pub const ts = @import("ts.zig");
+pub const alloc_bridge = @import("alloc_bridge.zig");
 
-test "typescript grammar links and is ABI compatible with the core" {
-    const parser = c.ts_parser_new() orelse return error.ParserAllocationFailed;
-    defer c.ts_parser_delete(parser);
-
-    const language = c.tree_sitter_typescript();
-    try std.testing.expectEqual(@as(u32, 14), c.ts_language_abi_version(language));
-    try std.testing.expect(c.ts_parser_set_language(parser, language));
+test {
+    @import("std").testing.refAllDecls(@This());
 }
