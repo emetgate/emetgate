@@ -1,6 +1,7 @@
 const std = @import("std");
-const ts = @import("ts.zig");
+const ts = @import("tree_sitter.zig");
 const alloc_bridge = @import("alloc_bridge.zig");
+const test_util = @import("test_util.zig");
 
 const max_source_len = std.math.maxInt(u32);
 
@@ -31,21 +32,13 @@ pub const Document = struct {
 
 const testing = std.testing;
 
-pub const fixture_dir = "tests/fixtures/";
-
-pub fn openFixture(parser: ts.Parser, name: []const u8) !Document {
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, fixture_dir ++ "{s}", .{name});
-    return Document.open(testing.allocator, testing.io, .cwd(), path, parser);
-}
-
 test "opens a fixture from disk and parses it without errors" {
     alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
 
-    const doc = try openFixture(parser, "functions.ts");
+    const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
 
     try testing.expect(doc.source.len > 0);
@@ -60,7 +53,7 @@ test "a syntactically broken fixture loads but reports the error" {
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
 
-    const doc = try openFixture(parser, "broken.ts");
+    const doc = try test_util.openFixture(parser, "broken.ts");
     defer doc.deinit();
 
     try testing.expect(doc.tree.root().hasError());
@@ -72,5 +65,5 @@ test "a missing file surfaces FileNotFound and leaks nothing" {
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
 
-    try testing.expectError(error.FileNotFound, openFixture(parser, "does-not-exist.ts"));
+    try testing.expectError(error.FileNotFound, test_util.openFixture(parser, "does-not-exist.ts"));
 }

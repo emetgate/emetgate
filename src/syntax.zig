@@ -1,7 +1,8 @@
 const std = @import("std");
-const ts = @import("ts.zig");
+const ts = @import("tree_sitter.zig");
+const traversal = @import("traversal.zig");
 const alloc_bridge = @import("alloc_bridge.zig");
-const document = @import("document.zig");
+const test_util = @import("test_util.zig");
 
 pub const FunctionKind = enum {
     function_declaration,
@@ -92,7 +93,7 @@ pub fn collectFunctions(gpa: std.mem.Allocator, tree: ts.Tree) std.mem.Allocator
     var open_bodies: std.ArrayList(Span) = .empty;
     defer open_bodies.deinit(gpa);
 
-    var walker = ts.Walker.init(tree.root());
+    var walker = traversal.Walker.init(tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
         if (!entry.node.isNamed()) continue;
@@ -152,7 +153,7 @@ test "collects every function-like boundary in the fixture, in source order" {
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
-    const doc = try document.openFixture(parser, "functions.ts");
+    const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
 
     try expectFunctions(doc.tree, &.{
@@ -237,7 +238,7 @@ test "byte offsets stay exact after multi-byte UTF-8 text" {
     defer alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
-    const doc = try document.openFixture(parser, "functions.ts");
+    const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
 
     const functions = try collectFunctions(testing.allocator, doc.tree);

@@ -1,9 +1,9 @@
 const std = @import("std");
 const synapse = @import("synapse");
 
-const ts = synapse.ts;
+const ts = synapse.tree_sitter;
 const skeleton = synapse.skeleton;
-const Document = synapse.document.Document;
+const Document = synapse.loader.Document;
 
 const usage =
     \\usage: synapse skeleton <file.ts>

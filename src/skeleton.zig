@@ -1,8 +1,9 @@
 const std = @import("std");
-const ts = @import("ts.zig");
+const ts = @import("tree_sitter.zig");
+const traversal = @import("traversal.zig");
 const syntax = @import("syntax.zig");
 const alloc_bridge = @import("alloc_bridge.zig");
-const document = @import("document.zig");
+const test_util = @import("test_util.zig");
 
 pub const Error = error{ SourceHasErrors, SkeletonInvalid } || std.mem.Allocator.Error || ts.Error;
 
@@ -117,7 +118,7 @@ pub const Metrics = struct {
 
 pub fn measure(tree: ts.Tree) Metrics {
     var tokens: usize = 0;
-    var walker = ts.Walker.init(tree.root());
+    var walker = traversal.Walker.init(tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
@@ -157,12 +158,12 @@ test "functions.ts skeleton matches the golden file byte for byte" {
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
 
-    const doc = try document.openFixture(parser, "functions.ts");
+    const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
     const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
     defer testing.allocator.free(skeleton);
 
-    const golden = try std.Io.Dir.cwd().readFileAlloc(testing.io, document.fixture_dir ++ "functions.skeleton.ts", testing.allocator, .unlimited);
+    const golden = try std.Io.Dir.cwd().readFileAlloc(testing.io, test_util.fixture_dir ++ "functions.skeleton.ts", testing.allocator, .unlimited);
     defer testing.allocator.free(golden);
     try testing.expectEqualStrings(golden, skeleton);
 }
@@ -175,7 +176,7 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
 
     for (fixtures) |name| {
         errdefer std.debug.print("fixture: {s}\n", .{name});
-        const doc = try document.openFixture(parser, name);
+        const doc = try test_util.openFixture(parser, name);
         defer doc.deinit();
 
         const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
@@ -201,7 +202,7 @@ test "sources with syntax errors are refused instead of guessed at" {
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
 
-    const doc = try document.openFixture(parser, "broken.ts");
+    const doc = try test_util.openFixture(parser, "broken.ts");
     defer doc.deinit();
     try testing.expectError(error.SourceHasErrors, skeletonize(testing.allocator, parser, doc.tree));
 }
