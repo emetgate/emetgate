@@ -1,7 +1,7 @@
 const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
-const syntax = @import("syntax.zig");
+const symbol = @import("symbol.zig");
 const alloc_bridge = @import("alloc_bridge.zig");
 const test_util = @import("test_util.zig");
 
@@ -28,7 +28,7 @@ const Cut = struct {
 pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Error![]u8 {
     if (tree.root().hasError()) return error.SourceHasErrors;
 
-    const functions = try syntax.collectFunctions(gpa, tree);
+    const functions = try symbol.collectFunctions(gpa, tree);
     defer gpa.free(functions);
 
     var out: std.ArrayList(u8) = try .initCapacity(gpa, tree.source.len);
@@ -50,7 +50,7 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Err
     return skeleton;
 }
 
-fn planCut(source: []const u8, function: syntax.Function) ?Cut {
+fn planCut(source: []const u8, function: symbol.Function) ?Cut {
     if (!std.mem.eql(u8, "statement_block", function.body.kind())) return null;
     const terminator: Terminator = if (followsComment(function.body)) .empty_block else terminatorFor(function);
     const body_start = function.body.startByte();
@@ -61,7 +61,7 @@ fn planCut(source: []const u8, function: syntax.Function) ?Cut {
     };
 }
 
-fn terminatorFor(function: syntax.Function) Terminator {
+fn terminatorFor(function: symbol.Function) Terminator {
     return switch (function.kind) {
         .function_declaration => .semicolon,
         .method_definition => if (isClassMember(function.node) and !isDecorated(function.node)) .semicolon else .empty_block,

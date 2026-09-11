@@ -3,10 +3,12 @@ const synapse = @import("synapse");
 
 const ts = synapse.tree_sitter;
 const skeleton = synapse.skeleton;
+const symbol = synapse.symbol;
 const Document = synapse.loader.Document;
 
 const usage =
     \\usage: synapse skeleton <file.ts>
+    \\       synapse symbols <file.ts>
     \\       synapse stats <file.ts>...
     \\
 ;
@@ -30,6 +32,10 @@ pub fn main(init: std.process.Init) !u8 {
         try printSkeleton(init, parser, args[2], out);
         return 0;
     }
+    if (std.mem.eql(u8, command, "symbols") and args.len == 3) {
+        try printSymbols(init, parser, args[2], out);
+        return 0;
+    }
     if (std.mem.eql(u8, command, "stats")) {
         const skipped = try printStats(init, parser, args[2..], out);
         return if (skipped == 0) 0 else 1;
@@ -48,6 +54,23 @@ fn printSkeleton(init: std.process.Init, parser: ts.Parser, path: []const u8, ou
     const text = try skeleton.skeletonize(init.gpa, parser, doc.tree);
     defer init.gpa.free(text);
     try out.writeAll(text);
+}
+
+fn printSymbols(init: std.process.Init, parser: ts.Parser, path: []const u8, out: *std.Io.Writer) !void {
+    const doc = try Document.open(init.gpa, init.io, .cwd(), path, parser);
+    defer doc.deinit();
+    const table = try symbol.Table.build(init.gpa, doc.tree);
+    defer table.deinit();
+
+    for (table.symbols) |entry| {
+        try out.print("{s}  L{d}  {t}  {f}{s}\n", .{
+            &symbol.formatHash(entry.hash),
+            entry.node.startPoint().row + 1,
+            entry.kind,
+            entry.ref,
+            if (entry.ambiguous) "  (ambiguous)" else "",
+        });
+    }
 }
 
 const Totals = struct {

@@ -53,6 +53,11 @@ pub const Tree = struct {
     }
 };
 
+pub const Point = struct {
+    row: u32,
+    column: u32,
+};
+
 pub const Node = struct {
     raw: c.TSNode,
 
@@ -68,6 +73,11 @@ pub const Node = struct {
         return c.ts_node_end_byte(self.raw);
     }
 
+    pub fn startPoint(self: Node) Point {
+        const point = c.ts_node_start_point(self.raw);
+        return .{ .row = point.row, .column = point.column };
+    }
+
     pub fn isNamed(self: Node) bool {
         return c.ts_node_is_named(self.raw);
     }
@@ -78,6 +88,10 @@ pub const Node = struct {
 
     pub fn childCount(self: Node) u32 {
         return c.ts_node_child_count(self.raw);
+    }
+
+    pub fn child(self: Node, index: u32) ?Node {
+        return wrap(c.ts_node_child(self.raw, index));
     }
 
     pub fn namedChildCount(self: Node) u32 {
