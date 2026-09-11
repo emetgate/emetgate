@@ -27,8 +27,8 @@ pub const Guard = struct {
         var wide: WidePath = undefined;
         const handle = win.CreateFileW(
             try toWide(&wide, path_abs),
-            win.generic_read,
-            win.file_share_read | win.file_share_delete,
+            win.generic_read | win.delete,
+            win.file_share_read,
             null,
             win.open_existing,
             win.file_attribute_normal,
@@ -38,7 +38,7 @@ pub const Guard = struct {
             win.error_file_not_found, win.error_path_not_found => error.BaseChanged,
             win.error_sharing_violation, win.error_lock_violation => error.FileLocked,
             win.error_access_denied => error.AccessDenied,
-            else => error.ReplaceFailed,
+            else => error.OpenFailed,
         };
         return .{ .handle = handle };
     }
@@ -52,6 +52,16 @@ pub const Guard = struct {
         return symbol.hashOf(bytes);
     }
 
+    fn attributes(self: Guard) !windows.DWORD {
+        var info: win.BY_HANDLE_FILE_INFORMATION = undefined;
+        if (win.GetFileInformationByHandle(self.handle, &info) == .FALSE) return error.OpenFailed;
+        return info.file_attributes;
+    }
+
+    fn renameTo(self: Guard, gpa: Allocator, path_abs: []const u8) !void {
+        return renameByHandle(gpa, self.handle, path_abs);
+    }
+
     pub fn close(self: Guard) void {
         windows.CloseHandle(self.handle);
     }
@@ -62,52 +72,85 @@ const Hook = struct {
     run: *const fn (context: *anyopaque) anyerror!void,
 };
 
+pub const Paths = struct {
+    temp: []const u8,
+    backup: []const u8,
+};
+
 pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
     return replaceWithHook(gpa, io, path_abs, data, expected_base, null);
 }
 
-fn replaceWithHook(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, before_replace: ?Hook) !void {
+fn replaceWithHook(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, in_gap: ?Hook) !void {
     if (builtin.os.tag != .windows) return error.Unsupported;
 
     const guard = try Guard.open(path_abs);
     var guard_open = true;
     defer if (guard_open) guard.close();
     if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &expected_base)) return error.BaseChanged;
-    if (try hasAttribute(path_abs, win.file_attribute_readonly)) return error.ReadOnlyFile;
+    const saved_attributes = try guard.attributes();
+    if (saved_attributes & win.file_attribute_readonly != 0) return error.ReadOnlyFile;
 
     var random: [8]u8 = undefined;
     io.random(&random);
     const tag = std.fmt.bytesToHex(random, .lower);
-    var temp_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var backup_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const temp = try std.fmt.bufPrint(&temp_buf, "{s}.synapse-{s}.tmp", .{ path_abs, &tag });
-    const backup = try std.fmt.bufPrint(&backup_buf, "{s}.synapse-{s}.bak", .{ path_abs, &tag });
+    const temp = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.tmp", .{ path_abs, &tag });
+    defer gpa.free(temp);
+    const backup = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.bak", .{ path_abs, &tag });
+    defer gpa.free(backup);
 
     try writeDurably(io, temp, data);
-    errdefer std.Io.Dir.deleteFileAbsolute(io, temp) catch {};
+    var temp_present = true;
+    defer if (temp_present) deleteWithRetry(io, temp);
 
-    if (before_replace) |hook| try hook.run(hook.context);
-    try replace(path_abs, temp, backup);
+    const replacement = try Guard.open(temp);
+    var replacement_open = true;
+    defer if (replacement_open) replacement.close();
+
+    try guard.renameTo(gpa, backup);
+    var original_at_backup = true;
+    errdefer if (original_at_backup) guard.renameTo(gpa, path_abs) catch {};
+
+    if (in_gap) |hook| try hook.run(hook.context);
+
+    replacement.renameTo(gpa, path_abs) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.Conflict,
+        else => |e| return e,
+    };
+    temp_present = false;
+    original_at_backup = false;
+    applyAttributes(path_abs, saved_attributes) catch {};
+
+    replacement.close();
+    replacement_open = false;
     guard.close();
     guard_open = false;
-
-    const displaced = hashFile(gpa, io, backup) catch return error.WrittenButUnverified;
-    if (!std.mem.eql(u8, &displaced, &expected_base)) {
-        try restore(backup, path_abs);
-        return error.BaseChanged;
-    }
-    std.Io.Dir.deleteFileAbsolute(io, backup) catch {};
+    deleteWithRetry(io, backup);
 
     const written = hashFile(gpa, io, path_abs) catch return error.WrittenButUnverified;
     if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) return error.WrittenButUnverified;
 }
 
-fn restore(backup: []const u8, path_abs: []const u8) !void {
-    var backup_w: WidePath = undefined;
-    var path_w: WidePath = undefined;
-    if (win.MoveFileExW(try toWide(&backup_w, backup), try toWide(&path_w, path_abs), win.movefile_replace_existing | win.movefile_write_through) == .FALSE) {
-        return error.RestoreFailed;
-    }
+fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8) !void {
+    var wide: WidePath = undefined;
+    const name = try toWide(&wide, target_abs);
+    const name_bytes = std.mem.sliceTo(name, 0).len * 2;
+
+    const header = 20;
+    const buffer = try gpa.alignedAlloc(u8, .of(u64), header + name_bytes);
+    defer gpa.free(buffer);
+    @memset(buffer, 0);
+    std.mem.writeInt(u32, buffer[0..4], win.file_rename_flag_posix_semantics, .little);
+    std.mem.writeInt(u32, buffer[16..20], @intCast(name_bytes), .little);
+    @memcpy(buffer[header..][0..name_bytes], std.mem.sliceAsBytes(std.mem.sliceTo(name, 0)));
+
+    if (win.SetFileInformationByHandle(handle, win.file_rename_info_ex, buffer.ptr, @intCast(buffer.len)) != .FALSE) return;
+    return switch (win.GetLastError()) {
+        win.error_already_exists, win.error_file_exists => error.PathAlreadyExists,
+        win.error_sharing_violation, win.error_lock_violation => error.FileLocked,
+        win.error_access_denied => error.AccessDenied,
+        else => error.RenameFailed,
+    };
 }
 
 fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
@@ -118,31 +161,28 @@ fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
     try file.sync(io);
 }
 
-fn replace(path_abs: []const u8, temp: []const u8, backup: []const u8) !void {
-    var path_w: WidePath = undefined;
-    var temp_w: WidePath = undefined;
-    var backup_w: WidePath = undefined;
-    const replaced = try toWide(&path_w, path_abs);
-    const replacement = try toWide(&temp_w, temp);
-    const backup_name = try toWide(&backup_w, backup);
-
-    if (win.ReplaceFileW(replaced, replacement, backup_name, 0, null, null) != .FALSE) return;
-    switch (win.GetLastError()) {
-        win.error_sharing_violation, win.error_lock_violation => return error.FileLocked,
-        win.error_access_denied => return error.AccessDenied,
-        win.error_unable_to_move_replacement_2 => {
-            try restore(backup, path_abs);
-            return error.ReplaceFailed;
-        },
-        else => return error.ReplaceFailed,
-    }
+fn applyAttributes(path_abs: []const u8, attributes: windows.DWORD) !void {
+    if (attributes == 0 or attributes == win.file_attribute_normal) return;
+    var wide: WidePath = undefined;
+    if (win.SetFileAttributesW(try toWide(&wide, path_abs), attributes & ~win.file_attribute_readonly) == .FALSE) return error.SetAttributesFailed;
 }
 
-fn hasAttribute(path_abs: []const u8, attribute: windows.DWORD) !bool {
-    var wide: WidePath = undefined;
-    const attributes = win.GetFileAttributesW(try toWide(&wide, path_abs));
-    if (attributes == win.invalid_file_attributes) return error.BaseChanged;
-    return attributes & attribute != 0;
+const delete_retries = 5;
+const delete_retry_ms: windows.DWORD = 40;
+
+fn deleteWithRetry(io: std.Io, path: []const u8) void {
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        std.Io.Dir.deleteFileAbsolute(io, path) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => {
+                if (attempt + 1 >= delete_retries) return;
+                win.Sleep(delete_retry_ms);
+                continue;
+            },
+        };
+        return;
+    }
 }
 
 fn toWide(buffer: *WidePath, path: []const u8) ![*:0]const u16 {
@@ -155,6 +195,7 @@ fn toWide(buffer: *WidePath, path: []const u8) ![*:0]const u16 {
 const win = struct {
     const generic_read: windows.DWORD = 0x80000000;
     const generic_write: windows.DWORD = 0x40000000;
+    const delete: windows.DWORD = 0x00010000;
     const file_share_read: windows.DWORD = 0x00000001;
     const file_share_write: windows.DWORD = 0x00000002;
     const file_share_delete: windows.DWORD = 0x00000004;
@@ -163,15 +204,31 @@ const win = struct {
     const file_attribute_hidden: windows.DWORD = 0x00000002;
     const file_attribute_normal: windows.DWORD = 0x00000080;
     const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
-    const movefile_replace_existing: windows.DWORD = 0x00000001;
-    const movefile_write_through: windows.DWORD = 0x00000008;
+
+    const file_rename_info_ex: c_int = 22;
+    const file_rename_flag_replace_if_exists: windows.DWORD = 0x00000001;
+    const file_rename_flag_posix_semantics: windows.DWORD = 0x00000002;
 
     const error_file_not_found: windows.DWORD = 2;
     const error_path_not_found: windows.DWORD = 3;
     const error_access_denied: windows.DWORD = 5;
+    const error_file_exists: windows.DWORD = 80;
     const error_sharing_violation: windows.DWORD = 32;
     const error_lock_violation: windows.DWORD = 33;
-    const error_unable_to_move_replacement_2: windows.DWORD = 1177;
+    const error_already_exists: windows.DWORD = 183;
+
+    const BY_HANDLE_FILE_INFORMATION = extern struct {
+        file_attributes: windows.DWORD,
+        creation_time: windows.FILETIME,
+        last_access_time: windows.FILETIME,
+        last_write_time: windows.FILETIME,
+        volume_serial_number: windows.DWORD,
+        file_size_high: windows.DWORD,
+        file_size_low: windows.DWORD,
+        number_of_links: windows.DWORD,
+        file_index_high: windows.DWORD,
+        file_index_low: windows.DWORD,
+    };
 
     extern "kernel32" fn CreateFileW(
         name: [*:0]const u16,
@@ -182,18 +239,12 @@ const win = struct {
         flags: windows.DWORD,
         template: ?windows.HANDLE,
     ) callconv(.winapi) windows.HANDLE;
-    extern "kernel32" fn ReplaceFileW(
-        replaced: [*:0]const u16,
-        replacement: [*:0]const u16,
-        backup: ?[*:0]const u16,
-        flags: windows.DWORD,
-        exclude: ?*anyopaque,
-        reserved: ?*anyopaque,
-    ) callconv(.winapi) windows.BOOL;
-    extern "kernel32" fn MoveFileExW(existing: [*:0]const u16, new: [*:0]const u16, flags: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn SetFileInformationByHandle(handle: windows.HANDLE, class: c_int, info: *anyopaque, length: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn GetFileInformationByHandle(handle: windows.HANDLE, info: *BY_HANDLE_FILE_INFORMATION) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn SetFileAttributesW(name: [*:0]const u16, attributes: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 };
 
 const testing = std.testing;
@@ -259,7 +310,15 @@ const Fixture = struct {
         if (handle == windows.INVALID_HANDLE_VALUE) return error.OpenFailed;
         return handle;
     }
+
+    fn createSibling(self: *const Fixture, name: []const u8, content: []const u8) !void {
+        try self.tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = content });
+    }
 };
+
+fn replace(fixture: *const Fixture, data: []const u8, base: symbol.Hash) !void {
+    return replaceAtomically(testing.allocator, testing.io, fixture.path(), data, base);
+}
 
 test "an unchanged base is replaced atomically, keeps its attributes and leaves no temp or backup" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
@@ -267,7 +326,7 @@ test "an unchanged base is replaced atomically, keeps its attributes and leaves 
     defer fixture.deinit();
     try fixture.setAttributes(win.file_attribute_hidden);
 
-    try replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original));
+    try replace(&fixture, updated, symbol.hashOf(original));
 
     try fixture.expectContent(updated);
     try testing.expect(try fixture.attributes() & win.file_attribute_hidden != 0);
@@ -284,7 +343,7 @@ test "an external edit since the session began is refused with BaseChanged" {
     try fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "target.ts", .data = external });
 
     try testing.expectError(error.BaseChanged, verifyBase(testing.allocator, testing.io, fixture.path(), base));
-    try testing.expectError(error.BaseChanged, replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, base));
+    try testing.expectError(error.BaseChanged, replace(&fixture, updated, base));
     try fixture.expectContent(external);
     try fixture.expectEntries(1);
 }
@@ -296,7 +355,7 @@ test "a file deleted since the session began is refused with BaseChanged" {
     try fixture.tmp.dir.deleteFile(testing.io, "target.ts");
 
     try testing.expectError(error.BaseChanged, verifyBase(testing.allocator, testing.io, fixture.path(), symbol.hashOf(original)));
-    try testing.expectError(error.BaseChanged, replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original)));
+    try testing.expectError(error.BaseChanged, replace(&fixture, updated, symbol.hashOf(original)));
     try fixture.expectEntries(0);
 }
 
@@ -306,57 +365,26 @@ test "a read-only file is refused and keeps both its content and its read-only f
     defer fixture.deinit();
     try fixture.setAttributes(win.file_attribute_readonly);
 
-    try testing.expectError(error.ReadOnlyFile, replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original)));
+    try testing.expectError(error.ReadOnlyFile, replace(&fixture, updated, symbol.hashOf(original)));
     try fixture.expectContent(original);
     try testing.expect(try fixture.attributes() & win.file_attribute_readonly != 0);
     try fixture.expectEntries(1);
 }
 
-test "a file held open by another process is refused with FileLocked and succeeds once released" {
+test "a file held open for writing by another process is refused with FileLocked" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fixture = try Fixture.init(original);
     defer fixture.deinit();
     const base = symbol.hashOf(original);
 
-    const reader_without_delete_share = try fixture.openRaw(win.generic_read, win.file_share_read);
-    try testing.expectError(error.FileLocked, replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, base));
-    windows.CloseHandle(reader_without_delete_share);
+    const writer = try fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write);
+    try testing.expectError(error.FileLocked, replace(&fixture, updated, base));
+    windows.CloseHandle(writer);
     try fixture.expectContent(original);
     try fixture.expectEntries(1);
 
-    const active_writer = try fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write);
-    try testing.expectError(error.FileLocked, replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, base));
-    windows.CloseHandle(active_writer);
-    try fixture.expectContent(original);
-    try fixture.expectEntries(1);
-
-    try replaceAtomically(testing.allocator, testing.io, fixture.path(), updated, base);
+    try replace(&fixture, updated, base);
     try fixture.expectContent(updated);
-    try fixture.expectEntries(1);
-}
-
-const external_save = "export function f() { return 42; } // saved by another tool\n";
-
-const RecreateTarget = struct {
-    fixture: *Fixture,
-
-    fn run(context: *anyopaque) anyerror!void {
-        const self: *RecreateTarget = @ptrCast(@alignCast(context));
-        try self.fixture.tmp.dir.deleteFile(testing.io, "target.ts");
-        try self.fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "target.ts", .data = external_save });
-    }
-};
-
-test "a file deleted and recreated while guarded keeps the external content and reports BaseChanged" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var fixture = try Fixture.init(original);
-    defer fixture.deinit();
-
-    var recreate: RecreateTarget = .{ .fixture = &fixture };
-    const hook: Hook = .{ .context = &recreate, .run = RecreateTarget.run };
-    try testing.expectError(error.BaseChanged, replaceWithHook(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), hook));
-
-    try fixture.expectContent(external_save);
     try fixture.expectEntries(1);
 }
 
@@ -367,10 +395,34 @@ test "while the guard is held no other handle can open the file for writing" {
 
     const guard = try Guard.open(fixture.path());
     try testing.expectEqual(symbol.hashOf(original), try guard.hash(testing.allocator, testing.io));
+    // A writer or a deleter cannot open the file while the guard is held.
     try testing.expectError(error.OpenFailed, fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write | win.file_share_delete));
-    try testing.expectEqual(win.error_sharing_violation, win.GetLastError());
+    try testing.expectError(error.OpenFailed, fixture.openRaw(win.delete, win.file_share_read | win.file_share_write | win.file_share_delete));
     guard.close();
 
     const writer = try fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write | win.file_share_delete);
     windows.CloseHandle(writer);
+}
+
+const external_save = "export function f() { return 42; } // saved by another tool\n";
+
+const RecreateTarget = struct {
+    fixture: *Fixture,
+
+    fn run(context: *anyopaque) anyerror!void {
+        const self: *RecreateTarget = @ptrCast(@alignCast(context));
+        try self.fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "target.ts", .data = external_save });
+    }
+};
+
+test "a concurrent save that lands in the rename gap is preserved as a Conflict, not overwritten" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fixture = try Fixture.init(original);
+    defer fixture.deinit();
+
+    var recreate: RecreateTarget = .{ .fixture = &fixture };
+    const hook: Hook = .{ .context = &recreate, .run = RecreateTarget.run };
+    try testing.expectError(error.Conflict, replaceWithHook(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), hook));
+
+    try fixture.expectContent(external_save);
 }

@@ -83,8 +83,26 @@ pub const Shadow = struct {
     pub fn writeFile(self: Shadow, sub_path: []const u8, data: []const u8) !void {
         try validateRelative(sub_path);
         if (isUnderAny(sub_path, self.linked)) return error.UnsafePath;
-        if (std.fs.path.dirname(sub_path)) |parent| try self.dir.createDirPath(self.io, parent);
+        if (std.fs.path.dirname(sub_path)) |parent| {
+            try self.dir.createDirPath(self.io, parent);
+            try self.assertResolvesInside(parent);
+        }
         try self.dir.writeFile(self.io, .{ .sub_path = sub_path, .data = data });
+    }
+
+    fn assertResolvesInside(self: Shadow, parent: []const u8) !void {
+        if (builtin.os.tag != .windows) return;
+        var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var parent_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const root_final = try finalPath(self.dir, &root_buf);
+
+        var parent_dir = self.dir.openDir(self.io, parent, .{}) catch return error.UnsafePath;
+        defer parent_dir.close(self.io);
+        const parent_final = try finalPath(parent_dir, &parent_buf);
+
+        if (!std.ascii.startsWithIgnoreCase(parent_final, root_final)) return error.UnsafePath;
+        const rest = parent_final[root_final.len..];
+        if (rest.len != 0 and !isSeparator(rest[0])) return error.UnsafePath;
     }
 
     pub fn close(self: *Shadow) void {
@@ -111,18 +129,38 @@ pub fn ensureInsideWorkspace(root_abs: []const u8, shadow_abs: []const u8) error
     if (segments.next() == null) return error.ShadowOutsideWorkspace;
 }
 
+const reserved_devices = [_][]const u8{
+    "CON",    "PRN",  "AUX",  "NUL",  "CONIN$", "CONOUT$",
+    "COM1",   "COM2", "COM3", "COM4", "COM5",   "COM6",
+    "COM7",   "COM8", "COM9", "LPT1", "LPT2",   "LPT3",
+    "LPT4",   "LPT5", "LPT6", "LPT7", "LPT8",   "LPT9",
+};
+
 pub fn validateRelative(path: []const u8) error{UnsafePath}!void {
     if (path.len == 0 or isSeparator(path[0])) return error.UnsafePath;
     if (std.mem.indexOfScalar(u8, path, ':') != null) return error.UnsafePath;
+    if (std.mem.indexOfScalar(u8, path, 0) != null) return error.UnsafePath;
     var segments = std.mem.tokenizeAny(u8, path, "/\\");
     while (segments.next()) |segment| {
         if (std.mem.eql(u8, segment, ".") or std.mem.eql(u8, segment, "..")) return error.UnsafePath;
+        if (std.mem.indexOfScalar(u8, segment, '~') != null) return error.UnsafePath;
         const last = segment[segment.len - 1];
         if (last == '.' or last == ' ') return error.UnsafePath;
+        if (isReservedDevice(segment)) return error.UnsafePath;
     }
 }
 
-fn ensureNoLinks(root_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceIsLink, NameTooLong, InvalidWtf8 }!void {
+fn isReservedDevice(segment: []const u8) bool {
+    var base = segment;
+    if (std.mem.indexOfScalar(u8, base, '.')) |dot| base = base[0..dot];
+    while (base.len > 0 and base[base.len - 1] == ' ') base = base[0 .. base.len - 1];
+    for (reserved_devices) |device| {
+        if (std.ascii.eqlIgnoreCase(base, device)) return true;
+    }
+    return false;
+}
+
+fn ensureNoLinks(root_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceIsLink, AttributeCheckFailed, NameTooLong, InvalidWtf8 }!void {
     if (builtin.os.tag != .windows) return;
     var index = root_abs.len + 1;
     while (index <= shadow_abs.len) : (index += 1) {
@@ -131,14 +169,34 @@ fn ensureNoLinks(root_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceI
     }
 }
 
-fn isReparsePoint(path: []const u8) error{ NameTooLong, InvalidWtf8 }!bool {
+fn isReparsePoint(path: []const u8) error{ AttributeCheckFailed, NameTooLong, InvalidWtf8 }!bool {
     var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
-    const len = std.unicode.wtf8ToWtf16Le(&path_w, path) catch return error.InvalidWtf8;
-    if (len >= path_w.len) return error.NameTooLong;
-    path_w[len] = 0;
-    const attributes = win.GetFileAttributesW(&path_w);
-    if (attributes == win.invalid_file_attributes) return false;
+    const wide = try toExtendedWide(&path_w, path);
+    const attributes = win.GetFileAttributesW(wide);
+    if (attributes == win.invalid_file_attributes) return switch (win.GetLastError()) {
+        win.error_file_not_found, win.error_path_not_found => false,
+        else => error.AttributeCheckFailed,
+    };
     return attributes & win.file_attribute_reparse_point != 0;
+}
+
+fn toExtendedWide(buffer: *[std.fs.max_path_bytes:0]u16, path: []const u8) error{ NameTooLong, InvalidWtf8 }![*:0]const u16 {
+    const prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\");
+    const use_prefix = std.fs.path.isAbsolute(path) and !std.mem.startsWith(u8, path, "\\\\");
+    const offset = if (use_prefix) prefix.len else 0;
+    if (use_prefix) @memcpy(buffer[0..prefix.len], prefix);
+    const len = std.unicode.wtf8ToWtf16Le(buffer[offset..], path) catch return error.InvalidWtf8;
+    if (offset + len >= buffer.len) return error.NameTooLong;
+    buffer[offset + len] = 0;
+    return buffer;
+}
+
+fn finalPath(dir: Dir, buffer: []u8) error{UnsafePath}![]const u8 {
+    var wide: [std.fs.max_path_bytes]u16 = undefined;
+    const len = win.GetFinalPathNameByHandleW(dir.handle, &wide, wide.len, 0);
+    if (len == 0 or len >= wide.len) return error.UnsafePath;
+    const written = std.unicode.wtf16LeToWtf8(buffer, wide[0..len]);
+    return buffer[0..written];
 }
 
 fn isSeparator(byte: u8) bool {
@@ -147,7 +205,7 @@ fn isSeparator(byte: u8) bool {
 
 fn isUnderAny(file: []const u8, dirs: []const []const u8) bool {
     for (dirs) |dir| {
-        if (!std.mem.startsWith(u8, file, dir)) continue;
+        if (!std.ascii.startsWithIgnoreCase(file, dir)) continue;
         if (file.len == dir.len or isSeparator(file[dir.len])) return true;
     }
     return false;
@@ -171,8 +229,12 @@ const win = struct {
     const mount_point_header_len = 8;
     const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
     const file_attribute_reparse_point: windows.DWORD = 0x00000400;
+    const error_file_not_found: windows.DWORD = 2;
+    const error_path_not_found: windows.DWORD = 3;
 
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetFinalPathNameByHandleW(handle: windows.HANDLE, path: [*]u16, count: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
 
     extern "kernel32" fn CreateFileW(
         name: [*:0]const u16,
@@ -437,6 +499,15 @@ test "writeFile refuses paths that leave the shadow or go through a junction" {
         "a.ts:stream",
         "node_modules/pkg/index.js",
         "node_modules",
+        "Node_modules/pkg/evil.js",
+        "NODE_MODULES/pkg/evil.js",
+        "NODE_M~1/pkg/evil.js",
+        "src/PROGRA~1/x.ts",
+        "nul.ts",
+        "CON",
+        "src/NUL/x.ts",
+        "aux.js",
+        "a\x00b.ts",
         "trailing.",
         "",
     };
@@ -450,6 +521,7 @@ test "writeFile refuses paths that leave the shadow or go through a junction" {
     try testing.expectEqualStrings("module.exports = 42;\n", real_dependency);
     try testing.expectError(error.FileNotFound, project.read("abs.txt"));
     try testing.expectError(error.FileNotFound, project.tmp.dir.access(testing.io, "escape.txt", .{}));
+    try testing.expectError(error.FileNotFound, project.read("node_modules/pkg/evil.js"));
 }
 
 test "prepare refuses unsafe tracked names and link entries before touching the disk" {
