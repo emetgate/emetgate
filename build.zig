@@ -56,6 +56,7 @@ pub fn build(b: *std.Build) void {
 const e2e_fixture = "tests/fixtures/functions.ts";
 const e2e_add_hash = "35b462b8e42e39e0fe66ae0dae747ab7";
 const e2e_zero_hash = "00000000000000000000000000000000";
+const e2e_patched_add_hash = "357b8d531c0c7045e5af084156e66186";
 
 const CliCase = struct {
     name: []const u8,
@@ -72,7 +73,47 @@ const cli_cases = [_]CliCase{
         .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", e2e_add_hash, "--body-file", "tests/e2e/add.body" },
         .exit_code = 0,
         .stdout = @embedFile("tests/e2e/functions.add.expected.ts"),
-        .stderr_contains = "mutated add  " ++ e2e_add_hash ++ " -> ",
+        .stderr_contains = "mutated add  " ++ e2e_add_hash ++ " -> " ++ e2e_patched_add_hash ++ "\n",
+    },
+    .{
+        .name = "the reported hash is what symbols sees in the patched text",
+        .args = &.{ "symbols", "tests/e2e/functions.add.expected.ts" },
+        .exit_code = 0,
+        .stdout_contains = e2e_patched_add_hash ++ "  L9:8  function  add\n",
+    },
+    .{
+        .name = "body file with a BOM and a trailing newline",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", e2e_add_hash, "--body-file", "tests/e2e/add.bom-newline.body" },
+        .exit_code = 0,
+        .stdout = @embedFile("tests/e2e/functions.add.expected.ts"),
+        .stderr_contains = "-> " ++ e2e_patched_add_hash ++ "\n",
+    },
+    .{
+        .name = "output larger than the stdout buffer",
+        .args = &.{ "symbols", "tests/e2e/many.ts" },
+        .exit_code = 0,
+        .stdout_contains = "  L3000:1  function  fn_3000\n",
+    },
+    .{
+        .name = "symbols on a source with syntax errors",
+        .args = &.{ "symbols", "tests/fixtures/broken.ts" },
+        .exit_code = 3,
+        .stdout = "",
+        .stderr_contains = "error: SourceHasErrors",
+    },
+    .{
+        .name = "flag given where a value belongs",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "--body", "--hash", e2e_add_hash, "--body-file", "tests/e2e/add.body" },
+        .exit_code = 2,
+        .stdout = "",
+        .stderr_contains = "usage:",
+    },
+    .{
+        .name = "missing body file on a broken source reports the source first",
+        .args = &.{ "mutate", "tests/fixtures/broken.ts", "--symbol", "broken", "--hash", e2e_zero_hash, "--body-file", "tests/e2e/missing.body" },
+        .exit_code = 3,
+        .stdout = "",
+        .stderr_contains = "error: SourceHasErrors",
     },
     .{
         .name = "mutate with an inline body",
@@ -158,7 +199,11 @@ fn addEndToEndTests(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Buil
     for (cli_cases) |case| {
         const run = cliRun(b, exe, case.name, case.args);
         run.expectExitCode(case.exit_code);
-        if (case.stdout) |bytes| run.expectStdOutEqual(bytes);
+        if (case.stdout) |bytes| {
+            run.expectStdOutEqual(bytes);
+        } else if (case.exit_code != 0) {
+            run.expectStdOutEqual("");
+        }
         if (case.stdout_contains) |bytes| run.expectStdOutMatch(bytes);
         if (case.stderr_contains) |bytes| run.expectStdErrMatch(bytes);
         disk_check.step.dependOn(&run.step);

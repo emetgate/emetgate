@@ -1,5 +1,6 @@
 const std = @import("std");
 const synapse = @import("synapse");
+const stdio = @import("stdio.zig");
 
 const ts = synapse.tree_sitter;
 const skeleton = synapse.skeleton;
@@ -22,15 +23,20 @@ pub fn main(init: std.process.Init) !u8 {
     if (args.len < 3) exitWithUsage();
 
     var buffer: [64 * 1024]u8 = undefined;
-    var stdout_writer: std.Io.File.Writer = .initStreaming(.stdout(), init.io, &buffer);
+    var stdout_writer: std.Io.File.Writer = .initStreaming(stdio.stdout(), init.io, &buffer);
     const out = &stdout_writer.interface;
-    defer out.flush() catch {};
 
     synapse.alloc_bridge.install(init.gpa);
     defer synapse.alloc_bridge.uninstall();
     const parser = try ts.Parser.init(ts.typescript());
     defer parser.deinit();
 
+    const status = dispatch(init, parser, args, out) catch |err| return fail(err);
+    out.flush() catch |err| return fail(err);
+    return status;
+}
+
+fn dispatch(init: std.process.Init, parser: ts.Parser, args: []const [:0]const u8, out: *std.Io.Writer) !u8 {
     const command = args[1];
     if (std.mem.eql(u8, command, "skeleton") and args.len == 3) {
         try printSkeleton(init, parser, args[2], out);
@@ -46,18 +52,34 @@ pub fn main(init: std.process.Init) !u8 {
     }
     if (std.mem.eql(u8, command, "mutate")) {
         const request = MutateRequest.parse(args[2..]) orelse exitWithUsage();
-        mutate(init, parser, request, out) catch |err| {
-            std.debug.print("error: {t}\n", .{err});
-            return exitCodeFor(err);
-        };
+        try mutate(init, parser, request, out);
         return 0;
     }
     exitWithUsage();
 }
 
+fn fail(err: anyerror) u8 {
+    std.debug.print("error: {t}\n", .{err});
+    return exitCodeFor(err);
+}
+
 fn exitWithUsage() noreturn {
     std.debug.print("{s}", .{usage});
     std.process.exit(2);
+}
+
+fn exitCodeFor(err: anyerror) u8 {
+    return switch (err) {
+        error.InvalidRef, error.InvalidHash => 2,
+        error.SourceHasErrors => 3,
+        error.SymbolNotFound => 4,
+        error.AmbiguousSymbol => 5,
+        error.HashMismatch => 6,
+        error.MutationSyntaxInvalid => 7,
+        error.BodyEscape => 8,
+        error.SkeletonInvalid => 9,
+        else => 1,
+    };
 }
 
 fn printSkeleton(init: std.process.Init, parser: ts.Parser, path: []const u8, out: *std.Io.Writer) !void {
@@ -87,6 +109,8 @@ fn printSymbols(init: std.process.Init, parser: ts.Parser, path: []const u8, out
     }
 }
 
+const flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file" };
+
 const MutateRequest = struct {
     path: []const u8,
     symbol: []const u8,
@@ -95,41 +119,30 @@ const MutateRequest = struct {
 
     fn parse(args: []const [:0]const u8) ?MutateRequest {
         if (args.len == 0 or args.len % 2 == 0) return null;
-        var symbol_arg: ?[]const u8 = null;
-        var hash_arg: ?[]const u8 = null;
-        var body_arg: ?[]const u8 = null;
-        var body_file_arg: ?[]const u8 = null;
+        var values: [flags.len]?[]const u8 = @splat(null);
 
         var i: usize = 1;
         while (i < args.len) : (i += 2) {
-            const slot = flagSlot(args[i], &symbol_arg, &hash_arg, &body_arg, &body_file_arg) orelse return null;
-            if (slot.* != null) return null;
-            slot.* = args[i + 1];
+            const slot = flagIndex(args[i]) orelse return null;
+            if (values[slot] != null or flagIndex(args[i + 1]) != null) return null;
+            values[slot] = args[i + 1];
         }
 
-        const body: @FieldType(MutateRequest, "body") = if (body_arg) |text|
-            if (body_file_arg == null) .{ .inline_text = text } else return null
-        else
-            .{ .file = body_file_arg orelse return null };
+        const inline_body = values[2];
+        const body_file = values[3];
+        if ((inline_body == null) == (body_file == null)) return null;
         return .{
             .path = args[0],
-            .symbol = symbol_arg orelse return null,
-            .hash = hash_arg orelse return null,
-            .body = body,
+            .symbol = values[0] orelse return null,
+            .hash = values[1] orelse return null,
+            .body = if (inline_body) |text| .{ .inline_text = text } else .{ .file = body_file.? },
         };
     }
 
-    fn flagSlot(
-        flag: []const u8,
-        symbol_arg: *?[]const u8,
-        hash_arg: *?[]const u8,
-        body_arg: *?[]const u8,
-        body_file_arg: *?[]const u8,
-    ) ?*?[]const u8 {
-        if (std.mem.eql(u8, flag, "--symbol")) return symbol_arg;
-        if (std.mem.eql(u8, flag, "--hash")) return hash_arg;
-        if (std.mem.eql(u8, flag, "--body")) return body_arg;
-        if (std.mem.eql(u8, flag, "--body-file")) return body_file_arg;
+    fn flagIndex(arg: []const u8) ?usize {
+        for (flags, 0..) |flag, index| {
+            if (std.mem.eql(u8, flag, arg)) return index;
+        }
         return null;
     }
 };
@@ -140,6 +153,10 @@ fn mutate(init: std.process.Init, parser: ts.Parser, request: MutateRequest, out
     defer ref.deinit(gpa);
     const expected = try symbol.parseHash(request.hash);
 
+    const doc = try Document.open(gpa, init.io, .cwd(), request.path, parser);
+    defer doc.deinit();
+    if (doc.tree.root().hasError()) return error.SourceHasErrors;
+
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
         .inline_text => null,
@@ -147,26 +164,12 @@ fn mutate(init: std.process.Init, parser: ts.Parser, request: MutateRequest, out
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const doc = try Document.open(gpa, init.io, .cwd(), request.path, parser);
-    defer doc.deinit();
     const patched = try cas.apply(gpa, parser, doc.tree, .{ .ref = ref, .expected_hash = expected, .new_body = body });
     defer patched.deinit();
 
     try out.writeAll(patched.source);
+    try out.flush();
     std.debug.print("mutated {f}  {s} -> {s}\n", .{ ref, &symbol.formatHash(expected), &symbol.formatHash(patched.hash) });
-}
-
-fn exitCodeFor(err: anyerror) u8 {
-    return switch (err) {
-        error.InvalidRef, error.InvalidHash => 2,
-        error.SourceHasErrors => 3,
-        error.SymbolNotFound => 4,
-        error.AmbiguousSymbol => 5,
-        error.HashMismatch => 6,
-        error.MutationSyntaxInvalid => 7,
-        error.BodyEscape => 8,
-        else => 1,
-    };
 }
 
 const Totals = struct {

@@ -308,7 +308,7 @@ fn describe(arena: Allocator, tree: ts.Tree, function: Function) Allocator.Error
     const name = function.name orelse return null;
     if (!isOneOf(name.kind(), &addressable_name_kinds)) return null;
     const container = try containerPath(arena, tree, function.node) orelse return null;
-    const declaration = declarationSpan(function);
+    const declaration = declarationOf(function);
     return .{
         .ref = .{
             .container = container,
@@ -319,8 +319,8 @@ fn describe(arena: Allocator, tree: ts.Tree, function: Function) Allocator.Error
         .kind = kind,
         .node = function.node,
         .body = function.body,
-        .declaration = declaration,
-        .hash = hashOf(tree.source[declaration.start..declaration.end]),
+        .declaration = declaration.span,
+        .hash = declaration.hash(tree.source),
     };
 }
 
@@ -413,15 +413,55 @@ const declaration_statements = [_][]const u8{
     "expression_statement",
 };
 
-fn declarationSpan(function: Function) Span {
-    var declaration = bindingSite(function.node) orelse function.node;
-    if (declaration.parent()) |parent| {
-        if (isOneOf(parent.kind(), &declaration_statements)) declaration = parent;
+const Declaration = struct {
+    span: Span,
+    prefix: Span = .{ .start = 0, .end = 0 },
+
+    fn hash(self: Declaration, source: []const u8) Hash {
+        var hasher = std.crypto.hash.Blake3.init(.{});
+        hasher.update(source[self.prefix.start..self.prefix.end]);
+        hasher.update(source[self.span.start..self.span.end]);
+        var out: Hash = undefined;
+        hasher.final(&out);
+        return out;
     }
-    if (declaration.parent()) |parent| {
-        if (std.mem.eql(u8, "export_statement", parent.kind())) declaration = parent;
+};
+
+fn declarationOf(function: Function) Declaration {
+    const site = bindingSite(function.node);
+    const own = site orelse function.node;
+    var statement: ?ts.Node = null;
+    if (own.parent()) |parent| {
+        if (isOneOf(parent.kind(), &declaration_statements)) statement = parent;
     }
-    return .{ .start = leadingDecoratorStart(declaration), .end = declaration.endByte() };
+    var outer = statement orelse own;
+    if (outer.parent()) |parent| {
+        if (std.mem.eql(u8, "export_statement", parent.kind())) outer = parent;
+    }
+
+    const shared = if (statement) |s| site != null and declaratorCount(s) > 1 else false;
+    if (!shared) return .{ .span = .{ .start = leadingDecoratorStart(outer), .end = outer.endByte() } };
+    return .{
+        .span = .{ .start = own.startByte(), .end = own.endByte() },
+        .prefix = .{ .start = outer.startByte(), .end = firstDeclaratorStart(statement.?) },
+    };
+}
+
+fn declaratorCount(statement: ts.Node) u32 {
+    var count: u32 = 0;
+    var i: u32 = 0;
+    while (statement.namedChild(i)) |child| : (i += 1) {
+        if (std.mem.eql(u8, "variable_declarator", child.kind())) count += 1;
+    }
+    return count;
+}
+
+fn firstDeclaratorStart(statement: ts.Node) u32 {
+    var i: u32 = 0;
+    while (statement.namedChild(i)) |child| : (i += 1) {
+        if (std.mem.eql(u8, "variable_declarator", child.kind())) return child.startByte();
+    }
+    return statement.startByte();
 }
 
 fn leadingDecoratorStart(node: ts.Node) u32 {
@@ -826,6 +866,36 @@ test "hash covers decorators, export, modifiers and the binding, not only the fu
         defer b.deinit();
         try testing.expect(!std.mem.eql(u8, &(try resolveText(a, pair.ref)).hash, &(try resolveText(b, pair.ref)).hash));
     }
+}
+
+test "declarators sharing one statement get independent hashes that still cover the keyword" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const base = try test_util.TestTree.init("const a = () => 1, b = () => 2;\n");
+    defer base.deinit();
+    const a_edited = try test_util.TestTree.init("const a = () => 10, b = () => 2;\n");
+    defer a_edited.deinit();
+    const keyword_changed = try test_util.TestTree.init("let a = () => 1, b = () => 2;\n");
+    defer keyword_changed.deinit();
+    const exported = try test_util.TestTree.init("export const a = () => 1, b = () => 2;\n");
+    defer exported.deinit();
+
+    const t0 = try Table.build(testing.allocator, base.tree);
+    defer t0.deinit();
+    const t1 = try Table.build(testing.allocator, a_edited.tree);
+    defer t1.deinit();
+    const t2 = try Table.build(testing.allocator, keyword_changed.tree);
+    defer t2.deinit();
+    const t3 = try Table.build(testing.allocator, exported.tree);
+    defer t3.deinit();
+
+    const a0 = (try resolveText(t0, "a")).hash;
+    const b0 = (try resolveText(t0, "b")).hash;
+    try testing.expect(!std.mem.eql(u8, &a0, &b0));
+    try testing.expectEqual(b0, (try resolveText(t1, "b")).hash);
+    try testing.expect(!std.mem.eql(u8, &a0, &(try resolveText(t1, "a")).hash));
+    try testing.expect(!std.mem.eql(u8, &b0, &(try resolveText(t2, "b")).hash));
+    try testing.expect(!std.mem.eql(u8, &b0, &(try resolveText(t3, "b")).hash));
 }
 
 test "dotted namespace names are normalised from identifiers, ignoring spacing and comments" {

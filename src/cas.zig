@@ -34,14 +34,22 @@ pub const Patched = struct {
     }
 };
 
+const utf8_bom = "\xEF\xBB\xBF";
+
+pub fn normalizeBody(body: []const u8) []const u8 {
+    const without_bom = if (std.mem.startsWith(u8, body, utf8_bom)) body[utf8_bom.len..] else body;
+    return std.mem.trim(u8, without_bom, " \t\r\n");
+}
+
 pub fn apply(gpa: Allocator, parser: ts.Parser, tree: ts.Tree, mutation: Mutation) Error!Patched {
+    const new_body = normalizeBody(mutation.new_body);
     const before = try symbol.Table.build(gpa, tree);
     defer before.deinit();
     const target = try before.resolve(mutation.ref);
     if (!std.mem.eql(u8, &target.hash, &mutation.expected_hash)) return error.HashMismatch;
 
     const cut: Span = .{ .start = target.body.startByte(), .end = target.body.endByte() };
-    const source = try std.mem.concat(gpa, u8, &.{ tree.source[0..cut.start], mutation.new_body, tree.source[cut.end..] });
+    const source = try std.mem.concat(gpa, u8, &.{ tree.source[0..cut.start], new_body, tree.source[cut.end..] });
     errdefer gpa.free(source);
 
     const patched_tree = try parser.parse(source);
@@ -54,7 +62,7 @@ pub fn apply(gpa: Allocator, parser: ts.Parser, tree: ts.Tree, mutation: Mutatio
     };
     defer after.deinit();
 
-    const slot: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(mutation.new_body.len)) };
+    const slot: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(new_body.len)) };
     const patched_target = after.resolve(mutation.ref) catch return error.BodyEscape;
     try expectExactSlot(patched_target.body, slot);
     try expectUntouchedOutside(before, after, cut, slot);
@@ -367,6 +375,39 @@ test "regression: attacks from the adversarial review stay refused" {
         defer t.deinit();
         try testing.expectError(attack.expected, mutate(t.parser, t.tree, attack.ref, attack.body, .current));
     }
+}
+
+test "replacement bodies are normalised: a BOM and surrounding whitespace are ignored" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const t = try test_util.TestTree.init("function f() { return 1; }\n");
+    defer t.deinit();
+
+    const bodies = [_][]const u8{
+        "{ return 2; }\n",
+        "\xEF\xBB\xBF{ return 2; }\r\n",
+        "\n\t { return 2; }  \n\n",
+    };
+    for (bodies) |body| {
+        errdefer std.debug.print("body not normalised: \"{s}\"\n", .{body});
+        const patched = try mutate(t.parser, t.tree, "f", body, .current);
+        defer patched.deinit();
+        try testing.expectEqualStrings("function f() { return 2; }\n", patched.source);
+    }
+    try testing.expectError(error.BodyEscape, mutate(t.parser, t.tree, "f", " \r\n\t", .current));
+}
+
+test "mutating one declarator leaves a sibling declarator's hash intact" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const t = try test_util.TestTree.init("export const a = () => 1, b = () => 2;\n");
+    defer t.deinit();
+
+    const b_before = try hashOfRef(t.tree, "b");
+    const patched = try mutate(t.parser, t.tree, "a", "10", .current);
+    defer patched.deinit();
+    try testing.expectEqualStrings("export const a = () => 10, b = () => 2;\n", patched.source);
+    try testing.expectEqual(b_before, try hashOfRef(patched.tree, "b"));
 }
 
 test "chained mutations: the returned hash is the next expected hash" {
