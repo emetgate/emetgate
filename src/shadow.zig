@@ -1,0 +1,369 @@
+const std = @import("std");
+const builtin = @import("builtin");
+
+const Allocator = std.mem.Allocator;
+const Dir = std.Io.Dir;
+
+pub const workspace_dir = ".synapse";
+
+const max_git_listing = 64 * 1024 * 1024;
+
+pub fn trackedFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{ "git", "ls-files", "-z" },
+        .cwd = .{ .path = root_abs },
+        .stdout_limit = .limited(max_git_listing),
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.GitFailed,
+        else => return error.GitFailed,
+    }
+
+    var files: std.ArrayList([]u8) = .empty;
+    errdefer freeFileList(gpa, files.items);
+    errdefer files.deinit(gpa);
+    var names = std.mem.tokenizeScalar(u8, result.stdout, 0);
+    while (names.next()) |name| {
+        const copy = try gpa.dupe(u8, name);
+        errdefer gpa.free(copy);
+        try files.append(gpa, copy);
+    }
+    return files.toOwnedSlice(gpa);
+}
+
+pub fn freeFileList(gpa: Allocator, files: []const []u8) void {
+    for (files) |file| gpa.free(file);
+}
+
+pub const Shadow = struct {
+    io: std.Io,
+    dir: Dir,
+
+    pub const Options = struct {
+        root_abs: []const u8,
+        shadow_abs: []const u8,
+        files: []const []const u8,
+        linked: []const []const u8 = &.{},
+    };
+
+    pub fn prepare(io: std.Io, options: Options) !Shadow {
+        try remove(io, options.root_abs, options.shadow_abs);
+
+        var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
+        defer root.close(io);
+        try Dir.cwd().createDirPath(io, options.shadow_abs);
+        var dir = try Dir.openDirAbsolute(io, options.shadow_abs, .{});
+        errdefer dir.close(io);
+
+        for (options.files) |file| {
+            if (isUnderAny(file, options.linked)) continue;
+            if (std.fs.path.dirname(file)) |parent| try dir.createDirPath(io, parent);
+            try root.copyFile(file, dir, file, io, .{});
+        }
+
+        var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+        for (options.linked) |link| {
+            root.access(io, link, .{}) catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => |e| return e,
+            };
+            const target = try joinWindows(&target_buf, options.root_abs, link);
+            const link_path = try joinWindows(&link_buf, options.shadow_abs, link);
+            try createJunction(io, link_path, target);
+        }
+        return .{ .io = io, .dir = dir };
+    }
+
+    pub fn writeFile(self: Shadow, sub_path: []const u8, data: []const u8) !void {
+        if (std.fs.path.dirname(sub_path)) |parent| try self.dir.createDirPath(self.io, parent);
+        try self.dir.writeFile(self.io, .{ .sub_path = sub_path, .data = data });
+    }
+
+    pub fn close(self: *Shadow) void {
+        self.dir.close(self.io);
+        self.* = undefined;
+    }
+};
+
+pub fn remove(io: std.Io, root_abs: []const u8, shadow_abs: []const u8) !void {
+    try ensureInsideWorkspace(root_abs, shadow_abs);
+    try Dir.cwd().deleteTree(io, shadow_abs);
+}
+
+pub fn ensureInsideWorkspace(root_abs: []const u8, shadow_abs: []const u8) error{ShadowOutsideWorkspace}!void {
+    if (!std.mem.startsWith(u8, shadow_abs, root_abs)) return error.ShadowOutsideWorkspace;
+    const rest = shadow_abs[root_abs.len..];
+    if (rest.len < 2 or !isSeparator(rest[0])) return error.ShadowOutsideWorkspace;
+    const inside = rest[1..];
+    if (!std.mem.startsWith(u8, inside, workspace_dir)) return error.ShadowOutsideWorkspace;
+    if (inside.len < workspace_dir.len + 2 or !isSeparator(inside[workspace_dir.len])) return error.ShadowOutsideWorkspace;
+    if (std.mem.indexOf(u8, inside, "..") != null) return error.ShadowOutsideWorkspace;
+}
+
+fn isSeparator(byte: u8) bool {
+    return byte == '\\' or byte == '/';
+}
+
+fn isUnderAny(file: []const u8, dirs: []const []const u8) bool {
+    for (dirs) |dir| {
+        if (std.mem.startsWith(u8, file, dir) and file.len > dir.len and isSeparator(file[dir.len])) return true;
+    }
+    return false;
+}
+
+fn joinWindows(buf: []u8, base: []const u8, relative: []const u8) ![]u8 {
+    const joined = try std.fmt.bufPrint(buf, "{s}\\{s}", .{ base, relative });
+    std.mem.replaceScalar(u8, joined, '/', '\\');
+    return joined;
+}
+
+const win = struct {
+    const windows = std.os.windows;
+    const generic_write: windows.DWORD = 0x40000000;
+    const open_existing: windows.DWORD = 3;
+    const flag_backup_semantics: windows.DWORD = 0x02000000;
+    const flag_open_reparse_point: windows.DWORD = 0x00200000;
+    const fsctl_set_reparse_point: windows.DWORD = 0x000900A4;
+    const reparse_tag_mount_point: u32 = 0xA0000003;
+    const reparse_header_len = 8;
+    const mount_point_header_len = 8;
+
+    extern "kernel32" fn CreateFileW(
+        name: [*:0]const u16,
+        access: windows.DWORD,
+        share: windows.DWORD,
+        security: ?*anyopaque,
+        disposition: windows.DWORD,
+        flags: windows.DWORD,
+        template: ?windows.HANDLE,
+    ) callconv(.winapi) windows.HANDLE;
+
+    extern "kernel32" fn DeviceIoControl(
+        device: windows.HANDLE,
+        code: windows.DWORD,
+        in_buffer: ?*const anyopaque,
+        in_size: windows.DWORD,
+        out_buffer: ?*anyopaque,
+        out_size: windows.DWORD,
+        returned: ?*windows.DWORD,
+        overlapped: ?*anyopaque,
+    ) callconv(.winapi) windows.BOOL;
+};
+
+pub fn createJunction(io: std.Io, link_abs: []const u8, target_abs: []const u8) !void {
+    if (builtin.os.tag != .windows) return error.JunctionUnsupported;
+
+    var link_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const link_len = try std.unicode.wtf8ToWtf16Le(&link_w, link_abs);
+    link_w[link_len] = 0;
+
+    const prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\??\\");
+    var target_w: [std.fs.max_path_bytes]u16 = undefined;
+    const target_len = try std.unicode.wtf8ToWtf16Le(&target_w, target_abs);
+    const target = target_w[0..target_len];
+
+    const substitute_bytes = (prefix.len + target.len) * 2;
+    const print_bytes = target.len * 2;
+    const path_bytes = substitute_bytes + 2 + print_bytes + 2;
+    const data_len = win.mount_point_header_len + path_bytes;
+    const total_len = win.reparse_header_len + data_len;
+
+    var buffer: [std.os.windows.MAXIMUM_REPARSE_DATA_BUFFER_SIZE]u8 align(4) = @splat(0);
+    if (total_len > buffer.len) return error.NameTooLong;
+    std.mem.writeInt(u32, buffer[0..4], win.reparse_tag_mount_point, .little);
+    std.mem.writeInt(u16, buffer[4..6], @intCast(data_len), .little);
+    std.mem.writeInt(u16, buffer[8..10], 0, .little);
+    std.mem.writeInt(u16, buffer[10..12], @intCast(substitute_bytes), .little);
+    std.mem.writeInt(u16, buffer[12..14], @intCast(substitute_bytes + 2), .little);
+    std.mem.writeInt(u16, buffer[14..16], @intCast(print_bytes), .little);
+    const paths = buffer[16..][0..path_bytes];
+    @memcpy(paths[0 .. prefix.len * 2], std.mem.sliceAsBytes(prefix));
+    @memcpy(paths[prefix.len * 2 ..][0 .. target.len * 2], std.mem.sliceAsBytes(target));
+    @memcpy(paths[substitute_bytes + 2 ..][0..print_bytes], std.mem.sliceAsBytes(target));
+
+    try Dir.cwd().createDirPath(io, link_abs);
+    errdefer Dir.cwd().deleteDir(io, link_abs) catch {};
+
+    const handle = win.CreateFileW(&link_w, win.generic_write, 0, null, win.open_existing, win.flag_backup_semantics | win.flag_open_reparse_point, null);
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.JunctionFailed;
+    defer std.os.windows.CloseHandle(handle);
+
+    var returned: std.os.windows.DWORD = 0;
+    if (win.DeviceIoControl(handle, win.fsctl_set_reparse_point, &buffer, @intCast(total_len), null, 0, &returned, null) == .FALSE) {
+        return error.JunctionFailed;
+    }
+}
+
+const testing = std.testing;
+
+const Project = struct {
+    tmp: testing.TmpDir,
+    root_abs: [:0]u8,
+    shadow_buf: [std.fs.max_path_bytes]u8 = undefined,
+
+    fn init() !Project {
+        var tmp = testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        const files = [_]struct { path: []const u8, data: []const u8 }{
+            .{ .path = "project/a.ts", .data = "export const a = 1;\n" },
+            .{ .path = "project/src/b.ts", .data = "export function b() { return 2; }\n" },
+            .{ .path = "project/node_modules/pkg/index.js", .data = "module.exports = 42;\n" },
+            .{ .path = "project/untracked.log", .data = "not listed by git\n" },
+        };
+        for (files) |file| {
+            try tmp.dir.createDirPath(testing.io, std.fs.path.dirname(file.path).?);
+            try tmp.dir.writeFile(testing.io, .{ .sub_path = file.path, .data = file.data });
+        }
+        const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "project", testing.allocator);
+        return .{ .tmp = tmp, .root_abs = root_abs };
+    }
+
+    fn deinit(self: *Project) void {
+        testing.allocator.free(self.root_abs);
+        self.tmp.cleanup();
+    }
+
+    fn shadowPath(self: *Project) ![]const u8 {
+        return std.fmt.bufPrint(&self.shadow_buf, "{s}\\.synapse\\shadow", .{self.root_abs});
+    }
+
+    fn options(self: *Project) !Shadow.Options {
+        return .{
+            .root_abs = self.root_abs,
+            .shadow_abs = try self.shadowPath(),
+            .files = &.{ "a.ts", "src/b.ts", "node_modules/pkg/index.js" },
+            .linked = &.{ "node_modules", "vendor_missing" },
+        };
+    }
+
+    fn read(self: *Project, sub_path: []const u8) ![]u8 {
+        var root = try Dir.openDirAbsolute(testing.io, self.root_abs, .{});
+        defer root.close(testing.io);
+        return root.readFileAlloc(testing.io, sub_path, testing.allocator, .unlimited);
+    }
+};
+
+fn expectFileContent(dir: Dir, sub_path: []const u8, expected: []const u8) !void {
+    const actual = try dir.readFileAlloc(testing.io, sub_path, testing.allocator, .unlimited);
+    defer testing.allocator.free(actual);
+    try testing.expectEqualStrings(expected, actual);
+}
+
+test "prepare copies tracked files, links heavy directories by junction and skips missing links" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+
+    var shadow = try Shadow.prepare(testing.io, try project.options());
+    defer shadow.close();
+
+    try expectFileContent(shadow.dir, "a.ts", "export const a = 1;\n");
+    try expectFileContent(shadow.dir, "src/b.ts", "export function b() { return 2; }\n");
+    try expectFileContent(shadow.dir, "node_modules/pkg/index.js", "module.exports = 42;\n");
+    try testing.expectError(error.FileNotFound, shadow.dir.access(testing.io, "untracked.log", .{}));
+    try testing.expectError(error.FileNotFound, shadow.dir.access(testing.io, "vendor_missing", .{}));
+
+    var listing = try shadow.dir.openDir(testing.io, ".", .{ .iterate = true });
+    defer listing.close(testing.io);
+    var iterator = listing.iterate();
+    var saw_link = false;
+    while (try iterator.next(testing.io)) |entry| {
+        if (std.mem.eql(u8, entry.name, "node_modules")) {
+            try testing.expectEqual(std.Io.File.Kind.sym_link, entry.kind);
+            saw_link = true;
+        }
+    }
+    try testing.expect(saw_link);
+}
+
+test "writing into the shadow never touches the project" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+
+    var shadow = try Shadow.prepare(testing.io, try project.options());
+    defer shadow.close();
+    try shadow.writeFile("a.ts", "export const a = 999;\n");
+    try shadow.writeFile("src/new/c.ts", "export const c = 3;\n");
+
+    try expectFileContent(shadow.dir, "a.ts", "export const a = 999;\n");
+    const original = try project.read("a.ts");
+    defer testing.allocator.free(original);
+    try testing.expectEqualStrings("export const a = 1;\n", original);
+    try testing.expectError(error.FileNotFound, project.read("src/new/c.ts"));
+}
+
+test "removing the shadow deletes the junction, never the directory it points to" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+
+    const options = try project.options();
+    var shadow = try Shadow.prepare(testing.io, options);
+    shadow.close();
+    try remove(testing.io, options.root_abs, options.shadow_abs);
+
+    const survivor = try project.read("node_modules/pkg/index.js");
+    defer testing.allocator.free(survivor);
+    try testing.expectEqualStrings("module.exports = 42;\n", survivor);
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
+}
+
+test "re-preparing replaces a stale shadow completely" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+
+    var first = try Shadow.prepare(testing.io, try project.options());
+    try first.writeFile("stale.ts", "left over\n");
+    try first.writeFile("a.ts", "changed\n");
+    first.close();
+
+    var second = try Shadow.prepare(testing.io, try project.options());
+    defer second.close();
+    try testing.expectError(error.FileNotFound, second.dir.access(testing.io, "stale.ts", .{}));
+    try expectFileContent(second.dir, "a.ts", "export const a = 1;\n");
+    try expectFileContent(second.dir, "node_modules/pkg/index.js", "module.exports = 42;\n");
+}
+
+test "shadow paths outside <root>\\.synapse\\ are refused before anything is deleted" {
+    const root = "C:\\work\\project";
+    const refused = [_][]const u8{
+        "C:\\work\\project",
+        "C:\\work\\project\\",
+        "C:\\work\\project\\src",
+        "C:\\work\\project\\.synapse",
+        "C:\\work\\project\\.synapse\\",
+        "C:\\work\\project\\.synapsex\\shadow",
+        "C:\\work\\project\\.synapse\\..\\src",
+        "C:\\work\\other\\.synapse\\shadow",
+        "C:\\work\\projectX\\.synapse\\shadow",
+        "D:\\",
+    };
+    for (refused) |candidate| {
+        errdefer std.debug.print("accepted shadow path: {s}\n", .{candidate});
+        try testing.expectError(error.ShadowOutsideWorkspace, ensureInsideWorkspace(root, candidate));
+    }
+    try ensureInsideWorkspace(root, "C:\\work\\project\\.synapse\\shadow");
+    try ensureInsideWorkspace(root, "C:\\work\\project/.synapse/shadow/run-1");
+}
+
+test "git lists this repository's tracked files" {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = try Dir.cwd().realPath(testing.io, &cwd_buf);
+    const files = try trackedFiles(testing.allocator, testing.io, cwd_buf[0..cwd_len]);
+    defer testing.allocator.free(files);
+    defer freeFileList(testing.allocator, files);
+
+    var saw_build = false;
+    var saw_root = false;
+    for (files) |file| {
+        if (std.mem.eql(u8, file, "build.zig")) saw_build = true;
+        if (std.mem.eql(u8, file, "src/root.zig")) saw_root = true;
+        try testing.expect(!std.mem.startsWith(u8, file, ".zig-cache"));
+    }
+    try testing.expect(saw_build and saw_root);
+}
