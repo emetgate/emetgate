@@ -11,13 +11,14 @@ const usage =
     \\
 ;
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 3) exitWithUsage();
 
     var buffer: [64 * 1024]u8 = undefined;
-    var stdout_writer: std.Io.File.Writer = .init(.stdout(), init.io, &buffer);
+    var stdout_writer: std.Io.File.Writer = .initStreaming(.stdout(), init.io, &buffer);
     const out = &stdout_writer.interface;
+    defer out.flush() catch {};
 
     synapse.alloc_bridge.install(init.gpa);
     defer synapse.alloc_bridge.uninstall();
@@ -27,12 +28,13 @@ pub fn main(init: std.process.Init) !void {
     const command = args[1];
     if (std.mem.eql(u8, command, "skeleton") and args.len == 3) {
         try printSkeleton(init, parser, args[2], out);
-    } else if (std.mem.eql(u8, command, "stats")) {
-        try printStats(init, parser, args[2..], out);
-    } else {
-        exitWithUsage();
+        return 0;
     }
-    try out.flush();
+    if (std.mem.eql(u8, command, "stats")) {
+        const skipped = try printStats(init, parser, args[2..], out);
+        return if (skipped == 0) 0 else 1;
+    }
+    exitWithUsage();
 }
 
 fn exitWithUsage() noreturn {
@@ -55,19 +57,26 @@ const Totals = struct {
     skipped: usize = 0,
 };
 
-fn printStats(init: std.process.Init, parser: ts.Parser, paths: []const [:0]const u8, out: *std.Io.Writer) !void {
+fn printStats(init: std.process.Init, parser: ts.Parser, paths: []const [:0]const u8, out: *std.Io.Writer) !usize {
     var totals: Totals = .{};
     for (paths) |path| {
-        const doc = try Document.open(init.gpa, init.io, .cwd(), path, parser);
-        defer doc.deinit();
-
-        const text = skeleton.skeletonize(init.gpa, parser, doc.tree) catch |err| switch (err) {
-            error.SourceHasErrors, error.SkeletonInvalid => {
+        const doc = Document.open(init.gpa, init.io, .cwd(), path, parser) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
                 try out.print("{s}  skipped: {t}\n", .{ path, err });
                 totals.skipped += 1;
                 continue;
             },
-            else => return err,
+        };
+        defer doc.deinit();
+
+        const text = skeleton.skeletonize(init.gpa, parser, doc.tree) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                try out.print("{s}  skipped: {t}\n", .{ path, err });
+                totals.skipped += 1;
+                continue;
+            },
         };
         defer init.gpa.free(text);
         const reparsed = try parser.parse(text);
@@ -84,6 +93,7 @@ fn printStats(init: std.process.Init, parser: ts.Parser, paths: []const [:0]cons
     }
     try out.print("\n{d} files, {d} skipped\n", .{ totals.files, totals.skipped });
     try printRow(out, "TOTAL", totals.before, totals.after);
+    return totals.skipped;
 }
 
 fn printRow(out: *std.Io.Writer, label: []const u8, before: skeleton.Metrics, after: skeleton.Metrics) !void {

@@ -92,6 +92,14 @@ pub const Node = struct {
         return wrap(c.ts_node_child_by_field_name(self.raw, field.ptr, len));
     }
 
+    pub fn prevSibling(self: Node) ?Node {
+        return wrap(c.ts_node_prev_sibling(self.raw));
+    }
+
+    pub fn prevNamedSibling(self: Node) ?Node {
+        return wrap(c.ts_node_prev_named_sibling(self.raw));
+    }
+
     pub fn parent(self: Node) ?Node {
         return wrap(c.ts_node_parent(self.raw));
     }

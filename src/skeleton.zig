@@ -51,7 +51,7 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Err
 
 fn planCut(source: []const u8, function: syntax.Function) ?Cut {
     if (!std.mem.eql(u8, "statement_block", function.body.kind())) return null;
-    const terminator = terminatorFor(function);
+    const terminator: Terminator = if (followsComment(function.body)) .empty_block else terminatorFor(function);
     const body_start = function.body.startByte();
     return .{
         .start = if (terminator == .semicolon) trimTrailingWhitespace(source, body_start) else body_start,
@@ -63,7 +63,7 @@ fn planCut(source: []const u8, function: syntax.Function) ?Cut {
 fn terminatorFor(function: syntax.Function) Terminator {
     return switch (function.kind) {
         .function_declaration => .semicolon,
-        .method_definition => if (isClassMember(function.node)) .semicolon else .empty_block,
+        .method_definition => if (isClassMember(function.node) and !isDecorated(function.node)) .semicolon else .empty_block,
         .generator_function_declaration,
         .function_expression,
         .generator_function,
@@ -76,6 +76,26 @@ fn terminatorFor(function: syntax.Function) Terminator {
 fn isClassMember(node: ts.Node) bool {
     const parent = node.parent() orelse return false;
     return std.mem.eql(u8, "class_body", parent.kind());
+}
+
+fn isDecorated(node: ts.Node) bool {
+    if (node.namedChild(0)) |first| {
+        if (isKind(first, "decorator")) return true;
+    }
+    var prev = node.prevNamedSibling();
+    while (prev) |sibling| : (prev = sibling.prevNamedSibling()) {
+        if (!isKind(sibling, "comment")) return isKind(sibling, "decorator");
+    }
+    return false;
+}
+
+fn followsComment(body: ts.Node) bool {
+    const prev = body.prevSibling() orelse return false;
+    return isKind(prev, "comment");
+}
+
+fn isKind(node: ts.Node, kind: []const u8) bool {
+    return std.mem.eql(u8, kind, node.kind());
 }
 
 fn trimTrailingWhitespace(source: []const u8, end: u32) u32 {
@@ -114,6 +134,21 @@ fn skeletonOfSource(parser: ts.Parser, source: []const u8) ![]u8 {
     const tree = try parser.parse(source);
     defer tree.deinit();
     return skeletonize(testing.allocator, parser, tree);
+}
+
+fn expectSkeleton(source: []const u8, expected: []const u8) !void {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    const skeleton = try skeletonOfSource(parser, source);
+    defer testing.allocator.free(skeleton);
+    try testing.expectEqualStrings(expected, skeleton);
+
+    const again = try skeletonOfSource(parser, skeleton);
+    defer testing.allocator.free(again);
+    try testing.expectEqualStrings(skeleton, again);
 }
 
 test "functions.ts skeleton matches the golden file byte for byte" {
@@ -172,33 +207,58 @@ test "sources with syntax errors are refused instead of guessed at" {
 }
 
 test "expression bodies survive while block functions inside them are stripped" {
-    alloc_bridge.install(testing.allocator);
-    defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
-    defer parser.deinit();
-
-    const skeleton = try skeletonOfSource(parser, "export const load = (u: string) => fetch(u).then((r) => {\n  return r.json();\n});\n");
-    defer testing.allocator.free(skeleton);
-    try testing.expectEqualStrings("export const load = (u: string) => fetch(u).then((r) => {});\n", skeleton);
+    try expectSkeleton(
+        "export const load = (u: string) => fetch(u).then((r) => {\n  return r.json();\n});\n",
+        "export const load = (u: string) => fetch(u).then((r) => {});\n",
+    );
 }
 
 test "object methods keep an empty block, class methods and declarations end with a semicolon" {
-    alloc_bridge.install(testing.allocator);
-    defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
-    defer parser.deinit();
-
-    const skeleton = try skeletonOfSource(parser,
+    try expectSkeleton(
         \\const api = { *ids() { yield 1; }, async get() { return 1; } };
         \\class A { run(): void { go(); } }
         \\function* gen(): Generator<number> { yield 2; }
-    );
-    defer testing.allocator.free(skeleton);
-    try testing.expectEqualStrings(
+    ,
         \\const api = { *ids() {}, async get() {} };
         \\class A { run(): void; }
         \\function* gen(): Generator<number> {}
-    , skeleton);
+    );
+}
+
+test "decorated class methods keep an empty block because the grammar has no bodyless form" {
+    try expectSkeleton(
+        \\@Injectable()
+        \\export class Users {
+        \\  @Get(":id")
+        \\  async find(@Param("id") id: string): Promise<string> { return id; }
+        \\  @Cached() // hot path
+        \\  get size(): number { return 1; }
+        \\  plain(): void { go(); }
+        \\}
+    ,
+        \\@Injectable()
+        \\export class Users {
+        \\  @Get(":id")
+        \\  async find(@Param("id") id: string): Promise<string> {}
+        \\  @Cached() // hot path
+        \\  get size(): number {}
+        \\  plain(): void;
+        \\}
+    );
+}
+
+test "a line comment before the body never swallows the terminator" {
+    try expectSkeleton(
+        "function f() // c\n{ return 1; }\nclass A {\n  m() // c\n  { }\n  *g() { yield 1; }\n}\nfunction h() /* c */ { return 1; }\n",
+        "function f() // c\n{}\nclass A {\n  m() // c\n  {}\n  *g();\n}\nfunction h() /* c */ {}\n",
+    );
+}
+
+test "CRLF line endings and a UTF-8 BOM are preserved around the cuts" {
+    try expectSkeleton(
+        "\xEF\xBB\xBFexport function a(): number {\r\n  return 1;\r\n}\r\nclass B {\r\n  m() {\r\n  }\r\n}\r\n",
+        "\xEF\xBB\xBFexport function a(): number;\r\nclass B {\r\n  m();\r\n}\r\n",
+    );
 }
 
 test "a source without functions is returned unchanged" {
