@@ -1,69 +1,95 @@
 const std = @import("std");
 const ts = @import("tree_sitter.zig");
-const alloc_bridge = @import("alloc_bridge.zig");
+const symbol = @import("symbol.zig");
+const Runtime = @import("runtime.zig").Runtime;
 const test_util = @import("test_util.zig");
 
 const max_source_len = std.math.maxInt(u32);
 
-pub const Document = struct {
-    gpa: std.mem.Allocator,
+pub const Snapshot = struct {
+    runtime: *Runtime,
     source: []u8,
     tree: ts.Tree,
+    table: ?symbol.Table = null,
 
-    pub const OpenError = std.Io.Dir.ReadFileAllocError || ts.Error;
+    pub const CreateError = ts.Error || std.mem.Allocator.Error;
+    pub const LoadError = std.Io.Dir.ReadFileAllocError || ts.Error;
 
-    pub fn open(
-        gpa: std.mem.Allocator,
-        io: std.Io,
-        dir: std.Io.Dir,
-        path: []const u8,
-        parser: ts.Parser,
-    ) OpenError!Document {
-        const source = try dir.readFileAlloc(io, path, gpa, .limited(max_source_len));
-        errdefer gpa.free(source);
-        return .{ .gpa = gpa, .source = source, .tree = try parser.parse(source) };
+    pub fn fromSource(runtime: *Runtime, source: []u8) CreateError!*Snapshot {
+        errdefer runtime.gpa.free(source);
+        const tree = try runtime.parser.parse(source);
+        errdefer tree.deinit();
+        const self = try runtime.gpa.create(Snapshot);
+        self.* = .{ .runtime = runtime, .source = source, .tree = tree };
+        runtime.live_snapshots += 1;
+        return self;
     }
 
-    pub fn deinit(self: Document) void {
+    pub fn load(runtime: *Runtime, io: std.Io, dir: std.Io.Dir, path: []const u8) LoadError!*Snapshot {
+        const source = try dir.readFileAlloc(io, path, runtime.gpa, .limited(max_source_len));
+        return fromSource(runtime, source);
+    }
+
+    pub fn destroy(self: *Snapshot) void {
+        const runtime = self.runtime;
+        if (self.table) |table| table.deinit();
         self.tree.deinit();
-        self.gpa.free(self.source);
+        runtime.gpa.free(self.source);
+        self.* = undefined;
+        runtime.gpa.destroy(self);
+        runtime.live_snapshots -= 1;
+    }
+
+    pub fn symbols(self: *Snapshot) symbol.Table.BuildError!*const symbol.Table {
+        if (self.table == null) self.table = try symbol.Table.build(self.runtime.gpa, self.tree);
+        return &self.table.?;
     }
 };
 
 const testing = std.testing;
 
-test "opens a fixture from disk and parses it without errors" {
-    alloc_bridge.install(testing.allocator);
-    defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
-    defer parser.deinit();
+test "loads a fixture from disk into a snapshot that owns its source and tree" {
+    var runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(&runtime);
 
-    const doc = try test_util.openFixture(parser, "functions.ts");
-    defer doc.deinit();
+    const snapshot = try test_util.loadFixture(&runtime, "functions.ts");
+    defer snapshot.destroy();
 
-    try testing.expect(doc.source.len > 0);
-    try testing.expectEqualStrings("program", doc.tree.root().kind());
-    try testing.expect(!doc.tree.root().hasError());
-    try testing.expectEqual(@as(u32, @intCast(doc.source.len)), doc.tree.root().endByte());
+    try testing.expect(snapshot.source.len > 0);
+    try testing.expectEqualStrings("program", snapshot.tree.root().kind());
+    try testing.expect(!snapshot.tree.root().hasError());
+    try testing.expectEqual(@as(u32, @intCast(snapshot.source.len)), snapshot.tree.root().endByte());
+    try testing.expect(snapshot.tree.source.ptr == snapshot.source.ptr);
 }
 
-test "a syntactically broken fixture loads but reports the error" {
-    alloc_bridge.install(testing.allocator);
-    defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
-    defer parser.deinit();
+test "a syntactically broken fixture loads but reports the error and refuses a symbol table" {
+    var runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(&runtime);
 
-    const doc = try test_util.openFixture(parser, "broken.ts");
-    defer doc.deinit();
+    const snapshot = try test_util.loadFixture(&runtime, "broken.ts");
+    defer snapshot.destroy();
 
-    try testing.expect(doc.tree.root().hasError());
+    try testing.expect(snapshot.tree.root().hasError());
+    try testing.expectError(error.SourceHasErrors, snapshot.symbols());
+    try testing.expect(snapshot.table == null);
 }
 
-test "a missing file surfaces FileNotFound and leaks nothing" {
-    alloc_bridge.install(testing.allocator);
-    defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
-    defer parser.deinit();
+test "a missing file surfaces FileNotFound and creates no snapshot" {
+    var runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(&runtime);
 
-    try testing.expectError(error.FileNotFound, test_util.openFixture(parser, "does-not-exist.ts"));
+    try testing.expectError(error.FileNotFound, test_util.loadFixture(&runtime, "does-not-exist.ts"));
+    try testing.expectEqual(@as(usize, 0), runtime.live_snapshots);
+}
+
+test "the symbol table is built once, cached, and released with its snapshot" {
+    var runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(&runtime);
+
+    const snapshot = try test_util.loadFixture(&runtime, "functions.ts");
+    const first = try snapshot.symbols();
+    const second = try snapshot.symbols();
+    try testing.expect(first == second);
+    try testing.expect(first.symbols.len > 0);
+    snapshot.destroy();
 }

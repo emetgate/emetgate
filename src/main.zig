@@ -1,12 +1,13 @@
 const std = @import("std");
 const synapse = @import("synapse");
-const stdio = synapse.stdio;
 
 const ts = synapse.tree_sitter;
 const skeleton = synapse.skeleton;
 const symbol = synapse.symbol;
 const cas = synapse.cas;
-const Document = synapse.loader.Document;
+const stdio = synapse.stdio;
+const Runtime = synapse.runtime.Runtime;
+const Snapshot = synapse.loader.Snapshot;
 
 const usage =
     \\usage: synapse skeleton <file.ts>
@@ -26,33 +27,31 @@ pub fn main(init: std.process.Init) !u8 {
     var stdout_writer: std.Io.File.Writer = .initStreaming(stdio.stdout(), init.io, &buffer);
     const out = &stdout_writer.interface;
 
-    synapse.alloc_bridge.install(init.gpa);
-    defer synapse.alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
-    defer parser.deinit();
+    var runtime = try Runtime.init(init.gpa);
+    defer runtime.deinit() catch |err| std.debug.panic("runtime closed with live snapshots: {t}", .{err});
 
-    const status = dispatch(init, parser, args, out) catch |err| return fail(err);
+    const status = dispatch(init, &runtime, args, out) catch |err| return fail(err);
     out.flush() catch |err| return fail(err);
     return status;
 }
 
-fn dispatch(init: std.process.Init, parser: ts.Parser, args: []const [:0]const u8, out: *std.Io.Writer) !u8 {
+fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u8, out: *std.Io.Writer) !u8 {
     const command = args[1];
     if (std.mem.eql(u8, command, "skeleton") and args.len == 3) {
-        try printSkeleton(init, parser, args[2], out);
+        try printSkeleton(init, runtime, args[2], out);
         return 0;
     }
     if (std.mem.eql(u8, command, "symbols") and args.len == 3) {
-        try printSymbols(init, parser, args[2], out);
+        try printSymbols(init, runtime, args[2], out);
         return 0;
     }
     if (std.mem.eql(u8, command, "stats")) {
-        const skipped = try printStats(init, parser, args[2..], out);
+        const skipped = try printStats(init, runtime, args[2..], out);
         return if (skipped == 0) 0 else 1;
     }
     if (std.mem.eql(u8, command, "mutate")) {
         const request = MutateRequest.parse(args[2..]) orelse exitWithUsage();
-        try mutate(init, parser, request, out);
+        try mutate(init, runtime, request, out);
         return 0;
     }
     exitWithUsage();
@@ -82,19 +81,18 @@ fn exitCodeFor(err: anyerror) u8 {
     };
 }
 
-fn printSkeleton(init: std.process.Init, parser: ts.Parser, path: []const u8, out: *std.Io.Writer) !void {
-    const doc = try Document.open(init.gpa, init.io, .cwd(), path, parser);
-    defer doc.deinit();
-    const text = try skeleton.skeletonize(init.gpa, parser, doc.tree);
-    defer init.gpa.free(text);
+fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {
+    const snapshot = try Snapshot.load(runtime, init.io, .cwd(), path);
+    defer snapshot.destroy();
+    const text = try skeleton.skeletonize(runtime.gpa, runtime.parser, snapshot.tree);
+    defer runtime.gpa.free(text);
     try out.writeAll(text);
 }
 
-fn printSymbols(init: std.process.Init, parser: ts.Parser, path: []const u8, out: *std.Io.Writer) !void {
-    const doc = try Document.open(init.gpa, init.io, .cwd(), path, parser);
-    defer doc.deinit();
-    const table = try symbol.Table.build(init.gpa, doc.tree);
-    defer table.deinit();
+fn printSymbols(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {
+    const snapshot = try Snapshot.load(runtime, init.io, .cwd(), path);
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
 
     for (table.symbols) |entry| {
         const point = entry.node.startPoint();
@@ -147,15 +145,15 @@ const MutateRequest = struct {
     }
 };
 
-fn mutate(init: std.process.Init, parser: ts.Parser, request: MutateRequest, out: *std.Io.Writer) !void {
-    const gpa = init.gpa;
+fn mutate(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out: *std.Io.Writer) !void {
+    const gpa = runtime.gpa;
     const ref = try symbol.Ref.parse(gpa, request.symbol);
     defer ref.deinit(gpa);
     const expected = try symbol.parseHash(request.hash);
 
-    const doc = try Document.open(gpa, init.io, .cwd(), request.path, parser);
-    defer doc.deinit();
-    if (doc.tree.root().hasError()) return error.SourceHasErrors;
+    const base = try Snapshot.load(runtime, init.io, .cwd(), request.path);
+    defer base.destroy();
+    if (base.tree.root().hasError()) return error.SourceHasErrors;
 
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
@@ -164,12 +162,12 @@ fn mutate(init: std.process.Init, parser: ts.Parser, request: MutateRequest, out
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const patched = try cas.apply(gpa, parser, doc.tree, .{ .ref = ref, .expected_hash = expected, .new_body = body });
-    defer patched.deinit();
+    const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
+    defer applied.snapshot.destroy();
 
-    try out.writeAll(patched.source);
+    try out.writeAll(applied.snapshot.source);
     try out.flush();
-    std.debug.print("mutated {f}  {s} -> {s}\n", .{ ref, &symbol.formatHash(expected), &symbol.formatHash(patched.hash) });
+    std.debug.print("mutated {f}  {s} -> {s}\n", .{ ref, &symbol.formatHash(expected), &symbol.formatHash(applied.hash) });
 }
 
 const Totals = struct {
@@ -179,10 +177,10 @@ const Totals = struct {
     skipped: usize = 0,
 };
 
-fn printStats(init: std.process.Init, parser: ts.Parser, paths: []const [:0]const u8, out: *std.Io.Writer) !usize {
+fn printStats(init: std.process.Init, runtime: *Runtime, paths: []const [:0]const u8, out: *std.Io.Writer) !usize {
     var totals: Totals = .{};
     for (paths) |path| {
-        const doc = Document.open(init.gpa, init.io, .cwd(), path, parser) catch |err| switch (err) {
+        const snapshot = Snapshot.load(runtime, init.io, .cwd(), path) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
                 try out.print("{s}  skipped: {t}\n", .{ path, err });
@@ -190,9 +188,9 @@ fn printStats(init: std.process.Init, parser: ts.Parser, paths: []const [:0]cons
                 continue;
             },
         };
-        defer doc.deinit();
+        defer snapshot.destroy();
 
-        const text = skeleton.skeletonize(init.gpa, parser, doc.tree) catch |err| switch (err) {
+        const text = skeleton.skeletonize(runtime.gpa, runtime.parser, snapshot.tree) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
                 try out.print("{s}  skipped: {t}\n", .{ path, err });
@@ -200,11 +198,11 @@ fn printStats(init: std.process.Init, parser: ts.Parser, paths: []const [:0]cons
                 continue;
             },
         };
-        defer init.gpa.free(text);
-        const reparsed = try parser.parse(text);
+        defer runtime.gpa.free(text);
+        const reparsed = try runtime.parser.parse(text);
         defer reparsed.deinit();
 
-        const before = skeleton.measure(doc.tree);
+        const before = skeleton.measure(snapshot.tree);
         const after = skeleton.measure(reparsed);
         try printRow(out, path, before, after);
         totals.before.bytes += before.bytes;
