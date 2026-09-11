@@ -63,9 +63,11 @@ fn printSymbols(init: std.process.Init, parser: ts.Parser, path: []const u8, out
     defer table.deinit();
 
     for (table.symbols) |entry| {
-        try out.print("{s}  L{d}  {t}  {f}{s}\n", .{
+        const point = entry.node.startPoint();
+        try out.print("{s}  L{d}:{d}  {t}  {f}{s}\n", .{
             &symbol.formatHash(entry.hash),
-            entry.node.startPoint().row + 1,
+            point.row + 1,
+            point.column + 1,
             entry.kind,
             entry.ref,
             if (entry.ambiguous) "  (ambiguous)" else "",

@@ -112,7 +112,7 @@ fn isOneOf(kind: []const u8, kinds: []const []const u8) bool {
     return false;
 }
 
-const Span = struct { start: u32, end: u32 };
+pub const Span = struct { start: u32, end: u32 };
 
 pub fn collectFunctions(gpa: Allocator, tree: ts.Tree) Allocator.Error![]Function {
     var found: std.ArrayList(Function) = .empty;
@@ -244,6 +244,7 @@ pub const Symbol = struct {
     kind: Kind,
     node: ts.Node,
     body: ts.Node,
+    declaration: Span,
     hash: Hash,
     ambiguous: bool = false,
 };
@@ -307,6 +308,7 @@ fn describe(arena: Allocator, tree: ts.Tree, function: Function) Allocator.Error
     const name = function.name orelse return null;
     if (!isOneOf(name.kind(), &addressable_name_kinds)) return null;
     const container = try containerPath(arena, tree, function.node) orelse return null;
+    const declaration = declarationSpan(function);
     return .{
         .ref = .{
             .container = container,
@@ -317,7 +319,8 @@ fn describe(arena: Allocator, tree: ts.Tree, function: Function) Allocator.Error
         .kind = kind,
         .node = function.node,
         .body = function.body,
-        .hash = hashOf(tree.text(function.node)),
+        .declaration = declaration,
+        .hash = hashOf(tree.source[declaration.start..declaration.end]),
     };
 }
 
@@ -396,11 +399,54 @@ fn containerPath(arena: Allocator, tree: ts.Tree, node: ts.Node) Allocator.Error
             .named => |name| name,
         };
         if (!isOneOf(name.kind(), &container_name_kinds)) return null;
-        var segments = std.mem.splitBackwardsScalar(u8, tree.text(name), '.');
-        while (segments.next()) |segment| try reversed.append(arena, segment);
+        const first = reversed.items.len;
+        try appendNameSegments(arena, tree, name, &reversed);
+        std.mem.reverse([]const u8, reversed.items[first..]);
     }
     std.mem.reverse([]const u8, reversed.items);
     return reversed.items;
+}
+
+const declaration_statements = [_][]const u8{
+    "lexical_declaration",
+    "variable_declaration",
+    "expression_statement",
+};
+
+fn declarationSpan(function: Function) Span {
+    var declaration = bindingSite(function.node) orelse function.node;
+    if (declaration.parent()) |parent| {
+        if (isOneOf(parent.kind(), &declaration_statements)) declaration = parent;
+    }
+    if (declaration.parent()) |parent| {
+        if (std.mem.eql(u8, "export_statement", parent.kind())) declaration = parent;
+    }
+    return .{ .start = leadingDecoratorStart(declaration), .end = declaration.endByte() };
+}
+
+fn leadingDecoratorStart(node: ts.Node) u32 {
+    var start = node.startByte();
+    var prev = node.prevNamedSibling();
+    while (prev) |sibling| : (prev = sibling.prevNamedSibling()) {
+        if (std.mem.eql(u8, "comment", sibling.kind())) continue;
+        if (!std.mem.eql(u8, "decorator", sibling.kind())) break;
+        start = sibling.startByte();
+    }
+    return start;
+}
+
+const identifier_segment_kinds = [_][]const u8{ "identifier", "property_identifier", "type_identifier" };
+
+fn appendNameSegments(arena: Allocator, tree: ts.Tree, name: ts.Node, out: *std.ArrayList([]const u8)) Allocator.Error!void {
+    if (!std.mem.eql(u8, "nested_identifier", name.kind())) return out.append(arena, tree.text(name));
+    var walker = traversal.Walker.init(name);
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        if (node.childCount() == 0 and isOneOf(node.kind(), &identifier_segment_kinds)) {
+            try out.append(arena, tree.text(node));
+        }
+    }
 }
 
 const testing = std.testing;
@@ -754,4 +800,69 @@ test "hash is BLAKE3-128 of the function node and ignores edits elsewhere in the
     try testing.expectEqual(f_original.hash, (try resolveText(b, "f")).hash);
     try testing.expect(!std.mem.eql(u8, &f_original.hash, &(try resolveText(c, "f")).hash));
     try testing.expect(!std.mem.eql(u8, &(try resolveText(a, "g")).hash, &(try resolveText(b, "g")).hash));
+}
+
+test "hash covers decorators, export, modifiers and the binding, not only the function node" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const Pair = struct { ref: []const u8, plain: []const u8, changed: []const u8 };
+    const pairs = [_]Pair{
+        .{ .ref = "C.m", .plain = "class C { m() {} }", .changed = "class C { @memo m() {} }" },
+        .{ .ref = "f", .plain = "function f() {}", .changed = "export function f() {}" },
+        .{ .ref = "C.f", .plain = "class C { f = () => {}; }", .changed = "class C { private readonly f = () => {}; }" },
+        .{ .ref = "f", .plain = "const f = () => {};", .changed = "const f: Handler = () => {};" },
+        .{ .ref = "f", .plain = "let f = () => {};", .changed = "export const f = () => {};" },
+    };
+    for (pairs) |pair| {
+        errdefer std.debug.print("pair: {s} | {s}\n", .{ pair.plain, pair.changed });
+        const plain = try test_util.TestTree.init(pair.plain);
+        defer plain.deinit();
+        const changed = try test_util.TestTree.init(pair.changed);
+        defer changed.deinit();
+        const a = try Table.build(testing.allocator, plain.tree);
+        defer a.deinit();
+        const b = try Table.build(testing.allocator, changed.tree);
+        defer b.deinit();
+        try testing.expect(!std.mem.eql(u8, &(try resolveText(a, pair.ref)).hash, &(try resolveText(b, pair.ref)).hash));
+    }
+}
+
+test "dotted namespace names are normalised from identifiers, ignoring spacing and comments" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const t = try test_util.TestTree.init(
+        \\namespace A . B { export function f() {} }
+        \\namespace A./* x.y@get */B { export function g() {} }
+        \\namespace A.B { export function h() {} }
+    );
+    defer t.deinit();
+
+    try expectSymbols(t.tree, &.{
+        .{ .ref = "A.B.f", .kind = .function },
+        .{ .ref = "A.B.g", .kind = .function },
+        .{ .ref = "A.B.h", .kind = .function },
+    });
+}
+
+test "every unambiguous symbol resolves back to itself through its canonical text" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    var buf: [256]u8 = undefined;
+    for ([_][]const u8{ "functions.ts", "service.ts" }) |name| {
+        const doc = try test_util.openFixture(parser, name);
+        defer doc.deinit();
+        const table = try Table.build(testing.allocator, doc.tree);
+        defer table.deinit();
+
+        for (table.symbols) |*entry| {
+            if (entry.ambiguous) continue;
+            const text = try std.fmt.bufPrint(&buf, "{f}", .{entry.ref});
+            errdefer std.debug.print("round trip failed: {s} in {s}\n", .{ text, name });
+            try testing.expectEqual(entry, try resolveText(table, text));
+        }
+    }
 }
