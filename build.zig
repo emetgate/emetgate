@@ -27,6 +27,21 @@ pub fn build(b: *std.Build) void {
     });
     synapse.linkLibrary(tree_sitter);
 
+    const exe = b.addExecutable(.{
+        .name = "synapse",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "synapse", .module = synapse }},
+        }),
+    });
+    b.installArtifact(exe);
+
+    const run_exe = b.addRunArtifact(exe);
+    if (b.args) |args| run_exe.addArgs(args);
+    b.step("run", "Run the synapse CLI").dependOn(&run_exe.step);
+
     const tests = b.addTest(.{ .root_module = synapse });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path("."));
@@ -65,10 +80,8 @@ fn buildTreeSitter(
         .flags = c_flags,
     });
 
-    const lib = b.addLibrary(.{
+    return b.addLibrary(.{
         .name = "tree-sitter-typescript",
         .root_module = module,
     });
-    b.installArtifact(lib);
-    return lib;
 }

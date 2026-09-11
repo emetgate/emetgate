@@ -75,6 +75,10 @@ pub const Node = struct {
         return c.ts_node_has_error(self.raw);
     }
 
+    pub fn childCount(self: Node) u32 {
+        return c.ts_node_child_count(self.raw);
+    }
+
     pub fn namedChildCount(self: Node) u32 {
         return c.ts_node_named_child_count(self.raw);
     }
@@ -164,7 +168,10 @@ pub const Walker = struct {
     pub fn next(self: *Walker) ?Entry {
         switch (self.state) {
             .done => return null,
-            .fresh => self.state = .walking,
+            .fresh => {
+                self.state = .walking;
+                self.skip_children = false;
+            },
             .walking => if (!self.advance()) {
                 self.state = .done;
                 return null;
@@ -322,4 +329,27 @@ test "walker honours skipChildren and never escapes a subtree root" {
         if (std.mem.eql(u8, "statement_block", entry.node.kind())) walker.skipChildren();
     }
     try testing.expectEqual(@as(usize, 7), visited);
+}
+
+test "walker on a leaf yields only the leaf, and an early skipChildren is ignored" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const t = try TestTree.init("x;");
+    defer t.deinit();
+
+    const statement = t.tree.root().namedChild(0).?;
+    const leaf = statement.namedChild(0).?;
+    try testing.expectEqual(@as(u32, 0), leaf.childCount());
+
+    var leaf_walker = Walker.init(leaf);
+    defer leaf_walker.deinit();
+    try testing.expect(leaf_walker.next().?.node.eql(leaf));
+    try testing.expect(leaf_walker.next() == null);
+
+    var early = Walker.init(statement);
+    defer early.deinit();
+    early.skipChildren();
+    try testing.expect(early.next().?.node.eql(statement));
+    try testing.expect(early.next().?.node.eql(leaf));
 }

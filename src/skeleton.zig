@@ -1,0 +1,218 @@
+const std = @import("std");
+const ts = @import("ts.zig");
+const syntax = @import("syntax.zig");
+const alloc_bridge = @import("alloc_bridge.zig");
+const document = @import("document.zig");
+
+pub const Error = error{ SourceHasErrors, SkeletonInvalid } || std.mem.Allocator.Error || ts.Error;
+
+const Terminator = enum {
+    semicolon,
+    empty_block,
+
+    fn text(self: Terminator) []const u8 {
+        return switch (self) {
+            .semicolon => ";",
+            .empty_block => "{}",
+        };
+    }
+};
+
+const Cut = struct {
+    start: u32,
+    end: u32,
+    terminator: Terminator,
+};
+
+pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Error![]u8 {
+    if (tree.root().hasError()) return error.SourceHasErrors;
+
+    const functions = try syntax.collectFunctions(gpa, tree);
+    defer gpa.free(functions);
+
+    var out: std.ArrayList(u8) = try .initCapacity(gpa, tree.source.len);
+    errdefer out.deinit(gpa);
+
+    var copied: u32 = 0;
+    for (functions) |function| {
+        const cut = planCut(tree.source, function) orelse continue;
+        if (cut.start < copied) continue;
+        out.appendSliceAssumeCapacity(tree.source[copied..cut.start]);
+        out.appendSliceAssumeCapacity(cut.terminator.text());
+        copied = cut.end;
+    }
+    out.appendSliceAssumeCapacity(tree.source[copied..]);
+
+    const skeleton = try out.toOwnedSlice(gpa);
+    errdefer gpa.free(skeleton);
+    try verify(parser, skeleton);
+    return skeleton;
+}
+
+fn planCut(source: []const u8, function: syntax.Function) ?Cut {
+    if (!std.mem.eql(u8, "statement_block", function.body.kind())) return null;
+    const terminator = terminatorFor(function);
+    const body_start = function.body.startByte();
+    return .{
+        .start = if (terminator == .semicolon) trimTrailingWhitespace(source, body_start) else body_start,
+        .end = function.body.endByte(),
+        .terminator = terminator,
+    };
+}
+
+fn terminatorFor(function: syntax.Function) Terminator {
+    return switch (function.kind) {
+        .function_declaration => .semicolon,
+        .method_definition => if (isClassMember(function.node)) .semicolon else .empty_block,
+        .generator_function_declaration,
+        .function_expression,
+        .generator_function,
+        .arrow_function,
+        .class_static_block,
+        => .empty_block,
+    };
+}
+
+fn isClassMember(node: ts.Node) bool {
+    const parent = node.parent() orelse return false;
+    return std.mem.eql(u8, "class_body", parent.kind());
+}
+
+fn trimTrailingWhitespace(source: []const u8, end: u32) u32 {
+    var i = end;
+    while (i > 0 and std.ascii.isWhitespace(source[i - 1])) i -= 1;
+    return i;
+}
+
+fn verify(parser: ts.Parser, skeleton: []const u8) Error!void {
+    const tree = try parser.parse(skeleton);
+    defer tree.deinit();
+    if (tree.root().hasError()) return error.SkeletonInvalid;
+}
+
+pub const Metrics = struct {
+    bytes: usize,
+    tokens: usize,
+};
+
+pub fn measure(tree: ts.Tree) Metrics {
+    var tokens: usize = 0;
+    var walker = ts.Walker.init(tree.root());
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        if (node.childCount() == 0 and node.endByte() > node.startByte()) tokens += 1;
+    }
+    return .{ .bytes = tree.source.len, .tokens = tokens };
+}
+
+const testing = std.testing;
+
+const fixtures = [_][]const u8{ "functions.ts", "service.ts" };
+
+fn skeletonOfSource(parser: ts.Parser, source: []const u8) ![]u8 {
+    const tree = try parser.parse(source);
+    defer tree.deinit();
+    return skeletonize(testing.allocator, parser, tree);
+}
+
+test "functions.ts skeleton matches the golden file byte for byte" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    const doc = try document.openFixture(parser, "functions.ts");
+    defer doc.deinit();
+    const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
+    defer testing.allocator.free(skeleton);
+
+    const golden = try std.Io.Dir.cwd().readFileAlloc(testing.io, document.fixture_dir ++ "functions.skeleton.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(golden);
+    try testing.expectEqualStrings(golden, skeleton);
+}
+
+test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    for (fixtures) |name| {
+        errdefer std.debug.print("fixture: {s}\n", .{name});
+        const doc = try document.openFixture(parser, name);
+        defer doc.deinit();
+
+        const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
+        defer testing.allocator.free(skeleton);
+        const reparsed = try parser.parse(skeleton);
+        defer reparsed.deinit();
+        try testing.expect(!reparsed.root().hasError());
+
+        const before = measure(doc.tree);
+        const after = measure(reparsed);
+        try testing.expect(after.bytes < before.bytes);
+        try testing.expect(after.tokens < before.tokens);
+
+        const again = try skeletonize(testing.allocator, parser, reparsed);
+        defer testing.allocator.free(again);
+        try testing.expectEqualStrings(skeleton, again);
+    }
+}
+
+test "sources with syntax errors are refused instead of guessed at" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    const doc = try document.openFixture(parser, "broken.ts");
+    defer doc.deinit();
+    try testing.expectError(error.SourceHasErrors, skeletonize(testing.allocator, parser, doc.tree));
+}
+
+test "expression bodies survive while block functions inside them are stripped" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    const skeleton = try skeletonOfSource(parser, "export const load = (u: string) => fetch(u).then((r) => {\n  return r.json();\n});\n");
+    defer testing.allocator.free(skeleton);
+    try testing.expectEqualStrings("export const load = (u: string) => fetch(u).then((r) => {});\n", skeleton);
+}
+
+test "object methods keep an empty block, class methods and declarations end with a semicolon" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    const skeleton = try skeletonOfSource(parser,
+        \\const api = { *ids() { yield 1; }, async get() { return 1; } };
+        \\class A { run(): void { go(); } }
+        \\function* gen(): Generator<number> { yield 2; }
+    );
+    defer testing.allocator.free(skeleton);
+    try testing.expectEqualStrings(
+        \\const api = { *ids() {}, async get() {} };
+        \\class A { run(): void; }
+        \\function* gen(): Generator<number> {}
+    , skeleton);
+}
+
+test "a source without functions is returned unchanged" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+
+    const source = "export type Id = string;\nexport const limit = 10;\n";
+    const skeleton = try skeletonOfSource(parser, source);
+    defer testing.allocator.free(skeleton);
+    try testing.expectEqualStrings(source, skeleton);
+
+    const empty = try skeletonOfSource(parser, "");
+    defer testing.allocator.free(empty);
+    try testing.expectEqualStrings("", empty);
+}

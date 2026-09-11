@@ -32,6 +32,14 @@ const bindings = [_]Binding{
     .{ .parent = "public_field_definition", .value_field = "value", .name_field = "name" },
     .{ .parent = "pair", .value_field = "value", .name_field = "key" },
     .{ .parent = "assignment_expression", .value_field = "right", .name_field = "left" },
+    .{ .parent = "augmented_assignment_expression", .value_field = "right", .name_field = "left" },
+};
+
+const transparent_wrappers = [_][]const u8{
+    "parenthesized_expression",
+    "as_expression",
+    "satisfies_expression",
+    "non_null_expression",
 };
 
 pub fn classify(node: ts.Node) ?Function {
@@ -41,20 +49,39 @@ pub fn classify(node: ts.Node) ?Function {
         .node = node,
         .kind = kind,
         .body = body,
-        .name = resolveName(node),
+        .name = resolveName(node, kind),
         .nested = false,
     };
 }
 
-fn resolveName(node: ts.Node) ?ts.Node {
-    if (node.childByField("name")) |name| return name;
-    const parent = node.parent() orelse return null;
+fn resolveName(node: ts.Node, kind: FunctionKind) ?ts.Node {
+    const own = node.childByField("name");
+    return switch (kind) {
+        .function_declaration, .generator_function_declaration, .method_definition => own,
+        else => bindingName(node) orelse own,
+    };
+}
+
+fn bindingName(node: ts.Node) ?ts.Node {
+    var value = node;
+    var parent = node.parent() orelse return null;
+    while (isTransparentWrapper(parent.kind())) {
+        value = parent;
+        parent = parent.parent() orelse return null;
+    }
     for (bindings) |binding| {
         if (!std.mem.eql(u8, binding.parent, parent.kind())) continue;
-        const value = parent.childByField(binding.value_field) orelse return null;
-        return if (value.eql(node)) parent.childByField(binding.name_field) else null;
+        const bound = parent.childByField(binding.value_field) orelse return null;
+        return if (bound.eql(value)) parent.childByField(binding.name_field) else null;
     }
     return null;
+}
+
+fn isTransparentWrapper(kind: []const u8) bool {
+    for (transparent_wrappers) |wrapper| {
+        if (std.mem.eql(u8, wrapper, kind)) return true;
+    }
+    return false;
 }
 
 const Span = struct { start: u32, end: u32 };
@@ -133,7 +160,7 @@ test "collects every function-like boundary in the fixture, in source order" {
         .{ .kind = .generator_function_declaration, .name = "stream" },
         .{ .kind = .function_declaration, .name = "overloaded" },
         .{ .kind = .arrow_function, .name = "validateToken" },
-        .{ .kind = .function_expression, .name = "inner", .nested = true },
+        .{ .kind = .function_expression, .name = "helper", .nested = true },
         .{ .kind = .arrow_function, .name = "square" },
         .{ .kind = .function_expression, .name = null },
         .{ .kind = .arrow_function, .name = "handler" },
@@ -165,6 +192,29 @@ test "bodyless signatures are not function boundaries" {
     defer tree.deinit();
 
     try expectFunctions(tree, &.{});
+}
+
+test "names resolve through type assertions, parentheses and compound assignment" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(ts.typescript());
+    defer parser.deinit();
+    const tree = try parser.parse(
+        \\const asserted = (() => {}) as Handler;
+        \\const checked = (function () {}) satisfies Handler;
+        \\const forced = (() => {})!;
+        \\exports.lazy ||= () => {};
+        \\const wrapped = memo(() => {});
+    );
+    defer tree.deinit();
+
+    try expectFunctions(tree, &.{
+        .{ .kind = .arrow_function, .name = "asserted" },
+        .{ .kind = .function_expression, .name = "checked" },
+        .{ .kind = .arrow_function, .name = "forced" },
+        .{ .kind = .arrow_function, .name = "exports.lazy" },
+        .{ .kind = .arrow_function, .name = null },
+    });
 }
 
 test "arrow functions in default parameters are not nested in the body" {
