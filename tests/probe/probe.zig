@@ -4,6 +4,11 @@ const windows = std.os.windows;
 extern "kernel32" fn ExitProcess(code: windows.UINT) callconv(.winapi) noreturn;
 extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 extern "kernel32" fn GetProcessId(process: windows.HANDLE) callconv(.winapi) windows.DWORD;
+extern "kernel32" fn GetStdHandle(which: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
+extern "kernel32" fn CloseHandle(handle: windows.HANDLE) callconv(.winapi) windows.BOOL;
+
+const std_output_handle: windows.DWORD = @bitCast(@as(i32, -11));
+const std_error_handle: windows.DWORD = @bitCast(@as(i32, -12));
 
 const flood_line = "flood flood flood flood flood flood flood flood flood flood\n";
 
@@ -36,6 +41,11 @@ pub fn main(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, mode, "flood")) {
         while (true) try out.writeAll(flood_line);
+    }
+    if (std.mem.eql(u8, mode, "closeout")) {
+        _ = CloseHandle(GetStdHandle(std_output_handle).?);
+        _ = CloseHandle(GetStdHandle(std_error_handle).?);
+        while (true) Sleep(1000);
     }
     if (std.mem.eql(u8, mode, "sleep")) {
         while (true) Sleep(1000);

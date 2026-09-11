@@ -40,6 +40,7 @@ pub fn freeFileList(gpa: Allocator, files: []const []u8) void {
 pub const Shadow = struct {
     io: std.Io,
     dir: Dir,
+    linked: []const []const u8,
 
     pub const Options = struct {
         root_abs: []const u8,
@@ -49,6 +50,8 @@ pub const Shadow = struct {
     };
 
     pub fn prepare(io: std.Io, options: Options) !Shadow {
+        for (options.files) |file| try validateRelative(file);
+        for (options.linked) |link| try validateRelative(link);
         try remove(io, options.root_abs, options.shadow_abs);
 
         var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
@@ -74,10 +77,12 @@ pub const Shadow = struct {
             const link_path = try joinWindows(&link_buf, options.shadow_abs, link);
             try createJunction(io, link_path, target);
         }
-        return .{ .io = io, .dir = dir };
+        return .{ .io = io, .dir = dir, .linked = options.linked };
     }
 
     pub fn writeFile(self: Shadow, sub_path: []const u8, data: []const u8) !void {
+        try validateRelative(sub_path);
+        if (isUnderAny(sub_path, self.linked)) return error.UnsafePath;
         if (std.fs.path.dirname(sub_path)) |parent| try self.dir.createDirPath(self.io, parent);
         try self.dir.writeFile(self.io, .{ .sub_path = sub_path, .data = data });
     }
@@ -90,6 +95,7 @@ pub const Shadow = struct {
 
 pub fn remove(io: std.Io, root_abs: []const u8, shadow_abs: []const u8) !void {
     try ensureInsideWorkspace(root_abs, shadow_abs);
+    try ensureNoLinks(root_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
 }
 
@@ -98,9 +104,41 @@ pub fn ensureInsideWorkspace(root_abs: []const u8, shadow_abs: []const u8) error
     const rest = shadow_abs[root_abs.len..];
     if (rest.len < 2 or !isSeparator(rest[0])) return error.ShadowOutsideWorkspace;
     const inside = rest[1..];
-    if (!std.mem.startsWith(u8, inside, workspace_dir)) return error.ShadowOutsideWorkspace;
-    if (inside.len < workspace_dir.len + 2 or !isSeparator(inside[workspace_dir.len])) return error.ShadowOutsideWorkspace;
-    if (std.mem.indexOf(u8, inside, "..") != null) return error.ShadowOutsideWorkspace;
+    validateRelative(inside) catch return error.ShadowOutsideWorkspace;
+    var segments = std.mem.tokenizeAny(u8, inside, "/\\");
+    const first = segments.next() orelse return error.ShadowOutsideWorkspace;
+    if (!std.mem.eql(u8, first, workspace_dir)) return error.ShadowOutsideWorkspace;
+    if (segments.next() == null) return error.ShadowOutsideWorkspace;
+}
+
+pub fn validateRelative(path: []const u8) error{UnsafePath}!void {
+    if (path.len == 0 or isSeparator(path[0])) return error.UnsafePath;
+    if (std.mem.indexOfScalar(u8, path, ':') != null) return error.UnsafePath;
+    var segments = std.mem.tokenizeAny(u8, path, "/\\");
+    while (segments.next()) |segment| {
+        if (std.mem.eql(u8, segment, ".") or std.mem.eql(u8, segment, "..")) return error.UnsafePath;
+        const last = segment[segment.len - 1];
+        if (last == '.' or last == ' ') return error.UnsafePath;
+    }
+}
+
+fn ensureNoLinks(root_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceIsLink, NameTooLong, InvalidWtf8 }!void {
+    if (builtin.os.tag != .windows) return;
+    var index = root_abs.len + 1;
+    while (index <= shadow_abs.len) : (index += 1) {
+        if (index != shadow_abs.len and !isSeparator(shadow_abs[index])) continue;
+        if (try isReparsePoint(shadow_abs[0..index])) return error.WorkspaceIsLink;
+    }
+}
+
+fn isReparsePoint(path: []const u8) error{ NameTooLong, InvalidWtf8 }!bool {
+    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const len = std.unicode.wtf8ToWtf16Le(&path_w, path) catch return error.InvalidWtf8;
+    if (len >= path_w.len) return error.NameTooLong;
+    path_w[len] = 0;
+    const attributes = win.GetFileAttributesW(&path_w);
+    if (attributes == win.invalid_file_attributes) return false;
+    return attributes & win.file_attribute_reparse_point != 0;
 }
 
 fn isSeparator(byte: u8) bool {
@@ -109,7 +147,8 @@ fn isSeparator(byte: u8) bool {
 
 fn isUnderAny(file: []const u8, dirs: []const []const u8) bool {
     for (dirs) |dir| {
-        if (std.mem.startsWith(u8, file, dir) and file.len > dir.len and isSeparator(file[dir.len])) return true;
+        if (!std.mem.startsWith(u8, file, dir)) continue;
+        if (file.len == dir.len or isSeparator(file[dir.len])) return true;
     }
     return false;
 }
@@ -130,6 +169,10 @@ const win = struct {
     const reparse_tag_mount_point: u32 = 0xA0000003;
     const reparse_header_len = 8;
     const mount_point_header_len = 8;
+    const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
+    const file_attribute_reparse_point: windows.DWORD = 0x00000400;
+
+    extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
 
     extern "kernel32" fn CreateFileW(
         name: [*:0]const u16,
@@ -342,6 +385,11 @@ test "shadow paths outside <root>\\.synapse\\ are refused before anything is del
         "C:\\work\\other\\.synapse\\shadow",
         "C:\\work\\projectX\\.synapse\\shadow",
         "D:\\",
+        "C:\\work\\project\\.synapse\\.",
+        "C:\\work\\project\\.synapse\\ .",
+        "C:\\work\\project\\.synapse\\x::$INDEX_ALLOCATION",
+        "C:\\work\\project\\.synapse\\C:\\x",
+        "C:\\work\\project\\.synapse\\shadow.",
     };
     for (refused) |candidate| {
         errdefer std.debug.print("accepted shadow path: {s}\n", .{candidate});
@@ -349,6 +397,75 @@ test "shadow paths outside <root>\\.synapse\\ are refused before anything is del
     }
     try ensureInsideWorkspace(root, "C:\\work\\project\\.synapse\\shadow");
     try ensureInsideWorkspace(root, "C:\\work\\project/.synapse/shadow/run-1");
+}
+
+test "a .synapse that is a junction is refused and the directory it points to is untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+
+    try project.tmp.dir.createDirPath(testing.io, "victim/shadow");
+    try project.tmp.dir.writeFile(testing.io, .{ .sub_path = "victim/shadow/precious.txt", .data = "keep me\n" });
+    const victim_abs = try project.tmp.dir.realPathFileAlloc(testing.io, "victim", testing.allocator);
+    defer testing.allocator.free(victim_abs);
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try createJunction(testing.io, try joinWindows(&link_buf, project.root_abs, workspace_dir), victim_abs);
+
+    try testing.expectError(error.WorkspaceIsLink, Shadow.prepare(testing.io, try project.options()));
+    try testing.expectError(error.WorkspaceIsLink, remove(testing.io, project.root_abs, try project.shadowPath()));
+
+    try expectFileContent(project.tmp.dir, "victim/shadow/precious.txt", "keep me\n");
+    try testing.expectError(error.FileNotFound, project.tmp.dir.access(testing.io, "victim/shadow/a.ts", .{}));
+}
+
+test "writeFile refuses paths that leave the shadow or go through a junction" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+
+    var shadow = try Shadow.prepare(testing.io, try project.options());
+    defer shadow.close();
+
+    var absolute_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const absolute = try std.fmt.bufPrint(&absolute_buf, "{s}\\abs.txt", .{project.root_abs});
+    const escapes = [_][]const u8{
+        "../../escape.txt",
+        "..\\escape.txt",
+        "src/../../escape.txt",
+        absolute,
+        "\\rooted.txt",
+        "a.ts:stream",
+        "node_modules/pkg/index.js",
+        "node_modules",
+        "trailing.",
+        "",
+    };
+    for (escapes) |path| {
+        errdefer std.debug.print("writeFile accepted: \"{s}\"\n", .{path});
+        try testing.expectError(error.UnsafePath, shadow.writeFile(path, "PWNED"));
+    }
+
+    const real_dependency = try project.read("node_modules/pkg/index.js");
+    defer testing.allocator.free(real_dependency);
+    try testing.expectEqualStrings("module.exports = 42;\n", real_dependency);
+    try testing.expectError(error.FileNotFound, project.read("abs.txt"));
+    try testing.expectError(error.FileNotFound, project.tmp.dir.access(testing.io, "escape.txt", .{}));
+}
+
+test "prepare refuses unsafe tracked names and link entries before touching the disk" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+
+    var options = try project.options();
+    options.files = &.{ "a.ts", "../outside.ts" };
+    try testing.expectError(error.UnsafePath, Shadow.prepare(testing.io, options));
+
+    options = try project.options();
+    options.linked = &.{"..\\..\\outside"};
+    try testing.expectError(error.UnsafePath, Shadow.prepare(testing.io, options));
+
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
 }
 
 test "git lists this repository's tracked files" {

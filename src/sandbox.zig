@@ -25,7 +25,7 @@ pub const Report = struct {
 
     pub fn passed(self: Report) bool {
         return switch (self.outcome) {
-            .exited => |code| code == 0,
+            .exited => |code| code == 0 and !self.killed_leftovers,
             .timed_out, .output_limit => false,
         };
     }
@@ -45,8 +45,12 @@ pub const Command = struct {
 const read_reserve = 4096;
 const exit_poll_ns = 50 * std.time.ns_per_ms;
 
+var running: std.atomic.Value(bool) = .init(false);
+
 pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
     if (builtin.os.tag != .windows) return error.SandboxUnsupported;
+    if (running.cmpxchgStrong(false, true, .acquire, .monotonic) != null) return error.SandboxBusy;
+    defer running.store(false, .release);
 
     const job = try Job.create();
     defer job.close();
@@ -104,6 +108,7 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
             break;
         }
     }
+    if (stopped == null and !exitsBefore(io, child.id.?, deadline)) stopped = .timed_out;
     if (stopped != null) job.terminate() else try reader.checkAnyError();
 
     const exit_code = try waitExitCode(child.id.?);
@@ -123,6 +128,12 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
         .truncated = truncated,
         .killed_leftovers = killed_leftovers,
     };
+}
+
+fn exitsBefore(io: std.Io, process: std.os.windows.HANDLE, deadline: std.Io.Clock.Timestamp) bool {
+    const remaining = std.Io.Clock.Timestamp.now(io, .awake).durationTo(deadline).raw.nanoseconds;
+    const wait_ms: std.os.windows.DWORD = if (remaining <= 0) 0 else @intCast(@min(@divTrunc(remaining + std.time.ns_per_ms - 1, std.time.ns_per_ms), win.infinite - 1));
+    return win.WaitForSingleObject(process, wait_ms) == win.wait_object_0;
 }
 
 fn hasExited(process: std.os.windows.HANDLE) bool {
@@ -316,11 +327,29 @@ test "a command that exits but leaves a background process is reported by its ow
     defer report.deinit(testing.allocator);
 
     try testing.expectEqual(Outcome{ .exited = 0 }, report.outcome);
-    try testing.expect(report.passed());
     try testing.expect(report.killed_leftovers);
+    try testing.expect(!report.passed());
     try testing.expect(report.duration_ns < 5 * std.time.ns_per_s);
     const pid = try std.fmt.parseInt(u32, std.mem.trim(u8, report.stdout, " \r\n"), 10);
     try testing.expect(processIsGone(pid));
+}
+
+test "a process that closes its output and keeps running is killed at the deadline" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const report = try probe(&.{"closeout"}, .{ .timeout_ms = 1000 });
+    defer report.deinit(testing.allocator);
+
+    try testing.expectEqual(Outcome.timed_out, report.outcome);
+    try testing.expect(!report.passed());
+    try testing.expect(report.duration_ns >= 1000 * std.time.ns_per_ms);
+    try testing.expect(report.duration_ns < 10 * std.time.ns_per_s);
+}
+
+test "a second concurrent run is refused instead of sharing inherited pipes" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    running.store(true, .release);
+    defer running.store(false, .release);
+    try testing.expectError(error.SandboxBusy, probe(&.{"both"}, .{ .timeout_ms = 1000 }));
 }
 
 test "a program that does not exist is an error, not a hang" {
