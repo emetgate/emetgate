@@ -336,6 +336,39 @@ test "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbo
     try expectUntouchedOutside(before, after, cut, cut);
 }
 
+test "regression: attacks from the adversarial review stay refused" {
+    alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const Attack = struct {
+        name: []const u8,
+        source: []const u8,
+        ref: []const u8,
+        body: []const u8,
+        expected: anyerror,
+    };
+    const arrow_source = "export const square = (n: number) => n * n;\nafter();\n";
+    const class_source = "class C {\n  a() { return 1; }\n  b() { return 2; }\n}\n";
+    const object_source = "const o = {\n  m() { return 1; },\n  n() { return 2; },\n};\n";
+    const attacks = [_]Attack{
+        .{ .name = "static injection into the next member", .source = class_source, .ref = "C.a", .body = "{ } static", .expected = error.BodyEscape },
+        .{ .name = "extra property injected into an object literal", .source = object_source, .ref = "o.m", .body = "{ return 1; }, z() { return 3; }", .expected = error.BodyEscape },
+        .{ .name = "statement smuggled after an arrow expression", .source = arrow_source, .ref = "square", .body = "n; evil()", .expected = error.BodyEscape },
+        .{ .name = "comma expression appended to an arrow body", .source = arrow_source, .ref = "square", .body = "n * n, sideEffect()", .expected = error.MutationSyntaxInvalid },
+        .{ .name = "U+2028 line separator after an arrow body", .source = arrow_source, .ref = "square", .body = "n * n\u{2028}", .expected = error.BodyEscape },
+        .{ .name = "U+2029 paragraph separator after an arrow body", .source = arrow_source, .ref = "square", .body = "n * n\u{2029}", .expected = error.BodyEscape },
+        .{ .name = "trailing block comment on an arrow body", .source = arrow_source, .ref = "square", .body = "n * n /* c */", .expected = error.BodyEscape },
+        .{ .name = "NUL byte inside a block body", .source = class_source, .ref = "C.a", .body = "{ return 1;\x00 }", .expected = error.MutationSyntaxInvalid },
+        .{ .name = "NUL byte after an arrow body", .source = arrow_source, .ref = "square", .body = "n * n\x00", .expected = error.MutationSyntaxInvalid },
+    };
+    for (attacks) |attack| {
+        errdefer std.debug.print("attack not refused as expected: {s}\n", .{attack.name});
+        const t = try test_util.TestTree.init(attack.source);
+        defer t.deinit();
+        try testing.expectError(attack.expected, mutate(t.parser, t.tree, attack.ref, attack.body, .current));
+    }
+}
+
 test "chained mutations: the returned hash is the next expected hash" {
     alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();

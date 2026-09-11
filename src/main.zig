@@ -4,14 +4,18 @@ const synapse = @import("synapse");
 const ts = synapse.tree_sitter;
 const skeleton = synapse.skeleton;
 const symbol = synapse.symbol;
+const cas = synapse.cas;
 const Document = synapse.loader.Document;
 
 const usage =
     \\usage: synapse skeleton <file.ts>
     \\       synapse symbols <file.ts>
     \\       synapse stats <file.ts>...
+    \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>)
     \\
 ;
+
+const max_body_len = std.math.maxInt(u32);
 
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -39,6 +43,14 @@ pub fn main(init: std.process.Init) !u8 {
     if (std.mem.eql(u8, command, "stats")) {
         const skipped = try printStats(init, parser, args[2..], out);
         return if (skipped == 0) 0 else 1;
+    }
+    if (std.mem.eql(u8, command, "mutate")) {
+        const request = MutateRequest.parse(args[2..]) orelse exitWithUsage();
+        mutate(init, parser, request, out) catch |err| {
+            std.debug.print("error: {t}\n", .{err});
+            return exitCodeFor(err);
+        };
+        return 0;
     }
     exitWithUsage();
 }
@@ -73,6 +85,88 @@ fn printSymbols(init: std.process.Init, parser: ts.Parser, path: []const u8, out
             if (entry.ambiguous) "  (ambiguous)" else "",
         });
     }
+}
+
+const MutateRequest = struct {
+    path: []const u8,
+    symbol: []const u8,
+    hash: []const u8,
+    body: union(enum) { inline_text: []const u8, file: []const u8 },
+
+    fn parse(args: []const [:0]const u8) ?MutateRequest {
+        if (args.len == 0 or args.len % 2 == 0) return null;
+        var symbol_arg: ?[]const u8 = null;
+        var hash_arg: ?[]const u8 = null;
+        var body_arg: ?[]const u8 = null;
+        var body_file_arg: ?[]const u8 = null;
+
+        var i: usize = 1;
+        while (i < args.len) : (i += 2) {
+            const slot = flagSlot(args[i], &symbol_arg, &hash_arg, &body_arg, &body_file_arg) orelse return null;
+            if (slot.* != null) return null;
+            slot.* = args[i + 1];
+        }
+
+        const body: @FieldType(MutateRequest, "body") = if (body_arg) |text|
+            if (body_file_arg == null) .{ .inline_text = text } else return null
+        else
+            .{ .file = body_file_arg orelse return null };
+        return .{
+            .path = args[0],
+            .symbol = symbol_arg orelse return null,
+            .hash = hash_arg orelse return null,
+            .body = body,
+        };
+    }
+
+    fn flagSlot(
+        flag: []const u8,
+        symbol_arg: *?[]const u8,
+        hash_arg: *?[]const u8,
+        body_arg: *?[]const u8,
+        body_file_arg: *?[]const u8,
+    ) ?*?[]const u8 {
+        if (std.mem.eql(u8, flag, "--symbol")) return symbol_arg;
+        if (std.mem.eql(u8, flag, "--hash")) return hash_arg;
+        if (std.mem.eql(u8, flag, "--body")) return body_arg;
+        if (std.mem.eql(u8, flag, "--body-file")) return body_file_arg;
+        return null;
+    }
+};
+
+fn mutate(init: std.process.Init, parser: ts.Parser, request: MutateRequest, out: *std.Io.Writer) !void {
+    const gpa = init.gpa;
+    const ref = try symbol.Ref.parse(gpa, request.symbol);
+    defer ref.deinit(gpa);
+    const expected = try symbol.parseHash(request.hash);
+
+    const body_from_file: ?[]u8 = switch (request.body) {
+        .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
+        .inline_text => null,
+    };
+    defer if (body_from_file) |bytes| gpa.free(bytes);
+    const body = body_from_file orelse request.body.inline_text;
+
+    const doc = try Document.open(gpa, init.io, .cwd(), request.path, parser);
+    defer doc.deinit();
+    const patched = try cas.apply(gpa, parser, doc.tree, .{ .ref = ref, .expected_hash = expected, .new_body = body });
+    defer patched.deinit();
+
+    try out.writeAll(patched.source);
+    std.debug.print("mutated {f}  {s} -> {s}\n", .{ ref, &symbol.formatHash(expected), &symbol.formatHash(patched.hash) });
+}
+
+fn exitCodeFor(err: anyerror) u8 {
+    return switch (err) {
+        error.InvalidRef, error.InvalidHash => 2,
+        error.SourceHasErrors => 3,
+        error.SymbolNotFound => 4,
+        error.AmbiguousSymbol => 5,
+        error.HashMismatch => 6,
+        error.MutationSyntaxInvalid => 7,
+        error.BodyEscape => 8,
+        else => 1,
+    };
 }
 
 const Totals = struct {
