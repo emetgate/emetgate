@@ -15,8 +15,8 @@ const usage =
     \\usage: synapse skeleton <file.ts>
     \\       synapse symbols <file.ts> [--json]
     \\       synapse stats <file.ts>...
-    \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>)
-    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) --test <command>
+    \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
+    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) --test <command> [--json]
     \\
 ;
 
@@ -59,15 +59,38 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return if (skipped == 0) 0 else 1;
     }
     if (std.mem.eql(u8, command, "mutate")) {
-        const request = MutateRequest.parse(args[2..]) orelse exitWithUsage();
+        const parsed = extractJson(init, args[2..]);
+        const request = MutateRequest.parse(parsed.rest) orelse exitWithUsage();
+        if (parsed.json) return mutateJson(init, runtime, request, out);
         try mutate(init, runtime, request, out);
         return 0;
     }
     if (std.mem.eql(u8, command, "try")) {
-        const request = TryRequest.parse(args[2..]) orelse exitWithUsage();
+        const parsed = extractJson(init, args[2..]);
+        const request = TryRequest.parse(parsed.rest) orelse exitWithUsage();
+        if (parsed.json) return tryRunJson(init, runtime, request, out);
         return tryRun(init, runtime, request, out);
     }
     exitWithUsage();
+}
+
+const Extracted = struct { json: bool, rest: []const [:0]const u8 };
+
+fn extractJson(init: std.process.Init, args: []const [:0]const u8) Extracted {
+    var count: usize = 0;
+    for (args) |arg| {
+        if (!std.mem.eql(u8, arg, "--json")) count += 1;
+    }
+    if (count == args.len) return .{ .json = false, .rest = args };
+
+    const rest = init.arena.allocator().alloc([:0]const u8, count) catch exitWithUsage();
+    var i: usize = 0;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json")) continue;
+        rest[i] = arg;
+        i += 1;
+    }
+    return .{ .json = true, .rest = rest };
 }
 
 fn fail(err: anyerror) u8 {
@@ -168,6 +191,78 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
             return rejected_exit_code;
         },
     }
+}
+
+fn tryRunJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer) u8 {
+    return emitTryJson(init, runtime, request, out) catch |err| {
+        wire.writeError(out, @errorName(err), exitCodeFor(err)) catch {};
+        return exitCodeFor(err);
+    };
+}
+
+fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    defer gpa.free(file_abs);
+    const expected = try symbol.parseHash(request.hash);
+
+    const body_from_file: ?[]u8 = switch (request.body) {
+        .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
+        .inline_text => null,
+    };
+    defer if (body_from_file) |bytes| gpa.free(bytes);
+    const body = body_from_file orelse request.body.inline_text;
+
+    const result = try runner.tryMutate(gpa, init.io, runtime, .{
+        .file_abs = file_abs,
+        .ref_text = request.symbol,
+        .expected_hash = expected,
+        .new_body = body,
+        .test_command = request.test_command,
+    });
+    defer result.deinit(gpa);
+
+    switch (result) {
+        .committed => |new_hash| {
+            try wire.writeCommitted(out, request.symbol, expected, new_hash);
+            return 0;
+        },
+        .rejected => |report| {
+            try wire.writeRejected(out, request.test_command, report);
+            return rejected_exit_code;
+        },
+    }
+}
+
+fn mutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out: *std.Io.Writer) u8 {
+    emitMutateJson(init, runtime, request, out) catch |err| {
+        wire.writeError(out, @errorName(err), exitCodeFor(err)) catch {};
+        return exitCodeFor(err);
+    };
+    return 0;
+}
+
+fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out: *std.Io.Writer) !void {
+    const gpa = runtime.gpa;
+    const ref = try symbol.Ref.parse(gpa, request.symbol);
+    defer ref.deinit(gpa);
+    const expected = try symbol.parseHash(request.hash);
+
+    const base = try Snapshot.load(runtime, init.io, .cwd(), request.path);
+    defer base.destroy();
+    if (base.tree.root().hasError()) return error.SourceHasErrors;
+
+    const body_from_file: ?[]u8 = switch (request.body) {
+        .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
+        .inline_text => null,
+    };
+    defer if (body_from_file) |bytes| gpa.free(bytes);
+    const body = body_from_file orelse request.body.inline_text;
+
+    const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
+    defer applied.snapshot.destroy();
+
+    try wire.writeMutated(out, request.symbol, expected, applied.hash, applied.snapshot.source);
 }
 
 fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {

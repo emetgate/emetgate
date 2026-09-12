@@ -125,6 +125,18 @@ const cli_cases = [_]CliCase{
         .stdout = "{\"status\":\"error\",\"error\":\"SourceHasErrors\",\"exit_code\":3}\n",
     },
     .{
+        .name = "mutate json emits the transformed source and both hashes on one line",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", e2e_add_hash, "--body", "{ return 0; }", "--json" },
+        .exit_code = 0,
+        .stdout_contains = "\"status\":\"mutated\",\"symbol\":\"add\",\"old_hash\":\"" ++ e2e_add_hash ++ "\",\"new_hash\":\"65fda373e6c418a2e3dd2126c05fd44c\",\"source\":\"",
+    },
+    .{
+        .name = "mutate json on a stale hash is a typed error payload",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", e2e_zero_hash, "--body", "{ return 0; }", "--json" },
+        .exit_code = 6,
+        .stdout = "{\"status\":\"error\",\"error\":\"HashMismatch\",\"exit_code\":6}\n",
+    },
+    .{
         .name = "output larger than the stdout buffer",
         .args = &.{ "symbols", "tests/e2e/many.ts" },
         .exit_code = 0,
