@@ -145,14 +145,20 @@ fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []con
     original_at_backup = false;
     applyAttributes(path_abs, saved_attributes) catch {};
 
+    const written = replacement.hash(gpa, io) catch {
+        if (leftover) |out| out.record(backup);
+        return error.WrittenButUnverified;
+    };
+    if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) {
+        if (leftover) |out| out.record(backup);
+        return error.WrittenButUnverified;
+    }
+
     replacement.close();
     replacement_open = false;
     guard.close();
     guard_open = false;
     if (!deleteWithRetry(io, backup)) if (leftover) |out| out.record(backup);
-
-    const written = hashFile(gpa, io, path_abs) catch return error.WrittenButUnverified;
-    if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) return error.WrittenButUnverified;
 }
 
 fn renameWithRetry(gpa: Allocator, guard: Guard, target_abs: []const u8) bool {
