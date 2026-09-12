@@ -115,6 +115,10 @@ pub fn remove(io: std.Io, root_abs: []const u8, shadow_abs: []const u8) !void {
     try ensureInsideWorkspace(root_abs, shadow_abs);
     try ensureNoLinks(root_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
+
+    var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const workspace = std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ root_abs, workspace_dir }) catch return;
+    Dir.cwd().deleteDir(io, workspace) catch {};
 }
 
 pub fn ensureInsideWorkspace(root_abs: []const u8, shadow_abs: []const u8) error{ShadowOutsideWorkspace}!void {

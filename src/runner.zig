@@ -265,5 +265,5 @@ test "no shadow workspace survives a run" {
     });
     result.deinit(testing.allocator);
 
-    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/.synapse/shadow", .{}));
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/.synapse", .{}));
 }
