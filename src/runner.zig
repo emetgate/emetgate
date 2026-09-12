@@ -33,7 +33,33 @@ pub const Result = union(enum) {
     }
 };
 
+pub const config_file = ".synapserc.json";
+
+pub fn resolveTestCommand(gpa: Allocator, io: std.Io, file_abs: []const u8, given: []const u8) ![]u8 {
+    if (given.len != 0) return gpa.dupe(u8, given);
+    const dir = std.fs.path.dirname(file_abs) orelse return error.InvalidPath;
+    const root = try gitToplevel(gpa, io, dir);
+    defer gpa.free(root);
+    return (try readTestCommand(gpa, io, root)) orelse error.NoTestCommand;
+}
+
+fn readTestCommand(gpa: Allocator, io: std.Io, root: []const u8) !?[]u8 {
+    const path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, config_file });
+    defer gpa.free(path);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(64 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer gpa.free(bytes);
+    const parsed = std.json.parseFromSlice(struct { test_cmd: ?[]const u8 = null }, gpa, bytes, .{ .ignore_unknown_fields = true }) catch return error.InvalidConfig;
+    defer parsed.deinit();
+    const cmd = parsed.value.test_cmd orelse return null;
+    if (cmd.len == 0) return null;
+    return try gpa.dupe(u8, cmd);
+}
+
 pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Result {
+    if (options.test_command.len == 0) return error.NoTestCommand;
     const dir = std.fs.path.dirname(options.file_abs) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir);
     defer gpa.free(root);
@@ -243,6 +269,56 @@ test "a stale hash is refused before any test runs" {
     const on_disk = try repo.read();
     defer testing.allocator.free(on_disk);
     try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "test command defaults from .synapserc.json when the caller omits it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"exit 0\"}" });
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "");
+    defer testing.allocator.free(cmd);
+    try testing.expectEqualStrings("exit 0", cmd);
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = cmd,
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
+test "an explicit test command overrides the config default" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"exit 1\"}" });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "exit 0");
+    defer testing.allocator.free(cmd);
+    try testing.expectEqualStrings("exit 0", cmd);
+}
+
+test "a missing config with no test command is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    try testing.expectError(error.NoTestCommand, resolveTestCommand(testing.allocator, testing.io, file, ""));
 }
 
 test "no shadow workspace survives a run" {

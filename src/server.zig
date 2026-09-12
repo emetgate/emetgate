@@ -16,7 +16,7 @@ const server_name = "synapse";
 const server_version = "0.1.0";
 const max_message_bytes = 4 * 1024 * 1024;
 
-const Prop = struct { name: []const u8, desc: []const u8 };
+const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false };
 const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
 
 const tool_defs = [_]Tool{
@@ -33,7 +33,7 @@ const tool_defs = [_]Tool{
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
             .{ .name = "hash", .desc = "current 32-hex hash of the symbol from synapse_symbols" },
             .{ .name = "body", .desc = "new function body including braces" },
-            .{ .name = "test_cmd", .desc = "shell command that must exit 0 for the mutation to commit" },
+            .{ .name = "test_cmd", .desc = "shell command that must exit 0 for the mutation to commit; defaults to test_cmd in .synapserc.json when omitted", .optional = true },
         },
     },
     .{
@@ -186,7 +186,7 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolRes
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
     const body = try requireString(args, "body");
-    const test_cmd = try requireString(args, "test_cmd");
+    const test_cmd = if (args) |a| getString(a, "test_cmd") orelse "" else "";
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, test_cmd, &buffer.writer) catch |err| blk: {
@@ -201,13 +201,15 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolRes
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, test_cmd: []const u8, w: *Writer) !bool {
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
     defer gpa.free(file_abs);
+    const test_command = try runner.resolveTestCommand(gpa, io, file_abs, test_cmd);
+    defer gpa.free(test_command);
     const expected = try symbol.parseHash(hash_hex);
     const result = try runner.tryMutate(gpa, io, runtime, .{
         .file_abs = file_abs,
         .ref_text = sym,
         .expected_hash = expected,
         .new_body = body,
-        .test_command = test_cmd,
+        .test_command = test_command,
     });
     defer result.deinit(gpa);
     switch (result) {
@@ -216,7 +218,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             return false;
         },
         .rejected => |report| {
-            try wire.writeRejected(w, test_cmd, report);
+            try wire.writeRejected(w, test_command, report);
             return true;
         },
     }
@@ -326,7 +328,9 @@ fn writeToolsList(out: *Writer, id: Value) !void {
         try js.endObject();
         try js.objectField("required");
         try js.beginArray();
-        for (tool.props) |prop| try js.write(prop.name);
+        for (tool.props) |prop| {
+            if (!prop.optional) try js.write(prop.name);
+        }
         try js.endArray();
         try js.endObject();
         try js.endObject();
@@ -415,7 +419,8 @@ test "tools/list names the three tools and marks hash required" {
     try testing.expect(std.mem.indexOf(u8, response, "synapse_symbols") != null);
     try testing.expect(std.mem.indexOf(u8, response, "synapse_try") != null);
     try testing.expect(std.mem.indexOf(u8, response, "synapse_mutate") != null);
-    try testing.expect(std.mem.indexOf(u8, response, "\"required\":[\"file\",\"symbol\",\"hash\",\"body\",\"test_cmd\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"required\":[\"file\",\"symbol\",\"hash\",\"body\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"required\":[\"file\",\"symbol\",\"hash\",\"body\",\"test_cmd\"]") == null);
 }
 
 test "ping returns an empty result" {

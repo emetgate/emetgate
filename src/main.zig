@@ -17,7 +17,7 @@ const usage =
     \\       synapse symbols <file.ts> [--json]
     \\       synapse stats <file.ts>...
     \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
-    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) --test <command> [--json]
+    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--json]
     \\       synapse mcp
     \\
 ;
@@ -141,7 +141,7 @@ const TryRequest = struct {
             .symbol = values[0] orelse return null,
             .hash = values[1] orelse return null,
             .body = if (inline_body) |text| .{ .inline_text = text } else .{ .file = body_file.? },
-            .test_command = values[4] orelse return null,
+            .test_command = values[4] orelse "",
         };
     }
 };
@@ -159,12 +159,15 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
+    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command);
+    defer gpa.free(test_command);
+
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
         .ref_text = request.symbol,
         .expected_hash = expected,
         .new_body = body,
-        .test_command = request.test_command,
+        .test_command = test_command,
     });
     defer result.deinit(gpa);
 
@@ -203,12 +206,15 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
+    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command);
+    defer gpa.free(test_command);
+
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
         .ref_text = request.symbol,
         .expected_hash = expected,
         .new_body = body,
-        .test_command = request.test_command,
+        .test_command = test_command,
     });
     defer result.deinit(gpa);
 
@@ -218,7 +224,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
             return 0;
         },
         .rejected => |report| {
-            try wire.writeRejected(out, request.test_command, report);
+            try wire.writeRejected(out, test_command, report);
             return rejected_exit_code;
         },
     }
