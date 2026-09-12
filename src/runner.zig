@@ -110,6 +110,131 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     return .{ .committed = applied.hash };
 }
 
+pub const Edit = struct {
+    file_abs: []const u8,
+    ref_text: []const u8,
+    expected_hash: symbol.Hash,
+    new_body: []const u8,
+};
+
+pub const BatchOptions = struct {
+    edits: []const Edit,
+    test_command: []const u8,
+    linked: []const []const u8 = &.{"node_modules"},
+    limits: sandbox.Limits = .{},
+};
+
+pub const BatchResult = union(enum) {
+    committed: []symbol.Hash,
+    rejected: sandbox.Report,
+
+    pub fn deinit(self: BatchResult, gpa: Allocator) void {
+        switch (self) {
+            .committed => |hashes| gpa.free(hashes),
+            .rejected => |report| report.deinit(gpa),
+        }
+    }
+};
+
+const Prepared = struct {
+    rel: []u8,
+    base_hash: symbol.Hash,
+    applied: cas.Applied,
+};
+
+pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !BatchResult {
+    if (options.test_command.len == 0) return error.NoTestCommand;
+    if (options.edits.len == 0) return error.EmptyBatch;
+
+    const dir0 = std.fs.path.dirname(options.edits[0].file_abs) orelse return error.InvalidPath;
+    const root = try gitToplevel(gpa, io, dir0);
+    defer gpa.free(root);
+    const lock = try shadow.Lock.acquire(io, root);
+    defer lock.release();
+
+    var prepared: std.ArrayList(Prepared) = .empty;
+    defer {
+        for (prepared.items) |*p| {
+            p.applied.snapshot.destroy();
+            gpa.free(p.rel);
+        }
+        prepared.deinit(gpa);
+    }
+
+    for (options.edits) |edit| {
+        const rel = try relativeUnder(gpa, root, edit.file_abs);
+        var keep_rel = false;
+        errdefer if (!keep_rel) gpa.free(rel);
+        for (prepared.items) |p| {
+            if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;
+        }
+
+        var base_hash: symbol.Hash = undefined;
+        const applied = blk: {
+            const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
+            defer base.destroy();
+            if (base.tree.root().hasError()) return error.SourceHasErrors;
+            base_hash = symbol.hashOf(base.source);
+            const ref = try symbol.Ref.parse(gpa, edit.ref_text);
+            defer ref.deinit(gpa);
+            break :blk try cas.apply(base, .{ .ref = ref, .expected_hash = edit.expected_hash, .new_body = edit.new_body });
+        };
+        errdefer applied.snapshot.destroy();
+        try prepared.append(gpa, .{ .rel = rel, .base_hash = base_hash, .applied = applied });
+        keep_rel = true;
+    }
+
+    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
+    defer gpa.free(shadow_abs);
+
+    const report = try runBatchInShadow(gpa, io, root, shadow_abs, prepared.items, options);
+    if (!report.passed()) return .{ .rejected = report };
+    defer report.deinit(gpa);
+
+    const pendings = try gpa.alloc(disk.Pending, prepared.items.len);
+    defer gpa.free(pendings);
+    var count: usize = 0;
+    var commit_entered = false;
+    errdefer if (!commit_entered) {
+        var i = count;
+        while (i > 0) {
+            i -= 1;
+            pendings[i].discard(null);
+        }
+    };
+    for (prepared.items, 0..) |p, i| {
+        pendings[i] = try disk.prepare(gpa, io, options.edits[i].file_abs, p.applied.snapshot.source, p.base_hash);
+        count = i + 1;
+    }
+    commit_entered = true;
+    try disk.commitBatch(pendings, null, null);
+
+    const hashes = try gpa.alloc(symbol.Hash, prepared.items.len);
+    for (prepared.items, 0..) |p, i| hashes[i] = p.applied.hash;
+    return .{ .committed = hashes };
+}
+
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, prepared: []const Prepared, options: BatchOptions) !sandbox.Report {
+    const files = try shadow.trackedFiles(gpa, io, root);
+    defer gpa.free(files);
+    defer shadow.freeFileList(gpa, files);
+
+    var workspace = try shadow.Shadow.prepare(io, .{
+        .root_abs = root,
+        .shadow_abs = shadow_abs,
+        .files = files,
+        .linked = options.linked,
+    });
+    defer {
+        workspace.close();
+        shadow.remove(io, root, shadow_abs) catch {};
+    }
+    for (prepared) |p| try workspace.writeFile(p.rel, p.applied.snapshot.source);
+
+    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", options.test_command };
+    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = shadow_abs, .limits = options.limits });
+}
+
 fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options) !sandbox.Report {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
@@ -217,6 +342,153 @@ fn hashOfRef(gpa: Allocator, io: std.Io, runtime: *Runtime, file_abs: []const u8
     const ref = try symbol.Ref.parse(gpa, ref_text);
     defer ref.deinit(gpa);
     return (try table.resolve(ref)).hash;
+}
+
+const TwoFile = struct {
+    tmp: testing.TmpDir,
+    root_abs: [:0]u8,
+
+    const a_src = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
+    const b_src = "export function twice(x: number): number {\n  return x + x;\n}\n";
+
+    fn init() !TwoFile {
+        var tmp = testing.tmpDir(.{ .iterate = true });
+        errdefer tmp.cleanup();
+        try tmp.dir.createDirPath(testing.io, "repo/src");
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/a.ts", .data = a_src });
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/b.ts", .data = b_src });
+        const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
+        errdefer testing.allocator.free(root_abs);
+        try Repo.git(root_abs, &.{ "init", "-q" });
+        try Repo.git(root_abs, &.{ "config", "user.email", "t@t" });
+        try Repo.git(root_abs, &.{ "config", "user.name", "t" });
+        try Repo.git(root_abs, &.{ "add", "." });
+        try Repo.git(root_abs, &.{ "commit", "-q", "-m", "init" });
+        return .{ .tmp = tmp, .root_abs = root_abs };
+    }
+
+    fn deinit(self: *TwoFile) void {
+        testing.allocator.free(self.root_abs);
+        self.tmp.cleanup();
+    }
+
+    fn pathA(self: *TwoFile, buf: []u8) ![]const u8 {
+        return std.fmt.bufPrint(buf, "{s}\\src\\a.ts", .{self.root_abs});
+    }
+    fn pathB(self: *TwoFile, buf: []u8) ![]const u8 {
+        return std.fmt.bufPrint(buf, "{s}\\src\\b.ts", .{self.root_abs});
+    }
+    fn readA(self: *TwoFile) ![]u8 {
+        return self.tmp.dir.readFileAlloc(testing.io, "repo/src/a.ts", testing.allocator, .unlimited);
+    }
+    fn readB(self: *TwoFile) ![]u8 {
+        return self.tmp.dir.readFileAlloc(testing.io, "repo/src/b.ts", testing.allocator, .unlimited);
+    }
+};
+
+test "a batch commits every file when the shared test passes" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TwoFile.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    var buf_b: [std.fs.max_path_bytes]u8 = undefined;
+    const file_a = try repo.pathA(&buf_a);
+    const file_b = try repo.pathB(&buf_b);
+    const hash_a = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add");
+    const hash_b = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice");
+
+    const edits = [_]Edit{
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = hash_b, .new_body = "{ return x * 2; }" },
+    };
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+
+    const a = try repo.readA();
+    defer testing.allocator.free(a);
+    const b = try repo.readB();
+    defer testing.allocator.free(b);
+    try testing.expectEqualStrings("export function add(a: number, b: number): number { return a - b; }\n", a);
+    try testing.expectEqualStrings("export function twice(x: number): number { return x * 2; }\n", b);
+}
+
+test "a batch with one stale hash writes nothing (pre-validation is fail-closed)" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TwoFile.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    var buf_b: [std.fs.max_path_bytes]u8 = undefined;
+    const file_a = try repo.pathA(&buf_a);
+    const file_b = try repo.pathB(&buf_b);
+    const hash_a = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add");
+
+    const edits = [_]Edit{
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = symbol.hashOf("stale"), .new_body = "{ return x * 2; }" },
+    };
+    try testing.expectError(error.HashMismatch, tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" }));
+
+    const a = try repo.readA();
+    defer testing.allocator.free(a);
+    const b = try repo.readB();
+    defer testing.allocator.free(b);
+    try testing.expectEqualStrings(TwoFile.a_src, a);
+    try testing.expectEqualStrings(TwoFile.b_src, b);
+}
+
+test "a batch cannot edit the same file twice" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TwoFile.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    const file_a = try repo.pathA(&buf_a);
+    const hash_a = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add");
+
+    const edits = [_]Edit{
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return b - a; }" },
+    };
+    try testing.expectError(error.DuplicateBatchFile, tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" }));
+}
+
+test "a batch whose shared test fails writes nothing" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TwoFile.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    var buf_b: [std.fs.max_path_bytes]u8 = undefined;
+    const file_a = try repo.pathA(&buf_a);
+    const file_b = try repo.pathB(&buf_b);
+    const hash_a = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add");
+    const hash_b = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice");
+
+    const edits = [_]Edit{
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = hash_b, .new_body = "{ return x * 2; }" },
+    };
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 1" });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rejected);
+
+    const a = try repo.readA();
+    defer testing.allocator.free(a);
+    const b = try repo.readB();
+    defer testing.allocator.free(b);
+    try testing.expectEqualStrings(TwoFile.a_src, a);
+    try testing.expectEqualStrings(TwoFile.b_src, b);
 }
 
 test "a passing test commits the mutation to disk" {

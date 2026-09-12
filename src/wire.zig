@@ -81,6 +81,39 @@ pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Hash, n
     try writer.writeByte('\n');
 }
 
+pub const BatchEdit = struct {
+    file: []const u8,
+    symbol: []const u8,
+    old_hash: symbol.Hash,
+    new_hash: symbol.Hash,
+};
+
+pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("committed");
+    try js.objectField("edits");
+    try js.beginArray();
+    for (edits) |edit| {
+        const old_hex = symbol.formatHash(edit.old_hash);
+        const new_hex = symbol.formatHash(edit.new_hash);
+        try js.beginObject();
+        try js.objectField("file");
+        try js.write(edit.file);
+        try js.objectField("symbol");
+        try js.write(edit.symbol);
+        try js.objectField("old_hash");
+        try js.write(old_hex[0..]);
+        try js.objectField("new_hash");
+        try js.write(new_hex[0..]);
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Hash, new_hash: symbol.Hash, source: []const u8) !void {
     const old_hex = symbol.formatHash(old_hash);
     const new_hex = symbol.formatHash(new_hash);

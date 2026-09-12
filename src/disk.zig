@@ -59,7 +59,11 @@ pub const Guard = struct {
     }
 
     fn renameTo(self: Guard, gpa: Allocator, path_abs: []const u8) !void {
-        return renameByHandle(gpa, self.handle, path_abs);
+        return renameByHandle(gpa, self.handle, path_abs, false);
+    }
+
+    fn renameReplacing(self: Guard, gpa: Allocator, path_abs: []const u8) !void {
+        return renameByHandle(gpa, self.handle, path_abs, true);
     }
 
     pub fn close(self: Guard) void {
@@ -102,13 +106,77 @@ pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: 
     return replaceInternal(gpa, io, path_abs, data, expected_base, leftover, null);
 }
 
-fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook) !void {
+pub const Pending = struct {
+    gpa: Allocator,
+    io: std.Io,
+    guard: Guard,
+    replacement: Guard,
+    path: []u8,
+    temp: []u8,
+    backup: []u8,
+    saved_attributes: windows.DWORD,
+    data_hash: symbol.Hash,
+    state: State = .staged,
+
+    const State = enum { staged, backed_up, swapped };
+
+    pub fn swap(self: *Pending, in_gap: ?Hook) !void {
+        try self.guard.renameTo(self.gpa, self.backup);
+        self.state = .backed_up;
+        if (in_gap) |hook| try hook.run(hook.context);
+        self.replacement.renameTo(self.gpa, self.path) catch |err| switch (err) {
+            error.PathAlreadyExists => return error.Conflict,
+            else => |e| return e,
+        };
+        applyAttributes(self.path, self.saved_attributes) catch {};
+        self.state = .swapped;
+    }
+
+    pub fn verify(self: *Pending) !void {
+        const written = self.replacement.hash(self.gpa, self.io) catch return error.WrittenButUnverified;
+        if (!std.mem.eql(u8, &written, &self.data_hash)) return error.WrittenButUnverified;
+    }
+
+    pub fn finalize(self: *Pending, leftover: ?*Leftover) void {
+        self.replacement.close();
+        self.guard.close();
+        if (!deleteWithRetry(self.io, self.backup)) {
+            if (leftover) |out| out.record(self.backup);
+        }
+        self.freePaths();
+    }
+
+    pub fn discard(self: *Pending, leftover: ?*Leftover) void {
+        self.replacement.close();
+        switch (self.state) {
+            .staged => _ = deleteWithRetry(self.io, self.temp),
+            .backed_up => {
+                self.guard.renameTo(self.gpa, self.path) catch {
+                    if (leftover) |out| out.record(self.backup);
+                };
+                _ = deleteWithRetry(self.io, self.temp);
+            },
+            .swapped => self.guard.renameReplacing(self.gpa, self.path) catch {
+                if (leftover) |out| out.record(self.backup);
+            },
+        }
+        self.guard.close();
+        self.freePaths();
+    }
+
+    fn freePaths(self: *Pending) void {
+        self.gpa.free(self.path);
+        self.gpa.free(self.temp);
+        self.gpa.free(self.backup);
+    }
+};
+
+pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !Pending {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
 
     const guard = try Guard.open(path_abs);
-    var guard_open = true;
-    defer if (guard_open) guard.close();
+    errdefer guard.close();
     if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &expected_base)) return error.BaseChanged;
     const saved_attributes = try guard.attributes();
     if (saved_attributes & win.file_attribute_readonly != 0) return error.ReadOnlyFile;
@@ -116,68 +184,71 @@ fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []con
     var random: [8]u8 = undefined;
     io.random(&random);
     const tag = std.fmt.bytesToHex(random, .lower);
+    const path = try gpa.dupe(u8, path_abs);
+    errdefer gpa.free(path);
     const temp = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.tmp", .{ path_abs, &tag });
-    defer gpa.free(temp);
+    errdefer gpa.free(temp);
     const backup = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.bak", .{ path_abs, &tag });
-    defer gpa.free(backup);
+    errdefer gpa.free(backup);
 
     try writeDurably(io, temp, data);
-    var temp_present = true;
-    defer if (temp_present) {
-        _ = deleteWithRetry(io, temp);
-    };
-
+    errdefer _ = deleteWithRetry(io, temp);
     const replacement = try Guard.open(temp);
-    var replacement_open = true;
-    defer if (replacement_open) replacement.close();
 
-    try guard.renameTo(gpa, backup);
-    var original_at_backup = true;
-    defer if (original_at_backup) {
-        if (!renameWithRetry(gpa, guard, path_abs)) {
-            if (leftover) |out| out.record(backup);
-        }
+    return .{
+        .gpa = gpa,
+        .io = io,
+        .guard = guard,
+        .replacement = replacement,
+        .path = path,
+        .temp = temp,
+        .backup = backup,
+        .saved_attributes = saved_attributes,
+        .data_hash = symbol.hashOf(data),
     };
-
-    if (in_gap) |hook| try hook.run(hook.context);
-
-    replacement.renameTo(gpa, path_abs) catch |err| switch (err) {
-        error.PathAlreadyExists => return error.Conflict,
-        else => |e| return e,
-    };
-    temp_present = false;
-    original_at_backup = false;
-    applyAttributes(path_abs, saved_attributes) catch {};
-
-    const written = replacement.hash(gpa, io) catch {
-        if (leftover) |out| out.record(backup);
-        return error.WrittenButUnverified;
-    };
-    if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) {
-        if (leftover) |out| out.record(backup);
-        return error.WrittenButUnverified;
-    }
-
-    replacement.close();
-    replacement_open = false;
-    guard.close();
-    guard_open = false;
-    if (!deleteWithRetry(io, backup)) if (leftover) |out| out.record(backup);
 }
 
-fn renameWithRetry(gpa: Allocator, guard: Guard, target_abs: []const u8) bool {
-    var attempt: usize = 0;
-    while (attempt < delete_retries) : (attempt += 1) {
-        guard.renameTo(gpa, target_abs) catch {
-            win.Sleep(delete_retry_ms);
-            continue;
+fn abortSwaps(pendings: []Pending, swapped: usize, leftover: ?*Leftover) void {
+    var k = swapped;
+    while (k > 0) {
+        k -= 1;
+        pendings[k].discard(leftover);
+    }
+    for (pendings[swapped..]) |*rest| rest.discard(leftover);
+}
+
+pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usize) !void {
+    var swapped: usize = 0;
+    while (swapped < pendings.len) : (swapped += 1) {
+        if (fail_before) |k| if (k == swapped) {
+            abortSwaps(pendings, swapped, leftover);
+            return error.BatchAborted;
         };
-        return true;
+        pendings[swapped].swap(null) catch |err| {
+            abortSwaps(pendings, swapped, leftover);
+            return err;
+        };
     }
-    return false;
+    for (pendings) |*p| {
+        p.verify() catch {
+            for (pendings) |*q| q.discard(leftover);
+            return error.WrittenButUnverified;
+        };
+    }
+    for (pendings) |*p| p.finalize(leftover);
 }
 
-fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8) !void {
+fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook) !void {
+    var pending = try prepare(gpa, io, path_abs, data, expected_base);
+    var done = false;
+    defer if (!done) pending.discard(leftover);
+    try pending.swap(in_gap);
+    try pending.verify();
+    pending.finalize(leftover);
+    done = true;
+}
+
+fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8, replace_existing: bool) !void {
     var wide: WidePath = undefined;
     const name = try toWide(&wide, target_abs);
     const name_bytes = std.mem.sliceTo(name, 0).len * 2;
@@ -187,7 +258,7 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     defer gpa.free(buffer);
     @memset(buffer, 0);
     const info: *win.FILE_RENAME_INFO = @ptrCast(buffer.ptr);
-    info.flags = win.file_rename_flag_posix_semantics;
+    info.flags = win.file_rename_flag_posix_semantics | (if (replace_existing) win.file_rename_flag_replace_if_exists else 0);
     info.root_directory = null;
     info.file_name_length = @intCast(name_bytes);
     @memcpy(buffer[header..][0..name_bytes], std.mem.sliceAsBytes(std.mem.sliceTo(name, 0)));
@@ -486,4 +557,42 @@ test "a concurrent save that lands in the rename gap is preserved as a Conflict,
     defer testing.allocator.free(preserved);
     try testing.expectEqualStrings(original, preserved);
     std.Io.Dir.deleteFileAbsolute(testing.io, backup_path) catch {};
+}
+
+test "commitBatch writes every file when all swaps succeed and leaves no sidecars" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var a = try Fixture.init(original);
+    defer a.deinit();
+    var b = try Fixture.init(original);
+    defer b.deinit();
+
+    var pendings = [_]Pending{
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original)),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original)),
+    };
+    try commitBatch(&pendings, null, null);
+
+    try a.expectContent(updated);
+    try b.expectContent(updated);
+    try a.expectEntries(1);
+    try b.expectEntries(1);
+}
+
+test "commitBatch rolls every committed file back when one swap fails midway" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var a = try Fixture.init(original);
+    defer a.deinit();
+    var b = try Fixture.init(original);
+    defer b.deinit();
+
+    var pendings = [_]Pending{
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original)),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original)),
+    };
+    try testing.expectError(error.BatchAborted, commitBatch(&pendings, null, 1));
+
+    try a.expectContent(original);
+    try b.expectContent(original);
+    try a.expectEntries(1);
+    try b.expectEntries(1);
 }

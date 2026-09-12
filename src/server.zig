@@ -153,6 +153,7 @@ fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arg
     if (std.mem.eql(u8, name, "synapse_read_symbol")) return callReadSymbol(gpa, io, runtime, args);
     if (std.mem.eql(u8, name, "synapse_mutate")) return callMutate(gpa, io, runtime, args);
     if (std.mem.eql(u8, name, "synapse_try")) return callTry(gpa, io, runtime, args);
+    if (std.mem.eql(u8, name, "synapse_try_batch")) return callTryBatch(gpa, io, runtime, args);
     return error.UnknownTool;
 }
 
@@ -292,6 +293,75 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
     }
 }
 
+fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+    const arguments = args orelse return error.MissingArgument;
+    const edits_val = getField(arguments, "edits") orelse return error.MissingArgument;
+    if (edits_val != .array or edits_val.array.items.len == 0) return error.MissingArgument;
+    for (edits_val.array.items) |item| {
+        _ = getString(item, "file") orelse return error.MissingArgument;
+        _ = getString(item, "symbol") orelse return error.MissingArgument;
+        _ = getString(item, "hash") orelse return error.MissingArgument;
+        _ = getString(item, "body") orelse return error.MissingArgument;
+    }
+    const test_cmd = getString(arguments, "test_cmd") orelse "";
+    const allow_repo_config = getBool(arguments, "allow_repo_config");
+
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    const is_error = batchInto(gpa, io, runtime, edits_val.array.items, test_cmd, allow_repo_config, &buffer.writer) catch |err| blk: {
+        if (err == error.OutOfMemory) return err;
+        buffer.clearRetainingCapacity();
+        try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        break :blk true;
+    };
+    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, test_cmd: []const u8, allow_repo_config: bool, w: *Writer) !bool {
+    const edits = try gpa.alloc(runner.Edit, items.len);
+    defer gpa.free(edits);
+    var built: usize = 0;
+    defer {
+        var i = built;
+        while (i > 0) {
+            i -= 1;
+            gpa.free(@constCast(edits[i].file_abs));
+        }
+    }
+    for (items, 0..) |item, i| {
+        const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, getString(item, "file").?, gpa);
+        edits[i].file_abs = file_abs;
+        built = i + 1;
+        edits[i].ref_text = getString(item, "symbol").?;
+        edits[i].new_body = getString(item, "body").?;
+        edits[i].expected_hash = try symbol.parseHash(getString(item, "hash").?);
+    }
+
+    const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, test_cmd, allow_repo_config);
+    defer gpa.free(resolved);
+    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved });
+    defer result.deinit(gpa);
+
+    switch (result) {
+        .committed => |hashes| {
+            const views = try gpa.alloc(wire.BatchEdit, items.len);
+            defer gpa.free(views);
+            for (items, 0..) |item, i| views[i] = .{
+                .file = getString(item, "file").?,
+                .symbol = getString(item, "symbol").?,
+                .old_hash = edits[i].expected_hash,
+                .new_hash = hashes[i],
+            };
+            try wire.writeBatchCommitted(w, views);
+            return false;
+        },
+        .rejected => |report| {
+            try wire.writeRejected(w, resolved, report);
+            return true;
+        },
+    }
+}
+
 fn success(gpa: Allocator, buffer: *std.Io.Writer.Allocating) !ToolResult {
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = false };
 }
@@ -411,6 +481,58 @@ fn writeToolsList(out: *Writer, id: Value) !void {
         try js.endObject();
         try js.endObject();
     }
+    try writeBatchToolDef(&js);
+    try js.endArray();
+    try js.endObject();
+    try js.endObject();
+}
+
+fn writeBatchToolDef(js: *std.json.Stringify) !void {
+    try js.beginObject();
+    try js.objectField("name");
+    try js.write("synapse_try_batch");
+    try js.objectField("description");
+    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run one test_cmd over all of them, and commit every file only if it passes; otherwise nothing is written. One edit per file.");
+    try js.objectField("inputSchema");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("object");
+    try js.objectField("properties");
+    try js.beginObject();
+    try js.objectField("edits");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("array");
+    try js.objectField("description");
+    try js.write("one edit per file: {file, symbol, hash, body}");
+    try js.objectField("items");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("object");
+    try js.objectField("required");
+    try js.beginArray();
+    inline for (.{ "file", "symbol", "hash", "body" }) |field| try js.write(field);
+    try js.endArray();
+    try js.endObject();
+    try js.endObject();
+    try js.objectField("test_cmd");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("string");
+    try js.objectField("description");
+    try js.write("shell command that must exit 0 for the whole batch to commit; falls back to an explicit or global test_cmd when omitted");
+    try js.endObject();
+    try js.objectField("allow_repo_config");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("boolean");
+    try js.objectField("description");
+    try js.write("opt in to the repo's untrusted .synapserc.json test_cmd (default false)");
+    try js.endObject();
+    try js.endObject();
+    try js.objectField("required");
+    try js.beginArray();
+    try js.write("edits");
     try js.endArray();
     try js.endObject();
     try js.endObject();
