@@ -165,6 +165,7 @@ const win = struct {
     const job_object_extended_limit_information: c_int = 9;
     const limit_kill_on_job_close: u32 = 0x00002000;
     const limit_active_process: u32 = 0x00000008;
+    const limit_die_on_unhandled_exception: u32 = 0x00000400;
     const active_process_cap: u32 = 512;
     const leftover_poll_attempts: usize = 30;
     const leftover_poll_ms: windows.DWORD = 10;
@@ -226,7 +227,7 @@ const Job = struct {
         const handle = win.CreateJobObjectW(null, null) orelse return error.JobCreationFailed;
         errdefer std.os.windows.CloseHandle(handle);
         var info = std.mem.zeroes(win.ExtendedLimitInformation);
-        info.basic.limit_flags = win.limit_kill_on_job_close | win.limit_active_process;
+        info.basic.limit_flags = win.limit_kill_on_job_close | win.limit_active_process | win.limit_die_on_unhandled_exception;
         info.basic.active_process_limit = win.active_process_cap;
         if (win.SetInformationJobObject(handle, win.job_object_extended_limit_information, &info, @sizeOf(win.ExtendedLimitInformation)) == .FALSE) {
             return error.JobConfigurationFailed;
@@ -293,6 +294,27 @@ fn processIsGone(pid: u32) bool {
     const handle = win.OpenProcess(win.synchronize, .FALSE, pid) orelse return true;
     defer std.os.windows.CloseHandle(handle);
     return win.WaitForSingleObject(handle, 5000) == win.wait_object_0;
+}
+
+test "the job actually carries every limit we claim to set" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const job = try Job.create();
+    defer job.close();
+
+    var info: win.ExtendedLimitInformation = undefined;
+    var returned: std.os.windows.DWORD = 0;
+    try testing.expect(win.QueryInformationJobObject(
+        job.handle,
+        win.job_object_extended_limit_information,
+        &info,
+        @sizeOf(win.ExtendedLimitInformation),
+        &returned,
+    ) != .FALSE);
+
+    try testing.expect(info.basic.limit_flags & win.limit_kill_on_job_close != 0);
+    try testing.expect(info.basic.limit_flags & win.limit_active_process != 0);
+    try testing.expect(info.basic.limit_flags & win.limit_die_on_unhandled_exception != 0);
+    try testing.expectEqual(win.active_process_cap, info.basic.active_process_limit);
 }
 
 test "a clean exit passes and both streams are captured separately" {
