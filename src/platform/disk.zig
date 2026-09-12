@@ -306,7 +306,12 @@ fn isUnderRoot(root_abs: []const u8, target_abs: []const u8) bool {
     if (target_abs.len <= root_abs.len) return false;
     if (!std.ascii.startsWithIgnoreCase(target_abs, root_abs)) return false;
     const sep = target_abs[root_abs.len];
-    return sep == '\\' or sep == '/';
+    if (sep != '\\' and sep != '/') return false;
+    var it = std.mem.tokenizeAny(u8, target_abs, "/\\");
+    while (it.next()) |segment| {
+        if (std.mem.eql(u8, segment, "..") or std.mem.eql(u8, segment, ".")) return false;
+    }
+    return true;
 }
 
 fn escapesViaReparse(root_abs: []const u8, target_abs: []const u8) !bool {
@@ -846,4 +851,28 @@ test "recover never deletes temps through a junction (F, defense in depth)" {
 
     _ = try recover(testing.allocator, testing.io, root);
     try outside.dir.access(testing.io, "x.synapse-" ++ recover_tag ++ ".tmp", .{});
+}
+
+test "recover refuses a journal target that escapes the repo via .. (A hardening)" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo");
+    const root = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
+    defer testing.allocator.free(root);
+
+    const mal = "export const PWNED = 1;\n";
+    // the .bak lives in the repo's PARENT, named for the escaping target
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "pwned.ts.synapse-" ++ recover_tag ++ ".bak", .data = mal });
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = try std.fmt.bufPrint(&target_buf, "{s}\\..\\pwned.ts", .{root});
+    var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.synapse\\journal", .{root});
+    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, target, symbol.hashOf(mal));
+    testing.allocator.free(jp);
+
+    const report = try recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expect(report.failed >= 1);
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "pwned.ts", .{}));
 }
