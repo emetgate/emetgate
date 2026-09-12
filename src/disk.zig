@@ -172,12 +172,14 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     const name = try toWide(&wide, target_abs);
     const name_bytes = std.mem.sliceTo(name, 0).len * 2;
 
-    const header = 20;
-    const buffer = try gpa.alignedAlloc(u8, .of(u64), header + name_bytes);
+    const header = @offsetOf(win.FILE_RENAME_INFO, "file_name");
+    const buffer = try gpa.alignedAlloc(u8, .of(win.FILE_RENAME_INFO), header + name_bytes + 2);
     defer gpa.free(buffer);
     @memset(buffer, 0);
-    std.mem.writeInt(u32, buffer[0..4], win.file_rename_flag_posix_semantics, .little);
-    std.mem.writeInt(u32, buffer[16..20], @intCast(name_bytes), .little);
+    const info: *win.FILE_RENAME_INFO = @ptrCast(buffer.ptr);
+    info.flags = win.file_rename_flag_posix_semantics;
+    info.root_directory = null;
+    info.file_name_length = @intCast(name_bytes);
     @memcpy(buffer[header..][0..name_bytes], std.mem.sliceAsBytes(std.mem.sliceTo(name, 0)));
 
     if (win.SetFileInformationByHandle(handle, win.file_rename_info_ex, buffer.ptr, @intCast(buffer.len)) != .FALSE) return;
@@ -252,6 +254,13 @@ const win = struct {
     const error_sharing_violation: windows.DWORD = 32;
     const error_lock_violation: windows.DWORD = 33;
     const error_already_exists: windows.DWORD = 183;
+
+    const FILE_RENAME_INFO = extern struct {
+        flags: windows.DWORD,
+        root_directory: ?windows.HANDLE,
+        file_name_length: windows.DWORD,
+        file_name: [1]u16,
+    };
 
     const BY_HANDLE_FILE_INFORMATION = extern struct {
         file_attributes: windows.DWORD,

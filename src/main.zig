@@ -6,6 +6,7 @@ const skeleton = synapse.skeleton;
 const symbol = synapse.symbol;
 const cas = synapse.cas;
 const stdio = synapse.stdio;
+const runner = synapse.runner;
 const Runtime = synapse.runtime.Runtime;
 const Snapshot = synapse.loader.Snapshot;
 
@@ -14,6 +15,7 @@ const usage =
     \\       synapse symbols <file.ts>
     \\       synapse stats <file.ts>...
     \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>)
+    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) --test <command>
     \\
 ;
 
@@ -54,6 +56,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         try mutate(init, runtime, request, out);
         return 0;
     }
+    if (std.mem.eql(u8, command, "try")) {
+        const request = TryRequest.parse(args[2..]) orelse exitWithUsage();
+        return tryRun(init, runtime, request, out);
+    }
     exitWithUsage();
 }
 
@@ -77,8 +83,83 @@ fn exitCodeFor(err: anyerror) u8 {
         error.MutationSyntaxInvalid => 7,
         error.BodyEscape => 8,
         error.SkeletonInvalid => 9,
+        error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
+        error.Conflict => 11,
+        error.WrittenButUnverified => 12,
         else => 1,
     };
+}
+
+const rejected_exit_code: u8 = 10;
+
+const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test" };
+
+const TryRequest = struct {
+    path: []const u8,
+    symbol: []const u8,
+    hash: []const u8,
+    body: union(enum) { inline_text: []const u8, file: []const u8 },
+    test_command: []const u8,
+
+    fn parse(args: []const [:0]const u8) ?TryRequest {
+        if (args.len == 0 or args.len % 2 == 0) return null;
+        var values: [try_flags.len]?[]const u8 = @splat(null);
+
+        var i: usize = 1;
+        while (i < args.len) : (i += 2) {
+            const slot = flagIndex(&try_flags, args[i]) orelse return null;
+            if (values[slot] != null or flagIndex(&try_flags, args[i + 1]) != null) return null;
+            values[slot] = args[i + 1];
+        }
+
+        const inline_body = values[2];
+        const body_file = values[3];
+        if ((inline_body == null) == (body_file == null)) return null;
+        return .{
+            .path = args[0],
+            .symbol = values[0] orelse return null,
+            .hash = values[1] orelse return null,
+            .body = if (inline_body) |text| .{ .inline_text = text } else .{ .file = body_file.? },
+            .test_command = values[4] orelse return null,
+        };
+    }
+};
+
+fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    defer gpa.free(file_abs);
+    const expected = try symbol.parseHash(request.hash);
+
+    const body_from_file: ?[]u8 = switch (request.body) {
+        .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
+        .inline_text => null,
+    };
+    defer if (body_from_file) |bytes| gpa.free(bytes);
+    const body = body_from_file orelse request.body.inline_text;
+
+    const result = try runner.tryMutate(gpa, init.io, runtime, .{
+        .file_abs = file_abs,
+        .ref_text = request.symbol,
+        .expected_hash = expected,
+        .new_body = body,
+        .test_command = request.test_command,
+    });
+    defer result.deinit(gpa);
+
+    _ = out;
+    switch (result) {
+        .committed => |new_hash| {
+            std.debug.print("committed {s}  {s} -> {s}\n", .{ request.symbol, &symbol.formatHash(expected), &symbol.formatHash(new_hash) });
+            return 0;
+        },
+        .rejected => |report| {
+            std.debug.print("rejected: tests did not pass ({t})\n", .{report.outcome});
+            if (report.stdout.len != 0) std.debug.print("--- stdout ---\n{s}\n", .{report.stdout});
+            if (report.stderr.len != 0) std.debug.print("--- stderr ---\n{s}\n", .{report.stderr});
+            return rejected_exit_code;
+        },
+    }
 }
 
 fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {
@@ -121,8 +202,8 @@ const MutateRequest = struct {
 
         var i: usize = 1;
         while (i < args.len) : (i += 2) {
-            const slot = flagIndex(args[i]) orelse return null;
-            if (values[slot] != null or flagIndex(args[i + 1]) != null) return null;
+            const slot = flagIndex(&flags, args[i]) orelse return null;
+            if (values[slot] != null or flagIndex(&flags, args[i + 1]) != null) return null;
             values[slot] = args[i + 1];
         }
 
@@ -136,14 +217,14 @@ const MutateRequest = struct {
             .body = if (inline_body) |text| .{ .inline_text = text } else .{ .file = body_file.? },
         };
     }
-
-    fn flagIndex(arg: []const u8) ?usize {
-        for (flags, 0..) |flag, index| {
-            if (std.mem.eql(u8, flag, arg)) return index;
-        }
-        return null;
-    }
 };
+
+fn flagIndex(list: []const []const u8, arg: []const u8) ?usize {
+    for (list, 0..) |flag, index| {
+        if (std.mem.eql(u8, flag, arg)) return index;
+    }
+    return null;
+}
 
 fn mutate(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out: *std.Io.Writer) !void {
     const gpa = runtime.gpa;
