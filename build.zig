@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) void {
     test_options.addOptionPath("probe_path", probe.getEmittedBin());
 
     const test_module = b.createModule(.{
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("test_root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,

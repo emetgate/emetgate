@@ -1,11 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const symbol = @import("symbol.zig");
-const cas = @import("cas.zig");
-const alloc_bridge = @import("alloc_bridge.zig");
-const Runtime = @import("runtime.zig").Runtime;
-const Snapshot = @import("loader.zig").Snapshot;
-const test_util = @import("test_util.zig");
+const symbol = @import("../engine/symbol.zig");
+const cas = @import("../engine/cas.zig");
+const alloc_bridge = @import("../engine/alloc_bridge.zig");
+const Runtime = @import("../engine/runtime.zig").Runtime;
+const Snapshot = @import("../engine/loader.zig").Snapshot;
+const test_util = @import("../engine/test_util.zig");
 
 const Allocator = std.mem.Allocator;
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const symbol = @import("symbol.zig");
+const symbol = @import("../engine/symbol.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;

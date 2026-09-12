@@ -1,6 +1,6 @@
 const std = @import("std");
-const symbol = @import("symbol.zig");
-const sandbox = @import("sandbox.zig");
+const symbol = @import("../engine/symbol.zig");
+const sandbox = @import("../platform/sandbox.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -203,9 +203,9 @@ pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
 }
 
 const testing = std.testing;
-const ts = @import("tree_sitter.zig");
-const alloc_bridge = @import("alloc_bridge.zig");
-const test_util = @import("test_util.zig");
+const ts = @import("../engine/tree_sitter.zig");
+const alloc_bridge = @import("../engine/alloc_bridge.zig");
+const test_util = @import("../engine/test_util.zig");
 
 fn renderSymbols(gpa: Allocator, file: []const u8, tree: ts.Tree) ![]u8 {
     const table = try symbol.Table.build(gpa, tree);

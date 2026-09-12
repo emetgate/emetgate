@@ -1,12 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const symbol = @import("symbol.zig");
-const cas = @import("cas.zig");
+const symbol = @import("../engine/symbol.zig");
+const cas = @import("../engine/cas.zig");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
-const Runtime = @import("runtime.zig").Runtime;
-const Snapshot = @import("loader.zig").Snapshot;
+const Runtime = @import("../engine/runtime.zig").Runtime;
+const Snapshot = @import("../engine/loader.zig").Snapshot;
 
 const Allocator = std.mem.Allocator;
 const max_git_output = 64 * 1024;

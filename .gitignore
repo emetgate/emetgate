@@ -1,6 +1,6 @@
 .zig-cache/
 zig-out/
 .synapse/
-bench/master/node_modules/
-bench/work/
-bench/work2/
+tests/bench/master/node_modules/
+tests/bench/work/
+tests/bench/work2/

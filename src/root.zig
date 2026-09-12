@@ -1,23 +1,19 @@
-pub const tree_sitter = @import("tree_sitter.zig");
-pub const alloc_bridge = @import("alloc_bridge.zig");
-pub const traversal = @import("traversal.zig");
-pub const runtime = @import("runtime.zig");
-pub const loader = @import("loader.zig");
-pub const symbol = @import("symbol.zig");
-pub const skeleton = @import("skeleton.zig");
-pub const cas = @import("cas.zig");
-pub const session = @import("session.zig");
-pub const shadow = @import("shadow.zig");
-pub const sandbox = @import("sandbox.zig");
-pub const disk = @import("disk.zig");
-pub const runner = @import("runner.zig");
-pub const stdio = @import("stdio.zig");
-pub const wire = @import("wire.zig");
-pub const server = @import("server.zig");
-
-test {
-    _ = @import("purple.zig");
-}
+pub const tree_sitter = @import("engine/tree_sitter.zig");
+pub const alloc_bridge = @import("engine/alloc_bridge.zig");
+pub const traversal = @import("engine/traversal.zig");
+pub const runtime = @import("engine/runtime.zig");
+pub const loader = @import("engine/loader.zig");
+pub const symbol = @import("engine/symbol.zig");
+pub const skeleton = @import("engine/skeleton.zig");
+pub const cas = @import("engine/cas.zig");
+pub const session = @import("platform/session.zig");
+pub const shadow = @import("platform/shadow.zig");
+pub const sandbox = @import("platform/sandbox.zig");
+pub const disk = @import("platform/disk.zig");
+pub const runner = @import("platform/runner.zig");
+pub const stdio = @import("platform/stdio.zig");
+pub const wire = @import("protocol/wire.zig");
+pub const server = @import("protocol/server.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
