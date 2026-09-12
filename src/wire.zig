@@ -108,6 +108,24 @@ fn outcomeTag(outcome: sandbox.Outcome) []const u8 {
     };
 }
 
+pub fn exitCode(err: anyerror) u8 {
+    return switch (err) {
+        error.InvalidRef, error.InvalidHash => 2,
+        error.SourceHasErrors => 3,
+        error.SymbolNotFound => 4,
+        error.AmbiguousSymbol => 5,
+        error.HashMismatch => 6,
+        error.MutationSyntaxInvalid => 7,
+        error.BodyEscape => 8,
+        error.SkeletonInvalid => 9,
+        error.PlaceholderBody => 13,
+        error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
+        error.Conflict => 11,
+        error.WrittenButUnverified => 12,
+        else => 1,
+    };
+}
+
 pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();

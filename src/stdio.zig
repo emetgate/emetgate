@@ -7,6 +7,12 @@ pub fn stdout() std.Io.File {
     return file;
 }
 
+pub fn stdin() std.Io.File {
+    var file = std.Io.File.stdin();
+    if (builtin.os.tag == .windows) file.flags.nonblocking = isOverlapped(file.handle);
+    return file;
+}
+
 fn isOverlapped(handle: std.os.windows.HANDLE) bool {
     const windows = std.os.windows;
     var iosb: windows.IO_STATUS_BLOCK = undefined;

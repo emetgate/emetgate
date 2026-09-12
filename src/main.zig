@@ -8,6 +8,7 @@ const cas = synapse.cas;
 const stdio = synapse.stdio;
 const runner = synapse.runner;
 const wire = synapse.wire;
+const server = synapse.server;
 const Runtime = synapse.runtime.Runtime;
 const Snapshot = synapse.loader.Snapshot;
 
@@ -17,6 +18,7 @@ const usage =
     \\       synapse stats <file.ts>...
     \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
     \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) --test <command> [--json]
+    \\       synapse mcp
     \\
 ;
 
@@ -24,7 +26,7 @@ const max_body_len = std.math.maxInt(u32);
 
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 3) exitWithUsage();
+    if (args.len < 2) exitWithUsage();
 
     var buffer: [64 * 1024]u8 = undefined;
     var stdout_writer: std.Io.File.Writer = .initStreaming(stdio.stdout(), init.io, &buffer);
@@ -71,6 +73,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         if (parsed.json) return tryRunJson(init, runtime, request, out);
         return tryRun(init, runtime, request, out);
     }
+    if ((std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) and args.len == 2) {
+        try server.serve(runtime.gpa, init.io, runtime, out);
+        return 0;
+    }
     exitWithUsage();
 }
 
@@ -103,23 +109,7 @@ fn exitWithUsage() noreturn {
     std.process.exit(2);
 }
 
-fn exitCodeFor(err: anyerror) u8 {
-    return switch (err) {
-        error.InvalidRef, error.InvalidHash => 2,
-        error.SourceHasErrors => 3,
-        error.SymbolNotFound => 4,
-        error.AmbiguousSymbol => 5,
-        error.HashMismatch => 6,
-        error.MutationSyntaxInvalid => 7,
-        error.BodyEscape => 8,
-        error.SkeletonInvalid => 9,
-        error.PlaceholderBody => 13,
-        error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
-        error.Conflict => 11,
-        error.WrittenButUnverified => 12,
-        else => 1,
-    };
-}
+const exitCodeFor = wire.exitCode;
 
 const rejected_exit_code: u8 = 10;
 

@@ -13,6 +13,7 @@ pub const disk = @import("disk.zig");
 pub const runner = @import("runner.zig");
 pub const stdio = @import("stdio.zig");
 pub const wire = @import("wire.zig");
+pub const server = @import("server.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
