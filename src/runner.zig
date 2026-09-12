@@ -35,6 +35,13 @@ pub const Result = union(enum) {
 
 pub const config_file = ".synapserc.json";
 
+pub fn assertUnderCwdRepo(gpa: Allocator, io: std.Io, file_abs: []const u8) !void {
+    const root = try gitToplevel(gpa, io, ".");
+    defer gpa.free(root);
+    const rel = try relativeUnder(gpa, root, file_abs);
+    gpa.free(rel);
+}
+
 pub fn resolveTestCommand(gpa: Allocator, io: std.Io, file_abs: []const u8, given: []const u8) ![]u8 {
     if (given.len != 0) return gpa.dupe(u8, given);
     const dir = std.fs.path.dirname(file_abs) orelse return error.InvalidPath;

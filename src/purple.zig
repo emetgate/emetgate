@@ -297,6 +297,20 @@ test "purple C4: a committed mutation leaves no temp or backup artifacts" {
     try testing.expect(!repo.hasShadow());
 }
 
+test "purple V6: an MCP read tool cannot escape the project root" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = try respond(runtime,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"synapse_symbols","arguments":{"file":"C:/Windows/System32/drivers/etc/hosts"}}}
+    );
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "FileOutsideRepo") != null);
+}
+
 fn respond(runtime: *Runtime, line: []const u8) ![]u8 {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();

@@ -164,8 +164,15 @@ fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !Too
     return success(gpa, &buffer);
 }
 
+fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8) !*Snapshot {
+    const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
+    defer gpa.free(file_abs);
+    try runner.assertUnderCwdRepo(gpa, io, file_abs);
+    return Snapshot.load(runtime, io, .cwd(), file_abs);
+}
+
 fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer) !void {
-    const snapshot = try Snapshot.load(runtime, io, .cwd(), file);
+    const snapshot = try loadJailed(gpa, io, runtime, file);
     defer snapshot.destroy();
     const table = try snapshot.symbols();
     try wire.writeSymbols(gpa, w, file, table.*);
@@ -183,7 +190,7 @@ fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !To
 }
 
 fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer) !void {
-    const snapshot = try Snapshot.load(runtime, io, .cwd(), file);
+    const snapshot = try loadJailed(gpa, io, runtime, file);
     defer snapshot.destroy();
     const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.tree);
     defer gpa.free(text);
@@ -203,7 +210,7 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !
 }
 
 fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, w: *Writer) !void {
-    const snapshot = try Snapshot.load(runtime, io, .cwd(), file);
+    const snapshot = try loadJailed(gpa, io, runtime, file);
     defer snapshot.destroy();
     const table = try snapshot.symbols();
     const ref = try symbol.Ref.parse(gpa, sym);
@@ -230,7 +237,7 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8,
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
     const expected = try symbol.parseHash(hash_hex);
-    const base = try Snapshot.load(runtime, io, .cwd(), file);
+    const base = try loadJailed(gpa, io, runtime, file);
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
