@@ -113,6 +113,18 @@ const cli_cases = [_]CliCase{
         .stderr_contains = "-> " ++ e2e_patched_add_hash ++ "\n",
     },
     .{
+        .name = "symbols json emits one line with typed fields",
+        .args = &.{ "symbols", e2e_fixture, "--json" },
+        .exit_code = 0,
+        .stdout_contains = "\"hash\":\"" ++ e2e_add_hash ++ "\",\"kind\":\"function\",\"ref\":\"add\",\"line\":9,\"col\":8,\"ambiguous\":false",
+    },
+    .{
+        .name = "symbols json on a broken source is a typed error payload",
+        .args = &.{ "symbols", "tests/fixtures/broken.ts", "--json" },
+        .exit_code = 3,
+        .stdout = "{\"status\":\"error\",\"error\":\"SourceHasErrors\",\"exit_code\":3}\n",
+    },
+    .{
         .name = "output larger than the stdout buffer",
         .args = &.{ "symbols", "tests/e2e/many.ts" },
         .exit_code = 0,

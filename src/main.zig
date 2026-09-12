@@ -7,12 +7,13 @@ const symbol = synapse.symbol;
 const cas = synapse.cas;
 const stdio = synapse.stdio;
 const runner = synapse.runner;
+const wire = synapse.wire;
 const Runtime = synapse.runtime.Runtime;
 const Snapshot = synapse.loader.Snapshot;
 
 const usage =
     \\usage: synapse skeleton <file.ts>
-    \\       synapse symbols <file.ts>
+    \\       synapse symbols <file.ts> [--json]
     \\       synapse stats <file.ts>...
     \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>)
     \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) --test <command>
@@ -43,9 +44,15 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         try printSkeleton(init, runtime, args[2], out);
         return 0;
     }
-    if (std.mem.eql(u8, command, "symbols") and args.len == 3) {
-        try printSymbols(init, runtime, args[2], out);
-        return 0;
+    if (std.mem.eql(u8, command, "symbols")) {
+        if (args.len == 3) {
+            try printSymbols(init, runtime, args[2], out);
+            return 0;
+        }
+        if (args.len == 4 and std.mem.eql(u8, args[3], "--json")) {
+            return symbolsJson(init, runtime, args[2], out);
+        }
+        exitWithUsage();
     }
     if (std.mem.eql(u8, command, "stats")) {
         const skipped = try printStats(init, runtime, args[2..], out);
@@ -169,6 +176,21 @@ fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, ou
     const text = try skeleton.skeletonize(runtime.gpa, runtime.parser, snapshot.tree);
     defer runtime.gpa.free(text);
     try out.writeAll(text);
+}
+
+fn symbolsJson(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) u8 {
+    emitSymbolsJson(init, runtime, path, out) catch |err| {
+        wire.writeError(out, @errorName(err), exitCodeFor(err)) catch {};
+        return exitCodeFor(err);
+    };
+    return 0;
+}
+
+fn emitSymbolsJson(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {
+    const snapshot = try Snapshot.load(runtime, init.io, .cwd(), path);
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
+    try wire.writeSymbols(runtime.gpa, out, path, table.*);
 }
 
 fn printSymbols(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {
