@@ -1,2 +1,5 @@
 .zig-cache/
 zig-out/
+bench/master/node_modules/
+bench/work/
+bench/work2/
