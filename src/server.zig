@@ -75,7 +75,9 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer) !void 
                 try writeRpcError(out, .null, -32700, "Message exceeds size limit");
                 try out.writeByte('\n');
                 try out.flush();
-                return;
+                in.tossBuffered();
+                _ = in.discardDelimiterInclusive('\n') catch return;
+                continue;
             },
             error.ReadFailed => return,
         } orelse return;
