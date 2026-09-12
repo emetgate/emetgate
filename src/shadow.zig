@@ -37,6 +37,46 @@ pub fn freeFileList(gpa: Allocator, files: []const []u8) void {
     for (files) |file| gpa.free(file);
 }
 
+pub const Lock = struct {
+    handle: ?std.os.windows.HANDLE,
+    io: std.Io,
+    root_abs: []const u8,
+
+    pub fn acquire(io: std.Io, root_abs: []const u8) !Lock {
+        if (builtin.os.tag != .windows) return .{ .handle = null, .io = io, .root_abs = root_abs };
+        var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const workspace = try std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ root_abs, workspace_dir });
+        Dir.cwd().createDirPath(io, workspace) catch {};
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const lock_path = try std.fmt.bufPrint(&path_buf, "{s}\\.lock", .{workspace});
+        var wide: [std.fs.max_path_bytes:0]u16 = undefined;
+        const handle = win.CreateFileW(
+            try toExtendedWide(&wide, lock_path),
+            win.generic_write,
+            0,
+            null,
+            win.open_always,
+            win.file_attribute_normal | win.flag_delete_on_close,
+            null,
+        );
+        if (handle == std.os.windows.INVALID_HANDLE_VALUE) {
+            return switch (win.GetLastError()) {
+                win.error_sharing_violation => error.WorkspaceBusy,
+                else => error.WorkspaceLockFailed,
+            };
+        }
+        return .{ .handle = handle, .io = io, .root_abs = root_abs };
+    }
+
+    pub fn release(self: Lock) void {
+        const handle = self.handle orelse return;
+        std.os.windows.CloseHandle(handle);
+        var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const workspace = std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ self.root_abs, workspace_dir }) catch return;
+        Dir.cwd().deleteDir(self.io, workspace) catch {};
+    }
+};
+
 pub const Shadow = struct {
     io: std.Io,
     dir: Dir,
@@ -233,8 +273,12 @@ const win = struct {
     const mount_point_header_len = 8;
     const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
     const file_attribute_reparse_point: windows.DWORD = 0x00000400;
+    const file_attribute_normal: windows.DWORD = 0x00000080;
+    const flag_delete_on_close: windows.DWORD = 0x04000000;
+    const open_always: windows.DWORD = 4;
     const error_file_not_found: windows.DWORD = 2;
     const error_path_not_found: windows.DWORD = 3;
+    const error_sharing_violation: windows.DWORD = 32;
 
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;

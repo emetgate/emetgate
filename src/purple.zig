@@ -142,6 +142,20 @@ test "purple C1: a concurrent change is caught at commit and the original surviv
     try expectPristine(&repo);
 }
 
+test "purple C1: a second run on a locked repo is refused with a typed WorkspaceBusy" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+
+    {
+        const held = try shadow.Lock.acquire(testing.io, repo.root_abs);
+        defer held.release();
+        try testing.expectError(error.WorkspaceBusy, shadow.Lock.acquire(testing.io, repo.root_abs));
+    }
+    const reacquired = try shadow.Lock.acquire(testing.io, repo.root_abs);
+    reacquired.release();
+}
+
 test "purple C2: a brace-injection body cannot escape the slot" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();

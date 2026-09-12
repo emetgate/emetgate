@@ -63,6 +63,8 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     const dir = std.fs.path.dirname(options.file_abs) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir);
     defer gpa.free(root);
+    const lock = try shadow.Lock.acquire(io, root);
+    defer lock.release();
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
 
