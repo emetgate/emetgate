@@ -73,6 +73,10 @@ pub const Lock = struct {
         std.os.windows.CloseHandle(handle);
         var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
         const workspace = std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ self.root_abs, workspace_dir }) catch return;
+        var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (std.fmt.bufPrint(&journal_buf, "{s}\\journal", .{workspace})) |journal| {
+            Dir.cwd().deleteDir(self.io, journal) catch {};
+        } else |_| {}
         Dir.cwd().deleteDir(self.io, workspace) catch {};
     }
 };
@@ -213,7 +217,7 @@ fn ensureNoLinks(root_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceI
     }
 }
 
-fn isReparsePoint(path: []const u8) error{ AttributeCheckFailed, NameTooLong, InvalidWtf8 }!bool {
+pub fn isReparsePoint(path: []const u8) error{ AttributeCheckFailed, NameTooLong, InvalidWtf8 }!bool {
     var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
     const wide = try toExtendedWide(&path_w, path);
     const attributes = win.GetFileAttributesW(wide);

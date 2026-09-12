@@ -138,7 +138,7 @@ test "purple C1: a concurrent change is caught at commit and the original surviv
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
 
-    try testing.expectError(error.BaseChanged, disk.replaceReporting(testing.allocator, testing.io, file, "corrupted", symbol.hashOf("some other content"), null));
+    try testing.expectError(error.BaseChanged, disk.replaceReporting(testing.allocator, testing.io, file, "corrupted", symbol.hashOf("some other content"), null, null));
     try expectPristine(&repo);
 }
 
@@ -323,36 +323,129 @@ test "purple V6: an MCP read tool cannot escape the project root" {
 }
 
 const orig_a = "export function a(): number { return 1; }\n";
-const orig_b = "export function b(): number { return 9; }\n";
+const new_a = "export function a(): number { return 2; }\n";
 
-fn seedCrashLeftovers(tmp: *testing.TmpDir) !void {
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function a(): number { return 2; }\n" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-0123456789abcdef.bak", .data = orig_a });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.ts", .data = orig_b });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.ts.synapse-fedcba9876543210.tmp", .data = "orphaned staged bytes\n" });
+fn writeJournal(tmp: *testing.TmpDir, root: []const u8, tag: []const u8, rel_target: []const u8, base_hash_hex: []const u8) !void {
+    try tmp.dir.createDirPath(testing.io, ".synapse/journal");
+    const target_abs = try std.fmt.allocPrint(testing.allocator, "{s}\\{s}", .{ root, rel_target });
+    defer testing.allocator.free(target_abs);
+
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    var js: std.json.Stringify = .{ .writer = &buffer.writer };
+    try js.beginObject();
+    try js.objectField("target");
+    try js.write(target_abs);
+    try js.objectField("base_hash");
+    try js.write(base_hash_hex);
+    try js.endObject();
+
+    var name_buf: [128]u8 = undefined;
+    const name = try std.fmt.bufPrint(&name_buf, ".synapse/journal/{s}.json", .{tag});
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = buffer.written() });
 }
 
-test "purple recover: crash leftovers roll back to the original and orphan temps are cleared" {
+const tag_a = "0123456789abcdef";
+
+test "purple recover #7: a journaled backup restores the original (happy path)" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
-    try seedCrashLeftovers(&tmp);
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-" ++ tag_a ++ ".bak", .data = orig_a });
+    try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
 
     const report = try disk.recover(testing.allocator, testing.io, root);
     try testing.expectEqual(@as(usize, 1), report.restored);
-    try testing.expectEqual(@as(usize, 1), report.removed_temps);
-
+    try testing.expectEqual(@as(usize, 0), report.failed);
     const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
     defer testing.allocator.free(a);
     try testing.expectEqualStrings(orig_a, a);
-    const b = try tmp.dir.readFileAlloc(testing.io, "b.ts", testing.allocator, .unlimited);
-    defer testing.allocator.free(b);
-    try testing.expectEqualStrings(orig_b, b);
+}
 
-    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "a.ts.synapse-0123456789abcdef.bak", .{}));
-    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "b.ts.synapse-fedcba9876543210.tmp", .{}));
+test "purple recover #3 (A): a journal target outside the repo is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    // forged journal whose target escapes the repo root entirely
+    try tmp.dir.createDirPath(testing.io, ".synapse/journal");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".synapse/journal/" ++ tag_a ++ ".json", .data = "{\"target\":\"C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts\",\"base_hash\":\"" ++ "af1349b9f5f9a1a6a0404dea36dcc949" ++ "\"}" });
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expectEqual(@as(usize, 1), report.failed);
+}
+
+test "purple recover #4 (C): a backup whose content does not match base_hash is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-" ++ tag_a ++ ".bak", .data = "export const STOLEN = 1;\n" });
+    // journal claims the original hash, but the .bak content is attacker-controlled
+    try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expectEqual(@as(usize, 1), report.failed);
+    const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(a);
+    try testing.expectEqualStrings(new_a, a);
+}
+
+test "purple recover #1: a zero-byte backup never overwrites the target" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-" ++ tag_a ++ ".bak", .data = "" });
+    try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expectEqual(@as(usize, 1), report.failed);
+    const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(a);
+    try testing.expectEqualStrings(new_a, a);
+}
+
+test "purple recover #5 (B): a corrupt journal fails closed without a panic" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try tmp.dir.createDirPath(testing.io, ".synapse/journal");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".synapse/journal/" ++ tag_a ++ ".json", .data = "{ this is not json" });
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expectEqual(@as(usize, 1), report.failed);
+}
+
+test "purple recover #6 (D): a journal entry with no backup is skipped, target untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = orig_a });
+    try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expectEqual(@as(usize, 1), report.skipped);
+    const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(a);
+    try testing.expectEqualStrings(orig_a, a);
 }
 
 fn respond(runtime: *Runtime, line: []const u8) ![]u8 {

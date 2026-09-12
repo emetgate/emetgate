@@ -110,7 +110,9 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
 
     if (!report.passed()) return .{ .rejected = report };
     defer report.deinit(gpa);
-    try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null);
+    const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
+    defer gpa.free(journal_dir);
+    try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir);
     return .{ .committed = applied.hash };
 }
 
@@ -206,8 +208,10 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
             pendings[i].discard(null);
         }
     };
+    const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
+    defer gpa.free(journal_dir);
     for (prepared.items, 0..) |p, i| {
-        pendings[i] = try disk.prepare(gpa, io, options.edits[i].file_abs, p.applied.snapshot.source, p.base_hash);
+        pendings[i] = try disk.prepare(gpa, io, options.edits[i].file_abs, p.applied.snapshot.source, p.base_hash, journal_dir);
         count = i + 1;
     }
     commit_entered = true;

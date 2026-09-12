@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
+const shadow = @import("shadow.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -99,11 +100,11 @@ pub const Leftover = struct {
 const sidecar_suffix_max = ".synapse-0123456789abcdef.tmp".len;
 
 pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
-    return replaceInternal(gpa, io, path_abs, data, expected_base, null, null);
+    return replaceInternal(gpa, io, path_abs, data, expected_base, null, null, null);
 }
 
-pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover) !void {
-    return replaceInternal(gpa, io, path_abs, data, expected_base, leftover, null);
+pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, journal_dir: ?[]const u8) !void {
+    return replaceInternal(gpa, io, path_abs, data, expected_base, leftover, null, journal_dir);
 }
 
 pub const Pending = struct {
@@ -114,6 +115,7 @@ pub const Pending = struct {
     path: []u8,
     temp: []u8,
     backup: []u8,
+    journal: ?[]u8,
     saved_attributes: windows.DWORD,
     data_hash: symbol.Hash,
     state: State = .staged,
@@ -165,13 +167,17 @@ pub const Pending = struct {
     }
 
     fn freePaths(self: *Pending) void {
+        if (self.journal) |j| {
+            _ = deleteWithRetry(self.io, j);
+            self.gpa.free(j);
+        }
         self.gpa.free(self.path);
         self.gpa.free(self.temp);
         self.gpa.free(self.backup);
     }
 };
 
-pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !Pending {
+pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, journal_dir: ?[]const u8) !Pending {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
 
@@ -191,6 +197,12 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
     const backup = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.bak", .{ path_abs, &tag });
     errdefer gpa.free(backup);
 
+    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, path_abs, expected_base) else null;
+    errdefer if (journal) |j| {
+        _ = deleteWithRetry(io, j);
+        gpa.free(j);
+    };
+
     try writeDurably(io, temp, data);
     errdefer _ = deleteWithRetry(io, temp);
     const replacement = try Guard.open(temp);
@@ -203,9 +215,30 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
         .path = path,
         .temp = temp,
         .backup = backup,
+        .journal = journal,
         .saved_attributes = saved_attributes,
         .data_hash = symbol.hashOf(data),
     };
+}
+
+fn writeJournal(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const u8, target_abs: []const u8, base_hash: symbol.Hash) ![]u8 {
+    std.Io.Dir.cwd().createDirPath(io, journal_dir) catch {};
+    const journal_path = try std.fmt.allocPrint(gpa, "{s}\\{s}.json", .{ journal_dir, tag });
+    errdefer gpa.free(journal_path);
+
+    const hex = symbol.formatHash(base_hash);
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    var js: std.json.Stringify = .{ .writer = &buffer.writer };
+    try js.beginObject();
+    try js.objectField("target");
+    try js.write(target_abs);
+    try js.objectField("base_hash");
+    try js.write(hex[0..]);
+    try js.endObject();
+
+    try writeDurably(io, journal_path, buffer.written());
+    return journal_path;
 }
 
 fn abortSwaps(pendings: []Pending, swapped: usize, leftover: ?*Leftover) void {
@@ -241,8 +274,16 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
 pub const RecoverReport = struct {
     restored: usize = 0,
     removed_temps: usize = 0,
+    skipped: usize = 0,
+    failed: usize = 0,
 };
 
+const JournalEntry = struct {
+    target: []const u8 = "",
+    base_hash: []const u8 = "",
+};
+
+const max_journal_bytes = 64 * 1024;
 const SidecarKind = enum { tmp, bak };
 
 fn sidecarKind(name: []const u8) ?SidecarKind {
@@ -261,55 +302,139 @@ fn skipDir(name: []const u8) bool {
     return std.mem.eql(u8, name, ".git") or std.mem.eql(u8, name, "node_modules") or std.mem.eql(u8, name, ".synapse");
 }
 
-fn restoreBackup(gpa: Allocator, bak_abs: []const u8, target_abs: []const u8) !void {
+fn isUnderRoot(root_abs: []const u8, target_abs: []const u8) bool {
+    if (target_abs.len <= root_abs.len) return false;
+    if (!std.ascii.startsWithIgnoreCase(target_abs, root_abs)) return false;
+    const sep = target_abs[root_abs.len];
+    return sep == '\\' or sep == '/';
+}
+
+fn escapesViaReparse(root_abs: []const u8, target_abs: []const u8) !bool {
+    var current = std.fs.path.dirname(target_abs) orelse return true;
+    while (current.len > root_abs.len) {
+        if (try shadow.isReparsePoint(current)) return true;
+        current = std.fs.path.dirname(current) orelse break;
+    }
+    return false;
+}
+
+fn clearReadonly(path_abs: []const u8) void {
+    var wide: WidePath = undefined;
+    const w = toWide(&wide, path_abs) catch return;
+    _ = win.SetFileAttributesW(w, win.file_attribute_normal);
+}
+
+fn restoreVerified(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, base_hash: symbol.Hash) !void {
     const guard = try Guard.open(bak_abs);
     defer guard.close();
+    if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &base_hash)) return error.BackupUnverified;
+    clearReadonly(target_abs);
     try guard.renameReplacing(gpa, target_abs);
 }
 
 pub fn recover(gpa: Allocator, io: std.Io, root_abs: []const u8) !RecoverReport {
     if (builtin.os.tag != .windows) return error.Unsupported;
-    var baks: std.ArrayList([]u8) = .empty;
-    var tmps: std.ArrayList([]u8) = .empty;
+    var report: RecoverReport = .{};
+    try recoverJournaled(gpa, io, root_abs, &report);
+    try clearOrphanTemps(gpa, io, root_abs, &report);
+    return report;
+}
+
+fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *RecoverReport) !void {
+    var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const journal_dir = std.fmt.bufPrint(&journal_buf, "{s}\\{s}\\journal", .{ root_abs, shadow.workspace_dir }) catch return;
+
+    var dir = std.Io.Dir.openDirAbsolute(io, journal_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close(io);
+
+    var names: std.ArrayList([]u8) = .empty;
     defer {
-        for (baks.items) |p| gpa.free(p);
-        for (tmps.items) |p| gpa.free(p);
-        baks.deinit(gpa);
-        tmps.deinit(gpa);
+        for (names.items) |n| gpa.free(n);
+        names.deinit(gpa);
+    }
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
+        try names.append(gpa, try gpa.dupe(u8, entry.name));
     }
 
-    var dir = try std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true });
+    for (names.items) |name| {
+        var jp_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const jp = std.fmt.bufPrint(&jp_buf, "{s}\\{s}", .{ journal_dir, name }) catch continue;
+        applyJournalEntry(gpa, io, root_abs, jp, name, report) catch {
+            report.failed += 1;
+        };
+        _ = deleteWithRetry(io, jp);
+    }
+    std.Io.Dir.cwd().deleteDir(io, journal_dir) catch {};
+}
+
+fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_path: []const u8, name: []const u8, report: *RecoverReport) !void {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, journal_path, gpa, .limited(max_journal_bytes));
+    defer gpa.free(bytes);
+
+    const parsed = std.json.parseFromSlice(JournalEntry, gpa, bytes, .{ .ignore_unknown_fields = true }) catch {
+        report.failed += 1;
+        return;
+    };
+    defer parsed.deinit();
+    const target = parsed.value.target;
+    if (target.len == 0) {
+        report.failed += 1;
+        return;
+    }
+    const base_hash = symbol.parseHash(parsed.value.base_hash) catch {
+        report.failed += 1;
+        return;
+    };
+    if (!isUnderRoot(root_abs, target) or try escapesViaReparse(root_abs, target)) {
+        report.failed += 1;
+        return;
+    }
+
+    const tag = name[0 .. name.len - ".json".len];
+    const bak = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.bak", .{ target, tag });
+    defer gpa.free(bak);
+
+    restoreVerified(gpa, io, bak, target, base_hash) catch |err| switch (err) {
+        error.BaseChanged, error.FileLocked => {
+            report.skipped += 1;
+            return;
+        },
+        else => {
+            report.failed += 1;
+            return;
+        },
+    };
+    report.restored += 1;
+}
+
+fn clearOrphanTemps(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *RecoverReport) !void {
+    var dir = std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true }) catch return;
     defer dir.close(io);
     var walker = try dir.walkSelectively(gpa);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
+        const abs = std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, entry.path }) catch continue;
+        defer gpa.free(abs);
+        std.mem.replaceScalar(u8, abs, '/', '\\');
         if (entry.kind == .directory) {
-            if (!skipDir(entry.basename)) try walker.enter(io, entry);
+            if (skipDir(entry.basename)) continue;
+            const reparse = shadow.isReparsePoint(abs) catch true;
+            if (!reparse) try walker.enter(io, entry);
             continue;
         }
         if (entry.kind != .file) continue;
-        const kind = sidecarKind(entry.basename) orelse continue;
-        const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, entry.path });
-        std.mem.replaceScalar(u8, abs, '/', '\\');
-        switch (kind) {
-            .bak => try baks.append(gpa, abs),
-            .tmp => try tmps.append(gpa, abs),
-        }
+        if (sidecarKind(entry.basename) != .tmp) continue;
+        if (deleteWithRetry(io, abs)) report.removed_temps += 1;
     }
-
-    var report: RecoverReport = .{};
-    for (baks.items) |bak| {
-        restoreBackup(gpa, bak, bak[0 .. bak.len - sidecar_suffix_max]) catch continue;
-        report.restored += 1;
-    }
-    for (tmps.items) |tmp| {
-        if (deleteWithRetry(io, tmp)) report.removed_temps += 1;
-    }
-    return report;
 }
 
-fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook) !void {
-    var pending = try prepare(gpa, io, path_abs, data, expected_base);
+fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook, journal_dir: ?[]const u8) !void {
+    var pending = try prepare(gpa, io, path_abs, data, expected_base, journal_dir);
     var done = false;
     defer if (!done) pending.discard(leftover);
     try pending.swap(in_gap);
@@ -618,7 +743,7 @@ test "a concurrent save that lands in the rename gap is preserved as a Conflict,
     var recreate: RecreateTarget = .{ .fixture = &fixture };
     const hook: Hook = .{ .context = &recreate, .run = RecreateTarget.run };
     var leftover: Leftover = .{};
-    try testing.expectError(error.Conflict, replaceInternal(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), &leftover, hook));
+    try testing.expectError(error.Conflict, replaceInternal(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), &leftover, hook, null));
 
     try fixture.expectContent(external_save);
 
@@ -637,8 +762,8 @@ test "commitBatch writes every file when all swaps succeed and leaves no sidecar
     defer b.deinit();
 
     var pendings = [_]Pending{
-        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original)),
-        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original)),
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null),
     };
     try commitBatch(&pendings, null, null);
 
@@ -656,8 +781,8 @@ test "commitBatch rolls every committed file back when one swap fails midway" {
     defer b.deinit();
 
     var pendings = [_]Pending{
-        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original)),
-        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original)),
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null),
     };
     try testing.expectError(error.BatchAborted, commitBatch(&pendings, null, 1));
 
@@ -665,4 +790,60 @@ test "commitBatch rolls every committed file back when one swap fails midway" {
     try b.expectContent(original);
     try a.expectEntries(1);
     try b.expectEntries(1);
+}
+
+const recover_tag = "0123456789abcdef";
+
+fn seedRecover(root_abs: []const u8, tmp: *testing.TmpDir, target_content: []const u8, bak_content: []const u8) !void {
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts", .data = target_content });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts.synapse-" ++ recover_tag ++ ".bak", .data = bak_content });
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target_abs = try std.fmt.bufPrint(&target_buf, "{s}\\f.ts", .{root_abs});
+    var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.synapse\\journal", .{root_abs});
+    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, target_abs, symbol.hashOf(original));
+    testing.allocator.free(jp);
+}
+
+test "recover clears a read-only target and restores it, never fails open (ORTA-1)" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try seedRecover(root, &tmp, updated, original);
+
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target_abs = try std.fmt.bufPrint(&target_buf, "{s}\\f.ts", .{root});
+    var wide: WidePath = undefined;
+    const wide_target = try toWide(&wide, target_abs);
+    _ = win.SetFileAttributesW(wide_target, win.file_attribute_readonly);
+    defer _ = win.SetFileAttributesW(wide_target, win.file_attribute_normal);
+
+    const report = try recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 1), report.restored);
+    try testing.expectEqual(@as(usize, 0), report.failed);
+    const f = try tmp.dir.readFileAlloc(testing.io, "f.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(f);
+    try testing.expectEqualStrings(original, f);
+}
+
+test "recover never deletes temps through a junction (F, defense in depth)" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var outside = testing.tmpDir(.{ .iterate = true });
+    defer outside.cleanup();
+    try outside.dir.writeFile(testing.io, .{ .sub_path = "x.synapse-" ++ recover_tag ++ ".tmp", .data = "outside temp\n" });
+    const outside_abs = try outside.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(outside_abs);
+
+    var repo = testing.tmpDir(.{ .iterate = true });
+    defer repo.cleanup();
+    const root = try repo.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const link_abs = try std.fmt.bufPrint(&link_buf, "{s}\\link", .{root});
+    try shadow.createJunction(testing.io, link_abs, outside_abs);
+
+    _ = try recover(testing.allocator, testing.io, root);
+    try outside.dir.access(testing.io, "x.synapse-" ++ recover_tag ++ ".tmp", .{});
 }

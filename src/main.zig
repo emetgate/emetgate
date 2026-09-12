@@ -81,8 +81,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return 0;
     }
     if (std.mem.eql(u8, command, "recover") and args.len == 2) {
-        try recoverCmd(init, runtime);
-        return 0;
+        return recoverCmd(init, runtime);
     }
     exitWithUsage();
 }
@@ -276,15 +275,22 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     try wire.writeMutated(out, request.symbol, expected, applied.hash, applied.snapshot.source);
 }
 
-fn recoverCmd(init: std.process.Init, runtime: *Runtime) !void {
+const recover_failed_exit_code: u8 = 16;
+
+fn recoverCmd(init: std.process.Init, runtime: *Runtime) !u8 {
     const gpa = runtime.gpa;
     const root = try runner.repoRoot(gpa, init.io);
     defer gpa.free(root);
+    const lock = try shadow.Lock.acquire(init.io, root);
+    defer lock.release();
+
     const report = try disk.recover(gpa, init.io, root);
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);
     shadow.remove(init.io, root, shadow_abs) catch {};
-    std.debug.print("recovered {d} file(s), removed {d} orphaned temp file(s)\n", .{ report.restored, report.removed_temps });
+
+    std.debug.print("recovered {d} file(s), removed {d} orphaned temp file(s), skipped {d}, failed {d}\n", .{ report.restored, report.removed_temps, report.skipped, report.failed });
+    return if (report.failed > 0) recover_failed_exit_code else 0;
 }
 
 fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {
