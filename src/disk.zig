@@ -77,11 +77,29 @@ pub const Paths = struct {
     backup: []const u8,
 };
 
+pub const Leftover = struct {
+    buf: [std.fs.max_path_bytes]u8 = undefined,
+    len: usize = 0,
+
+    pub fn path(self: *const Leftover) ?[]const u8 {
+        return if (self.len == 0) null else self.buf[0..self.len];
+    }
+
+    fn record(self: *Leftover, value: []const u8) void {
+        @memcpy(self.buf[0..value.len], value);
+        self.len = value.len;
+    }
+};
+
 pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
-    return replaceWithHook(gpa, io, path_abs, data, expected_base, null);
+    return replaceInternal(gpa, io, path_abs, data, expected_base, null, null);
 }
 
-fn replaceWithHook(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, in_gap: ?Hook) !void {
+pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover) !void {
+    return replaceInternal(gpa, io, path_abs, data, expected_base, leftover, null);
+}
+
+fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook) !void {
     if (builtin.os.tag != .windows) return error.Unsupported;
 
     const guard = try Guard.open(path_abs);
@@ -101,7 +119,9 @@ fn replaceWithHook(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []con
 
     try writeDurably(io, temp, data);
     var temp_present = true;
-    defer if (temp_present) deleteWithRetry(io, temp);
+    defer if (temp_present) {
+        _ = deleteWithRetry(io, temp);
+    };
 
     const replacement = try Guard.open(temp);
     var replacement_open = true;
@@ -109,7 +129,11 @@ fn replaceWithHook(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []con
 
     try guard.renameTo(gpa, backup);
     var original_at_backup = true;
-    errdefer if (original_at_backup) guard.renameTo(gpa, path_abs) catch {};
+    defer if (original_at_backup) {
+        if (!renameWithRetry(gpa, guard, path_abs)) {
+            if (leftover) |out| out.record(backup);
+        }
+    };
 
     if (in_gap) |hook| try hook.run(hook.context);
 
@@ -125,10 +149,22 @@ fn replaceWithHook(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []con
     replacement_open = false;
     guard.close();
     guard_open = false;
-    deleteWithRetry(io, backup);
+    if (!deleteWithRetry(io, backup)) if (leftover) |out| out.record(backup);
 
     const written = hashFile(gpa, io, path_abs) catch return error.WrittenButUnverified;
     if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) return error.WrittenButUnverified;
+}
+
+fn renameWithRetry(gpa: Allocator, guard: Guard, target_abs: []const u8) bool {
+    var attempt: usize = 0;
+    while (attempt < delete_retries) : (attempt += 1) {
+        guard.renameTo(gpa, target_abs) catch {
+            win.Sleep(delete_retry_ms);
+            continue;
+        };
+        return true;
+    }
+    return false;
 }
 
 fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8) !void {
@@ -170,18 +206,18 @@ fn applyAttributes(path_abs: []const u8, attributes: windows.DWORD) !void {
 const delete_retries = 5;
 const delete_retry_ms: windows.DWORD = 40;
 
-fn deleteWithRetry(io: std.Io, path: []const u8) void {
+fn deleteWithRetry(io: std.Io, path: []const u8) bool {
     var attempt: usize = 0;
     while (true) : (attempt += 1) {
         std.Io.Dir.deleteFileAbsolute(io, path) catch |err| switch (err) {
-            error.FileNotFound => return,
+            error.FileNotFound => return true,
             else => {
-                if (attempt + 1 >= delete_retries) return;
+                if (attempt + 1 >= delete_retries) return false;
                 win.Sleep(delete_retry_ms);
                 continue;
             },
         };
-        return;
+        return true;
     }
 }
 
@@ -395,7 +431,6 @@ test "while the guard is held no other handle can open the file for writing" {
 
     const guard = try Guard.open(fixture.path());
     try testing.expectEqual(symbol.hashOf(original), try guard.hash(testing.allocator, testing.io));
-    // A writer or a deleter cannot open the file while the guard is held.
     try testing.expectError(error.OpenFailed, fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write | win.file_share_delete));
     try testing.expectError(error.OpenFailed, fixture.openRaw(win.delete, win.file_share_read | win.file_share_write | win.file_share_delete));
     guard.close();
@@ -422,7 +457,14 @@ test "a concurrent save that lands in the rename gap is preserved as a Conflict,
 
     var recreate: RecreateTarget = .{ .fixture = &fixture };
     const hook: Hook = .{ .context = &recreate, .run = RecreateTarget.run };
-    try testing.expectError(error.Conflict, replaceWithHook(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), hook));
+    var leftover: Leftover = .{};
+    try testing.expectError(error.Conflict, replaceInternal(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), &leftover, hook));
 
     try fixture.expectContent(external_save);
+
+    const backup_path = leftover.path() orelse return error.NoLeftoverReported;
+    const preserved = try std.Io.Dir.cwd().readFileAlloc(testing.io, backup_path, testing.allocator, .unlimited);
+    defer testing.allocator.free(preserved);
+    try testing.expectEqualStrings(original, preserved);
+    std.Io.Dir.deleteFileAbsolute(testing.io, backup_path) catch {};
 }

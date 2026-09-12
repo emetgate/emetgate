@@ -109,10 +109,19 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
         }
     }
     if (stopped == null and !exitsBefore(io, child.id.?, deadline)) stopped = .timed_out;
-    if (stopped != null) job.terminate() else try reader.checkAnyError();
-
-    const exit_code = try waitExitCode(child.id.?);
-    _ = try child.wait(io);
+    var exit_code: u32 = win.terminated_exit_code;
+    var reaped = false;
+    if (stopped == null) {
+        exit_code = try waitExitCode(child.id.?);
+        _ = try child.wait(io);
+        reaped = true;
+        if (job.onlyLeftovers()) killed_leftovers = true;
+        if (killed_leftovers) job.terminate() else try reader.checkAnyError();
+    } else {
+        job.terminate();
+        exit_code = try waitExitCode(child.id.?);
+    }
+    if (!reaped) _ = try child.wait(io);
     const duration_ns: u64 = @intCast(started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds);
 
     var truncated = false;
@@ -152,8 +161,13 @@ fn takeStream(gpa: Allocator, reader: *MultiReader, index: usize, limit: usize, 
 
 const win = struct {
     const windows = std.os.windows;
+    const job_object_basic_process_id_list: c_int = 3;
     const job_object_extended_limit_information: c_int = 9;
     const limit_kill_on_job_close: u32 = 0x00002000;
+    const limit_active_process: u32 = 0x00000008;
+    const active_process_cap: u32 = 512;
+    const leftover_poll_attempts: usize = 30;
+    const leftover_poll_ms: windows.DWORD = 10;
     const infinite: windows.DWORD = 0xFFFFFFFF;
     const wait_object_0: windows.DWORD = 0;
     const synchronize: windows.DWORD = 0x00100000;
@@ -195,11 +209,14 @@ const win = struct {
 
     extern "kernel32" fn CreateJobObjectW(attributes: ?*anyopaque, name: ?[*:0]const u16) callconv(.winapi) ?windows.HANDLE;
     extern "kernel32" fn SetInformationJobObject(job: windows.HANDLE, class: c_int, info: *const anyopaque, length: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn QueryInformationJobObject(job: windows.HANDLE, class: c_int, info: *anyopaque, length: windows.DWORD, returned: ?*windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn AssignProcessToJobObject(job: windows.HANDLE, process: windows.HANDLE) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn TerminateJobObject(job: windows.HANDLE, exit_code: windows.UINT) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetExitCodeProcess(process: windows.HANDLE, code: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn OpenProcess(access: windows.DWORD, inherit: windows.BOOL, pid: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
+    extern "kernel32" fn GetProcessId(process: windows.HANDLE) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 };
 
 const Job = struct {
@@ -209,11 +226,30 @@ const Job = struct {
         const handle = win.CreateJobObjectW(null, null) orelse return error.JobCreationFailed;
         errdefer std.os.windows.CloseHandle(handle);
         var info = std.mem.zeroes(win.ExtendedLimitInformation);
-        info.basic.limit_flags = win.limit_kill_on_job_close;
+        info.basic.limit_flags = win.limit_kill_on_job_close | win.limit_active_process;
+        info.basic.active_process_limit = win.active_process_cap;
         if (win.SetInformationJobObject(handle, win.job_object_extended_limit_information, &info, @sizeOf(win.ExtendedLimitInformation)) == .FALSE) {
             return error.JobConfigurationFailed;
         }
         return .{ .handle = handle };
+    }
+
+    fn processCount(self: Job) !u32 {
+        var buf: [8 + win.active_process_cap * 8]u8 align(8) = undefined;
+        if (win.QueryInformationJobObject(self.handle, win.job_object_basic_process_id_list, &buf, buf.len, null) == .FALSE) {
+            return error.JobQueryFailed;
+        }
+        return std.mem.readInt(u32, buf[4..8], .little);
+    }
+
+    fn onlyLeftovers(self: Job) bool {
+        var attempt: usize = 0;
+        while (attempt < win.leftover_poll_attempts) : (attempt += 1) {
+            const count = self.processCount() catch return true;
+            if (count == 0) return false;
+            win.Sleep(win.leftover_poll_ms);
+        }
+        return true;
     }
 
     fn assign(self: Job, process: std.os.windows.HANDLE) !void {
@@ -324,6 +360,19 @@ test "grandchild processes die with the job when the command times out" {
 test "a command that exits but leaves a background process is reported by its own exit code" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try probe(&.{"orphan"}, .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+
+    try testing.expectEqual(Outcome{ .exited = 0 }, report.outcome);
+    try testing.expect(report.killed_leftovers);
+    try testing.expect(!report.passed());
+    try testing.expect(report.duration_ns < 5 * std.time.ns_per_s);
+    const pid = try std.fmt.parseInt(u32, std.mem.trim(u8, report.stdout, " \r\n"), 10);
+    try testing.expect(processIsGone(pid));
+}
+
+test "a detached worker that holds no pipe is still caught by job accounting, not passed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const report = try probe(&.{"detached"}, .{ .timeout_ms = 20_000 });
     defer report.deinit(testing.allocator);
 
     try testing.expectEqual(Outcome{ .exited = 0 }, report.outcome);

@@ -10,6 +10,26 @@ extern "kernel32" fn CloseHandle(handle: windows.HANDLE) callconv(.winapi) windo
 const std_output_handle: windows.DWORD = @bitCast(@as(i32, -11));
 const std_error_handle: windows.DWORD = @bitCast(@as(i32, -12));
 
+const PROCESS_INFORMATION = extern struct {
+    hProcess: windows.HANDLE,
+    hThread: windows.HANDLE,
+    dwProcessId: windows.DWORD,
+    dwThreadId: windows.DWORD,
+};
+
+extern "kernel32" fn CreateProcessW(
+    application: ?[*:0]const u16,
+    command_line: ?[*:0]u16,
+    process_attributes: ?*anyopaque,
+    thread_attributes: ?*anyopaque,
+    inherit_handles: windows.BOOL,
+    creation_flags: windows.DWORD,
+    environment: ?*anyopaque,
+    current_directory: ?[*:0]const u16,
+    startup_info: *windows.STARTUPINFOW,
+    process_information: *PROCESS_INFORMATION,
+) callconv(.winapi) windows.BOOL;
+
 const flood_line = "flood flood flood flood flood flood flood flood flood flood\n";
 
 pub fn main(init: std.process.Init) !void {
@@ -59,6 +79,24 @@ pub fn main(init: std.process.Init) !void {
         });
         try out.print("{d}\n", .{GetProcessId(child.id.?)});
         try out.flush();
+        ExitProcess(0);
+    }
+    if (std.mem.eql(u8, mode, "detached")) {
+        var utf8_buf: [1024]u8 = undefined;
+        const cmdline = try std.fmt.bufPrint(&utf8_buf, "\"{s}\" sleep", .{args[0]});
+        var wide: [1024:0]u16 = undefined;
+        const n = try std.unicode.wtf8ToWtf16Le(&wide, cmdline);
+        wide[n] = 0;
+
+        var si: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+        si.cb = @sizeOf(windows.STARTUPINFOW);
+        var pi: PROCESS_INFORMATION = undefined;
+        const detached_process: windows.DWORD = 0x00000008;
+        if (CreateProcessW(null, &wide, null, null, .FALSE, detached_process, null, null, &si, &pi) == .FALSE) return error.SpawnFailed;
+        try out.print("{d}\n", .{pi.dwProcessId});
+        try out.flush();
+        _ = CloseHandle(pi.hProcess);
+        _ = CloseHandle(pi.hThread);
         ExitProcess(0);
     }
     if (std.mem.eql(u8, mode, "grandchild")) {
