@@ -14,6 +14,7 @@ pub const Error = error{
     HashMismatch,
     MutationSyntaxInvalid,
     BodyEscape,
+    PlaceholderBody,
 } || Allocator.Error || ts.Error;
 
 pub const Mutation = struct {
@@ -54,6 +55,7 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
     const slot: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(new_body.len)) };
     const patched_target = after.resolve(mutation.ref) catch return error.BodyEscape;
     try expectExactSlot(patched_target.body, slot);
+    try rejectPlaceholder(patched_target.body);
     try expectUntouchedOutside(before.*, after.*, cut, slot);
 
     return .{ .snapshot = next, .hash = patched_target.hash };
@@ -70,6 +72,21 @@ fn edgeToken(node: ts.Node, comptime side: enum { first, last }) ts.Node {
         current = current.child(if (side == .first) 0 else current.childCount() - 1).?;
     }
     return current;
+}
+
+fn rejectPlaceholder(body: ts.Node) error{PlaceholderBody}!void {
+    if (!std.mem.eql(u8, "statement_block", body.kind())) return;
+    var has_statement = false;
+    var has_comment = false;
+    var i: u32 = 0;
+    while (body.child(i)) |node| : (i += 1) {
+        if (isComment(node)) {
+            has_comment = true;
+        } else if (node.isNamed()) {
+            has_statement = true;
+        }
+    }
+    if (has_comment and !has_statement) return error.PlaceholderBody;
 }
 
 fn isComment(node: ts.Node) bool {
@@ -240,6 +257,31 @@ test "broken replacement bodies are refused and never spliced" {
         errdefer std.debug.print("accepted broken body: \"{s}\"\n", .{body});
         try testing.expectError(error.MutationSyntaxInvalid, mutate(doc, "add", body, .current));
     }
+}
+
+test "a body that is only a placeholder comment is refused, but a real empty block is allowed" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const doc = try test_util.loadFixture(runtime, "functions.ts");
+    defer doc.destroy();
+
+    const placeholders = [_][]const u8{
+        "{\n  // ...existing code...\n}",
+        "{ /* keep the rest */ }",
+        "{\n  // TODO\n  /* and more */\n}",
+    };
+    for (placeholders) |body| {
+        errdefer std.debug.print("accepted placeholder body: \"{s}\"\n", .{body});
+        try testing.expectError(error.PlaceholderBody, mutate(doc, "add", body, .current));
+    }
+
+    const empty = try mutate(doc, "add", "{}", .current);
+    defer empty.snapshot.destroy();
+    try testing.expect(std.mem.indexOf(u8, empty.snapshot.source, "): number {}") != null);
+
+    const with_comment = try mutate(doc, "add", "{ return a + b; // keep\n}", .current);
+    defer with_comment.snapshot.destroy();
+    try testing.expect(std.mem.indexOf(u8, with_comment.snapshot.source, "return a + b; // keep") != null);
 }
 
 test "a body that parses but spills outside its slot is a BodyEscape" {

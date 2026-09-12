@@ -83,6 +83,7 @@ fn exitCodeFor(err: anyerror) u8 {
         error.MutationSyntaxInvalid => 7,
         error.BodyEscape => 8,
         error.SkeletonInvalid => 9,
+        error.PlaceholderBody => 13,
         error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
         error.Conflict => 11,
         error.WrittenButUnverified => 12,
