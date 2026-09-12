@@ -1,6 +1,7 @@
 const std = @import("std");
 const symbol = @import("symbol.zig");
 const cas = @import("cas.zig");
+const skeleton = @import("skeleton.zig");
 const wire = @import("wire.zig");
 const runner = @import("runner.zig");
 const stdio = @import("stdio.zig");
@@ -24,6 +25,19 @@ const tool_defs = [_]Tool{
         .name = "synapse_symbols",
         .description = "List addressable function symbols in a TypeScript file with their content hashes.",
         .props = &.{.{ .name = "file", .desc = "path to a .ts file" }},
+    },
+    .{
+        .name = "synapse_skeleton",
+        .description = "Structural outline of a file: every symbol's signature with bodies elided. Read this instead of the whole file to locate a target cheaply.",
+        .props = &.{.{ .name = "file", .desc = "path to a .ts file" }},
+    },
+    .{
+        .name = "synapse_read_symbol",
+        .description = "Return the current body of one symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into synapse_try.",
+        .props = &.{
+            .{ .name = "file", .desc = "path to a .ts file" },
+            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
+        },
     },
     .{
         .name = "synapse_try",
@@ -132,6 +146,8 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
 
 fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value) !ToolResult {
     if (std.mem.eql(u8, name, "synapse_symbols")) return callSymbols(gpa, io, runtime, args);
+    if (std.mem.eql(u8, name, "synapse_skeleton")) return callSkeleton(gpa, io, runtime, args);
+    if (std.mem.eql(u8, name, "synapse_read_symbol")) return callReadSymbol(gpa, io, runtime, args);
     if (std.mem.eql(u8, name, "synapse_mutate")) return callMutate(gpa, io, runtime, args);
     if (std.mem.eql(u8, name, "synapse_try")) return callTry(gpa, io, runtime, args);
     return error.UnknownTool;
@@ -153,6 +169,47 @@ fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8
     defer snapshot.destroy();
     const table = try snapshot.symbols();
     try wire.writeSymbols(gpa, w, file, table.*);
+}
+
+fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+    const file = try requireString(args, "file");
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    renderSkeleton(gpa, io, runtime, file, &buffer.writer) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return failure(gpa, &buffer, err);
+    };
+    return success(gpa, &buffer);
+}
+
+fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer) !void {
+    const snapshot = try Snapshot.load(runtime, io, .cwd(), file);
+    defer snapshot.destroy();
+    const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.tree);
+    defer gpa.free(text);
+    try wire.writeSkeleton(w, file, text);
+}
+
+fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+    const file = try requireString(args, "file");
+    const sym = try requireString(args, "symbol");
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    renderSymbolBody(gpa, io, runtime, file, sym, &buffer.writer) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return failure(gpa, &buffer, err);
+    };
+    return success(gpa, &buffer);
+}
+
+fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, w: *Writer) !void {
+    const snapshot = try Snapshot.load(runtime, io, .cwd(), file);
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
+    const ref = try symbol.Ref.parse(gpa, sym);
+    defer ref.deinit(gpa);
+    const found = try table.resolve(ref);
+    try wire.writeSymbolBody(w, file, sym, found.hash, snapshot.tree.text(found.body));
 }
 
 fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
@@ -417,6 +474,8 @@ test "tools/list names the three tools and marks hash required" {
     defer testing.allocator.free(response);
 
     try testing.expect(std.mem.indexOf(u8, response, "synapse_symbols") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "synapse_skeleton") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "synapse_read_symbol") != null);
     try testing.expect(std.mem.indexOf(u8, response, "synapse_try") != null);
     try testing.expect(std.mem.indexOf(u8, response, "synapse_mutate") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"required\":[\"file\",\"symbol\",\"hash\",\"body\"]") != null);
@@ -488,6 +547,47 @@ test "a broken source is a tool error carrying the typed payload" {
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"error\\\":\\\"SourceHasErrors\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"exit_code\\\":3") != null);
+}
+
+test "synapse_skeleton call returns the outline with bodies elided" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"synapse_skeleton","arguments":{"file":"tests/fixtures/functions.ts"}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"skeleton\\\":\\\"") != null);
+}
+
+test "synapse_read_symbol returns one body and its hash" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"synapse_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbol":"add"}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"add\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"hash\\\":\\\"35b462b8e42e39e0fe66ae0dae747ab7\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"body\\\":\\\"") != null);
+}
+
+test "synapse_read_symbol on an unknown symbol is a tool error" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"synapse_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbol":"nope"}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"error\\\":\\\"SymbolNotFound\\\"") != null);
 }
 
 test "synapse_mutate call returns the transformed source without touching disk" {

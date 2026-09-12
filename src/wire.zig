@@ -37,6 +37,33 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
     try writer.writeByte('\n');
 }
 
+pub fn writeSkeleton(writer: *Writer, file: []const u8, skeleton_text: []const u8) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("skeleton");
+    try js.write(skeleton_text);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, body: []const u8) !void {
+    const hex = symbol.formatHash(hash);
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("symbol");
+    try js.write(ref);
+    try js.objectField("hash");
+    try js.write(hex[0..]);
+    try js.objectField("body");
+    try js.write(body);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Hash, new_hash: symbol.Hash) !void {
     const old_hex = symbol.formatHash(old_hash);
     const new_hex = symbol.formatHash(new_hash);
@@ -182,6 +209,28 @@ test "file paths with backslashes and quotes are JSON-escaped" {
     defer testing.allocator.free(json);
 
     try testing.expect(std.mem.indexOf(u8, json, "tests\\\\e2e\\\\a\\\"b.ts") != null);
+}
+
+test "skeleton payload embeds the outline as one JSON line" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeSkeleton(&buffer.writer, "src/a.ts", "export function add(a: number, b: number): number;\n");
+
+    const json = buffer.written();
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
+    try testing.expect(std.mem.indexOf(u8, json, "\"file\":\"src/a.ts\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"skeleton\":\"export function add(a: number, b: number): number;\\n\"") != null);
+}
+
+test "symbol body payload carries ref, hash and the escaped body" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeSymbolBody(&buffer.writer, "src/a.ts", "add", symbol.hashOf("x"), "{\n  return a + b;\n}");
+
+    const json = buffer.written();
+    try testing.expect(std.mem.indexOf(u8, json, "\"symbol\":\"add\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"hash\":\"" ++ &symbol.formatHash(symbol.hashOf("x")) ++ "\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"body\":\"{\\n  return a + b;\\n}\"") != null);
 }
 
 test "committed payload names the symbol and both hashes" {
