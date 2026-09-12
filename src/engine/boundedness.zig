@@ -97,7 +97,7 @@ fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, 
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
-        if (!std.mem.eql(u8, node.kind(), "identifier")) continue;
+        if (!isNameCarrier(node.kind())) continue;
         if (!std.mem.eql(u8, snapshot.tree.text(node), name)) continue;
         if (isWithin(node, sym.declaration)) continue;
 
@@ -118,15 +118,31 @@ fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, 
     };
 }
 
+fn isNameCarrier(kind: []const u8) bool {
+    return std.mem.eql(u8, kind, "identifier") or
+        std.mem.eql(u8, kind, "property_identifier") or
+        std.mem.eql(u8, kind, "shorthand_property_identifier") or
+        std.mem.eql(u8, kind, "shorthand_property_identifier_pattern");
+}
+
 fn classifyReference(node: ts.Node) ?Provenance {
+    if (!std.mem.eql(u8, node.kind(), "identifier")) return .unrecognized_reference;
     const parent = node.parent() orelse return .unrecognized_reference;
-    if (std.mem.eql(u8, parent.kind(), "call_expression")) {
-        if (parent.childByField("function")) |callee| {
-            if (callee.eql(node)) return null;
-        }
-    }
+    if (std.mem.eql(u8, parent.kind(), "call_expression") and isPlainCall(parent, node)) return null;
     if (std.mem.eql(u8, parent.kind(), "arguments")) return .first_class_escape;
     return .unrecognized_reference;
+}
+
+fn isPlainCall(call: ts.Node, callee_node: ts.Node) bool {
+    const callee = call.childByField("function") orelse return false;
+    if (!callee.eql(callee_node)) return false;
+    const args = call.childByField("arguments") orelse return false;
+    if (!std.mem.eql(u8, args.kind(), "arguments")) return false;
+    var i: u32 = 0;
+    while (call.child(i)) |c| : (i += 1) {
+        if (!c.isNamed() and std.mem.eql(u8, c.kind(), "?.")) return false;
+    }
+    return true;
 }
 
 fn callSite(node: ts.Node) ts.Node {
@@ -296,6 +312,93 @@ test "whitelist proof: a reference shape outside the escape blacklist still UNBO
     , "process", .unrecognized_reference);
 }
 
+fn expectUnboundedAny(src: []const u8, ref_text: []const u8) !void {
+    var case = try Case.init(src);
+    defer case.deinit();
+    const span = try case.signatureSpan(ref_text);
+    const report = try case.run(ref_text, span);
+    defer report.deinit();
+    errdefer std.debug.print("got confidence={t} provenance={?}\n", .{ report.confidence, report.provenance });
+    try testing.expectEqual(Confidence.unbounded, report.confidence);
+    try testing.expect(report.provenance != null);
+}
+
+const decl = "function process(x: number): number { return x; }\n";
+
+test "corpus: computed subscript reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "const c = obj[process]();", "process", .unrecognized_reference);
+}
+test "corpus: namespace/member property reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "NS.process();", "process", .unrecognized_reference);
+}
+test "corpus: this-method property reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "class C { m(): void { this.process(); } }", "process", .unrecognized_reference);
+}
+test "corpus: tagged template reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "const t = process`x`;", "process", .unrecognized_reference);
+}
+test "corpus: spread reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "const a = [...process];", "process", .unrecognized_reference);
+}
+test "corpus: destructure-pattern reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "const { process } = obj;", "process", .unrecognized_reference);
+}
+test "corpus: object shorthand reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "const o = { process };", "process", .unrecognized_reference);
+}
+test "corpus: alias assignment reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "const alias = process;", "process", .unrecognized_reference);
+}
+test "corpus: typeof type-query reference is UNBOUNDED" {
+    try expectUnbounded(decl ++ "type T = typeof process;", "process", .unrecognized_reference);
+}
+test "corpus: decorator reference is UNBOUNDED" {
+    try expectUnboundedAny(decl ++ "@process class C {}", "process");
+}
+test "corpus: optional call reference is UNBOUNDED" {
+    try expectUnboundedAny(decl ++ "process?.();", "process");
+}
+test "corpus: renamed export specifier is UNBOUNDED" {
+    try expectUnbounded(decl ++ "export { process as other };", "process", .reexport_ambiguous);
+}
+test "corpus: commonjs exports assignment is UNBOUNDED" {
+    try expectUnbounded(decl ++ "exports.foo = process;", "process", .unrecognized_reference);
+}
+test "corpus: assign-to-exported-object is UNBOUNDED" {
+    try expectUnbounded(decl ++ "const obj = {}; obj.foo = process; export { obj };", "process", .unrecognized_reference);
+}
+test "corpus: export default declaration is UNBOUNDED" {
+    try expectUnbounded("export default function process(x: number): number { return x; }", "process", .exported_escape);
+}
+test "corpus: shadowing local passed as callback is UNBOUNDED (over-count is safe)" {
+    try expectUnboundedAny(decl ++ "function outer(): void { const process = 1; [process].map((process) => process); }", "process");
+}
+
+test "completeness: a reference in a nested scope is still counted" {
+    var case = try Case.init(decl ++ "function outer(): number { return process(1); }\nprocess(2);");
+    defer case.deinit();
+    const span = try case.signatureSpan("process");
+    const report = try case.run("process", span);
+    defer report.deinit();
+    try testing.expectEqual(Confidence.bounded, report.confidence);
+    try testing.expectEqual(@as(usize, 2), report.same_file_refs.len);
+}
+
+test "boundary: a mutation one byte into the signature flips to signature_change" {
+    var case = try Case.init(decl ++ "process(1);");
+    defer case.deinit();
+    const table = try case.snapshot.symbols();
+    const ref = try symbol.Ref.parse(testing.allocator, "process");
+    defer ref.deinit(testing.allocator);
+    const sym = try table.resolve(ref);
+    const just_before_body: symbol.Span = .{ .start = sym.body.startByte() - 1, .end = sym.body.endByte() };
+
+    const report = analyze(testing.allocator, case.snapshot, ref, just_before_body);
+    defer report.deinit();
+    try testing.expectEqual(MutationClass.signature_change, report.mutation_class);
+    try testing.expectEqual(Confidence.bounded, report.confidence);
+}
+
 test "positive control: a body-only mutation is BODY_ONLY_NO_OP and bounded" {
     var case = try Case.init(
         \\function process(x: number): number { return x; }
@@ -312,6 +415,23 @@ test "positive control: a body-only mutation is BODY_ONLY_NO_OP and bounded" {
     defer report.deinit();
     try testing.expectEqual(MutationClass.body_only_no_op, report.mutation_class);
     try testing.expectEqual(Confidence.bounded, report.confidence);
+}
+
+test "reachability: a realistic module-private helper with several call sites stays BOUNDED" {
+    var case = try Case.init(
+        \\import { log } from "./log.ts";
+        \\function clamp(x: number, lo: number, hi: number): number { return Math.min(hi, Math.max(lo, x)); }
+        \\function a(v: number): number { return clamp(v, 0, 10); }
+        \\function b(v: number): number { log(v); return clamp(v, 0, 100); }
+        \\export function api(v: number): number { return clamp(v, -1, 1); }
+    );
+    defer case.deinit();
+    const span = try case.signatureSpan("clamp");
+    const report = try case.run("clamp", span);
+    defer report.deinit();
+    try testing.expectEqual(MutationClass.signature_change, report.mutation_class);
+    try testing.expectEqual(Confidence.bounded, report.confidence);
+    try testing.expectEqual(@as(usize, 3), report.same_file_refs.len);
 }
 
 test "positive control: a module-private, escape-free, in-file-called symbol is BOUNDED" {
