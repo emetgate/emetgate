@@ -16,5 +16,9 @@ pub const wire = @import("wire.zig");
 pub const server = @import("server.zig");
 
 test {
+    _ = @import("purple.zig");
+}
+
+test {
     @import("std").testing.refAllDecls(@This());
 }
