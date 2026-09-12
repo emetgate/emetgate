@@ -86,10 +86,13 @@ pub const Leftover = struct {
     }
 
     fn record(self: *Leftover, value: []const u8) void {
-        @memcpy(self.buf[0..value.len], value);
-        self.len = value.len;
+        const n = @min(value.len, self.buf.len);
+        @memcpy(self.buf[0..n], value[0..n]);
+        self.len = n;
     }
 };
+
+const sidecar_suffix_max = ".synapse-0123456789abcdef.tmp".len;
 
 pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
     return replaceInternal(gpa, io, path_abs, data, expected_base, null, null);
@@ -101,6 +104,7 @@ pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: 
 
 fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook) !void {
     if (builtin.os.tag != .windows) return error.Unsupported;
+    if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
 
     const guard = try Guard.open(path_abs);
     var guard_open = true;
