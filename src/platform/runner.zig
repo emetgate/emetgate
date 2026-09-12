@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
+const boundedness = @import("../engine/boundedness.zig");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
@@ -17,6 +18,7 @@ pub const Options = struct {
     expected_hash: symbol.Hash,
     new_body: []const u8,
     test_command: []const u8,
+    test_scoped_cmd: ?[]const u8 = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
 };
@@ -83,6 +85,28 @@ fn fileExists(io: std.Io, path: []const u8) !bool {
     return true;
 }
 
+pub const Gate = enum { full, scoped };
+
+// Safety-valve default (no scoped cmd): boundedness is telemetry, not control —
+// BOUNDED and UNBOUNDED both run the full test_command, behavior unchanged; teeth
+// come only from the scoped path. The scoped path is a softer guarantee: it trusts
+// the runner's related-test (import-graph) heuristic, blind to dynamic import / DI /
+// reflection. Prefer the full command when tests reach code dynamically; scoped is
+// a trade-off the user opts into explicitly. Fast-path opens only for BOUNDED.
+fn chooseGate(confidence: boundedness.Confidence, has_scoped: bool) Gate {
+    if (confidence == .bounded and has_scoped) return .scoped;
+    return .full;
+}
+
+fn substituteFile(gpa: Allocator, template: []const u8, rel: []const u8) ![]u8 {
+    const needle = "{file}";
+    const count = std.mem.count(u8, template, needle);
+    if (count == 0) return gpa.dupe(u8, template);
+    const out = try gpa.alloc(u8, template.len - count * needle.len + count * rel.len);
+    _ = std.mem.replace(u8, template, needle, rel, out);
+    return out;
+}
+
 pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Result {
     if (options.test_command.len == 0) return error.NoTestCommand;
     const dir = std.fs.path.dirname(options.file_abs) orelse return error.InvalidPath;
@@ -106,7 +130,18 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);
 
-    const report = try runInShadow(gpa, io, root, shadow_abs, rel, applied.snapshot.source, options);
+    const analysis_target = try (try base.symbols()).resolve(ref);
+    const cut: symbol.Span = .{ .start = analysis_target.body.startByte(), .end = analysis_target.body.endByte() };
+    const frame = boundedness.analyze(gpa, base, ref, cut);
+    defer frame.deinit();
+    const scoped_owned: ?[]u8 = if (chooseGate(frame.confidence, options.test_scoped_cmd != null) == .scoped)
+        try substituteFile(gpa, options.test_scoped_cmd.?, rel)
+    else
+        null;
+    defer if (scoped_owned) |s| gpa.free(s);
+    const command = scoped_owned orelse options.test_command;
+
+    const report = try runInShadow(gpa, io, root, shadow_abs, rel, applied.snapshot.source, options, command);
 
     if (!report.passed()) return .{ .rejected = report };
     defer report.deinit(gpa);
@@ -243,7 +278,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []
     return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = shadow_abs, .limits = options.limits });
 }
 
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options) !sandbox.Report {
+fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options, command: []const u8) !sandbox.Report {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
@@ -260,7 +295,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const
     }
     try workspace.writeFile(rel, patched);
 
-    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", options.test_command };
+    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", command };
     return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = shadow_abs, .limits = options.limits });
 }
 
@@ -497,6 +532,62 @@ test "a batch whose shared test fails writes nothing" {
     defer testing.allocator.free(b);
     try testing.expectEqualStrings(TwoFile.a_src, a);
     try testing.expectEqualStrings(TwoFile.b_src, b);
+}
+
+test "gate: only BOUNDED with a scoped command reaches the scoped path" {
+    try testing.expectEqual(Gate.scoped, chooseGate(.bounded, true));
+    try testing.expectEqual(Gate.full, chooseGate(.bounded, false));
+    try testing.expectEqual(Gate.full, chooseGate(.unbounded, true));
+    try testing.expectEqual(Gate.full, chooseGate(.unbounded, false));
+}
+
+test "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = "exit 1",
+        .test_scoped_cmd = "type {file}",
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings("export function add(a: number, b: number): number {\n  return a - b;\n}\n", on_disk);
+}
+
+test "gate: an empty test command aborts before touching disk" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    try testing.expectError(error.NoTestCommand, tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = "{ return a - b; }",
+        .test_command = "",
+        .test_scoped_cmd = "cmd /c exit 0",
+    }));
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
 }
 
 test "a passing test commits the mutation to disk" {
