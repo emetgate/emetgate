@@ -13,6 +13,7 @@ pub const disk = @import("platform/disk.zig");
 pub const runner = @import("platform/runner.zig");
 pub const stdio = @import("platform/stdio.zig");
 pub const wire = @import("protocol/wire.zig");
+pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
 
 test {

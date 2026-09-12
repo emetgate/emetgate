@@ -1,6 +1,7 @@
 const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const sandbox = @import("../platform/sandbox.zig");
+const diagnostics = @import("diagnostics.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -133,7 +134,12 @@ pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Hash, new
     try writer.writeByte('\n');
 }
 
-pub fn writeRejected(writer: *Writer, test_cmd: []const u8, report: sandbox.Report) !void {
+pub fn writeRejected(gpa: Allocator, writer: *Writer, test_cmd: []const u8, report: sandbox.Report) !void {
+    const from_out = try diagnostics.parse(gpa, report.stdout);
+    defer gpa.free(from_out);
+    const from_err = try diagnostics.parse(gpa, report.stderr);
+    defer gpa.free(from_err);
+
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
@@ -144,12 +150,30 @@ pub fn writeRejected(writer: *Writer, test_cmd: []const u8, report: sandbox.Repo
     try js.write(test_cmd);
     try js.objectField("outcome");
     try js.write(outcomeTag(report.outcome));
+    try js.objectField("diagnostics");
+    try js.beginArray();
+    for (from_out) |d| try writeDiagnostic(&js, d);
+    for (from_err) |d| try writeDiagnostic(&js, d);
+    try js.endArray();
     try js.objectField("stdout");
     try js.write(report.stdout);
     try js.objectField("stderr");
     try js.write(report.stderr);
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+fn writeDiagnostic(js: *std.json.Stringify, d: diagnostics.Diagnostic) !void {
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(d.file);
+    try js.objectField("line");
+    try js.write(d.line);
+    try js.objectField("col");
+    try js.write(d.col);
+    try js.objectField("message");
+    try js.write(d.message);
+    try js.endObject();
 }
 
 fn rejectionReason(report: sandbox.Report) []const u8 {
@@ -310,7 +334,7 @@ test "rejected reason reflects the real outcome, not always tests_failed" {
             .truncated = false,
             .killed_leftovers = case.leftovers,
         };
-        try writeRejected(&buffer.writer, "npm test", report);
+        try writeRejected(testing.allocator, &buffer.writer, "npm test", report);
         const json = buffer.written();
         errdefer std.debug.print("case {s}: {s}\n", .{ case.reason, json });
         try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"") != null);
@@ -320,6 +344,25 @@ test "rejected reason reflects the real outcome, not always tests_failed" {
         try testing.expect(std.mem.indexOf(u8, json, try std.fmt.bufPrint(&tag_buf, "\"outcome\":\"{s}\"", .{case.tag})) != null);
         try testing.expect(std.mem.indexOf(u8, json, "\"test_cmd\":\"npm test\"") != null);
     }
+}
+
+test "rejected payload surfaces parsed diagnostics and escapes control bytes" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 2 },
+        .duration_ns = 0,
+        .stdout = @constCast("src/x.ts(3,5): error TS2322: bad \x1b[31mred\x1b[0m type\n"),
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    try writeRejected(testing.allocator, &buffer.writer, "npx tsc", report);
+    const json = buffer.written();
+
+    try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics\":[{\"file\":\"src/x.ts\",\"line\":3,\"col\":5,\"message\":") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\\u001b") != null);
+    try testing.expect(std.mem.indexOfScalar(u8, json, 0x1b) == null);
 }
 
 test "error payload carries the name and exit code on one line" {

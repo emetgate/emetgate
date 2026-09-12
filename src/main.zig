@@ -238,7 +238,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
             return 0;
         },
         .rejected => |report| {
-            try wire.writeRejected(out, test_command, report);
+            try wire.writeRejected(gpa, out, test_command, report);
             return rejected_exit_code;
         },
     }

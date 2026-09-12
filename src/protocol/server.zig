@@ -287,7 +287,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             return false;
         },
         .rejected => |report| {
-            try wire.writeRejected(w, test_command, report);
+            try wire.writeRejected(gpa, w, test_command, report);
             return true;
         },
     }
@@ -356,7 +356,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             return false;
         },
         .rejected => |report| {
-            try wire.writeRejected(w, resolved, report);
+            try wire.writeRejected(gpa, w, resolved, report);
             return true;
         },
     }
