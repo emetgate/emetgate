@@ -42,17 +42,23 @@ pub fn assertUnderCwdRepo(gpa: Allocator, io: std.Io, file_abs: []const u8) !voi
     gpa.free(rel);
 }
 
-pub fn resolveTestCommand(gpa: Allocator, io: std.Io, file_abs: []const u8, given: []const u8) ![]u8 {
+pub fn resolveTestCommand(gpa: Allocator, io: std.Io, file_abs: []const u8, given: []const u8, allow_repo_config: bool) ![]u8 {
     if (given.len != 0) return gpa.dupe(u8, given);
+
     const dir = std.fs.path.dirname(file_abs) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir);
     defer gpa.free(root);
-    return (try readTestCommand(gpa, io, root)) orelse error.NoTestCommand;
+    const repo_path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, config_file });
+    defer gpa.free(repo_path);
+
+    if (!allow_repo_config) {
+        if (try fileExists(io, repo_path)) return error.UntrustedRepoConfig;
+        return error.NoTestCommand;
+    }
+    return (try readConfigCommand(gpa, io, repo_path)) orelse error.NoTestCommand;
 }
 
-fn readTestCommand(gpa: Allocator, io: std.Io, root: []const u8) !?[]u8 {
-    const path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, config_file });
-    defer gpa.free(path);
+fn readConfigCommand(gpa: Allocator, io: std.Io, path: []const u8) !?[]u8 {
     const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(64 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
@@ -63,6 +69,14 @@ fn readTestCommand(gpa: Allocator, io: std.Io, root: []const u8) !?[]u8 {
     const cmd = parsed.value.test_cmd orelse return null;
     if (cmd.len == 0) return null;
     return try gpa.dupe(u8, cmd);
+}
+
+fn fileExists(io: std.Io, path: []const u8) !bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    return true;
 }
 
 pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Result {
@@ -292,7 +306,7 @@ test "test command defaults from .synapserc.json when the caller omits it" {
     const file = try repo.filePath(&buf);
     const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
 
-    const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "");
+    const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "", true);
     defer testing.allocator.free(cmd);
     try testing.expectEqualStrings("exit 0", cmd);
 
@@ -307,7 +321,22 @@ test "test command defaults from .synapserc.json when the caller omits it" {
     try testing.expect(result == .committed);
 }
 
-test "an explicit test command overrides the config default" {
+test "a repo config is untrusted by default and only honored with allow_repo_config" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"exit 0\"}" });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    try testing.expectError(error.UntrustedRepoConfig, resolveTestCommand(testing.allocator, testing.io, file, "", false));
+
+    const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "", true);
+    defer testing.allocator.free(cmd);
+    try testing.expectEqualStrings("exit 0", cmd);
+}
+
+test "an explicit test command overrides an untrusted repo config" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -315,7 +344,7 @@ test "an explicit test command overrides the config default" {
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
-    const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "exit 0");
+    const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "exit 0", false);
     defer testing.allocator.free(cmd);
     try testing.expectEqualStrings("exit 0", cmd);
 }
@@ -327,7 +356,7 @@ test "a missing config with no test command is refused" {
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
-    try testing.expectError(error.NoTestCommand, resolveTestCommand(testing.allocator, testing.io, file, ""));
+    try testing.expectError(error.NoTestCommand, resolveTestCommand(testing.allocator, testing.io, file, "", true));
 }
 
 test "no shadow workspace survives a run" {

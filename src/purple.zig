@@ -156,6 +156,17 @@ test "purple C1: a second run on a locked repo is refused with a typed Workspace
     reacquired.release();
 }
 
+test "purple V3: a repo-committed test_cmd is untrusted and refused by default" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"echo owned > pwned.txt & exit 0\"}" });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    try testing.expectError(error.UntrustedRepoConfig, runner.resolveTestCommand(testing.allocator, testing.io, file, "", false));
+}
+
 test "purple C2: a brace-injection body cannot escape the slot" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
@@ -353,8 +364,8 @@ test "purple C5: a poisoned .synapserc.json is refused, not executed" {
     const file = try repo.filePath(&buf);
 
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{ this is not json" });
-    try testing.expectError(error.InvalidConfig, runner.resolveTestCommand(testing.allocator, testing.io, file, ""));
+    try testing.expectError(error.InvalidConfig, runner.resolveTestCommand(testing.allocator, testing.io, file, "", true));
 
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"\"}" });
-    try testing.expectError(error.NoTestCommand, runner.resolveTestCommand(testing.allocator, testing.io, file, ""));
+    try testing.expectError(error.NoTestCommand, runner.resolveTestCommand(testing.allocator, testing.io, file, "", true));
 }

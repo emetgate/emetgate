@@ -17,7 +17,7 @@ const server_name = "synapse";
 const server_version = "0.1.0";
 const max_message_bytes = 4 * 1024 * 1024;
 
-const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false };
+const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string" };
 const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
 
 const tool_defs = [_]Tool{
@@ -47,7 +47,8 @@ const tool_defs = [_]Tool{
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
             .{ .name = "hash", .desc = "current 32-hex hash of the symbol from synapse_symbols" },
             .{ .name = "body", .desc = "new function body including braces" },
-            .{ .name = "test_cmd", .desc = "shell command that must exit 0 for the mutation to commit; defaults to test_cmd in .synapserc.json when omitted", .optional = true },
+            .{ .name = "test_cmd", .desc = "shell command that must exit 0 for the mutation to commit; falls back to an explicit or global ~/.synapserc.json test_cmd when omitted", .optional = true },
+            .{ .name = "allow_repo_config", .desc = "opt in to running the untrusted test_cmd committed in the repo's .synapserc.json (default false)", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -251,9 +252,10 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolRes
     const hash_hex = try requireString(args, "hash");
     const body = try requireString(args, "body");
     const test_cmd = if (args) |a| getString(a, "test_cmd") orelse "" else "";
+    const allow_repo_config = if (args) |a| getBool(a, "allow_repo_config") else false;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, test_cmd, &buffer.writer) catch |err| blk: {
+    const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, test_cmd, allow_repo_config, &buffer.writer) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         buffer.clearRetainingCapacity();
         try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
@@ -262,10 +264,10 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolRes
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, test_cmd: []const u8, w: *Writer) !bool {
+fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, test_cmd: []const u8, allow_repo_config: bool, w: *Writer) !bool {
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
     defer gpa.free(file_abs);
-    const test_command = try runner.resolveTestCommand(gpa, io, file_abs, test_cmd);
+    const test_command = try runner.resolveTestCommand(gpa, io, file_abs, test_cmd, allow_repo_config);
     defer gpa.free(test_command);
     const expected = try symbol.parseHash(hash_hex);
     const result = try runner.tryMutate(gpa, io, runtime, .{
@@ -311,6 +313,14 @@ fn requireString(args: ?Value, key: []const u8) error{MissingArgument}![]const u
 fn getField(value: Value, key: []const u8) ?Value {
     if (value != .object) return null;
     return value.object.get(key);
+}
+
+fn getBool(value: Value, key: []const u8) bool {
+    const field = getField(value, key) orelse return false;
+    return switch (field) {
+        .bool => |b| b,
+        else => false,
+    };
 }
 
 fn getString(value: Value, key: []const u8) ?[]const u8 {
@@ -384,7 +394,7 @@ fn writeToolsList(out: *Writer, id: Value) !void {
             try js.objectField(prop.name);
             try js.beginObject();
             try js.objectField("type");
-            try js.write("string");
+            try js.write(prop.ty);
             try js.objectField("description");
             try js.write(prop.desc);
             try js.endObject();

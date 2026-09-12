@@ -17,7 +17,7 @@ const usage =
     \\       synapse symbols <file.ts> [--json]
     \\       synapse stats <file.ts>...
     \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
-    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--json]
+    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--allow-repo-config] [--json]
     \\       synapse mcp
     \\
 ;
@@ -61,17 +61,17 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return if (skipped == 0) 0 else 1;
     }
     if (std.mem.eql(u8, command, "mutate")) {
-        const parsed = extractJson(init, args[2..]);
+        const parsed = extractFlags(init, args[2..]);
         const request = MutateRequest.parse(parsed.rest) orelse exitWithUsage();
         if (parsed.json) return mutateJson(init, runtime, request, out);
         try mutate(init, runtime, request, out);
         return 0;
     }
     if (std.mem.eql(u8, command, "try")) {
-        const parsed = extractJson(init, args[2..]);
+        const parsed = extractFlags(init, args[2..]);
         const request = TryRequest.parse(parsed.rest) orelse exitWithUsage();
-        if (parsed.json) return tryRunJson(init, runtime, request, out);
-        return tryRun(init, runtime, request, out);
+        if (parsed.json) return tryRunJson(init, runtime, request, out, parsed.allow_repo_config);
+        return tryRun(init, runtime, request, out, parsed.allow_repo_config);
     }
     if ((std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) and args.len == 2) {
         try server.serve(runtime.gpa, init.io, runtime, out);
@@ -80,23 +80,31 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     exitWithUsage();
 }
 
-const Extracted = struct { json: bool, rest: []const [:0]const u8 };
+const Extracted = struct { json: bool, allow_repo_config: bool, rest: []const [:0]const u8 };
 
-fn extractJson(init: std.process.Init, args: []const [:0]const u8) Extracted {
+fn isBoolFlag(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "--allow-repo-config");
+}
+
+fn extractFlags(init: std.process.Init, args: []const [:0]const u8) Extracted {
+    var json = false;
+    var allow_repo_config = false;
     var count: usize = 0;
     for (args) |arg| {
-        if (!std.mem.eql(u8, arg, "--json")) count += 1;
+        if (std.mem.eql(u8, arg, "--json")) json = true;
+        if (std.mem.eql(u8, arg, "--allow-repo-config")) allow_repo_config = true;
+        if (!isBoolFlag(arg)) count += 1;
     }
-    if (count == args.len) return .{ .json = false, .rest = args };
+    if (count == args.len) return .{ .json = false, .allow_repo_config = false, .rest = args };
 
     const rest = init.arena.allocator().alloc([:0]const u8, count) catch exitWithUsage();
     var i: usize = 0;
     for (args) |arg| {
-        if (std.mem.eql(u8, arg, "--json")) continue;
+        if (isBoolFlag(arg)) continue;
         rest[i] = arg;
         i += 1;
     }
-    return .{ .json = true, .rest = rest };
+    return .{ .json = json, .allow_repo_config = allow_repo_config, .rest = rest };
 }
 
 fn fail(err: anyerror) u8 {
@@ -146,7 +154,7 @@ const TryRequest = struct {
     }
 };
 
-fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer) !u8 {
+fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) !u8 {
     const gpa = runtime.gpa;
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
     defer gpa.free(file_abs);
@@ -159,7 +167,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command);
+    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, allow_repo_config);
     defer gpa.free(test_command);
 
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
@@ -186,14 +194,14 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     }
 }
 
-fn tryRunJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer) u8 {
-    return emitTryJson(init, runtime, request, out) catch |err| {
+fn tryRunJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) u8 {
+    return emitTryJson(init, runtime, request, out, allow_repo_config) catch |err| {
         wire.writeError(out, @errorName(err), exitCodeFor(err)) catch {};
         return exitCodeFor(err);
     };
 }
 
-fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer) !u8 {
+fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) !u8 {
     const gpa = runtime.gpa;
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
     defer gpa.free(file_abs);
@@ -206,7 +214,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command);
+    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, allow_repo_config);
     defer gpa.free(test_command);
 
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
