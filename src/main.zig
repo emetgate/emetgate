@@ -9,6 +9,8 @@ const stdio = synapse.stdio;
 const runner = synapse.runner;
 const wire = synapse.wire;
 const server = synapse.server;
+const disk = synapse.disk;
+const shadow = synapse.shadow;
 const Runtime = synapse.runtime.Runtime;
 const Snapshot = synapse.loader.Snapshot;
 
@@ -19,6 +21,7 @@ const usage =
     \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
     \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--allow-repo-config] [--json]
     \\       synapse mcp
+    \\       synapse recover
     \\
 ;
 
@@ -75,6 +78,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if ((std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) and args.len == 2) {
         try server.serve(runtime.gpa, init.io, runtime, out);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "recover") and args.len == 2) {
+        try recoverCmd(init, runtime);
         return 0;
     }
     exitWithUsage();
@@ -267,6 +274,17 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     defer applied.snapshot.destroy();
 
     try wire.writeMutated(out, request.symbol, expected, applied.hash, applied.snapshot.source);
+}
+
+fn recoverCmd(init: std.process.Init, runtime: *Runtime) !void {
+    const gpa = runtime.gpa;
+    const root = try runner.repoRoot(gpa, init.io);
+    defer gpa.free(root);
+    const report = try disk.recover(gpa, init.io, root);
+    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
+    defer gpa.free(shadow_abs);
+    shadow.remove(init.io, root, shadow_abs) catch {};
+    std.debug.print("recovered {d} file(s), removed {d} orphaned temp file(s)\n", .{ report.restored, report.removed_temps });
 }
 
 fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {

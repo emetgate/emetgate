@@ -238,6 +238,76 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
     for (pendings) |*p| p.finalize(leftover);
 }
 
+pub const RecoverReport = struct {
+    restored: usize = 0,
+    removed_temps: usize = 0,
+};
+
+const SidecarKind = enum { tmp, bak };
+
+fn sidecarKind(name: []const u8) ?SidecarKind {
+    if (name.len < sidecar_suffix_max) return null;
+    const suffix = name[name.len - sidecar_suffix_max ..];
+    if (!std.mem.startsWith(u8, suffix, ".synapse-")) return null;
+    for (suffix[9..25]) |c| if (!std.ascii.isHex(c)) return null;
+    if (suffix[25] != '.') return null;
+    const ext = suffix[26..29];
+    if (std.mem.eql(u8, ext, "tmp")) return .tmp;
+    if (std.mem.eql(u8, ext, "bak")) return .bak;
+    return null;
+}
+
+fn skipDir(name: []const u8) bool {
+    return std.mem.eql(u8, name, ".git") or std.mem.eql(u8, name, "node_modules") or std.mem.eql(u8, name, ".synapse");
+}
+
+fn restoreBackup(gpa: Allocator, bak_abs: []const u8, target_abs: []const u8) !void {
+    const guard = try Guard.open(bak_abs);
+    defer guard.close();
+    try guard.renameReplacing(gpa, target_abs);
+}
+
+pub fn recover(gpa: Allocator, io: std.Io, root_abs: []const u8) !RecoverReport {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    var baks: std.ArrayList([]u8) = .empty;
+    var tmps: std.ArrayList([]u8) = .empty;
+    defer {
+        for (baks.items) |p| gpa.free(p);
+        for (tmps.items) |p| gpa.free(p);
+        baks.deinit(gpa);
+        tmps.deinit(gpa);
+    }
+
+    var dir = try std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walkSelectively(gpa);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if (entry.kind == .directory) {
+            if (!skipDir(entry.basename)) try walker.enter(io, entry);
+            continue;
+        }
+        if (entry.kind != .file) continue;
+        const kind = sidecarKind(entry.basename) orelse continue;
+        const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, entry.path });
+        std.mem.replaceScalar(u8, abs, '/', '\\');
+        switch (kind) {
+            .bak => try baks.append(gpa, abs),
+            .tmp => try tmps.append(gpa, abs),
+        }
+    }
+
+    var report: RecoverReport = .{};
+    for (baks.items) |bak| {
+        restoreBackup(gpa, bak, bak[0 .. bak.len - sidecar_suffix_max]) catch continue;
+        report.restored += 1;
+    }
+    for (tmps.items) |tmp| {
+        if (deleteWithRetry(io, tmp)) report.removed_temps += 1;
+    }
+    return report;
+}
+
 fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook) !void {
     var pending = try prepare(gpa, io, path_abs, data, expected_base);
     var done = false;

@@ -322,6 +322,39 @@ test "purple V6: an MCP read tool cannot escape the project root" {
     try testing.expect(std.mem.indexOf(u8, response, "FileOutsideRepo") != null);
 }
 
+const orig_a = "export function a(): number { return 1; }\n";
+const orig_b = "export function b(): number { return 9; }\n";
+
+fn seedCrashLeftovers(tmp: *testing.TmpDir) !void {
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function a(): number { return 2; }\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-0123456789abcdef.bak", .data = orig_a });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.ts", .data = orig_b });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.ts.synapse-fedcba9876543210.tmp", .data = "orphaned staged bytes\n" });
+}
+
+test "purple recover: crash leftovers roll back to the original and orphan temps are cleared" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try seedCrashLeftovers(&tmp);
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 1), report.restored);
+    try testing.expectEqual(@as(usize, 1), report.removed_temps);
+
+    const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(a);
+    try testing.expectEqualStrings(orig_a, a);
+    const b = try tmp.dir.readFileAlloc(testing.io, "b.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(b);
+    try testing.expectEqualStrings(orig_b, b);
+
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "a.ts.synapse-0123456789abcdef.bak", .{}));
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "b.ts.synapse-fedcba9876543210.tmp", .{}));
+}
+
 fn respond(runtime: *Runtime, line: []const u8) ![]u8 {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();

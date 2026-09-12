@@ -35,6 +35,10 @@ pub const Result = union(enum) {
 
 pub const config_file = ".synapserc.json";
 
+pub fn repoRoot(gpa: Allocator, io: std.Io) ![]u8 {
+    return gitToplevel(gpa, io, ".");
+}
+
 pub fn assertUnderCwdRepo(gpa: Allocator, io: std.Io, file_abs: []const u8) !void {
     const root = try gitToplevel(gpa, io, ".");
     defer gpa.free(root);
