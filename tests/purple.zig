@@ -448,6 +448,45 @@ test "purple recover #6 (D): a journal entry with no backup is skipped, target u
     try testing.expectEqualStrings(orig_a, a);
 }
 
+test "purple recover: a journal with a non-hex tag is refused (tag hardening)" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-notavalidtag.bak", .data = orig_a });
+    try writeJournal(&tmp, root, "notavalidtag", "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expect(report.failed >= 1);
+    const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(a);
+    try testing.expectEqualStrings(new_a, a);
+}
+
+const secret = "export const SECRET = 1;\n";
+
+test "purple recover: a symlinked backup is refused (reparse guard, privilege-gated)" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "outside_secret.ts", .data = secret });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
+    tmp.dir.symLink(testing.io, "outside_secret.ts", "a.ts.synapse-" ++ tag_a ++ ".bak", .{}) catch return error.SkipZigTest;
+    try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(secret)));
+
+    const report = try disk.recover(testing.allocator, testing.io, root);
+    try testing.expectEqual(@as(usize, 0), report.restored);
+    try testing.expect(report.failed >= 1);
+    const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(a);
+    try testing.expectEqualStrings(new_a, a);
+}
+
 fn respond(runtime: *Runtime, line: []const u8) ![]u8 {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();

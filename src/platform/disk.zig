@@ -302,6 +302,12 @@ fn skipDir(name: []const u8) bool {
     return std.mem.eql(u8, name, ".git") or std.mem.eql(u8, name, "node_modules") or std.mem.eql(u8, name, ".synapse");
 }
 
+fn isValidTag(tag: []const u8) bool {
+    if (tag.len != 16) return false;
+    for (tag) |c| if (!std.ascii.isHex(c)) return false;
+    return true;
+}
+
 fn isUnderRoot(root_abs: []const u8, target_abs: []const u8) bool {
     if (target_abs.len <= root_abs.len) return false;
     if (!std.ascii.startsWithIgnoreCase(target_abs, root_abs)) return false;
@@ -330,6 +336,7 @@ fn clearReadonly(path_abs: []const u8) void {
 }
 
 fn restoreVerified(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, base_hash: symbol.Hash) !void {
+    if (shadow.isReparsePoint(bak_abs) catch true) return error.BackupUnverified;
     const guard = try Guard.open(bak_abs);
     defer guard.close();
     if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &base_hash)) return error.BackupUnverified;
@@ -401,6 +408,10 @@ fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_p
     }
 
     const tag = name[0 .. name.len - ".json".len];
+    if (!isValidTag(tag)) {
+        report.failed += 1;
+        return;
+    }
     const bak = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.bak", .{ target, tag });
     defer gpa.free(bak);
 
