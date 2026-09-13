@@ -1,47 +1,21 @@
 const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
+const functions_mod = @import("functions.zig");
+const ref_mod = @import("ref.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const FunctionKind = enum {
-    function_declaration,
-    generator_function_declaration,
-    function_expression,
-    generator_function,
-    arrow_function,
-    method_definition,
-    class_static_block,
-};
-
-pub const Function = struct {
-    node: ts.Node,
-    kind: FunctionKind,
-    body: ts.Node,
-    name: ?ts.Node,
-    nested: bool,
-};
-
-const Binding = struct {
-    parent: []const u8,
-    value_field: []const u8,
-    name_field: []const u8,
-};
-
-const bindings = [_]Binding{
-    .{ .parent = "variable_declarator", .value_field = "value", .name_field = "name" },
-    .{ .parent = "public_field_definition", .value_field = "value", .name_field = "name" },
-    .{ .parent = "pair", .value_field = "value", .name_field = "key" },
-    .{ .parent = "assignment_expression", .value_field = "right", .name_field = "left" },
-    .{ .parent = "augmented_assignment_expression", .value_field = "right", .name_field = "left" },
-};
-
-const transparent_wrappers = [_][]const u8{
-    "parenthesized_expression",
-    "as_expression",
-    "satisfies_expression",
-    "non_null_expression",
-};
+pub const FunctionKind = functions_mod.FunctionKind;
+pub const Function = functions_mod.Function;
+pub const Span = functions_mod.Span;
+pub const classify = functions_mod.classify;
+pub const collectFunctions = functions_mod.collectFunctions;
+pub const Accessor = ref_mod.Accessor;
+pub const Ref = ref_mod.Ref;
+const bindingSite = functions_mod.bindingSite;
+const bindingName = functions_mod.bindingName;
+const isOneOf = functions_mod.isOneOf;
 
 const addressable_name_kinds = [_][]const u8{
     "identifier",
@@ -58,89 +32,6 @@ const declared_containers = [_][]const u8{
     "internal_module",
     "module",
 };
-
-pub fn classify(node: ts.Node) ?Function {
-    const kind = std.meta.stringToEnum(FunctionKind, node.kind()) orelse return null;
-    const body = node.childByField("body") orelse return null;
-    return .{
-        .node = node,
-        .kind = kind,
-        .body = body,
-        .name = resolveName(node, kind),
-        .nested = false,
-    };
-}
-
-fn resolveName(node: ts.Node, kind: FunctionKind) ?ts.Node {
-    const own = node.childByField("name");
-    return switch (kind) {
-        .function_declaration, .generator_function_declaration, .method_definition => own,
-        else => bindingName(node) orelse own,
-    };
-}
-
-fn bindingSite(node: ts.Node) ?ts.Node {
-    var value = node;
-    var parent = node.parent() orelse return null;
-    while (isOneOf(parent.kind(), &transparent_wrappers)) {
-        value = parent;
-        parent = parent.parent() orelse return null;
-    }
-    const binding = bindingFor(parent) orelse return null;
-    const bound = parent.childByField(binding.value_field) orelse return null;
-    return if (bound.eql(value)) parent else null;
-}
-
-fn bindingName(node: ts.Node) ?ts.Node {
-    const site = bindingSite(node) orelse return null;
-    return site.childByField(bindingFor(site).?.name_field);
-}
-
-fn bindingFor(node: ts.Node) ?Binding {
-    for (bindings) |binding| {
-        if (std.mem.eql(u8, binding.parent, node.kind())) return binding;
-    }
-    return null;
-}
-
-fn isOneOf(kind: []const u8, kinds: []const []const u8) bool {
-    for (kinds) |candidate| {
-        if (std.mem.eql(u8, candidate, kind)) return true;
-    }
-    return false;
-}
-
-pub const Span = struct { start: u32, end: u32 };
-
-pub fn collectFunctions(gpa: Allocator, tree: ts.Tree) Allocator.Error![]Function {
-    var found: std.ArrayList(Function) = .empty;
-    errdefer found.deinit(gpa);
-    var open_bodies: std.ArrayList(Span) = .empty;
-    defer open_bodies.deinit(gpa);
-
-    var walker = traversal.Walker.init(tree.root());
-    defer walker.deinit();
-    while (walker.next()) |entry| {
-        if (!entry.node.isNamed()) continue;
-        var function = classify(entry.node) orelse continue;
-        const start = entry.node.startByte();
-        while (open_bodies.getLastOrNull()) |body| {
-            if (start < body.end) break;
-            _ = open_bodies.pop();
-        }
-        function.nested = insideAny(open_bodies.items, start);
-        try open_bodies.append(gpa, .{ .start = function.body.startByte(), .end = function.body.endByte() });
-        try found.append(gpa, function);
-    }
-    return found.toOwnedSlice(gpa);
-}
-
-fn insideAny(bodies: []const Span, offset: u32) bool {
-    for (bodies) |body| {
-        if (offset >= body.start and offset < body.end) return true;
-    }
-    return false;
-}
 
 pub const Hash = [16]u8;
 pub const hash_hex_len = @sizeOf(Hash) * 2;
@@ -172,70 +63,6 @@ pub const Kind = enum {
     arrow,
     function_expression,
 };
-
-pub const Accessor = enum { none, get, set };
-
-pub const Ref = struct {
-    container: []const []const u8 = &.{},
-    name: []const u8,
-    accessor: Accessor = .none,
-    is_static: bool = false,
-
-    pub const ParseError = error{InvalidRef} || Allocator.Error;
-
-    pub fn parse(gpa: Allocator, text: []const u8) ParseError!Ref {
-        const qualifier_start = std.mem.indexOfScalar(u8, text, '@') orelse text.len;
-        var ref: Ref = .{ .name = undefined };
-        if (qualifier_start < text.len) try ref.applyQualifiers(text[qualifier_start + 1 ..]);
-
-        const path = text[0..qualifier_start];
-        const container = try gpa.alloc([]const u8, std.mem.count(u8, path, "."));
-        errdefer gpa.free(container);
-        var segments = std.mem.splitScalar(u8, path, '.');
-        for (container) |*segment| segment.* = try nonEmpty(segments.next().?);
-        ref.name = try nonEmpty(segments.next().?);
-        ref.container = container;
-        return ref;
-    }
-
-    pub fn deinit(self: Ref, gpa: Allocator) void {
-        gpa.free(self.container);
-    }
-
-    fn applyQualifiers(self: *Ref, text: []const u8) error{InvalidRef}!void {
-        var qualifiers = std.mem.splitScalar(u8, text, '@');
-        while (qualifiers.next()) |qualifier| {
-            if (std.mem.eql(u8, qualifier, "static")) {
-                if (self.is_static) return error.InvalidRef;
-                self.is_static = true;
-                continue;
-            }
-            const accessor = std.meta.stringToEnum(Accessor, qualifier) orelse return error.InvalidRef;
-            if (accessor == .none or self.accessor != .none) return error.InvalidRef;
-            self.accessor = accessor;
-        }
-    }
-
-    pub fn format(self: Ref, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        for (self.container) |segment| try writer.print("{s}.", .{segment});
-        try writer.writeAll(self.name);
-        if (self.is_static) try writer.writeAll("@static");
-        if (self.accessor != .none) try writer.print("@{t}", .{self.accessor});
-    }
-
-    pub fn eql(a: Ref, b: Ref) bool {
-        if (a.accessor != b.accessor or a.is_static != b.is_static) return false;
-        if (!std.mem.eql(u8, a.name, b.name) or a.container.len != b.container.len) return false;
-        for (a.container, b.container) |x, y| {
-            if (!std.mem.eql(u8, x, y)) return false;
-        }
-        return true;
-    }
-};
-
-fn nonEmpty(segment: []const u8) error{InvalidRef}![]const u8 {
-    return if (segment.len == 0) error.InvalidRef else segment;
-}
 
 pub const Symbol = struct {
     ref: Ref,
