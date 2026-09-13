@@ -7,4 +7,5 @@ test {
     _ = @import("tests/lockdown.zig");
     _ = @import("tests/symbol.zig");
     _ = @import("tests/runner.zig");
+    _ = @import("tests/mutate_harness.zig");
 }

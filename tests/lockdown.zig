@@ -103,6 +103,13 @@ test "lockdown refuses to launch when the directory has no .mcp.json" {
     try testing.expect(std.mem.endsWith(u8, found, ".mcp.json"));
 }
 
+test "a lock override is refused before .mcp.json is looked up" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try testing.expectError(error.LockdownFlagOverride, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &.{ "--tools", "default" }));
+    try testing.expectError(error.McpConfigMissing, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &.{ "-p", "hi" }));
+}
+
 test "ordinary claude args pass through the lock" {
     try lockdown.refuseReserved(&.{ "-p", "hi", "--output-format", "stream-json", "--verbose", "--max-turns", "1", "--toolsy" });
 }

@@ -66,7 +66,8 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_exe.addArgs(args);
     b.step("run", "Run the synapse CLI").dependOn(&run_exe.step);
 
-    const tests = b.addTest(.{ .root_module = test_module });
+    const test_filters = b.option([]const []const u8, "test-filter", "Only run tests whose name contains one of these strings; skips the CLI e2e cases") orelse &.{};
+    const tests = b.addTest(.{ .root_module = test_module, .filters = test_filters });
     const run_tests = b.addRunArtifact(tests);
     run_tests.setCwd(b.path("."));
     const test_step = b.step("test", "Run unit and end-to-end tests");
@@ -74,7 +75,18 @@ pub fn build(b: *std.Build) void {
 
     const e2e_step = b.step("e2e", "Run CLI end-to-end tests");
     addEndToEndTests(b, exe, e2e_step);
-    test_step.dependOn(e2e_step);
+    if (test_filters.len == 0) test_step.dependOn(e2e_step);
+
+    const mutate_tool = b.addExecutable(.{
+        .name = "synapse-mutate",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/mutate/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const install_mutate = b.addInstallArtifact(mutate_tool, .{});
+    b.step("mutate-tool", "Build the mutation harness into zig-out/bin/synapse-mutate").dependOn(&install_mutate.step);
 
     const lockdown_check = b.addExecutable(.{
         .name = "lockdown-check",

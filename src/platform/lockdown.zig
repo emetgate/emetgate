@@ -45,8 +45,12 @@ pub fn resolveMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir) ![:0]u8 {
 }
 
 pub fn launch(gpa: Allocator, io: std.Io, passthrough: []const []const u8) !u8 {
+    return launchIn(gpa, io, std.Io.Dir.cwd(), passthrough);
+}
+
+pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, passthrough: []const []const u8) !u8 {
     try refuseReserved(passthrough);
-    const config_abs = try resolveMcpConfig(gpa, io, std.Io.Dir.cwd());
+    const config_abs = try resolveMcpConfig(gpa, io, dir);
     defer gpa.free(config_abs);
     const argv = try buildArgv(gpa, config_abs, passthrough);
     defer gpa.free(argv);

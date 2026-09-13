@@ -1,0 +1,188 @@
+{
+  "mutations": [
+    {
+      "id": "M1-search-size-cap-removed",
+      "file": "src/protocol/read_tools.zig",
+      "from": ".limited(limits.file_bytes)",
+      "to": ".unlimited",
+      "kills": ["search reads a tracked file just under 1 MiB and skips one of 1 MiB"]
+    },
+    {
+      "id": "M2-search-binary-skip-removed",
+      "file": "src/protocol/read_tools.zig",
+      "from": "if (looksBinary(bytes)) continue;",
+      "to": "",
+      "kills": ["search skips a tracked binary file"]
+    },
+    {
+      "id": "M3-search-cap-raised-to-2MiB",
+      "file": "src/protocol/read_tools.zig",
+      "from": "const max_search_file_bytes = 1024 * 1024;",
+      "to": "const max_search_file_bytes = 2 * 1024 * 1024;",
+      "kills": ["search reads a tracked file just under 1 MiB and skips one of 1 MiB"]
+    },
+    {
+      "id": "K1-lockdown-tools-default",
+      "file": "src/platform/lockdown.zig",
+      "from": "pub const allowed_builtin_tools = \"ToolSearch\";",
+      "to": "pub const allowed_builtin_tools = \"default\";",
+      "kills": ["lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args"]
+    },
+    {
+      "id": "K2-lockdown-strict-mcp-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": ", mcp_config_abs, \"--strict-mcp-config\" };",
+      "to": ", mcp_config_abs };",
+      "kills": [
+        "lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args",
+        "a positional prompt right after lockdown is not swallowed by a variadic flag"
+      ]
+    },
+    {
+      "id": "K3-lockdown-tools-flag-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--mcp-config\"",
+      "to": "{ claude_program, \"--mcp-config\"",
+      "kills": ["lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args"]
+    },
+    {
+      "id": "K5-lockdown-reserved-guard-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try refuseReserved(passthrough);\n",
+      "to": "",
+      "all": true,
+      "kills": ["a passthrough arg that would override the lock is refused in both spellings"]
+    },
+    {
+      "id": "K5b-lockdown-launch-guard-only-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try refuseReserved(passthrough);\n    const config_abs",
+      "to": "    const config_abs",
+      "kills": ["a lock override is refused before .mcp.json is looked up"],
+      "note": "without the launch-level guard a missing .mcp.json is reported instead of the override"
+    },
+    {
+      "id": "F1-lockdown-mcp-config-last",
+      "file": "src/platform/lockdown.zig",
+      "from": "\"--mcp-config\", mcp_config_abs, \"--strict-mcp-config\" }",
+      "to": "\"--strict-mcp-config\", \"--mcp-config\", mcp_config_abs }",
+      "kills": [
+        "a user prompt never becomes a --tools or --mcp-config value",
+        "a positional prompt right after lockdown is not swallowed by a variadic flag"
+      ]
+    },
+    {
+      "id": "F2-lockdown-tools-last",
+      "file": "src/platform/lockdown.zig",
+      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--mcp-config\", mcp_config_abs, \"--strict-mcp-config\" }",
+      "to": "{ claude_program, \"--mcp-config\", mcp_config_abs, \"--strict-mcp-config\", \"--tools\", allowed_builtin_tools }",
+      "kills": [
+        "a user prompt never becomes a --tools or --mcp-config value",
+        "a positional prompt right after lockdown is not swallowed by a variadic flag"
+      ]
+    },
+    {
+      "id": "N1-lockdown-missing-config-guard-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": "error.FileNotFound => return error.McpConfigMissing,",
+      "to": "error.FileNotFound => return gpa.dupeZ(u8, mcp_config_name),",
+      "kills": ["lockdown refuses to launch when the directory has no .mcp.json"]
+    },
+    {
+      "id": "K1e-lockdown-tools-default",
+      "file": "src/platform/lockdown.zig",
+      "from": "pub const allowed_builtin_tools = \"ToolSearch\";",
+      "to": "pub const allowed_builtin_tools = \"default\";",
+      "expect": "e2e-lockdown"
+    },
+    {
+      "id": "K2e-lockdown-strict-mcp-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": ", mcp_config_abs, \"--strict-mcp-config\" };",
+      "to": ", mcp_config_abs };",
+      "expect": "e2e-lockdown",
+      "note": "only killed on a machine with user-level MCP servers configured"
+    },
+    {
+      "id": "K3e-lockdown-tools-flag-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--mcp-config\"",
+      "to": "{ claude_program, \"--mcp-config\"",
+      "expect": "e2e-lockdown"
+    },
+    {
+      "id": "K5e-lockdown-reserved-guard-removed",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try refuseReserved(passthrough);\n",
+      "to": "",
+      "all": true,
+      "expect": "e2e-lockdown"
+    },
+    {
+      "id": "MS1-ref-double-static-allowed",
+      "file": "src/engine/ref.zig",
+      "from": "if (self.is_static) return error.InvalidRef;",
+      "to": "",
+      "kills": ["refs round-trip through the canonical text form and malformed refs are rejected"]
+    },
+    {
+      "id": "MS2-functions-nested-always-false",
+      "file": "src/engine/functions.zig",
+      "from": "function.nested = insideAny(open_bodies.items, start);",
+      "to": "function.nested = false;",
+      "kills": [
+        "arrow functions in default parameters are not nested in the body",
+        "collects every function-like boundary in the fixture, in source order"
+      ]
+    },
+    {
+      "id": "MR1-gate-and-becomes-or",
+      "file": "src/platform/gate.zig",
+      "from": "if (confidence == .bounded and has_scoped) return .scoped;",
+      "to": "if (confidence == .bounded or has_scoped) return .scoped;",
+      "kills": [
+        "gate: only BOUNDED with a scoped command reaches the scoped path",
+        "footer gate always equals chooseGate for every confidence and scoped combination"
+      ]
+    },
+    {
+      "id": "MR2-batch-duplicate-file-allowed",
+      "file": "src/platform/batch.zig",
+      "from": "if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;",
+      "to": "_ = p;",
+      "kills": ["a batch cannot edit the same file twice"]
+    },
+    {
+      "id": "SELF-a-harmless-change-survives",
+      "file": "src/protocol/server.zig",
+      "from": "const server_version = \"0.1.0\";",
+      "to": "const server_version = \"0.1.1\";",
+      "expect_status": "survived",
+      "filter": ["initialize reflects the client protocol version and advertises tools"],
+      "note": "control: proves the harness reports a survivor instead of calling everything killed"
+    },
+    {
+      "id": "SELF-a-compile-error-is-not-a-kill",
+      "file": "src/platform/batch.zig",
+      "from": "if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;",
+      "to": "",
+      "expect_status": "compile_error",
+      "filter": ["a batch cannot edit the same file twice"],
+      "note": "control: removing the line leaves an unused capture, which must not count as killed"
+    },
+    {
+      "id": "HX1-harness-ignores-crashed-tests",
+      "file": "tools/mutate/core.zig",
+      "from": "if (s.failed + s.crashed > 0) return .killed;",
+      "to": "if (s.failed > 0) return .killed;",
+      "kills": ["harness: a run with only crashed tests is killed"]
+    },
+    {
+      "id": "HX2-harness-compile-error-check-removed",
+      "file": "tools/mutate/core.zig",
+      "from": "if (isCompileError(output)) return .compile_error;",
+      "to": "",
+      "kills": ["harness: a compile error is classified as compile_error, not killed"]
+    }
+  ]
+}
