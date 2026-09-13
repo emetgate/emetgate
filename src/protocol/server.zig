@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const skeleton = @import("../engine/skeleton.zig");
@@ -402,12 +403,21 @@ fn callSearch(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event)
     return success(gpa, &buffer);
 }
 
+const SearchLimits = struct {
+    file_bytes: usize = max_search_file_bytes,
+    matches: usize = max_search_matches,
+};
+
 fn renderSearch(gpa: Allocator, io: std.Io, pattern: []const u8, dir: []const u8, w: *Writer) !void {
     if (pattern.len == 0) return error.EmptyPattern;
     const place = try jailPath(gpa, io, dir);
     defer place.deinit(gpa);
     const root = try runner.repoRoot(gpa, io);
     defer gpa.free(root);
+    try searchIn(gpa, io, root, place.rel, pattern, .{}, w);
+}
+
+fn searchIn(gpa: Allocator, io: std.Io, root: []const u8, prefix: []const u8, pattern: []const u8, limits: SearchLimits, w: *Writer) !void {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
@@ -421,7 +431,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, pattern: []const u8, dir: []const u8
     var count: usize = 0;
     var truncated = false;
     outer: for (files) |f| {
-        if (!inDirectory(f, place.rel)) continue;
+        if (!inDirectory(f, prefix)) continue;
         const joined = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, f });
         defer gpa.free(joined);
         const real = std.Io.Dir.cwd().realPathFileAlloc(io, joined, gpa) catch continue;
@@ -429,7 +439,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, pattern: []const u8, dir: []const u8
         const rel = runner.relativeUnder(gpa, root, real) catch continue;
         defer gpa.free(rel);
         refuseInternal(rel) catch continue;
-        const bytes = std.Io.Dir.cwd().readFileAlloc(io, real, gpa, .limited(max_search_file_bytes)) catch continue;
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, real, gpa, .limited(limits.file_bytes)) catch continue;
         defer gpa.free(bytes);
         if (looksBinary(bytes)) continue;
         var lines = std.mem.splitScalar(u8, bytes, '\n');
@@ -439,7 +449,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, pattern: []const u8, dir: []const u8
             if (std.mem.indexOf(u8, raw, pattern) == null) continue;
             const text = utf8Prefix(std.mem.trim(u8, raw, " \t\r"), max_match_text);
             if (!std.unicode.utf8ValidateSlice(text)) continue;
-            if (count == max_search_matches) {
+            if (count == limits.matches) {
                 truncated = true;
                 break :outer;
             }
@@ -960,6 +970,61 @@ test "directory filtering matches whole path segments across separators and case
     try testing.expect(!inDirectory("tests/fixtures2/a.ts", "tests\\fixtures"));
     try testing.expect(!inDirectory("tests", "tests"));
     try testing.expect(!inDirectory("src/a.ts", "tests"));
+}
+
+fn gitIn(root: []const u8, args: []const []const u8) !void {
+    var argv: [8][]const u8 = undefined;
+    argv[0] = "git";
+    @memcpy(argv[1..][0..args.len], args);
+    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root } });
+    testing.allocator.free(result.stdout);
+    testing.allocator.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.GitSetupFailed,
+        else => return error.GitSetupFailed,
+    }
+}
+
+fn searchedFiles(root: []const u8, limits: SearchLimits) !std.json.Parsed(Value) {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try searchIn(testing.allocator, testing.io, root, "", "needle", limits, &out.writer);
+    return std.json.parseFromSlice(Value, testing.allocator, out.written(), .{ .allocate = .alloc_always });
+}
+
+fn matchedFile(parsed: Value, name: []const u8) bool {
+    for (parsed.object.get("matches").?.array.items) |m| {
+        if (std.mem.eql(u8, m.object.get("file").?.string, name)) return true;
+    }
+    return false;
+}
+
+test "search skips tracked files over its size cap and tracked binary files" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "small.txt", .data = "needle here\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "large.txt", .data = "needle " ++ ("x" ** 200) ++ "\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "blob.bin", .data = "needle\x00binary\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try gitIn(root, &.{ "init", "-q" });
+    try gitIn(root, &.{ "config", "user.email", "t@t" });
+    try gitIn(root, &.{ "config", "user.name", "t" });
+    try gitIn(root, &.{ "add", "." });
+    try gitIn(root, &.{ "commit", "-q", "-m", "init" });
+
+    var capped = try searchedFiles(root, .{ .file_bytes = 64 });
+    defer capped.deinit();
+    try testing.expect(matchedFile(capped.value, "small.txt"));
+    try testing.expect(!matchedFile(capped.value, "large.txt"));
+    try testing.expect(!matchedFile(capped.value, "blob.bin"));
+
+    var defaults = try searchedFiles(root, .{});
+    defer defaults.deinit();
+    try testing.expect(matchedFile(defaults.value, "small.txt"));
+    try testing.expect(matchedFile(defaults.value, "large.txt"));
+    try testing.expect(!matchedFile(defaults.value, "blob.bin"));
 }
 
 test "internal workspace and git paths are refused, others pass" {
