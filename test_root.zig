@@ -5,4 +5,5 @@ test {
     _ = @import("tests/readtools.zig");
     _ = @import("tests/server.zig");
     _ = @import("tests/lockdown.zig");
+    _ = @import("tests/symbol.zig");
 }
