@@ -76,7 +76,7 @@ const tool_defs = [_]Tool{
     },
     .{
         .name = "synapse_search",
-        .description = "Find a literal, case-sensitive substring in git-tracked text files under a directory of the repo; returns file, line and the trimmed line (at most 200 matches, truncated:true when cut).",
+        .description = "Find a literal, case-sensitive substring in git-tracked text files under a directory of the repo; returns file, line and the trimmed line (at most 200 matches, truncated:true when cut). Files of 1 MiB or more are skipped (files under 1 MiB are read).",
         .props = &.{
             .{ .name = "pattern", .desc = "literal text to find" },
             .{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true },

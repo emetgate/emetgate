@@ -225,32 +225,53 @@ fn matchedFile(parsed: Value, name: []const u8) bool {
     return false;
 }
 
-test "search skips tracked files over its size cap and tracked binary files" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "small.txt", .data = "needle here\n" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "large.txt", .data = "needle " ++ ("x" ** 200) ++ "\n" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "blob.bin", .data = "needle\x00binary\n" });
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(root);
+fn commitAll(root: []const u8) !void {
     try gitIn(root, &.{ "init", "-q" });
     try gitIn(root, &.{ "config", "user.email", "t@t" });
     try gitIn(root, &.{ "config", "user.name", "t" });
     try gitIn(root, &.{ "add", "." });
     try gitIn(root, &.{ "commit", "-q", "-m", "init" });
+}
 
-    var capped = try searchedFiles(root, .{ .file_bytes = 64 });
-    defer capped.deinit();
-    try testing.expect(matchedFile(capped.value, "small.txt"));
-    try testing.expect(!matchedFile(capped.value, "large.txt"));
-    try testing.expect(!matchedFile(capped.value, "blob.bin"));
+test "search reads a tracked file just under 1 MiB and skips one of 1 MiB" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const mib = 1024 * 1024;
+    const under_cap = try testing.allocator.alloc(u8, mib - 1);
+    defer testing.allocator.free(under_cap);
+    @memset(under_cap, 'x');
+    @memcpy(under_cap[0..7], "needle\n");
+    const at_cap = try testing.allocator.alloc(u8, mib);
+    defer testing.allocator.free(at_cap);
+    @memset(at_cap, 'x');
+    @memcpy(at_cap[0..7], "needle\n");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "under_cap.txt", .data = under_cap });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "at_cap.txt", .data = at_cap });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
 
-    var defaults = try searchedFiles(root, .{});
-    defer defaults.deinit();
-    try testing.expect(matchedFile(defaults.value, "small.txt"));
-    try testing.expect(matchedFile(defaults.value, "large.txt"));
-    try testing.expect(!matchedFile(defaults.value, "blob.bin"));
+    var result = try searchedFiles(root, .{});
+    defer result.deinit();
+    try testing.expect(matchedFile(result.value, "under_cap.txt"));
+    try testing.expect(!matchedFile(result.value, "at_cap.txt"));
+}
+
+test "search skips a tracked binary file" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "text.txt", .data = "needle here\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "blob.bin", .data = "needle\x00binary\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+
+    var result = try searchedFiles(root, .{});
+    defer result.deinit();
+    try testing.expect(matchedFile(result.value, "text.txt"));
+    try testing.expect(!matchedFile(result.value, "blob.bin"));
 }
 
 test "internal workspace and git paths are refused, others pass" {
