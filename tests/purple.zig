@@ -521,6 +521,59 @@ test "purple C5: an unknown tool is invalid params" {
     try testing.expect(std.mem.indexOf(u8, response, "\"code\":-32602") != null);
 }
 
+test "purple C6: an MCP batch frees every resolved path with its real size" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+
+    var line: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer line.deinit();
+    var js: std.json.Stringify = .{ .writer = &line.writer };
+    try js.beginObject();
+    try js.objectField("jsonrpc");
+    try js.write("2.0");
+    try js.objectField("id");
+    try js.write(1);
+    try js.objectField("method");
+    try js.write("tools/call");
+    try js.objectField("params");
+    try js.beginObject();
+    try js.objectField("name");
+    try js.write("synapse_try_batch");
+    try js.objectField("arguments");
+    try js.beginObject();
+    try js.objectField("edits");
+    try js.beginArray();
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("symbol");
+    try js.write("add");
+    try js.objectField("hash");
+    try js.write(hex[0..]);
+    try js.objectField("body");
+    try js.write("{\n  return a - b;\n}");
+    try js.endObject();
+    try js.endArray();
+    try js.objectField("test_cmd");
+    try js.write("cmd /c exit 0");
+    try js.endObject();
+    try js.endObject();
+    try js.endObject();
+
+    const response = try respond(runtime, line.written());
+    defer testing.allocator.free(response);
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    const on_disk = try repo.onDisk();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings("export function add(a: number, b: number): number {\n  return a - b;\n}\n", on_disk);
+}
+
 test "purple C5: a poisoned .synapserc.json is refused, not executed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();

@@ -325,7 +325,8 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         var i = built;
         while (i > 0) {
             i -= 1;
-            gpa.free(@constCast(edits[i].file_abs));
+            const owned: [:0]const u8 = edits[i].file_abs.ptr[0..edits[i].file_abs.len :0];
+            gpa.free(owned);
         }
     }
     for (items, 0..) |item, i| {
