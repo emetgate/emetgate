@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const server = @import("../src/protocol/server.zig");
+const read_tools = @import("../src/protocol/read_tools.zig");
 const Runtime = @import("../src/engine/runtime.zig").Runtime;
 
 const testing = std.testing;
@@ -183,18 +184,18 @@ test "search finds a literal in tracked files under a directory and refuses an e
 }
 
 test "a read is cut on a UTF-8 boundary, never inside a character" {
-    try testing.expectEqualStrings("a", server.utf8Prefix("aé", 2));
-    try testing.expectEqualStrings("aé", server.utf8Prefix("aé", 3));
-    try testing.expectEqualStrings("ab", server.utf8Prefix("ab", 16));
+    try testing.expectEqualStrings("a", read_tools.utf8Prefix("aé", 2));
+    try testing.expectEqualStrings("aé", read_tools.utf8Prefix("aé", 3));
+    try testing.expectEqualStrings("ab", read_tools.utf8Prefix("ab", 16));
 }
 
 test "directory filtering matches whole path segments across separators and case" {
-    try testing.expect(server.inDirectory("tests/fixtures/a.ts", ""));
-    try testing.expect(server.inDirectory("tests/fixtures/a.ts", "tests\\fixtures"));
-    try testing.expect(server.inDirectory("Tests/Fixtures/a.ts", "tests\\fixtures"));
-    try testing.expect(!server.inDirectory("tests/fixtures2/a.ts", "tests\\fixtures"));
-    try testing.expect(!server.inDirectory("tests", "tests"));
-    try testing.expect(!server.inDirectory("src/a.ts", "tests"));
+    try testing.expect(read_tools.inDirectory("tests/fixtures/a.ts", ""));
+    try testing.expect(read_tools.inDirectory("tests/fixtures/a.ts", "tests\\fixtures"));
+    try testing.expect(read_tools.inDirectory("Tests/Fixtures/a.ts", "tests\\fixtures"));
+    try testing.expect(!read_tools.inDirectory("tests/fixtures2/a.ts", "tests\\fixtures"));
+    try testing.expect(!read_tools.inDirectory("tests", "tests"));
+    try testing.expect(!read_tools.inDirectory("src/a.ts", "tests"));
 }
 
 fn gitIn(root: []const u8, args: []const []const u8) !void {
@@ -210,10 +211,10 @@ fn gitIn(root: []const u8, args: []const []const u8) !void {
     }
 }
 
-fn searchedFiles(root: []const u8, limits: server.SearchLimits) !std.json.Parsed(Value) {
+fn searchedFiles(root: []const u8, limits: read_tools.SearchLimits) !std.json.Parsed(Value) {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    try server.searchIn(testing.allocator, testing.io, root, "", "needle", limits, &out.writer);
+    try read_tools.searchIn(testing.allocator, testing.io, root, "", "needle", limits, &out.writer);
     return std.json.parseFromSlice(Value, testing.allocator, out.written(), .{ .allocate = .alloc_always });
 }
 
@@ -253,10 +254,10 @@ test "search skips tracked files over its size cap and tracked binary files" {
 }
 
 test "internal workspace and git paths are refused, others pass" {
-    try testing.expectError(error.InternalPath, server.refuseInternal(".git\\HEAD"));
-    try testing.expectError(error.InternalPath, server.refuseInternal(".GIT/config"));
-    try testing.expectError(error.InternalPath, server.refuseInternal(".synapse\\events.ndjson"));
-    try server.refuseInternal("");
-    try server.refuseInternal("docs\\.git-notes.md");
-    try server.refuseInternal("src\\main.zig");
+    try testing.expectError(error.InternalPath, read_tools.refuseInternal(".git\\HEAD"));
+    try testing.expectError(error.InternalPath, read_tools.refuseInternal(".GIT/config"));
+    try testing.expectError(error.InternalPath, read_tools.refuseInternal(".synapse\\events.ndjson"));
+    try read_tools.refuseInternal("");
+    try read_tools.refuseInternal("docs\\.git-notes.md");
+    try read_tools.refuseInternal("src\\main.zig");
 }
