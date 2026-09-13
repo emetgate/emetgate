@@ -11,6 +11,7 @@ const wire = synapse.wire;
 const server = synapse.server;
 const disk = synapse.disk;
 const shadow = synapse.shadow;
+const lockdown = synapse.lockdown;
 const Runtime = synapse.runtime.Runtime;
 const Snapshot = synapse.loader.Snapshot;
 
@@ -22,6 +23,11 @@ const usage =
     \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--allow-repo-config] [--json]
     \\       synapse mcp [--test <command>] [--allow-repo-config]
     \\       synapse recover
+    \\       synapse lockdown [<claude args>...]
+    \\
+    \\lockdown starts claude with only ToolSearch and the .mcp.json servers
+    \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config).
+    \\The lock is per launch: a claude started without synapse lockdown is unlocked.
     \\
 ;
 
@@ -83,6 +89,11 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (std.mem.eql(u8, command, "recover") and args.len == 2) {
         return recoverCmd(init, runtime);
+    }
+    if (std.mem.eql(u8, command, "lockdown")) {
+        const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
+        for (args[2..], 0..) |arg, i| passthrough[i] = arg;
+        return lockdown.launch(runtime.gpa, init.io, passthrough);
     }
     exitWithUsage();
 }

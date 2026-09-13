@@ -75,6 +75,22 @@ pub fn build(b: *std.Build) void {
     const e2e_step = b.step("e2e", "Run CLI end-to-end tests");
     addEndToEndTests(b, exe, e2e_step);
     test_step.dependOn(e2e_step);
+
+    const lockdown_check = b.addExecutable(.{
+        .name = "lockdown-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/e2e/lockdown_check.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_lockdown = b.addRunArtifact(lockdown_check);
+    run_lockdown.setCwd(b.path("."));
+    run_lockdown.has_side_effects = true;
+    run_lockdown.addFileArg(exe.getEmittedBin());
+    if (b.args) |args| run_lockdown.addArgs(args);
+    run_lockdown.step.dependOn(b.getInstallStep());
+    b.step("e2e-lockdown", "Launch a real claude through synapse lockdown and check its tool list (spends tokens)").dependOn(&run_lockdown.step);
 }
 
 const e2e_fixture = "tests/fixtures/functions.ts";
