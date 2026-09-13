@@ -20,7 +20,7 @@ const usage =
     \\       synapse stats <file.ts>...
     \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
     \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--allow-repo-config] [--json]
-    \\       synapse mcp
+    \\       synapse mcp [--test <command>] [--allow-repo-config]
     \\       synapse recover
     \\
 ;
@@ -76,8 +76,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         if (parsed.json) return tryRunJson(init, runtime, request, out, parsed.allow_repo_config);
         return tryRun(init, runtime, request, out, parsed.allow_repo_config);
     }
-    if ((std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) and args.len == 2) {
-        try server.serve(runtime.gpa, init.io, runtime, out);
+    if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
+        const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
+        try server.serve(runtime.gpa, init.io, runtime, out, policy);
         return 0;
     }
     if (std.mem.eql(u8, command, "recover") and args.len == 2) {

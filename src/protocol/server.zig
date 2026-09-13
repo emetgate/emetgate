@@ -30,7 +30,7 @@ const tool_defs = [_]Tool{
     },
     .{
         .name = "synapse_skeleton",
-        .description = "Structural outline of a file: every symbol's signature with bodies elided. Read this instead of the whole file to locate a target cheaply.",
+        .description = "Structural outline of a TypeScript (.ts) file: every symbol's signature with bodies elided. Read this instead of the whole file to locate a target cheaply. Other files are refused; use synapse_read_file for docs and config.",
         .props = &.{.{ .name = "file", .desc = "path to a .ts file" }},
     },
     .{
@@ -43,14 +43,12 @@ const tool_defs = [_]Tool{
     },
     .{
         .name = "synapse_try",
-        .description = "Type-checked atomic mutation: replaces the symbol body, runs test_cmd in a sandbox, and writes to disk only if the test passes; otherwise nothing is written.",
+        .description = "Atomic mutation: replaces the symbol body, runs the project's trusted test command in a sandbox, and writes to disk only if it passes; otherwise nothing is written. The test command is fixed by the user who started synapse (synapse mcp --test <cmd>, or the repo .synapserc.json with --allow-repo-config); a call that passes test_cmd or allow_repo_config is refused.",
         .props = &.{
             .{ .name = "file", .desc = "path to a .ts file" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
             .{ .name = "hash", .desc = "current 32-hex hash of the symbol from synapse_symbols" },
             .{ .name = "body", .desc = "new function body including braces" },
-            .{ .name = "test_cmd", .desc = "shell command that must exit 0 for the mutation to commit; falls back to an explicit or global ~/.synapserc.json test_cmd when omitted", .optional = true },
-            .{ .name = "allow_repo_config", .desc = "opt in to running the untrusted test_cmd committed in the repo's .synapserc.json (default false)", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -63,9 +61,66 @@ const tool_defs = [_]Tool{
             .{ .name = "body", .desc = "new function body including braces" },
         },
     },
+    .{
+        .name = "synapse_read_file",
+        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. For TypeScript code use synapse_skeleton and synapse_read_symbol instead. Paths outside the repo, .git and .synapse are refused.",
+        .props = &.{.{ .name = "file", .desc = "path inside the repo" }},
+    },
+    .{
+        .name = "synapse_list",
+        .description = "List git-tracked files under a directory of the repo (at most 2000 entries, truncated:true when cut).",
+        .props = &.{.{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true }},
+    },
+    .{
+        .name = "synapse_search",
+        .description = "Find a literal, case-sensitive substring in git-tracked text files under a directory of the repo; returns file, line and the trimmed line (at most 200 matches, truncated:true when cut).",
+        .props = &.{
+            .{ .name = "pattern", .desc = "literal text to find" },
+            .{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true },
+        },
+    },
 };
 
-pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer) !void {
+const max_read_bytes = 16 * 1024;
+const max_read_source_bytes = 64 * 1024 * 1024;
+const max_list_entries = 2000;
+const max_search_matches = 200;
+const max_search_file_bytes = 1024 * 1024;
+const max_match_text = 200;
+const binary_probe_bytes = 8000;
+
+pub const Policy = struct {
+    test_command: ?[]const u8 = null,
+    allow_repo_config: bool = false,
+};
+
+pub fn parsePolicy(args: anytype) ?Policy {
+    var policy: Policy = .{};
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg: []const u8 = args[i];
+        if (std.mem.eql(u8, arg, "--allow-repo-config")) {
+            if (policy.allow_repo_config) return null;
+            policy.allow_repo_config = true;
+        } else if (std.mem.eql(u8, arg, "--test")) {
+            if (policy.test_command != null or i + 1 >= args.len) return null;
+            i += 1;
+            const command: []const u8 = args[i];
+            if (command.len == 0) return null;
+            policy.test_command = command;
+        } else return null;
+    }
+    return policy;
+}
+
+fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestPolicy}![]const u8 {
+    if (args) |a| {
+        if (getField(a, "test_cmd") != null or getField(a, "allow_repo_config") != null) return error.ModelSuppliedTestPolicy;
+    }
+    return policy.test_command orelse "";
+}
+
+pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
     const root: ?[]u8 = runner.repoRoot(gpa, io) catch null;
     defer if (root) |r| gpa.free(r);
     const workspace: ?[]u8 = if (root) |r| std.fmt.allocPrint(gpa, "{s}\\{s}", .{ r, shadow.workspace_dir }) catch null else null;
@@ -93,7 +148,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer) !void 
         const trimmed = if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
         if (trimmed.len == 0) continue;
 
-        if (try handleMessageObserved(gpa, io, runtime, trimmed, out, observer_ptr)) {
+        if (try handleMessageObserved(gpa, io, runtime, trimmed, out, observer_ptr, policy)) {
             try out.writeByte('\n');
             try out.flush();
         }
@@ -101,10 +156,10 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer) !void 
 }
 
 pub fn handleMessage(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8, out: *Writer) !bool {
-    return handleMessageObserved(gpa, io, runtime, line, out, null);
+    return handleMessageObserved(gpa, io, runtime, line, out, null, .{});
 }
 
-pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8, out: *Writer, observer: ?*telemetry.Observer) !bool {
+pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8, out: *Writer, observer: ?*telemetry.Observer, policy: Policy) !bool {
     var parsed = std.json.parseFromSlice(Value, gpa, line, .{}) catch {
         try writeRpcError(out, .null, -32700, "Parse error");
         return true;
@@ -137,7 +192,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
-        try handleToolsCall(gpa, io, runtime, out, request_id, msg, observer);
+        try handleToolsCall(gpa, io, runtime, out, request_id, msg, observer, policy);
         return true;
     }
     try writeRpcError(out, request_id, -32601, "Method not found");
@@ -146,13 +201,13 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
 
 const ToolResult = struct { text: []u8, is_error: bool };
 
-fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, id: Value, msg: Value, observer: ?*telemetry.Observer) !void {
+fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, id: Value, msg: Value, observer: ?*telemetry.Observer, policy: Policy) !void {
     const params = getField(msg, "params") orelse return writeRpcError(out, id, -32602, "Missing params");
     const name = getString(params, "name") orelse return writeRpcError(out, id, -32602, "Missing tool name");
     const arguments = getField(params, "arguments");
 
     var event: telemetry.Event = .{ .tool = name };
-    const result = callTool(gpa, io, runtime, name, arguments, &event) catch |err| {
+    const result = callTool(gpa, io, runtime, name, arguments, &event, policy) catch |err| {
         if (observer) |obs| {
             event.fail(@errorName(err));
             obs.record(gpa, io, event);
@@ -169,13 +224,16 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     try writeToolResult(out, id, decorated orelse result.text, result.is_error);
 }
 
-fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event) !ToolResult {
+fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     if (std.mem.eql(u8, name, "synapse_symbols")) return callSymbols(gpa, io, runtime, args, event);
     if (std.mem.eql(u8, name, "synapse_skeleton")) return callSkeleton(gpa, io, runtime, args, event);
     if (std.mem.eql(u8, name, "synapse_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event);
     if (std.mem.eql(u8, name, "synapse_mutate")) return callMutate(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "synapse_try")) return callTry(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "synapse_try_batch")) return callTryBatch(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "synapse_try")) return callTry(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "synapse_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "synapse_read_file")) return callReadFile(gpa, io, args, event);
+    if (std.mem.eql(u8, name, "synapse_list")) return callList(gpa, io, args, event);
+    if (std.mem.eql(u8, name, "synapse_search")) return callSearch(gpa, io, args, event);
     return error.UnknownTool;
 }
 
@@ -196,7 +254,211 @@ fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8) !
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
     defer gpa.free(file_abs);
     try runner.assertUnderCwdRepo(gpa, io, file_abs);
+    if (!std.ascii.endsWithIgnoreCase(file_abs, ".ts")) return error.NotTypeScript;
     return Snapshot.load(runtime, io, .cwd(), file_abs);
+}
+
+const Jailed = struct {
+    abs: [:0]u8,
+    rel: []u8,
+
+    fn deinit(self: Jailed, gpa: Allocator) void {
+        gpa.free(self.abs);
+        gpa.free(self.rel);
+    }
+};
+
+fn jailPath(gpa: Allocator, io: std.Io, path: []const u8) !Jailed {
+    const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
+    errdefer gpa.free(abs);
+    const rel = try runner.repoRelative(gpa, io, abs);
+    errdefer gpa.free(rel);
+    try refuseInternal(rel);
+    return .{ .abs = abs, .rel = rel };
+}
+
+fn refuseInternal(rel: []const u8) error{InternalPath}!void {
+    var segments = std.mem.tokenizeAny(u8, rel, "/\\");
+    const first = segments.next() orelse return;
+    if (std.ascii.eqlIgnoreCase(first, ".git") or std.ascii.eqlIgnoreCase(first, shadow.workspace_dir)) return error.InternalPath;
+}
+
+fn utf8Prefix(bytes: []const u8, limit: usize) []const u8 {
+    if (bytes.len <= limit) return bytes;
+    var end = limit;
+    while (end > 0 and (bytes[end] & 0xC0) == 0x80) end -= 1;
+    return bytes[0..end];
+}
+
+fn looksBinary(bytes: []const u8) bool {
+    return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_probe_bytes)], 0) != null;
+}
+
+fn inDirectory(path: []const u8, prefix: []const u8) bool {
+    if (prefix.len == 0) return true;
+    if (path.len <= prefix.len) return false;
+    for (prefix, path[0..prefix.len]) |a, b| {
+        const na: u8 = if (a == '/') '\\' else std.ascii.toLower(a);
+        const nb: u8 = if (b == '/') '\\' else std.ascii.toLower(b);
+        if (na != nb) return false;
+    }
+    return path[prefix.len] == '/' or path[prefix.len] == '\\';
+}
+
+fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event) !ToolResult {
+    const file = try requireString(args, "file");
+    event.label = "read_file";
+    event.file = file;
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    renderReadFile(gpa, io, file, &buffer.writer, event) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return failure(gpa, &buffer, err, event);
+    };
+    return success(gpa, &buffer);
+}
+
+fn renderReadFile(gpa: Allocator, io: std.Io, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
+    const place = try jailPath(gpa, io, file);
+    defer place.deinit(gpa);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, place.abs, gpa, .limited(max_read_source_bytes));
+    defer gpa.free(bytes);
+    if (looksBinary(bytes)) return error.BinaryFile;
+    const shown = utf8Prefix(bytes, max_read_bytes);
+    if (!std.unicode.utf8ValidateSlice(shown)) return error.NotUtf8;
+    event.chars_synapse = shown.len;
+    event.chars_fullfile = bytes.len;
+    var js: std.json.Stringify = .{ .writer = w };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("bytes");
+    try js.write(bytes.len);
+    try js.objectField("truncated");
+    try js.write(shown.len < bytes.len);
+    try js.objectField("content");
+    try js.write(shown);
+    try js.endObject();
+    try w.writeByte('\n');
+}
+
+fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event) !ToolResult {
+    const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
+    event.label = "list";
+    event.file = dir;
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    renderList(gpa, io, dir, &buffer.writer) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return failure(gpa, &buffer, err, event);
+    };
+    return success(gpa, &buffer);
+}
+
+fn renderList(gpa: Allocator, io: std.Io, dir: []const u8, w: *Writer) !void {
+    const place = try jailPath(gpa, io, dir);
+    defer place.deinit(gpa);
+    const root = try runner.repoRoot(gpa, io);
+    defer gpa.free(root);
+    const files = try shadow.trackedFiles(gpa, io, root);
+    defer gpa.free(files);
+    defer shadow.freeFileList(gpa, files);
+
+    var js: std.json.Stringify = .{ .writer = w };
+    try js.beginObject();
+    try js.objectField("dir");
+    try js.write(dir);
+    try js.objectField("files");
+    try js.beginArray();
+    var count: usize = 0;
+    var truncated = false;
+    for (files) |f| {
+        if (!inDirectory(f, place.rel)) continue;
+        if (count == max_list_entries) {
+            truncated = true;
+            break;
+        }
+        try js.write(f);
+        count += 1;
+    }
+    try js.endArray();
+    try js.objectField("truncated");
+    try js.write(truncated);
+    try js.endObject();
+    try w.writeByte('\n');
+}
+
+fn callSearch(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event) !ToolResult {
+    const pattern = try requireString(args, "pattern");
+    const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
+    event.label = "search";
+    event.file = dir;
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    renderSearch(gpa, io, pattern, dir, &buffer.writer) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return failure(gpa, &buffer, err, event);
+    };
+    return success(gpa, &buffer);
+}
+
+fn renderSearch(gpa: Allocator, io: std.Io, pattern: []const u8, dir: []const u8, w: *Writer) !void {
+    if (pattern.len == 0) return error.EmptyPattern;
+    const place = try jailPath(gpa, io, dir);
+    defer place.deinit(gpa);
+    const root = try runner.repoRoot(gpa, io);
+    defer gpa.free(root);
+    const files = try shadow.trackedFiles(gpa, io, root);
+    defer gpa.free(files);
+    defer shadow.freeFileList(gpa, files);
+
+    var js: std.json.Stringify = .{ .writer = w };
+    try js.beginObject();
+    try js.objectField("pattern");
+    try js.write(pattern);
+    try js.objectField("matches");
+    try js.beginArray();
+    var count: usize = 0;
+    var truncated = false;
+    outer: for (files) |f| {
+        if (!inDirectory(f, place.rel)) continue;
+        const joined = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, f });
+        defer gpa.free(joined);
+        const real = std.Io.Dir.cwd().realPathFileAlloc(io, joined, gpa) catch continue;
+        defer gpa.free(real);
+        const rel = runner.relativeUnder(gpa, root, real) catch continue;
+        defer gpa.free(rel);
+        refuseInternal(rel) catch continue;
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, real, gpa, .limited(max_search_file_bytes)) catch continue;
+        defer gpa.free(bytes);
+        if (looksBinary(bytes)) continue;
+        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var number: usize = 0;
+        while (lines.next()) |raw| {
+            number += 1;
+            if (std.mem.indexOf(u8, raw, pattern) == null) continue;
+            const text = utf8Prefix(std.mem.trim(u8, raw, " \t\r"), max_match_text);
+            if (!std.unicode.utf8ValidateSlice(text)) continue;
+            if (count == max_search_matches) {
+                truncated = true;
+                break :outer;
+            }
+            try js.beginObject();
+            try js.objectField("file");
+            try js.write(f);
+            try js.objectField("line");
+            try js.write(number);
+            try js.objectField("text");
+            try js.write(text);
+            try js.endObject();
+            count += 1;
+        }
+    }
+    try js.endArray();
+    try js.objectField("truncated");
+    try js.write(truncated);
+    try js.endObject();
+    try w.writeByte('\n');
 }
 
 fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer) !void {
@@ -294,19 +556,17 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8,
     try wire.writeMutated(w, sym, expected, applied.hash, applied.snapshot.source);
 }
 
-fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
+fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
     const body = try requireString(args, "body");
-    const test_cmd = if (args) |a| getString(a, "test_cmd") orelse "" else "";
-    const allow_repo_config = if (args) |a| getBool(a, "allow_repo_config") else false;
     event.file = file;
     event.symbol = sym;
     event.mutating = true;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, test_cmd, allow_repo_config, &buffer.writer, event) catch |err| blk: {
+    const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, args, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
@@ -316,10 +576,11 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, test_cmd: []const u8, allow_repo_config: bool, w: *Writer, event: *telemetry.Event) !bool {
+fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+    const given = try trustedTestCommand(args, policy);
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
     defer gpa.free(file_abs);
-    const test_command = try runner.resolveTestCommand(gpa, io, file_abs, test_cmd, allow_repo_config);
+    const test_command = try runner.resolveTestCommand(gpa, io, file_abs, given, policy.allow_repo_config);
     defer gpa.free(test_command);
     const expected = try symbol.parseHash(hash_hex);
     const result = try runner.tryMutate(gpa, io, runtime, .{
@@ -351,7 +612,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
     }
 }
 
-fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
+fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     const arguments = args orelse return error.MissingArgument;
     const edits_val = getField(arguments, "edits") orelse return error.MissingArgument;
     if (edits_val != .array or edits_val.array.items.len == 0) return error.MissingArgument;
@@ -361,13 +622,11 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
         _ = getString(item, "hash") orelse return error.MissingArgument;
         _ = getString(item, "body") orelse return error.MissingArgument;
     }
-    const test_cmd = getString(arguments, "test_cmd") orelse "";
-    const allow_repo_config = getBool(arguments, "allow_repo_config");
     event.mutating = true;
 
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = batchInto(gpa, io, runtime, edits_val.array.items, test_cmd, allow_repo_config, &buffer.writer, event) catch |err| blk: {
+    const is_error = batchInto(gpa, io, runtime, edits_val.array.items, arguments, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
@@ -377,7 +636,8 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, test_cmd: []const u8, allow_repo_config: bool, w: *Writer, event: *telemetry.Event) !bool {
+fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+    const given = try trustedTestCommand(args, policy);
     const edits = try gpa.alloc(runner.Edit, items.len);
     defer gpa.free(edits);
     var built: usize = 0;
@@ -398,7 +658,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         edits[i].expected_hash = try symbol.parseHash(getString(item, "hash").?);
     }
 
-    const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, test_cmd, allow_repo_config);
+    const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, given, policy.allow_repo_config);
     defer gpa.free(resolved);
     const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .trace = &event.trace });
     defer result.deinit(gpa);
@@ -455,14 +715,6 @@ fn requireString(args: ?Value, key: []const u8) error{MissingArgument}![]const u
 fn getField(value: Value, key: []const u8) ?Value {
     if (value != .object) return null;
     return value.object.get(key);
-}
-
-fn getBool(value: Value, key: []const u8) bool {
-    const field = getField(value, key) orelse return false;
-    return switch (field) {
-        .bool => |b| b,
-        else => false,
-    };
 }
 
 fn getString(value: Value, key: []const u8) ?[]const u8 {
@@ -562,7 +814,7 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("name");
     try js.write("synapse_try_batch");
     try js.objectField("description");
-    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run one test_cmd over all of them, and commit every file only if it passes; otherwise nothing is written. One edit per file.");
+    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted test command once over all of them, and commit every file only if it passes; otherwise nothing is written. One edit per file. The test command is fixed by the user who started synapse; a call that passes test_cmd or allow_repo_config is refused.");
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");
@@ -584,20 +836,6 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     inline for (.{ "file", "symbol", "hash", "body" }) |field| try js.write(field);
     try js.endArray();
     try js.endObject();
-    try js.endObject();
-    try js.objectField("test_cmd");
-    try js.beginObject();
-    try js.objectField("type");
-    try js.write("string");
-    try js.objectField("description");
-    try js.write("shell command that must exit 0 for the whole batch to commit; falls back to an explicit or global test_cmd when omitted");
-    try js.endObject();
-    try js.objectField("allow_repo_config");
-    try js.beginObject();
-    try js.objectField("type");
-    try js.write("boolean");
-    try js.objectField("description");
-    try js.write("opt in to the repo's untrusted .synapserc.json test_cmd (default false)");
     try js.endObject();
     try js.endObject();
     try js.objectField("required");
@@ -691,6 +929,46 @@ test "tools/list names the three tools and marks hash required" {
     try testing.expect(std.mem.indexOf(u8, response, "synapse_mutate") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"required\":[\"file\",\"symbol\",\"hash\",\"body\"]") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"required\":[\"file\",\"symbol\",\"hash\",\"body\",\"test_cmd\"]") == null);
+}
+
+test "serve policy comes only from the command line synapse was started with" {
+    const empty = parsePolicy(&[_][]const u8{}).?;
+    try testing.expect(empty.test_command == null);
+    try testing.expect(!empty.allow_repo_config);
+
+    const full = parsePolicy(&[_][]const u8{ "--test", "npm test", "--allow-repo-config" }).?;
+    try testing.expectEqualStrings("npm test", full.test_command.?);
+    try testing.expect(full.allow_repo_config);
+
+    try testing.expect(parsePolicy(&[_][]const u8{"--test"}) == null);
+    try testing.expect(parsePolicy(&[_][]const u8{ "--test", "" }) == null);
+    try testing.expect(parsePolicy(&[_][]const u8{ "--test", "a", "--test", "b" }) == null);
+    try testing.expect(parsePolicy(&[_][]const u8{ "--allow-repo-config", "--allow-repo-config" }) == null);
+    try testing.expect(parsePolicy(&[_][]const u8{"--bogus"}) == null);
+}
+
+test "a read is cut on a UTF-8 boundary, never inside a character" {
+    try testing.expectEqualStrings("a", utf8Prefix("aé", 2));
+    try testing.expectEqualStrings("aé", utf8Prefix("aé", 3));
+    try testing.expectEqualStrings("ab", utf8Prefix("ab", 16));
+}
+
+test "directory filtering matches whole path segments across separators and case" {
+    try testing.expect(inDirectory("tests/fixtures/a.ts", ""));
+    try testing.expect(inDirectory("tests/fixtures/a.ts", "tests\\fixtures"));
+    try testing.expect(inDirectory("Tests/Fixtures/a.ts", "tests\\fixtures"));
+    try testing.expect(!inDirectory("tests/fixtures2/a.ts", "tests\\fixtures"));
+    try testing.expect(!inDirectory("tests", "tests"));
+    try testing.expect(!inDirectory("src/a.ts", "tests"));
+}
+
+test "internal workspace and git paths are refused, others pass" {
+    try testing.expectError(error.InternalPath, refuseInternal(".git\\HEAD"));
+    try testing.expectError(error.InternalPath, refuseInternal(".GIT/config"));
+    try testing.expectError(error.InternalPath, refuseInternal(".synapse\\events.ndjson"));
+    try refuseInternal("");
+    try refuseInternal("docs\\.git-notes.md");
+    try refuseInternal("src\\main.zig");
 }
 
 test "ping returns an empty result" {

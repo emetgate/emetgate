@@ -494,6 +494,28 @@ fn respond(runtime: *Runtime, line: []const u8) ![]u8 {
     return testing.allocator.dupe(u8, buffer.written());
 }
 
+fn respondWith(runtime: *Runtime, line: []const u8, policy: server.Policy) ![]u8 {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line, &buffer.writer, null, policy);
+    return testing.allocator.dupe(u8, buffer.written());
+}
+
+fn jsonEscaped(text: []const u8) ![]u8 {
+    return std.mem.replaceOwned(u8, testing.allocator, text, "\\", "\\\\");
+}
+
+fn toolCallLine(tool: []const u8, file: []const u8, hash_hex: []const u8, extra: []const u8) ![]u8 {
+    const escaped = try jsonEscaped(file);
+    defer testing.allocator.free(escaped);
+    if (std.mem.eql(u8, tool, "synapse_try_batch")) {
+        return std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"synapse_try_batch\",\"arguments\":{{\"edits\":[{{\"file\":\"{s}\",\"symbol\":\"add\",\"hash\":\"{s}\",\"body\":\"{{ return a - b; }}\"}}]{s}}}}}}}", .{ escaped, hash_hex, extra });
+    }
+    return std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"synapse_try\",\"arguments\":{{\"file\":\"{s}\",\"symbol\":\"add\",\"hash\":\"{s}\",\"body\":\"{{ return a - b; }}\"{s}}}}}}}", .{ escaped, hash_hex, extra });
+}
+
+const edited_source = "export function add(a: number, b: number): number { return a - b; }\n";
+
 test "purple C5: malformed JSON is a typed parse error, never a crash" {
     const response = try respond(undefined, "{ this is not json ]");
     defer testing.allocator.free(response);
@@ -519,6 +541,103 @@ test "purple C5: an unknown tool is invalid params" {
     );
     defer testing.allocator.free(response);
     try testing.expect(std.mem.indexOf(u8, response, "\"code\":-32602") != null);
+}
+
+test "purple C7: a test command supplied by the model is refused and never runs" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+
+    const marker = try std.fmt.allocPrint(testing.allocator, "{s}\\model-ran.txt", .{repo.root_abs});
+    defer testing.allocator.free(marker);
+    const marker_json = try jsonEscaped(marker);
+    defer testing.allocator.free(marker_json);
+    const extra = try std.fmt.allocPrint(testing.allocator, ",\"test_cmd\":\"cmd /c echo ran> {s}\"", .{marker_json});
+    defer testing.allocator.free(extra);
+
+    const policies = [_]server.Policy{ .{}, .{ .test_command = "cmd /c exit 1" }, .{ .test_command = "cmd /c exit 0" } };
+    for ([_][]const u8{ "synapse_try", "synapse_try_batch" }) |tool| {
+        for (policies) |policy| {
+            const line = try toolCallLine(tool, file, hex[0..], extra);
+            defer testing.allocator.free(line);
+            const response = try respondWith(runtime, line, policy);
+            defer testing.allocator.free(response);
+            try testing.expect(std.mem.indexOf(u8, response, "ModelSuppliedTestPolicy") != null);
+            try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+            try expectPristine(&repo);
+            try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, marker, .{}));
+        }
+    }
+}
+
+test "purple C7: a repo config opt-in supplied by the model is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"cmd /c exit 0\"}" });
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+
+    for ([_][]const u8{ "synapse_try", "synapse_try_batch" }) |tool| {
+        for ([_][]const u8{ ",\"allow_repo_config\":true", ",\"allow_repo_config\":false" }) |extra| {
+            const line = try toolCallLine(tool, file, hex[0..], extra);
+            defer testing.allocator.free(line);
+            const response = try respondWith(runtime, line, .{});
+            defer testing.allocator.free(response);
+            try testing.expect(std.mem.indexOf(u8, response, "ModelSuppliedTestPolicy") != null);
+            try expectPristine(&repo);
+        }
+    }
+}
+
+test "purple C7: only the user's policy decides whether an edit can commit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+    const line = try toolCallLine("synapse_try", file, hex[0..], "");
+    defer testing.allocator.free(line);
+
+    for ([_]server.Policy{ .{}, .{ .allow_repo_config = true } }) |policy| {
+        const response = try respondWith(runtime, line, policy);
+        defer testing.allocator.free(response);
+        try testing.expect(std.mem.indexOf(u8, response, "NoTestCommand") != null);
+        try expectPristine(&repo);
+    }
+
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"cmd /c exit 0\"}" });
+    const untrusted = try respondWith(runtime, line, .{});
+    defer testing.allocator.free(untrusted);
+    try testing.expect(std.mem.indexOf(u8, untrusted, "UntrustedRepoConfig") != null);
+
+    const committed = try respondWith(runtime, line, .{ .allow_repo_config = true });
+    defer testing.allocator.free(committed);
+    try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"committed\\\"") != null);
+    const on_disk = try repo.onDisk();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(edited_source, on_disk);
+}
+
+test "purple C7: tools/list never offers the model a test command or a repo opt-in" {
+    const response = try respond(undefined,
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+    );
+    defer testing.allocator.free(response);
+    try testing.expect(std.mem.indexOf(u8, response, "synapse_try_batch") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"test_cmd\"") == null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"allow_repo_config\"") == null);
 }
 
 test "purple C6: an MCP batch frees every resolved path with its real size" {
@@ -560,13 +679,11 @@ test "purple C6: an MCP batch frees every resolved path with its real size" {
     try js.write("{\n  return a - b;\n}");
     try js.endObject();
     try js.endArray();
-    try js.objectField("test_cmd");
-    try js.write("cmd /c exit 0");
     try js.endObject();
     try js.endObject();
     try js.endObject();
 
-    const response = try respond(runtime, line.written());
+    const response = try respondWith(runtime, line.written(), .{ .test_command = "cmd /c exit 0" });
     defer testing.allocator.free(response);
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
     const on_disk = try repo.onDisk();

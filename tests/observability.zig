@@ -69,7 +69,7 @@ fn hashOfRef(runtime: *Runtime, file: []const u8, name: []const u8) !symbol.Hash
     return (try table.resolve(ref)).hash;
 }
 
-fn writeCall(w: *std.Io.Writer, tool: []const u8, file: []const u8, hash_hex: ?[]const u8, body: ?[]const u8, cmd: ?[]const u8) !void {
+fn writeCall(w: *std.Io.Writer, tool: []const u8, file: []const u8, hash_hex: ?[]const u8, body: ?[]const u8) !void {
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("jsonrpc");
@@ -96,19 +96,15 @@ fn writeCall(w: *std.Io.Writer, tool: []const u8, file: []const u8, hash_hex: ?[
         try js.objectField("body");
         try js.write(b);
     }
-    if (cmd) |c| {
-        try js.objectField("test_cmd");
-        try js.write(c);
-    }
     try js.endObject();
     try js.endObject();
     try js.endObject();
 }
 
-fn call(runtime: *Runtime, line: []const u8, observer: ?*telemetry.Observer) ![]u8 {
+fn call(runtime: *Runtime, line: []const u8, observer: ?*telemetry.Observer, policy: server.Policy) ![]u8 {
     var buffer: Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line, &buffer.writer, observer);
+    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line, &buffer.writer, observer, policy);
     return testing.allocator.dupe(u8, buffer.written());
 }
 
@@ -131,8 +127,8 @@ fn runScenario(runtime: *Runtime, repo: *Repo, observer: ?*telemetry.Observer) !
         const hex = symbol.formatHash(hash);
         var line: Allocating = .init(testing.allocator);
         defer line.deinit();
-        try writeCall(&line.writer, "synapse_try", file, hex[0..], step.body, step.cmd);
-        out[i] = try call(runtime, line.written(), observer);
+        try writeCall(&line.writer, "synapse_try", file, hex[0..], step.body);
+        out[i] = try call(runtime, line.written(), observer, .{ .test_command = step.cmd });
         produced = i + 1;
     }
     return out;
@@ -294,9 +290,9 @@ test "fail-soft: events never follow a .synapse junction out of the repo" {
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}", "cmd /c exit 0");
+    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer);
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
     defer testing.allocator.free(response);
     try expectContains(response, "synapse ");
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "victim/events.ndjson", .{}));
@@ -356,13 +352,11 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     try writeBatchEdit(&js, math, "add", math_hex[0..], "{\n  return a - b;\n}");
     try writeBatchEdit(&js, twice, "twice", twice_hex[0..], "{\n  return x * 2;\n}");
     try js.endArray();
-    try js.objectField("test_cmd");
-    try js.write("cmd /c exit 0");
     try js.endObject();
     try js.endObject();
     try js.endObject();
 
-    const response = try call(runtime, line.written(), &observer);
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
     defer testing.allocator.free(response);
     try expectContains(response, "synapse ✓ committed · gate full · sent ");
     try expectContains(response, " chars · session 2 edits");
@@ -392,9 +386,9 @@ test "a failure after the commit began is reported as commit phase, never disk u
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}", racing_cmd);
+    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer);
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = racing_cmd });
     defer testing.allocator.free(response);
     try expectContains(response, "\"isError\":true");
     try expectContains(response, "failed in commit phase, run synapse recover");
@@ -427,9 +421,9 @@ test "fail-soft: an events file symlinked outside the repo is never written thro
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}", "cmd /c exit 0");
+    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer);
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
     defer testing.allocator.free(response);
     try expectContains(response, "synapse ✓ committed");
 
@@ -454,8 +448,8 @@ test "a read tool logs the chars it can compute and leaves the rest null" {
 
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_skeleton", fixture, null, null, null);
-    const response = try call(runtime, line.written(), &observer);
+    try writeCall(&line.writer, "synapse_skeleton", fixture, null, null);
+    const response = try call(runtime, line.written(), &observer, .{});
     defer testing.allocator.free(response);
     try expectContains(response, "synapse ✓ skeleton · read ");
     try expectContains(response, " chars · session 0 edits");

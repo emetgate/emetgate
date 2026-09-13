@@ -60,6 +60,16 @@ pub fn assertUnderCwdRepo(gpa: Allocator, io: std.Io, file_abs: []const u8) !voi
     gpa.free(rel);
 }
 
+pub fn repoRelative(gpa: Allocator, io: std.Io, path_abs: []const u8) ![]u8 {
+    const root = try gitToplevel(gpa, io, ".");
+    defer gpa.free(root);
+    const normalized = try gpa.dupe(u8, path_abs);
+    defer gpa.free(normalized);
+    std.mem.replaceScalar(u8, normalized, '/', '\\');
+    if (std.ascii.eqlIgnoreCase(normalized, root)) return gpa.dupe(u8, "");
+    return relativeUnder(gpa, root, normalized);
+}
+
 pub fn resolveTestCommand(gpa: Allocator, io: std.Io, file_abs: []const u8, given: []const u8, allow_repo_config: bool) ![]u8 {
     if (given.len != 0) return gpa.dupe(u8, given);
 
@@ -329,7 +339,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const
     return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = shadow_abs, .limits = options.limits });
 }
 
-fn relativeUnder(gpa: Allocator, root: []const u8, file_abs: []const u8) ![]u8 {
+pub fn relativeUnder(gpa: Allocator, root: []const u8, file_abs: []const u8) ![]u8 {
     const normalized = try gpa.dupe(u8, file_abs);
     defer gpa.free(normalized);
     std.mem.replaceScalar(u8, normalized, '/', '\\');
