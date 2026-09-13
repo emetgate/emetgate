@@ -176,7 +176,7 @@ fn writeDiagnostic(js: *std.json.Stringify, d: diagnostics.Diagnostic) !void {
     try js.endObject();
 }
 
-fn rejectionReason(report: sandbox.Report) []const u8 {
+pub fn rejectionReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
         .exited => |code| if (code != 0) "tests_failed" else "leftover_processes",
         .timed_out => "timed_out",

@@ -16,6 +16,7 @@ pub const stdio = @import("platform/stdio.zig");
 pub const wire = @import("protocol/wire.zig");
 pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
+pub const telemetry = @import("protocol/telemetry.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

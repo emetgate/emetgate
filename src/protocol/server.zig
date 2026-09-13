@@ -3,7 +3,9 @@ const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const skeleton = @import("../engine/skeleton.zig");
 const wire = @import("wire.zig");
+const telemetry = @import("telemetry.zig");
 const runner = @import("../platform/runner.zig");
+const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
@@ -64,6 +66,13 @@ const tool_defs = [_]Tool{
 };
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer) !void {
+    const root: ?[]u8 = runner.repoRoot(gpa, io) catch null;
+    defer if (root) |r| gpa.free(r);
+    const workspace: ?[]u8 = if (root) |r| std.fmt.allocPrint(gpa, "{s}\\{s}", .{ r, shadow.workspace_dir }) catch null else null;
+    defer if (workspace) |ws| gpa.free(ws);
+    var observer: ?telemetry.Observer = if (workspace) |ws| .{ .workspace_abs = ws } else null;
+    const observer_ptr: ?*telemetry.Observer = if (observer) |*o| o else null;
+
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);
     var reader = std.Io.File.Reader.init(stdio.stdin(), io, read_buffer);
@@ -84,7 +93,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer) !void 
         const trimmed = if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
         if (trimmed.len == 0) continue;
 
-        if (try handleMessage(gpa, io, runtime, trimmed, out)) {
+        if (try handleMessageObserved(gpa, io, runtime, trimmed, out, observer_ptr)) {
             try out.writeByte('\n');
             try out.flush();
         }
@@ -92,6 +101,10 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer) !void 
 }
 
 pub fn handleMessage(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8, out: *Writer) !bool {
+    return handleMessageObserved(gpa, io, runtime, line, out, null);
+}
+
+pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8, out: *Writer, observer: ?*telemetry.Observer) !bool {
     var parsed = std.json.parseFromSlice(Value, gpa, line, .{}) catch {
         try writeRpcError(out, .null, -32700, "Parse error");
         return true;
@@ -124,7 +137,7 @@ pub fn handleMessage(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []cons
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
-        try handleToolsCall(gpa, io, runtime, out, request_id, msg);
+        try handleToolsCall(gpa, io, runtime, out, request_id, msg, observer);
         return true;
     }
     try writeRpcError(out, request_id, -32601, "Method not found");
@@ -133,37 +146,48 @@ pub fn handleMessage(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []cons
 
 const ToolResult = struct { text: []u8, is_error: bool };
 
-fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, id: Value, msg: Value) !void {
+fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, id: Value, msg: Value, observer: ?*telemetry.Observer) !void {
     const params = getField(msg, "params") orelse return writeRpcError(out, id, -32602, "Missing params");
     const name = getString(params, "name") orelse return writeRpcError(out, id, -32602, "Missing tool name");
     const arguments = getField(params, "arguments");
 
-    const result = callTool(gpa, io, runtime, name, arguments) catch |err| switch (err) {
-        error.UnknownTool => return writeRpcError(out, id, -32602, "Unknown tool"),
-        error.MissingArgument => return writeRpcError(out, id, -32602, "Missing or invalid argument"),
-        else => return writeRpcError(out, id, -32603, "Internal error"),
+    var event: telemetry.Event = .{ .tool = name };
+    const result = callTool(gpa, io, runtime, name, arguments, &event) catch |err| {
+        if (observer) |obs| {
+            event.fail(@errorName(err));
+            obs.record(gpa, io, event);
+        }
+        return switch (err) {
+            error.UnknownTool => writeRpcError(out, id, -32602, "Unknown tool"),
+            error.MissingArgument => writeRpcError(out, id, -32602, "Missing or invalid argument"),
+            else => writeRpcError(out, id, -32603, "Internal error"),
+        };
     };
     defer gpa.free(result.text);
-    try writeToolResult(out, id, result.text, result.is_error);
+    const decorated: ?[]u8 = if (observer) |obs| telemetry.observe(gpa, io, obs, event, result.text) else null;
+    defer if (decorated) |d| gpa.free(d);
+    try writeToolResult(out, id, decorated orelse result.text, result.is_error);
 }
 
-fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value) !ToolResult {
-    if (std.mem.eql(u8, name, "synapse_symbols")) return callSymbols(gpa, io, runtime, args);
-    if (std.mem.eql(u8, name, "synapse_skeleton")) return callSkeleton(gpa, io, runtime, args);
-    if (std.mem.eql(u8, name, "synapse_read_symbol")) return callReadSymbol(gpa, io, runtime, args);
-    if (std.mem.eql(u8, name, "synapse_mutate")) return callMutate(gpa, io, runtime, args);
-    if (std.mem.eql(u8, name, "synapse_try")) return callTry(gpa, io, runtime, args);
-    if (std.mem.eql(u8, name, "synapse_try_batch")) return callTryBatch(gpa, io, runtime, args);
+fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event) !ToolResult {
+    if (std.mem.eql(u8, name, "synapse_symbols")) return callSymbols(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "synapse_skeleton")) return callSkeleton(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "synapse_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "synapse_mutate")) return callMutate(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "synapse_try")) return callTry(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "synapse_try_batch")) return callTryBatch(gpa, io, runtime, args, event);
     return error.UnknownTool;
 }
 
-fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
     const file = try requireString(args, "file");
+    event.label = "symbols";
+    event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     renderSymbols(gpa, io, runtime, file, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
-        return failure(gpa, &buffer, err);
+        return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
@@ -182,84 +206,109 @@ fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8
     try wire.writeSymbols(gpa, w, file, table.*);
 }
 
-fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
     const file = try requireString(args, "file");
+    event.label = "skeleton";
+    event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSkeleton(gpa, io, runtime, file, &buffer.writer) catch |err| {
+    renderSkeleton(gpa, io, runtime, file, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
-        return failure(gpa, &buffer, err);
+        return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer) !void {
+fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
     const snapshot = try loadJailed(gpa, io, runtime, file);
     defer snapshot.destroy();
     const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.tree);
     defer gpa.free(text);
+    event.chars_synapse = text.len;
+    event.chars_fullfile = snapshot.source.len;
     try wire.writeSkeleton(w, file, text);
 }
 
-fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
+    event.label = "read_symbol";
+    event.file = file;
+    event.symbol = sym;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSymbolBody(gpa, io, runtime, file, sym, &buffer.writer) catch |err| {
+    renderSymbolBody(gpa, io, runtime, file, sym, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
-        return failure(gpa, &buffer, err);
+        return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, w: *Writer) !void {
+fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, w: *Writer, event: *telemetry.Event) !void {
     const snapshot = try loadJailed(gpa, io, runtime, file);
     defer snapshot.destroy();
     const table = try snapshot.symbols();
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
     const found = try table.resolve(ref);
-    try wire.writeSymbolBody(w, file, sym, found.hash, snapshot.tree.text(found.body));
+    const body = snapshot.tree.text(found.body);
+    event.hash = found.hash;
+    event.chars_synapse = body.len;
+    event.chars_fullfile = snapshot.source.len;
+    try wire.writeSymbolBody(w, file, sym, found.hash, body);
 }
 
-fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
     const body = try requireString(args, "body");
+    event.label = "dry-run";
+    event.file = file;
+    event.symbol = sym;
+    event.mutating = true;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderMutate(gpa, io, runtime, file, sym, hash_hex, body, &buffer.writer) catch |err| {
+    renderMutate(gpa, io, runtime, file, sym, hash_hex, body, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
-        return failure(gpa, &buffer, err);
+        return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, w: *Writer) !void {
+fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, w: *Writer, event: *telemetry.Event) !void {
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
     const expected = try symbol.parseHash(hash_hex);
     const base = try loadJailed(gpa, io, runtime, file);
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
+    const target = try (try base.symbols()).resolve(ref);
+    const old_body_len = target.body.endByte() - target.body.startByte();
     const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
     defer applied.snapshot.destroy();
+    event.hash = applied.hash;
+    event.chars_synapse = sym.len + hash_hex.len + body.len;
+    event.chars_fullfile = applied.snapshot.source.len;
+    event.chars_sr = old_body_len + body.len;
     try wire.writeMutated(w, sym, expected, applied.hash, applied.snapshot.source);
 }
 
-fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
     const body = try requireString(args, "body");
     const test_cmd = if (args) |a| getString(a, "test_cmd") orelse "" else "";
     const allow_repo_config = if (args) |a| getBool(a, "allow_repo_config") else false;
+    event.file = file;
+    event.symbol = sym;
+    event.mutating = true;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, test_cmd, allow_repo_config, &buffer.writer) catch |err| blk: {
+    const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, test_cmd, allow_repo_config, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
+        event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
         try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
         break :blk true;
@@ -267,7 +316,7 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolRes
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, test_cmd: []const u8, allow_repo_config: bool, w: *Writer) !bool {
+fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, test_cmd: []const u8, allow_repo_config: bool, w: *Writer, event: *telemetry.Event) !bool {
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
     defer gpa.free(file_abs);
     const test_command = try runner.resolveTestCommand(gpa, io, file_abs, test_cmd, allow_repo_config);
@@ -279,21 +328,30 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .trace = &event.trace,
     });
     defer result.deinit(gpa);
+    event.chars_synapse = sym.len + hash_hex.len + body.len;
+    event.chars_fullfile = event.trace.new_len;
+    event.chars_sr = if (event.trace.old_body_len) |old| old + body.len else null;
     switch (result) {
         .committed => |new_hash| {
+            event.outcome = .committed;
+            event.edits = 1;
+            event.hash = new_hash;
             try wire.writeCommitted(w, sym, expected, new_hash);
             return false;
         },
         .rejected => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.rejectionReason(report);
             try wire.writeRejected(gpa, w, test_command, report);
             return true;
         },
     }
 }
 
-fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !ToolResult {
+fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
     const arguments = args orelse return error.MissingArgument;
     const edits_val = getField(arguments, "edits") orelse return error.MissingArgument;
     if (edits_val != .array or edits_val.array.items.len == 0) return error.MissingArgument;
@@ -305,11 +363,13 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !To
     }
     const test_cmd = getString(arguments, "test_cmd") orelse "";
     const allow_repo_config = getBool(arguments, "allow_repo_config");
+    event.mutating = true;
 
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = batchInto(gpa, io, runtime, edits_val.array.items, test_cmd, allow_repo_config, &buffer.writer) catch |err| blk: {
+    const is_error = batchInto(gpa, io, runtime, edits_val.array.items, test_cmd, allow_repo_config, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
+        event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
         try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
         break :blk true;
@@ -317,7 +377,7 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value) !To
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, test_cmd: []const u8, allow_repo_config: bool, w: *Writer) !bool {
+fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, test_cmd: []const u8, allow_repo_config: bool, w: *Writer, event: *telemetry.Event) !bool {
     const edits = try gpa.alloc(runner.Edit, items.len);
     defer gpa.free(edits);
     var built: usize = 0;
@@ -340,11 +400,17 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
 
     const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, test_cmd, allow_repo_config);
     defer gpa.free(resolved);
-    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved });
+    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .trace = &event.trace });
     defer result.deinit(gpa);
 
+    var sent: usize = 0;
+    for (items) |item| sent += getString(item, "symbol").?.len + getString(item, "hash").?.len + getString(item, "body").?.len;
+    event.chars_synapse = sent;
+    event.chars_fullfile = event.trace.new_len;
     switch (result) {
         .committed => |hashes| {
+            event.outcome = .committed;
+            event.edits = items.len;
             const views = try gpa.alloc(wire.BatchEdit, items.len);
             defer gpa.free(views);
             for (items, 0..) |item, i| views[i] = .{
@@ -357,6 +423,8 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             return false;
         },
         .rejected => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.rejectionReason(report);
             try wire.writeRejected(gpa, w, resolved, report);
             return true;
         },
@@ -367,7 +435,8 @@ fn success(gpa: Allocator, buffer: *std.Io.Writer.Allocating) !ToolResult {
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = false };
 }
 
-fn failure(gpa: Allocator, buffer: *std.Io.Writer.Allocating, err: anyerror) !ToolResult {
+fn failure(gpa: Allocator, buffer: *std.Io.Writer.Allocating, err: anyerror, event: *telemetry.Event) !ToolResult {
+    event.fail(@errorName(err));
     buffer.clearRetainingCapacity();
     try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };

@@ -21,6 +21,18 @@ pub const Options = struct {
     test_scoped_cmd: ?[]const u8 = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
+    trace: ?*Trace = null,
+};
+
+pub const Trace = struct {
+    gate: ?Gate = null,
+    confidence: ?boundedness.Confidence = null,
+    provenance: ?boundedness.Provenance = null,
+    class: ?boundedness.MutationClass = null,
+    base_len: ?usize = null,
+    new_len: ?usize = null,
+    old_body_len: ?usize = null,
+    commit_attempted: bool = false,
 };
 
 pub const Result = union(enum) {
@@ -93,7 +105,7 @@ pub const Gate = enum { full, scoped };
 // the runner's related-test (import-graph) heuristic, blind to dynamic import / DI /
 // reflection. Prefer the full command when tests reach code dynamically; scoped is
 // a trade-off the user opts into explicitly. Fast-path opens only for BOUNDED.
-fn chooseGate(confidence: boundedness.Confidence, has_scoped: bool) Gate {
+pub fn chooseGate(confidence: boundedness.Confidence, has_scoped: bool) Gate {
     if (confidence == .bounded and has_scoped) return .scoped;
     return .full;
 }
@@ -134,7 +146,17 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     const cut: symbol.Span = .{ .start = analysis_target.body.startByte(), .end = analysis_target.body.endByte() };
     const frame = boundedness.analyze(gpa, base, ref, cut);
     defer frame.deinit();
-    const scoped_owned: ?[]u8 = if (chooseGate(frame.confidence, options.test_scoped_cmd != null) == .scoped)
+    const gate = chooseGate(frame.confidence, options.test_scoped_cmd != null);
+    if (options.trace) |t| t.* = .{
+        .gate = gate,
+        .confidence = frame.confidence,
+        .provenance = frame.provenance,
+        .class = frame.mutation_class,
+        .base_len = base.source.len,
+        .new_len = applied.snapshot.source.len,
+        .old_body_len = cut.end - cut.start,
+    };
+    const scoped_owned: ?[]u8 = if (gate == .scoped)
         try substituteFile(gpa, options.test_scoped_cmd.?, rel)
     else
         null;
@@ -147,6 +169,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer report.deinit(gpa);
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
+    if (options.trace) |t| t.commit_attempted = true;
     try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir);
     return .{ .committed = applied.hash };
 }
@@ -163,6 +186,7 @@ pub const BatchOptions = struct {
     test_command: []const u8,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
+    trace: ?*Trace = null,
 };
 
 pub const BatchResult = union(enum) {
@@ -228,6 +252,11 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);
 
+    if (options.trace) |t| {
+        var new_total: usize = 0;
+        for (prepared.items) |p| new_total += p.applied.snapshot.source.len;
+        t.* = .{ .gate = .full, .new_len = new_total };
+    }
     const report = try runBatchInShadow(gpa, io, root, shadow_abs, prepared.items, options);
     if (!report.passed()) return .{ .rejected = report };
     defer report.deinit(gpa);
@@ -245,6 +274,7 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     };
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
+    if (options.trace) |t| t.commit_attempted = true;
     for (prepared.items, 0..) |p, i| {
         pendings[i] = try disk.prepare(gpa, io, options.edits[i].file_abs, p.applied.snapshot.source, p.base_hash, journal_dir);
         count = i + 1;
