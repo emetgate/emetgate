@@ -9,4 +9,5 @@ test {
     _ = @import("tests/runner.zig");
     _ = @import("tests/mutate_harness.zig");
     _ = @import("tests/memory.zig");
+    _ = @import("tests/redteam_memory.zig");
 }

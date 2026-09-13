@@ -483,6 +483,26 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     };
 }
 
+pub fn replaceByRename(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
+    var random: [8]u8 = undefined;
+    io.random(&random);
+    const tag = std.fmt.bytesToHex(random, .lower);
+    const temp = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.tmp", .{ path_abs, &tag });
+    defer gpa.free(temp);
+    try writeDurably(io, temp, data);
+    var renamed = false;
+    defer if (!renamed) {
+        _ = deleteWithRetry(io, temp);
+    };
+    try verifyBase(gpa, io, path_abs, expected_base);
+    const replacement = try Guard.open(temp);
+    defer replacement.close();
+    try replacement.renameReplacing(gpa, path_abs);
+    renamed = true;
+}
+
 pub fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
     const file = try std.Io.Dir.createFileAbsolute(io, path, .{ .exclusive = true });
     errdefer std.Io.Dir.deleteFileAbsolute(io, path) catch {};

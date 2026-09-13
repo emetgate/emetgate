@@ -6,13 +6,13 @@ const disk = @import("disk.zig");
 const Allocator = std.mem.Allocator;
 
 pub const ledger_name = "ledger.ndjson";
-pub const state_name = "state.bin";
+pub const lock_name = "memory.lock";
+pub const sidecar_prefix = ledger_name ++ ".synapse-";
+pub const torn_prefix = ledger_name ++ ".torn-";
 pub const max_ledger_bytes = 64 * 1024 * 1024;
 pub const max_text_bytes = 16 * 1024;
 pub const max_check_bytes = 4 * 1024;
 pub const max_id_bytes = 64;
-
-const state_magic = "SYNMEMv1";
 
 pub const Scope = enum { global, project, file, symbol };
 pub const Status = enum { active, superseded };
@@ -33,6 +33,11 @@ pub const Row = struct {
     line: []const u8,
 };
 
+pub const Folded = struct {
+    latest: std.StringHashMapUnmanaged(Decision),
+    active: []const Decision,
+};
+
 pub const Recall = struct {
     arena: *std.heap.ArenaAllocator,
     decisions: []const Decision,
@@ -47,33 +52,36 @@ pub const Recall = struct {
 const Paths = struct {
     workspace: []const u8,
     ledger: []const u8,
-    state: []const u8,
+    lock: []const u8,
 
     fn init(arena: Allocator, root_abs: []const u8) !Paths {
         const workspace = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root_abs, shadow.workspace_dir });
         return .{
             .workspace = workspace,
             .ledger = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ workspace, ledger_name }),
-            .state = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ workspace, state_name }),
+            .lock = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ workspace, lock_name }),
         };
     }
 };
 
+const Loaded = struct {
+    bytes: []const u8,
+    rows: []const Row,
+    folded: Folded,
+};
+
 pub fn remember(gpa: Allocator, io: std.Io, root_abs: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8) ![]u8 {
     try validateInput(text, check);
-    const lock = try acquireRepoLock(io, root_abs);
-    defer lock.release();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const paths = try Paths.init(arena, root_abs);
+    const lock = try acquireMemoryLock(io, paths);
+    defer lock.release();
 
-    const ledger_bytes = try readLedger(arena, io, paths.ledger);
-    const rows = try parseLedger(arena, ledger_bytes);
-    _ = try fold(arena, rows);
-
-    const id = try newId(arena, io, ledger_bytes.len, text);
-    try appendRows(arena, io, paths, &.{.{
+    const ledger = try loadLedger(arena, io, paths);
+    const id = try newId(arena, io, ledger.bytes.len, text);
+    try appendRow(arena, io, paths, .{
         .id = id,
         .scope = scope,
         .text = text,
@@ -81,30 +89,23 @@ pub fn remember(gpa: Allocator, io: std.Io, root_abs: []const u8, scope: Scope, 
         .check = check,
         .status = .active,
         .ts = now(io),
-    }});
-    try refreshState(arena, gpa, io, paths);
+    });
     return gpa.dupe(u8, id);
 }
 
 pub fn supersede(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8) ![]u8 {
     try validateInput(text, check);
-    const lock = try acquireRepoLock(io, root_abs);
-    defer lock.release();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const paths = try Paths.init(arena, root_abs);
+    const lock = try acquireMemoryLock(io, paths);
+    defer lock.release();
 
-    const ledger_bytes = try readLedger(arena, io, paths.ledger);
-    const rows = try parseLedger(arena, ledger_bytes);
-    const prior = try findActive(try fold(arena, rows), id);
-
-    const stamp = now(io);
-    const successor_id = try newId(arena, io, ledger_bytes.len, text);
-    var tombstone = prior;
-    tombstone.status = .superseded;
-    tombstone.ts = stamp;
-    try appendRows(arena, io, paths, &.{ tombstone, .{
+    const ledger = try loadLedger(arena, io, paths);
+    const prior = try findActive(ledger.folded.active, id);
+    const successor_id = try newId(arena, io, ledger.bytes.len, text);
+    try appendRow(arena, io, paths, .{
         .id = successor_id,
         .scope = scope,
         .text = text,
@@ -112,68 +113,69 @@ pub fn supersede(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u
         .check = check,
         .status = .active,
         .supersedes = prior.id,
-        .ts = stamp,
-    } });
-    try refreshState(arena, gpa, io, paths);
+        .ts = now(io),
+    });
     return gpa.dupe(u8, successor_id);
 }
 
 pub fn forget(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8) !void {
-    const lock = try acquireRepoLock(io, root_abs);
-    defer lock.release();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const paths = try Paths.init(arena, root_abs);
+    const lock = try acquireMemoryLock(io, paths);
+    defer lock.release();
 
-    const ledger_bytes = try readLedger(arena, io, paths.ledger);
-    const rows = try parseLedger(arena, ledger_bytes);
-    var tombstone = try findActive(try fold(arena, rows), id);
+    const ledger = try loadLedger(arena, io, paths);
+    var tombstone = try findActive(ledger.folded.active, id);
     tombstone.status = .superseded;
+    tombstone.supersedes = null;
     tombstone.ts = now(io);
-    try appendRows(arena, io, paths, &.{tombstone});
-    try refreshState(arena, gpa, io, paths);
+    try appendRow(arena, io, paths, tombstone);
 }
 
 pub fn recall(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
-    const lock = try acquireRepoLock(io, root_abs);
-    defer lock.release();
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
     errdefer arena.deinit();
     const paths = try Paths.init(arena.allocator(), root_abs);
-    const decisions = try activeDecisions(arena.allocator(), gpa, io, paths);
-    return .{ .arena = arena, .decisions = decisions };
+    const lock = try acquireMemoryLock(io, paths);
+    defer lock.release();
+
+    const ledger = try loadLedger(arena.allocator(), io, paths);
+    return .{ .arena = arena, .decisions = ledger.folded.active };
 }
 
 pub fn compact(gpa: Allocator, io: std.Io, root_abs: []const u8) !void {
-    const lock = try acquireRepoLock(io, root_abs);
-    defer lock.release();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const paths = try Paths.init(arena, root_abs);
+    const lock = try acquireMemoryLock(io, paths);
+    defer lock.release();
 
-    const ledger_bytes = try readLedger(arena, io, paths.ledger);
-    if (ledger_bytes.len == 0) return;
-    const rows = try parseLedger(arena, ledger_bytes);
-    _ = try fold(arena, rows);
-    const compacted = try compactedLedger(arena, rows);
-    if (!std.mem.eql(u8, compacted, ledger_bytes)) {
-        try disk.replaceAtomically(gpa, io, paths.ledger, compacted, symbol.hashOf(ledger_bytes));
-    }
-    try refreshState(arena, gpa, io, paths);
+    const ledger = try loadLedger(arena, io, paths);
+    if (ledger.bytes.len == 0) return;
+    const compacted = try compactedLedger(arena, ledger.rows, ledger.folded);
+    if (std.mem.eql(u8, compacted, ledger.bytes)) return;
+    try disk.replaceByRename(gpa, io, paths.ledger, compacted, symbol.hashOf(ledger.bytes));
 }
 
-fn acquireRepoLock(io: std.Io, root_abs: []const u8) !shadow.Lock {
-    return shadow.Lock.acquire(io, root_abs);
+fn acquireMemoryLock(io: std.Io, paths: Paths) !shadow.FileLock {
+    try std.Io.Dir.cwd().createDirPath(io, paths.workspace);
+    return shadow.FileLock.acquire(paths.lock) catch |err| switch (err) {
+        error.Busy => error.MemoryBusy,
+        else => err,
+    };
 }
 
 fn validateInput(text: []const u8, check: ?[]const u8) error{InvalidDecision}!void {
     if (text.len == 0 or text.len > max_text_bytes) return error.InvalidDecision;
+    if (!std.unicode.utf8ValidateSlice(text)) return error.InvalidDecision;
     if (check) |c| {
         if (c.len == 0 or c.len > max_check_bytes) return error.InvalidDecision;
+        if (!std.unicode.utf8ValidateSlice(c)) return error.InvalidDecision;
     }
 }
 
@@ -197,11 +199,58 @@ fn newId(arena: Allocator, io: std.Io, ledger_len: usize, text: []const u8) ![]c
     return std.fmt.allocPrint(arena, "m{s}", .{&hex});
 }
 
-fn readLedger(arena: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_ledger_bytes)) catch |err| switch (err) {
-        error.FileNotFound => return arena.dupe(u8, ""),
+fn loadLedger(arena: Allocator, io: std.Io, paths: Paths) !Loaded {
+    var bytes = try readLedger(arena, io, paths);
+    if (tornTailStart(bytes)) |keep| {
+        try quarantineTornTail(arena, io, paths, bytes, keep);
+        bytes = bytes[0..keep];
+    }
+    const rows = try parseLedger(arena, bytes);
+    return .{ .bytes = bytes, .rows = rows, .folded = try foldRows(arena, rows) };
+}
+
+fn readLedger(arena: Allocator, io: std.Io, paths: Paths) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io, paths.ledger, arena, .limited(max_ledger_bytes)) catch |err| switch (err) {
+        error.FileNotFound => {
+            if (try hasLedgerSidecars(io, paths)) return error.LedgerMissingWithSidecars;
+            return arena.dupe(u8, "");
+        },
         else => return err,
     };
+}
+
+fn hasLedgerSidecars(io: std.Io, paths: Paths) !bool {
+    var dir = std.Io.Dir.openDirAbsolute(io, paths.workspace, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (std.mem.startsWith(u8, entry.name, sidecar_prefix)) return true;
+    }
+    return false;
+}
+
+pub fn tornTailStart(bytes: []const u8) ?usize {
+    if (bytes.len == 0) return null;
+    if (bytes[bytes.len - 1] != '\n') {
+        return if (std.mem.lastIndexOfScalar(u8, bytes, '\n')) |nl| nl + 1 else 0;
+    }
+    const body = bytes[0 .. bytes.len - 1];
+    const start = if (std.mem.lastIndexOfScalar(u8, body, '\n')) |nl| nl + 1 else 0;
+    const last = body[start..];
+    if (last.len != 0 and std.mem.allEqual(u8, last, 0)) return start;
+    return null;
+}
+
+fn quarantineTornTail(arena: Allocator, io: std.Io, paths: Paths, bytes: []const u8, keep: usize) !void {
+    const torn_path = try std.fmt.allocPrint(arena, "{s}\\{s}{d}", .{ paths.workspace, torn_prefix, now(io) });
+    try disk.writeDurably(io, torn_path, bytes[keep..]);
+    const file = try std.Io.Dir.createFileAbsolute(io, paths.ledger, .{ .read = true, .truncate = false });
+    defer file.close(io);
+    try file.setLength(io, keep);
+    try file.sync(io);
 }
 
 pub fn parseLedger(arena: Allocator, bytes: []const u8) ![]const Row {
@@ -222,34 +271,40 @@ pub fn parseLedger(arena: Allocator, bytes: []const u8) ![]const Row {
 
 fn validateRow(d: Decision) error{LedgerCorrupt}!void {
     if (d.id.len == 0 or d.id.len > max_id_bytes) return error.LedgerCorrupt;
+    for (d.id) |c| {
+        if (c < 0x21 or c > 0x7e) return error.LedgerCorrupt;
+    }
     if (d.text.len == 0 or d.text.len > max_text_bytes) return error.LedgerCorrupt;
+    if (!std.unicode.utf8ValidateSlice(d.text)) return error.LedgerCorrupt;
     if (d.check) |c| {
         if (c.len == 0 or c.len > max_check_bytes) return error.LedgerCorrupt;
+        if (!std.unicode.utf8ValidateSlice(c)) return error.LedgerCorrupt;
     }
 }
 
-pub fn fold(arena: Allocator, rows: []const Row) ![]const Decision {
+pub fn foldRows(arena: Allocator, rows: []const Row) !Folded {
     var order: std.ArrayList([]const u8) = .empty;
     var latest: std.StringHashMapUnmanaged(Decision) = .empty;
     for (rows) |row| {
         const d = row.decision;
-        const existing = latest.get(d.id);
         switch (d.status) {
             .active => {
-                if (existing != null) return error.LedgerCorrupt;
+                if (latest.get(d.id) != null) return error.LedgerCorrupt;
                 if (d.supersedes) |prior_id| {
-                    if (latest.get(prior_id)) |prior| {
-                        if (prior.status == .active) return error.LedgerCorrupt;
-                    }
+                    const prior = latest.getPtr(prior_id) orelse return error.LedgerCorrupt;
+                    if (prior.status != .active) return error.LedgerCorrupt;
+                    prior.status = .superseded;
                 }
                 try order.append(arena, d.id);
+                try latest.put(arena, d.id, d);
             },
             .superseded => {
-                const current = existing orelse return error.LedgerCorrupt;
+                if (d.supersedes != null) return error.LedgerCorrupt;
+                const current = latest.getPtr(d.id) orelse return error.LedgerCorrupt;
                 if (current.status != .active) return error.LedgerCorrupt;
+                current.status = .superseded;
             },
         }
-        try latest.put(arena, d.id, d);
     }
     var active: std.ArrayList(Decision) = .empty;
     for (order.items) |id| {
@@ -257,20 +312,28 @@ pub fn fold(arena: Allocator, rows: []const Row) ![]const Decision {
         if (decision.status != .active) continue;
         try active.append(arena, decision);
     }
-    return active.toOwnedSlice(arena);
+    return .{ .latest = latest, .active = try active.toOwnedSlice(arena) };
 }
 
-fn compactedLedger(arena: Allocator, rows: []const Row) ![]u8 {
-    var last_index: std.StringHashMapUnmanaged(usize) = .empty;
-    for (rows, 0..) |row, index| try last_index.put(arena, row.decision.id, index);
-    var out: std.ArrayList(u8) = .empty;
-    for (rows, 0..) |row, index| {
+pub fn fold(arena: Allocator, rows: []const Row) ![]const Decision {
+    return (try foldRows(arena, rows)).active;
+}
+
+fn compactedLedger(arena: Allocator, rows: []const Row, folded: Folded) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(arena);
+    for (rows) |row| {
         if (row.decision.status == .superseded) continue;
-        if (last_index.get(row.decision.id).? != index) continue;
-        try out.appendSlice(arena, row.line);
-        try out.append(arena, '\n');
+        if (folded.latest.get(row.decision.id).?.status != .active) continue;
+        if (row.decision.supersedes == null) {
+            try out.writer.writeAll(row.line);
+        } else {
+            var head = row.decision;
+            head.supersedes = null;
+            try writeDecision(&out.writer, head);
+        }
+        try out.writer.writeByte('\n');
     }
-    return out.toOwnedSlice(arena);
+    return out.written();
 }
 
 fn writeDecision(w: *std.Io.Writer, d: Decision) !void {
@@ -278,99 +341,15 @@ fn writeDecision(w: *std.Io.Writer, d: Decision) !void {
     try js.write(d);
 }
 
-fn appendRows(arena: Allocator, io: std.Io, paths: Paths, rows: []const Decision) !void {
+fn appendRow(arena: Allocator, io: std.Io, paths: Paths, row: Decision) !void {
     var buffer: std.Io.Writer.Allocating = .init(arena);
-    for (rows) |row| {
-        try writeDecision(&buffer.writer, row);
-        try buffer.writer.writeByte('\n');
-    }
+    try writeDecision(&buffer.writer, row);
+    try buffer.writer.writeByte('\n');
     const line = buffer.written();
-    try std.Io.Dir.cwd().createDirPath(io, paths.workspace);
     const file = try std.Io.Dir.createFileAbsolute(io, paths.ledger, .{ .read = true, .truncate = false });
     defer file.close(io);
     const end = try file.length(io);
-    if (end + line.len > max_ledger_bytes) return error.LedgerTooLarge;
-    try file.writePositionalAll(io, line, try file.length(io));
+    if (end + line.len >= max_ledger_bytes) return error.LedgerTooLarge;
+    try file.writePositionalAll(io, line, end);
     try file.sync(io);
-}
-
-fn activeDecisions(arena: Allocator, gpa: Allocator, io: std.Io, paths: Paths) ![]const Decision {
-    const ledger_bytes = try readLedger(arena, io, paths.ledger);
-    const ledger_hash = symbol.hashOf(ledger_bytes);
-    const state_bytes = try readState(arena, io, paths.state);
-    if (state_bytes) |bytes| {
-        if (decodeState(arena, bytes, ledger_hash)) |decisions| return decisions;
-    }
-    const decisions = try fold(arena, try parseLedger(arena, ledger_bytes));
-    try writeState(gpa, io, paths.state, state_bytes, try encodeState(arena, ledger_hash, decisions));
-    return decisions;
-}
-
-fn refreshState(arena: Allocator, gpa: Allocator, io: std.Io, paths: Paths) !void {
-    const ledger_bytes = try readLedger(arena, io, paths.ledger);
-    const decisions = try fold(arena, try parseLedger(arena, ledger_bytes));
-    const encoded = try encodeState(arena, symbol.hashOf(ledger_bytes), decisions);
-    const existing = try readState(arena, io, paths.state);
-    if (existing) |bytes| {
-        if (std.mem.eql(u8, bytes, encoded)) return;
-    }
-    try writeState(gpa, io, paths.state, existing, encoded);
-}
-
-fn readState(arena: Allocator, io: std.Io, path: []const u8) !?[]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_ledger_bytes)) catch |err| switch (err) {
-        error.FileNotFound => return null,
-        else => return err,
-    };
-}
-
-fn writeState(gpa: Allocator, io: std.Io, path: []const u8, existing: ?[]const u8, encoded: []const u8) !void {
-    if (existing) |bytes| {
-        try disk.replaceAtomically(gpa, io, path, encoded, symbol.hashOf(bytes));
-    } else {
-        try disk.writeDurably(io, path, encoded);
-    }
-}
-
-pub fn encodeState(arena: Allocator, ledger_hash: symbol.Hash, decisions: []const Decision) ![]u8 {
-    var out: std.Io.Writer.Allocating = .init(arena);
-    const w = &out.writer;
-    try w.writeAll(state_magic);
-    try w.writeAll(&ledger_hash);
-    var count: [4]u8 = undefined;
-    std.mem.writeInt(u32, &count, @intCast(decisions.len), .little);
-    try w.writeAll(&count);
-    for (decisions) |d| {
-        var record: std.Io.Writer.Allocating = .init(arena);
-        try writeDecision(&record.writer, d);
-        var len: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len, @intCast(record.written().len), .little);
-        try w.writeAll(&len);
-        try w.writeAll(record.written());
-    }
-    return out.written();
-}
-
-pub fn decodeState(arena: Allocator, bytes: []const u8, ledger_hash: symbol.Hash) ?[]const Decision {
-    const header_len = state_magic.len + @sizeOf(symbol.Hash) + 4;
-    if (bytes.len < header_len) return null;
-    if (!std.mem.eql(u8, bytes[0..state_magic.len], state_magic)) return null;
-    const stored_hash = bytes[state_magic.len..][0..@sizeOf(symbol.Hash)];
-    if (!std.mem.eql(u8, stored_hash, &ledger_hash)) return null;
-    var pos: usize = state_magic.len + @sizeOf(symbol.Hash);
-    const count = std.mem.readInt(u32, bytes[pos..][0..4], .little);
-    pos += 4;
-    if (count > bytes.len) return null;
-    const decisions = arena.alloc(Decision, count) catch return null;
-    for (decisions) |*d| {
-        if (bytes.len - pos < 4) return null;
-        const len = std.mem.readInt(u32, bytes[pos..][0..4], .little);
-        pos += 4;
-        if (len > bytes.len - pos) return null;
-        d.* = std.json.parseFromSliceLeaky(Decision, arena, bytes[pos..][0..len], .{}) catch return null;
-        validateRow(d.*) catch return null;
-        pos += len;
-    }
-    if (pos != bytes.len) return null;
-    return decisions;
 }

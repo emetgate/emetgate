@@ -81,6 +81,35 @@ pub const Lock = struct {
     }
 };
 
+pub const FileLock = struct {
+    handle: ?std.os.windows.HANDLE,
+
+    pub fn acquire(path_abs: []const u8) error{ Busy, LockFailed, NameTooLong, InvalidWtf8, Unsupported }!FileLock {
+        if (builtin.os.tag != .windows) return error.Unsupported;
+        var wide: [std.fs.max_path_bytes:0]u16 = undefined;
+        const handle = win.CreateFileW(
+            try toExtendedWide(&wide, path_abs),
+            win.generic_write,
+            0,
+            null,
+            win.open_always,
+            win.file_attribute_normal | win.flag_delete_on_close,
+            null,
+        );
+        if (handle == std.os.windows.INVALID_HANDLE_VALUE) {
+            return switch (win.GetLastError()) {
+                win.error_sharing_violation, win.error_access_denied => error.Busy,
+                else => error.LockFailed,
+            };
+        }
+        return .{ .handle = handle };
+    }
+
+    pub fn release(self: FileLock) void {
+        if (self.handle) |handle| std.os.windows.CloseHandle(handle);
+    }
+};
+
 pub const Shadow = struct {
     io: std.Io,
     dir: Dir,
@@ -283,6 +312,7 @@ const win = struct {
     const error_file_not_found: windows.DWORD = 2;
     const error_path_not_found: windows.DWORD = 3;
     const error_sharing_violation: windows.DWORD = 32;
+    const error_access_denied: windows.DWORD = 5;
 
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
