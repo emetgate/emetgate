@@ -171,6 +171,85 @@
       "note": "control: removing the line leaves an unused capture, which must not count as killed"
     },
     {
+      "id": "MEM1-recall-returns-superseded",
+      "file": "src/platform/memory.zig",
+      "from": "        if (decision.status != .active) continue;\n",
+      "to": "",
+      "kills": ["memory: recall returns only active decisions"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "MEM2-append-rewrites-from-offset-zero",
+      "file": "src/platform/memory.zig",
+      "from": "try file.writePositionalAll(io, line, try file.length(io));",
+      "to": "try file.writePositionalAll(io, line, 0);",
+      "kills": ["memory: operations append rows and never rewrite earlier ledger bytes"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "MEM3-corrupt-ledger-line-skipped",
+      "file": "src/platform/memory.zig",
+      "from": "const decision = std.json.parseFromSliceLeaky(Decision, arena, line, .{}) catch return error.LedgerCorrupt;",
+      "to": "const decision = std.json.parseFromSliceLeaky(Decision, arena, line, .{}) catch continue;",
+      "kills": ["memory: a corrupt or partial ledger line is refused, not skipped"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "MEM4-state-ledger-hash-check-removed",
+      "file": "src/platform/memory.zig",
+      "from": "if (!std.mem.eql(u8, stored_hash, &ledger_hash)) return null;",
+      "to": "if (!std.mem.eql(u8, stored_hash, &ledger_hash)) {}",
+      "kills": ["memory: a stale state.bin is never trusted over the ledger"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "MEM4b-state-magic-check-removed",
+      "file": "src/platform/memory.zig",
+      "from": "if (!std.mem.eql(u8, bytes[0..state_magic.len], state_magic)) return null;",
+      "to": "if (!std.mem.eql(u8, bytes[0..state_magic.len], state_magic)) {}",
+      "kills": ["memory: state.bin is a derived fold, rebuilt byte-identical from the untouched ledger"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "MEM4c-state-trailing-bytes-accepted",
+      "file": "src/platform/memory.zig",
+      "from": "if (pos != bytes.len) return null;",
+      "to": "if (pos != bytes.len) {}",
+      "kills": ["memory: state.bin is a derived fold, rebuilt byte-identical from the untouched ledger"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "MEM5-compact-collapses-active-chain-head",
+      "file": "src/platform/memory.zig",
+      "from": "if (last_index.get(row.decision.id).? != index) continue;",
+      "to": "if (row.decision.supersedes != null or last_index.get(row.decision.id).? != index) continue;",
+      "kills": ["memory: compact drops superseded history and never an active decision"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "MEM6-repo-lock-removed",
+      "file": "src/platform/memory.zig",
+      "from": "return shadow.Lock.acquire(io, root_abs);",
+      "to": "return .{ .handle = null, .io = io, .root_abs = root_abs };",
+      "kills": ["memory: a held repo lock blocks writes and recall"],
+      "filter": ["memory: "],
+      "exact": true
+    },
+    {
+      "id": "HX3-harness-exact-kill-check-removed",
+      "file": "tools/mutate/core.zig",
+      "from": "        } else return got;\n",
+      "to": "        } else continue;\n",
+      "kills": ["harness: exact kills reject a test outside the expected set"]
+    },
+    {
       "id": "HX1-harness-ignores-crashed-tests",
       "file": "tools/mutate/core.zig",
       "from": "if (s.failed + s.crashed > 0) return .killed;",

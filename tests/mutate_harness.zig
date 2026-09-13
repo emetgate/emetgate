@@ -34,6 +34,14 @@ test "harness: failed test names are read in both output spellings" {
     try testing.expectEqualStrings("round-trip", core.missingKill(names, &.{"round-trip"}).?);
 }
 
+test "harness: exact kills reject a test outside the expected set" {
+    const failed = [_][]const u8{ "tests.memory.test.memory: a", "tests.memory.test.memory: b" };
+    const extra = core.unexpectedKill(&failed, &.{"memory: a"}) orelse return error.UnexpectedKillNotReported;
+    try testing.expectEqualStrings("tests.memory.test.memory: b", extra);
+    try testing.expect(core.unexpectedKill(&failed, &.{ "memory: a", "memory: b" }) == null);
+    try testing.expect(core.unexpectedKill(&.{}, &.{"memory: a"}) == null);
+}
+
 test "harness: a failing test run is killed and its summary is parsed" {
     const output = "error: 'tests.a.test.x' failed:\nBuild Summary: 32/34 steps succeeded (1 failed); 236/239 tests passed (2 skipped, 1 failed)\n";
     const summary = core.parseSummary(output).?;

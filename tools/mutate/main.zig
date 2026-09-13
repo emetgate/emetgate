@@ -19,6 +19,7 @@ const Mutation = struct {
     kills: []const []const u8 = &.{},
     filter: []const []const u8 = &.{},
     all: bool = false,
+    exact: bool = false,
     note: ?[]const u8 = null,
 };
 
@@ -34,6 +35,7 @@ const Outcome = struct {
     seconds: u64 = 0,
     failed_tests: []const []const u8 = &.{},
     missing_kill: ?[]const u8 = null,
+    unexpected_kill: ?[]const u8 = null,
     detail: ?[]const u8 = null,
 };
 
@@ -204,6 +206,12 @@ fn runOne(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, 
             outcome.missing_kill = missing;
         }
     }
+    if (outcome.ok and status == .killed and kind == .unit and m.exact) {
+        if (core.unexpectedKill(outcome.failed_tests, m.kills)) |extra| {
+            outcome.ok = false;
+            outcome.unexpected_kill = extra;
+        }
+    }
     if (!outcome.ok and (status == .other_error or status == .compile_error)) outcome.detail = firstErrorLine(output);
     return outcome;
 }
@@ -262,5 +270,6 @@ fn printOutcome(o: Outcome) void {
     std.debug.print("{s} {s}  {s}  expect={s}  status={s} (wanted {s})  {d}s\n", .{ verdict, o.id, o.file, o.expect, o.status, o.expected_status, o.seconds });
     for (o.failed_tests) |name| std.debug.print("       failed: {s}\n", .{name});
     if (o.missing_kill) |name| std.debug.print("       expected to fail but did not: {s}\n", .{name});
+    if (o.unexpected_kill) |name| std.debug.print("       failed but was not expected to: {s}\n", .{name});
     if (o.detail) |detail| std.debug.print("       {s}\n", .{detail});
 }

@@ -76,6 +76,16 @@ pub fn missingKill(failed: []const []const u8, expected: []const []const u8) ?[]
     return null;
 }
 
+pub fn unexpectedKill(failed: []const []const u8, expected: []const []const u8) ?[]const u8 {
+    for (failed) |got| {
+        for (expected) |want| {
+            if (std.mem.eql(u8, got, want)) break;
+            if (got.len > want.len and std.mem.endsWith(u8, got, want) and std.mem.endsWith(u8, got[0 .. got.len - want.len], ".test.")) break;
+        } else return got;
+    }
+    return null;
+}
+
 pub fn classify(kind: Kind, exit_code: u8, output: []const u8) Status {
     if (exit_code == 0) {
         if (kind == .e2e) return .survived;

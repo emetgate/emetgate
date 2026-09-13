@@ -483,7 +483,7 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     };
 }
 
-fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
+pub fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
     const file = try std.Io.Dir.createFileAbsolute(io, path, .{ .exclusive = true });
     errdefer std.Io.Dir.deleteFileAbsolute(io, path) catch {};
     defer file.close(io);
