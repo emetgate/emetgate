@@ -3,4 +3,5 @@ test {
     _ = @import("tests/purple.zig");
     _ = @import("tests/observability.zig");
     _ = @import("tests/readtools.zig");
+    _ = @import("tests/server.zig");
 }
