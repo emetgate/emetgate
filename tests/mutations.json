@@ -626,6 +626,67 @@
       "kills": [
         "purple C7: a typecheck command supplied by the model is refused and never runs"
       ]
+    },
+    {
+      "id": "C1-coverage-ambiguous-match-accepted",
+      "file": "src/engine/coverage.zig",
+      "from": "if (matches == 1) verdict.*",
+      "to": "if (matches >= 1) verdict.*",
+      "kills": [
+        "two V8 functions that both fit one symbol make it unknown"
+      ]
+    },
+    {
+      "id": "C2-coverage-module-wrapper-not-skipped",
+      "file": "src/engine/coverage.zig",
+      "from": "        if (isModuleWrapper(function)) continue;\n",
+      "to": "",
+      "kills": [
+        "real node 24 offsets: called, not called and non-ASCII shifted symbols are all recognised"
+      ]
+    },
+    {
+      "id": "C3-coverage-start-window-check-disabled",
+      "file": "src/engine/coverage.zig",
+      "from": "if (candidate.start < node_start or candidate.start > body_start) continue;",
+      "to": "if (candidate.start < node_start and candidate.start > body_start) continue;",
+      "kills": [
+        "a range that ends with the body but starts inside it does not count for the symbol"
+      ]
+    },
+    {
+      "id": "C4-coverage-surrogate-middle-accepted",
+      "file": "src/engine/coverage.zig",
+      "from": "        if (len == 4) try index.append(gpa, invalid_unit);\n",
+      "to": "",
+      "kills": [
+        "a surrogate pair counts as two UTF-16 units before a later function",
+        "utf16 index maps units to bytes and rejects the middle of a surrogate pair"
+      ]
+    },
+    {
+      "id": "C5-coverage-default-not-called",
+      "file": "src/engine/coverage.zig",
+      "from": "    @memset(out, .unknown);",
+      "to": "    @memset(out, .not_called);",
+      "kills": [
+        "a symbol with no V8 function is unknown, never not_called",
+        "offsets from a transpiled source make the whole file unknown",
+        "shifted offsets that still land inside the source match nothing and stay unknown",
+        "an offset inside a surrogate pair makes the whole file unknown",
+        "a range that ends with the body but starts inside it does not count for the symbol",
+        "two V8 functions that both fit one symbol make it unknown",
+        "a function without ranges makes the whole file unknown"
+      ]
+    },
+    {
+      "id": "C6-coverage-count-ignored",
+      "file": "src/engine/coverage.zig",
+      "from": "if (count > 0) .called else .not_called",
+      "to": ".called",
+      "kills": [
+        "real node 24 offsets: called, not called and non-ASCII shifted symbols are all recognised"
+      ]
     }
   ]
 }
