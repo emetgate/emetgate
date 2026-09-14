@@ -16,6 +16,7 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 const trustedTestCommand = policy_mod.trustedTestCommand;
+const trustedTypecheckCommand = policy_mod.trustedTypecheckCommand;
 const ToolResult = tool_result.ToolResult;
 const requireString = tool_result.requireString;
 const getField = tool_result.getField;
@@ -179,6 +180,8 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
     defer gpa.free(file_abs);
     const test_command = try runner.resolveTestCommand(gpa, io, file_abs, given, policy.allow_repo_config);
     defer gpa.free(test_command);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
+    defer if (typecheck_command) |command| gpa.free(command);
     const expected = try symbol.parseHash(hash_hex);
     const result = try runner.tryMutate(gpa, io, runtime, .{
         .file_abs = file_abs,
@@ -186,6 +189,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .typecheck_command = typecheck_command,
         .trace = &event.trace,
     });
     defer result.deinit(gpa);
@@ -204,6 +208,12 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
             try wire.writeRejected(gpa, w, test_command, report);
+            return true;
+        },
+        .typecheck_failed => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.typecheckReason(report);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
             return true;
         },
     }
@@ -257,7 +267,9 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
 
     const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, given, policy.allow_repo_config);
     defer gpa.free(resolved);
-    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .trace = &event.trace });
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, edits[0].file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
+    defer if (typecheck_command) |command| gpa.free(command);
+    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .trace = &event.trace });
     defer result.deinit(gpa);
 
     var sent: usize = 0;
@@ -283,6 +295,12 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
             try wire.writeRejected(gpa, w, resolved, report);
+            return true;
+        },
+        .typecheck_failed => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.typecheckReason(report);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
             return true;
         },
     }

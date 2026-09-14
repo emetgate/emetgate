@@ -167,11 +167,13 @@ Register the server with an MCP client:
   "mcpServers": {
     "emetgate": {
       "command": "C:/path/to/zig-out/bin/emetgate.exe",
-      "args": ["mcp", "--test", "npm test"]
+      "args": ["mcp", "--typecheck", "npx tsc --noEmit", "--test", "npm test"]
     }
   }
 }
 ```
+
+`--typecheck` is optional. When it is set, the typecheck command runs on the shadow copy before the test command, and a failure rejects the change with reason `typecheck_failed` without running the tests. Both commands can instead come from `test_cmd` and `typecheck_cmd` in `.emetgaterc.json`, which is read only with `--allow-repo-config`. The model can never supply either command.
 
 ## Roadmap
 

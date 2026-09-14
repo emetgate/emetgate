@@ -135,6 +135,14 @@ pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Hash, new
 }
 
 pub fn writeRejected(gpa: Allocator, writer: *Writer, test_cmd: []const u8, report: sandbox.Report) !void {
+    return writeStageRejected(gpa, writer, rejectionReason(report), "test_cmd", test_cmd, report);
+}
+
+pub fn writeTypecheckRejected(gpa: Allocator, writer: *Writer, typecheck_cmd: []const u8, report: sandbox.Report) !void {
+    return writeStageRejected(gpa, writer, typecheckReason(report), "typecheck_cmd", typecheck_cmd, report);
+}
+
+fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, command_field: []const u8, command: []const u8, report: sandbox.Report) !void {
     const from_out = try diagnostics.parse(gpa, report.stdout);
     defer gpa.free(from_out);
     const from_err = try diagnostics.parse(gpa, report.stderr);
@@ -145,9 +153,9 @@ pub fn writeRejected(gpa: Allocator, writer: *Writer, test_cmd: []const u8, repo
     try js.objectField("status");
     try js.write("rejected");
     try js.objectField("reason");
-    try js.write(rejectionReason(report));
-    try js.objectField("test_cmd");
-    try js.write(test_cmd);
+    try js.write(reason);
+    try js.objectField(command_field);
+    try js.write(command);
     try js.objectField("outcome");
     try js.write(outcomeTag(report.outcome));
     try js.objectField("diagnostics");
@@ -179,6 +187,14 @@ fn writeDiagnostic(js: *std.json.Stringify, d: diagnostics.Diagnostic) !void {
 pub fn rejectionReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
         .exited => |code| if (code != 0) "tests_failed" else "leftover_processes",
+        .timed_out => "timed_out",
+        .output_limit => "output_limit",
+    };
+}
+
+pub fn typecheckReason(report: sandbox.Report) []const u8 {
+    return switch (report.outcome) {
+        .exited => |code| if (code != 0) "typecheck_failed" else "leftover_processes",
         .timed_out => "timed_out",
         .output_limit => "output_limit",
     };
@@ -365,6 +381,26 @@ test "rejected payload surfaces parsed diagnostics and escapes control bytes" {
     try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics\":[{\"file\":\"src/x.ts\",\"line\":3,\"col\":5,\"message\":") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\\u001b") != null);
     try testing.expect(std.mem.indexOfScalar(u8, json, 0x1b) == null);
+}
+
+test "a typecheck rejection names its own reason and command, not the test command" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 2 },
+        .duration_ns = 0,
+        .stdout = @constCast("src/x.ts(3,5): error TS2322: bad type\n"),
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    try writeTypecheckRejected(testing.allocator, &buffer.writer, "npx tsc --noEmit", report);
+    const json = buffer.written();
+
+    try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"typecheck_failed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"typecheck_cmd\":\"npx tsc --noEmit\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"test_cmd\"") == null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics\":[{\"file\":\"src/x.ts\",\"line\":3,\"col\":5,") != null);
 }
 
 test "error payload carries the name and exit code on one line" {

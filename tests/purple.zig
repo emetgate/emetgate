@@ -575,6 +575,38 @@ test "purple C7: a test command supplied by the model is refused and never runs"
     }
 }
 
+test "purple C7: a typecheck command supplied by the model is refused and never runs" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+
+    const marker = try std.fmt.allocPrint(testing.allocator, "{s}\\model-typecheck-ran.txt", .{repo.root_abs});
+    defer testing.allocator.free(marker);
+    const marker_json = try jsonEscaped(marker);
+    defer testing.allocator.free(marker_json);
+    const extra = try std.fmt.allocPrint(testing.allocator, ",\"typecheck_cmd\":\"cmd /c echo ran> {s}\"", .{marker_json});
+    defer testing.allocator.free(extra);
+
+    const policies = [_]server.Policy{ .{ .test_command = "cmd /c exit 0" }, .{ .test_command = "cmd /c exit 0", .typecheck_command = "cmd /c exit 0" } };
+    for ([_][]const u8{ "emetgate_try", "emetgate_try_batch" }) |tool| {
+        for (policies) |policy| {
+            const line = try toolCallLine(tool, file, hex[0..], extra);
+            defer testing.allocator.free(line);
+            const response = try respondWith(runtime, line, policy);
+            defer testing.allocator.free(response);
+            try testing.expect(std.mem.indexOf(u8, response, "ModelSuppliedTestPolicy") != null);
+            try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+            try expectPristine(&repo);
+            try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, marker, .{}));
+        }
+    }
+}
+
 test "purple C7: a repo config opt-in supplied by the model is refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
@@ -637,6 +669,7 @@ test "purple C7: tools/list never offers the model a test command or a repo opt-
     defer testing.allocator.free(response);
     try testing.expect(std.mem.indexOf(u8, response, "emetgate_try_batch") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"test_cmd\"") == null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"typecheck_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, response, "\"allow_repo_config\"") == null);
 }
 

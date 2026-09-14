@@ -62,6 +62,18 @@ test "serve policy comes only from the command line emetgate was started with" {
     try testing.expect(server.parsePolicy(&[_][]const u8{"--bogus"}) == null);
 }
 
+test "policy: --typecheck is parsed once, never empty, and absent by default" {
+    try testing.expect(server.parsePolicy(&[_][]const u8{}).?.typecheck_command == null);
+
+    const both = server.parsePolicy(&[_][]const u8{ "--test", "npm test", "--typecheck", "npx tsc --noEmit" }).?;
+    try testing.expectEqualStrings("npm test", both.test_command.?);
+    try testing.expectEqualStrings("npx tsc --noEmit", both.typecheck_command.?);
+
+    try testing.expect(server.parsePolicy(&[_][]const u8{"--typecheck"}) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--typecheck", "" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--typecheck", "a", "--typecheck", "b" }) == null);
+}
+
 test "ping returns an empty result" {
     const response = (try respond(testing.allocator, testing.io, undefined,
         \\{"jsonrpc":"2.0","id":3,"method":"ping"}

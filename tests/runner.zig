@@ -11,6 +11,7 @@ const Edit = runner.Edit;
 const Gate = runner.Gate;
 const chooseGate = runner.chooseGate;
 const resolveTestCommand = runner.resolveTestCommand;
+const resolveTypecheckCommand = runner.resolveTypecheckCommand;
 const tryMutate = runner.tryMutate;
 const tryMutateBatch = runner.tryMutateBatch;
 
@@ -432,6 +433,110 @@ test "an explicit test command overrides an untrusted repo config" {
     const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "exit 0", false);
     defer testing.allocator.free(cmd);
     try testing.expectEqualStrings("exit 0", cmd);
+}
+
+test "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = "exit 0",
+        .typecheck_command = "exit 2",
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .typecheck_failed);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "typecheck: it checks the patched shadow copy and only then runs the test command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const typecheck = "findstr a-b src\\math.ts";
+    const Case = struct { body: []const u8, test_command: []const u8, expected: std.meta.Tag(runner.Result) };
+    const cases = [_]Case{
+        .{ .body = "{\n  return a*b;\n}", .test_command = "exit 0", .expected = .typecheck_failed },
+        .{ .body = "{\n  return a-b;\n}", .test_command = "exit 1", .expected = .rejected },
+        .{ .body = "{\n  return a-b;\n}", .test_command = "exit 0", .expected = .committed },
+    };
+    for (cases) |c| {
+        errdefer std.debug.print("case body={s} test={s}\n", .{ c.body, c.test_command });
+        var repo = try Repo.init();
+        defer repo.deinit();
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file = try repo.filePath(&buf);
+        const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+        const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+            .file_abs = file,
+            .ref_text = "add",
+            .expected_hash = hash,
+            .new_body = c.body,
+            .test_command = c.test_command,
+            .typecheck_command = typecheck,
+        });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(c.expected, std.meta.activeTag(result));
+    }
+}
+
+test "typecheck: a failing typecheck rejects a whole batch and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = "{\n  return a - b;\n}" }};
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
+        .edits = &edits,
+        .test_command = "exit 0",
+        .typecheck_command = "exit 2",
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .typecheck_failed);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "typecheck command: the flag wins, an untrusted repo config is ignored, a trusted one is read" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 0\",\"typecheck_cmd\":\"tsc --noEmit\"}" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+
+    const given = (try resolveTypecheckCommand(testing.allocator, testing.io, file, "npx tsc", false)).?;
+    defer testing.allocator.free(given);
+    try testing.expectEqualStrings("npx tsc", given);
+
+    try testing.expect((try resolveTypecheckCommand(testing.allocator, testing.io, file, "", false)) == null);
+
+    const trusted = (try resolveTypecheckCommand(testing.allocator, testing.io, file, "", true)).?;
+    defer testing.allocator.free(trusted);
+    try testing.expectEqualStrings("tsc --noEmit", trusted);
+
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 0\",\"typecheck_cmd\":\"\"}" });
+    try testing.expect((try resolveTypecheckCommand(testing.allocator, testing.io, file, "", true)) == null);
 }
 
 test "a missing config with no test command is refused" {

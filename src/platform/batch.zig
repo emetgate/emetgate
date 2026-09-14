@@ -24,6 +24,7 @@ pub const Edit = struct {
 pub const BatchOptions = struct {
     edits: []const Edit,
     test_command: []const u8,
+    typecheck_command: ?[]const u8 = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
     trace: ?*Trace = null,
@@ -32,11 +33,12 @@ pub const BatchOptions = struct {
 pub const BatchResult = union(enum) {
     committed: []symbol.Hash,
     rejected: sandbox.Report,
+    typecheck_failed: sandbox.Report,
 
     pub fn deinit(self: BatchResult, gpa: Allocator) void {
         switch (self) {
             .committed => |hashes| gpa.free(hashes),
-            .rejected => |report| report.deinit(gpa),
+            .rejected, .typecheck_failed => |report| report.deinit(gpa),
         }
     }
 };
@@ -97,7 +99,10 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         for (prepared.items) |p| new_total += p.applied.snapshot.source.len;
         t.* = .{ .gate = .full, .new_len = new_total };
     }
-    const report = try runBatchInShadow(gpa, io, root, shadow_abs, prepared.items, options);
+    const report = switch (try runBatchInShadow(gpa, io, root, shadow_abs, prepared.items, options)) {
+        .typecheck => |failed| return .{ .typecheck_failed = failed },
+        .tests => |tests| tests,
+    };
     if (!report.passed()) return .{ .rejected = report };
     defer report.deinit(gpa);
 
@@ -127,7 +132,7 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     return .{ .committed = hashes };
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, prepared: []const Prepared, options: BatchOptions) !sandbox.Report {
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, prepared: []const Prepared, options: BatchOptions) !runner.ShadowRun {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
@@ -144,6 +149,5 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []
     }
     for (prepared) |p| try workspace.writeFile(p.rel, p.applied.snapshot.source);
 
-    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", options.test_command };
-    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = shadow_abs, .limits = options.limits });
+    return runner.runStages(gpa, io, shadow_abs, options.typecheck_command, options.test_command, options.limits);
 }

@@ -20,6 +20,7 @@ pub const assertUnderCwdRepo = repo.assertUnderCwdRepo;
 pub const repoRelative = repo.repoRelative;
 pub const relativeUnder = repo.relativeUnder;
 pub const resolveTestCommand = test_command_mod.resolveTestCommand;
+pub const resolveTypecheckCommand = test_command_mod.resolveTypecheckCommand;
 pub const Gate = gate_mod.Gate;
 pub const chooseGate = gate_mod.chooseGate;
 pub const Edit = batch.Edit;
@@ -36,6 +37,7 @@ pub const Options = struct {
     new_body: []const u8,
     test_command: []const u8,
     test_scoped_cmd: ?[]const u8 = null,
+    typecheck_command: ?[]const u8 = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
     trace: ?*Trace = null,
@@ -55,14 +57,34 @@ pub const Trace = struct {
 pub const Result = union(enum) {
     committed: symbol.Hash,
     rejected: sandbox.Report,
+    typecheck_failed: sandbox.Report,
 
     pub fn deinit(self: Result, gpa: Allocator) void {
         switch (self) {
             .committed => {},
-            .rejected => |report| report.deinit(gpa),
+            .rejected, .typecheck_failed => |report| report.deinit(gpa),
         }
     }
 };
+
+pub const ShadowRun = union(enum) {
+    typecheck: sandbox.Report,
+    tests: sandbox.Report,
+};
+
+pub fn runStages(gpa: Allocator, io: std.Io, cwd: []const u8, typecheck_command: ?[]const u8, test_command: []const u8, limits: sandbox.Limits) !ShadowRun {
+    if (typecheck_command) |typecheck| {
+        const checked = try runCommand(gpa, io, cwd, typecheck, limits);
+        if (!checked.passed()) return .{ .typecheck = checked };
+        checked.deinit(gpa);
+    }
+    return .{ .tests = try runCommand(gpa, io, cwd, test_command, limits) };
+}
+
+fn runCommand(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
+    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", command };
+    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits });
+}
 
 pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Result {
     if (options.test_command.len == 0) return error.NoTestCommand;
@@ -108,7 +130,10 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer if (scoped_owned) |s| gpa.free(s);
     const command = scoped_owned orelse options.test_command;
 
-    const report = try runInShadow(gpa, io, root, shadow_abs, rel, applied.snapshot.source, options, command);
+    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, applied.snapshot.source, options, command)) {
+        .typecheck => |failed| return .{ .typecheck_failed = failed },
+        .tests => |tests| tests,
+    };
 
     if (!report.passed()) return .{ .rejected = report };
     defer report.deinit(gpa);
@@ -119,7 +144,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     return .{ .committed = applied.hash };
 }
 
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options, command: []const u8) !sandbox.Report {
+fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options, command: []const u8) !ShadowRun {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
@@ -136,6 +161,5 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const
     }
     try workspace.writeFile(rel, patched);
 
-    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", command };
-    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = shadow_abs, .limits = options.limits });
+    return runStages(gpa, io, shadow_abs, options.typecheck_command, command, options.limits);
 }

@@ -20,8 +20,8 @@ const usage =
     \\       emetgate symbols <file.ts> [--json]
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
-    \\       emetgate try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--allow-repo-config] [--json]
-    \\       emetgate mcp [--test <command>] [--allow-repo-config]
+    \\       emetgate try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
+    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config]
     \\       emetgate recover
     \\       emetgate lockdown [<claude args>...]
     \\
@@ -139,7 +139,7 @@ const exitCodeFor = wire.exitCode;
 
 const rejected_exit_code: u8 = 10;
 
-const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test" };
+const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test", "--typecheck" };
 
 const TryRequest = struct {
     path: []const u8,
@@ -147,6 +147,7 @@ const TryRequest = struct {
     hash: []const u8,
     body: union(enum) { inline_text: []const u8, file: []const u8 },
     test_command: []const u8,
+    typecheck_command: []const u8,
 
     fn parse(args: []const [:0]const u8) ?TryRequest {
         if (args.len == 0 or args.len % 2 == 0) return null;
@@ -168,6 +169,7 @@ const TryRequest = struct {
             .hash = values[1] orelse return null,
             .body = if (inline_body) |text| .{ .inline_text = text } else .{ .file = body_file.? },
             .test_command = values[4] orelse "",
+            .typecheck_command = values[5] orelse "",
         };
     }
 };
@@ -187,6 +189,8 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
 
     const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, allow_repo_config);
     defer gpa.free(test_command);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, allow_repo_config);
+    defer if (typecheck_command) |command| gpa.free(command);
 
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
@@ -194,6 +198,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .typecheck_command = typecheck_command,
     });
     defer result.deinit(gpa);
 
@@ -202,6 +207,12 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
         .committed => |new_hash| {
             std.debug.print("committed {s}  {s} -> {s}\n", .{ request.symbol, &symbol.formatHash(expected), &symbol.formatHash(new_hash) });
             return 0;
+        },
+        .typecheck_failed => |report| {
+            std.debug.print("rejected: typecheck did not pass ({t})\n", .{report.outcome});
+            if (report.stdout.len != 0) std.debug.print("--- stdout ---\n{s}\n", .{report.stdout});
+            if (report.stderr.len != 0) std.debug.print("--- stderr ---\n{s}\n", .{report.stderr});
+            return rejected_exit_code;
         },
         .rejected => |report| {
             std.debug.print("rejected: tests did not pass ({t})\n", .{report.outcome});
@@ -234,6 +245,8 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
 
     const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, allow_repo_config);
     defer gpa.free(test_command);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, allow_repo_config);
+    defer if (typecheck_command) |command| gpa.free(command);
 
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
@@ -241,6 +254,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .typecheck_command = typecheck_command,
     });
     defer result.deinit(gpa);
 
@@ -251,6 +265,10 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         },
         .rejected => |report| {
             try wire.writeRejected(gpa, out, test_command, report);
+            return rejected_exit_code;
+        },
+        .typecheck_failed => |report| {
+            try wire.writeTypecheckRejected(gpa, out, typecheck_command.?, report);
             return rejected_exit_code;
         },
     }

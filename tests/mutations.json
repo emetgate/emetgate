@@ -606,6 +606,26 @@
         "gate-consistency: the footer shows exactly the gate the runner chose",
         "fail-soft: a broken event log never changes a tool result or what reaches disk"
       ]
+    },
+    {
+      "id": "T1-typecheck-failure-ignored",
+      "file": "src/platform/runner.zig",
+      "from": "        if (!checked.passed()) return .{ .typecheck = checked };\n",
+      "to": "",
+      "kills": [
+        "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched",
+        "typecheck: it checks the patched shadow copy and only then runs the test command",
+        "typecheck: a failing typecheck rejects a whole batch and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "T2-model-supplied-typecheck-cmd-accepted",
+      "file": "src/protocol/policy.zig",
+      "from": " or tool_result.getField(a, \"typecheck_cmd\") != null",
+      "to": "",
+      "kills": [
+        "purple C7: a typecheck command supplied by the model is refused and never runs"
+      ]
     }
   ]
 }
