@@ -188,6 +188,142 @@ test "memory: a held memory lock blocks every operation and the repo lock does n
     defer testing.allocator.free(id);
 }
 
+const Branch = struct {
+    tag: u8,
+    next: usize = 0,
+    active: std.ArrayList([]const u8) = .empty,
+    rows: std.ArrayList(memory.Decision) = .empty,
+
+    fn fork(self: Branch, arena: std.mem.Allocator, tag: u8) !Branch {
+        var child: Branch = .{ .tag = tag };
+        try child.active.appendSlice(arena, self.active.items);
+        return child;
+    }
+
+    fn run(self: *Branch, arena: std.mem.Allocator, random: std.Random, clock: *i64, ops: usize) !void {
+        for (0..ops) |_| {
+            clock.* += 1;
+            const pick = random.uintLessThan(u8, 3);
+            if (self.active.items.len == 0 or pick == 0) {
+                try self.append(arena, clock.*, null);
+                continue;
+            }
+            const prior = self.active.swapRemove(random.uintLessThan(usize, self.active.items.len));
+            if (pick == 1) {
+                try self.append(arena, clock.*, prior);
+            } else {
+                try self.rows.append(arena, .{ .id = prior, .scope = .project, .text = prior, .enforce = false, .status = .superseded, .ts = clock.* });
+            }
+        }
+    }
+
+    fn append(self: *Branch, arena: std.mem.Allocator, ts: i64, supersedes: ?[]const u8) !void {
+        const id = try std.fmt.allocPrint(arena, "m{c}{d}", .{ self.tag, self.next });
+        self.next += 1;
+        try self.rows.append(arena, .{ .id = id, .scope = .project, .text = id, .enforce = false, .status = .active, .supersedes = supersedes, .ts = ts });
+        try self.active.append(arena, id);
+    }
+};
+
+fn renderLines(arena: std.mem.Allocator, rows: []const memory.Decision) ![]const []const u8 {
+    const lines = try arena.alloc([]const u8, rows.len);
+    for (rows, lines) |row, *line| {
+        const body = try std.json.Stringify.valueAlloc(arena, row, .{});
+        line.* = try std.mem.concat(arena, u8, &.{ body, "\n" });
+    }
+    return lines;
+}
+
+fn foldSummary(arena: std.mem.Allocator, lines: []const []const u8) ![]const u8 {
+    const bytes = try std.mem.concat(arena, u8, lines);
+    const folded = try memory.foldRows(arena, try memory.parseLedger(arena, bytes));
+    var out: std.Io.Writer.Allocating = .init(arena);
+    for (folded.active) |d| try out.writer.print("{s} ", .{d.id});
+    try out.writer.writeAll("|");
+    for (folded.conflicts) |c| {
+        try out.writer.print(" {s}>", .{c.prior});
+        for (c.successors) |id| try out.writer.print("{s},", .{id});
+    }
+    return out.written();
+}
+
+fn oracleSummary(arena: std.mem.Allocator, rows: []const memory.Decision) ![]const u8 {
+    var retired: std.StringHashMapUnmanaged(void) = .empty;
+    var successors: std.StringHashMapUnmanaged(std.ArrayList([]const u8)) = .empty;
+    for (rows) |row| {
+        if (row.status == .superseded) {
+            try retired.put(arena, row.id, {});
+        } else if (row.supersedes) |prior| {
+            try retired.put(arena, prior, {});
+            const slot = try successors.getOrPut(arena, prior);
+            if (!slot.found_existing) slot.value_ptr.* = .empty;
+            try slot.value_ptr.append(arena, row.id);
+        }
+    }
+    var out: std.Io.Writer.Allocating = .init(arena);
+    for (rows) |row| {
+        if (row.status == .active and !retired.contains(row.id)) try out.writer.print("{s} ", .{row.id});
+    }
+    try out.writer.writeAll("|");
+    var priors: std.ArrayList([]const u8) = .empty;
+    var it = successors.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.items.len > 1) try priors.append(arena, entry.key_ptr.*);
+    }
+    std.mem.sort([]const u8, priors.items, {}, lessThanString);
+    for (priors.items) |prior| {
+        const ids = successors.get(prior).?.items;
+        std.mem.sort([]const u8, ids, {}, lessThanString);
+        try out.writer.print(" {s}>", .{prior});
+        for (ids) |id| try out.writer.print("{s},", .{id});
+    }
+    return out.written();
+}
+
+fn lessThanString(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+test "memory: fold converges for every merge order, permutation and duplication of branch histories" {
+    var conflicts_seen: usize = 0;
+    var seed: u64 = 0;
+    while (seed < 300) : (seed += 1) {
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var prng = std.Random.DefaultPrng.init(seed);
+        const random = prng.random();
+        var clock: i64 = 0;
+
+        var base: Branch = .{ .tag = 'o' };
+        try base.run(arena, random, &clock, random.uintLessThan(usize, 8));
+        var left = try base.fork(arena, 'a');
+        var right = try base.fork(arena, 'b');
+        try left.run(arena, random, &clock, 1 + random.uintLessThan(usize, 8));
+        try right.run(arena, random, &clock, 1 + random.uintLessThan(usize, 8));
+
+        const left_first = try std.mem.concat(arena, memory.Decision, &.{ base.rows.items, left.rows.items, right.rows.items });
+        const right_first = try std.mem.concat(arena, memory.Decision, &.{ base.rows.items, right.rows.items, left.rows.items });
+        const want = try oracleSummary(arena, left_first);
+        if (std.mem.indexOfScalar(u8, want, '>') != null) conflicts_seen += 1;
+
+        const lines = try renderLines(arena, left_first);
+        try testing.expectEqualStrings(want, try foldSummary(arena, lines));
+        try testing.expectEqualStrings(want, try foldSummary(arena, try renderLines(arena, right_first)));
+
+        for (0..4) |_| {
+            var mixed: std.ArrayList([]const u8) = .empty;
+            try mixed.appendSlice(arena, lines);
+            for (lines) |line| {
+                if (random.boolean()) try mixed.append(arena, line);
+            }
+            random.shuffle([]const u8, mixed.items);
+            try testing.expectEqualStrings(want, try foldSummary(arena, mixed.items));
+        }
+    }
+    try testing.expect(conflicts_seen > 0);
+}
+
 test "memory: recall folds the ledger and never creates state.bin" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var store = try Store.init();

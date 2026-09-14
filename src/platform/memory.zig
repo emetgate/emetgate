@@ -33,14 +33,21 @@ pub const Row = struct {
     line: []const u8,
 };
 
+pub const Conflict = struct {
+    prior: []const u8,
+    successors: []const []const u8,
+};
+
 pub const Folded = struct {
     latest: std.StringHashMapUnmanaged(Decision),
     active: []const Decision,
+    conflicts: []const Conflict,
 };
 
 pub const Recall = struct {
     arena: *std.heap.ArenaAllocator,
     decisions: []const Decision,
+    conflicts: []const Conflict,
 
     pub fn deinit(self: Recall) void {
         const gpa = self.arena.child_allocator;
@@ -144,7 +151,7 @@ pub fn recall(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
     defer lock.release();
 
     const ledger = try loadLedger(arena.allocator(), io, paths);
-    return .{ .arena = arena, .decisions = ledger.folded.active };
+    return .{ .arena = arena, .decisions = ledger.folded.active, .conflicts = ledger.folded.conflicts };
 }
 
 pub fn compact(gpa: Allocator, io: std.Io, root_abs: []const u8) !void {
@@ -157,7 +164,8 @@ pub fn compact(gpa: Allocator, io: std.Io, root_abs: []const u8) !void {
 
     const ledger = try loadLedger(arena, io, paths);
     if (ledger.bytes.len == 0) return;
-    const compacted = try compactedLedger(arena, ledger.rows, ledger.folded);
+    if (ledger.folded.conflicts.len != 0) return error.LedgerConflict;
+    const compacted = try compactedLedger(arena, ledger.folded);
     if (std.mem.eql(u8, compacted, ledger.bytes)) return;
     try disk.replaceByRename(gpa, io, paths.ledger, compacted, symbol.hashOf(ledger.bytes));
 }
@@ -293,54 +301,111 @@ fn validateRow(d: Decision) error{LedgerCorrupt}!void {
 }
 
 pub fn foldRows(arena: Allocator, rows: []const Row) !Folded {
-    var order: std.ArrayList([]const u8) = .empty;
     var latest: std.StringHashMapUnmanaged(Decision) = .empty;
     for (rows) |row| {
         const d = row.decision;
-        switch (d.status) {
-            .active => {
-                if (latest.get(d.id) != null) return error.LedgerCorrupt;
-                if (d.supersedes) |prior_id| {
-                    const prior = latest.getPtr(prior_id) orelse return error.LedgerCorrupt;
-                    if (prior.status != .active) return error.LedgerCorrupt;
-                    prior.status = .superseded;
-                }
-                try order.append(arena, d.id);
-                try latest.put(arena, d.id, d);
-            },
-            .superseded => {
-                if (d.supersedes != null) return error.LedgerCorrupt;
-                const current = latest.getPtr(d.id) orelse return error.LedgerCorrupt;
-                if (current.status != .active) return error.LedgerCorrupt;
-                current.status = .superseded;
-            },
-        }
+        if (d.status != .active) continue;
+        const slot = try latest.getOrPut(arena, d.id);
+        if (slot.found_existing and !sameDecision(slot.value_ptr.*, d)) return error.LedgerCorrupt;
+        slot.value_ptr.* = d;
     }
+
+    var retired: std.StringHashMapUnmanaged(void) = .empty;
+    var successors: std.StringHashMapUnmanaged(std.ArrayList([]const u8)) = .empty;
+    var heads = latest.valueIterator();
+    while (heads.next()) |d| {
+        const prior_id = d.supersedes orelse continue;
+        if (!latest.contains(prior_id)) return error.LedgerCorrupt;
+        try retired.put(arena, prior_id, {});
+        const slot = try successors.getOrPut(arena, prior_id);
+        if (!slot.found_existing) slot.value_ptr.* = .empty;
+        try slot.value_ptr.append(arena, d.id);
+    }
+    try refuseSupersedeCycles(arena, latest);
+
+    for (rows) |row| {
+        const d = row.decision;
+        if (d.status != .superseded) continue;
+        if (d.supersedes != null) return error.LedgerCorrupt;
+        if (!latest.contains(d.id)) return error.LedgerCorrupt;
+        try retired.put(arena, d.id, {});
+    }
+
     var active: std.ArrayList(Decision) = .empty;
-    for (order.items) |id| {
-        const decision = latest.get(id).?;
-        if (decision.status != .active) continue;
-        try active.append(arena, decision);
+    var values = latest.valueIterator();
+    while (values.next()) |d| {
+        if (retired.contains(d.id)) {
+            d.status = .superseded;
+            continue;
+        }
+        try active.append(arena, d.*);
     }
-    return .{ .latest = latest, .active = try active.toOwnedSlice(arena) };
+    std.mem.sort(Decision, active.items, {}, decisionBefore);
+
+    var conflicts: std.ArrayList(Conflict) = .empty;
+    var edges = successors.iterator();
+    while (edges.next()) |edge| {
+        const ids = edge.value_ptr.items;
+        if (ids.len < 2) continue;
+        std.mem.sort([]const u8, ids, {}, idBefore);
+        try conflicts.append(arena, .{ .prior = edge.key_ptr.*, .successors = ids });
+    }
+    std.mem.sort(Conflict, conflicts.items, {}, conflictBefore);
+
+    return .{ .latest = latest, .active = try active.toOwnedSlice(arena), .conflicts = try conflicts.toOwnedSlice(arena) };
+}
+
+fn refuseSupersedeCycles(arena: Allocator, latest: std.StringHashMapUnmanaged(Decision)) !void {
+    var done: std.StringHashMapUnmanaged(void) = .empty;
+    var path: std.StringHashMapUnmanaged(void) = .empty;
+    var starts = latest.keyIterator();
+    while (starts.next()) |start| {
+        path.clearRetainingCapacity();
+        var cursor: ?[]const u8 = start.*;
+        while (cursor) |id| {
+            if (done.contains(id)) break;
+            if ((try path.getOrPut(arena, id)).found_existing) return error.LedgerCorrupt;
+            cursor = latest.get(id).?.supersedes;
+        }
+        var walked = path.keyIterator();
+        while (walked.next()) |id| try done.put(arena, id.*, {});
+    }
+}
+
+fn sameDecision(a: Decision, b: Decision) bool {
+    return std.mem.eql(u8, a.id, b.id) and a.scope == b.scope and std.mem.eql(u8, a.text, b.text) and
+        a.enforce == b.enforce and sameOptional(a.check, b.check) and a.status == b.status and
+        sameOptional(a.supersedes, b.supersedes) and a.ts == b.ts;
+}
+
+fn sameOptional(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+fn idBefore(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+fn decisionBefore(_: void, a: Decision, b: Decision) bool {
+    if (a.ts != b.ts) return a.ts < b.ts;
+    return idBefore({}, a.id, b.id);
+}
+
+fn conflictBefore(_: void, a: Conflict, b: Conflict) bool {
+    return idBefore({}, a.prior, b.prior);
 }
 
 pub fn fold(arena: Allocator, rows: []const Row) ![]const Decision {
     return (try foldRows(arena, rows)).active;
 }
 
-fn compactedLedger(arena: Allocator, rows: []const Row, folded: Folded) ![]u8 {
+fn compactedLedger(arena: Allocator, folded: Folded) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(arena);
-    for (rows) |row| {
-        if (row.decision.status == .superseded) continue;
-        if (folded.latest.get(row.decision.id).?.status != .active) continue;
-        if (row.decision.supersedes == null) {
-            try out.writer.writeAll(row.line);
-        } else {
-            var head = row.decision;
-            head.supersedes = null;
-            try writeDecision(&out.writer, head);
-        }
+    for (folded.active) |decision| {
+        var head = decision;
+        head.supersedes = null;
+        try writeDecision(&out.writer, head);
         try out.writer.writeByte('\n');
     }
     return out.written();

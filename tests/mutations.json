@@ -197,8 +197,8 @@
     {
       "id": "MEM1-recall-returns-retired",
       "file": "src/platform/memory.zig",
-      "from": "        if (decision.status != .active) continue;\n",
-      "to": "",
+      "from": "        if (retired.contains(d.id)) {\n",
+      "to": "        if (false) {\n",
       "kills": [
         "memory: recall returns only active decisions"
       ],
@@ -234,10 +234,10 @@
       "exact": true
     },
     {
-      "id": "MEM5-compact-keeps-retired-drops-active",
+      "id": "MEM5-compact-drops-an-active-decision",
       "file": "src/platform/memory.zig",
-      "from": "if (folded.latest.get(row.decision.id).?.status != .active) continue;",
-      "to": "if (folded.latest.get(row.decision.id).?.status == .active) continue;",
+      "from": "    for (folded.active) |decision| {\n",
+      "to": "    for (folded.active[@min(1, folded.active.len)..]) |decision| {\n",
       "kills": [
         "memory: compact drops retired history and never an active decision"
       ],
@@ -288,8 +288,8 @@
     {
       "id": "MEM9-RT10-dangling-supersedes-skipped",
       "file": "src/platform/memory.zig",
-      "from": "const prior = latest.getPtr(prior_id) orelse return error.LedgerCorrupt;",
-      "to": "const prior = latest.getPtr(prior_id) orelse continue;",
+      "from": "if (!latest.contains(prior_id)) return error.LedgerCorrupt;",
+      "to": "if (!latest.contains(prior_id)) continue;",
       "kills": [
         "memory: RT10 dangling, self and forward supersedes pointers are refused"
       ],
@@ -366,7 +366,7 @@
     {
       "id": "MEM13-supersede-does-not-retire-prior",
       "file": "src/platform/memory.zig",
-      "from": "                    prior.status = .superseded;\n",
+      "from": "        try retired.put(arena, prior_id, {});\n",
       "to": "",
       "kills": [
         "memory: supersede retires the prior decision in the same row"
@@ -379,8 +379,8 @@
     {
       "id": "MEM14-compact-keeps-dangling-supersedes",
       "file": "src/platform/memory.zig",
-      "from": "            head.supersedes = null;\n",
-      "to": "            head.supersedes = row.decision.supersedes;\n",
+      "from": "        head.supersedes = null;\n",
+      "to": "        head.supersedes = decision.supersedes;\n",
       "kills": [
         "memory: compact collapses a supersede chain without leaving a dangling pointer"
       ],
@@ -423,6 +423,123 @@
       "kills": [
         "memory: RT5 corruption before the last row stays fatal and untouched",
         "memory: a corrupt ledger line before the end is refused, not skipped"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM18-RT5-tampered-duplicate-id-accepted",
+      "file": "src/platform/memory.zig",
+      "from": "        if (slot.found_existing and !sameDecision(slot.value_ptr.*, d)) return error.LedgerCorrupt;\n",
+      "to": "",
+      "kills": [
+        "memory: RT5 corruption before the last row stays fatal and untouched"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM19-RT4-identical-duplicate-refused",
+      "file": "src/platform/memory.zig",
+      "from": "if (slot.found_existing and !sameDecision(slot.value_ptr.*, d)) return error.LedgerCorrupt;",
+      "to": "if (slot.found_existing) return error.LedgerCorrupt;",
+      "kills": [
+        "memory: RT4 a merge that repeats rows or retires one decision twice folds once"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM20-RT10-supersede-cycle-check-removed",
+      "file": "src/platform/memory.zig",
+      "from": "    try refuseSupersedeCycles(arena, latest);\n",
+      "to": "",
+      "kills": [
+        "memory: RT10 dangling, self and cyclic supersedes pointers are refused"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM21-dangling-tombstone-skipped",
+      "file": "src/platform/memory.zig",
+      "from": "if (!latest.contains(d.id)) return error.LedgerCorrupt;",
+      "to": "if (!latest.contains(d.id)) continue;",
+      "kills": [
+        "memory: a corrupt ledger line before the end is refused, not skipped"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM22-RT10-tombstone-with-supersedes-accepted",
+      "file": "src/platform/memory.zig",
+      "from": "        if (d.supersedes != null) return error.LedgerCorrupt;\n",
+      "to": "",
+      "kills": [
+        "memory: RT10 dangling, self and cyclic supersedes pointers are refused"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM23-tombstone-does-not-retire",
+      "file": "src/platform/memory.zig",
+      "from": "        try retired.put(arena, d.id, {});\n",
+      "to": "",
+      "kills": [
+        "memory: recall returns only active decisions"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM24-RT4-conflict-detection-removed",
+      "file": "src/platform/memory.zig",
+      "from": "        if (ids.len < 2) continue;\n",
+      "to": "        continue;\n",
+      "kills": [
+        "memory: RT4 two branches superseding one decision keep both successors and report the conflict"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM25-RT4-compact-ignores-conflict",
+      "file": "src/platform/memory.zig",
+      "from": "    if (ledger.folded.conflicts.len != 0) return error.LedgerConflict;\n",
+      "to": "",
+      "kills": [
+        "memory: RT4 compact refuses a ledger with an unresolved conflict and leaves it untouched"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM26-fold-order-depends-on-hash-iteration",
+      "file": "src/platform/memory.zig",
+      "from": "    std.mem.sort(Decision, active.items, {}, decisionBefore);\n",
+      "to": "",
+      "kills": [
+        "memory: fold converges for every merge order, permutation and duplication of branch histories"
       ],
       "filter": [
         "memory: "
