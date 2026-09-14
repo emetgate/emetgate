@@ -3,7 +3,11 @@ import tiktoken
 
 BENCH = os.path.dirname(os.path.abspath(__file__))
 MASTER = os.path.join(BENCH, "master")
-SYN = r"C:\Users\ugur\Desktop\Emetgate\zig-out\bin\emetgate.exe"
+ROOT = os.path.dirname(os.path.dirname(BENCH))
+_exe = "emetgate.exe" if os.name == "nt" else "emetgate"
+SYN = os.environ.get("EMETGATE_BIN") or os.path.join(ROOT, "zig-out", "bin", _exe)
+if not os.path.exists(SYN):
+    raise SystemExit(f"emetgate binary not found at {SYN}; run `zig build` or set EMETGATE_BIN")
 ENC = tiktoken.get_encoding("o200k_base")
 
 def toks(s): return len(ENC.encode(s))

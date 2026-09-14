@@ -139,6 +139,8 @@ Emetgate is early and deliberately narrow.
 
 On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, two of them real files), editing through symbol-level proposals uses a median of **1.80×** fewer tokens than search-and-replace editing, with a range of 1.15× to 3.77×. On the real files the gain is modest, 1.15× to 1.17×. Token savings are a side effect, not the point.
 
+Each scenario counts the tokens both approaches actually spend on one symbol edit: ingest plus emit. Search-and-replace reads the whole file and sends the old and new block; the kernel reads a skeleton plus one symbol body and sends a symbol reference, a content hash and the new body. Search-and-replace is the baseline; a whole-file rewrite is the upper bound (2.88× on the same set). The tokenizer is a GPT-4o-family proxy, so the ratio is the signal, not the absolute count. It is deterministic and offline — build the binary and run `python tests/bench/run4.py` to reproduce every number here.
+
 ## Limits
 
 Some things cannot be made mechanical, and this project does not claim otherwise.
