@@ -196,8 +196,8 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
         try testing.expectEqualStrings(plain_out[i], stripped);
     }
 
-    try expectContains(healthy_out[0], "emetgate ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 0 edits");
-    try expectContains(healthy_out[1], "emetgate ✓ committed · BOUNDED · gate full · sent ");
+    try expectContains(healthy_out[0], "emetgate ✗ rejected · tests_failed · UNBOUNDED · gate full · disk untouched · session 0 edits");
+    try expectContains(healthy_out[1], "emetgate ✓ committed · UNBOUNDED · gate full · sent ");
     try expectContains(healthy_out[1], " / file ");
     try expectContains(healthy_out[1], " chars · session 1 edits");
     try expectContains(healthy_out[2], "emetgate ✗ HashMismatch · disk untouched · session 1 edits");
@@ -215,7 +215,7 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
     try expectContains(events, "\"result\":\"committed\"");
     try expectContains(events, "\"result\":\"HashMismatch\"");
     try expectContains(events, "\"gate\":\"full\"");
-    try expectContains(events, "\"confidence\":\"bounded\"");
+    try expectContains(events, "\"confidence\":\"unbounded\"");
 
     const ignore = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/.gitignore", testing.allocator, .unlimited);
     defer testing.allocator.free(ignore);
@@ -238,20 +238,24 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
     defer runtime.destroy() catch @panic("live snapshots");
     var repo = try Repo.init();
     defer repo.deinit();
-    const file = try repo.under("src\\math.ts");
-    defer testing.allocator.free(file);
+    const exported = try repo.under("src\\math.ts");
+    defer testing.allocator.free(exported);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/private.ts", .data = "function add(a: number, b: number): number {\n  return a + b;\n}\nadd(1, 2);\n" });
+    const private = try repo.under("src\\private.ts");
+    defer testing.allocator.free(private);
 
-    const Case = struct { scoped: ?[]const u8, expected: runner.Gate, body: []const u8, label: []const u8 };
+    const Case = struct { file: []const u8, scoped: ?[]const u8, expected: runner.Gate, body: []const u8, label: []const u8 };
     const cases = [_]Case{
-        .{ .scoped = null, .expected = .full, .body = "{\n  return a - b;\n}", .label = " · gate full" },
-        .{ .scoped = "cmd /c exit 0", .expected = .scoped, .body = "{\n  return a * b;\n}", .label = " · gate scoped" },
+        .{ .file = exported, .scoped = null, .expected = .full, .body = "{\n  return a - b;\n}", .label = " · gate full" },
+        .{ .file = exported, .scoped = "cmd /c exit 0", .expected = .full, .body = "{\n  return a * b;\n}", .label = " · gate full" },
+        .{ .file = private, .scoped = "cmd /c exit 0", .expected = .scoped, .body = "{\n  return a * b;\n}", .label = " · gate scoped" },
     };
     for (cases) |c| {
         var trace: runner.Trace = .{};
         const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
-            .file_abs = file,
+            .file_abs = c.file,
             .ref_text = "add",
-            .expected_hash = try hashOfAdd(runtime, file),
+            .expected_hash = try hashOfAdd(runtime, c.file),
             .new_body = c.body,
             .test_command = "cmd /c exit 0",
             .test_scoped_cmd = c.scoped,

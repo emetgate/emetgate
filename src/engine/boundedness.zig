@@ -14,11 +14,6 @@
 //! (prove good), never a blacklist of known-bad escape patterns — an incomplete
 //! blacklist would silently leak false-BOUNDED, which equals an unverified
 //! breaking change reaching disk.
-//!
-//! Scope note: a body-only mutation keeps the signature byte-identical, so no
-//! type-level cross-file breakage is possible (BOUNDED). Behavioral changes
-//! (return value, throwing) are out of scope here — that is the test command's
-//! job, not this pass's.
 
 const std = @import("std");
 const ts = @import("tree_sitter.zig");
@@ -70,23 +65,21 @@ fn analyzeInner(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_s
     const table = try snapshot.symbols();
     const sym = try table.resolve(ref);
 
-    if (isBodyOnly(sym.*, mutation_span)) {
-        return .{ .mutation_class = .body_only_no_op, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };
-    }
+    const class: MutationClass = if (isBodyOnly(sym.*, mutation_span)) .body_only_no_op else .signature_change;
 
-    if (isExported(sym.*)) return unbounded(.signature_change, .exported_escape);
-    if (hasReexportOf(snapshot, ref.name)) return unbounded(.signature_change, .reexport_ambiguous);
-    if (hasDynamicConstruct(snapshot)) return unbounded(.signature_change, .dynamic_construct);
-    if (hasStringKey(snapshot, ref.name)) return unbounded(.signature_change, .string_key_escape);
+    if (isExported(sym.*)) return unbounded(class, .exported_escape);
+    if (hasReexportOf(snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);
+    if (hasDynamicConstruct(snapshot)) return unbounded(class, .dynamic_construct);
+    if (hasStringKey(snapshot, ref.name)) return unbounded(class, .string_key_escape);
 
-    return enumerateReferences(gpa, snapshot, sym.*, ref.name);
+    return enumerateReferences(gpa, snapshot, sym.*, ref.name, class);
 }
 
 fn isBodyOnly(sym: symbol.Symbol, mutation_span: symbol.Span) bool {
     return mutation_span.start >= sym.body.startByte() and mutation_span.end <= sym.body.endByte();
 }
 
-fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, name: []const u8) !FrameReport {
+fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, name: []const u8, class: MutationClass) !FrameReport {
     var refs: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (refs.items) |r| gpa.free(r);
@@ -104,13 +97,13 @@ fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, 
         if (classifyReference(node)) |escape| {
             for (refs.items) |r| gpa.free(r);
             refs.deinit(gpa);
-            return unbounded(.signature_change, escape);
+            return unbounded(class, escape);
         }
         try refs.append(gpa, try gpa.dupe(u8, snapshot.tree.text(callSite(node))));
     }
 
     return .{
-        .mutation_class = .signature_change,
+        .mutation_class = class,
         .confidence = .bounded,
         .provenance = null,
         .same_file_refs = try refs.toOwnedSlice(gpa),
@@ -415,6 +408,37 @@ test "positive control: a body-only mutation is BODY_ONLY_NO_OP and bounded" {
     defer report.deinit();
     try testing.expectEqual(MutationClass.body_only_no_op, report.mutation_class);
     try testing.expectEqual(Confidence.bounded, report.confidence);
+}
+
+fn expectBodyOnlyUnbounded(src: []const u8, ref_text: []const u8, provenance: Provenance) !void {
+    var case = try Case.init(src);
+    defer case.deinit();
+    const table = try case.snapshot.symbols();
+    const ref = try symbol.Ref.parse(testing.allocator, ref_text);
+    defer ref.deinit(testing.allocator);
+    const sym = try table.resolve(ref);
+    const body_span: symbol.Span = .{ .start = sym.body.startByte(), .end = sym.body.endByte() };
+
+    const report = analyze(testing.allocator, case.snapshot, ref, body_span);
+    defer report.deinit();
+    errdefer std.debug.print("got confidence={t} provenance={?}\n", .{ report.confidence, report.provenance });
+    try testing.expectEqual(MutationClass.body_only_no_op, report.mutation_class);
+    try testing.expectEqual(Confidence.unbounded, report.confidence);
+    try testing.expectEqual(provenance, report.provenance.?);
+}
+
+test "body-only: an exported declaration is UNBOUNDED" {
+    try expectBodyOnlyUnbounded(
+        \\export function process(x: number): number { return x; }
+    , "process", .exported_escape);
+}
+
+test "body-only: a callback escape is UNBOUNDED" {
+    try expectBodyOnlyUnbounded(decl ++ "const out = [1, 2].map(process);", "process", .first_class_escape);
+}
+
+test "body-only: a dynamic construct in the file forces UNBOUNDED" {
+    try expectBodyOnlyUnbounded(decl ++ "const run = eval(\"process\");", "process", .dynamic_construct);
 }
 
 test "reachability: a realistic module-private helper with several call sites stays BOUNDED" {

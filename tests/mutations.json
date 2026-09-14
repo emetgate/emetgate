@@ -592,6 +592,20 @@
       "kills": [
         "harness: a compile error is classified as compile_error, not killed"
       ]
+    },
+    {
+      "id": "B1-body-only-bounded-shortcut-restored",
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (isExported(sym.*)) return unbounded(class, .exported_escape);",
+      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (isExported(sym.*)) return unbounded(class, .exported_escape);",
+      "kills": [
+        "body-only: an exported declaration is UNBOUNDED",
+        "body-only: a callback escape is UNBOUNDED",
+        "body-only: a dynamic construct in the file forces UNBOUNDED",
+        "gate: a body-only change to an exported symbol runs the full command even with a scoped one",
+        "gate-consistency: the footer shows exactly the gate the runner chose",
+        "fail-soft: a broken event log never changes a tool result or what reaches disk"
+      ]
     }
   ]
 }

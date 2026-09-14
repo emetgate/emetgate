@@ -228,7 +228,7 @@ test "gate: only BOUNDED with a scoped command reaches the scoped path" {
     try testing.expectEqual(Gate.full, chooseGate(.unbounded, false));
 }
 
-test "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command" {
+test "gate: a body-only change to an exported symbol runs the full command even with a scoped one" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -247,11 +247,38 @@ test "gate: a BOUNDED mutation runs the scoped command against {file}, not the f
         .test_scoped_cmd = "type {file}",
     });
     defer result.deinit(testing.allocator);
+    try testing.expect(result == .rejected);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.ts", .data = "function add(a: number, b: number): number {\n  return a + b;\n}\nadd(1, 2);\n" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = "exit 1",
+        .test_scoped_cmd = "type {file}",
+    });
+    defer result.deinit(testing.allocator);
     try testing.expect(result == .committed);
 
     const on_disk = try repo.read();
     defer testing.allocator.free(on_disk);
-    try testing.expectEqualStrings("export function add(a: number, b: number): number {\n  return a - b;\n}\n", on_disk);
+    try testing.expectEqualStrings("function add(a: number, b: number): number {\n  return a - b;\n}\nadd(1, 2);\n", on_disk);
 }
 
 test "gate: an empty test command aborts before touching disk" {
