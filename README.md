@@ -5,6 +5,14 @@
   </picture>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/status-early-E040FB?style=flat-square" alt="Status: early">
+  <img src="https://img.shields.io/badge/zig-0.16.0-F7A41D?style=flat-square&logo=zig&logoColor=white" alt="Zig 0.16.0">
+  <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
+  <img src="https://img.shields.io/badge/languages-typescript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="Languages: TypeScript">
+  <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
+</p>
+
 <p align="center"><b>Nothing passes but the truth.</b><br>
 A deterministic verification kernel that sits between a language model and your source tree.</p>
 
