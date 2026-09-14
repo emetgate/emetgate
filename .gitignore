@@ -1,6 +1,8 @@
 .zig-cache/
 zig-out/
 .synapse/
+docs/
+.mcp.json
 tests/bench/master/node_modules/
 tests/bench/work/
 tests/bench/work2/
