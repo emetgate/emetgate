@@ -200,7 +200,13 @@
       "from": "        if (retired.contains(d.id)) {\n",
       "to": "        if (false) {\n",
       "kills": [
-        "memory: recall returns only active decisions"
+        "memory: recall returns only active decisions",
+        "memory: supersede retires the prior decision in the same row",
+        "memory: compact drops retired history and never an active decision",
+        "memory: fold converges for every merge order, permutation and duplication of branch histories",
+        "memory: RT10 a successor row before its prior folds by content, not line order",
+        "memory: RT4 a merge that repeats rows or retires one decision twice folds once",
+        "memory: RT4 two branches superseding one decision keep both successors and report the conflict"
       ],
       "filter": [
         "memory: "
@@ -291,7 +297,7 @@
       "from": "if (!latest.contains(prior_id)) return error.LedgerCorrupt;",
       "to": "if (!latest.contains(prior_id)) continue;",
       "kills": [
-        "memory: RT10 dangling, self and forward supersedes pointers are refused"
+        "memory: RT10 dangling, self and cyclic supersedes pointers are refused"
       ],
       "filter": [
         "memory: "
@@ -369,7 +375,10 @@
       "from": "        try retired.put(arena, prior_id, {});\n",
       "to": "",
       "kills": [
-        "memory: supersede retires the prior decision in the same row"
+        "memory: supersede retires the prior decision in the same row",
+        "memory: fold converges for every merge order, permutation and duplication of branch histories",
+        "memory: RT10 a successor row before its prior folds by content, not line order",
+        "memory: RT4 two branches superseding one decision keep both successors and report the conflict"
       ],
       "filter": [
         "memory: "
@@ -406,7 +415,7 @@
       "id": "MEM16-C2-bad-last-row-not-torn",
       "file": "src/platform/memory.zig",
       "from": "if (!complete or !lineIsRow(arena, bytes[start..end])) {",
-      "to": "if (!complete) {",
+      "to": "if (!complete or !(lineIsRow(arena, bytes[start..end]) or true)) {",
       "kills": [
         "memory: RT5 a torn trailing row is quarantined and truncated, never a silent forget"
       ],
@@ -421,8 +430,10 @@
       "from": "            if (end + 1 < bytes.len) return null;\n",
       "to": "",
       "kills": [
-        "memory: RT5 corruption before the last row stays fatal and untouched",
-        "memory: a corrupt ledger line before the end is refused, not skipped"
+        "memory: a corrupt ledger line before the end is refused, not skipped",
+        "memory: RT3 a ledger row with non-UTF-8 text or check is refused",
+        "memory: RT3 a ledger id with control characters is refused",
+        "memory: RT5 corruption before the last row stays fatal and untouched"
       ],
       "filter": [
         "memory: "
@@ -448,7 +459,9 @@
       "from": "if (slot.found_existing and !sameDecision(slot.value_ptr.*, d)) return error.LedgerCorrupt;",
       "to": "if (slot.found_existing) return error.LedgerCorrupt;",
       "kills": [
-        "memory: RT4 a merge that repeats rows or retires one decision twice folds once"
+        "memory: fold converges for every merge order, permutation and duplication of branch histories",
+        "memory: RT4 a merge that repeats rows or retires one decision twice folds once",
+        "memory: RT4 two branches superseding one decision keep both successors and report the conflict"
       ],
       "filter": [
         "memory: "
@@ -500,7 +513,10 @@
       "from": "        try retired.put(arena, d.id, {});\n",
       "to": "",
       "kills": [
-        "memory: recall returns only active decisions"
+        "memory: recall returns only active decisions",
+        "memory: compact drops retired history and never an active decision",
+        "memory: fold converges for every merge order, permutation and duplication of branch histories",
+        "memory: RT4 a merge that repeats rows or retires one decision twice folds once"
       ],
       "filter": [
         "memory: "
@@ -511,9 +527,11 @@
       "id": "MEM24-RT4-conflict-detection-removed",
       "file": "src/platform/memory.zig",
       "from": "        if (ids.len < 2) continue;\n",
-      "to": "        continue;\n",
+      "to": "        if (ids.len < 2 or true) continue;\n",
       "kills": [
-        "memory: RT4 two branches superseding one decision keep both successors and report the conflict"
+        "memory: fold converges for every merge order, permutation and duplication of branch histories",
+        "memory: RT4 two branches superseding one decision keep both successors and report the conflict",
+        "memory: RT4 compact refuses a ledger with an unresolved conflict and leaves it untouched"
       ],
       "filter": [
         "memory: "
@@ -539,7 +557,9 @@
       "from": "    std.mem.sort(Decision, active.items, {}, decisionBefore);\n",
       "to": "",
       "kills": [
-        "memory: fold converges for every merge order, permutation and duplication of branch histories"
+        "memory: fold converges for every merge order, permutation and duplication of branch histories",
+        "memory: RT10 a successor row before its prior folds by content, not line order",
+        "memory: RT4 two branches superseding one decision keep both successors and report the conflict"
       ],
       "filter": [
         "memory: "

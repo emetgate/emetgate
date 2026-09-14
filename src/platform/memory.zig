@@ -365,7 +365,7 @@ fn refuseSupersedeCycles(arena: Allocator, latest: std.StringHashMapUnmanaged(De
         while (cursor) |id| {
             if (done.contains(id)) break;
             if ((try path.getOrPut(arena, id)).found_existing) return error.LedgerCorrupt;
-            cursor = latest.get(id).?.supersedes;
+            cursor = if (latest.get(id)) |d| d.supersedes else null;
         }
         var walked = path.keyIterator();
         while (walked.next()) |id| try done.put(arena, id.*, {});
