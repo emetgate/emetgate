@@ -27,11 +27,11 @@ const Store = struct {
     }
 
     fn path(name: []const u8) ![]u8 {
-        return std.fmt.allocPrint(testing.allocator, ".synapse/{s}", .{name});
+        return std.fmt.allocPrint(testing.allocator, ".emetgate/{s}", .{name});
     }
 
     fn put(self: *Store, name: []const u8, bytes: []const u8) !void {
-        try self.tmp.dir.createDirPath(testing.io, ".synapse");
+        try self.tmp.dir.createDirPath(testing.io, ".emetgate");
         const p = try path(name);
         defer testing.allocator.free(p);
         try self.tmp.dir.writeFile(testing.io, .{ .sub_path = p, .data = bytes });
@@ -172,8 +172,8 @@ test "memory: a held memory lock blocks every operation and the repo lock does n
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var store = try Store.init();
     defer store.deinit();
-    try store.tmp.dir.createDirPath(testing.io, ".synapse");
-    const lock_path = try std.fmt.allocPrint(testing.allocator, "{s}\\.synapse\\{s}", .{ store.root, memory.lock_name });
+    try store.tmp.dir.createDirPath(testing.io, ".emetgate");
+    const lock_path = try std.fmt.allocPrint(testing.allocator, "{s}\\.emetgate\\{s}", .{ store.root, memory.lock_name });
     defer testing.allocator.free(lock_path);
 
     const held = try shadow.FileLock.acquire(lock_path);

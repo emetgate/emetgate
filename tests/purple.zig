@@ -71,7 +71,7 @@ const Repo = struct {
     }
 
     fn hasShadow(self: *Repo) bool {
-        self.tmp.dir.access(testing.io, "repo/.synapse", .{}) catch return false;
+        self.tmp.dir.access(testing.io, "repo/.emetgate", .{}) catch return false;
         return true;
     }
 };
@@ -160,7 +160,7 @@ test "purple V3: a repo-committed test_cmd is untrusted and refused by default" 
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"echo owned > pwned.txt & exit 0\"}" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"echo owned > pwned.txt & exit 0\"}" });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
@@ -314,7 +314,7 @@ test "purple V6: an MCP read tool cannot escape the project root" {
     defer runtime.destroy() catch @panic("live snapshots");
 
     const response = try respond(runtime,
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"synapse_symbols","arguments":{"file":"C:/Windows/System32/drivers/etc/hosts"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"emetgate_symbols","arguments":{"file":"C:/Windows/System32/drivers/etc/hosts"}}}
     );
     defer testing.allocator.free(response);
 
@@ -326,7 +326,7 @@ const orig_a = "export function a(): number { return 1; }\n";
 const new_a = "export function a(): number { return 2; }\n";
 
 fn writeJournal(tmp: *testing.TmpDir, root: []const u8, tag: []const u8, rel_target: []const u8, base_hash_hex: []const u8) !void {
-    try tmp.dir.createDirPath(testing.io, ".synapse/journal");
+    try tmp.dir.createDirPath(testing.io, ".emetgate/journal");
     const target_abs = try std.fmt.allocPrint(testing.allocator, "{s}\\{s}", .{ root, rel_target });
     defer testing.allocator.free(target_abs);
 
@@ -341,7 +341,7 @@ fn writeJournal(tmp: *testing.TmpDir, root: []const u8, tag: []const u8, rel_tar
     try js.endObject();
 
     var name_buf: [128]u8 = undefined;
-    const name = try std.fmt.bufPrint(&name_buf, ".synapse/journal/{s}.json", .{tag});
+    const name = try std.fmt.bufPrint(&name_buf, ".emetgate/journal/{s}.json", .{tag});
     try tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = buffer.written() });
 }
 
@@ -354,7 +354,7 @@ test "purple recover #7: a journaled backup restores the original (happy path)" 
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-" ++ tag_a ++ ".bak", .data = orig_a });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.emetgate-" ++ tag_a ++ ".bak", .data = orig_a });
     try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
 
     const report = try disk.recover(testing.allocator, testing.io, root);
@@ -372,8 +372,8 @@ test "purple recover #3 (A): a journal target outside the repo is refused" {
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
     // forged journal whose target escapes the repo root entirely
-    try tmp.dir.createDirPath(testing.io, ".synapse/journal");
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".synapse/journal/" ++ tag_a ++ ".json", .data = "{\"target\":\"C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts\",\"base_hash\":\"" ++ "af1349b9f5f9a1a6a0404dea36dcc949" ++ "\"}" });
+    try tmp.dir.createDirPath(testing.io, ".emetgate/journal");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".emetgate/journal/" ++ tag_a ++ ".json", .data = "{\"target\":\"C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts\",\"base_hash\":\"" ++ "af1349b9f5f9a1a6a0404dea36dcc949" ++ "\"}" });
 
     const report = try disk.recover(testing.allocator, testing.io, root);
     try testing.expectEqual(@as(usize, 0), report.restored);
@@ -387,7 +387,7 @@ test "purple recover #4 (C): a backup whose content does not match base_hash is 
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-" ++ tag_a ++ ".bak", .data = "export const STOLEN = 1;\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.emetgate-" ++ tag_a ++ ".bak", .data = "export const STOLEN = 1;\n" });
     // journal claims the original hash, but the .bak content is attacker-controlled
     try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
 
@@ -406,7 +406,7 @@ test "purple recover #1: a zero-byte backup never overwrites the target" {
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-" ++ tag_a ++ ".bak", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.emetgate-" ++ tag_a ++ ".bak", .data = "" });
     try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
 
     const report = try disk.recover(testing.allocator, testing.io, root);
@@ -423,8 +423,8 @@ test "purple recover #5 (B): a corrupt journal fails closed without a panic" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
-    try tmp.dir.createDirPath(testing.io, ".synapse/journal");
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".synapse/journal/" ++ tag_a ++ ".json", .data = "{ this is not json" });
+    try tmp.dir.createDirPath(testing.io, ".emetgate/journal");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".emetgate/journal/" ++ tag_a ++ ".json", .data = "{ this is not json" });
 
     const report = try disk.recover(testing.allocator, testing.io, root);
     try testing.expectEqual(@as(usize, 0), report.restored);
@@ -455,7 +455,7 @@ test "purple recover: a journal with a non-hex tag is refused (tag hardening)" {
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.synapse-notavalidtag.bak", .data = orig_a });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.emetgate-notavalidtag.bak", .data = orig_a });
     try writeJournal(&tmp, root, "notavalidtag", "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
 
     const report = try disk.recover(testing.allocator, testing.io, root);
@@ -476,7 +476,7 @@ test "purple recover: a symlinked backup is refused (reparse guard, privilege-ga
     defer testing.allocator.free(root);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "outside_secret.ts", .data = secret });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
-    tmp.dir.symLink(testing.io, "outside_secret.ts", "a.ts.synapse-" ++ tag_a ++ ".bak", .{}) catch return error.SkipZigTest;
+    tmp.dir.symLink(testing.io, "outside_secret.ts", "a.ts.emetgate-" ++ tag_a ++ ".bak", .{}) catch return error.SkipZigTest;
     try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(secret)));
 
     const report = try disk.recover(testing.allocator, testing.io, root);
@@ -508,10 +508,10 @@ fn jsonEscaped(text: []const u8) ![]u8 {
 fn toolCallLine(tool: []const u8, file: []const u8, hash_hex: []const u8, extra: []const u8) ![]u8 {
     const escaped = try jsonEscaped(file);
     defer testing.allocator.free(escaped);
-    if (std.mem.eql(u8, tool, "synapse_try_batch")) {
-        return std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"synapse_try_batch\",\"arguments\":{{\"edits\":[{{\"file\":\"{s}\",\"symbol\":\"add\",\"hash\":\"{s}\",\"body\":\"{{ return a - b; }}\"}}]{s}}}}}}}", .{ escaped, hash_hex, extra });
+    if (std.mem.eql(u8, tool, "emetgate_try_batch")) {
+        return std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"emetgate_try_batch\",\"arguments\":{{\"edits\":[{{\"file\":\"{s}\",\"symbol\":\"add\",\"hash\":\"{s}\",\"body\":\"{{ return a - b; }}\"}}]{s}}}}}}}", .{ escaped, hash_hex, extra });
     }
-    return std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"synapse_try\",\"arguments\":{{\"file\":\"{s}\",\"symbol\":\"add\",\"hash\":\"{s}\",\"body\":\"{{ return a - b; }}\"{s}}}}}}}", .{ escaped, hash_hex, extra });
+    return std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"emetgate_try\",\"arguments\":{{\"file\":\"{s}\",\"symbol\":\"add\",\"hash\":\"{s}\",\"body\":\"{{ return a - b; }}\"{s}}}}}}}", .{ escaped, hash_hex, extra });
 }
 
 const edited_source = "export function add(a: number, b: number): number { return a - b; }\n";
@@ -526,7 +526,7 @@ test "purple C5: a type-confused argument is invalid params, not an internal err
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
     const response = try respond(runtime,
-        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"synapse_symbols","arguments":{"file":123}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"emetgate_symbols","arguments":{"file":123}}}
     );
     defer testing.allocator.free(response);
     try testing.expect(std.mem.indexOf(u8, response, "\"code\":-32602") != null);
@@ -561,7 +561,7 @@ test "purple C7: a test command supplied by the model is refused and never runs"
     defer testing.allocator.free(extra);
 
     const policies = [_]server.Policy{ .{}, .{ .test_command = "cmd /c exit 1" }, .{ .test_command = "cmd /c exit 0" } };
-    for ([_][]const u8{ "synapse_try", "synapse_try_batch" }) |tool| {
+    for ([_][]const u8{ "emetgate_try", "emetgate_try_batch" }) |tool| {
         for (policies) |policy| {
             const line = try toolCallLine(tool, file, hex[0..], extra);
             defer testing.allocator.free(line);
@@ -579,14 +579,14 @@ test "purple C7: a repo config opt-in supplied by the model is refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"cmd /c exit 0\"}" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"cmd /c exit 0\"}" });
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
     const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
 
-    for ([_][]const u8{ "synapse_try", "synapse_try_batch" }) |tool| {
+    for ([_][]const u8{ "emetgate_try", "emetgate_try_batch" }) |tool| {
         for ([_][]const u8{ ",\"allow_repo_config\":true", ",\"allow_repo_config\":false" }) |extra| {
             const line = try toolCallLine(tool, file, hex[0..], extra);
             defer testing.allocator.free(line);
@@ -607,7 +607,7 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
     const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
-    const line = try toolCallLine("synapse_try", file, hex[0..], "");
+    const line = try toolCallLine("emetgate_try", file, hex[0..], "");
     defer testing.allocator.free(line);
 
     for ([_]server.Policy{ .{}, .{ .allow_repo_config = true } }) |policy| {
@@ -617,7 +617,7 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
         try expectPristine(&repo);
     }
 
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"cmd /c exit 0\"}" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"cmd /c exit 0\"}" });
     const untrusted = try respondWith(runtime, line, .{});
     defer testing.allocator.free(untrusted);
     try testing.expect(std.mem.indexOf(u8, untrusted, "UntrustedRepoConfig") != null);
@@ -635,7 +635,7 @@ test "purple C7: tools/list never offers the model a test command or a repo opt-
         \\{"jsonrpc":"2.0","id":1,"method":"tools/list"}
     );
     defer testing.allocator.free(response);
-    try testing.expect(std.mem.indexOf(u8, response, "synapse_try_batch") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "emetgate_try_batch") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"test_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, response, "\"allow_repo_config\"") == null);
 }
@@ -663,7 +663,7 @@ test "purple C6: an MCP batch frees every resolved path with its real size" {
     try js.objectField("params");
     try js.beginObject();
     try js.objectField("name");
-    try js.write("synapse_try_batch");
+    try js.write("emetgate_try_batch");
     try js.objectField("arguments");
     try js.beginObject();
     try js.objectField("edits");
@@ -691,16 +691,16 @@ test "purple C6: an MCP batch frees every resolved path with its real size" {
     try testing.expectEqualStrings("export function add(a: number, b: number): number {\n  return a - b;\n}\n", on_disk);
 }
 
-test "purple C5: a poisoned .synapserc.json is refused, not executed" {
+test "purple C5: a poisoned .emetgaterc.json is refused, not executed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
 
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{ this is not json" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{ this is not json" });
     try testing.expectError(error.InvalidConfig, runner.resolveTestCommand(testing.allocator, testing.io, file, "", true));
 
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"\"}" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"\"}" });
     try testing.expectError(error.NoTestCommand, runner.resolveTestCommand(testing.allocator, testing.io, file, "", true));
 }

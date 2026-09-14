@@ -1,33 +1,33 @@
 const std = @import("std");
-const synapse = @import("synapse");
+const emetgate = @import("emetgate");
 
-const ts = synapse.tree_sitter;
-const skeleton = synapse.skeleton;
-const symbol = synapse.symbol;
-const cas = synapse.cas;
-const stdio = synapse.stdio;
-const runner = synapse.runner;
-const wire = synapse.wire;
-const server = synapse.server;
-const disk = synapse.disk;
-const shadow = synapse.shadow;
-const lockdown = synapse.lockdown;
-const Runtime = synapse.runtime.Runtime;
-const Snapshot = synapse.loader.Snapshot;
+const ts = emetgate.tree_sitter;
+const skeleton = emetgate.skeleton;
+const symbol = emetgate.symbol;
+const cas = emetgate.cas;
+const stdio = emetgate.stdio;
+const runner = emetgate.runner;
+const wire = emetgate.wire;
+const server = emetgate.server;
+const disk = emetgate.disk;
+const shadow = emetgate.shadow;
+const lockdown = emetgate.lockdown;
+const Runtime = emetgate.runtime.Runtime;
+const Snapshot = emetgate.loader.Snapshot;
 
 const usage =
-    \\usage: synapse skeleton <file.ts>
-    \\       synapse symbols <file.ts> [--json]
-    \\       synapse stats <file.ts>...
-    \\       synapse mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
-    \\       synapse try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--allow-repo-config] [--json]
-    \\       synapse mcp [--test <command>] [--allow-repo-config]
-    \\       synapse recover
-    \\       synapse lockdown [<claude args>...]
+    \\usage: emetgate skeleton <file.ts>
+    \\       emetgate symbols <file.ts> [--json]
+    \\       emetgate stats <file.ts>...
+    \\       emetgate mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
+    \\       emetgate try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--allow-repo-config] [--json]
+    \\       emetgate mcp [--test <command>] [--allow-repo-config]
+    \\       emetgate recover
+    \\       emetgate lockdown [<claude args>...]
     \\
     \\lockdown starts claude with only ToolSearch and the .mcp.json servers
     \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config).
-    \\The lock is per launch: a claude started without synapse lockdown is unlocked.
+    \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
 ;
 

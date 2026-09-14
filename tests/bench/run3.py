@@ -3,7 +3,7 @@ import tiktoken
 
 BENCH = os.path.dirname(os.path.abspath(__file__))
 MASTER = os.path.join(BENCH, "master")
-SYN = r"C:\Users\ugur\Desktop\Synapse\zig-out\bin\synapse.exe"
+SYN = r"C:\Users\ugur\Desktop\Emetgate\zig-out\bin\emetgate.exe"
 ENC = tiktoken.get_encoding("o200k_base")
 
 def toks(s): return len(ENC.encode(s))
@@ -36,7 +36,7 @@ def body_of(content, fn):
 
 def main():
     print("\n=== INGEST TOKENS: read a file to edit ONE symbol (tiktoken o200k_base) ===")
-    print(f"{'file':<12} {'fns':>4} {'target':<8} {'cat whole':>10} {'skeleton':>9} {'+1 body':>8} {'Synapse':>8} {'cat vs Synapse':>15}")
+    print(f"{'file':<12} {'fns':>4} {'target':<8} {'cat whole':>10} {'skeleton':>9} {'+1 body':>8} {'Emetgate':>8} {'cat vs Emetgate':>15}")
     for path, fn in CASES:
         content = read(path)
         n = content.count("export function")

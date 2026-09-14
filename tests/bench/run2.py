@@ -4,7 +4,7 @@ import tiktoken
 BENCH = os.path.dirname(os.path.abspath(__file__))
 MASTER = os.path.join(BENCH, "master")
 WORK = os.path.join(BENCH, "work2")
-SYN = r"C:\Users\ugur\Desktop\Synapse\zig-out\bin\synapse.exe"
+SYN = r"C:\Users\ugur\Desktop\Emetgate\zig-out\bin\emetgate.exe"
 ENC = tiktoken.get_encoding("o200k_base")
 TEST_CMD = "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json && node --test --experimental-strip-types engine.test.ts"
 FILE = "engine.ts"
@@ -46,7 +46,7 @@ def prep(dst, git):
     shutil.copytree(MASTER, dst, ignore=shutil.ignore_patterns("node_modules", ".git", "work", "work2"))
     subprocess.run(["cmd", "/c", "mklink", "/J", os.path.join(dst, "node_modules"), os.path.join(MASTER, "node_modules")], capture_output=True)
     if git:
-        with open(os.path.join(dst, ".synapserc.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(dst, ".emetgaterc.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps({"test_cmd": TEST_CMD}))
         for a in (["init","-q"],["config","user.email","t@t"],["config","user.name","t"],["add","."],["commit","-q","-m","i"]):
             subprocess.run(["git"]+a, cwd=dst, capture_output=True)
@@ -65,7 +65,7 @@ def emit_full(content):   return toks(FILE + " " + content)
 
 def single(fn):
     base = master_engine()
-    # synapse
+    # emetgate
     d = os.path.join(WORK, "syn_"+fn); prep(d, git=True)
     h = syn_hash(d, fn)
     r = subprocess.run([SYN,"try",FILE,"--symbol",fn,"--hash",h,"--body",NEW_BODY[fn]], cwd=d, capture_output=True, text=True)
@@ -82,7 +82,7 @@ def single(fn):
 
 def multi(seq):
     base = master_engine()
-    # synapse: sequential commits in one repo
+    # emetgate: sequential commits in one repo
     d = os.path.join(WORK, "syn_multi"); prep(d, git=True)
     hashes = {fn: syn_hash(d, fn) for fn in seq}
     syn_emit = 0
@@ -110,8 +110,8 @@ def body_lines(fn): return NEW_BODY[fn].count("\n") + 1
 def main():
     os.makedirs(WORK, exist_ok=True)
     base = master_engine()
-    print("\n=== ROUND 2: SIZE SWEEP (single valid refactor, emit tokens, Synapse test_cmd from config) ===")
-    print(f"{'function':<10} {'orig lines':>10} {'Synapse':>8} {'Srch/Repl':>10} {'Full-File':>10} {'S vs SR':>8} {'S vs Full':>10} {'ok'}")
+    print("\n=== ROUND 2: SIZE SWEEP (single valid refactor, emit tokens, Emetgate test_cmd from config) ===")
+    print(f"{'function':<10} {'orig lines':>10} {'Emetgate':>8} {'Srch/Repl':>10} {'Full-File':>10} {'S vs SR':>8} {'S vs Full':>10} {'ok'}")
     for fn in ["abs1", "grade", "render"]:
         n = fn_text(base, fn).count("\n") + 1
         r = single(fn)
@@ -121,7 +121,7 @@ def main():
 
     print("\n=== ROUND 2: MULTI-EDIT (3 sequential edits to one file) ===")
     m = multi(["abs1", "grade", "render"])
-    print(f"{'':<10} {'':>10} {'Synapse':>8} {'Srch/Repl':>10} {'Full-File':>10} {'S vs SR':>8} {'S vs Full':>10} {'ok'}")
+    print(f"{'':<10} {'':>10} {'Emetgate':>8} {'Srch/Repl':>10} {'Full-File':>10} {'S vs SR':>8} {'S vs Full':>10} {'ok'}")
     ok = "OK" if (m["syn_ok"] and m["te_ok"]) else "FAIL"
     print(f"{'3 edits':<10} {'':>10} {m['syn_emit']:>8} {m['sr_emit']:>10} {m['full_emit']:>10} "
           f"{m['sr_emit']/m['syn_emit']:>7.2f}x {m['full_emit']/m['syn_emit']:>9.2f}x  {ok}")

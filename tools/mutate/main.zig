@@ -136,7 +136,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn usage() u8 {
-    std.debug.print("usage: synapse-mutate [--e2e] [--full] [--list] [--timeout-s=N] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--timeout-s=N] [id...]\n", .{});
     return 2;
 }
 

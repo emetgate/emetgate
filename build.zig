@@ -19,14 +19,14 @@ pub fn build(b: *std.Build) void {
     c_api.addIncludePath(b.path(ts_core_root ++ "/include"));
 
     const c_module = c_api.createModule();
-    const synapse = b.addModule("synapse", .{
+    const emetgate = b.addModule("emetgate", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .imports = &.{.{ .name = "c", .module = c_module }},
     });
-    synapse.linkLibrary(tree_sitter);
+    emetgate.linkLibrary(tree_sitter);
 
     const probe = b.addExecutable(.{
         .name = "sandbox-probe",
@@ -52,19 +52,19 @@ pub fn build(b: *std.Build) void {
     test_module.linkLibrary(tree_sitter);
 
     const exe = b.addExecutable(.{
-        .name = "synapse",
+        .name = "emetgate",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "synapse", .module = synapse }},
+            .imports = &.{.{ .name = "emetgate", .module = emetgate }},
         }),
     });
     b.installArtifact(exe);
 
     const run_exe = b.addRunArtifact(exe);
     if (b.args) |args| run_exe.addArgs(args);
-    b.step("run", "Run the synapse CLI").dependOn(&run_exe.step);
+    b.step("run", "Run the emetgate CLI").dependOn(&run_exe.step);
 
     const test_filters = b.option([]const []const u8, "test-filter", "Only run tests whose name contains one of these strings; skips the CLI e2e cases") orelse &.{};
     const tests = b.addTest(.{ .root_module = test_module, .filters = test_filters });
@@ -78,7 +78,7 @@ pub fn build(b: *std.Build) void {
     if (test_filters.len == 0) test_step.dependOn(e2e_step);
 
     const mutate_tool = b.addExecutable(.{
-        .name = "synapse-mutate",
+        .name = "emetgate-mutate",
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/mutate/main.zig"),
             .target = target,
@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const install_mutate = b.addInstallArtifact(mutate_tool, .{});
-    b.step("mutate-tool", "Build the mutation harness into zig-out/bin/synapse-mutate").dependOn(&install_mutate.step);
+    b.step("mutate-tool", "Build the mutation harness into zig-out/bin/emetgate-mutate").dependOn(&install_mutate.step);
 
     const lockdown_check = b.addExecutable(.{
         .name = "lockdown-check",
@@ -102,7 +102,7 @@ pub fn build(b: *std.Build) void {
     run_lockdown.addFileArg(exe.getEmittedBin());
     if (b.args) |args| run_lockdown.addArgs(args);
     run_lockdown.step.dependOn(b.getInstallStep());
-    b.step("e2e-lockdown", "Launch a real claude through synapse lockdown and check its tool list (spends tokens)").dependOn(&run_lockdown.step);
+    b.step("e2e-lockdown", "Launch a real claude through emetgate lockdown and check its tool list (spends tokens)").dependOn(&run_lockdown.step);
 }
 
 const e2e_fixture = "tests/fixtures/functions.ts";

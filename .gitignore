@@ -1,6 +1,6 @@
 .zig-cache/
 zig-out/
-.synapse/
+.emetgate/
 docs/
 .mcp.json
 tests/bench/master/node_modules/

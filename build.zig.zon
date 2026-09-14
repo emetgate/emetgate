@@ -1,7 +1,7 @@
 .{
-    .name = .synapse,
+    .name = .emetgate,
     .version = "0.1.0",
-    .fingerprint = 0xa462c739803a53e5,
+    .fingerprint = 0xda4cc3fd9cf936a2,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{

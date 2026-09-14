@@ -104,15 +104,15 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 
 | Tool | Purpose |
 |---|---|
-| `synapse_symbols` | Symbols in a file, with references, positions and content hashes |
-| `synapse_skeleton` | Signatures and structure without bodies |
-| `synapse_read_symbol` | The source of one symbol |
-| `synapse_mutate` | Verify a proposed body structurally and return the result without writing |
-| `synapse_try` | Verify, gate and commit a proposed body |
-| `synapse_try_batch` | Several proposals as one unit |
-| `synapse_read_file`, `synapse_list`, `synapse_search` | Reads confined to the repository |
+| `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
+| `emetgate_skeleton` | Signatures and structure without bodies |
+| `emetgate_read_symbol` | The source of one symbol |
+| `emetgate_mutate` | Verify a proposed body structurally and return the result without writing |
+| `emetgate_try` | Verify, gate and commit a proposed body |
+| `emetgate_try_batch` | Several proposals as one unit |
+| `emetgate_read_file`, `emetgate_list`, `emetgate_search` | Reads confined to the repository |
 
-`synapse lockdown` starts Claude Code with only these tools available, so the model has no path to the disk other than the gate.
+`emetgate lockdown` starts Claude Code with only these tools available, so the model has no path to the disk other than the gate.
 
 ## How the kernel itself is verified
 
@@ -153,7 +153,7 @@ Some things cannot be made mechanical, and this project does not claim otherwise
 Requires Zig 0.16.0. tree-sitter and the TypeScript grammar are vendored.
 
 ```sh
-zig build                 # zig-out/bin/synapse
+zig build                 # zig-out/bin/emetgate
 zig build test            # unit and end-to-end tests
 zig build mutate-tool     # mutation harness
 ```
@@ -164,14 +164,12 @@ Register the server with an MCP client:
 {
   "mcpServers": {
     "emetgate": {
-      "command": "C:/path/to/zig-out/bin/synapse.exe",
+      "command": "C:/path/to/zig-out/bin/emetgate.exe",
       "args": ["mcp", "--test", "npm test"]
     }
   }
 }
 ```
-
-The binary is still named `synapse`, the project's working name, and will be renamed.
 
 ## Roadmap
 

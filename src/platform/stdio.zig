@@ -53,12 +53,12 @@ test "overlapped pipes are detected so large writes wait instead of hitting unre
     if (builtin.os.tag != .windows) return error.SkipZigTest;
 
     const overlapped = try test_pipe.create(
-        std.unicode.utf8ToUtf16LeStringLiteral("\\\\.\\pipe\\synapse-stdio-overlapped"),
+        std.unicode.utf8ToUtf16LeStringLiteral("\\\\.\\pipe\\emetgate-stdio-overlapped"),
         test_pipe.access_outbound | test_pipe.flag_overlapped,
     );
     defer _ = test_pipe.CloseHandle(overlapped);
     const synchronous = try test_pipe.create(
-        std.unicode.utf8ToUtf16LeStringLiteral("\\\\.\\pipe\\synapse-stdio-synchronous"),
+        std.unicode.utf8ToUtf16LeStringLiteral("\\\\.\\pipe\\emetgate-stdio-synchronous"),
         test_pipe.access_outbound,
     );
     defer _ = test_pipe.CloseHandle(synchronous);

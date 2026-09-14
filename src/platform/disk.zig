@@ -97,7 +97,7 @@ pub const Leftover = struct {
     }
 };
 
-const sidecar_suffix_max = ".synapse-0123456789abcdef.tmp".len;
+const sidecar_suffix_max = ".emetgate-0123456789abcdef.tmp".len;
 
 pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
     return replaceInternal(gpa, io, path_abs, data, expected_base, null, null, null);
@@ -192,9 +192,9 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
     const tag = std.fmt.bytesToHex(random, .lower);
     const path = try gpa.dupe(u8, path_abs);
     errdefer gpa.free(path);
-    const temp = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.tmp", .{ path_abs, &tag });
+    const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path_abs, &tag });
     errdefer gpa.free(temp);
-    const backup = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.bak", .{ path_abs, &tag });
+    const backup = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ path_abs, &tag });
     errdefer gpa.free(backup);
 
     const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, path_abs, expected_base) else null;
@@ -289,17 +289,17 @@ const SidecarKind = enum { tmp, bak };
 fn sidecarKind(name: []const u8) ?SidecarKind {
     if (name.len < sidecar_suffix_max) return null;
     const suffix = name[name.len - sidecar_suffix_max ..];
-    if (!std.mem.startsWith(u8, suffix, ".synapse-")) return null;
-    for (suffix[9..25]) |c| if (!std.ascii.isHex(c)) return null;
-    if (suffix[25] != '.') return null;
-    const ext = suffix[26..29];
+    if (!std.mem.startsWith(u8, suffix, ".emetgate-")) return null;
+    for (suffix[10..26]) |c| if (!std.ascii.isHex(c)) return null;
+    if (suffix[26] != '.') return null;
+    const ext = suffix[27..30];
     if (std.mem.eql(u8, ext, "tmp")) return .tmp;
     if (std.mem.eql(u8, ext, "bak")) return .bak;
     return null;
 }
 
 fn skipDir(name: []const u8) bool {
-    return std.mem.eql(u8, name, ".git") or std.mem.eql(u8, name, "node_modules") or std.mem.eql(u8, name, ".synapse");
+    return std.mem.eql(u8, name, ".git") or std.mem.eql(u8, name, "node_modules") or std.mem.eql(u8, name, ".emetgate");
 }
 
 fn isValidTag(tag: []const u8) bool {
@@ -412,7 +412,7 @@ fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_p
         report.failed += 1;
         return;
     }
-    const bak = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.bak", .{ target, tag });
+    const bak = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ target, tag });
     defer gpa.free(bak);
 
     restoreVerified(gpa, io, bak, target, base_hash) catch |err| switch (err) {
@@ -489,7 +489,7 @@ pub fn replaceByRename(gpa: Allocator, io: std.Io, path_abs: []const u8, data: [
     var random: [8]u8 = undefined;
     io.random(&random);
     const tag = std.fmt.bytesToHex(random, .lower);
-    const temp = try std.fmt.allocPrint(gpa, "{s}.synapse-{s}.tmp", .{ path_abs, &tag });
+    const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path_abs, &tag });
     defer gpa.free(temp);
     try writeDurably(io, temp, data);
     var renamed = false;
@@ -832,11 +832,11 @@ const recover_tag = "0123456789abcdef";
 
 fn seedRecover(root_abs: []const u8, tmp: *testing.TmpDir, target_content: []const u8, bak_content: []const u8) !void {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts", .data = target_content });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts.synapse-" ++ recover_tag ++ ".bak", .data = bak_content });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts.emetgate-" ++ recover_tag ++ ".bak", .data = bak_content });
     var target_buf: [std.fs.max_path_bytes]u8 = undefined;
     const target_abs = try std.fmt.bufPrint(&target_buf, "{s}\\f.ts", .{root_abs});
     var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.synapse\\journal", .{root_abs});
+    const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.emetgate\\journal", .{root_abs});
     const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, target_abs, symbol.hashOf(original));
     testing.allocator.free(jp);
 }
@@ -868,7 +868,7 @@ test "recover never deletes temps through a junction (F, defense in depth)" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var outside = testing.tmpDir(.{ .iterate = true });
     defer outside.cleanup();
-    try outside.dir.writeFile(testing.io, .{ .sub_path = "x.synapse-" ++ recover_tag ++ ".tmp", .data = "outside temp\n" });
+    try outside.dir.writeFile(testing.io, .{ .sub_path = "x.emetgate-" ++ recover_tag ++ ".tmp", .data = "outside temp\n" });
     const outside_abs = try outside.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(outside_abs);
 
@@ -881,7 +881,7 @@ test "recover never deletes temps through a junction (F, defense in depth)" {
     try shadow.createJunction(testing.io, link_abs, outside_abs);
 
     _ = try recover(testing.allocator, testing.io, root);
-    try outside.dir.access(testing.io, "x.synapse-" ++ recover_tag ++ ".tmp", .{});
+    try outside.dir.access(testing.io, "x.emetgate-" ++ recover_tag ++ ".tmp", .{});
 }
 
 test "recover refuses a journal target that escapes the repo via .. (A hardening)" {
@@ -894,11 +894,11 @@ test "recover refuses a journal target that escapes the repo via .. (A hardening
 
     const mal = "export const PWNED = 1;\n";
     // the .bak lives in the repo's PARENT, named for the escaping target
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "pwned.ts.synapse-" ++ recover_tag ++ ".bak", .data = mal });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "pwned.ts.emetgate-" ++ recover_tag ++ ".bak", .data = mal });
     var target_buf: [std.fs.max_path_bytes]u8 = undefined;
     const target = try std.fmt.bufPrint(&target_buf, "{s}\\..\\pwned.ts", .{root});
     var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.synapse\\journal", .{root});
+    const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.emetgate\\journal", .{root});
     const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, target, symbol.hashOf(mal));
     testing.allocator.free(jp);
 

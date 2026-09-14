@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 
 pub const ledger_name = "ledger.ndjson";
 pub const lock_name = "memory.lock";
-pub const sidecar_prefix = ledger_name ++ ".synapse-";
+pub const sidecar_prefix = ledger_name ++ ".emetgate-";
 pub const torn_prefix = ledger_name ++ ".torn-";
 pub const max_ledger_bytes = 64 * 1024 * 1024;
 pub const max_text_bytes = 16 * 1024;

@@ -25,15 +25,15 @@ const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
-    if (std.mem.eql(u8, name, "synapse_symbols")) return callSymbols(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "synapse_skeleton")) return callSkeleton(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "synapse_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "synapse_mutate")) return callMutate(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "synapse_try")) return callTry(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "synapse_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "synapse_read_file")) return read_tools.callReadFile(gpa, io, args, event);
-    if (std.mem.eql(u8, name, "synapse_list")) return read_tools.callList(gpa, io, args, event);
-    if (std.mem.eql(u8, name, "synapse_search")) return read_tools.callSearch(gpa, io, args, event);
+    if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event);
+    if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event);
+    if (std.mem.eql(u8, name, "emetgate_search")) return read_tools.callSearch(gpa, io, args, event);
     return error.UnknownTool;
 }
 
@@ -83,7 +83,7 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u
     defer snapshot.destroy();
     const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.tree);
     defer gpa.free(text);
-    event.chars_synapse = text.len;
+    event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
     try wire.writeSkeleton(w, file, text);
 }
@@ -112,7 +112,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const
     const found = try table.resolve(ref);
     const body = snapshot.tree.text(found.body);
     event.hash = found.hash;
-    event.chars_synapse = body.len;
+    event.chars_emetgate = body.len;
     event.chars_fullfile = snapshot.source.len;
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
 }
@@ -147,7 +147,7 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8,
     const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
     defer applied.snapshot.destroy();
     event.hash = applied.hash;
-    event.chars_synapse = sym.len + hash_hex.len + body.len;
+    event.chars_emetgate = sym.len + hash_hex.len + body.len;
     event.chars_fullfile = applied.snapshot.source.len;
     event.chars_sr = old_body_len + body.len;
     try wire.writeMutated(w, sym, expected, applied.hash, applied.snapshot.source);
@@ -189,7 +189,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .trace = &event.trace,
     });
     defer result.deinit(gpa);
-    event.chars_synapse = sym.len + hash_hex.len + body.len;
+    event.chars_emetgate = sym.len + hash_hex.len + body.len;
     event.chars_fullfile = event.trace.new_len;
     event.chars_sr = if (event.trace.old_body_len) |old| old + body.len else null;
     switch (result) {
@@ -262,7 +262,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
 
     var sent: usize = 0;
     for (items) |item| sent += getString(item, "symbol").?.len + getString(item, "hash").?.len + getString(item, "body").?.len;
-    event.chars_synapse = sent;
+    event.chars_emetgate = sent;
     event.chars_fullfile = event.trace.new_len;
     switch (result) {
         .committed => |hashes| {

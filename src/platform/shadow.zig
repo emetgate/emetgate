@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
 
-pub const workspace_dir = ".synapse";
+pub const workspace_dir = ".emetgate";
 
 const max_git_listing = 64 * 1024 * 1024;
 
@@ -414,7 +414,7 @@ const Project = struct {
     }
 
     fn shadowPath(self: *Project) ![]const u8 {
-        return std.fmt.bufPrint(&self.shadow_buf, "{s}\\.synapse\\shadow", .{self.root_abs});
+        return std.fmt.bufPrint(&self.shadow_buf, "{s}\\.emetgate\\shadow", .{self.root_abs});
     }
 
     fn options(self: *Project) !Shadow.Options {
@@ -516,34 +516,34 @@ test "re-preparing replaces a stale shadow completely" {
     try expectFileContent(second.dir, "node_modules/pkg/index.js", "module.exports = 42;\n");
 }
 
-test "shadow paths outside <root>\\.synapse\\ are refused before anything is deleted" {
+test "shadow paths outside <root>\\.emetgate\\ are refused before anything is deleted" {
     const root = "C:\\work\\project";
     const refused = [_][]const u8{
         "C:\\work\\project",
         "C:\\work\\project\\",
         "C:\\work\\project\\src",
-        "C:\\work\\project\\.synapse",
-        "C:\\work\\project\\.synapse\\",
-        "C:\\work\\project\\.synapsex\\shadow",
-        "C:\\work\\project\\.synapse\\..\\src",
-        "C:\\work\\other\\.synapse\\shadow",
-        "C:\\work\\projectX\\.synapse\\shadow",
+        "C:\\work\\project\\.emetgate",
+        "C:\\work\\project\\.emetgate\\",
+        "C:\\work\\project\\.emetgatex\\shadow",
+        "C:\\work\\project\\.emetgate\\..\\src",
+        "C:\\work\\other\\.emetgate\\shadow",
+        "C:\\work\\projectX\\.emetgate\\shadow",
         "D:\\",
-        "C:\\work\\project\\.synapse\\.",
-        "C:\\work\\project\\.synapse\\ .",
-        "C:\\work\\project\\.synapse\\x::$INDEX_ALLOCATION",
-        "C:\\work\\project\\.synapse\\C:\\x",
-        "C:\\work\\project\\.synapse\\shadow.",
+        "C:\\work\\project\\.emetgate\\.",
+        "C:\\work\\project\\.emetgate\\ .",
+        "C:\\work\\project\\.emetgate\\x::$INDEX_ALLOCATION",
+        "C:\\work\\project\\.emetgate\\C:\\x",
+        "C:\\work\\project\\.emetgate\\shadow.",
     };
     for (refused) |candidate| {
         errdefer std.debug.print("accepted shadow path: {s}\n", .{candidate});
         try testing.expectError(error.ShadowOutsideWorkspace, ensureInsideWorkspace(root, candidate));
     }
-    try ensureInsideWorkspace(root, "C:\\work\\project\\.synapse\\shadow");
-    try ensureInsideWorkspace(root, "C:\\work\\project/.synapse/shadow/run-1");
+    try ensureInsideWorkspace(root, "C:\\work\\project\\.emetgate\\shadow");
+    try ensureInsideWorkspace(root, "C:\\work\\project/.emetgate/shadow/run-1");
 }
 
-test "a .synapse that is a junction is refused and the directory it points to is untouched" {
+test "a .emetgate that is a junction is refused and the directory it points to is untouched" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var project = try Project.init();
     defer project.deinit();

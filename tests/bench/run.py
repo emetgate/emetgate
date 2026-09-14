@@ -4,7 +4,7 @@ import tiktoken
 BENCH = os.path.dirname(os.path.abspath(__file__))
 MASTER = os.path.join(BENCH, "master")
 WORK = os.path.join(BENCH, "work")
-SYN = r"C:\Users\ugur\Desktop\Synapse\zig-out\bin\synapse.exe"
+SYN = r"C:\Users\ugur\Desktop\Emetgate\zig-out\bin\emetgate.exe"
 ENC = tiktoken.get_encoding("o200k_base")
 TEST_CMD = "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json && node --test --experimental-strip-types tests.ts"
 
@@ -62,7 +62,7 @@ def fn_text(content, fn):
     j = content.find("}", i)
     return content[i:j+1]
 
-def synapse_hash(cwd, fn):
+def emetgate_hash(cwd, fn):
     r = subprocess.run([SYN, "symbols", "calc.ts", "--json"], cwd=cwd, capture_output=True, text=True)
     data = json.loads(r.stdout.strip().splitlines()[-1])
     for s in data["symbols"]:
@@ -75,11 +75,11 @@ def neighbors_intact(before, after, target):
         if fn_text(before, fn) != fn_text(after, fn): return False
     return True
 
-def arm_synapse(t):
+def arm_emetgate(t):
     d = os.path.join(WORK, f"syn{t['id']}")
     prep(d, git=True)
     before = baseline()
-    h = synapse_hash(d, t["fn"])
+    h = emetgate_hash(d, t["fn"])
     r = subprocess.run([SYN, "try", "calc.ts", "--symbol", t["fn"], "--hash", h,
                         "--body", t["body"], "--test", TEST_CMD], cwd=d, capture_output=True, text=True)
     with open(os.path.join(d, "calc.ts"), encoding="utf-8") as f: after = f.read()
@@ -110,13 +110,13 @@ def main():
     os.makedirs(WORK, exist_ok=True)
     rows = []
     for t in TASKS:
-        syn = arm_synapse(t)
+        syn = arm_emetgate(t)
         sr = arm_textedit(t, whole_file=False)
         full = arm_textedit(t, whole_file=True)
         rows.append((t, syn, sr, full))
 
     print("\n=== TOKEN (emit payload, tiktoken o200k_base) ===")
-    print(f"{'#':>2} {'category':<20} {'Synapse':>8} {'Search/Repl':>12} {'Full-File':>10} {'S vs Full':>10}")
+    print(f"{'#':>2} {'category':<20} {'Emetgate':>8} {'Search/Repl':>12} {'Full-File':>10} {'S vs Full':>10}")
     ts = tsr = tf = 0
     for t, syn, sr, full in rows:
         ratio = f"{full['emit']/syn['emit']:.1f}x"
@@ -125,7 +125,7 @@ def main():
     print(f"{'':>2} {'TOTAL':<20} {ts:>8} {tsr:>12} {tf:>10} {tf/ts:>9.1f}x")
 
     print("\n=== FAIL-CLOSED & CORRECTNESS ===")
-    print(f"{'#':>2} {'category':<20} {'expect':<7} {'Synapse':<22} {'Search/Repl':<16} {'Full-File':<16}")
+    print(f"{'#':>2} {'category':<20} {'expect':<7} {'Emetgate':<22} {'Search/Repl':<16} {'Full-File':<16}")
     for t, syn, sr, full in rows:
         exp = "pass" if t["pass"] else "reject"
         s_state = ("committed" if syn["committed"] else f"blocked(exit {syn['exit']})")
@@ -137,7 +137,7 @@ def main():
     print("\n=== NEIGHBOR IMMUTABILITY (task 8) ===")
     for t, syn, sr, full in rows:
         if not t["cat"].startswith("neighbor"): continue
-        print(f"  Synapse neighbors intact: {syn['neighbors']}")
+        print(f"  Emetgate neighbors intact: {syn['neighbors']}")
         print(f"  Search/Replace neighbors intact: {sr['neighbors']}")
         print(f"  Full-File neighbors intact: {full['neighbors']}")
 

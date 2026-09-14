@@ -65,7 +65,7 @@ test "read_file returns a small repo file whole" {
     const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/functions.ts", testing.allocator, .unlimited);
     defer testing.allocator.free(expected);
 
-    var reply = try callTool(runtime, "synapse_read_file", .{ .file = "tests/fixtures/functions.ts" });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/functions.ts" });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -83,7 +83,7 @@ test "read_file caps a large file and says it was truncated" {
     defer testing.allocator.free(whole);
     try testing.expect(whole.len > 16 * 1024);
 
-    var reply = try callTool(runtime, "synapse_read_file", .{ .file = path });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -103,16 +103,16 @@ test "read tools refuse a path outside the repo" {
     const outside = "C:\\Windows\\win.ini";
     std.Io.Dir.cwd().access(testing.io, outside, .{}) catch return error.SkipZigTest;
 
-    try expectToolError(runtime, "synapse_read_file", .{ .file = outside }, "FileOutsideRepo");
-    try expectToolError(runtime, "synapse_list", .{ .dir = "C:\\Windows" }, "FileOutsideRepo");
-    try expectToolError(runtime, "synapse_search", .{ .pattern = "fonts", .dir = "C:\\Windows" }, "FileOutsideRepo");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = outside }, "FileOutsideRepo");
+    try expectToolError(runtime, "emetgate_list", .{ .dir = "C:\\Windows" }, "FileOutsideRepo");
+    try expectToolError(runtime, "emetgate_search", .{ .pattern = "fonts", .dir = "C:\\Windows" }, "FileOutsideRepo");
 }
 
 test "read tools refuse .git internals" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    try expectToolError(runtime, "synapse_read_file", .{ .file = ".git/HEAD" }, "InternalPath");
-    try expectToolError(runtime, "synapse_list", .{ .dir = ".git" }, "InternalPath");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = ".git/HEAD" }, "InternalPath");
+    try expectToolError(runtime, "emetgate_list", .{ .dir = ".git" }, "InternalPath");
 }
 
 test "skeleton refuses a non-TypeScript file instead of echoing it; read_file serves it" {
@@ -124,7 +124,7 @@ test "skeleton refuses a non-TypeScript file instead of echoing it; read_file se
     const path = try tmp.dir.realPathFileAlloc(testing.io, "NOTES.md", testing.allocator);
     defer testing.allocator.free(path);
 
-    for ([_][]const u8{ "synapse_skeleton", "synapse_symbols" }) |tool| {
+    for ([_][]const u8{ "emetgate_skeleton", "emetgate_symbols" }) |tool| {
         var reply = try callTool(runtime, tool, .{ .file = path });
         defer reply.deinit();
         try testing.expect(reply.is_error);
@@ -132,7 +132,7 @@ test "skeleton refuses a non-TypeScript file instead of echoing it; read_file se
         try testing.expect(std.mem.indexOf(u8, reply.text, "SECRET_LINE_77") == null);
     }
 
-    var reply = try callTool(runtime, "synapse_read_file", .{ .file = path });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     try testing.expect(std.mem.indexOf(u8, reply.text, "SECRET_LINE_77") != null);
@@ -146,13 +146,13 @@ test "read_file refuses a binary file" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "blob.bin", .data = "MZ\x00\x01\x02binary" });
     const path = try tmp.dir.realPathFileAlloc(testing.io, "blob.bin", testing.allocator);
     defer testing.allocator.free(path);
-    try expectToolError(runtime, "synapse_read_file", .{ .file = path }, "BinaryFile");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "BinaryFile");
 }
 
 test "list returns only tracked files under the requested directory" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    var reply = try callTool(runtime, "synapse_list", .{ .dir = "tests/fixtures" });
+    var reply = try callTool(runtime, "emetgate_list", .{ .dir = "tests/fixtures" });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -166,7 +166,7 @@ test "list returns only tracked files under the requested directory" {
 test "search finds a literal in tracked files under a directory and refuses an empty pattern" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    var reply = try callTool(runtime, "synapse_search", .{ .pattern = "export function afterUnicode", .dir = "tests/fixtures" });
+    var reply = try callTool(runtime, "emetgate_search", .{ .pattern = "export function afterUnicode", .dir = "tests/fixtures" });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -180,7 +180,7 @@ test "search finds a literal in tracked files under a directory and refuses an e
     }
     try testing.expect(found);
 
-    try expectToolError(runtime, "synapse_search", .{ .pattern = "" }, "EmptyPattern");
+    try expectToolError(runtime, "emetgate_search", .{ .pattern = "" }, "EmptyPattern");
 }
 
 test "a read is cut on a UTF-8 boundary, never inside a character" {
@@ -277,7 +277,7 @@ test "search skips a tracked binary file" {
 test "internal workspace and git paths are refused, others pass" {
     try testing.expectError(error.InternalPath, read_tools.refuseInternal(".git\\HEAD"));
     try testing.expectError(error.InternalPath, read_tools.refuseInternal(".GIT/config"));
-    try testing.expectError(error.InternalPath, read_tools.refuseInternal(".synapse\\events.ndjson"));
+    try testing.expectError(error.InternalPath, read_tools.refuseInternal(".emetgate\\events.ndjson"));
     try read_tools.refuseInternal("");
     try read_tools.refuseInternal("docs\\.git-notes.md");
     try read_tools.refuseInternal("src\\main.zig");

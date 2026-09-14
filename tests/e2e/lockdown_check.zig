@@ -4,7 +4,7 @@ const Value = std.json.Value;
 
 const work_dir = ".zig-cache/e2e-lockdown";
 const max_stdout = 16 * 1024 * 1024;
-const fresh_build_tool = "mcp__synapse__synapse_read_file";
+const fresh_build_tool = "mcp__emetgate__emetgate_read_file";
 const probe_args = [_][]const u8{ "-p", "Reply with the single word ok.", "--output-format", "stream-json", "--verbose", "--max-turns", "1" };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -12,7 +12,7 @@ pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
     const args = try init.minimal.args.toSlice(arena);
     if (args.len < 2) {
-        std.debug.print("usage: lockdown_check <synapse.exe> [--direct]\n", .{});
+        std.debug.print("usage: lockdown_check <emetgate.exe> [--direct]\n", .{});
         return 2;
     }
     const direct = args.len == 3 and std.mem.eql(u8, args[2], "--direct");
@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !u8 {
     std.mem.replaceScalar(u8, exe_json, '\\', '/');
 
     try std.Io.Dir.cwd().createDirPath(io, work_dir);
-    const config = try std.fmt.allocPrint(arena, "{{\"mcpServers\":{{\"synapse\":{{\"command\":\"{s}\",\"args\":[\"mcp\"]}}}}}}", .{exe_json});
+    const config = try std.fmt.allocPrint(arena, "{{\"mcpServers\":{{\"emetgate\":{{\"command\":\"{s}\",\"args\":[\"mcp\"]}}}}}}", .{exe_json});
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = work_dir ++ "/.mcp.json", .data = config });
 
     var failures: usize = 0;
@@ -39,7 +39,7 @@ pub fn main(init: std.process.Init) !u8 {
     var has_fresh_tool = false;
     for (tools) |t| {
         if (std.mem.eql(u8, t, fresh_build_tool)) has_fresh_tool = true;
-        if (!std.mem.eql(u8, t, "ToolSearch") and !std.mem.startsWith(u8, t, "mcp__synapse__")) {
+        if (!std.mem.eql(u8, t, "ToolSearch") and !std.mem.startsWith(u8, t, "mcp__emetgate__")) {
             std.debug.print("FAIL: tool outside the lockdown allow-list: {s}\n", .{t});
             failures += 1;
         }
@@ -49,7 +49,7 @@ pub fn main(init: std.process.Init) !u8 {
         failures += 1;
     }
     if (!has_fresh_tool) {
-        std.debug.print("FAIL: {s} missing; the synapse binary under test is stale or not connected\n", .{fresh_build_tool});
+        std.debug.print("FAIL: {s} missing; the emetgate binary under test is stale or not connected\n", .{fresh_build_tool});
         failures += 1;
     }
 

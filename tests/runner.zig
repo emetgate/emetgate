@@ -352,11 +352,11 @@ test "a stale hash is refused before any test runs" {
     try testing.expectEqualStrings(Repo.source, on_disk);
 }
 
-test "test command defaults from .synapserc.json when the caller omits it" {
+test "test command defaults from .emetgaterc.json when the caller omits it" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"exit 0\"}" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 0\"}" });
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
@@ -383,7 +383,7 @@ test "a repo config is untrusted by default and only honored with allow_repo_con
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"exit 0\"}" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 0\"}" });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
@@ -398,7 +398,7 @@ test "an explicit test command overrides an untrusted repo config" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
-    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.synapserc.json", .data = "{\"test_cmd\":\"exit 1\"}" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 1\"}" });
 
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
@@ -437,5 +437,5 @@ test "no shadow workspace survives a run" {
     });
     result.deinit(testing.allocator);
 
-    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/.synapse", .{}));
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/.emetgate", .{}));
 }

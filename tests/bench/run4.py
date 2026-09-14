@@ -3,7 +3,7 @@ import tiktoken
 
 BENCH = os.path.dirname(os.path.abspath(__file__))
 MASTER = os.path.join(BENCH, "master")
-SYN = r"C:\Users\ugur\Desktop\Synapse\zig-out\bin\synapse.exe"
+SYN = r"C:\Users\ugur\Desktop\Emetgate\zig-out\bin\emetgate.exe"
 ENC = tiktoken.get_encoding("o200k_base")
 
 def toks(s): return len(ENC.encode(s))
@@ -42,7 +42,7 @@ def fn_text(content, sym):
     raise ValueError(sym)
 
 HEADER = """\
-Synapse token benchmark - surgical edit round-trip (ingest + emit)
+Emetgate token benchmark - surgical edit round-trip (ingest + emit)
 Methodology (read before quoting a number):
 - Tokenizer: o200k_base (GPT-4o-family proxy; NOT Claude's tokenizer). Absolute counts
   are approximate; the RATIO between approaches is the signal.
@@ -50,8 +50,8 @@ Methodology (read before quoting a number):
 - Primary baseline: Search/Replace (what modern diff/apply editors emit).
 - Secondary: Full-file emit = UPPER BOUND, assumes a whole-file rewrite (whole-file .md
   style). Modern tools diff/apply, so treat full-file as the ceiling, not the norm.
-- Counts: ingest (full/S-R read the whole file; Synapse reads skeleton + one symbol body)
-  + emit (full rewrites the whole file; S-R sends old+new block; Synapse sends symbol
+- Counts: ingest (full/S-R read the whole file; Emetgate reads skeleton + one symbol body)
+  + emit (full rewrites the whole file; S-R sends old+new block; Emetgate sends symbol
   ref + content hash + new body).
 - MCP tool-schema / register-frame fixed cost: EXCLUDED (amortized once per session).
 - Fixtures: synthetic (calc/engine/big) and real (es-toolkit, MIT; master/realworld/NOTICE.md).
@@ -60,7 +60,7 @@ Methodology (read before quoting a number):
 def main():
     print(HEADER)
     print("\n{:<24} {:<10} {:<10} {:>7} {:>8} {:>10} {:>7} {:>10}".format(
-        "file", "kind", "symbol", "S/R", "synapse", "S/R vs syn", "full", "full vs syn"))
+        "file", "kind", "symbol", "S/R", "emetgate", "S/R vs syn", "full", "full vs syn"))
     tot = {"full": 0, "sr": 0, "syn": 0}
     sr_ratios, full_ratios = [], []
     for kind, path, sym, new_body in SCENARIOS:

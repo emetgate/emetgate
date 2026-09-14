@@ -127,7 +127,7 @@ fn runScenario(runtime: *Runtime, repo: *Repo, observer: ?*telemetry.Observer) !
         const hex = symbol.formatHash(hash);
         var line: Allocating = .init(testing.allocator);
         defer line.deinit();
-        try writeCall(&line.writer, "synapse_try", file, hex[0..], step.body);
+        try writeCall(&line.writer, "emetgate_try", file, hex[0..], step.body);
         out[i] = try call(runtime, line.written(), observer, .{ .test_command = step.cmd });
         produced = i + 1;
     }
@@ -139,7 +139,7 @@ fn freeAll(responses: [steps.len][]u8) void {
 }
 
 fn stripFooter(response: []const u8) ![]u8 {
-    const start = std.mem.indexOf(u8, response, "\\nsynapse ") orelse return error.NoFooter;
+    const start = std.mem.indexOf(u8, response, "\\nemetgate ") orelse return error.NoFooter;
     const end = std.mem.indexOfPos(u8, response, start, "\"}],\"isError\"") orelse return error.NoFooter;
     return std.mem.concat(testing.allocator, u8, &.{ response[0..start], response[end..] });
 }
@@ -165,14 +165,14 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
     var file_sabotage = try Repo.init();
     defer file_sabotage.deinit();
 
-    try dir_sabotage.tmp.dir.createDirPath(testing.io, "repo/.synapse/events.ndjson");
+    try dir_sabotage.tmp.dir.createDirPath(testing.io, "repo/.emetgate/events.ndjson");
     try file_sabotage.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/blocker", .data = "x" });
 
-    const healthy_ws = try healthy.under(".synapse");
+    const healthy_ws = try healthy.under(".emetgate");
     defer testing.allocator.free(healthy_ws);
-    const dir_ws = try dir_sabotage.under(".synapse");
+    const dir_ws = try dir_sabotage.under(".emetgate");
     defer testing.allocator.free(dir_ws);
-    const file_ws = try file_sabotage.under("blocker\\.synapse");
+    const file_ws = try file_sabotage.under("blocker\\.emetgate");
     defer testing.allocator.free(file_ws);
 
     var healthy_obs: telemetry.Observer = .{ .workspace_abs = healthy_ws };
@@ -196,11 +196,11 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
         try testing.expectEqualStrings(plain_out[i], stripped);
     }
 
-    try expectContains(healthy_out[0], "synapse ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 0 edits");
-    try expectContains(healthy_out[1], "synapse ✓ committed · BOUNDED · gate full · sent ");
+    try expectContains(healthy_out[0], "emetgate ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 0 edits");
+    try expectContains(healthy_out[1], "emetgate ✓ committed · BOUNDED · gate full · sent ");
     try expectContains(healthy_out[1], " / file ");
     try expectContains(healthy_out[1], " chars · session 1 edits");
-    try expectContains(healthy_out[2], "synapse ✗ HashMismatch · disk untouched · session 1 edits");
+    try expectContains(healthy_out[2], "emetgate ✗ HashMismatch · disk untouched · session 1 edits");
 
     for ([_]*Repo{ &plain, &healthy, &dir_sabotage, &file_sabotage }) |repo| {
         const on_disk = try repo.onDisk();
@@ -208,7 +208,7 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
         try testing.expectEqualStrings(committed_source, on_disk);
     }
 
-    const events = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.synapse/events.ndjson", testing.allocator, .unlimited);
+    const events = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/events.ndjson", testing.allocator, .unlimited);
     defer testing.allocator.free(events);
     try testing.expectEqual(@as(usize, steps.len), std.mem.count(u8, events, "\n"));
     try expectContains(events, "\"result\":\"rejected\"");
@@ -217,15 +217,15 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
     try expectContains(events, "\"gate\":\"full\"");
     try expectContains(events, "\"confidence\":\"bounded\"");
 
-    const ignore = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.synapse/.gitignore", testing.allocator, .unlimited);
+    const ignore = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/.gitignore", testing.allocator, .unlimited);
     defer testing.allocator.free(ignore);
     try testing.expectEqualStrings("*\n", ignore);
     const status = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "status", "--porcelain", "--untracked-files=all" }, .cwd = .{ .path = healthy.root_abs } });
     defer testing.allocator.free(status.stdout);
     defer testing.allocator.free(status.stderr);
-    if (std.mem.indexOf(u8, status.stdout, ".synapse") != null) return error.TestSynapseVisibleToGit;
+    if (std.mem.indexOf(u8, status.stdout, ".emetgate") != null) return error.TestEmetgateVisibleToGit;
 
-    var still_dir = try dir_sabotage.tmp.dir.openDir(testing.io, "repo/.synapse/events.ndjson", .{});
+    var still_dir = try dir_sabotage.tmp.dir.openDir(testing.io, "repo/.emetgate/events.ndjson", .{});
     still_dir.close(testing.io);
     const blocker = try file_sabotage.tmp.dir.readFileAlloc(testing.io, "repo/blocker", testing.allocator, .unlimited);
     defer testing.allocator.free(blocker);
@@ -264,12 +264,12 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
 
         var buffer: Allocating = .init(testing.allocator);
         defer buffer.deinit();
-        try telemetry.renderFooter(&buffer.writer, .{ .tool = "synapse_try", .outcome = .committed, .mutating = true, .edits = 1, .trace = trace }, .{});
+        try telemetry.renderFooter(&buffer.writer, .{ .tool = "emetgate_try", .outcome = .committed, .mutating = true, .edits = 1, .trace = trace }, .{});
         try expectContains(buffer.written(), c.label);
     }
 }
 
-test "fail-soft: events never follow a .synapse junction out of the repo" {
+test "fail-soft: events never follow a .emetgate junction out of the repo" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
@@ -279,7 +279,7 @@ test "fail-soft: events never follow a .synapse junction out of the repo" {
     try repo.tmp.dir.createDirPath(testing.io, "victim");
     const victim = try repo.tmp.dir.realPathFileAlloc(testing.io, "victim", testing.allocator);
     defer testing.allocator.free(victim);
-    const link = try repo.under(".synapse");
+    const link = try repo.under(".emetgate");
     defer testing.allocator.free(link);
     try run(repo.root_abs, &.{ "cmd", "/c", "mklink", "/J", link, victim });
     defer std.Io.Dir.cwd().deleteDir(testing.io, link) catch {};
@@ -290,11 +290,11 @@ test "fail-soft: events never follow a .synapse junction out of the repo" {
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}");
+    try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
     const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
     defer testing.allocator.free(response);
-    try expectContains(response, "synapse ");
+    try expectContains(response, "emetgate ");
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "victim/events.ndjson", .{}));
 }
 
@@ -321,7 +321,7 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     try run(repo.root_abs, &.{ "git", "add", "." });
     try run(repo.root_abs, &.{ "git", "commit", "-q", "-m", "twice" });
 
-    const ws = try repo.under(".synapse");
+    const ws = try repo.under(".emetgate");
     defer testing.allocator.free(ws);
     var observer: telemetry.Observer = .{ .workspace_abs = ws };
     const math = try repo.under("src\\math.ts");
@@ -344,7 +344,7 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     try js.objectField("params");
     try js.beginObject();
     try js.objectField("name");
-    try js.write("synapse_try_batch");
+    try js.write("emetgate_try_batch");
     try js.objectField("arguments");
     try js.beginObject();
     try js.objectField("edits");
@@ -358,12 +358,12 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
 
     const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
     defer testing.allocator.free(response);
-    try expectContains(response, "synapse ✓ committed · gate full · sent ");
+    try expectContains(response, "emetgate ✓ committed · gate full · sent ");
     try expectContains(response, " chars · session 2 edits");
 
-    const events = try repo.tmp.dir.readFileAlloc(testing.io, "repo/.synapse/events.ndjson", testing.allocator, .unlimited);
+    const events = try repo.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/events.ndjson", testing.allocator, .unlimited);
     defer testing.allocator.free(events);
-    try expectContains(events, "\"tool\":\"synapse_try_batch\"");
+    try expectContains(events, "\"tool\":\"emetgate_try_batch\"");
     try expectContains(events, "\"result\":\"committed\"");
     try expectContains(events, "\"gate\":\"full\"");
     try expectContains(events, "\"confidence\":null");
@@ -375,7 +375,7 @@ test "a failure after the commit began is reported as commit phase, never disk u
     defer runtime.destroy() catch @panic("live snapshots");
     var repo = try Repo.init();
     defer repo.deinit();
-    const ws = try repo.under(".synapse");
+    const ws = try repo.under(".emetgate");
     defer testing.allocator.free(ws);
     var observer: telemetry.Observer = .{ .workspace_abs = ws };
     const file = try repo.under("src\\math.ts");
@@ -386,12 +386,12 @@ test "a failure after the commit began is reported as commit phase, never disk u
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}");
+    try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
     const response = try call(runtime, line.written(), &observer, .{ .test_command = racing_cmd });
     defer testing.allocator.free(response);
     try expectContains(response, "\"isError\":true");
-    try expectContains(response, "failed in commit phase, run synapse recover");
+    try expectContains(response, "failed in commit phase, run emetgate recover");
     if (std.mem.indexOf(u8, response, "disk untouched") != null) return error.TestClaimedDiskUntouched;
 
     const on_disk = try repo.onDisk();
@@ -408,12 +408,12 @@ test "fail-soft: an events file symlinked outside the repo is never written thro
 
     const outside = "export const SECRET = 1;\n";
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "outside.txt", .data = outside });
-    try repo.tmp.dir.createDirPath(testing.io, "repo/.synapse");
+    try repo.tmp.dir.createDirPath(testing.io, "repo/.emetgate");
     const target = try repo.tmp.dir.realPathFileAlloc(testing.io, "outside.txt", testing.allocator);
     defer testing.allocator.free(target);
-    repo.tmp.dir.symLink(testing.io, target, "repo/.synapse/events.ndjson", .{}) catch return error.SkipZigTest;
+    repo.tmp.dir.symLink(testing.io, target, "repo/.emetgate/events.ndjson", .{}) catch return error.SkipZigTest;
 
-    const ws = try repo.under(".synapse");
+    const ws = try repo.under(".emetgate");
     defer testing.allocator.free(ws);
     var observer: telemetry.Observer = .{ .workspace_abs = ws };
     const file = try repo.under("src\\math.ts");
@@ -421,11 +421,11 @@ test "fail-soft: an events file symlinked outside the repo is never written thro
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_try", file, hex[0..], "{\n  return a - b;\n}");
+    try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
     const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
     defer testing.allocator.free(response);
-    try expectContains(response, "synapse ✓ committed");
+    try expectContains(response, "emetgate ✓ committed");
 
     const after = try repo.tmp.dir.readFileAlloc(testing.io, "outside.txt", testing.allocator, .unlimited);
     defer testing.allocator.free(after);
@@ -448,10 +448,10 @@ test "a read tool logs the chars it can compute and leaves the rest null" {
 
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
-    try writeCall(&line.writer, "synapse_skeleton", fixture, null, null);
+    try writeCall(&line.writer, "emetgate_skeleton", fixture, null, null);
     const response = try call(runtime, line.written(), &observer, .{});
     defer testing.allocator.free(response);
-    try expectContains(response, "synapse ✓ skeleton · read ");
+    try expectContains(response, "emetgate ✓ skeleton · read ");
     try expectContains(response, " chars · session 0 edits");
 
     const ignore = try tmp.dir.readFileAlloc(testing.io, ".gitignore", testing.allocator, .unlimited);
@@ -460,7 +460,7 @@ test "a read tool logs the chars it can compute and leaves the rest null" {
 
     const events = try tmp.dir.readFileAlloc(testing.io, telemetry.events_file, testing.allocator, .unlimited);
     defer testing.allocator.free(events);
-    try expectContains(events, "\"tool\":\"synapse_skeleton\"");
+    try expectContains(events, "\"tool\":\"emetgate_skeleton\"");
     try expectContains(events, "\"chars_sr\":null");
     try expectContains(events, "\"gate\":null");
     const full = try std.fmt.allocPrint(testing.allocator, "\"chars_fullfile\":{d}", .{fixture_bytes.len});

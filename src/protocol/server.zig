@@ -18,7 +18,7 @@ pub const Policy = policy_mod.Policy;
 pub const parsePolicy = policy_mod.parsePolicy;
 
 const default_protocol_version = "2025-06-18";
-const server_name = "synapse";
+const server_name = "emetgate";
 const server_version = "0.1.0";
 const max_message_bytes = 4 * 1024 * 1024;
 
@@ -27,55 +27,55 @@ const Tool = struct { name: []const u8, description: []const u8, props: []const 
 
 const tool_defs = [_]Tool{
     .{
-        .name = "synapse_symbols",
+        .name = "emetgate_symbols",
         .description = "List addressable function symbols in a TypeScript file with their content hashes.",
         .props = &.{.{ .name = "file", .desc = "path to a .ts file" }},
     },
     .{
-        .name = "synapse_skeleton",
-        .description = "Structural outline of a TypeScript (.ts) file: every symbol's signature with bodies elided. Read this instead of the whole file to locate a target cheaply. Other files are refused; use synapse_read_file for docs and config.",
+        .name = "emetgate_skeleton",
+        .description = "Structural outline of a TypeScript (.ts) file: every symbol's signature with bodies elided. Read this instead of the whole file to locate a target cheaply. Other files are refused; use emetgate_read_file for docs and config.",
         .props = &.{.{ .name = "file", .desc = "path to a .ts file" }},
     },
     .{
-        .name = "synapse_read_symbol",
-        .description = "Return the current body of one symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into synapse_try.",
+        .name = "emetgate_read_symbol",
+        .description = "Return the current body of one symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try.",
         .props = &.{
             .{ .name = "file", .desc = "path to a .ts file" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
         },
     },
     .{
-        .name = "synapse_try",
-        .description = "Atomic mutation: replaces the symbol body, runs the project's trusted test command in a sandbox, and writes to disk only if it passes; otherwise nothing is written. The test command is fixed by the user who started synapse (synapse mcp --test <cmd>, or the repo .synapserc.json with --allow-repo-config); a call that passes test_cmd or allow_repo_config is refused.",
+        .name = "emetgate_try",
+        .description = "Atomic mutation: replaces the symbol body, runs the project's trusted test command in a sandbox, and writes to disk only if it passes; otherwise nothing is written. The test command is fixed by the user who started emetgate (emetgate mcp --test <cmd>, or the repo .emetgaterc.json with --allow-repo-config); a call that passes test_cmd or allow_repo_config is refused.",
         .props = &.{
             .{ .name = "file", .desc = "path to a .ts file" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
-            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from synapse_symbols" },
+            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
             .{ .name = "body", .desc = "new function body including braces" },
         },
     },
     .{
-        .name = "synapse_mutate",
+        .name = "emetgate_mutate",
         .description = "In-memory dry-run mutation: returns the transformed source and new hash without touching disk.",
         .props = &.{
             .{ .name = "file", .desc = "path to a .ts file" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
-            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from synapse_symbols" },
+            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
             .{ .name = "body", .desc = "new function body including braces" },
         },
     },
     .{
-        .name = "synapse_read_file",
-        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. For TypeScript code use synapse_skeleton and synapse_read_symbol instead. Paths outside the repo, .git and .synapse are refused.",
+        .name = "emetgate_read_file",
+        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. For TypeScript code use emetgate_skeleton and emetgate_read_symbol instead. Paths outside the repo, .git and .emetgate are refused.",
         .props = &.{.{ .name = "file", .desc = "path inside the repo" }},
     },
     .{
-        .name = "synapse_list",
+        .name = "emetgate_list",
         .description = "List git-tracked files under a directory of the repo (at most 2000 entries, truncated:true when cut).",
         .props = &.{.{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true }},
     },
     .{
-        .name = "synapse_search",
+        .name = "emetgate_search",
         .description = "Find a literal, case-sensitive substring in git-tracked text files under a directory of the repo; returns file, line and the trimmed line (at most 200 matches, truncated:true when cut). Files of 1 MiB or more are skipped (files under 1 MiB are read).",
         .props = &.{
             .{ .name = "pattern", .desc = "literal text to find" },
@@ -273,9 +273,9 @@ fn writeToolsList(out: *Writer, id: Value) !void {
 fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.beginObject();
     try js.objectField("name");
-    try js.write("synapse_try_batch");
+    try js.write("emetgate_try_batch");
     try js.objectField("description");
-    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted test command once over all of them, and commit every file only if it passes; otherwise nothing is written. One edit per file. The test command is fixed by the user who started synapse; a call that passes test_cmd or allow_repo_config is refused.");
+    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted test command once over all of them, and commit every file only if it passes; otherwise nothing is written. One edit per file. The test command is fixed by the user who started emetgate; a call that passes test_cmd or allow_repo_config is refused.");
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");

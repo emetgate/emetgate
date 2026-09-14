@@ -431,7 +431,7 @@ test "a second concurrent run is refused instead of sharing inherited pipes" {
 test "a program that does not exist is an error, not a hang" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     try testing.expectError(error.FileNotFound, run(testing.allocator, testing.io, .{
-        .argv = &.{"synapse-definitely-missing-program"},
+        .argv = &.{"emetgate-definitely-missing-program"},
         .cwd = ".",
         .limits = .{ .timeout_ms = 1000 },
     }));

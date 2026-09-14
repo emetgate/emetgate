@@ -21,7 +21,7 @@ const Store = struct {
         var tmp = testing.tmpDir(.{ .iterate = true });
         errdefer tmp.cleanup();
         const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
-        try tmp.dir.createDirPath(testing.io, ".synapse");
+        try tmp.dir.createDirPath(testing.io, ".emetgate");
         return .{ .tmp = tmp, .root = root };
     }
     fn deinit(self: *Store) void {
@@ -29,7 +29,7 @@ const Store = struct {
         self.tmp.cleanup();
     }
     fn p(name: []const u8) ![]u8 {
-        return std.fmt.allocPrint(gpa, ".synapse/{s}", .{name});
+        return std.fmt.allocPrint(gpa, ".emetgate/{s}", .{name});
     }
     fn put(self: *Store, name: []const u8, bytes: []const u8) !void {
         const path = try p(name);
@@ -48,7 +48,7 @@ const Store = struct {
         return true;
     }
     fn countWithPrefix(self: *Store, prefix: []const u8) !usize {
-        var dir = try self.tmp.dir.openDir(testing.io, ".synapse", .{ .iterate = true });
+        var dir = try self.tmp.dir.openDir(testing.io, ".emetgate", .{ .iterate = true });
         defer dir.close(testing.io);
         var it = dir.iterate();
         var n: usize = 0;
@@ -82,8 +82,8 @@ test "memory: RT2 a missing ledger next to rewrite sidecars refuses to start emp
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var s = try Store.init();
     defer s.deinit();
-    try s.put(memory.ledger_name ++ ".synapse-0123456789abcdef.bak", a_active ++ b_active);
-    try s.put(memory.ledger_name ++ ".synapse-0123456789abcdef.tmp", b_active);
+    try s.put(memory.ledger_name ++ ".emetgate-0123456789abcdef.bak", a_active ++ b_active);
+    try s.put(memory.ledger_name ++ ".emetgate-0123456789abcdef.tmp", b_active);
 
     try testing.expectError(error.LedgerMissingWithSidecars, memory.recall(gpa, testing.io, s.root));
     try testing.expectError(error.LedgerMissingWithSidecars, memory.remember(gpa, testing.io, s.root, .global, "new", false, null));
@@ -253,7 +253,7 @@ test "memory: RT8 a state.bin directory does not break recall or duplicate a rem
     var s = try Store.init();
     defer s.deinit();
     try s.put(memory.ledger_name, a_active);
-    try s.tmp.dir.createDirPath(testing.io, ".synapse/state.bin");
+    try s.tmp.dir.createDirPath(testing.io, ".emetgate/state.bin");
 
     const r = try memory.recall(gpa, testing.io, s.root);
     r.deinit();

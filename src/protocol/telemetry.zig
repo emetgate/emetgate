@@ -23,7 +23,7 @@ pub const Event = struct {
     trace: runner.Trace = .{},
     mutating: bool = false,
     edits: usize = 0,
-    chars_synapse: ?usize = null,
+    chars_emetgate: ?usize = null,
     chars_fullfile: ?usize = null,
     chars_sr: ?usize = null,
 
@@ -50,7 +50,7 @@ pub const Session = struct {
     pub fn tally(self: *Session, event: Event) void {
         if (event.outcome != .committed) return;
         self.edits += event.edits;
-        const sent = event.chars_synapse orelse return;
+        const sent = event.chars_emetgate orelse return;
         const full = event.chars_fullfile orelse return;
         self.sent_chars += sent;
         self.fullfile_chars += full;
@@ -130,8 +130,8 @@ pub fn writeEvent(w: *Writer, ts_ms: i64, event: Event) !void {
         const hex = symbol.formatHash(h);
         try js.write(hex[0..]);
     } else try js.write(null);
-    try js.objectField("chars_synapse");
-    try js.write(event.chars_synapse);
+    try js.objectField("chars_emetgate");
+    try js.write(event.chars_emetgate);
     try js.objectField("chars_fullfile");
     try js.write(event.chars_fullfile);
     try js.objectField("chars_sr");
@@ -140,7 +140,7 @@ pub fn writeEvent(w: *Writer, ts_ms: i64, event: Event) !void {
 }
 
 pub fn renderFooter(w: *Writer, event: Event, session: Session) !void {
-    try w.writeAll("synapse ");
+    try w.writeAll("emetgate ");
     switch (event.outcome) {
         .ok => try w.print("✓ {s}", .{event.label}),
         .committed => try w.writeAll("✓ committed"),
@@ -150,13 +150,13 @@ pub fn renderFooter(w: *Writer, event: Event, session: Session) !void {
     if (event.trace.confidence) |c| try w.writeAll(if (c == .bounded) " · BOUNDED" else " · UNBOUNDED");
     if (event.trace.gate) |g| try w.print(" · gate {s}", .{@tagName(g)});
     if (event.outcome == .ok or event.outcome == .committed) {
-        if (event.chars_synapse) |sent| {
+        if (event.chars_emetgate) |sent| {
             if (event.chars_fullfile) |full| try writeChars(w, if (event.mutating) "sent" else "read", sent, full);
         }
     }
     if (event.mutating) {
         if (event.outcome == .failed and event.trace.commit_attempted) {
-            try w.writeAll(" · failed in commit phase, run synapse recover");
+            try w.writeAll(" · failed in commit phase, run emetgate recover");
         } else if (event.outcome != .committed) {
             try w.writeAll(" · disk untouched");
         }
@@ -206,7 +206,7 @@ test "footer gate always equals chooseGate for every confidence and scoped combi
     for ([_]@import("../engine/boundedness.zig").Confidence{ .bounded, .unbounded }) |confidence| {
         for ([_]bool{ false, true }) |has_scoped| {
             const gate = runner.chooseGate(confidence, has_scoped);
-            const text = try footer(.{ .tool = "synapse_try", .outcome = .committed, .mutating = true, .edits = 1, .trace = .{ .gate = gate, .confidence = confidence } }, .{});
+            const text = try footer(.{ .tool = "emetgate_try", .outcome = .committed, .mutating = true, .edits = 1, .trace = .{ .gate = gate, .confidence = confidence } }, .{});
             defer testing.allocator.free(text);
             const expected = if (confidence == .bounded and has_scoped) " · gate scoped" else " · gate full";
             try expectContains(text, expected);
@@ -216,16 +216,16 @@ test "footer gate always equals chooseGate for every confidence and scoped combi
 }
 
 test "committed footer shows raw chars sent and the whole file size" {
-    const text = try footer(.{ .tool = "synapse_try", .outcome = .committed, .mutating = true, .edits = 1, .chars_synapse = 1700, .chars_fullfile = 6630 }, .{ .edits = 3 });
+    const text = try footer(.{ .tool = "emetgate_try", .outcome = .committed, .mutating = true, .edits = 1, .chars_emetgate = 1700, .chars_fullfile = 6630 }, .{ .edits = 3 });
     defer testing.allocator.free(text);
-    try testing.expectEqualStrings("synapse ✓ committed · sent 1.7k / file 6.6k chars · session 3 edits", text);
+    try testing.expectEqualStrings("emetgate ✓ committed · sent 1.7k / file 6.6k chars · session 3 edits", text);
 }
 
 test "footer never prints a ratio, a saving or a token claim" {
     const cases = [_][2]usize{ .{ 900, 400 }, .{ 10, 100_000 }, .{ 56, 2442 } };
     for (cases) |c| {
         for ([_]bool{ false, true }) |mutating| {
-            const text = try footer(.{ .tool = "synapse_try", .outcome = .committed, .mutating = mutating, .edits = 1, .chars_synapse = c[0], .chars_fullfile = c[1] }, .{});
+            const text = try footer(.{ .tool = "emetgate_try", .outcome = .committed, .mutating = mutating, .edits = 1, .chars_emetgate = c[0], .chars_fullfile = c[1] }, .{});
             defer testing.allocator.free(text);
             try expectLacks(text, "×");
             try expectLacks(text, "less");
@@ -237,34 +237,34 @@ test "footer never prints a ratio, a saving or a token claim" {
 }
 
 test "rejected footer names the reason, says disk untouched and shows no saving" {
-    const text = try footer(.{ .tool = "synapse_try", .outcome = .rejected, .reason = "tests_failed", .mutating = true, .chars_synapse = 10, .chars_fullfile = 100, .trace = .{ .gate = .full, .confidence = .bounded } }, .{ .edits = 2 });
+    const text = try footer(.{ .tool = "emetgate_try", .outcome = .rejected, .reason = "tests_failed", .mutating = true, .chars_emetgate = 10, .chars_fullfile = 100, .trace = .{ .gate = .full, .confidence = .bounded } }, .{ .edits = 2 });
     defer testing.allocator.free(text);
-    try testing.expectEqualStrings("synapse ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 2 edits", text);
+    try testing.expectEqualStrings("emetgate ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 2 edits", text);
 }
 
 test "a failure after the commit began never claims disk untouched" {
-    const before = try footer(.{ .tool = "synapse_try", .outcome = .failed, .result = "HashMismatch", .mutating = true }, .{});
+    const before = try footer(.{ .tool = "emetgate_try", .outcome = .failed, .result = "HashMismatch", .mutating = true }, .{});
     defer testing.allocator.free(before);
-    try testing.expectEqualStrings("synapse ✗ HashMismatch · disk untouched · session 0 edits", before);
+    try testing.expectEqualStrings("emetgate ✗ HashMismatch · disk untouched · session 0 edits", before);
 
-    const during = try footer(.{ .tool = "synapse_try", .outcome = .failed, .result = "Conflict", .mutating = true, .trace = .{ .commit_attempted = true } }, .{});
+    const during = try footer(.{ .tool = "emetgate_try", .outcome = .failed, .result = "Conflict", .mutating = true, .trace = .{ .commit_attempted = true } }, .{});
     defer testing.allocator.free(during);
     try expectContains(during, "failed in commit phase");
     try expectLacks(during, "disk untouched");
 }
 
 test "a read tool footer says read, not sent, and never mentions disk" {
-    const text = try footer(.{ .tool = "synapse_skeleton", .label = "skeleton", .chars_synapse = 420, .chars_fullfile = 6600 }, .{});
+    const text = try footer(.{ .tool = "emetgate_skeleton", .label = "skeleton", .chars_emetgate = 420, .chars_fullfile = 6600 }, .{});
     defer testing.allocator.free(text);
-    try testing.expectEqualStrings("synapse ✓ skeleton · read 420 / file 6.6k chars · session 0 edits", text);
+    try testing.expectEqualStrings("emetgate ✓ skeleton · read 420 / file 6.6k chars · session 0 edits", text);
 }
 
 test "session counts only committed edits and their chars" {
     var session: Session = .{};
-    session.tally(.{ .tool = "synapse_try", .outcome = .committed, .edits = 1, .chars_synapse = 10, .chars_fullfile = 100 });
-    session.tally(.{ .tool = "synapse_try", .outcome = .rejected, .edits = 1, .chars_synapse = 10, .chars_fullfile = 100 });
-    session.tally(.{ .tool = "synapse_skeleton", .chars_synapse = 10, .chars_fullfile = 100 });
-    session.tally(.{ .tool = "synapse_try_batch", .outcome = .committed, .edits = 2, .chars_synapse = 20, .chars_fullfile = 300 });
+    session.tally(.{ .tool = "emetgate_try", .outcome = .committed, .edits = 1, .chars_emetgate = 10, .chars_fullfile = 100 });
+    session.tally(.{ .tool = "emetgate_try", .outcome = .rejected, .edits = 1, .chars_emetgate = 10, .chars_fullfile = 100 });
+    session.tally(.{ .tool = "emetgate_skeleton", .chars_emetgate = 10, .chars_fullfile = 100 });
+    session.tally(.{ .tool = "emetgate_try_batch", .outcome = .committed, .edits = 2, .chars_emetgate = 20, .chars_fullfile = 300 });
     try testing.expectEqual(@as(u64, 3), session.edits);
     try testing.expectEqual(@as(u64, 30), session.sent_chars);
     try testing.expectEqual(@as(u64, 400), session.fullfile_chars);
@@ -273,23 +273,23 @@ test "session counts only committed edits and their chars" {
 test "event line leaves uncomputable fields null instead of inventing them" {
     var buffer: Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeEvent(&buffer.writer, 42, .{ .tool = "synapse_skeleton", .file = "a.ts", .chars_synapse = 5, .chars_fullfile = 50 });
+    try writeEvent(&buffer.writer, 42, .{ .tool = "emetgate_skeleton", .file = "a.ts", .chars_emetgate = 5, .chars_fullfile = 50 });
     const line = buffer.written();
     try expectContains(line, "\"ts\":42");
-    try expectContains(line, "\"tool\":\"synapse_skeleton\"");
+    try expectContains(line, "\"tool\":\"emetgate_skeleton\"");
     try expectContains(line, "\"symbol\":null");
     try expectContains(line, "\"gate\":null");
     try expectContains(line, "\"confidence\":null");
     try expectContains(line, "\"hash\":null");
     try expectContains(line, "\"chars_sr\":null");
-    try expectContains(line, "\"chars_synapse\":5");
+    try expectContains(line, "\"chars_emetgate\":5");
     try expectContains(line, "\"result\":\"ok\"");
 }
 
 test "event line carries the runner trace as strings" {
     var buffer: Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeEvent(&buffer.writer, 1, .{ .tool = "synapse_try", .outcome = .failed, .result = "HashMismatch", .trace = .{ .gate = .scoped, .confidence = .unbounded, .provenance = .exported_escape, .class = .signature_change } });
+    try writeEvent(&buffer.writer, 1, .{ .tool = "emetgate_try", .outcome = .failed, .result = "HashMismatch", .trace = .{ .gate = .scoped, .confidence = .unbounded, .provenance = .exported_escape, .class = .signature_change } });
     const line = buffer.written();
     try expectContains(line, "\"gate\":\"scoped\"");
     try expectContains(line, "\"confidence\":\"unbounded\"");

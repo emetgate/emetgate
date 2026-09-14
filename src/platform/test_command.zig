@@ -3,7 +3,7 @@ const repo = @import("repo.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const config_file = ".synapserc.json";
+pub const config_file = ".emetgaterc.json";
 
 pub fn resolveTestCommand(gpa: Allocator, io: std.Io, file_abs: []const u8, given: []const u8, allow_repo_config: bool) ![]u8 {
     if (given.len != 0) return gpa.dupe(u8, given);

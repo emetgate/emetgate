@@ -89,7 +89,7 @@ fn renderReadFile(gpa: Allocator, io: std.Io, file: []const u8, w: *Writer, even
     if (looksBinary(bytes)) return error.BinaryFile;
     const shown = utf8Prefix(bytes, max_read_bytes);
     if (!std.unicode.utf8ValidateSlice(shown)) return error.NotUtf8;
-    event.chars_synapse = shown.len;
+    event.chars_emetgate = shown.len;
     event.chars_fullfile = bytes.len;
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
