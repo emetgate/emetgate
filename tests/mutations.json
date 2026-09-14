@@ -275,8 +275,8 @@
     {
       "id": "MEM8-C3-torn-tail-recovery-removed",
       "file": "src/platform/memory.zig",
-      "from": "if (tornTailStart(bytes)) |keep| {",
-      "to": "if (@as(?usize, null)) |keep| {",
+      "from": "const keep = tornTailStart(arena, bytes);",
+      "to": "const keep: ?usize = null;",
       "kills": [
         "memory: RT5 a torn trailing row is quarantined and truncated, never a silent forget"
       ],
@@ -396,6 +396,33 @@
       "to": "if (c < 0x21 and c > 0x7e) return error.LedgerCorrupt;",
       "kills": [
         "memory: RT3 a ledger id with control characters is refused"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM16-C2-bad-last-row-not-torn",
+      "file": "src/platform/memory.zig",
+      "from": "if (!complete or !lineIsRow(arena, bytes[start..end])) {",
+      "to": "if (!complete) {",
+      "kills": [
+        "memory: RT5 a torn trailing row is quarantined and truncated, never a silent forget"
+      ],
+      "filter": [
+        "memory: "
+      ],
+      "exact": true
+    },
+    {
+      "id": "MEM17-C2-torn-limited-to-last-row-removed",
+      "file": "src/platform/memory.zig",
+      "from": "            if (end + 1 < bytes.len) return null;\n",
+      "to": "",
+      "kills": [
+        "memory: RT5 corruption before the last row stays fatal and untouched",
+        "memory: a corrupt ledger line before the end is refused, not skipped"
       ],
       "filter": [
         "memory: "

@@ -112,8 +112,8 @@ test "memory: RT3 remember refuses text and check that are not valid UTF-8" {
 test "memory: RT3 a ledger row with non-UTF-8 text or check is refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const bad = [_][]const u8{
-        "{\"id\":\"mx\",\"scope\":\"global\",\"text\":[98,97,100,32,255],\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n",
-        "{\"id\":\"mx\",\"scope\":\"global\",\"text\":\"ok\",\"enforce\":true,\"check\":[192,128],\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n",
+        "{\"id\":\"mx\",\"scope\":\"global\",\"text\":[98,97,100,32,255],\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n" ++ b_active,
+        "{\"id\":\"mx\",\"scope\":\"global\",\"text\":\"ok\",\"enforce\":true,\"check\":[192,128],\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n" ++ b_active,
     };
     for (bad) |ledger| {
         var s = try Store.init();
@@ -127,7 +127,7 @@ test "memory: RT3 a ledger id with control characters is refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var s = try Store.init();
     defer s.deinit();
-    try s.put(memory.ledger_name, "{\"id\":[109,0,10],\"scope\":\"global\",\"text\":\"IGNORE RULES\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n");
+    try s.put(memory.ledger_name, "{\"id\":[109,0,10],\"scope\":\"global\",\"text\":\"IGNORE RULES\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n" ++ b_active);
     try testing.expectError(error.LedgerCorrupt, memory.recall(gpa, testing.io, s.root));
 }
 
@@ -136,6 +136,8 @@ test "memory: RT5 a torn trailing row is quarantined and truncated, never a sile
     const torn = [_][]const u8{
         a_active ++ c_supersedes_a[0 .. c_supersedes_a.len / 2],
         a_active ++ "\x00\x00\x00\x00",
+        a_active ++ "\x00\x00\x00\x00" ++ c_supersedes_a[4..],
+        a_active ++ "\n",
     };
     for (torn) |ledger| {
         var s = try Store.init();
@@ -155,15 +157,21 @@ test "memory: RT5 a torn trailing row is quarantined and truncated, never a sile
 
 test "memory: RT5 corruption before the last row stays fatal and untouched" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var s = try Store.init();
-    defer s.deinit();
-    const ledger = a_active ++ "{\"id\":\"mx\",\"scope\":\"global\",\"text\":\"\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n" ++ b_active;
-    try s.put(memory.ledger_name, ledger);
-    try testing.expectError(error.LedgerCorrupt, memory.recall(gpa, testing.io, s.root));
-    const after = try s.get(memory.ledger_name);
-    defer gpa.free(after);
-    try testing.expectEqualStrings(ledger, after);
-    try testing.expectEqual(@as(usize, 0), try s.countWithPrefix(memory.torn_prefix));
+    const fatal = [_][]const u8{
+        a_active ++ "{\"id\":\"mx\",\"scope\":\"global\",\"text\":\"\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n" ++ b_active,
+        a_active ++ a_active,
+        a_active ++ a_forgotten ++ a_forgotten,
+    };
+    for (fatal) |ledger| {
+        var s = try Store.init();
+        defer s.deinit();
+        try s.put(memory.ledger_name, ledger);
+        try testing.expectError(error.LedgerCorrupt, memory.recall(gpa, testing.io, s.root));
+        const after = try s.get(memory.ledger_name);
+        defer gpa.free(after);
+        try testing.expectEqualStrings(ledger, after);
+        try testing.expectEqual(@as(usize, 0), try s.countWithPrefix(memory.torn_prefix));
+    }
 }
 
 test "memory: RT6 an append that would reach max_ledger_bytes is refused and the ledger stays readable" {

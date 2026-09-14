@@ -106,7 +106,7 @@ test "memory: a corrupt ledger line before the end is refused, not skipped" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const bad = [_][]const u8{
         a_active ++ "{not json\n" ++ b_active,
-        a_active ++ "{\"id\":\"mx\",\"scope\":\"team\",\"text\":\"t\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":9}\n",
+        a_active ++ "{\"id\":\"mx\",\"scope\":\"team\",\"text\":\"t\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":9}\n" ++ b_active,
         a_active ++ "\n" ++ b_active,
         a_forgotten,
     };

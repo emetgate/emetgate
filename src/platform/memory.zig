@@ -200,13 +200,13 @@ fn newId(arena: Allocator, io: std.Io, ledger_len: usize, text: []const u8) ![]c
 }
 
 fn loadLedger(arena: Allocator, io: std.Io, paths: Paths) !Loaded {
-    var bytes = try readLedger(arena, io, paths);
-    if (tornTailStart(bytes)) |keep| {
-        try quarantineTornTail(arena, io, paths, bytes, keep);
-        bytes = bytes[0..keep];
-    }
-    const rows = try parseLedger(arena, bytes);
-    return .{ .bytes = bytes, .rows = rows, .folded = try foldRows(arena, rows) };
+    const bytes = try readLedger(arena, io, paths);
+    const keep = tornTailStart(arena, bytes);
+    const kept = if (keep) |k| bytes[0..k] else bytes;
+    const rows = try parseLedger(arena, kept);
+    const folded = try foldRows(arena, rows);
+    if (keep) |k| try quarantineTornTail(arena, io, paths, bytes, k);
+    return .{ .bytes = kept, .rows = rows, .folded = folded };
 }
 
 fn readLedger(arena: Allocator, io: std.Io, paths: Paths) ![]u8 {
@@ -232,16 +232,26 @@ fn hasLedgerSidecars(io: std.Io, paths: Paths) !bool {
     return false;
 }
 
-pub fn tornTailStart(bytes: []const u8) ?usize {
-    if (bytes.len == 0) return null;
-    if (bytes[bytes.len - 1] != '\n') {
-        return if (std.mem.lastIndexOfScalar(u8, bytes, '\n')) |nl| nl + 1 else 0;
+pub fn tornTailStart(arena: Allocator, bytes: []const u8) ?usize {
+    var start: usize = 0;
+    while (start < bytes.len) {
+        const newline = std.mem.indexOfScalarPos(u8, bytes, start, '\n');
+        const end = newline orelse bytes.len;
+        const complete = newline != null;
+        if (!complete or !lineIsRow(arena, bytes[start..end])) {
+            if (end + 1 < bytes.len) return null;
+            return start;
+        }
+        start = end + 1;
     }
-    const body = bytes[0 .. bytes.len - 1];
-    const start = if (std.mem.lastIndexOfScalar(u8, body, '\n')) |nl| nl + 1 else 0;
-    const last = body[start..];
-    if (last.len != 0 and std.mem.allEqual(u8, last, 0)) return start;
     return null;
+}
+
+fn lineIsRow(arena: Allocator, line: []const u8) bool {
+    if (line.len == 0) return false;
+    const decision = std.json.parseFromSliceLeaky(Decision, arena, line, .{}) catch return false;
+    validateRow(decision) catch return false;
+    return true;
 }
 
 fn quarantineTornTail(arena: Allocator, io: std.Io, paths: Paths, bytes: []const u8, keep: usize) !void {
