@@ -1,6 +1,11 @@
 # The e2e tests compare exact bytes and content hashes computed over LF source,
-# so every text file must check out with LF, including on Windows CI.
+# so text must check out with LF everywhere, including on Windows CI.
 * text=auto eol=lf
+
+# Fixtures and e2e inputs/outputs are byte-exact: check them out verbatim so no
+# platform ever rewrites their line endings.
+tests/fixtures/** -text
+tests/e2e/** -text
 
 *.png binary
 *.ico binary
