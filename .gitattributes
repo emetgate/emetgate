@@ -1,1 +1,6 @@
-tests/fixtures/** -text
+# The e2e tests compare exact bytes and content hashes computed over LF source,
+# so every text file must check out with LF, including on Windows CI.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
