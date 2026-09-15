@@ -51,6 +51,7 @@ pub const profile: Profile = .{
     .export_wrappers = &.{"export_statement"},
     .decorator = "decorator",
     .comments = &.{"comment"},
+    .block = "statement_block",
     .memberTraits = memberTraits,
 };
 

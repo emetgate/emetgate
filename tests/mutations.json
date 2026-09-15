@@ -877,7 +877,7 @@
         "purple C2: a brace-injection body cannot escape the slot"
       ],
       "file": "src/engine/cas.zig",
-      "from": "    try expectExactSlot(patched_target.body, slot);\n",
+      "from": "    try expectExactSlot(base.profile, patched_target.body, slot);\n",
       "to": ""
     },
     {
@@ -895,8 +895,8 @@
         "a body that parses but spills outside its slot is a BodyEscape"
       ],
       "file": "src/engine/cas.zig",
-      "from": "    if (isComment(edgeToken(body, .first)) or isComment(edgeToken(body, .last))) return error.BodyEscape;\n",
-      "to": ""
+      "from": "    if (profile.isComment(edgeToken(body, .first).kind()) or profile.isComment(edgeToken(body, .last).kind())) return error.BodyEscape;\n",
+      "to": "    if ((profile.isComment(edgeToken(body, .first).kind()) or profile.isComment(edgeToken(body, .last).kind())) and false) return error.BodyEscape;\n"
     },
     {
       "id": "EC6-cas-placeholder-call-removed",
@@ -904,7 +904,7 @@
         "purple C2: every placeholder variant is rejected before any test runs"
       ],
       "file": "src/engine/cas.zig",
-      "from": "    try rejectPlaceholder(patched_target.body);\n",
+      "from": "    try rejectPlaceholder(base.profile, patched_target.body);\n",
       "to": ""
     },
     {

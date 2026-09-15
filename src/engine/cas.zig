@@ -2,6 +2,7 @@ const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const symbol = @import("symbol.zig");
 const Snapshot = @import("loader.zig").Snapshot;
+const Profile = @import("lang/profile.zig").Profile;
 const test_util = @import("test_util.zig");
 
 const Allocator = std.mem.Allocator;
@@ -55,16 +56,16 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
 
     const slot: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(new_body.len)) };
     const patched_target = after.resolve(mutation.ref) catch return error.BodyEscape;
-    try expectExactSlot(patched_target.body, slot);
-    try rejectPlaceholder(patched_target.body);
+    try expectExactSlot(base.profile, patched_target.body, slot);
+    try rejectPlaceholder(base.profile, patched_target.body);
     try expectUntouchedOutside(before.*, after.*, cut, slot);
 
     return .{ .snapshot = next, .hash = patched_target.hash, .body = slot };
 }
 
-fn expectExactSlot(body: ts.Node, slot: Span) error{BodyEscape}!void {
+fn expectExactSlot(profile: *const Profile, body: ts.Node, slot: Span) error{BodyEscape}!void {
     if (body.startByte() != slot.start or body.endByte() != slot.end) return error.BodyEscape;
-    if (isComment(edgeToken(body, .first)) or isComment(edgeToken(body, .last))) return error.BodyEscape;
+    if (profile.isComment(edgeToken(body, .first).kind()) or profile.isComment(edgeToken(body, .last).kind())) return error.BodyEscape;
 }
 
 fn edgeToken(node: ts.Node, comptime side: enum { first, last }) ts.Node {
@@ -75,23 +76,19 @@ fn edgeToken(node: ts.Node, comptime side: enum { first, last }) ts.Node {
     return current;
 }
 
-fn rejectPlaceholder(body: ts.Node) error{PlaceholderBody}!void {
-    if (!std.mem.eql(u8, "statement_block", body.kind())) return;
+fn rejectPlaceholder(profile: *const Profile, body: ts.Node) error{PlaceholderBody}!void {
+    if (!std.mem.eql(u8, profile.block, body.kind())) return;
     var has_statement = false;
     var has_comment = false;
     var i: u32 = 0;
     while (body.child(i)) |node| : (i += 1) {
-        if (isComment(node)) {
+        if (profile.isComment(node.kind())) {
             has_comment = true;
         } else if (node.isNamed()) {
             has_statement = true;
         }
     }
     if (has_comment and !has_statement) return error.PlaceholderBody;
-}
-
-fn isComment(node: ts.Node) bool {
-    return std.mem.eql(u8, "comment", node.kind());
 }
 
 fn expectUntouchedOutside(before: symbol.Table, after: symbol.Table, cut: Span, slot: Span) error{BodyEscape}!void {

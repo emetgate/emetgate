@@ -52,6 +52,7 @@ pub const Profile = struct {
     export_wrappers: []const []const u8,
     decorator: []const u8,
     comments: []const []const u8,
+    block: []const u8,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
 
     pub fn handles(self: *const Profile, path: []const u8) bool {
@@ -66,6 +67,13 @@ pub const Profile = struct {
             if (std.mem.eql(u8, entry.node, node_kind)) return entry.kind;
         }
         return null;
+    }
+
+    pub fn isComment(self: *const Profile, node_kind: []const u8) bool {
+        for (self.comments) |kind| {
+            if (std.mem.eql(u8, kind, node_kind)) return true;
+        }
+        return false;
     }
 
     pub fn containerName(self: *const Profile, node_kind: []const u8) ?NameSource {
