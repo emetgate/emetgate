@@ -56,8 +56,7 @@ test "a runtime refuses to close while a snapshot is alive" {
 
 test "a runtime refuses to close while a plain tree is alive and stays usable" {
     const runtime = try Runtime.create(testing.allocator);
-    try runtime.parser.setLanguage(test_util.language.grammar());
-    const tree = try runtime.parser.parse("const x = 1;\n");
+    const tree = try runtime.parser.parseIn(test_util.language.grammar(), "const x = 1;\n");
 
     try testing.expectError(error.LiveAllocations, runtime.destroy());
 

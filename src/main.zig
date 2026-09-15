@@ -464,8 +464,7 @@ fn printStats(init: std.process.Init, runtime: *Runtime, paths: []const [:0]cons
             },
         };
         defer runtime.gpa.free(text);
-        try runtime.parser.setLanguage(snapshot.tree.language());
-        const reparsed = try runtime.parser.parse(text);
+        const reparsed = try runtime.parser.parseIn(snapshot.tree.language(), text);
         defer reparsed.deinit();
 
         const before = skeleton.measure(snapshot.tree);

@@ -29,6 +29,11 @@ pub const Parser = struct {
         if (!c.ts_parser_set_language(self.raw, language)) return error.IncompatibleLanguage;
     }
 
+    pub fn parseIn(self: Parser, language: *const Language, source: []const u8) Error!Tree {
+        try self.setLanguage(language);
+        return self.parse(source);
+    }
+
     pub fn deinit(self: Parser) void {
         c.ts_parser_delete(self.raw);
     }

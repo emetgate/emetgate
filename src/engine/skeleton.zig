@@ -46,8 +46,7 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Err
 
     const skeleton = try out.toOwnedSlice(gpa);
     errdefer gpa.free(skeleton);
-    try parser.setLanguage(tree.language());
-    try verify(parser, skeleton);
+    try verify(parser, tree.language(), skeleton);
     return skeleton;
 }
 
@@ -106,8 +105,8 @@ fn trimTrailingWhitespace(source: []const u8, end: u32) u32 {
     return i;
 }
 
-fn verify(parser: ts.Parser, skeleton: []const u8) Error!void {
-    const tree = try parser.parse(skeleton);
+fn verify(parser: ts.Parser, language: *const ts.Language, skeleton: []const u8) Error!void {
+    const tree = try parser.parseIn(language, skeleton);
     defer tree.deinit();
     if (tree.root().hasError()) return error.SkeletonInvalid;
 }

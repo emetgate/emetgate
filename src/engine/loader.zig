@@ -20,8 +20,7 @@ pub const Snapshot = struct {
 
     pub fn fromSource(runtime: *Runtime, profile: *const Profile, source: []u8) CreateError!*Snapshot {
         errdefer runtime.gpa.free(source);
-        try runtime.parser.setLanguage(profile.grammar());
-        const tree = try runtime.parser.parse(source);
+        const tree = try runtime.parser.parseIn(profile.grammar(), source);
         errdefer tree.deinit();
         const self = try runtime.gpa.create(Snapshot);
         self.* = .{ .runtime = runtime, .profile = profile, .source = source, .tree = tree };
