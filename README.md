@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/status-early-E040FB?style=flat-square" alt="Status: early">
   <img src="https://img.shields.io/badge/zig-0.16.0-F7A41D?style=flat-square&logo=zig&logoColor=white" alt="Zig 0.16.0">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="Languages: TypeScript">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
@@ -136,7 +136,7 @@ Emetgate is early and deliberately narrow.
 | MCP server and locked-down launch | Built |
 | Decision ledger (append-only, supersession, compaction, torn-tail recovery) | Built, not yet exposed as MCP tools |
 | Rule enforcement at the edit gate | In progress |
-| Language support | TypeScript only |
+| Language support | TypeScript and JavaScript (`.js`, `.mjs`, `.cjs`); new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
 | Platform | Windows only (the sandbox relies on Job Objects) |
 
 On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, two of them real files), editing through symbol-level proposals uses a median of **1.80×** fewer tokens than search-and-replace editing, with a range of 1.15× to 3.77×. On the real files the gain is modest, 1.15× to 1.17×. Token savings are a side effect, not the point.
