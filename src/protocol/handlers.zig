@@ -253,24 +253,19 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const given = try trustedTestCommand(args, policy);
     const edits = try gpa.alloc(runner.Edit, items.len);
     defer gpa.free(edits);
+    const places = try gpa.alloc(repo.Jailed, items.len);
+    defer gpa.free(places);
     var built: usize = 0;
-    defer {
-        var i = built;
-        while (i > 0) {
-            i -= 1;
-            const owned: [:0]const u8 = edits[i].file_abs.ptr[0..edits[i].file_abs.len :0];
-            gpa.free(owned);
-        }
-    }
+    defer for (places[0..built]) |place| place.deinit(gpa);
     for (items, 0..) |item, i| {
-        const place = try repo.jail(gpa, io, policy.root, getString(item, "file").?);
-        gpa.free(place.root);
-        gpa.free(place.rel);
-        edits[i].file_abs = place.abs;
+        places[i] = try repo.jail(gpa, io, policy.root, getString(item, "file").?);
         built = i + 1;
-        edits[i].ref_text = getString(item, "symbol").?;
-        edits[i].new_body = getString(item, "body").?;
-        edits[i].expected_hash = try symbol.parseHash(getString(item, "hash").?);
+        edits[i] = .{
+            .file_abs = places[i].abs,
+            .ref_text = getString(item, "symbol").?,
+            .new_body = getString(item, "body").?,
+            .expected_hash = try symbol.parseHash(getString(item, "hash").?),
+        };
     }
 
     const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, given, policy.allow_repo_config);
