@@ -1300,6 +1300,15 @@
       "kills": [
         "every registered language has conformance cases"
       ]
+    },
+    {
+      "id": "CJ1-javascript-field-name-shape-wrong",
+      "file": "src/engine/lang/javascript/profile.zig",
+      "from": "const field_shape: ecma.FieldShape = .{ .node = \"field_definition\", .name_field = \"property\" };",
+      "to": "const field_shape: ecma.FieldShape = .{ .node = \"field_definition\", .name_field = \"name\" };",
+      "kills": [
+        "conformance: static members, constructors and accessors get their own refs and kinds"
+      ]
     }
   ]
 }

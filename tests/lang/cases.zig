@@ -1,4 +1,13 @@
+const Kind = @import("../../src/engine/symbol.zig").Kind;
+
+pub const Member = struct {
+    ref: []const u8,
+    kind: Kind,
+};
+
 pub const Cases = struct {
+    member_source: []const u8,
+    members: []const Member,
     source: []const u8,
     target_ref: []const u8,
     neighbour_ref: []const u8,

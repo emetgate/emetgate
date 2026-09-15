@@ -137,6 +137,26 @@ test "conformance: an optional call is not a plain call, so the callee is unboun
     }
 }
 
+test "conformance: static members, constructors and accessors get their own refs and kinds" {
+    for (registry.profiles) |profile| {
+        errdefer std.debug.print("language: {s}\n", .{profile.name});
+        const cases = casesFor(profile) orelse return error.MissingConformanceCases;
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        const snapshot = try Snapshot.fromSource(runtime, profile, try testing.allocator.dupe(u8, cases.member_source));
+        defer snapshot.destroy();
+        try testing.expect(!snapshot.tree.root().hasError());
+
+        const table = try snapshot.symbols();
+        try testing.expectEqual(cases.members.len, table.symbols.len);
+        for (cases.members) |member| {
+            errdefer std.debug.print("member: {s}\n", .{member.ref});
+            const found = try Language.resolve(snapshot, member.ref);
+            try testing.expectEqual(member.kind, found.kind);
+        }
+    }
+}
+
 test "conformance: the skeleton is valid, smaller and a fixed point" {
     for (registry.profiles) |profile| {
         errdefer std.debug.print("language: {s}\n", .{profile.name});

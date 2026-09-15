@@ -1,6 +1,21 @@
 const Cases = @import("../cases.zig").Cases;
 
 pub const cases: Cases = .{
+    .member_source =
+    \\class Box {
+    \\  static make = () => 1;
+    \\  constructor() {}
+    \\  get size() { return 1; }
+    \\  set size(v) {}
+    \\}
+    \\
+    ,
+    .members = &.{
+        .{ .ref = "Box.make@static", .kind = .arrow },
+        .{ .ref = "Box.constructor", .kind = .constructor },
+        .{ .ref = "Box.size@get", .kind = .getter },
+        .{ .ref = "Box.size@set", .kind = .setter },
+    },
     .source =
     \\function target(a) {
     \\  return a + 1;
