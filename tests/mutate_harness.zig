@@ -45,6 +45,7 @@ test "harness: a crashed test is named like a failed one" {
     try testing.expectEqual(@as(usize, 1), names.len);
     try testing.expectEqualStrings("src.engine.cas.test.a body that parses but spills outside its slot is a BodyEscape", names[0]);
     try testing.expect(core.missingKill(names, &.{"a body that parses but spills outside its slot is a BodyEscape"}) == null);
+    try testing.expectEqual(core.Status.killed, core.classify(.unit, 1, "error: 'tests.a.test.x' exited with code 3 with stderr:\n"));
 }
 
 test "harness: exact kills reject a test outside the expected set" {

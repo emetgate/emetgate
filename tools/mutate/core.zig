@@ -47,18 +47,25 @@ fn numberBefore(text: []const u8, word: []const u8) u32 {
     return std.fmt.parseInt(u32, text[start..at], 10) catch 0;
 }
 
+const failure_prefix = "error: '";
+const failure_suffixes = [_][]const u8{ "' failed", "' exited with code" };
+
+fn failedTestName(raw: []const u8) ?[]const u8 {
+    const line = std.mem.trim(u8, raw, " \r");
+    if (!std.mem.startsWith(u8, line, failure_prefix)) return null;
+    for (failure_suffixes) |suffix| {
+        const close = std.mem.lastIndexOf(u8, line, suffix) orelse continue;
+        if (close > failure_prefix.len) return line[failure_prefix.len..close];
+    }
+    return null;
+}
+
 pub fn failedTests(gpa: Allocator, output: []const u8) ![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
     errdefer names.deinit(gpa);
-    const prefix = "error: '";
     var lines = std.mem.splitScalar(u8, output, '\n');
     while (lines.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \r");
-        if (!std.mem.startsWith(u8, line, prefix)) continue;
-        const close = std.mem.lastIndexOf(u8, line, "' failed") orelse
-            std.mem.lastIndexOf(u8, line, "' exited with code") orelse continue;
-        if (close <= prefix.len) continue;
-        const name = line[prefix.len..close];
+        const name = failedTestName(raw) orelse continue;
         for (names.items) |seen| {
             if (std.mem.eql(u8, seen, name)) break;
         } else try names.append(gpa, name);
@@ -114,7 +121,11 @@ fn isCompileError(output: []const u8) bool {
 }
 
 fn hasFailedTestLine(output: []const u8) bool {
-    return std.mem.indexOf(u8, output, "error: '") != null and std.mem.indexOf(u8, output, "' failed") != null;
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |raw| {
+        if (failedTestName(raw) != null) return true;
+    }
+    return false;
 }
 
 pub const Journal = struct {

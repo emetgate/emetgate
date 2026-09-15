@@ -1248,8 +1248,8 @@
     {
       "id": "H1-harness-crashed-test-names-ignored",
       "file": "tools/mutate/core.zig",
-      "from": "\"' failed\") orelse\n            std.mem.lastIndexOf(u8, line, \"' exited with code\") orelse continue;",
-      "to": "\"' failed\") orelse continue;",
+      "from": "const failure_suffixes = [_][]const u8{ \"' failed\", \"' exited with code\" };",
+      "to": "const failure_suffixes = [_][]const u8{\"' failed\"};",
       "kills": [
         "harness: a crashed test is named like a failed one"
       ]
