@@ -46,6 +46,7 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Err
 
     const skeleton = try out.toOwnedSlice(gpa);
     errdefer gpa.free(skeleton);
+    try parser.setLanguage(tree.language());
     try verify(parser, skeleton);
     return skeleton;
 }
@@ -140,7 +141,7 @@ fn skeletonOfSource(parser: ts.Parser, source: []const u8) ![]u8 {
 fn expectSkeleton(source: []const u8, expected: []const u8) !void {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const skeleton = try skeletonOfSource(parser, source);
@@ -155,7 +156,7 @@ fn expectSkeleton(source: []const u8, expected: []const u8) !void {
 test "functions.ts skeleton matches the golden file byte for byte" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const doc = try test_util.openFixture(parser, "functions.ts");
@@ -171,7 +172,7 @@ test "functions.ts skeleton matches the golden file byte for byte" {
 test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     for (fixtures) |name| {
@@ -199,7 +200,7 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
 test "sources with syntax errors are refused instead of guessed at" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const doc = try test_util.openFixture(parser, "broken.ts");
@@ -265,7 +266,7 @@ test "CRLF line endings and a UTF-8 BOM are preserved around the cuts" {
 test "a source without functions is returned unchanged" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const source = "export type Id = string;\nexport const limit = 10;\n";

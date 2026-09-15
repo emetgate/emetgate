@@ -44,7 +44,7 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
 
     const cut: Span = .{ .start = target.body.startByte(), .end = target.body.endByte() };
     const source = try std.mem.concat(base.runtime.gpa, u8, &.{ base.source[0..cut.start], new_body, base.source[cut.end..] });
-    const next = try Snapshot.fromSource(base.runtime, source);
+    const next = try Snapshot.fromSource(base.runtime, base.profile, source);
     errdefer next.destroy();
     if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;
 

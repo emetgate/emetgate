@@ -115,7 +115,7 @@ test "read tools refuse .git internals" {
     try expectToolError(runtime, "emetgate_list", .{ .dir = ".git" }, "InternalPath");
 }
 
-test "skeleton refuses a non-TypeScript file instead of echoing it; read_file serves it" {
+test "skeleton refuses a file of no registered language instead of echoing it; read_file serves it" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
     var tmp = testing.tmpDir(.{});
@@ -128,7 +128,7 @@ test "skeleton refuses a non-TypeScript file instead of echoing it; read_file se
         var reply = try callTool(runtime, tool, .{ .file = path });
         defer reply.deinit();
         try testing.expect(reply.is_error);
-        try testing.expect(std.mem.indexOf(u8, reply.text, "NotTypeScript") != null);
+        try testing.expect(std.mem.indexOf(u8, reply.text, "UnsupportedLanguage") != null);
         try testing.expect(std.mem.indexOf(u8, reply.text, "SECRET_LINE_77") == null);
     }
 

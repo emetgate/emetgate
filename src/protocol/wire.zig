@@ -255,7 +255,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.NoTestCommand, error.InvalidConfig => 2,
         error.UntrustedRepoConfig => 15,
         error.ModelSuppliedTestPolicy => 17,
-        error.NotTypeScript, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern => 18,
+        error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern => 18,
         error.WorkspaceBusy, error.WorkspaceLockFailed => 14,
         error.Conflict => 11,
         error.WrittenButUnverified => 12,

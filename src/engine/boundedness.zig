@@ -218,6 +218,7 @@ fn hasStringKey(snapshot: *Snapshot, name: []const u8) bool {
 
 const testing = std.testing;
 const Runtime = @import("runtime.zig").Runtime;
+const test_util = @import("test_util.zig");
 
 const Case = struct {
     runtime: *Runtime,
@@ -227,7 +228,7 @@ const Case = struct {
         const runtime = try Runtime.create(testing.allocator);
         errdefer runtime.destroy() catch {};
         const owned = try testing.allocator.dupe(u8, src);
-        const snapshot = try Snapshot.fromSource(runtime, owned);
+        const snapshot = try Snapshot.fromSource(runtime, test_util.language, owned);
         return .{ .runtime = runtime, .snapshot = snapshot };
     }
 

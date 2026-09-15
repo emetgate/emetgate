@@ -1,18 +1,25 @@
 const std = @import("std");
 const ts = @import("tree_sitter.zig");
+const Profile = @import("lang/profile.zig").Profile;
 const Runtime = @import("runtime.zig").Runtime;
 const Snapshot = @import("loader.zig").Snapshot;
 
 pub const fixture_dir = "tests/fixtures/";
+
+pub const language: *const Profile = &@import("lang/typescript/profile.zig").profile;
+
+pub fn parser() ts.Error!ts.Parser {
+    return ts.Parser.init(language.grammar());
+}
 
 pub const TestTree = struct {
     parser: ts.Parser,
     tree: ts.Tree,
 
     pub fn init(source: []const u8) !TestTree {
-        const parser = try ts.Parser.init(ts.typescript());
-        errdefer parser.deinit();
-        return .{ .parser = parser, .tree = try parser.parse(source) };
+        const p = try parser();
+        errdefer p.deinit();
+        return .{ .parser = p, .tree = try p.parse(source) };
     }
 
     pub fn deinit(self: TestTree) void {
@@ -31,11 +38,11 @@ pub const Fixture = struct {
     }
 };
 
-pub fn openFixture(parser: ts.Parser, name: []const u8) !Fixture {
+pub fn openFixture(p: ts.Parser, name: []const u8) !Fixture {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try fixturePath(&path_buf, name), std.testing.allocator, .unlimited);
     errdefer std.testing.allocator.free(source);
-    return .{ .source = source, .tree = try parser.parse(source) };
+    return .{ .source = source, .tree = try p.parse(source) };
 }
 
 pub fn openRuntime() !*Runtime {
@@ -48,7 +55,7 @@ pub fn closeRuntime(runtime: *Runtime) void {
 }
 
 pub fn snapshotOf(runtime: *Runtime, source: []const u8) !*Snapshot {
-    return Snapshot.fromSource(runtime, try std.testing.allocator.dupe(u8, source));
+    return Snapshot.fromSource(runtime, language, try std.testing.allocator.dupe(u8, source));
 }
 
 pub fn loadFixture(runtime: *Runtime, name: []const u8) !*Snapshot {

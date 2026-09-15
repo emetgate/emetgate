@@ -1253,6 +1253,26 @@
       "kills": [
         "harness: a crashed test is named like a failed one"
       ]
+    },
+    {
+      "id": "L1-loader-language-check-skipped",
+      "file": "src/engine/loader.zig",
+      "from": "const profile = registry.forPath(path) orelse return error.UnsupportedLanguage;",
+      "to": "const profile = registry.forPath(path) orelse registry.profiles[0];",
+      "kills": [
+        "a file of no registered language is refused before it is read and creates no snapshot",
+        "skeleton refuses a file of no registered language instead of echoing it; read_file serves it"
+      ]
+    },
+    {
+      "id": "R1-registry-extension-ignored",
+      "file": "src/engine/lang/registry.zig",
+      "from": "if (profile.handles(path)) return profile;",
+      "to": "if (profile.handles(path) or true) return profile;",
+      "kills": [
+        "every registered profile loads its grammar and alone claims its extensions in any case",
+        "a file of no registered language is refused before it is read and creates no snapshot"
+      ]
     }
   ]
 }

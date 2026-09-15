@@ -55,7 +55,6 @@ fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8) !
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
     defer gpa.free(file_abs);
     try runner.assertUnderCwdRepo(gpa, io, file_abs);
-    if (!std.ascii.endsWithIgnoreCase(file_abs, ".ts")) return error.NotTypeScript;
     return Snapshot.load(runtime, io, .cwd(), file_abs);
 }
 

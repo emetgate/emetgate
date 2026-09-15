@@ -17,7 +17,7 @@ pub const Runtime = struct {
         errdefer alloc_bridge.uninstall();
         const self = try gpa.create(Runtime);
         errdefer gpa.destroy(self);
-        self.* = .{ .gpa = gpa, .parser = try ts.Parser.init(ts.typescript()) };
+        self.* = .{ .gpa = gpa, .parser = ts.Parser.create() };
         return self;
     }
 
@@ -30,7 +30,7 @@ pub const Runtime = struct {
         if (self.live_snapshots != 0) return error.LiveSnapshots;
         self.parser.deinit();
         if (alloc_bridge.stats().blocks != 0) {
-            self.parser = ts.Parser.init(ts.typescript()) catch @panic("cannot restore the parser of a runtime that refused to close");
+            self.parser = ts.Parser.create();
             return error.LiveAllocations;
         }
         alloc_bridge.uninstall();
@@ -56,6 +56,7 @@ test "a runtime refuses to close while a snapshot is alive" {
 
 test "a runtime refuses to close while a plain tree is alive and stays usable" {
     const runtime = try Runtime.create(testing.allocator);
+    try runtime.parser.setLanguage(test_util.language.grammar());
     const tree = try runtime.parser.parse("const x = 1;\n");
 
     try testing.expectError(error.LiveAllocations, runtime.destroy());

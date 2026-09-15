@@ -83,7 +83,7 @@ fn resolveText(table: Table, text: []const u8) !*const Symbol {
 test "collects every function-like boundary in the fixture, in source order" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
     const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
@@ -162,7 +162,7 @@ test "arrow functions in default parameters are not nested in the body" {
 test "byte offsets stay exact after multi-byte UTF-8 text" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
     const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
@@ -180,7 +180,7 @@ test "byte offsets stay exact after multi-byte UTF-8 text" {
 test "symbol table of the fixture names every addressable function with its container" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
     const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
@@ -208,7 +208,7 @@ test "symbol table of the fixture names every addressable function with its cont
 test "service fixture: private, static, decorated-class and parameter-property members" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
     const doc = try test_util.openFixture(parser, "service.ts");
     defer doc.deinit();
@@ -321,7 +321,7 @@ test "a method named constructor in an object literal is a method, not a constru
 test "sources with syntax errors never produce a symbol table" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
     const doc = try test_util.openFixture(parser, "broken.ts");
     defer doc.deinit();
@@ -458,7 +458,7 @@ test "dotted namespace names are normalised from identifiers, ignoring spacing a
 test "every unambiguous symbol resolves back to itself through its canonical text" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     var buf: [256]u8 = undefined;

@@ -5,6 +5,7 @@ const cas = @import("../engine/cas.zig");
 const alloc_bridge = @import("../engine/alloc_bridge.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
+const Profile = @import("../engine/lang/profile.zig").Profile;
 const test_util = @import("../engine/test_util.zig");
 
 const Allocator = std.mem.Allocator;
@@ -27,8 +28,8 @@ pub const Session = struct {
     pub const LoadError = error{SourceHasErrors} || Snapshot.LoadError;
     pub const HashError = symbol.Table.BuildError || symbol.Table.ResolveError;
 
-    pub fn create(runtime: *Runtime, source: []u8) CreateError!*Session {
-        return adopt(runtime, try Snapshot.fromSource(runtime, source));
+    pub fn create(runtime: *Runtime, profile: *const Profile, source: []u8) CreateError!*Session {
+        return adopt(runtime, try Snapshot.fromSource(runtime, profile, source));
     }
 
     pub fn load(runtime: *Runtime, io: std.Io, dir: std.Io.Dir, path: []const u8) LoadError!*Session {
@@ -121,7 +122,7 @@ fn hashText(session: *Session, ref_text: []const u8) !symbol.Hash {
 }
 
 fn newSession(runtime: *Runtime, source: []const u8) !*Session {
-    return Session.create(runtime, try runtime.gpa.dupe(u8, source));
+    return Session.create(runtime, test_util.language, try runtime.gpa.dupe(u8, source));
 }
 
 const bodies = [_][]const u8{ "{\n  return a - b;\n}", "{\n  return a * b;\n}" };
