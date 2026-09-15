@@ -837,9 +837,9 @@
     },
     {
       "id": "R7-checks-template-string-prose-allowed",
-      "file": "src/engine/lang/typescript/profile.zig",
-      "from": ".prose_strings = &.{ \"string\", \"template_string\" },",
-      "to": ".prose_strings = &.{\"string\"},",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": "pub const prose_strings = [_][]const u8{ \"string\", \"template_string\" };",
+      "to": "pub const prose_strings = [_][]const u8{\"string\"};",
       "kills": [
         "no_comment flags prose smuggled in as a string or template statement"
       ]
@@ -1011,16 +1011,16 @@
       "kills": [
         "adversarial: a dynamic import anywhere in the file forces UNBOUNDED"
       ],
-      "file": "src/engine/lang/typescript/profile.zig",
-      "from": ".dynamic_callees = &.{ \"eval\", \"import\" },",
-      "to": ".dynamic_callees = &.{\"eval\"},"
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": "pub const dynamic_callees = [_][]const u8{ \"eval\", \"import\" };",
+      "to": "pub const dynamic_callees = [_][]const u8{\"eval\"};"
     },
     {
       "id": "EB7-bnd-new-function-ignored",
       "kills": [
         "adversarial: a Function constructor anywhere in the file forces UNBOUNDED"
       ],
-      "file": "src/engine/lang/typescript/profile.zig",
+      "file": "src/engine/lang/ecma/common.zig",
       "from": ".names = &.{\"Function\"}",
       "to": ".names = &.{}"
     },
@@ -1180,8 +1180,8 @@
       "kills": [
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
-      "file": "src/engine/lang/typescript/profile.zig",
-      "from": "and keywordBeforeName(site, \"static\");",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": "and keywordBeforeName(site, field.name_field, \"static\");",
       "to": "and false;"
     },
     {
@@ -1189,8 +1189,8 @@
       "kills": [
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
-      "file": "src/engine/lang/typescript/profile.zig",
-      "from": ".is_static = keywordBeforeName(node, \"static\"),",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": ".is_static = keywordBeforeName(node, \"name\", \"static\"),",
       "to": ".is_static = false,"
     },
     {
@@ -1198,15 +1198,15 @@
       "kills": [
         "only the addressed accessor changes when getter and setter share a name"
       ],
-      "file": "src/engine/lang/typescript/profile.zig",
-      "from": "    if (keywordBeforeName(node, \"get\")) accessor = .get;\n",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": "    if (keywordBeforeName(node, \"name\", \"get\")) accessor = .get;\n",
       "to": ""
     },
     {
       "id": "ES11-sym-keyword-scan-passes-name",
       "expect_status": "survived",
       "note": "open: no killing input found; an accessor or static keyword token after the name would be needed, and none was found in method or field syntax, but this is not proven equivalent",
-      "file": "src/engine/lang/typescript/profile.zig",
+      "file": "src/engine/lang/ecma/common.zig",
       "from": "if (child.eql(name)) return false;",
       "to": "if (child.eql(name) and false) return false;"
     },
@@ -1215,7 +1215,7 @@
       "kills": [
         "a method named constructor in an object literal is a method, not a constructor"
       ],
-      "file": "src/engine/lang/typescript/profile.zig",
+      "file": "src/engine/lang/ecma/common.zig",
       "from": "return std.mem.eql(u8, \"class_body\", parent.kind()) and std.mem.eql(u8, \"constructor\", tree.text(name));",
       "to": "return std.mem.eql(u8, \"constructor\", tree.text(name)) and parent.isNamed();"
     },
