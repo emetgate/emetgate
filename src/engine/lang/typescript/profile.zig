@@ -62,6 +62,12 @@ pub const profile: Profile = .{
     .dynamic_callees = &.{ "eval", "import" },
     .dynamic_constructors = &.{.{ .node = "new_expression", .field = "constructor", .names = &.{"Function"} }},
     .strings = &.{"string"},
+    .class_body = "class_body",
+    .bodyless_terminator = ";",
+    .empty_body = "{}",
+    .expression_statement = "expression_statement",
+    .prose_strings = &.{ "string", "template_string" },
+    .directives = &.{ "\"use strict\"", "'use strict'" },
     .memberTraits = memberTraits,
 };
 

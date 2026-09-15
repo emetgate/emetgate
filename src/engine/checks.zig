@@ -2,6 +2,8 @@ const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
 const symbol = @import("symbol.zig");
+const Profile = @import("lang/profile.zig").Profile;
+const isOneOf = @import("functions.zig").isOneOf;
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -11,7 +13,7 @@ pub const Violation = struct {
     span: Span,
 };
 
-pub const Collect = *const fn (gpa: Allocator, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void;
+pub const Collect = *const fn (gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void;
 
 pub const Check = struct {
     name: []const u8,
@@ -31,23 +33,23 @@ pub fn find(checks: []const Check, name: []const u8) ?Check {
     return null;
 }
 
-pub fn run(gpa: Allocator, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
-    return runWith(gpa, &registry, tree, span, names);
+pub fn run(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
+    return runWith(gpa, &registry, profile, tree, span, names);
 }
 
-pub fn runWith(gpa: Allocator, checks: []const Check, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
+pub fn runWith(gpa: Allocator, checks: []const Check, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
     for (names) |name| {
         if (find(checks, name) == null) return error.UnknownCheck;
     }
     var out: std.ArrayList(Violation) = .empty;
     errdefer out.deinit(gpa);
     for (names) |name| {
-        if (find(checks, name)) |check| try check.collect(gpa, tree, span, &out);
+        if (find(checks, name)) |check| try check.collect(gpa, profile, tree, span, &out);
     }
     return out.toOwnedSlice(gpa);
 }
 
-fn noComment(gpa: Allocator, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
+fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
     var walker = traversal.Walker.init(tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
@@ -56,31 +58,31 @@ fn noComment(gpa: Allocator, tree: ts.Tree, span: Span, out: *std.ArrayList(Viol
             walker.skipChildren();
             continue;
         }
-        if (isKind(node, "comment") or isProseStatement(tree, node)) {
+        if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {
             try out.append(gpa, .{ .check = "no_comment", .span = .{ .start = node.startByte(), .end = node.endByte() } });
         }
     }
 }
 
-fn isProseStatement(tree: ts.Tree, node: ts.Node) bool {
-    if (!isStringStatement(node)) return false;
-    return !isUseStrictDirective(tree, node);
+fn isProseStatement(profile: *const Profile, tree: ts.Tree, node: ts.Node) bool {
+    if (!isStringStatement(profile, node)) return false;
+    return !isDirective(profile, tree, node);
 }
 
-fn isStringStatement(node: ts.Node) bool {
-    if (!isKind(node, "expression_statement") or node.namedChildCount() != 1) return false;
+fn isStringStatement(profile: *const Profile, node: ts.Node) bool {
+    if (!isKind(node, profile.expression_statement) or node.namedChildCount() != 1) return false;
     const expression = node.namedChild(0).?;
-    return isKind(expression, "string") or isKind(expression, "template_string");
+    return isOneOf(expression.kind(), profile.prose_strings);
 }
 
-fn isUseStrictDirective(tree: ts.Tree, node: ts.Node) bool {
+fn isDirective(profile: *const Profile, tree: ts.Tree, node: ts.Node) bool {
     const literal = tree.text(node.namedChild(0).?);
-    if (!std.mem.eql(u8, literal, "\"use strict\"") and !std.mem.eql(u8, literal, "'use strict'")) return false;
+    if (!isOneOf(literal, profile.directives)) return false;
     const parent = node.parent() orelse return false;
-    if (!isKind(parent, "statement_block") and !isKind(parent, "program")) return false;
+    if (!isKind(parent, profile.block) and !isKind(parent, profile.root)) return false;
     var previous = node.prevNamedSibling();
     while (previous) |sibling| : (previous = sibling.prevNamedSibling()) {
-        if (!isStringStatement(sibling)) return false;
+        if (!isStringStatement(profile, sibling)) return false;
     }
     return true;
 }
@@ -107,7 +109,7 @@ fn collectTexts(source: []const u8, span: Span, names: []const []const u8) ![][]
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(source);
     defer t.deinit();
-    const violations = try run(testing.allocator, t.tree, span, names);
+    const violations = try run(testing.allocator, test_util.language, t.tree, span, names);
     defer testing.allocator.free(violations);
     const texts = try testing.allocator.alloc([]const u8, violations.len);
     for (violations, texts) |v, *text| {
@@ -182,13 +184,14 @@ test "an unknown check name is refused before any check runs" {
     defer t.deinit();
     const span = wholeSource("function f() { /* c */ }\n");
 
-    try testing.expectError(error.UnknownCheck, run(testing.allocator, t.tree, span, &.{"no_such_check"}));
-    try testing.expectError(error.UnknownCheck, run(testing.allocator, t.tree, span, &.{ "no_comment", "no_such_check" }));
+    try testing.expectError(error.UnknownCheck, run(testing.allocator, test_util.language, t.tree, span, &.{"no_such_check"}));
+    try testing.expectError(error.UnknownCheck, run(testing.allocator, test_util.language, t.tree, span, &.{ "no_comment", "no_such_check" }));
 
     const Probe = struct {
         var ran: usize = 0;
-        fn collect(gpa: Allocator, tree: ts.Tree, s: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, s: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
             _ = gpa;
+            _ = profile;
             _ = tree;
             _ = s;
             _ = out;
@@ -196,7 +199,7 @@ test "an unknown check name is refused before any check runs" {
         }
     };
     const checks = [_]Check{.{ .name = "probe", .collect = Probe.collect }};
-    try testing.expectError(error.UnknownCheck, runWith(testing.allocator, &checks, t.tree, span, &.{ "probe", "missing" }));
+    try testing.expectError(error.UnknownCheck, runWith(testing.allocator, &checks, test_util.language, t.tree, span, &.{ "probe", "missing" }));
     try testing.expectEqual(@as(usize, 0), Probe.ran);
 }
 
@@ -208,20 +211,20 @@ test "a new check joins by registration alone and runs in the requested order" {
     defer t.deinit();
 
     const NoEval = struct {
-        fn collect(gpa: Allocator, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
             var walker = traversal.Walker.init(tree.root());
             defer walker.deinit();
             while (walker.next()) |entry| {
                 const node = entry.node;
                 if (node.startByte() < span.start or node.endByte() > span.end) continue;
-                if (isKind(node, "identifier") and std.mem.eql(u8, tree.text(node), "eval")) {
+                if (isKind(node, profile.identifier) and std.mem.eql(u8, tree.text(node), "eval")) {
                     try out.append(gpa, .{ .check = "no_eval", .span = .{ .start = node.startByte(), .end = node.endByte() } });
                 }
             }
         }
     };
     const checks = registry ++ [_]Check{.{ .name = "no_eval", .collect = NoEval.collect }};
-    const violations = try runWith(testing.allocator, &checks, t.tree, wholeSource(source), &.{ "no_eval", "no_comment" });
+    const violations = try runWith(testing.allocator, &checks, test_util.language, t.tree, wholeSource(source), &.{ "no_eval", "no_comment" });
     defer testing.allocator.free(violations);
 
     try testing.expectEqual(@as(usize, 2), violations.len);

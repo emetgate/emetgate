@@ -77,6 +77,12 @@ pub const Profile = struct {
     dynamic_callees: []const []const u8,
     dynamic_constructors: []const DynamicConstructor,
     strings: []const []const u8,
+    class_body: []const u8,
+    bodyless_terminator: ?[]const u8,
+    empty_body: []const u8,
+    expression_statement: []const u8,
+    prose_strings: []const []const u8,
+    directives: []const []const u8,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
 
     pub fn handles(self: *const Profile, path: []const u8) bool {

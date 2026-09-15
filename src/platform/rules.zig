@@ -2,6 +2,7 @@ const std = @import("std");
 const ts = @import("../engine/tree_sitter.zig");
 const symbol = @import("../engine/symbol.zig");
 const checks = @import("../engine/checks.zig");
+const Profile = @import("../engine/lang/profile.zig").Profile;
 const memory = @import("memory.zig");
 const shadow = @import("shadow.zig");
 
@@ -55,19 +56,19 @@ pub fn load(gpa: Allocator, io: std.Io, root_abs: []const u8) !Enforced {
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
 
-pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, tree: ts.Tree, span: Span) !?Report {
+pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span) !?Report {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
-    return evaluate(gpa, file, tree, span, enforced.rules);
+    return evaluate(gpa, file, profile, tree, span, enforced.rules);
 }
 
-pub fn evaluate(gpa: Allocator, file: []const u8, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!?Report {
+pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!?Report {
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
     errdefer for (list.items) |v| freeViolation(gpa, v);
 
     for (rules) |rule| {
-        const found = try checks.run(gpa, tree, span, &.{rule.check});
+        const found = try checks.run(gpa, profile, tree, span, &.{rule.check});
         defer gpa.free(found);
         for (found) |hit| {
             const at = position(tree.source, hit.span.start);
@@ -124,7 +125,7 @@ fn evaluateSource(source: []const u8, span: Span, rules: []const Rule) !?Report 
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(source);
     defer t.deinit();
-    return evaluate(testing.allocator, "src/a.ts", t.tree, span, rules);
+    return evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules);
 }
 
 test "every violation names its rule, check, file, line, column and offending text" {

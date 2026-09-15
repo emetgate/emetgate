@@ -106,7 +106,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer ref.deinit(gpa);
     const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = options.expected_hash, .new_body = options.new_body });
     defer applied.snapshot.destroy();
-    if (try rules.gate(gpa, io, root, rel, applied.snapshot.tree, applied.body)) |report| return .{ .rule_violation = report };
+    if (try rules.gate(gpa, io, root, rel, applied.snapshot.profile, applied.snapshot.tree, applied.body)) |report| return .{ .rule_violation = report };
 
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);

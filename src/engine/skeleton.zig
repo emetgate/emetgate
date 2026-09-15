@@ -9,13 +9,13 @@ const test_util = @import("test_util.zig");
 pub const Error = error{ SourceHasErrors, SkeletonInvalid } || std.mem.Allocator.Error || ts.Error;
 
 const Terminator = enum {
-    semicolon,
-    empty_block,
+    bodyless,
+    empty_body,
 
-    fn text(self: Terminator) []const u8 {
+    fn text(self: Terminator, profile: *const Profile) []const u8 {
         return switch (self) {
-            .semicolon => ";",
-            .empty_block => "{}",
+            .bodyless => profile.bodyless_terminator.?,
+            .empty_body => profile.empty_body,
         };
     }
 };
@@ -37,10 +37,10 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, profile: *const Pr
 
     var copied: u32 = 0;
     for (functions) |function| {
-        const cut = planCut(tree.source, function) orelse continue;
+        const cut = planCut(profile, tree.source, function) orelse continue;
         if (cut.start < copied) continue;
         out.appendSliceAssumeCapacity(tree.source[copied..cut.start]);
-        out.appendSliceAssumeCapacity(cut.terminator.text());
+        out.appendSliceAssumeCapacity(cut.terminator.text(profile));
         copied = cut.end;
     }
     out.appendSliceAssumeCapacity(tree.source[copied..]);
@@ -51,49 +51,50 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, profile: *const Pr
     return skeleton;
 }
 
-fn planCut(source: []const u8, function: symbol.Function) ?Cut {
-    if (!std.mem.eql(u8, "statement_block", function.body.kind())) return null;
-    const terminator: Terminator = if (followsComment(function.body)) .empty_block else terminatorFor(function);
+fn planCut(profile: *const Profile, source: []const u8, function: symbol.Function) ?Cut {
+    if (!std.mem.eql(u8, profile.block, function.body.kind())) return null;
+    const terminator: Terminator = if (followsComment(profile, function.body)) .empty_body else terminatorFor(profile, function);
     const body_start = function.body.startByte();
     return .{
-        .start = if (terminator == .semicolon) trimTrailingWhitespace(source, body_start) else body_start,
+        .start = if (terminator == .bodyless) trimTrailingWhitespace(source, body_start) else body_start,
         .end = function.body.endByte(),
         .terminator = terminator,
     };
 }
 
-fn terminatorFor(function: symbol.Function) Terminator {
+fn terminatorFor(profile: *const Profile, function: symbol.Function) Terminator {
+    if (profile.bodyless_terminator == null) return .empty_body;
     return switch (function.kind) {
-        .declaration => .semicolon,
-        .method => if (isClassMember(function.node) and !isDecorated(function.node)) .semicolon else .empty_block,
+        .declaration => .bodyless,
+        .method => if (isClassMember(profile, function.node) and !isDecorated(profile, function.node)) .bodyless else .empty_body,
         .generator_declaration,
         .expression,
         .generator_expression,
         .arrow,
         .static_block,
-        => .empty_block,
+        => .empty_body,
     };
 }
 
-fn isClassMember(node: ts.Node) bool {
+fn isClassMember(profile: *const Profile, node: ts.Node) bool {
     const parent = node.parent() orelse return false;
-    return std.mem.eql(u8, "class_body", parent.kind());
+    return std.mem.eql(u8, profile.class_body, parent.kind());
 }
 
-fn isDecorated(node: ts.Node) bool {
+fn isDecorated(profile: *const Profile, node: ts.Node) bool {
     if (node.namedChild(0)) |first| {
-        if (isKind(first, "decorator")) return true;
+        if (isKind(first, profile.decorator)) return true;
     }
     var prev = node.prevNamedSibling();
     while (prev) |sibling| : (prev = sibling.prevNamedSibling()) {
-        if (!isKind(sibling, "comment")) return isKind(sibling, "decorator");
+        if (!profile.isComment(sibling.kind())) return isKind(sibling, profile.decorator);
     }
     return false;
 }
 
-fn followsComment(body: ts.Node) bool {
+fn followsComment(profile: *const Profile, body: ts.Node) bool {
     const prev = body.prevSibling() orelse return false;
-    return isKind(prev, "comment");
+    return profile.isComment(prev.kind());
 }
 
 fn isKind(node: ts.Node, kind: []const u8) bool {
