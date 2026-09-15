@@ -118,7 +118,9 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 
 A verification layer that has not been verified is only a more elaborate way of hoping. Two rules apply to every guard in the kernel.
 
-**Mutation kill.** Every guard and every branch that protects an invariant is mutated, forcing its condition to `true` and then to `false`, and the test suite is run against each mutant. At least one test must fail for every mutant. A guard that survives its own mutation is dead code and is treated as a defect. The harness lives in `tools/mutate`, and the list of killed mutations is recorded in `tests/mutations.json`.
+**Mutation kill.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either killed by a new test or recorded in `tests/mutations.json` with the reason it cannot be: an equivalent mutant, with the grammar or code fact that makes it one, or a redundant guard kept on purpose. Mutants with no killing input and no proof of equivalence are marked open rather than hidden. The harness lives in `tools/mutate`.
+
+For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants today: 37 killed, 4 proven equivalent, 1 redundant guard kept as defense in depth, 2 open.
 
 **Adversarial tests.** Dedicated red-team suites attack the gate directly: bodies that escape their braces, stale hashes, torn journal entries, poisoned repository configuration and attempts to open files outside the repository.
 
