@@ -23,7 +23,7 @@ const ExpectedFunction = struct {
 };
 
 fn expectFunctions(tree: ts.Tree, expected: []const ExpectedFunction) !void {
-    const functions = try collectFunctions(testing.allocator, tree);
+    const functions = try collectFunctions(testing.allocator, test_util.language, tree);
     defer testing.allocator.free(functions);
 
     for (expected, 0..) |want, i| {
@@ -52,7 +52,7 @@ const ExpectedSymbol = struct {
 };
 
 fn expectSymbols(tree: ts.Tree, expected: []const ExpectedSymbol) !void {
-    const table = try Table.build(testing.allocator, tree);
+    const table = try Table.build(testing.allocator, test_util.language, tree);
     defer table.deinit();
 
     var buf: [256]u8 = undefined;
@@ -89,25 +89,25 @@ test "collects every function-like boundary in the fixture, in source order" {
     defer doc.deinit();
 
     try expectFunctions(doc.tree, &.{
-        .{ .kind = .function_declaration, .name = "add" },
-        .{ .kind = .generator_function_declaration, .name = "stream" },
-        .{ .kind = .function_declaration, .name = "overloaded" },
-        .{ .kind = .arrow_function, .name = "validateToken" },
-        .{ .kind = .function_expression, .name = "helper", .nested = true },
-        .{ .kind = .arrow_function, .name = "square" },
-        .{ .kind = .function_expression, .name = null },
-        .{ .kind = .arrow_function, .name = "handler" },
-        .{ .kind = .class_static_block, .name = null },
-        .{ .kind = .method_definition, .name = "constructor" },
-        .{ .kind = .method_definition, .name = "label" },
-        .{ .kind = .method_definition, .name = "label" },
-        .{ .kind = .method_definition, .name = "now" },
-        .{ .kind = .method_definition, .name = "ids" },
-        .{ .kind = .method_definition, .name = "home" },
-        .{ .kind = .arrow_function, .name = "about" },
-        .{ .kind = .function_declaration, .name = "old" },
-        .{ .kind = .arrow_function, .name = null },
-        .{ .kind = .function_declaration, .name = "afterUnicode" },
+        .{ .kind = .declaration, .name = "add" },
+        .{ .kind = .generator_declaration, .name = "stream" },
+        .{ .kind = .declaration, .name = "overloaded" },
+        .{ .kind = .arrow, .name = "validateToken" },
+        .{ .kind = .expression, .name = "helper", .nested = true },
+        .{ .kind = .arrow, .name = "square" },
+        .{ .kind = .expression, .name = null },
+        .{ .kind = .arrow, .name = "handler" },
+        .{ .kind = .static_block, .name = null },
+        .{ .kind = .method, .name = "constructor" },
+        .{ .kind = .method, .name = "label" },
+        .{ .kind = .method, .name = "label" },
+        .{ .kind = .method, .name = "now" },
+        .{ .kind = .method, .name = "ids" },
+        .{ .kind = .method, .name = "home" },
+        .{ .kind = .arrow, .name = "about" },
+        .{ .kind = .declaration, .name = "old" },
+        .{ .kind = .arrow, .name = null },
+        .{ .kind = .declaration, .name = "afterUnicode" },
     });
 }
 
@@ -138,11 +138,11 @@ test "names resolve through type assertions, parentheses and compound assignment
     defer t.deinit();
 
     try expectFunctions(t.tree, &.{
-        .{ .kind = .arrow_function, .name = "asserted" },
-        .{ .kind = .function_expression, .name = "checked" },
-        .{ .kind = .arrow_function, .name = "forced" },
-        .{ .kind = .arrow_function, .name = "exports.lazy" },
-        .{ .kind = .arrow_function, .name = null },
+        .{ .kind = .arrow, .name = "asserted" },
+        .{ .kind = .expression, .name = "checked" },
+        .{ .kind = .arrow, .name = "forced" },
+        .{ .kind = .arrow, .name = "exports.lazy" },
+        .{ .kind = .arrow, .name = null },
     });
 }
 
@@ -153,9 +153,9 @@ test "arrow functions in default parameters are not nested in the body" {
     defer t.deinit();
 
     try expectFunctions(t.tree, &.{
-        .{ .kind = .function_declaration, .name = "outer" },
-        .{ .kind = .arrow_function, .name = null },
-        .{ .kind = .arrow_function, .name = "run", .nested = true },
+        .{ .kind = .declaration, .name = "outer" },
+        .{ .kind = .arrow, .name = null },
+        .{ .kind = .arrow, .name = "run", .nested = true },
     });
 }
 
@@ -167,7 +167,7 @@ test "byte offsets stay exact after multi-byte UTF-8 text" {
     const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
 
-    const functions = try collectFunctions(testing.allocator, doc.tree);
+    const functions = try collectFunctions(testing.allocator, test_util.language, doc.tree);
     defer testing.allocator.free(functions);
     const last = functions[functions.len - 1];
 
@@ -254,7 +254,7 @@ test "static, instance, getter and setter collisions are distinct refs; true dup
         .{ .ref = "dup", .kind = .function, .ambiguous = true },
     });
 
-    const table = try Table.build(testing.allocator, t.tree);
+    const table = try Table.build(testing.allocator, test_util.language, t.tree);
     defer table.deinit();
     try testing.expectEqual(Kind.getter, (try resolveText(table, "Box.size@static@get")).kind);
     try testing.expectEqual(Kind.setter, (try resolveText(table, "Box.size@set")).kind);
@@ -326,7 +326,7 @@ test "sources with syntax errors never produce a symbol table" {
     const doc = try test_util.openFixture(parser, "broken.ts");
     defer doc.deinit();
 
-    try testing.expectError(error.SourceHasErrors, Table.build(testing.allocator, doc.tree));
+    try testing.expectError(error.SourceHasErrors, Table.build(testing.allocator, test_util.language, doc.tree));
 }
 
 test "refs round-trip through the canonical text form and malformed refs are rejected" {
@@ -368,11 +368,11 @@ test "hash is BLAKE3-128 of the function node and ignores edits elsewhere in the
     const edited = try test_util.TestTree.init("function f(a: number) { return a + 1; }\nfunction g() {}");
     defer edited.deinit();
 
-    const a = try Table.build(testing.allocator, original.tree);
+    const a = try Table.build(testing.allocator, test_util.language, original.tree);
     defer a.deinit();
-    const b = try Table.build(testing.allocator, moved.tree);
+    const b = try Table.build(testing.allocator, test_util.language, moved.tree);
     defer b.deinit();
-    const c = try Table.build(testing.allocator, edited.tree);
+    const c = try Table.build(testing.allocator, test_util.language, edited.tree);
     defer c.deinit();
 
     const f_original = try resolveText(a, "f");
@@ -400,9 +400,9 @@ test "hash covers decorators, export, modifiers and the binding, not only the fu
         defer plain.deinit();
         const changed = try test_util.TestTree.init(pair.changed);
         defer changed.deinit();
-        const a = try Table.build(testing.allocator, plain.tree);
+        const a = try Table.build(testing.allocator, test_util.language, plain.tree);
         defer a.deinit();
-        const b = try Table.build(testing.allocator, changed.tree);
+        const b = try Table.build(testing.allocator, test_util.language, changed.tree);
         defer b.deinit();
         try testing.expect(!std.mem.eql(u8, &(try resolveText(a, pair.ref)).hash, &(try resolveText(b, pair.ref)).hash));
     }
@@ -420,13 +420,13 @@ test "declarators sharing one statement get independent hashes that still cover 
     const exported = try test_util.TestTree.init("export const a = () => 1, b = () => 2;\n");
     defer exported.deinit();
 
-    const t0 = try Table.build(testing.allocator, base.tree);
+    const t0 = try Table.build(testing.allocator, test_util.language, base.tree);
     defer t0.deinit();
-    const t1 = try Table.build(testing.allocator, a_edited.tree);
+    const t1 = try Table.build(testing.allocator, test_util.language, a_edited.tree);
     defer t1.deinit();
-    const t2 = try Table.build(testing.allocator, keyword_changed.tree);
+    const t2 = try Table.build(testing.allocator, test_util.language, keyword_changed.tree);
     defer t2.deinit();
-    const t3 = try Table.build(testing.allocator, exported.tree);
+    const t3 = try Table.build(testing.allocator, test_util.language, exported.tree);
     defer t3.deinit();
 
     const a0 = (try resolveText(t0, "a")).hash;
@@ -465,7 +465,7 @@ test "every unambiguous symbol resolves back to itself through its canonical tex
     for ([_][]const u8{ "functions.ts", "service.ts" }) |name| {
         const doc = try test_util.openFixture(parser, name);
         defer doc.deinit();
-        const table = try Table.build(testing.allocator, doc.tree);
+        const table = try Table.build(testing.allocator, test_util.language, doc.tree);
         defer table.deinit();
 
         for (table.symbols) |*entry| {

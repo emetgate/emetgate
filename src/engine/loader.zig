@@ -45,7 +45,7 @@ pub const Snapshot = struct {
     }
 
     pub fn symbols(self: *Snapshot) symbol.Table.BuildError!*const symbol.Table {
-        if (self.table == null) self.table = try symbol.Table.build(self.runtime.gpa, self.tree);
+        if (self.table == null) self.table = try symbol.Table.build(self.runtime.gpa, self.profile, self.tree);
         return &self.table.?;
     }
 };

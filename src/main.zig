@@ -334,7 +334,7 @@ fn recoverCmd(init: std.process.Init, runtime: *Runtime) !u8 {
 fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {
     const snapshot = try Snapshot.load(runtime, init.io, .cwd(), path);
     defer snapshot.destroy();
-    const text = try skeleton.skeletonize(runtime.gpa, runtime.parser, snapshot.tree);
+    const text = try skeleton.skeletonize(runtime.gpa, runtime.parser, snapshot.profile, snapshot.tree);
     defer runtime.gpa.free(text);
     try out.writeAll(text);
 }
@@ -455,7 +455,7 @@ fn printStats(init: std.process.Init, runtime: *Runtime, paths: []const [:0]cons
         };
         defer snapshot.destroy();
 
-        const text = skeleton.skeletonize(runtime.gpa, runtime.parser, snapshot.tree) catch |err| switch (err) {
+        const text = skeleton.skeletonize(runtime.gpa, runtime.parser, snapshot.profile, snapshot.tree) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
                 try out.print("{s}  skipped: {t}\n", .{ path, err });

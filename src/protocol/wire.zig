@@ -282,7 +282,7 @@ const alloc_bridge = @import("../engine/alloc_bridge.zig");
 const test_util = @import("../engine/test_util.zig");
 
 fn renderSymbols(gpa: Allocator, file: []const u8, tree: ts.Tree) ![]u8 {
-    const table = try symbol.Table.build(gpa, tree);
+    const table = try symbol.Table.build(gpa, test_util.language, tree);
     defer table.deinit();
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();

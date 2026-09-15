@@ -1190,8 +1190,8 @@
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
       "file": "src/engine/symbol.zig",
-      "from": "if (function.kind == .method_definition) return keywordBeforeName(function.node, \"static\");",
-      "to": "if (function.kind == .method_definition) return false;"
+      "from": "if (function.kind == .method) return keywordBeforeName(function.node, \"static\");",
+      "to": "if (function.kind == .method) return false;"
     },
     {
       "id": "ES10-sym-getter-not-detected",
@@ -1242,8 +1242,8 @@
         "names resolve through type assertions, parentheses and compound assignment"
       ],
       "file": "src/engine/functions.zig",
-      "from": "while (isOneOf(parent.kind(), &transparent_wrappers)) {",
-      "to": "while (isOneOf(parent.kind(), &transparent_wrappers) and false) {"
+      "from": "while (isOneOf(parent.kind(), profile.transparent_wrappers)) {",
+      "to": "while (isOneOf(parent.kind(), profile.transparent_wrappers) and false) {"
     },
     {
       "id": "H1-harness-crashed-test-names-ignored",

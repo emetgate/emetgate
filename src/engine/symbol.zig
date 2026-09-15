@@ -3,6 +3,7 @@ const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
 const functions_mod = @import("functions.zig");
 const ref_mod = @import("ref.zig");
+const Profile = @import("lang/profile.zig").Profile;
 
 const Allocator = std.mem.Allocator;
 
@@ -81,7 +82,7 @@ pub const Table = struct {
     pub const BuildError = error{SourceHasErrors} || Allocator.Error;
     pub const ResolveError = error{ SymbolNotFound, AmbiguousSymbol };
 
-    pub fn build(gpa: Allocator, tree: ts.Tree) BuildError!Table {
+    pub fn build(gpa: Allocator, profile: *const Profile, tree: ts.Tree) BuildError!Table {
         if (tree.root().hasError()) return error.SourceHasErrors;
 
         const arena = try gpa.create(std.heap.ArenaAllocator);
@@ -89,12 +90,12 @@ pub const Table = struct {
         arena.* = .init(gpa);
         errdefer arena.deinit();
 
-        const functions = try collectFunctions(gpa, tree);
+        const functions = try collectFunctions(gpa, profile, tree);
         defer gpa.free(functions);
 
         var symbols: std.ArrayList(Symbol) = .empty;
         for (functions) |function| {
-            const symbol = try describe(arena.allocator(), tree, function) orelse continue;
+            const symbol = try describe(arena.allocator(), profile, tree, function) orelse continue;
             try symbols.append(arena.allocator(), symbol);
         }
         markAmbiguous(symbols.items);
@@ -128,18 +129,18 @@ fn markAmbiguous(symbols: []Symbol) void {
     }
 }
 
-fn describe(arena: Allocator, tree: ts.Tree, function: Function) Allocator.Error!?Symbol {
+fn describe(arena: Allocator, profile: *const Profile, tree: ts.Tree, function: Function) Allocator.Error!?Symbol {
     const kind = symbolKind(tree, function) orelse return null;
     const name = function.name orelse return null;
     if (!isOneOf(name.kind(), &addressable_name_kinds)) return null;
-    const container = try containerPath(arena, tree, function.node) orelse return null;
-    const declaration = declarationOf(function);
+    const container = try containerPath(arena, profile, tree, function.node) orelse return null;
+    const declaration = declarationOf(profile, function);
     return .{
         .ref = .{
             .container = container,
             .name = tree.text(name),
             .accessor = accessorOf(function),
-            .is_static = isStatic(function),
+            .is_static = isStatic(profile, function),
         },
         .kind = kind,
         .node = function.node,
@@ -151,12 +152,12 @@ fn describe(arena: Allocator, tree: ts.Tree, function: Function) Allocator.Error
 
 fn symbolKind(tree: ts.Tree, function: Function) ?Kind {
     return switch (function.kind) {
-        .function_declaration => .function,
-        .generator_function_declaration, .generator_function => .generator,
-        .function_expression => .function_expression,
-        .arrow_function => .arrow,
-        .class_static_block => null,
-        .method_definition => switch (accessorOf(function)) {
+        .declaration => .function,
+        .generator_declaration, .generator_expression => .generator,
+        .expression => .function_expression,
+        .arrow => .arrow,
+        .static_block => null,
+        .method => switch (accessorOf(function)) {
             .get => .getter,
             .set => .setter,
             .none => if (isConstructor(tree, function)) .constructor else .method,
@@ -171,15 +172,15 @@ fn isConstructor(tree: ts.Tree, function: Function) bool {
 }
 
 fn accessorOf(function: Function) Accessor {
-    if (function.kind != .method_definition) return .none;
+    if (function.kind != .method) return .none;
     if (keywordBeforeName(function.node, "get")) return .get;
     if (keywordBeforeName(function.node, "set")) return .set;
     return .none;
 }
 
-fn isStatic(function: Function) bool {
-    if (function.kind == .method_definition) return keywordBeforeName(function.node, "static");
-    const site = bindingSite(function.node) orelse return false;
+fn isStatic(profile: *const Profile, function: Function) bool {
+    if (function.kind == .method) return keywordBeforeName(function.node, "static");
+    const site = bindingSite(profile, function.node) orelse return false;
     return std.mem.eql(u8, "public_field_definition", site.kind()) and keywordBeforeName(site, "static");
 }
 
@@ -199,26 +200,26 @@ const ContainerRole = union(enum) {
     named: ts.Node,
 };
 
-fn containerRole(node: ts.Node) ContainerRole {
+fn containerRole(profile: *const Profile, node: ts.Node) ContainerRole {
     const kind = node.kind();
-    const name: ?ts.Node = if (classify(node)) |function|
+    const name: ?ts.Node = if (classify(profile, node)) |function|
         function.name
     else if (isOneOf(kind, &declared_containers))
         node.childByField("name")
     else if (std.mem.eql(u8, kind, "class"))
-        node.childByField("name") orelse bindingName(node)
+        node.childByField("name") orelse bindingName(profile, node)
     else if (std.mem.eql(u8, kind, "object"))
-        bindingName(node)
+        bindingName(profile, node)
     else
         return .transparent;
     return if (name) |n| .{ .named = n } else .unnamed;
 }
 
-fn containerPath(arena: Allocator, tree: ts.Tree, node: ts.Node) Allocator.Error!?[]const []const u8 {
+fn containerPath(arena: Allocator, profile: *const Profile, tree: ts.Tree, node: ts.Node) Allocator.Error!?[]const []const u8 {
     var reversed: std.ArrayList([]const u8) = .empty;
     var current = node.parent();
     while (current) |ancestor| : (current = ancestor.parent()) {
-        const name = switch (containerRole(ancestor)) {
+        const name = switch (containerRole(profile, ancestor)) {
             .transparent => continue,
             .unnamed => return null,
             .named => |name| name,
@@ -252,8 +253,8 @@ const Declaration = struct {
     }
 };
 
-fn declarationOf(function: Function) Declaration {
-    const site = bindingSite(function.node);
+fn declarationOf(profile: *const Profile, function: Function) Declaration {
+    const site = bindingSite(profile, function.node);
     const own = site orelse function.node;
     var statement: ?ts.Node = null;
     if (own.parent()) |parent| {
@@ -313,4 +314,3 @@ fn appendNameSegments(arena: Allocator, tree: ts.Tree, name: ts.Node, out: *std.
         }
     }
 }
-

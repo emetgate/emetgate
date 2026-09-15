@@ -81,7 +81,7 @@ fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
 fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
     const snapshot = try loadJailed(gpa, io, runtime, root, file);
     defer snapshot.destroy();
-    const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.tree);
+    const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.profile, snapshot.tree);
     defer gpa.free(text);
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;

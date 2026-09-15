@@ -2,6 +2,7 @@ const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
 const symbol = @import("symbol.zig");
+const Profile = @import("lang/profile.zig").Profile;
 const alloc_bridge = @import("alloc_bridge.zig");
 const test_util = @import("test_util.zig");
 
@@ -25,10 +26,10 @@ const Cut = struct {
     terminator: Terminator,
 };
 
-pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Error![]u8 {
+pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, profile: *const Profile, tree: ts.Tree) Error![]u8 {
     if (tree.root().hasError()) return error.SourceHasErrors;
 
-    const functions = try symbol.collectFunctions(gpa, tree);
+    const functions = try symbol.collectFunctions(gpa, profile, tree);
     defer gpa.free(functions);
 
     var out: std.ArrayList(u8) = try .initCapacity(gpa, tree.source.len);
@@ -63,13 +64,13 @@ fn planCut(source: []const u8, function: symbol.Function) ?Cut {
 
 fn terminatorFor(function: symbol.Function) Terminator {
     return switch (function.kind) {
-        .function_declaration => .semicolon,
-        .method_definition => if (isClassMember(function.node) and !isDecorated(function.node)) .semicolon else .empty_block,
-        .generator_function_declaration,
-        .function_expression,
-        .generator_function,
-        .arrow_function,
-        .class_static_block,
+        .declaration => .semicolon,
+        .method => if (isClassMember(function.node) and !isDecorated(function.node)) .semicolon else .empty_block,
+        .generator_declaration,
+        .expression,
+        .generator_expression,
+        .arrow,
+        .static_block,
         => .empty_block,
     };
 }
@@ -134,7 +135,7 @@ const fixtures = [_][]const u8{ "functions.ts", "service.ts" };
 fn skeletonOfSource(parser: ts.Parser, source: []const u8) ![]u8 {
     const tree = try parser.parse(source);
     defer tree.deinit();
-    return skeletonize(testing.allocator, parser, tree);
+    return skeletonize(testing.allocator, parser, test_util.language, tree);
 }
 
 fn expectSkeleton(source: []const u8, expected: []const u8) !void {
@@ -160,7 +161,7 @@ test "functions.ts skeleton matches the golden file byte for byte" {
 
     const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
-    const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
+    const skeleton = try skeletonize(testing.allocator, parser, test_util.language, doc.tree);
     defer testing.allocator.free(skeleton);
 
     const golden = try std.Io.Dir.cwd().readFileAlloc(testing.io, test_util.fixture_dir ++ "functions.skeleton.ts", testing.allocator, .unlimited);
@@ -179,7 +180,7 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
         const doc = try test_util.openFixture(parser, name);
         defer doc.deinit();
 
-        const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
+        const skeleton = try skeletonize(testing.allocator, parser, test_util.language, doc.tree);
         defer testing.allocator.free(skeleton);
         const reparsed = try parser.parse(skeleton);
         defer reparsed.deinit();
@@ -190,7 +191,7 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
         try testing.expect(after.bytes < before.bytes);
         try testing.expect(after.tokens < before.tokens);
 
-        const again = try skeletonize(testing.allocator, parser, reparsed);
+        const again = try skeletonize(testing.allocator, parser, test_util.language, reparsed);
         defer testing.allocator.free(again);
         try testing.expectEqualStrings(skeleton, again);
     }
@@ -204,7 +205,7 @@ test "sources with syntax errors are refused instead of guessed at" {
 
     const doc = try test_util.openFixture(parser, "broken.ts");
     defer doc.deinit();
-    try testing.expectError(error.SourceHasErrors, skeletonize(testing.allocator, parser, doc.tree));
+    try testing.expectError(error.SourceHasErrors, skeletonize(testing.allocator, parser, test_util.language, doc.tree));
 }
 
 test "expression bodies survive while block functions inside them are stripped" {
