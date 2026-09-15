@@ -8,6 +8,7 @@ pub const skeleton = @import("engine/skeleton.zig");
 pub const cas = @import("engine/cas.zig");
 pub const boundedness = @import("engine/boundedness.zig");
 pub const coverage = @import("engine/coverage.zig");
+pub const checks = @import("engine/checks.zig");
 pub const session = @import("platform/session.zig");
 pub const shadow = @import("platform/shadow.zig");
 pub const sandbox = @import("platform/sandbox.zig");

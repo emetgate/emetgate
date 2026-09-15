@@ -680,6 +680,73 @@
       ]
     },
     {
+      "id": "R1-checks-unknown-check-skipped",
+      "file": "src/engine/checks.zig",
+      "from": "if (find(checks, name) == null) return error.UnknownCheck;",
+      "to": "if (find(checks, name) == null) continue;",
+      "kills": [
+        "an unknown check name is refused before any check runs"
+      ]
+    },
+    {
+      "id": "R2-checks-use-strict-prologue-position-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "        if (!isStringStatement(sibling)) return false;\n",
+      "to": "",
+      "kills": [
+        "no_comment allows a use strict directive only in the directive prologue"
+      ]
+    },
+    {
+      "id": "R3-checks-use-strict-exemption-removed",
+      "file": "src/engine/checks.zig",
+      "from": "    return !isUseStrictDirective(tree, node);",
+      "to": "    return !isUseStrictDirective(tree, node) or true;",
+      "kills": [
+        "no_comment allows a use strict directive only in the directive prologue"
+      ]
+    },
+    {
+      "id": "R4-checks-prose-statements-not-flagged",
+      "file": "src/engine/checks.zig",
+      "from": "if (isKind(node, \"comment\") or isProseStatement(tree, node)) {",
+      "to": "if (isKind(node, \"comment\")) {",
+      "kills": [
+        "no_comment flags prose smuggled in as a string or template statement",
+        "no_comment allows a use strict directive only in the directive prologue"
+      ]
+    },
+    {
+      "id": "R5-checks-comments-not-flagged",
+      "file": "src/engine/checks.zig",
+      "from": "if (isKind(node, \"comment\") or isProseStatement(tree, node)) {",
+      "to": "if (isProseStatement(tree, node)) {",
+      "kills": [
+        "no_comment flags line and block comments inside the span",
+        "no_comment flags a comment inside the span even when others sit outside it",
+        "a new check joins by registration alone and runs in the requested order"
+      ]
+    },
+    {
+      "id": "R6-checks-span-boundary-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "if (node.endByte() <= span.start or node.startByte() >= span.end) {",
+      "to": "if (node.endByte() <= span.start and node.startByte() >= span.end) {",
+      "kills": [
+        "no_comment ignores comments outside the span",
+        "no_comment flags a comment inside the span even when others sit outside it"
+      ]
+    },
+    {
+      "id": "R7-checks-template-string-prose-allowed",
+      "file": "src/engine/checks.zig",
+      "from": " or isKind(expression, \"template_string\")",
+      "to": "",
+      "kills": [
+        "no_comment flags prose smuggled in as a string or template statement"
+      ]
+    },
+    {
       "id": "C6-coverage-count-ignored",
       "file": "src/engine/coverage.zig",
       "from": "if (count > 0) .called else .not_called",
