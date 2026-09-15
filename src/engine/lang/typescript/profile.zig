@@ -52,6 +52,16 @@ pub const profile: Profile = .{
     .decorator = "decorator",
     .comments = &.{"comment"},
     .block = "statement_block",
+    .root = "program",
+    .identifier = "identifier",
+    .reference_names = &.{ "identifier", "property_identifier", "shorthand_property_identifier", "shorthand_property_identifier_pattern" },
+    .call = .{ .node = "call_expression", .function_field = "function", .arguments_field = "arguments", .arguments = "arguments", .optional_token = "?." },
+    .reexport_specifier = "export_specifier",
+    .namespace_exports = &.{"namespace_export"},
+    .star_token = "*",
+    .dynamic_callees = &.{ "eval", "import" },
+    .dynamic_constructors = &.{.{ .node = "new_expression", .field = "constructor", .names = &.{"Function"} }},
+    .strings = &.{"string"},
     .memberTraits = memberTraits,
 };
 

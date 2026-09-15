@@ -596,8 +596,8 @@
     {
       "id": "B1-body-only-bounded-shortcut-restored",
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(sym.*)) return unbounded(class, .exported_escape);",
-      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (isExported(sym.*)) return unbounded(class, .exported_escape);",
+      "from": "    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);",
+      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);",
       "kills": [
         "body-only: an exported declaration is UNBOUNDED",
         "body-only: a callback escape is UNBOUNDED",
@@ -976,7 +976,7 @@
         "body-only: an exported declaration is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(sym.*)) return unbounded(class, .exported_escape);\n",
+      "from": "    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);\n",
       "to": ""
     },
     {
@@ -985,7 +985,7 @@
         "adversarial: a re-exported symbol is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (hasReexportOf(snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);\n",
+      "from": "    if (hasReexportOf(profile, snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);\n",
       "to": ""
     },
     {
@@ -994,7 +994,7 @@
         "adversarial: a star re-export in the file is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": " or (std.mem.eql(u8, kind, \"export_statement\") and hasStarClause(node))",
+      "from": " or (isOneOf(kind, profile.export_wrappers) and hasStarClause(profile, node))",
       "to": ""
     },
     {
@@ -1003,7 +1003,7 @@
         "adversarial: a dynamic construct in the file forces UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (hasDynamicConstruct(snapshot)) return unbounded(class, .dynamic_construct);\n",
+      "from": "    if (hasDynamicConstruct(profile, snapshot)) return unbounded(class, .dynamic_construct);\n",
       "to": ""
     },
     {
@@ -1011,18 +1011,18 @@
       "kills": [
         "adversarial: a dynamic import anywhere in the file forces UNBOUNDED"
       ],
-      "file": "src/engine/boundedness.zig",
-      "from": " or std.mem.eql(u8, text, \"import\")",
-      "to": ""
+      "file": "src/engine/lang/typescript/profile.zig",
+      "from": ".dynamic_callees = &.{ \"eval\", \"import\" },",
+      "to": ".dynamic_callees = &.{\"eval\"},"
     },
     {
       "id": "EB7-bnd-new-function-ignored",
       "kills": [
         "adversarial: a Function constructor anywhere in the file forces UNBOUNDED"
       ],
-      "file": "src/engine/boundedness.zig",
-      "from": "if (std.mem.eql(u8, snapshot.tree.text(ctor), \"Function\")) return true;",
-      "to": "if (std.mem.eql(u8, snapshot.tree.text(ctor), \"Function\") and false) return true;"
+      "file": "src/engine/lang/typescript/profile.zig",
+      "from": ".names = &.{\"Function\"}",
+      "to": ".names = &.{}"
     },
     {
       "id": "EB8-bnd-string-key-check-removed",
@@ -1030,7 +1030,7 @@
         "adversarial: a string-key mention is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (hasStringKey(snapshot, ref.name)) return unbounded(class, .string_key_escape);\n",
+      "from": "    if (hasStringKey(profile, snapshot, ref.name)) return unbounded(class, .string_key_escape);\n",
       "to": ""
     },
     {
@@ -1038,7 +1038,7 @@
       "expect_status": "survived",
       "note": "equivalent: in the grammar property_identifier never has call_expression or arguments as a parent, and shorthand identifiers only sit under object and object patterns, so every non-identifier name still falls through to unrecognized_reference",
       "file": "src/engine/boundedness.zig",
-      "from": "    if (!std.mem.eql(u8, node.kind(), \"identifier\")) return .unrecognized_reference;\n",
+      "from": "    if (!std.mem.eql(u8, node.kind(), profile.identifier)) return .unrecognized_reference;\n",
       "to": ""
     },
     {
@@ -1047,7 +1047,7 @@
         "adversarial: a callback escape is UNBOUNDED (first-class)"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (std.mem.eql(u8, parent.kind(), \"arguments\")) return .first_class_escape;\n",
+      "from": "    if (std.mem.eql(u8, parent.kind(), profile.call.arguments)) return .first_class_escape;\n",
       "to": ""
     },
     {
@@ -1073,8 +1073,8 @@
         "corpus: optional call reference is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), \"?.\")) return false;",
-      "to": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), \"?.\") and false) return false;"
+      "from": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), optional)) return false;",
+      "to": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), optional) and false) return false;"
     },
     {
       "id": "EB14-bnd-declaration-skip-removed",
@@ -1109,8 +1109,8 @@
         "precision: a helper declared inside an exported function body is not itself exported"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "if (std.mem.eql(u8, kind, \"program\") or std.mem.eql(u8, kind, \"statement_block\")) return false;",
-      "to": "if (std.mem.eql(u8, kind, \"program\")) return false;"
+      "from": "if (std.mem.eql(u8, kind, profile.root) or std.mem.eql(u8, kind, profile.block)) return false;",
+      "to": "if (std.mem.eql(u8, kind, profile.root)) return false;"
     },
     {
       "id": "ES1-sym-ambiguity-marking-removed",

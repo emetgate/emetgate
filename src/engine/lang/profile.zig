@@ -30,6 +30,20 @@ pub const Container = struct {
     name: NameSource,
 };
 
+pub const Call = struct {
+    node: []const u8,
+    function_field: []const u8,
+    arguments_field: []const u8,
+    arguments: []const u8,
+    optional_token: ?[]const u8 = null,
+};
+
+pub const DynamicConstructor = struct {
+    node: []const u8,
+    field: []const u8,
+    names: []const []const u8,
+};
+
 pub const MemberTraits = struct {
     accessor: Accessor = .none,
     is_static: bool = false,
@@ -53,6 +67,16 @@ pub const Profile = struct {
     decorator: []const u8,
     comments: []const []const u8,
     block: []const u8,
+    root: []const u8,
+    identifier: []const u8,
+    reference_names: []const []const u8,
+    call: Call,
+    reexport_specifier: ?[]const u8,
+    namespace_exports: []const []const u8,
+    star_token: ?[]const u8,
+    dynamic_callees: []const []const u8,
+    dynamic_constructors: []const DynamicConstructor,
+    strings: []const []const u8,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
 
     pub fn handles(self: *const Profile, path: []const u8) bool {

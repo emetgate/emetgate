@@ -60,26 +60,30 @@ pub fn analyze(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_sp
     return analyzeInner(gpa, snapshot, ref, mutation_span) catch unbounded(.signature_change, .analysis_error);
 }
 
+const isOneOf = @import("functions.zig").isOneOf;
+const Profile = @import("lang/profile.zig").Profile;
+
 fn analyzeInner(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_span: symbol.Span) !FrameReport {
     if (snapshot.tree.root().hasError()) return unbounded(.signature_change, .analysis_error);
+    const profile = snapshot.profile;
     const table = try snapshot.symbols();
     const sym = try table.resolve(ref);
 
     const class: MutationClass = if (isBodyOnly(sym.*, mutation_span)) .body_only_no_op else .signature_change;
 
-    if (isExported(sym.*)) return unbounded(class, .exported_escape);
-    if (hasReexportOf(snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);
-    if (hasDynamicConstruct(snapshot)) return unbounded(class, .dynamic_construct);
-    if (hasStringKey(snapshot, ref.name)) return unbounded(class, .string_key_escape);
+    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);
+    if (hasReexportOf(profile, snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);
+    if (hasDynamicConstruct(profile, snapshot)) return unbounded(class, .dynamic_construct);
+    if (hasStringKey(profile, snapshot, ref.name)) return unbounded(class, .string_key_escape);
 
-    return enumerateReferences(gpa, snapshot, sym.*, ref.name, class);
+    return enumerateReferences(gpa, profile, snapshot, sym.*, ref.name, class);
 }
 
 fn isBodyOnly(sym: symbol.Symbol, mutation_span: symbol.Span) bool {
     return mutation_span.start >= sym.body.startByte() and mutation_span.end <= sym.body.endByte();
 }
 
-fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, name: []const u8, class: MutationClass) !FrameReport {
+fn enumerateReferences(gpa: Allocator, profile: *const Profile, snapshot: *Snapshot, sym: symbol.Symbol, name: []const u8, class: MutationClass) !FrameReport {
     var refs: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (refs.items) |r| gpa.free(r);
@@ -90,11 +94,11 @@ fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, 
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
-        if (!isNameCarrier(node.kind())) continue;
+        if (!isOneOf(node.kind(), profile.reference_names)) continue;
         if (!std.mem.eql(u8, snapshot.tree.text(node), name)) continue;
         if (isWithin(node, sym.declaration)) continue;
 
-        if (classifyReference(node)) |escape| {
+        if (classifyReference(profile, node)) |escape| {
             for (refs.items) |r| gpa.free(r);
             refs.deinit(gpa);
             return unbounded(class, escape);
@@ -111,29 +115,23 @@ fn enumerateReferences(gpa: Allocator, snapshot: *Snapshot, sym: symbol.Symbol, 
     };
 }
 
-fn isNameCarrier(kind: []const u8) bool {
-    return std.mem.eql(u8, kind, "identifier") or
-        std.mem.eql(u8, kind, "property_identifier") or
-        std.mem.eql(u8, kind, "shorthand_property_identifier") or
-        std.mem.eql(u8, kind, "shorthand_property_identifier_pattern");
-}
-
-fn classifyReference(node: ts.Node) ?Provenance {
-    if (!std.mem.eql(u8, node.kind(), "identifier")) return .unrecognized_reference;
+fn classifyReference(profile: *const Profile, node: ts.Node) ?Provenance {
+    if (!std.mem.eql(u8, node.kind(), profile.identifier)) return .unrecognized_reference;
     const parent = node.parent() orelse return .unrecognized_reference;
-    if (std.mem.eql(u8, parent.kind(), "call_expression") and isPlainCall(parent, node)) return null;
-    if (std.mem.eql(u8, parent.kind(), "arguments")) return .first_class_escape;
+    if (std.mem.eql(u8, parent.kind(), profile.call.node) and isPlainCall(profile, parent, node)) return null;
+    if (std.mem.eql(u8, parent.kind(), profile.call.arguments)) return .first_class_escape;
     return .unrecognized_reference;
 }
 
-fn isPlainCall(call: ts.Node, callee_node: ts.Node) bool {
-    const callee = call.childByField("function") orelse return false;
+fn isPlainCall(profile: *const Profile, call: ts.Node, callee_node: ts.Node) bool {
+    const callee = call.childByField(profile.call.function_field) orelse return false;
     if (!callee.eql(callee_node)) return false;
-    const args = call.childByField("arguments") orelse return false;
-    if (!std.mem.eql(u8, args.kind(), "arguments")) return false;
+    const args = call.childByField(profile.call.arguments_field) orelse return false;
+    if (!std.mem.eql(u8, args.kind(), profile.call.arguments)) return false;
+    const optional = profile.call.optional_token orelse return true;
     var i: u32 = 0;
     while (call.child(i)) |c| : (i += 1) {
-        if (!c.isNamed() and std.mem.eql(u8, c.kind(), "?.")) return false;
+        if (!c.isNamed() and std.mem.eql(u8, c.kind(), optional)) return false;
     }
     return true;
 }
@@ -146,70 +144,73 @@ fn isWithin(node: ts.Node, span: symbol.Span) bool {
     return node.startByte() >= span.start and node.endByte() <= span.end;
 }
 
-fn isExported(sym: symbol.Symbol) bool {
+fn isExported(profile: *const Profile, sym: symbol.Symbol) bool {
     var current = sym.node.parent();
     var hops: u8 = 0;
     while (current) |p| : (hops += 1) {
         if (hops > 6) return false;
         const kind = p.kind();
-        if (std.mem.eql(u8, kind, "export_statement")) return true;
-        if (std.mem.eql(u8, kind, "program") or std.mem.eql(u8, kind, "statement_block")) return false;
+        if (isOneOf(kind, profile.export_wrappers)) return true;
+        if (std.mem.eql(u8, kind, profile.root) or std.mem.eql(u8, kind, profile.block)) return false;
         current = p.parent();
     }
     return false;
 }
 
-fn hasReexportOf(snapshot: *Snapshot, name: []const u8) bool {
+fn hasReexportOf(profile: *const Profile, snapshot: *Snapshot, name: []const u8) bool {
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
         const kind = node.kind();
-        if (std.mem.eql(u8, kind, "export_specifier")) {
-            if (node.childByField("name")) |n| {
-                if (std.mem.eql(u8, snapshot.tree.text(n), name)) return true;
+        if (profile.reexport_specifier) |specifier| {
+            if (std.mem.eql(u8, kind, specifier)) {
+                if (node.childByField("name")) |n| {
+                    if (std.mem.eql(u8, snapshot.tree.text(n), name)) return true;
+                }
+                continue;
             }
-        } else if (std.mem.eql(u8, kind, "namespace_export") or (std.mem.eql(u8, kind, "export_statement") and hasStarClause(node))) {
-            return true;
         }
+        if (isOneOf(kind, profile.namespace_exports) or (isOneOf(kind, profile.export_wrappers) and hasStarClause(profile, node))) return true;
     }
     return false;
 }
 
-fn hasStarClause(node: ts.Node) bool {
+fn hasStarClause(profile: *const Profile, node: ts.Node) bool {
+    const star = profile.star_token orelse return false;
     var i: u32 = 0;
     while (node.child(i)) |c| : (i += 1) {
-        if (!c.isNamed() and std.mem.eql(u8, c.kind(), "*")) return true;
+        if (!c.isNamed() and std.mem.eql(u8, c.kind(), star)) return true;
     }
     return false;
 }
 
-fn hasDynamicConstruct(snapshot: *Snapshot) bool {
+fn hasDynamicConstruct(profile: *const Profile, snapshot: *Snapshot) bool {
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
         const kind = node.kind();
-        if (std.mem.eql(u8, kind, "call_expression")) {
-            if (node.childByField("function")) |callee| {
-                const text = snapshot.tree.text(callee);
-                if (std.mem.eql(u8, text, "eval") or std.mem.eql(u8, text, "import")) return true;
+        if (std.mem.eql(u8, kind, profile.call.node)) {
+            if (node.childByField(profile.call.function_field)) |callee| {
+                if (isOneOf(snapshot.tree.text(callee), profile.dynamic_callees)) return true;
             }
-        } else if (std.mem.eql(u8, kind, "new_expression")) {
-            if (node.childByField("constructor")) |ctor| {
-                if (std.mem.eql(u8, snapshot.tree.text(ctor), "Function")) return true;
-            }
+        }
+        for (profile.dynamic_constructors) |constructor| {
+            if (!std.mem.eql(u8, kind, constructor.node)) continue;
+            const target = node.childByField(constructor.field) orelse continue;
+            if (isOneOf(snapshot.tree.text(target), constructor.names)) return true;
         }
     }
     return false;
 }
 
-fn hasStringKey(snapshot: *Snapshot, name: []const u8) bool {
+fn hasStringKey(profile: *const Profile, snapshot: *Snapshot, name: []const u8) bool {
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
-        if (!std.mem.eql(u8, node.kind(), "string")) continue;
+        if (!isOneOf(node.kind(), profile.strings)) continue;
         const text = snapshot.tree.text(node);
         if (text.len >= 2 and std.mem.eql(u8, text[1 .. text.len - 1], name)) return true;
     }
