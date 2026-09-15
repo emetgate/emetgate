@@ -7,6 +7,7 @@ pub const Policy = struct {
     test_command: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
     allow_repo_config: bool = false,
+    root: ?[]const u8 = null,
 };
 
 pub fn parsePolicy(args: anytype) ?Policy {

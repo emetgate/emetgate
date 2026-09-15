@@ -91,6 +91,8 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     defer if (workspace) |ws| gpa.free(ws);
     var observer: ?telemetry.Observer = if (workspace) |ws| .{ .workspace_abs = ws } else null;
     const observer_ptr: ?*telemetry.Observer = if (observer) |*o| o else null;
+    var served = policy;
+    served.root = root;
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);
@@ -112,7 +114,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
         const trimmed = if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
         if (trimmed.len == 0) continue;
 
-        if (try handleMessageObserved(gpa, io, runtime, trimmed, out, observer_ptr, policy)) {
+        if (try handleMessageObserved(gpa, io, runtime, trimmed, out, observer_ptr, served)) {
             try out.writeByte('\n');
             try out.flush();
         }

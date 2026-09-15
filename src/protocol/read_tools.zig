@@ -2,6 +2,7 @@ const std = @import("std");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
+const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
 
 const Allocator = std.mem.Allocator;
@@ -21,30 +22,7 @@ const max_search_file_bytes = 1024 * 1024;
 const max_match_text = 200;
 const binary_probe_bytes = 8000;
 
-const Jailed = struct {
-    abs: [:0]u8,
-    rel: []u8,
-
-    fn deinit(self: Jailed, gpa: Allocator) void {
-        gpa.free(self.abs);
-        gpa.free(self.rel);
-    }
-};
-
-fn jailPath(gpa: Allocator, io: std.Io, path: []const u8) !Jailed {
-    const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
-    errdefer gpa.free(abs);
-    const rel = try runner.repoRelative(gpa, io, abs);
-    errdefer gpa.free(rel);
-    try refuseInternal(rel);
-    return .{ .abs = abs, .rel = rel };
-}
-
-pub fn refuseInternal(rel: []const u8) error{InternalPath}!void {
-    var segments = std.mem.tokenizeAny(u8, rel, "/\\");
-    const first = segments.next() orelse return;
-    if (std.ascii.eqlIgnoreCase(first, ".git") or std.ascii.eqlIgnoreCase(first, shadow.workspace_dir)) return error.InternalPath;
-}
+pub const refuseInternal = repo.refuseInternal;
 
 pub fn utf8Prefix(bytes: []const u8, limit: usize) []const u8 {
     if (bytes.len <= limit) return bytes;
@@ -68,21 +46,21 @@ pub fn inDirectory(path: []const u8, prefix: []const u8) bool {
     return path[prefix.len] == '/' or path[prefix.len] == '\\';
 }
 
-pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event) !ToolResult {
+pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const file = try requireString(args, "file");
     event.label = "read_file";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderReadFile(gpa, io, file, &buffer.writer, event) catch |err| {
+    renderReadFile(gpa, io, root, file, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderReadFile(gpa: Allocator, io: std.Io, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
-    const place = try jailPath(gpa, io, file);
+fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
+    const place = try repo.jail(gpa, io, root, file);
     defer place.deinit(gpa);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, place.abs, gpa, .limited(max_read_source_bytes));
     defer gpa.free(bytes);
@@ -105,25 +83,23 @@ fn renderReadFile(gpa: Allocator, io: std.Io, file: []const u8, w: *Writer, even
     try w.writeByte('\n');
 }
 
-pub fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event) !ToolResult {
+pub fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     event.label = "list";
     event.file = dir;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderList(gpa, io, dir, &buffer.writer) catch |err| {
+    renderList(gpa, io, root, dir, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderList(gpa: Allocator, io: std.Io, dir: []const u8, w: *Writer) !void {
-    const place = try jailPath(gpa, io, dir);
+fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w: *Writer) !void {
+    const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
-    const root = try runner.repoRoot(gpa, io);
-    defer gpa.free(root);
-    const files = try shadow.trackedFiles(gpa, io, root);
+    const files = try shadow.trackedFiles(gpa, io, place.root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
@@ -151,14 +127,14 @@ fn renderList(gpa: Allocator, io: std.Io, dir: []const u8, w: *Writer) !void {
     try w.writeByte('\n');
 }
 
-pub fn callSearch(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event) !ToolResult {
+pub fn callSearch(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const pattern = try requireString(args, "pattern");
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     event.label = "search";
     event.file = dir;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSearch(gpa, io, pattern, dir, &buffer.writer) catch |err| {
+    renderSearch(gpa, io, root, pattern, dir, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -170,13 +146,11 @@ pub const SearchLimits = struct {
     matches: usize = max_search_matches,
 };
 
-fn renderSearch(gpa: Allocator, io: std.Io, pattern: []const u8, dir: []const u8, w: *Writer) !void {
+fn renderSearch(gpa: Allocator, io: std.Io, root: ?[]const u8, pattern: []const u8, dir: []const u8, w: *Writer) !void {
     if (pattern.len == 0) return error.EmptyPattern;
-    const place = try jailPath(gpa, io, dir);
+    const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
-    const root = try runner.repoRoot(gpa, io);
-    defer gpa.free(root);
-    try searchIn(gpa, io, root, place.rel, pattern, .{}, w);
+    try searchIn(gpa, io, place.root, place.rel, pattern, .{}, w);
 }
 
 pub fn searchIn(gpa: Allocator, io: std.Io, root: []const u8, prefix: []const u8, pattern: []const u8, limits: SearchLimits, w: *Writer) !void {

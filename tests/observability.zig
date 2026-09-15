@@ -128,7 +128,7 @@ fn runScenario(runtime: *Runtime, repo: *Repo, observer: ?*telemetry.Observer) !
         var line: Allocating = .init(testing.allocator);
         defer line.deinit();
         try writeCall(&line.writer, "emetgate_try", file, hex[0..], step.body);
-        out[i] = try call(runtime, line.written(), observer, .{ .test_command = step.cmd });
+        out[i] = try call(runtime, line.written(), observer, .{ .test_command = step.cmd, .root = repo.root_abs });
         produced = i + 1;
     }
     return out;
@@ -296,7 +296,7 @@ test "fail-soft: events never follow a .emetgate junction out of the repo" {
     defer line.deinit();
     try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     try expectContains(response, "emetgate ");
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "victim/events.ndjson", .{}));
@@ -360,7 +360,7 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     try js.endObject();
     try js.endObject();
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     try expectContains(response, "emetgate ✓ committed · gate full · sent ");
     try expectContains(response, " chars · session 2 edits");
@@ -392,7 +392,7 @@ test "a failure after the commit began is reported as commit phase, never disk u
     defer line.deinit();
     try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = racing_cmd });
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = racing_cmd, .root = repo.root_abs });
     defer testing.allocator.free(response);
     try expectContains(response, "\"isError\":true");
     try expectContains(response, "failed in commit phase, run emetgate recover");
@@ -427,7 +427,7 @@ test "fail-soft: an events file symlinked outside the repo is never written thro
     defer line.deinit();
     try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     try expectContains(response, "emetgate ✓ committed");
 

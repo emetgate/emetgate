@@ -17,8 +17,6 @@ const Allocator = std.mem.Allocator;
 
 pub const config_file = test_command_mod.config_file;
 pub const repoRoot = repo.repoRoot;
-pub const assertUnderCwdRepo = repo.assertUnderCwdRepo;
-pub const repoRelative = repo.repoRelative;
 pub const relativeUnder = repo.relativeUnder;
 pub const resolveTestCommand = test_command_mod.resolveTestCommand;
 pub const resolveTypecheckCommand = test_command_mod.resolveTypecheckCommand;
