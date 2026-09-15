@@ -1291,6 +1291,15 @@
       "kills": [
         "purple V8: an MCP write tool cannot edit the emetgate workspace inside the served repository"
       ]
+    },
+    {
+      "id": "CF1-conformance-language-without-cases-accepted",
+      "file": "tests/lang/cases.zig",
+      "from": "    .{ .language = \"typescript\", .cases = @import(\"typescript/cases.zig\").cases },\n",
+      "to": "",
+      "kills": [
+        "every registered language has conformance cases"
+      ]
     }
   ]
 }
