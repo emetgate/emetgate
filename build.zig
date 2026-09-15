@@ -9,6 +9,7 @@ const Grammar = struct {
 
 const grammars = [_]Grammar{
     .{ .root = "vendor/tree-sitter-typescript/typescript/src", .sources = &.{ "parser.c", "scanner.c" } },
+    .{ .root = "vendor/tree-sitter-javascript/src", .sources = &.{ "parser.c", "scanner.c" } },
 };
 
 const c_flags: []const []const u8 = &.{"-std=c11"};
