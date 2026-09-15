@@ -20,4 +20,11 @@ pub const cases: Cases = .{
     .placeholder_body = "{\n  // TODO\n}",
     .escaping_body = "{ return 1; } function evil() {}",
     .broken_body = "{ return (a; }",
+    .optional_call_source =
+    \\function target(a: number): number {
+    \\  return a;
+    \\}
+    \\target?.(1);
+    \\
+    ,
 };

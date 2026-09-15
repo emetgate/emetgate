@@ -1073,8 +1073,8 @@
         "corpus: optional call reference is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), optional)) return false;",
-      "to": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), optional) and false) return false;"
+      "from": "if (std.mem.eql(u8, c.kind(), optional)) return false;",
+      "to": "if (std.mem.eql(u8, c.kind(), optional) and false) return false;"
     },
     {
       "id": "EB14-bnd-declaration-skip-removed",

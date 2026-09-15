@@ -7,6 +7,7 @@ pub const Cases = struct {
     placeholder_body: []const u8,
     escaping_body: []const u8,
     broken_body: []const u8,
+    optional_call_source: []const u8,
 };
 
 pub const Entry = struct {

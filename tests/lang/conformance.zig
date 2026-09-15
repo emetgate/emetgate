@@ -118,6 +118,25 @@ test "conformance: an exported symbol is unbounded and a private one called in t
     }
 }
 
+test "conformance: an optional call is not a plain call, so the callee is unbounded" {
+    for (registry.profiles) |profile| {
+        errdefer std.debug.print("language: {s}\n", .{profile.name});
+        const cases = casesFor(profile) orelse return error.MissingConformanceCases;
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        const snapshot = try Snapshot.fromSource(runtime, profile, try testing.allocator.dupe(u8, cases.optional_call_source));
+        defer snapshot.destroy();
+        try testing.expect(!snapshot.tree.root().hasError());
+
+        const ref = try symbol.Ref.parse(testing.allocator, cases.target_ref);
+        defer ref.deinit(testing.allocator);
+        const target = try (try snapshot.symbols()).resolve(ref);
+        const report = boundedness.analyze(testing.allocator, snapshot, ref, .{ .start = target.body.startByte(), .end = target.body.endByte() });
+        defer report.deinit();
+        try testing.expectEqual(boundedness.Confidence.unbounded, report.confidence);
+    }
+}
+
 test "conformance: the skeleton is valid, smaller and a fixed point" {
     for (registry.profiles) |profile| {
         errdefer std.debug.print("language: {s}\n", .{profile.name});

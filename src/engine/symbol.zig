@@ -178,7 +178,7 @@ fn containerPath(arena: Allocator, profile: *const Profile, tree: ts.Tree, node:
             .unnamed => return null,
             .named => |name| name,
         };
-        if (!isOneOf(name.kind(), profile.addressable_names) and !std.mem.eql(u8, name.kind(), profile.dotted_name)) return null;
+        if (!isOneOf(name.kind(), profile.addressable_names) and !profile.isDottedName(name.kind())) return null;
         const first = reversed.items.len;
         try appendNameSegments(arena, profile, tree, name, &reversed);
         std.mem.reverse([]const u8, reversed.items[first..]);
@@ -250,7 +250,7 @@ fn leadingDecoratorStart(profile: *const Profile, node: ts.Node) u32 {
 }
 
 fn appendNameSegments(arena: Allocator, profile: *const Profile, tree: ts.Tree, name: ts.Node, out: *std.ArrayList([]const u8)) Allocator.Error!void {
-    if (!std.mem.eql(u8, profile.dotted_name, name.kind())) return out.append(arena, tree.text(name));
+    if (!profile.isDottedName(name.kind())) return out.append(arena, tree.text(name));
     var walker = traversal.Walker.init(name);
     defer walker.deinit();
     while (walker.next()) |entry| {

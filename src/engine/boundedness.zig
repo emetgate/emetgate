@@ -128,10 +128,10 @@ fn isPlainCall(profile: *const Profile, call: ts.Node, callee_node: ts.Node) boo
     if (!callee.eql(callee_node)) return false;
     const args = call.childByField(profile.call.arguments_field) orelse return false;
     if (!std.mem.eql(u8, args.kind(), profile.call.arguments)) return false;
-    const optional = profile.call.optional_token orelse return true;
+    const optional = profile.call.optional_marker orelse return true;
     var i: u32 = 0;
     while (call.child(i)) |c| : (i += 1) {
-        if (!c.isNamed() and std.mem.eql(u8, c.kind(), optional)) return false;
+        if (std.mem.eql(u8, c.kind(), optional)) return false;
     }
     return true;
 }

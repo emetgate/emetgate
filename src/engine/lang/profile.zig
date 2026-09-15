@@ -35,7 +35,7 @@ pub const Call = struct {
     function_field: []const u8,
     arguments_field: []const u8,
     arguments: []const u8,
-    optional_token: ?[]const u8 = null,
+    optional_marker: ?[]const u8 = null,
 };
 
 pub const DynamicConstructor = struct {
@@ -58,7 +58,7 @@ pub const Profile = struct {
     bindings: []const Binding,
     transparent_wrappers: []const []const u8,
     addressable_names: []const []const u8,
-    dotted_name: []const u8,
+    dotted_name: ?[]const u8,
     name_segments: []const []const u8,
     containers: []const Container,
     declaration_statements: []const []const u8,
@@ -97,6 +97,11 @@ pub const Profile = struct {
             if (std.mem.eql(u8, entry.node, node_kind)) return entry.kind;
         }
         return null;
+    }
+
+    pub fn isDottedName(self: *const Profile, node_kind: []const u8) bool {
+        const dotted = self.dotted_name orelse return false;
+        return std.mem.eql(u8, dotted, node_kind);
     }
 
     pub fn isComment(self: *const Profile, node_kind: []const u8) bool {
