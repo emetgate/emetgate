@@ -216,6 +216,12 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
             return true;
         },
+        .rule_violation => |report| {
+            event.outcome = .rejected;
+            event.reason = "rule_violation";
+            try wire.writeRuleViolation(w, report);
+            return true;
+        },
     }
 }
 
@@ -301,6 +307,12 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             event.outcome = .rejected;
             event.reason = wire.typecheckReason(report);
             try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
+            return true;
+        },
+        .rule_violation => |report| {
+            event.outcome = .rejected;
+            event.reason = "rule_violation";
+            try wire.writeRuleViolation(w, report);
             return true;
         },
     }

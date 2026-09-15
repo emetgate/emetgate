@@ -26,6 +26,7 @@ pub const Mutation = struct {
 pub const Applied = struct {
     snapshot: *Snapshot,
     hash: symbol.Hash,
+    body: Span,
 };
 
 const utf8_bom = "\xEF\xBB\xBF";
@@ -58,7 +59,7 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
     try rejectPlaceholder(patched_target.body);
     try expectUntouchedOutside(before.*, after.*, cut, slot);
 
-    return .{ .snapshot = next, .hash = patched_target.hash };
+    return .{ .snapshot = next, .hash = patched_target.hash, .body = slot };
 }
 
 fn expectExactSlot(body: ts.Node, slot: Span) error{BodyEscape}!void {

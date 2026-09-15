@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const symbol = @import("../src/engine/symbol.zig");
 const sandbox = @import("../src/platform/sandbox.zig");
+const memory = @import("../src/platform/memory.zig");
 const Runtime = @import("../src/engine/runtime.zig").Runtime;
 const Snapshot = @import("../src/engine/loader.zig").Snapshot;
 
@@ -537,6 +538,116 @@ test "typecheck command: the flag wins, an untrusted repo config is ignored, a t
 
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 0\",\"typecheck_cmd\":\"\"}" });
     try testing.expect((try resolveTypecheckCommand(testing.allocator, testing.io, file, "", true)) == null);
+}
+
+const commented_body = "{\n  // why\n  return a - b;\n}";
+const clean_body = "{\n  return a - b;\n}";
+
+fn tryAdd(repo: *Repo, runtime: *Runtime, body: []const u8, test_command: []const u8) !runner.Result {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+    return tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = body,
+        .test_command = test_command,
+    });
+}
+
+fn expectPristineRepo(repo: *Repo) !void {
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "rules: an enforced no_comment rule rejects a commented body before the tests run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, commented_body, "exit 1");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    const violations = result.rule_violation.violations;
+    try testing.expectEqual(@as(usize, 1), violations.len);
+    try testing.expectEqualStrings(id, violations[0].rule);
+    try testing.expectEqualStrings("no_comment", violations[0].check);
+    try testing.expectEqualStrings("// why", violations[0].text);
+    try testing.expectEqualStrings("src\\math.ts", violations[0].file);
+    try testing.expectEqual(@as(u32, 2), violations[0].line);
+    try testing.expectEqual(@as(u32, 3), violations[0].col);
+    try expectPristineRepo(&repo);
+}
+
+test "rules: a clean body still commits under an enforced rule" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
+test "rules: unenforced, checkless and forgotten rules never block an edit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const unenforced = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "prefer no comments", false, "no_comment");
+    defer testing.allocator.free(unenforced);
+    const checkless = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "be kind", true, null);
+    defer testing.allocator.free(checkless);
+    const forgotten = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(forgotten);
+    try memory.forget(testing.allocator, testing.io, repo.root_abs, forgotten);
+
+    const result = try tryAdd(&repo, runtime, commented_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
+test "rules: an unknown check in the ledger fails closed and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "mystery", true, "no_such_check");
+    defer testing.allocator.free(id);
+
+    try testing.expectError(error.UnknownCheck, tryAdd(&repo, runtime, clean_body, "exit 0"));
+    try expectPristineRepo(&repo);
+}
+
+test "rules: one violating edit rejects the whole batch and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(id);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = commented_body }};
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "exit 0" });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    try expectPristineRepo(&repo);
 }
 
 test "a missing config with no test command is refused" {

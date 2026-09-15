@@ -208,6 +208,10 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
             std.debug.print("committed {s}  {s} -> {s}\n", .{ request.symbol, &symbol.formatHash(expected), &symbol.formatHash(new_hash) });
             return 0;
         },
+        .rule_violation => |report| {
+            for (report.violations) |v| std.debug.print("rejected: rule {s} ({s}) at {s}:{d}:{d}: {s}\n", .{ v.rule, v.check, v.file, v.line, v.col, v.text });
+            return rejected_exit_code;
+        },
         .typecheck_failed => |report| {
             std.debug.print("rejected: typecheck did not pass ({t})\n", .{report.outcome});
             if (report.stdout.len != 0) std.debug.print("--- stdout ---\n{s}\n", .{report.stdout});
@@ -269,6 +273,10 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         },
         .typecheck_failed => |report| {
             try wire.writeTypecheckRejected(gpa, out, typecheck_command.?, report);
+            return rejected_exit_code;
+        },
+        .rule_violation => |report| {
+            try wire.writeRuleViolation(out, report);
             return rejected_exit_code;
         },
     }

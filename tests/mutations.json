@@ -680,6 +680,104 @@
       ]
     },
     {
+      "id": "G1-rules-gate-skipped-for-single-edit",
+      "file": "src/platform/runner.zig",
+      "from": "applied.body)) |report| return .{ .rule_violation = report };",
+      "to": "applied.body)) |report| report.deinit(gpa);",
+      "kills": [
+        "rules: an enforced no_comment rule rejects a commented body before the tests run"
+      ]
+    },
+    {
+      "id": "G2-rules-gate-skipped-for-batch",
+      "file": "src/platform/batch.zig",
+      "from": "p.applied.body)) |report| return .{ .rule_violation = report };",
+      "to": "p.applied.body)) |report| report.deinit(gpa);",
+      "kills": [
+        "rules: one violating edit rejects the whole batch and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "G3-rules-enforce-flag-ignored",
+      "file": "src/platform/rules.zig",
+      "from": "if (decision.status != .active or !decision.enforce) continue;",
+      "to": "if (decision.status != .active) continue;",
+      "kills": [
+        "rules: unenforced, checkless and forgotten rules never block an edit"
+      ]
+    },
+    {
+      "id": "G5-rules-line-counting-broken",
+      "file": "src/platform/rules.zig",
+      "from": "            line += 1;\n",
+      "to": "            line += 0;\n",
+      "kills": [
+        "rules: an enforced no_comment rule rejects a commented body before the tests run",
+        "every violation names its rule, check, file, line, column and offending text"
+      ]
+    },
+    {
+      "id": "G6-rules-body-span-empty",
+      "file": "src/engine/cas.zig",
+      "from": ".hash = patched_target.hash, .body = slot };",
+      "to": ".hash = patched_target.hash, .body = .{ .start = slot.start, .end = slot.start } };",
+      "kills": [
+        "rules: an enforced no_comment rule rejects a commented body before the tests run",
+        "rules: one violating edit rejects the whole batch and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "G7-rules-empty-report-returned",
+      "file": "src/platform/rules.zig",
+      "from": "if (list.items.len == 0) return null;",
+      "to": "if (list.items.len == 99999) return null;",
+      "kills": [
+        "purple C3: a hanging test command times out and nothing commits",
+        "purple C4: a rejected mutation leaves no temp, backup, or shadow artifacts",
+        "purple C4: a committed mutation leaves no temp or backup artifacts",
+        "purple C7: only the user's policy decides whether an edit can commit",
+        "purple C6: an MCP batch frees every resolved path with its real size",
+        "fail-soft: a broken event log never changes a tool result or what reaches disk",
+        "gate-consistency: the footer shows exactly the gate the runner chose",
+        "a committed batch counts every edit in the footer and logs the full gate",
+        "a failure after the commit began is reported as commit phase, never disk untouched",
+        "a batch commits every file when the shared test passes",
+        "a batch whose shared test fails writes nothing",
+        "gate: a body-only change to an exported symbol runs the full command even with a scoped one",
+        "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command",
+        "a passing test commits the mutation to disk",
+        "a failing test leaves the file on disk untouched",
+        "test command defaults from .emetgaterc.json when the caller omits it",
+        "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched",
+        "typecheck: it checks the patched shadow copy and only then runs the test command",
+        "typecheck: a failing typecheck rejects a whole batch and leaves disk untouched",
+        "rules: a clean body still commits under an enforced rule",
+        "rules: unenforced, checkless and forgotten rules never block an edit",
+        "a clean span and an empty rule list both report nothing"
+      ]
+    },
+    {
+      "id": "G8-rules-column-off-by-one",
+      "file": "src/platform/rules.zig",
+      "from": ".col = @intCast(offset - line_start + 1)",
+      "to": ".col = @intCast(offset - line_start)",
+      "kills": [
+        "rules: an enforced no_comment rule rejects a commented body before the tests run",
+        "every violation names its rule, check, file, line, column and offending text"
+      ]
+    },
+    {
+      "id": "G9-rules-rule-id-not-recorded",
+      "file": "src/platform/rules.zig",
+      "from": "const rule_id = try gpa.dupe(u8, rule.id);",
+      "to": "const rule_id = try gpa.dupe(u8, rule.check);",
+      "kills": [
+        "rules: an enforced no_comment rule rejects a commented body before the tests run",
+        "every violation names its rule, check, file, line, column and offending text",
+        "each rule tags its own violations when two rules share a check"
+      ]
+    },
+    {
       "id": "R1-checks-unknown-check-skipped",
       "file": "src/engine/checks.zig",
       "from": "if (find(checks, name) == null) return error.UnknownCheck;",

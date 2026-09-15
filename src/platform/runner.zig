@@ -9,6 +9,7 @@ const repo = @import("repo.zig");
 const test_command_mod = @import("test_command.zig");
 const gate_mod = @import("gate.zig");
 const batch = @import("batch.zig");
+const rules = @import("rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -58,11 +59,13 @@ pub const Result = union(enum) {
     committed: symbol.Hash,
     rejected: sandbox.Report,
     typecheck_failed: sandbox.Report,
+    rule_violation: rules.Report,
 
     pub fn deinit(self: Result, gpa: Allocator) void {
         switch (self) {
             .committed => {},
             .rejected, .typecheck_failed => |report| report.deinit(gpa),
+            .rule_violation => |report| report.deinit(gpa),
         }
     }
 };
@@ -105,6 +108,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer ref.deinit(gpa);
     const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = options.expected_hash, .new_body = options.new_body });
     defer applied.snapshot.destroy();
+    if (try rules.gate(gpa, io, root, rel, applied.snapshot.tree, applied.body)) |report| return .{ .rule_violation = report };
 
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);

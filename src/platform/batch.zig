@@ -6,6 +6,7 @@ const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
+const rules = @import("rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -34,11 +35,13 @@ pub const BatchResult = union(enum) {
     committed: []symbol.Hash,
     rejected: sandbox.Report,
     typecheck_failed: sandbox.Report,
+    rule_violation: rules.Report,
 
     pub fn deinit(self: BatchResult, gpa: Allocator) void {
         switch (self) {
             .committed => |hashes| gpa.free(hashes),
             .rejected, .typecheck_failed => |report| report.deinit(gpa),
+            .rule_violation => |report| report.deinit(gpa),
         }
     }
 };
@@ -89,6 +92,10 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         errdefer applied.snapshot.destroy();
         try prepared.append(gpa, .{ .rel = rel, .base_hash = base_hash, .applied = applied });
         keep_rel = true;
+    }
+
+    for (prepared.items) |p| {
+        if (try rules.gate(gpa, io, root, p.rel, p.applied.snapshot.tree, p.applied.body)) |report| return .{ .rule_violation = report };
     }
 
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });

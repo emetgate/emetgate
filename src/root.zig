@@ -14,6 +14,7 @@ pub const shadow = @import("platform/shadow.zig");
 pub const sandbox = @import("platform/sandbox.zig");
 pub const disk = @import("platform/disk.zig");
 pub const runner = @import("platform/runner.zig");
+pub const rules = @import("platform/rules.zig");
 pub const stdio = @import("platform/stdio.zig");
 pub const lockdown = @import("platform/lockdown.zig");
 pub const memory = @import("platform/memory.zig");

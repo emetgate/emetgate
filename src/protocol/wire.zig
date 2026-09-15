@@ -2,6 +2,7 @@ const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const diagnostics = @import("diagnostics.zig");
+const rules = @import("../platform/rules.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -142,6 +143,36 @@ pub fn writeTypecheckRejected(gpa: Allocator, writer: *Writer, typecheck_cmd: []
     return writeStageRejected(gpa, writer, typecheckReason(report), "typecheck_cmd", typecheck_cmd, report);
 }
 
+pub fn writeRuleViolation(writer: *Writer, report: rules.Report) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("rejected");
+    try js.objectField("reason");
+    try js.write("rule_violation");
+    try js.objectField("violations");
+    try js.beginArray();
+    for (report.violations) |v| {
+        try js.beginObject();
+        try js.objectField("rule");
+        try js.write(v.rule);
+        try js.objectField("check");
+        try js.write(v.check);
+        try js.objectField("file");
+        try js.write(v.file);
+        try js.objectField("line");
+        try js.write(v.line);
+        try js.objectField("col");
+        try js.write(v.col);
+        try js.objectField("text");
+        try js.write(v.text);
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, command_field: []const u8, command: []const u8, report: sandbox.Report) !void {
     const from_out = try diagnostics.parse(gpa, report.stdout);
     defer gpa.free(from_out);
@@ -219,6 +250,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.BodyEscape => 8,
         error.SkeletonInvalid => 9,
         error.PlaceholderBody => 13,
+        error.UnknownCheck => 19,
         error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
         error.NoTestCommand, error.InvalidConfig => 2,
         error.UntrustedRepoConfig => 15,
@@ -401,6 +433,26 @@ test "a typecheck rejection names its own reason and command, not the test comma
     try testing.expect(std.mem.indexOf(u8, json, "\"typecheck_cmd\":\"npx tsc --noEmit\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"test_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics\":[{\"file\":\"src/x.ts\",\"line\":3,\"col\":5,") != null);
+}
+
+test "a rule violation payload lists every violation with its rule and position" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    var violations = [_]rules.Violation{.{
+        .rule = @constCast("r7"),
+        .check = @constCast("no_comment"),
+        .file = @constCast("src\\a.ts"),
+        .line = 2,
+        .col = 3,
+        .text = @constCast("// \"why\""),
+    }};
+    try writeRuleViolation(&buffer.writer, .{ .violations = &violations });
+
+    try testing.expectEqualStrings(
+        "{\"status\":\"rejected\",\"reason\":\"rule_violation\",\"violations\":[{\"rule\":\"r7\",\"check\":\"no_comment\",\"file\":\"src\\\\a.ts\",\"line\":2,\"col\":3,\"text\":\"// \\\"why\\\"\"}]}\n",
+        buffer.written(),
+    );
+    try testing.expectEqual(@as(u8, 19), exitCode(error.UnknownCheck));
 }
 
 test "error payload carries the name and exit code on one line" {
