@@ -891,6 +891,9 @@
     },
     {
       "id": "EC5-cas-edge-comment-check-removed",
+      "kills": [
+        "a body that parses but spills outside its slot is a BodyEscape"
+      ],
       "file": "src/engine/cas.zig",
       "from": "    if (isComment(edgeToken(body, .first)) or isComment(edgeToken(body, .last))) return error.BodyEscape;\n",
       "to": ""
@@ -1241,6 +1244,15 @@
       "file": "src/engine/functions.zig",
       "from": "while (isOneOf(parent.kind(), &transparent_wrappers)) {",
       "to": "while (isOneOf(parent.kind(), &transparent_wrappers) and false) {"
+    },
+    {
+      "id": "H1-harness-crashed-test-names-ignored",
+      "file": "tools/mutate/core.zig",
+      "from": "\"' failed\") orelse\n            std.mem.lastIndexOf(u8, line, \"' exited with code\") orelse continue;",
+      "to": "\"' failed\") orelse continue;",
+      "kills": [
+        "harness: a crashed test is named like a failed one"
+      ]
     }
   ]
 }

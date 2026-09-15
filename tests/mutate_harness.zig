@@ -34,6 +34,19 @@ test "harness: failed test names are read in both output spellings" {
     try testing.expectEqualStrings("round-trip", core.missingKill(names, &.{"round-trip"}).?);
 }
 
+test "harness: a crashed test is named like a failed one" {
+    const output =
+        \\error: 'src.engine.cas.test.a body that parses but spills outside its slot is a BodyEscape' exited with code 3 with stderr:
+        \\       thread 15264 panic: runtime closed with 1 live snapshots: LiveSnapshots
+        \\Build Summary: 6/8 steps succeeded (1 failed); 4/5 tests passed (1 crashed)
+    ;
+    const names = try core.failedTests(testing.allocator, output);
+    defer testing.allocator.free(names);
+    try testing.expectEqual(@as(usize, 1), names.len);
+    try testing.expectEqualStrings("src.engine.cas.test.a body that parses but spills outside its slot is a BodyEscape", names[0]);
+    try testing.expect(core.missingKill(names, &.{"a body that parses but spills outside its slot is a BodyEscape"}) == null);
+}
+
 test "harness: exact kills reject a test outside the expected set" {
     const failed = [_][]const u8{ "tests.memory.test.memory: a", "tests.memory.test.memory: b" };
     const extra = core.unexpectedKill(&failed, &.{"memory: a"}) orelse return error.UnexpectedKillNotReported;

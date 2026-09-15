@@ -55,7 +55,8 @@ pub fn failedTests(gpa: Allocator, output: []const u8) ![]const []const u8 {
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \r");
         if (!std.mem.startsWith(u8, line, prefix)) continue;
-        const close = std.mem.lastIndexOf(u8, line, "' failed") orelse continue;
+        const close = std.mem.lastIndexOf(u8, line, "' failed") orelse
+            std.mem.lastIndexOf(u8, line, "' exited with code") orelse continue;
         if (close <= prefix.len) continue;
         const name = line[prefix.len..close];
         for (names.items) |seen| {
