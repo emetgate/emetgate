@@ -852,6 +852,395 @@
       "kills": [
         "real node 24 offsets: called, not called and non-ASCII shifted symbols are all recognised"
       ]
+    },
+    {
+      "id": "EC1-cas-hash-check-removed",
+      "kills": [
+        "a stale hash is refused before any test runs",
+        "error precedence: each check wins over every later one"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "    if (!std.mem.eql(u8, &target.hash, &mutation.expected_hash)) return error.HashMismatch;\n",
+      "to": ""
+    },
+    {
+      "id": "EC2-cas-syntax-check-removed",
+      "expect_status": "survived",
+      "note": "equivalent: next.symbols() refuses the same tree with SourceHasErrors, which apply maps to MutationSyntaxInvalid; ES13 proves that guard",
+      "file": "src/engine/cas.zig",
+      "from": "    if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;\n",
+      "to": ""
+    },
+    {
+      "id": "EC3-cas-exact-slot-call-removed",
+      "kills": [
+        "purple C2: a brace-injection body cannot escape the slot"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "    try expectExactSlot(patched_target.body, slot);\n",
+      "to": ""
+    },
+    {
+      "id": "EC4-cas-exact-slot-or-becomes-and",
+      "kills": [
+        "purple C2: a brace-injection body cannot escape the slot"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "if (body.startByte() != slot.start or body.endByte() != slot.end) return error.BodyEscape;",
+      "to": "if (body.startByte() != slot.start and body.endByte() != slot.end) return error.BodyEscape;"
+    },
+    {
+      "id": "EC5-cas-edge-comment-check-removed",
+      "file": "src/engine/cas.zig",
+      "from": "    if (isComment(edgeToken(body, .first)) or isComment(edgeToken(body, .last))) return error.BodyEscape;\n",
+      "to": ""
+    },
+    {
+      "id": "EC6-cas-placeholder-call-removed",
+      "kills": [
+        "purple C2: every placeholder variant is rejected before any test runs"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "    try rejectPlaceholder(patched_target.body);\n",
+      "to": ""
+    },
+    {
+      "id": "EC7-cas-placeholder-condition-disabled",
+      "kills": [
+        "purple C2: every placeholder variant is rejected before any test runs"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "if (has_comment and !has_statement) return error.PlaceholderBody;",
+      "to": "if (has_comment and !has_statement and false) return error.PlaceholderBody;"
+    },
+    {
+      "id": "EC8-cas-untouched-outside-call-removed",
+      "expect_status": "survived",
+      "note": "defense in depth for body replacement: a 594-case differential spike (ASI, regex/division, template, comment, U+2028, shared declarators, class and object members) found no body that passes every other guard and fails only this one; it is the load-bearing guard for the planned insertion target",
+      "file": "src/engine/cas.zig",
+      "from": "    try expectUntouchedOutside(before.*, after.*, cut, slot);\n",
+      "to": ""
+    },
+    {
+      "id": "EC9-cas-twin-check-removed",
+      "kills": [
+        "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "        if (!hasTwinOutside(after, old, slot)) return error.BodyEscape;\n",
+      "to": ""
+    },
+    {
+      "id": "EC10-cas-outside-count-check-disabled",
+      "kills": [
+        "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "if (outside_before != outside_after) return error.BodyEscape;",
+      "to": "if (outside_before != outside_after and false) return error.BodyEscape;"
+    },
+    {
+      "id": "EC11-cas-twin-hash-ignored",
+      "kills": [
+        "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "if (candidate.ref.eql(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;",
+      "to": "if (candidate.ref.eql(wanted.ref)) return true;"
+    },
+    {
+      "id": "EC12-cas-body-trim-removed",
+      "kills": [
+        "replacement bodies are normalised: a BOM and surrounding whitespace are ignored"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "    return std.mem.trim(u8, without_bom, \" \\t\\r\\n\");",
+      "to": "    return without_bom;"
+    },
+    {
+      "id": "EC13-cas-bom-strip-removed",
+      "kills": [
+        "replacement bodies are normalised: a BOM and surrounding whitespace are ignored"
+      ],
+      "file": "src/engine/cas.zig",
+      "from": "const without_bom = if (std.mem.startsWith(u8, body, utf8_bom)) body[utf8_bom.len..] else body;",
+      "to": "const without_bom = body;"
+    },
+    {
+      "id": "EB2-bnd-exported-check-removed",
+      "kills": [
+        "adversarial: an exported declaration is UNBOUNDED",
+        "body-only: an exported declaration is UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (isExported(sym.*)) return unbounded(class, .exported_escape);\n",
+      "to": ""
+    },
+    {
+      "id": "EB3-bnd-reexport-check-removed",
+      "kills": [
+        "adversarial: a re-exported symbol is UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (hasReexportOf(snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);\n",
+      "to": ""
+    },
+    {
+      "id": "EB4-bnd-export-star-ignored",
+      "kills": [
+        "adversarial: a star re-export in the file is UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": " or (std.mem.eql(u8, kind, \"export_statement\") and hasStarClause(node))",
+      "to": ""
+    },
+    {
+      "id": "EB5-bnd-dynamic-check-removed",
+      "kills": [
+        "adversarial: a dynamic construct in the file forces UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (hasDynamicConstruct(snapshot)) return unbounded(class, .dynamic_construct);\n",
+      "to": ""
+    },
+    {
+      "id": "EB6-bnd-dynamic-import-ignored",
+      "kills": [
+        "adversarial: a dynamic import anywhere in the file forces UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": " or std.mem.eql(u8, text, \"import\")",
+      "to": ""
+    },
+    {
+      "id": "EB7-bnd-new-function-ignored",
+      "kills": [
+        "adversarial: a Function constructor anywhere in the file forces UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "if (std.mem.eql(u8, snapshot.tree.text(ctor), \"Function\")) return true;",
+      "to": "if (std.mem.eql(u8, snapshot.tree.text(ctor), \"Function\") and false) return true;"
+    },
+    {
+      "id": "EB8-bnd-string-key-check-removed",
+      "kills": [
+        "adversarial: a string-key mention is UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (hasStringKey(snapshot, ref.name)) return unbounded(class, .string_key_escape);\n",
+      "to": ""
+    },
+    {
+      "id": "EB9-bnd-non-identifier-reference-accepted",
+      "expect_status": "survived",
+      "note": "equivalent: in the grammar property_identifier never has call_expression or arguments as a parent, and shorthand identifiers only sit under object and object patterns, so every non-identifier name still falls through to unrecognized_reference",
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (!std.mem.eql(u8, node.kind(), \"identifier\")) return .unrecognized_reference;\n",
+      "to": ""
+    },
+    {
+      "id": "EB10-bnd-arguments-escape-removed",
+      "kills": [
+        "adversarial: a callback escape is UNBOUNDED (first-class)"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (std.mem.eql(u8, parent.kind(), \"arguments\")) return .first_class_escape;\n",
+      "to": ""
+    },
+    {
+      "id": "EB11-bnd-unrecognized-default-accepted",
+      "kills": [
+        "whitelist proof: a reference shape outside the escape blacklist still UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "return .first_class_escape;\n    return .unrecognized_reference;\n}",
+      "to": "return .first_class_escape;\n    return null;\n}"
+    },
+    {
+      "id": "EB12-bnd-callee-identity-ignored",
+      "expect_status": "survived",
+      "note": "equivalent: in the grammar a call_expression has only function, arguments and type_arguments children, so an identifier child of a call is always the callee",
+      "file": "src/engine/boundedness.zig",
+      "from": "if (!callee.eql(callee_node)) return false;",
+      "to": "if (!callee.eql(callee_node) and false) return false;"
+    },
+    {
+      "id": "EB13-bnd-optional-call-accepted",
+      "kills": [
+        "corpus: optional call reference is UNBOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), \"?.\")) return false;",
+      "to": "if (!c.isNamed() and std.mem.eql(u8, c.kind(), \"?.\") and false) return false;"
+    },
+    {
+      "id": "EB14-bnd-declaration-skip-removed",
+      "kills": [
+        "completeness: a reference in a nested scope is still counted",
+        "positive control: a module-private, escape-free, in-file-called symbol is BOUNDED"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "if (isWithin(node, sym.declaration)) continue;",
+      "to": "if (isWithin(node, sym.declaration) and false) continue;"
+    },
+    {
+      "id": "EB15-bnd-body-only-and-becomes-or",
+      "kills": [
+        "boundary: a mutation one byte into the signature flips to signature_change"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "return mutation_span.start >= sym.body.startByte() and mutation_span.end <= sym.body.endByte();",
+      "to": "return mutation_span.start >= sym.body.startByte() or mutation_span.end <= sym.body.endByte();"
+    },
+    {
+      "id": "EB16-bnd-has-error-check-removed",
+      "expect_status": "survived",
+      "note": "equivalent: snapshot.symbols() fails on the same tree and analyze catches it as unbounded(.analysis_error)",
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (snapshot.tree.root().hasError()) return unbounded(.signature_change, .analysis_error);\n",
+      "to": ""
+    },
+    {
+      "id": "EB17-bnd-export-walk-crosses-bodies",
+      "kills": [
+        "precision: a helper declared inside an exported function body is not itself exported"
+      ],
+      "file": "src/engine/boundedness.zig",
+      "from": "if (std.mem.eql(u8, kind, \"program\") or std.mem.eql(u8, kind, \"statement_block\")) return false;",
+      "to": "if (std.mem.eql(u8, kind, \"program\")) return false;"
+    },
+    {
+      "id": "ES1-sym-ambiguity-marking-removed",
+      "kills": [
+        "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "            a.ambiguous = true;\n            b.ambiguous = true;\n",
+      "to": ""
+    },
+    {
+      "id": "ES2-sym-resolve-first-of-duplicates",
+      "kills": [
+        "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "        if (found != null) return error.AmbiguousSymbol;\n",
+      "to": ""
+    },
+    {
+      "id": "ES3-sym-unnamed-container-skipped",
+      "kills": [
+        "containers: dotted namespaces, bound class expressions, nested objects and enclosing functions"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "            .unnamed => return null,",
+      "to": "            .unnamed => continue,"
+    },
+    {
+      "id": "ES4-sym-export-outside-hash",
+      "kills": [
+        "hash covers decorators, export, modifiers and the binding, not only the function node"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "if (std.mem.eql(u8, \"export_statement\", parent.kind())) outer = parent;",
+      "to": "if (std.mem.eql(u8, \"export_statement\", parent.kind()) and false) outer = parent;"
+    },
+    {
+      "id": "ES5-sym-decorators-outside-hash",
+      "kills": [
+        "hash covers decorators, export, modifiers and the binding, not only the function node"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": ".span = .{ .start = leadingDecoratorStart(outer), .end = outer.endByte() }",
+      "to": ".span = .{ .start = outer.startByte(), .end = outer.endByte() }"
+    },
+    {
+      "id": "ES6-sym-shared-prefix-outside-hash",
+      "kills": [
+        "declarators sharing one statement get independent hashes that still cover the keyword"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "        hasher.update(source[self.prefix.start..self.prefix.end]);\n",
+      "to": ""
+    },
+    {
+      "id": "ES7-sym-shared-declarators-never-detected",
+      "kills": [
+        "declarators sharing one statement get independent hashes that still cover the keyword"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "declaratorCount(s) > 1",
+      "to": "declaratorCount(s) > 99"
+    },
+    {
+      "id": "ES8-sym-static-field-not-detected",
+      "kills": [
+        "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "and keywordBeforeName(site, \"static\");",
+      "to": "and false;"
+    },
+    {
+      "id": "ES9-sym-static-method-not-detected",
+      "kills": [
+        "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "if (function.kind == .method_definition) return keywordBeforeName(function.node, \"static\");",
+      "to": "if (function.kind == .method_definition) return false;"
+    },
+    {
+      "id": "ES10-sym-getter-not-detected",
+      "kills": [
+        "only the addressed accessor changes when getter and setter share a name"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "    if (keywordBeforeName(function.node, \"get\")) return .get;\n",
+      "to": ""
+    },
+    {
+      "id": "ES11-sym-keyword-scan-passes-name",
+      "expect_status": "survived",
+      "note": "open: no killing input found; an accessor or static keyword token after the name would be needed, and none was found in method or field syntax, but this is not proven equivalent",
+      "file": "src/engine/symbol.zig",
+      "from": "if (child.eql(name)) return false;",
+      "to": "if (child.eql(name) and false) return false;"
+    },
+    {
+      "id": "ES12-sym-constructor-outside-class",
+      "kills": [
+        "a method named constructor in an object literal is a method, not a constructor"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "return std.mem.eql(u8, \"class_body\", parent.kind()) and std.mem.eql(u8, \"constructor\", tree.text(name));",
+      "to": "return std.mem.eql(u8, \"constructor\", tree.text(name)) and parent.isNamed();"
+    },
+    {
+      "id": "ES13-sym-broken-source-table-built",
+      "kills": [
+        "sources with syntax errors never produce a symbol table"
+      ],
+      "file": "src/engine/symbol.zig",
+      "from": "        if (tree.root().hasError()) return error.SourceHasErrors;\n",
+      "to": ""
+    },
+    {
+      "id": "EF1-fn-binding-value-identity-ignored",
+      "expect_status": "survived",
+      "note": "open: no killing input found; a function sitting under a binding node outside its value field would be needed, and none was found, but this is not proven equivalent",
+      "file": "src/engine/functions.zig",
+      "from": "return if (bound.eql(value)) parent else null;",
+      "to": "return if (bound.eql(value) or true) parent else null;"
+    },
+    {
+      "id": "EF2-fn-transparent-wrappers-ignored",
+      "kills": [
+        "names resolve through type assertions, parentheses and compound assignment"
+      ],
+      "file": "src/engine/functions.zig",
+      "from": "while (isOneOf(parent.kind(), &transparent_wrappers)) {",
+      "to": "while (isOneOf(parent.kind(), &transparent_wrappers) and false) {"
     }
   ]
 }

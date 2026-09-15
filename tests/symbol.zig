@@ -303,6 +303,21 @@ test "containers: dotted namespaces, bound class expressions, nested objects and
     });
 }
 
+test "a method named constructor in an object literal is a method, not a constructor" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const t = try test_util.TestTree.init(
+        \\const o = { constructor() { return 1; } };
+        \\class C { constructor() {} }
+    );
+    defer t.deinit();
+
+    try expectSymbols(t.tree, &.{
+        .{ .ref = "o.constructor", .kind = .method },
+        .{ .ref = "C.constructor", .kind = .constructor },
+    });
+}
+
 test "sources with syntax errors never produce a symbol table" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();

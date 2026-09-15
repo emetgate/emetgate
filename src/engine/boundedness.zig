@@ -296,6 +296,33 @@ test "adversarial: a string-key mention is UNBOUNDED" {
     , "process", .string_key_escape);
 }
 
+test "adversarial: a dynamic import anywhere in the file forces UNBOUNDED" {
+    try expectUnbounded(decl ++ "const loaded = import(\"./module\");", "process", .dynamic_construct);
+}
+
+test "adversarial: a Function constructor anywhere in the file forces UNBOUNDED" {
+    try expectUnbounded(decl ++ "const run = new Function(\"return 1\");", "process", .dynamic_construct);
+}
+
+test "adversarial: a star re-export in the file is UNBOUNDED" {
+    try expectUnbounded(decl ++ "export * from \"./other\";", "process", .reexport_ambiguous);
+}
+
+test "precision: a helper declared inside an exported function body is not itself exported" {
+    var case = try Case.init(
+        \\export function outer(): number {
+        \\  function inner(): number { return 1; }
+        \\  return inner();
+        \\}
+    );
+    defer case.deinit();
+    const span = try case.signatureSpan("outer.inner");
+    const report = try case.run("outer.inner", span);
+    defer report.deinit();
+    try testing.expectEqual(Confidence.bounded, report.confidence);
+    try testing.expectEqual(@as(usize, 1), report.same_file_refs.len);
+}
+
 test "whitelist proof: a reference shape outside the escape blacklist still UNBOUNDED" {
     // returning the symbol as a value is neither eval/string-key nor a call argument,
     // yet positive enumeration must still refuse it as an unrecognized reference.
