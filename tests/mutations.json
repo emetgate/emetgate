@@ -1145,8 +1145,8 @@
         "hash covers decorators, export, modifiers and the binding, not only the function node"
       ],
       "file": "src/engine/symbol.zig",
-      "from": "if (std.mem.eql(u8, \"export_statement\", parent.kind())) outer = parent;",
-      "to": "if (std.mem.eql(u8, \"export_statement\", parent.kind()) and false) outer = parent;"
+      "from": "if (isOneOf(parent.kind(), profile.export_wrappers)) outer = parent;",
+      "to": "if (isOneOf(parent.kind(), profile.export_wrappers) and false) outer = parent;"
     },
     {
       "id": "ES5-sym-decorators-outside-hash",
@@ -1154,7 +1154,7 @@
         "hash covers decorators, export, modifiers and the binding, not only the function node"
       ],
       "file": "src/engine/symbol.zig",
-      "from": ".span = .{ .start = leadingDecoratorStart(outer), .end = outer.endByte() }",
+      "from": ".span = .{ .start = leadingDecoratorStart(profile, outer), .end = outer.endByte() }",
       "to": ".span = .{ .start = outer.startByte(), .end = outer.endByte() }"
     },
     {
@@ -1172,15 +1172,15 @@
         "declarators sharing one statement get independent hashes that still cover the keyword"
       ],
       "file": "src/engine/symbol.zig",
-      "from": "declaratorCount(s) > 1",
-      "to": "declaratorCount(s) > 99"
+      "from": "declaratorCount(profile, s) > 1",
+      "to": "declaratorCount(profile, s) > 99"
     },
     {
       "id": "ES8-sym-static-field-not-detected",
       "kills": [
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
-      "file": "src/engine/symbol.zig",
+      "file": "src/engine/lang/typescript/profile.zig",
       "from": "and keywordBeforeName(site, \"static\");",
       "to": "and false;"
     },
@@ -1189,24 +1189,24 @@
       "kills": [
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
-      "file": "src/engine/symbol.zig",
-      "from": "if (function.kind == .method) return keywordBeforeName(function.node, \"static\");",
-      "to": "if (function.kind == .method) return false;"
+      "file": "src/engine/lang/typescript/profile.zig",
+      "from": ".is_static = keywordBeforeName(node, \"static\"),",
+      "to": ".is_static = false,"
     },
     {
       "id": "ES10-sym-getter-not-detected",
       "kills": [
         "only the addressed accessor changes when getter and setter share a name"
       ],
-      "file": "src/engine/symbol.zig",
-      "from": "    if (keywordBeforeName(function.node, \"get\")) return .get;\n",
+      "file": "src/engine/lang/typescript/profile.zig",
+      "from": "    if (keywordBeforeName(node, \"get\")) accessor = .get;\n",
       "to": ""
     },
     {
       "id": "ES11-sym-keyword-scan-passes-name",
       "expect_status": "survived",
       "note": "open: no killing input found; an accessor or static keyword token after the name would be needed, and none was found in method or field syntax, but this is not proven equivalent",
-      "file": "src/engine/symbol.zig",
+      "file": "src/engine/lang/typescript/profile.zig",
       "from": "if (child.eql(name)) return false;",
       "to": "if (child.eql(name) and false) return false;"
     },
@@ -1215,7 +1215,7 @@
       "kills": [
         "a method named constructor in an object literal is a method, not a constructor"
       ],
-      "file": "src/engine/symbol.zig",
+      "file": "src/engine/lang/typescript/profile.zig",
       "from": "return std.mem.eql(u8, \"class_body\", parent.kind()) and std.mem.eql(u8, \"constructor\", tree.text(name));",
       "to": "return std.mem.eql(u8, \"constructor\", tree.text(name)) and parent.isNamed();"
     },

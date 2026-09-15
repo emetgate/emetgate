@@ -3,9 +3,11 @@ const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
 const functions_mod = @import("functions.zig");
 const ref_mod = @import("ref.zig");
-const Profile = @import("lang/profile.zig").Profile;
+const profile_mod = @import("lang/profile.zig");
 
 const Allocator = std.mem.Allocator;
+const Profile = profile_mod.Profile;
+const MemberTraits = profile_mod.MemberTraits;
 
 pub const FunctionKind = functions_mod.FunctionKind;
 pub const Function = functions_mod.Function;
@@ -17,22 +19,6 @@ pub const Ref = ref_mod.Ref;
 const bindingSite = functions_mod.bindingSite;
 const bindingName = functions_mod.bindingName;
 const isOneOf = functions_mod.isOneOf;
-
-const addressable_name_kinds = [_][]const u8{
-    "identifier",
-    "property_identifier",
-    "private_property_identifier",
-    "type_identifier",
-};
-
-const container_name_kinds = addressable_name_kinds ++ [_][]const u8{"nested_identifier"};
-
-const declared_containers = [_][]const u8{
-    "class_declaration",
-    "abstract_class_declaration",
-    "internal_module",
-    "module",
-};
 
 pub const Hash = [16]u8;
 pub const hash_hex_len = @sizeOf(Hash) * 2;
@@ -130,17 +116,18 @@ fn markAmbiguous(symbols: []Symbol) void {
 }
 
 fn describe(arena: Allocator, profile: *const Profile, tree: ts.Tree, function: Function) Allocator.Error!?Symbol {
-    const kind = symbolKind(tree, function) orelse return null;
+    const traits = profile.memberTraits(profile, tree, function.node, function.kind);
+    const kind = symbolKind(function.kind, traits) orelse return null;
     const name = function.name orelse return null;
-    if (!isOneOf(name.kind(), &addressable_name_kinds)) return null;
+    if (!isOneOf(name.kind(), profile.addressable_names)) return null;
     const container = try containerPath(arena, profile, tree, function.node) orelse return null;
     const declaration = declarationOf(profile, function);
     return .{
         .ref = .{
             .container = container,
             .name = tree.text(name),
-            .accessor = accessorOf(function),
-            .is_static = isStatic(profile, function),
+            .accessor = traits.accessor,
+            .is_static = traits.is_static,
         },
         .kind = kind,
         .node = function.node,
@@ -150,48 +137,19 @@ fn describe(arena: Allocator, profile: *const Profile, tree: ts.Tree, function: 
     };
 }
 
-fn symbolKind(tree: ts.Tree, function: Function) ?Kind {
-    return switch (function.kind) {
+fn symbolKind(kind: FunctionKind, traits: MemberTraits) ?Kind {
+    return switch (kind) {
         .declaration => .function,
         .generator_declaration, .generator_expression => .generator,
         .expression => .function_expression,
         .arrow => .arrow,
         .static_block => null,
-        .method => switch (accessorOf(function)) {
+        .method => switch (traits.accessor) {
             .get => .getter,
             .set => .setter,
-            .none => if (isConstructor(tree, function)) .constructor else .method,
+            .none => if (traits.is_constructor) .constructor else .method,
         },
     };
-}
-
-fn isConstructor(tree: ts.Tree, function: Function) bool {
-    const name = function.name orelse return false;
-    const parent = function.node.parent() orelse return false;
-    return std.mem.eql(u8, "class_body", parent.kind()) and std.mem.eql(u8, "constructor", tree.text(name));
-}
-
-fn accessorOf(function: Function) Accessor {
-    if (function.kind != .method) return .none;
-    if (keywordBeforeName(function.node, "get")) return .get;
-    if (keywordBeforeName(function.node, "set")) return .set;
-    return .none;
-}
-
-fn isStatic(profile: *const Profile, function: Function) bool {
-    if (function.kind == .method) return keywordBeforeName(function.node, "static");
-    const site = bindingSite(profile, function.node) orelse return false;
-    return std.mem.eql(u8, "public_field_definition", site.kind()) and keywordBeforeName(site, "static");
-}
-
-fn keywordBeforeName(holder: ts.Node, keyword: []const u8) bool {
-    const name = holder.childByField("name") orelse return false;
-    var i: u32 = 0;
-    while (holder.child(i)) |child| : (i += 1) {
-        if (child.eql(name)) return false;
-        if (!child.isNamed() and std.mem.eql(u8, keyword, child.kind())) return true;
-    }
-    return false;
 }
 
 const ContainerRole = union(enum) {
@@ -201,17 +159,13 @@ const ContainerRole = union(enum) {
 };
 
 fn containerRole(profile: *const Profile, node: ts.Node) ContainerRole {
-    const kind = node.kind();
     const name: ?ts.Node = if (classify(profile, node)) |function|
         function.name
-    else if (isOneOf(kind, &declared_containers))
-        node.childByField("name")
-    else if (std.mem.eql(u8, kind, "class"))
-        node.childByField("name") orelse bindingName(profile, node)
-    else if (std.mem.eql(u8, kind, "object"))
-        bindingName(profile, node)
-    else
-        return .transparent;
+    else if (profile.containerName(node.kind())) |source| switch (source) {
+        .field => node.childByField("name"),
+        .field_or_binding => node.childByField("name") orelse bindingName(profile, node),
+        .binding => bindingName(profile, node),
+    } else return .transparent;
     return if (name) |n| .{ .named = n } else .unnamed;
 }
 
@@ -224,20 +178,14 @@ fn containerPath(arena: Allocator, profile: *const Profile, tree: ts.Tree, node:
             .unnamed => return null,
             .named => |name| name,
         };
-        if (!isOneOf(name.kind(), &container_name_kinds)) return null;
+        if (!isOneOf(name.kind(), profile.addressable_names) and !std.mem.eql(u8, name.kind(), profile.dotted_name)) return null;
         const first = reversed.items.len;
-        try appendNameSegments(arena, tree, name, &reversed);
+        try appendNameSegments(arena, profile, tree, name, &reversed);
         std.mem.reverse([]const u8, reversed.items[first..]);
     }
     std.mem.reverse([]const u8, reversed.items);
     return reversed.items;
 }
-
-const declaration_statements = [_][]const u8{
-    "lexical_declaration",
-    "variable_declaration",
-    "expression_statement",
-};
 
 const Declaration = struct {
     span: Span,
@@ -258,58 +206,56 @@ fn declarationOf(profile: *const Profile, function: Function) Declaration {
     const own = site orelse function.node;
     var statement: ?ts.Node = null;
     if (own.parent()) |parent| {
-        if (isOneOf(parent.kind(), &declaration_statements)) statement = parent;
+        if (isOneOf(parent.kind(), profile.declaration_statements)) statement = parent;
     }
     var outer = statement orelse own;
     if (outer.parent()) |parent| {
-        if (std.mem.eql(u8, "export_statement", parent.kind())) outer = parent;
+        if (isOneOf(parent.kind(), profile.export_wrappers)) outer = parent;
     }
 
-    const shared = if (statement) |s| site != null and declaratorCount(s) > 1 else false;
-    if (!shared) return .{ .span = .{ .start = leadingDecoratorStart(outer), .end = outer.endByte() } };
+    const shared = if (statement) |s| site != null and declaratorCount(profile, s) > 1 else false;
+    if (!shared) return .{ .span = .{ .start = leadingDecoratorStart(profile, outer), .end = outer.endByte() } };
     return .{
         .span = .{ .start = own.startByte(), .end = own.endByte() },
-        .prefix = .{ .start = outer.startByte(), .end = firstDeclaratorStart(statement.?) },
+        .prefix = .{ .start = outer.startByte(), .end = firstDeclaratorStart(profile, statement.?) },
     };
 }
 
-fn declaratorCount(statement: ts.Node) u32 {
+fn declaratorCount(profile: *const Profile, statement: ts.Node) u32 {
     var count: u32 = 0;
     var i: u32 = 0;
     while (statement.namedChild(i)) |child| : (i += 1) {
-        if (std.mem.eql(u8, "variable_declarator", child.kind())) count += 1;
+        if (std.mem.eql(u8, profile.declarator, child.kind())) count += 1;
     }
     return count;
 }
 
-fn firstDeclaratorStart(statement: ts.Node) u32 {
+fn firstDeclaratorStart(profile: *const Profile, statement: ts.Node) u32 {
     var i: u32 = 0;
     while (statement.namedChild(i)) |child| : (i += 1) {
-        if (std.mem.eql(u8, "variable_declarator", child.kind())) return child.startByte();
+        if (std.mem.eql(u8, profile.declarator, child.kind())) return child.startByte();
     }
     return statement.startByte();
 }
 
-fn leadingDecoratorStart(node: ts.Node) u32 {
+fn leadingDecoratorStart(profile: *const Profile, node: ts.Node) u32 {
     var start = node.startByte();
     var prev = node.prevNamedSibling();
     while (prev) |sibling| : (prev = sibling.prevNamedSibling()) {
-        if (std.mem.eql(u8, "comment", sibling.kind())) continue;
-        if (!std.mem.eql(u8, "decorator", sibling.kind())) break;
+        if (isOneOf(sibling.kind(), profile.comments)) continue;
+        if (!std.mem.eql(u8, profile.decorator, sibling.kind())) break;
         start = sibling.startByte();
     }
     return start;
 }
 
-const identifier_segment_kinds = [_][]const u8{ "identifier", "property_identifier", "type_identifier" };
-
-fn appendNameSegments(arena: Allocator, tree: ts.Tree, name: ts.Node, out: *std.ArrayList([]const u8)) Allocator.Error!void {
-    if (!std.mem.eql(u8, "nested_identifier", name.kind())) return out.append(arena, tree.text(name));
+fn appendNameSegments(arena: Allocator, profile: *const Profile, tree: ts.Tree, name: ts.Node, out: *std.ArrayList([]const u8)) Allocator.Error!void {
+    if (!std.mem.eql(u8, profile.dotted_name, name.kind())) return out.append(arena, tree.text(name));
     var walker = traversal.Walker.init(name);
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
-        if (node.childCount() == 0 and isOneOf(node.kind(), &identifier_segment_kinds)) {
+        if (node.childCount() == 0 and isOneOf(node.kind(), profile.name_segments)) {
             try out.append(arena, tree.text(node));
         }
     }
