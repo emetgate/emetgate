@@ -242,7 +242,7 @@ fn leadingDecoratorStart(profile: *const Profile, node: ts.Node) u32 {
     var start = node.startByte();
     var prev = node.prevNamedSibling();
     while (prev) |sibling| : (prev = sibling.prevNamedSibling()) {
-        if (isOneOf(sibling.kind(), profile.comments)) continue;
+        if (profile.isComment(sibling.kind())) continue;
         if (!std.mem.eql(u8, profile.decorator, sibling.kind())) break;
         start = sibling.startByte();
     }
