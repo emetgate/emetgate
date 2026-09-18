@@ -94,8 +94,10 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         keep_rel = true;
     }
 
-    for (prepared.items) |p| {
-        if (try rules.gate(gpa, io, root, p.rel, p.applied.snapshot.profile, p.applied.snapshot.tree, p.applied.body)) |report| return .{ .rule_violation = report };
+    for (prepared.items, options.edits[0..prepared.items.len]) |p, edit| {
+        const ref = try symbol.Ref.parse(gpa, edit.ref_text);
+        defer ref.deinit(gpa);
+        if (try rules.gate(gpa, io, root, p.rel, ref, p.applied.snapshot.profile, p.applied.snapshot.tree, p.applied.body)) |report| return .{ .rule_violation = report };
     }
 
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });

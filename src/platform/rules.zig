@@ -5,6 +5,7 @@ const checks = @import("../engine/checks.zig");
 const Profile = @import("../engine/lang/profile.zig").Profile;
 const memory = @import("memory.zig");
 const shadow = @import("shadow.zig");
+const where_mod = @import("where.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -12,6 +13,7 @@ const Span = symbol.Span;
 pub const Rule = struct {
     id: []const u8,
     check: []const u8,
+    where: ?[]const u8 = null,
 };
 
 pub const Enforced = struct {
@@ -62,15 +64,31 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     for (recall.decisions) |decision| {
         if (decision.status != .active or !decision.enforce) continue;
         const check = decision.check orelse continue;
-        try list.append(gpa, .{ .id = decision.id, .check = check });
+        try list.append(gpa, .{ .id = decision.id, .check = check, .where = decision.where });
     }
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
 
-pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span) !?Report {
+pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span) !?Report {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
-    return evaluate(gpa, file, profile, tree, span, enforced.rules);
+    const applicable = try applicableTo(gpa, enforced.rules, file, ref);
+    defer gpa.free(applicable);
+    return evaluate(gpa, file, profile, tree, span, applicable);
+}
+
+pub fn applicableTo(gpa: Allocator, all: []const Rule, file: []const u8, ref: symbol.Ref) ![]Rule {
+    var list: std.ArrayList(Rule) = .empty;
+    errdefer list.deinit(gpa);
+    for (all) |rule| {
+        const text = rule.where orelse {
+            try list.append(gpa, rule);
+            continue;
+        };
+        const scope = try where_mod.parse(text);
+        if (scope.coversSymbol(file, ref)) try list.append(gpa, rule);
+    }
+    return list.toOwnedSlice(gpa);
 }
 
 pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!?Report {

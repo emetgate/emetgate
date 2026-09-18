@@ -18,6 +18,7 @@ pub const Options = struct {
     pub fn parse(args: []const [:0]const u8) ?Options {
         var options: Options = .{ .source = .ledger, .json = false };
         var check: ?[]const u8 = null;
+        var in: ?[]const u8 = null;
         var i: usize = 0;
         while (i < args.len) : (i += 1) {
             const arg = args[i];
@@ -28,9 +29,15 @@ pub const Options = struct {
                 if (check != null or i + 1 >= args.len) return null;
                 i += 1;
                 check = args[i];
+            } else if (std.mem.eql(u8, arg, "--in")) {
+                if (in != null or i + 1 >= args.len) return null;
+                i += 1;
+                in = args[i];
             } else return null;
         }
-        if (check) |spec| options.source = .{ .check = spec };
+        if (check) |spec| {
+            options.source = .{ .check = .{ .spec = spec, .where = in } };
+        } else if (in != null) return null;
         return options;
     }
 };
@@ -56,6 +63,18 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
             try wire.writeMalformedRule(out, bad.rule.id, bad.rule.check, @errorName(bad.reason), code);
         } else {
             try err_out.print("error: {t}: rule {s} has check \"{s}\"\n", .{ bad.reason, bad.rule.id, bad.rule.check });
+        }
+        return code;
+    }
+
+    const unresolved = scan.firstUnresolved(gpa, io, runtime, root_abs, enforced.rules) catch |err| return report(err, options, out, err_out);
+    if (unresolved) |bad| {
+        const err = error.ScopeUnresolved;
+        const code = wire.exitCode(err);
+        if (options.json) {
+            try wire.writeUnresolvedScope(out, bad.rule.id, bad.rule.where.?, @errorName(bad.reason), code);
+        } else {
+            try err_out.print("error: {t}: rule {s} has scope \"{s}\": {t}\n", .{ err, bad.rule.id, bad.rule.where.?, bad.reason });
         }
         return code;
     }
@@ -91,10 +110,11 @@ fn writeText(out: *Writer, result: scan.Result) !void {
     }
     for (result.unreadable) |u| try out.print("warning: {s}: not scanned: {t}\n", .{ u.file, u.reason });
     for (result.parse_errors) |file| try out.print("warning: {s}: parse error; tree-based checks may be incomplete\n", .{file});
-    try out.print("{d} rule(s), {d} file(s) scanned, {d} violation(s); {d} skipped without a language profile, {d} unreadable, {d} with parse errors\n", .{
+    try out.print("{d} rule(s), {d} file(s) scanned, {d} violation(s); {d} outside rule scope, {d} skipped without a language profile, {d} unreadable, {d} with parse errors\n", .{
         result.rules,
         result.scanned,
         result.violations.len,
+        result.out_of_scope,
         result.unsupported,
         result.unreadable.len,
         result.parse_errors.len,

@@ -1694,7 +1694,7 @@
     {
       "id": "NF9-create-rules-gate-skipped",
       "file": "src/platform/runner.zig",
-      "from": "    if (try rules.gate(gpa, io, root, rel, created.snapshot.profile, created.snapshot.tree, created.body)) |report| return .{ .rule_violation = report };\n",
+      "from": "    if (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body)) |report| return .{ .rule_violation = report };\n",
       "to": "",
       "kills": [
         "new file: a body that breaks a forbid rule is rejected even when the tests pass"
@@ -1786,8 +1786,8 @@
     {
       "id": "SC5-scan-check-mode-reads-ledger",
       "file": "src/platform/scan.zig",
-      "from": "        .check => |spec| .{ .gpa = gpa, .recall = null,",
-      "to": "        .check => |spec| if (true) rules.peek(gpa, io, root_abs) else .{ .gpa = gpa, .recall = null,",
+      "from": "        .check => |adhoc| {\n",
+      "to": "        .check => |adhoc| if (true) rules.peek(gpa, io, root_abs) else {\n",
       "kills": [
         "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written",
         "scan: --check scans a spec absent from the ledger and leaves the ledger untouched"
@@ -1876,6 +1876,387 @@
       "kills": [
         "scan: a ledger torn on the first read but whole on the second is scanned after one re-read",
         "scan: a ledger torn on both reads stops with LedgerNeedsRepair after exactly one re-read"
+      ]
+    },
+    {
+      "id": "SP1-where-glob-guard-removed",
+      "file": "src/platform/where.zig",
+      "from": "    if (std.mem.indexOfAny(u8, text, \"*?[]{}\") != null) return error.WhereGlob;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name",
+        "where: remember and supersede refuse an invalid where by name and write nothing",
+        "scope: an invalid --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "SP2-where-absolute-guard-removed",
+      "file": "src/platform/where.zig",
+      "from": "    if (text[0] == '/' or text[0] == '\\\\' or std.mem.indexOfScalar(u8, text, ':') != null) return error.WhereAbsolute;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name",
+        "where: remember and supersede refuse an invalid where by name and write nothing",
+        "scope: an invalid --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "SP3-where-parent-segment-guard-removed",
+      "file": "src/platform/where.zig",
+      "from": "        if (std.mem.eql(u8, segment, \"..\")) return error.WhereParentSegment;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name",
+        "where: remember and supersede refuse an invalid where by name and write nothing",
+        "scope: an invalid --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "SP4-where-internal-guard-removed",
+      "file": "src/platform/where.zig",
+      "from": "        if (first and (std.ascii.eqlIgnoreCase(segment, \".git\") or std.ascii.eqlIgnoreCase(segment, shadow.workspace_dir))) return error.WhereInternal;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name",
+        "where: remember and supersede refuse an invalid where by name and write nothing",
+        "scope: an invalid --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "SP5-where-empty-guard-removed",
+      "file": "src/platform/where.zig",
+      "from": "    if (text.len == 0) return error.WhereEmpty;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name",
+        "where: remember and supersede refuse an invalid where by name and write nothing"
+      ]
+    },
+    {
+      "id": "SP6-where-length-cap-removed",
+      "file": "src/platform/where.zig",
+      "from": "    if (text.len > max_where_bytes) return error.WhereTooLong;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP7-where-utf8-guard-removed",
+      "file": "src/platform/where.zig",
+      "from": "    if (!std.unicode.utf8ValidateSlice(text)) return error.WhereMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP8-where-backslash-accepted",
+      "file": "src/platform/where.zig",
+      "from": "    if (std.mem.indexOfScalar(u8, path, '\\\\') != null) return error.WhereMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP9-where-empty-or-dot-segment-accepted",
+      "file": "src/platform/where.zig",
+      "from": "        if (segment.len == 0 or std.mem.eql(u8, segment, \".\")) return error.WhereMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP10-where-unsafe-name-accepted",
+      "file": "src/platform/where.zig",
+      "from": "    shadow.validateRelative(body) catch return error.WhereMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP11-where-empty-path-accepted",
+      "file": "src/platform/where.zig",
+      "from": "    if (path.len == 0) return error.WhereMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP12-where-symbol-on-directory-accepted",
+      "file": "src/platform/where.zig",
+      "from": "        if (path_part[path_part.len - 1] == '/') return error.WhereMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP13-where-symbol-ref-unchecked",
+      "file": "src/platform/where.zig",
+      "from": "        _ = Ref.parse(fixed.allocator(), ref_text) catch return error.WhereMalformed;\n",
+      "to": "        _ = &fixed;\n",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP14-where-second-hash-accepted",
+      "file": "src/platform/where.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, ref_text, '#') != null) return error.WhereMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected where is refused under its own name"
+      ]
+    },
+    {
+      "id": "SP15-where-directory-covers-everything",
+      "file": "src/platform/where.zig",
+      "from": ".dir => |p| rel.len > p.len and samePath(p, rel[0..p.len]),",
+      "to": ".dir => |p| p.len != 0,",
+      "kills": [
+        "a file where covers only that file and a directory where covers what is under it",
+        "scope: a directory scope reports only the violations under that directory"
+      ]
+    },
+    {
+      "id": "SP16-where-symbol-ignores-ref",
+      "file": "src/platform/where.zig",
+      "from": "        return scoped.eql(ref);",
+      "to": "        return scoped.eql(ref) or true;",
+      "kills": [
+        "a symbol where covers only proposals to that symbol",
+        "scope: a symbol-scoped rule blocks only a proposal to that symbol",
+        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+      ]
+    },
+    {
+      "id": "SP17-where-file-match-ignored",
+      "file": "src/platform/where.zig",
+      "from": ".file => |p| samePath(p, rel),",
+      "to": ".file => |p| p.len != 0,",
+      "kills": [
+        "a file where covers only that file and a directory where covers what is under it",
+        "scope: a rule whose where names another file does not block the proposal",
+        "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
+        "scope: a rule scoped to extension/content.js reports no fetch( from other files"
+      ]
+    },
+    {
+      "id": "SP18-gate-where-ignored",
+      "file": "src/platform/rules.zig",
+      "from": "        if (scope.coversSymbol(file, ref)) try list.append(gpa, rule);",
+      "to": "        if (scope.coversSymbol(file, ref) or true) try list.append(gpa, rule);",
+      "kills": [
+        "scope: a rule whose where names another file does not block the proposal",
+        "scope: a symbol-scoped rule blocks only a proposal to that symbol",
+        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+      ]
+    },
+    {
+      "id": "SP19-gate-evaluates-all-rules",
+      "file": "src/platform/rules.zig",
+      "from": "return evaluate(gpa, file, profile, tree, span, applicable);",
+      "to": "return evaluate(gpa, file, profile, tree, span, enforced.rules);",
+      "kills": [
+        "scope: a rule whose where names another file does not block the proposal",
+        "scope: a symbol-scoped rule blocks only a proposal to that symbol",
+        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+      ]
+    },
+    {
+      "id": "SP20-ledger-rule-drops-where",
+      "file": "src/platform/rules.zig",
+      "from": ", .where = decision.where });",
+      "to": " });",
+      "kills": [
+        "scope: a rule whose where names another file does not block the proposal",
+        "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
+        "scope: a rule scoped to extension/content.js reports no fetch( from other files",
+        "scope: a directory scope reports only the violations under that directory"
+      ]
+    },
+    {
+      "id": "SP21-scan-out-of-scope-files-scanned",
+      "file": "src/platform/scan.zig",
+      "from": "        if (!covers(scopes, file)) {\n            out_of_scope += 1;\n            continue;\n        }\n",
+      "to": "        _ = &out_of_scope;\n",
+      "kills": [
+        "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
+        "scope: a rule scoped to extension/content.js reports no fetch( from other files",
+        "scope: a directory scope reports only the violations under that directory",
+        "scope: --in narrows an ad-hoc check and the json report counts files outside it"
+      ]
+    },
+    {
+      "id": "SP22-scan-rule-where-not-rechecked",
+      "file": "src/platform/scan.zig",
+      "from": "                if (!w.coversFile(file)) continue;\n",
+      "to": "",
+      "kills": [
+        "scope: each rule in one scan keeps its own where"
+      ]
+    },
+    {
+      "id": "SP23-scan-unscoped-rule-treated-as-scoped",
+      "file": "src/platform/scan.zig",
+      "from": "        const w = scope orelse return true;",
+      "to": "        const w = scope orelse continue;",
+      "kills": [
+        "scope: a rule without where scans the whole repository as before"
+      ]
+    },
+    {
+      "id": "SP24-scan-symbol-span-is-whole-file",
+      "file": "src/platform/scan.zig",
+      "from": "    return .{ .start = target.body.startByte(), .end = target.body.endByte() };",
+      "to": "    _ = target;\n    return .{ .start = 0, .end = @intCast(snapshot.source.len) };",
+      "kills": [
+        "scope: a symbol scope ignores the same text in another symbol of the same file"
+      ]
+    },
+    {
+      "id": "SP26-scan-in-without-check-accepted",
+      "file": "src/protocol/scan_command.zig",
+      "from": "        } else if (in != null) return null;",
+      "to": "        }",
+      "kills": [
+        "scope: --in is refused without --check, twice, or without a value"
+      ]
+    },
+    {
+      "id": "SP27-scan-in-dropped",
+      "file": "src/protocol/scan_command.zig",
+      "from": ".check = .{ .spec = spec, .where = in } };",
+      "to": ".check = .{ .spec = spec, .where = null } };",
+      "kills": [
+        "scope: --in narrows an ad-hoc check and the json report counts files outside it",
+        "scope: an invalid --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "SP28-where-errors-exit-generic",
+      "file": "src/protocol/wire.zig",
+      "from": "        error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed => 2,\n",
+      "to": "",
+      "kills": [
+        "scope: an invalid --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "SP29-memory-where-unvalidated-on-write",
+      "file": "src/platform/memory.zig",
+      "from": "    try where_mod.validate(where);\n",
+      "to": "",
+      "all": true,
+      "kills": [
+        "where: remember and supersede refuse an invalid where by name and write nothing"
+      ]
+    },
+    {
+      "id": "SP30-memory-where-not-stored",
+      "file": "src/platform/memory.zig",
+      "from": "        .where = where,\n",
+      "to": "",
+      "all": true,
+      "kills": [
+        "where: remember and supersede store where, and an unscoped row carries no where field",
+        "scope: a rule whose where names another file does not block the proposal"
+      ]
+    },
+    {
+      "id": "SP31-ledger-row-where-unvalidated",
+      "file": "src/platform/memory.zig",
+      "from": "    where_mod.validate(d.where) catch return error.LedgerCorrupt;\n",
+      "to": "",
+      "kills": [
+        "where: a ledger row carrying an invalid where is corrupt"
+      ]
+    },
+    {
+      "id": "SP32-ledger-duplicate-ignores-where",
+      "file": "src/platform/memory.zig",
+      "from": " and sameOptional(a.where, b.where);",
+      "to": ";",
+      "kills": [
+        "where: two rows for one id that differ only in where are corrupt"
+      ]
+    },
+    {
+      "id": "SP33-ledger-writes-null-where",
+      "file": "src/platform/memory.zig",
+      "from": "if (comptime std.mem.eql(u8, field.name, \"where\")) {",
+      "to": "if (comptime false) {",
+      "kills": [
+        "where: remember and supersede store where, and an unscoped row carries no where field",
+        "memory: compact drops retired history and never an active decision"
+      ]
+    },
+    {
+      "id": "SP34-batch-gates-with-first-ref",
+      "file": "src/platform/batch.zig",
+      "from": "|p, edit| {\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
+      "to": "|p, edit| {\n        _ = edit;\n        const ref = try symbol.Ref.parse(gpa, options.edits[0].ref_text);",
+      "kills": [
+        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+      ]
+    },
+    {
+      "id": "SU1-scanner-unresolved-scope-not-refused",
+      "file": "src/platform/scan.zig",
+      "from": "    if (try firstUnresolvedIn(gpa, io, runtime, root, files, list) != null) return error.ScopeUnresolved;\n",
+      "to": "",
+      "kills": [
+        "scope: the scanner itself refuses an unresolved scope"
+      ]
+    },
+    {
+      "id": "SU2-scan-command-unresolved-precheck-removed",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (unresolved) |bad| {",
+      "to": "    if (if (true) @as(?scan.Unresolved, null) else unresolved) |bad| {",
+      "kills": [
+        "scope: a ledger rule whose where names a deleted file stops the scan with ScopeUnresolved",
+        "scope: a ledger rule whose where names a missing symbol stops the scan with ScopeUnresolved",
+        "scope: an unresolved scope is reported as one json error line naming rule and where"
+      ]
+    },
+    {
+      "id": "SU3-scope-symbol-not-resolved",
+      "file": "src/platform/scan.zig",
+      "from": "    _ = try symbolSpan(gpa, snapshot, ref_text);",
+      "to": "    if (false) _ = try symbolSpan(gpa, snapshot, ref_text);",
+      "kills": [
+        "scope: a ledger rule whose where names a missing symbol stops the scan with ScopeUnresolved",
+        "scope: an empty directory scope or an unparsable symbol file stops the scan with ScopeUnresolved"
+      ]
+    },
+    {
+      "id": "SU4-scope-file-presence-not-checked",
+      "file": "src/platform/scan.zig",
+      "from": "    } else return switch (scope) {\n        .dir => error.NoTrackedFileUnder,\n        else => error.FileNotTracked,\n    };",
+      "to": "    } else return;",
+      "kills": [
+        "scope: a ledger rule whose where names a deleted file stops the scan with ScopeUnresolved",
+        "scope: an empty directory scope or an unparsable symbol file stops the scan with ScopeUnresolved",
+        "scope: an unresolved scope is reported as one json error line naming rule and where",
+        "scope: the scanner itself refuses an unresolved scope"
+      ]
+    },
+    {
+      "id": "SU5-scope-unresolved-exit-generic",
+      "file": "src/protocol/wire.zig",
+      "from": "        error.ScopeUnresolved => 31,\n",
+      "to": "",
+      "kills": [
+        "scope: a ledger rule whose where names a deleted file stops the scan with ScopeUnresolved",
+        "scope: a ledger rule whose where names a missing symbol stops the scan with ScopeUnresolved",
+        "scope: an empty directory scope or an unparsable symbol file stops the scan with ScopeUnresolved",
+        "scope: an unresolved scope is reported as one json error line naming rule and where"
       ]
     }
   ]
