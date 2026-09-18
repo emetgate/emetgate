@@ -13,18 +13,42 @@ pub const Violation = struct {
     span: Span,
 };
 
-pub const Collect = *const fn (gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void;
+pub const Collect = *const fn (gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void;
 
 pub const Check = struct {
     name: []const u8,
     collect: Collect,
+    takes_argument: bool = false,
 };
 
 pub const registry = [_]Check{
     .{ .name = "no_comment", .collect = noComment },
+    .{ .name = "forbid", .collect = forbid, .takes_argument = true },
 };
 
-pub const Error = error{UnknownCheck} || Allocator.Error;
+pub const Error = error{ UnknownCheck, UnexpectedCheckArgument, MissingCheckArgument, EmptyCheckArgument } || Allocator.Error;
+
+pub const Invocation = struct {
+    name: []const u8,
+    arg: ?[]const u8,
+};
+
+pub fn parse(spec: []const u8) Invocation {
+    const colon = std.mem.indexOfScalar(u8, spec, ':') orelse return .{ .name = spec, .arg = null };
+    return .{ .name = spec[0..colon], .arg = spec[colon + 1 ..] };
+}
+
+fn resolve(checks: []const Check, spec: []const u8) Error!struct { check: Check, arg: ?[]const u8 } {
+    const invocation = parse(spec);
+    const check = find(checks, invocation.name) orelse return error.UnknownCheck;
+    if (check.takes_argument) {
+        const arg = invocation.arg orelse return error.MissingCheckArgument;
+        if (arg.len == 0) return error.EmptyCheckArgument;
+    } else if (invocation.arg != null) {
+        return error.UnexpectedCheckArgument;
+    }
+    return .{ .check = check, .arg = invocation.arg };
+}
 
 pub fn find(checks: []const Check, name: []const u8) ?Check {
     for (checks) |check| {
@@ -38,18 +62,29 @@ pub fn run(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, n
 }
 
 pub fn runWith(gpa: Allocator, checks: []const Check, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
-    for (names) |name| {
-        if (find(checks, name) == null) return error.UnknownCheck;
-    }
+    for (names) |name| _ = try resolve(checks, name);
     var out: std.ArrayList(Violation) = .empty;
     errdefer out.deinit(gpa);
     for (names) |name| {
-        if (find(checks, name)) |check| try check.collect(gpa, profile, tree, span, &out);
+        const resolved = try resolve(checks, name);
+        try resolved.check.collect(gpa, profile, tree, span, resolved.arg, &out);
     }
     return out.toOwnedSlice(gpa);
 }
 
-fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
+fn forbid(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+    _ = profile;
+    const needle = arg orelse return;
+    const body = tree.source[span.start..span.end];
+    var from: usize = 0;
+    while (std.mem.indexOfPos(u8, body, from, needle)) |at| : (from = at + needle.len) {
+        const start: u32 = span.start + @as(u32, @intCast(at));
+        try out.append(gpa, .{ .check = "forbid", .span = .{ .start = start, .end = start + @as(u32, @intCast(needle.len)) } });
+    }
+}
+
+fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+    _ = arg;
     var walker = traversal.Walker.init(tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
@@ -189,7 +224,8 @@ test "an unknown check name is refused before any check runs" {
 
     const Probe = struct {
         var ran: usize = 0;
-        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, s: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, s: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+            _ = arg;
             _ = gpa;
             _ = profile;
             _ = tree;
@@ -211,7 +247,8 @@ test "a new check joins by registration alone and runs in the requested order" {
     defer t.deinit();
 
     const NoEval = struct {
-        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, out: *std.ArrayList(Violation)) Allocator.Error!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+            _ = arg;
             var walker = traversal.Walker.init(tree.root());
             defer walker.deinit();
             while (walker.next()) |entry| {
@@ -232,4 +269,85 @@ test "a new check joins by registration alone and runs in the requested order" {
     try testing.expectEqualStrings("eval", source[violations[0].span.start..violations[0].span.end]);
     try testing.expectEqualStrings("no_comment", violations[1].check);
     try testing.expectEqualStrings("/* c */", source[violations[1].span.start..violations[1].span.end]);
+}
+
+fn runSpecs(source: []const u8, span: Span, specs: []const []const u8) ![]Violation {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const t = try test_util.TestTree.init(source);
+    defer t.deinit();
+    return run(testing.allocator, test_util.language, t.tree, span, specs);
+}
+
+fn expectForbidden(source: []const u8, span: Span, spec: []const u8, expected_starts: []const u32) !void {
+    const violations = try runSpecs(source, span, &.{spec});
+    defer testing.allocator.free(violations);
+    const needle = parse(spec).arg.?;
+    try testing.expectEqual(expected_starts.len, violations.len);
+    for (violations, expected_starts) |v, start| {
+        try testing.expectEqualStrings("forbid", v.check);
+        try testing.expectEqual(start, v.span.start);
+        try testing.expectEqual(start + @as(u32, @intCast(needle.len)), v.span.end);
+        try testing.expectEqualStrings(needle, source[v.span.start..v.span.end]);
+    }
+}
+
+test "a check spec splits at the first colon, and the argument may itself contain colons" {
+    const bare = parse("no_comment");
+    try testing.expectEqualStrings("no_comment", bare.name);
+    try testing.expect(bare.arg == null);
+
+    const with_arg = parse("forbid:console.log");
+    try testing.expectEqualStrings("forbid", with_arg.name);
+    try testing.expectEqualStrings("console.log", with_arg.arg.?);
+
+    const colons = parse("forbid:a::b:");
+    try testing.expectEqualStrings("forbid", colons.name);
+    try testing.expectEqualStrings("a::b:", colons.arg.?);
+
+    const empty = parse("forbid:");
+    try testing.expectEqualStrings("forbid", empty.name);
+    try testing.expectEqualStrings("", empty.arg.?);
+}
+
+test "argument misuse is refused with its own error before any check runs" {
+    const source = "function f() { /* c */ }\n";
+    const span = wholeSource(source);
+    try testing.expectError(error.UnexpectedCheckArgument, runSpecs(source, span, &.{"no_comment:x"}));
+    try testing.expectError(error.UnexpectedCheckArgument, runSpecs(source, span, &.{"no_comment:"}));
+    try testing.expectError(error.MissingCheckArgument, runSpecs(source, span, &.{"forbid"}));
+    try testing.expectError(error.EmptyCheckArgument, runSpecs(source, span, &.{"forbid:"}));
+    try testing.expectError(error.UnknownCheck, runSpecs(source, span, &.{"no_such_check:x"}));
+    try testing.expectError(error.MissingCheckArgument, runSpecs(source, span, &.{ "no_comment", "forbid" }));
+}
+
+test "forbid reports nothing when the text is absent or differs only in case" {
+    const source = "function f() { return Eval(1); }\n";
+    try expectForbidden(source, wholeSource(source), "forbid:eval", &.{});
+    try expectForbidden(source, wholeSource(source), "forbid:TODO", &.{});
+}
+
+test "forbid reports one violation spanning exactly the matched text" {
+    const source = "function f() { return eval(1); }\n";
+    try expectForbidden(source, wholeSource(source), "forbid:eval", &.{22});
+}
+
+test "forbid reports every occurrence inside the span and none outside it" {
+    const source = "const TODO = 1;\nfunction f() {\n  TODO(); x.TODO; // TODO\n}\nTODO;\n";
+    const span = try spanOf(source, "{\n  TODO(); x.TODO; // TODO\n}");
+    const first: u32 = @intCast(std.mem.indexOf(u8, source, "TODO();").?);
+    const second: u32 = @intCast(std.mem.indexOf(u8, source, "TODO;").?);
+    const third: u32 = @intCast(std.mem.indexOf(u8, source, "TODO\n}").?);
+    try expectForbidden(source, span, "forbid:TODO", &.{ first, second, third });
+}
+
+test "forbid deliberately does not count overlapping occurrences: aaa holds one aa" {
+    const source = "function f() { aaa; }\n";
+    const first: u32 = @intCast(std.mem.indexOf(u8, source, "aaa").?);
+    try expectForbidden(source, wholeSource(source), "forbid:aa", &.{first});
+}
+
+test "forbid matches an argument that contains colons" {
+    const source = "function f() { return a ? b::c : d; }\n";
+    try expectForbidden(source, wholeSource(source), "forbid:b::c", &.{@intCast(std.mem.indexOf(u8, source, "b::c").?)});
 }
