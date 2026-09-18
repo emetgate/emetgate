@@ -599,6 +599,44 @@ test "rules: a clean body still commits under an enforced rule" {
     try testing.expect(result == .committed);
 }
 
+test "rules: an enforced forbid rule rejects a body containing its text before the tests run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, "{\n  return Math.abs(a) - Math.abs(b);\n}", "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    const violations = result.rule_violation.violations;
+    try testing.expectEqual(@as(usize, 2), violations.len);
+    for (violations, [_]u32{ 10, 24 }) |v, col| {
+        try testing.expectEqualStrings(id, v.rule);
+        try testing.expectEqualStrings("forbid:Math.abs", v.check);
+        try testing.expectEqualStrings("Math.abs", v.text);
+        try testing.expectEqual(@as(u32, 2), v.line);
+        try testing.expectEqual(col, v.col);
+    }
+    try expectPristineRepo(&repo);
+}
+
+test "rules: a body without the forbidden text still commits under an enforced forbid rule" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
 test "rules: unenforced, checkless and forgotten rules never block an edit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();

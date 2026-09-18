@@ -1359,6 +1359,87 @@
       "kills": [
         "redteam sandbox: a passing test command cannot write outside the shadow, and only the target is committed"
       ]
+    },
+    {
+      "id": "PC1-checks-missing-argument-defaulted",
+      "file": "src/engine/checks.zig",
+      "from": "const arg = invocation.arg orelse return error.MissingCheckArgument;",
+      "to": "const arg = invocation.arg orelse \"x\";",
+      "kills": [
+        "argument misuse is refused with its own error before any check runs"
+      ]
+    },
+    {
+      "id": "PC2-checks-empty-argument-accepted",
+      "file": "src/engine/checks.zig",
+      "from": "if (arg.len == 0) return error.EmptyCheckArgument;",
+      "to": "_ = arg;",
+      "kills": [
+        "argument misuse is refused with its own error before any check runs"
+      ]
+    },
+    {
+      "id": "PC3-checks-unexpected-argument-accepted",
+      "file": "src/engine/checks.zig",
+      "from": "} else if (invocation.arg != null) {",
+      "to": "} else if (false) {",
+      "kills": [
+        "argument misuse is refused with its own error before any check runs"
+      ]
+    },
+    {
+      "id": "PC4-checks-spec-split-at-last-colon",
+      "file": "src/engine/checks.zig",
+      "from": "std.mem.indexOfScalar(u8, spec, ':')",
+      "to": "std.mem.lastIndexOfScalar(u8, spec, ':')",
+      "kills": [
+        "a check spec splits at the first colon, and the argument may itself contain colons"
+      ]
+    },
+    {
+      "id": "PC5-forbid-stops-after-first-match",
+      "file": "src/engine/checks.zig",
+      "from": "|at| : (from = at + needle.len) {",
+      "to": "|at| : (from = body.len) {",
+      "kills": [
+        "forbid reports every occurrence inside the span and none outside it"
+      ]
+    },
+    {
+      "id": "PC6-forbid-span-end-off-by-one",
+      "file": "src/engine/checks.zig",
+      "from": ".end = start + @as(u32, @intCast(needle.len)) }",
+      "to": ".end = start + @as(u32, @intCast(needle.len)) - 1 }",
+      "kills": [
+        "forbid reports one violation spanning exactly the matched text"
+      ]
+    },
+    {
+      "id": "PC7-forbid-ignores-span-end",
+      "file": "src/engine/checks.zig",
+      "from": "const body = tree.source[span.start..span.end];",
+      "to": "const body = tree.source[span.start..];",
+      "kills": [
+        "forbid reports every occurrence inside the span and none outside it"
+      ]
+    },
+    {
+      "id": "PC8-forbid-not-registered",
+      "file": "src/engine/checks.zig",
+      "from": "    .{ .name = \"forbid\", .collect = forbid, .takes_argument = true },\n",
+      "to": "",
+      "kills": [
+        "rules: an enforced forbid rule rejects a body containing its text before the tests run"
+      ]
+    },
+    {
+      "id": "PC9-forbid-counts-overlapping-matches",
+      "file": "src/engine/checks.zig",
+      "from": "|at| : (from = at + needle.len) {",
+      "to": "|at| : (from = at + 1) {",
+      "kills": [
+        "forbid deliberately does not count overlapping occurrences: aaa holds one aa"
+      ]
     }
   ]
 }
