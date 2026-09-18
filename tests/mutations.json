@@ -1745,6 +1745,138 @@
       "kills": [
         "purple: hash absent on a missing file creates it through emetgate_try, and emetgate_mutate only previews it"
       ]
+    },
+    {
+      "id": "SC1-scan-command-malformed-precheck-removed",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (scan.firstMalformed(enforced.rules)) |bad| {",
+      "to": "    if (@as(?scan.Malformed, null)) |bad| {",
+      "kills": [
+        "scan: a malformed ledger rule stops the scan before any file and names the rule"
+      ]
+    },
+    {
+      "id": "SC2-scanner-malformed-guard-removed",
+      "file": "src/platform/scan.zig",
+      "from": "    if (firstMalformed(list)) |bad| return bad.reason;\n",
+      "to": "",
+      "kills": [
+        "scan: the scanner itself refuses a malformed rule even when no file would run it"
+      ]
+    },
+    {
+      "id": "SC3-peek-torn-tail-not-refused",
+      "file": "src/platform/memory.zig",
+      "from": "    if (tornTailStart(arena.allocator(), bytes) != null) return error.LedgerNeedsRepair;\n",
+      "to": "",
+      "kills": [
+        "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written"
+      ]
+    },
+    {
+      "id": "SC4-scan-ledger-read-through-recall",
+      "file": "src/platform/rules.zig",
+      "from": "return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));",
+      "to": "return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));",
+      "kills": [
+        "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written",
+        "scan: with no ledger there are zero rules and no workspace is created"
+      ]
+    },
+    {
+      "id": "SC5-scan-check-mode-reads-ledger",
+      "file": "src/platform/scan.zig",
+      "from": "        .check => |spec| .{ .gpa = gpa, .recall = null,",
+      "to": "        .check => |spec| if (true) rules.peek(gpa, io, root_abs) else .{ .gpa = gpa, .recall = null,",
+      "kills": [
+        "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written",
+        "scan: --check scans a spec absent from the ledger and leaves the ledger untouched"
+      ]
+    },
+    {
+      "id": "SC6-scan-unsupported-not-counted",
+      "file": "src/platform/scan.zig",
+      "from": "            unsupported += 1;\n",
+      "to": "            unsupported += 0;\n",
+      "kills": [
+        "scan: a file with no language profile is skipped and counted",
+        "scan: --json is one parseable line carrying the same report"
+      ]
+    },
+    {
+      "id": "SC7-scan-unreadable-stops-scan",
+      "file": "src/platform/scan.zig",
+      "from": "                unreadable.appendAssumeCapacity(.{ .file = try gpa.dupe(u8, file), .reason = err });\n                continue;",
+      "to": "                return err;",
+      "kills": [
+        "scan: an unreadable tracked file is warned about, counted, and does not stop the scan",
+        "scan: --json is one parseable line carrying the same report"
+      ]
+    },
+    {
+      "id": "SC8-scan-parse-errors-skipped",
+      "file": "src/platform/scan.zig",
+      "from": "            parse_errors.appendAssumeCapacity(try gpa.dupe(u8, file));\n        }\n",
+      "to": "            parse_errors.appendAssumeCapacity(try gpa.dupe(u8, file));\n            continue;\n        }\n",
+      "kills": [
+        "scan: a file with parse errors is still scanned, flagged, and does not stop the scan",
+        "scan: --json is one parseable line carrying the same report"
+      ]
+    },
+    {
+      "id": "SC9-scan-parse-errors-not-flagged",
+      "file": "src/platform/scan.zig",
+      "from": "            parse_errors.appendAssumeCapacity(try gpa.dupe(u8, file));\n",
+      "to": "",
+      "kills": [
+        "scan: a file with parse errors is still scanned, flagged, and does not stop the scan",
+        "scan: --json is one parseable line carrying the same report"
+      ]
+    },
+    {
+      "id": "SC10-scan-span-misses-first-byte",
+      "file": "src/platform/scan.zig",
+      "from": "const whole: symbol.Span = .{ .start = 0,",
+      "to": "const whole: symbol.Span = .{ .start = 1,",
+      "kills": [
+        "scan: one violation names its file, line, column, rule and text, and exits 10",
+        "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written",
+        "scan: an unreadable tracked file is warned about, counted, and does not stop the scan"
+      ]
+    },
+    {
+      "id": "SC11-scan-violations-exit-zero",
+      "file": "src/protocol/scan_command.zig",
+      "from": "return if (result.violations.len == 0) 0 else violations_exit_code;",
+      "to": "return 0;",
+      "kills": [
+        "scan: one violation names its file, line, column, rule and text, and exits 10",
+        "scan: violations in several files are all reported",
+        "scan: --check scans a spec absent from the ledger and leaves the ledger untouched",
+        "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written",
+        "scan: a file with parse errors is still scanned, flagged, and does not stop the scan",
+        "scan: an unreadable tracked file is warned about, counted, and does not stop the scan",
+        "scan: --json is one parseable line carrying the same report"
+      ]
+    },
+    {
+      "id": "SC12-argument-errors-exit-generic",
+      "file": "src/protocol/wire.zig",
+      "from": "error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument => 19,",
+      "to": "error.UnknownCheck => 19,",
+      "kills": [
+        "scan: every malformed --check spec exits with the malformed-check code"
+      ]
+    },
+    {
+      "id": "SC13-scan-torn-ledger-not-reread",
+      "file": "src/platform/scan.zig",
+      "from": "            pause.call(pause.context, io);\n            return rules.peek(gpa, io, root_abs);",
+      "to": "            _ = pause;\n            return err;",
+      "kills": [
+        "scan: a ledger torn on the first read but whole on the second is scanned after one re-read",
+        "scan: a ledger torn on both reads stops with LedgerNeedsRepair after exactly one re-read"
+      ]
     }
   ]
 }

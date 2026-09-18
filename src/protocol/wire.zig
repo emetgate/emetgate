@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
+const scan = @import("../platform/scan.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -154,23 +155,91 @@ pub fn writeRuleViolation(writer: *Writer, report: rules.Report) !void {
     try js.write("rule_violation");
     try js.objectField("violations");
     try js.beginArray();
-    for (report.violations) |v| {
+    for (report.violations) |v| try writeViolation(&js, v);
+    try js.endArray();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+fn writeViolation(js: *std.json.Stringify, v: rules.Violation) !void {
+    try js.beginObject();
+    try js.objectField("rule");
+    try js.write(v.rule);
+    try js.objectField("check");
+    try js.write(v.check);
+    try js.objectField("file");
+    try js.write(v.file);
+    try js.objectField("line");
+    try js.write(v.line);
+    try js.objectField("col");
+    try js.write(v.col);
+    try js.objectField("text");
+    try js.write(v.text);
+    try js.endObject();
+}
+
+pub fn writeScan(writer: *Writer, result: scan.Result) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write(if (result.violations.len == 0) "clean" else "violations");
+    try js.objectField("rules");
+    try js.write(result.rules);
+    try js.objectField("scanned");
+    try js.write(result.scanned);
+    try js.objectField("unsupported");
+    try js.write(result.unsupported);
+    try js.objectField("unreadable");
+    try js.beginArray();
+    for (result.unreadable) |u| {
         try js.beginObject();
-        try js.objectField("rule");
-        try js.write(v.rule);
-        try js.objectField("check");
-        try js.write(v.check);
         try js.objectField("file");
-        try js.write(v.file);
-        try js.objectField("line");
-        try js.write(v.line);
-        try js.objectField("col");
-        try js.write(v.col);
-        try js.objectField("text");
-        try js.write(v.text);
+        try js.write(u.file);
+        try js.objectField("error");
+        try js.write(@errorName(u.reason));
         try js.endObject();
     }
     try js.endArray();
+    try js.objectField("parse_errors");
+    try js.beginArray();
+    for (result.parse_errors) |file| try js.write(file);
+    try js.endArray();
+    try js.objectField("violations");
+    try js.beginArray();
+    for (result.violations) |v| try writeViolation(&js, v);
+    try js.endArray();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub fn writeMalformedRule(writer: *Writer, rule: []const u8, check: []const u8, name: []const u8, exit_code: u8) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("error");
+    try js.objectField("error");
+    try js.write(name);
+    try js.objectField("exit_code");
+    try js.write(exit_code);
+    try js.objectField("rule");
+    try js.write(rule);
+    try js.objectField("check");
+    try js.write(check);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub fn writeErrorMessage(writer: *Writer, name: []const u8, exit_code: u8, message: []const u8) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("error");
+    try js.objectField("error");
+    try js.write(name);
+    try js.objectField("exit_code");
+    try js.write(exit_code);
+    try js.objectField("message");
+    try js.write(message);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -252,7 +321,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.BodyEscape => 8,
         error.SkeletonInvalid => 9,
         error.PlaceholderBody => 13,
-        error.UnknownCheck => 19,
+        error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument => 19,
         error.SymbolExists => 20,
         error.MissingTrailingNewline => 21,
         error.NoTopLevelSymbol => 22,
