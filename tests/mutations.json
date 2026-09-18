@@ -1309,6 +1309,56 @@
       "kills": [
         "conformance: static members, constructors and accessors get their own refs and kinds"
       ]
+    },
+    {
+      "id": "SB1-sandbox-spawns-with-caller-token",
+      "file": "src/platform/sandbox.zig",
+      "from": "win.CreateProcessAsUserW(token.handle,",
+      "to": "win.CreateProcessAsUserW(if (false) token.handle else null,",
+      "kills": [
+        "redteam sandbox: a passing test command cannot write outside the shadow, and only the target is committed",
+        "redteam sandbox: a failing test command cannot leave writes behind outside the shadow",
+        "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all"
+      ]
+    },
+    {
+      "id": "SB2-sandbox-integrity-label-not-set",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (faulted(.label) or win.SetTokenInformation(restricted, win.token_integrity_level, &label, @sizeOf(win.TokenMandatoryLabel) + @sizeOf(win.Sid)) == .FALSE) return error.SandboxUnavailable;\n",
+      "to": "        _ = &label;\n",
+      "kills": [
+        "redteam sandbox: a passing test command cannot write outside the shadow, and only the target is committed",
+        "redteam sandbox: a failing test command cannot leave writes behind outside the shadow",
+        "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all"
+      ]
+    },
+    {
+      "id": "SB3-sandbox-child-integrity-check-removed",
+      "file": "src/platform/sandbox.zig",
+      "from": "    try requireLowIntegrity(child.id.?);\n",
+      "to": "",
+      "kills": [
+        "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all",
+        "redteam sandbox: an unavailable sandbox rejects the proposal and leaves the repository untouched"
+      ]
+    },
+    {
+      "id": "SB4-sandbox-restricted-token-not-created",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (faulted(.restrict) or win.CreateRestrictedToken(process_token, win.disable_max_privilege, 0, null, 0, null, 0, null, &restricted) == .FALSE) return error.SandboxUnavailable;\n",
+      "to": "        if (faulted(.restrict)) return error.SandboxUnavailable;\n        restricted = process_token;\n",
+      "kills": [
+        "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all"
+      ]
+    },
+    {
+      "id": "SB5-shadow-low-integrity-write-not-granted",
+      "file": "src/platform/shadow.zig",
+      "from": "        try grantLowIntegrityWrite(options.shadow_abs);\n",
+      "to": "",
+      "kills": [
+        "redteam sandbox: a passing test command cannot write outside the shadow, and only the target is committed"
+      ]
     }
   ]
 }

@@ -130,6 +130,8 @@ pub const Shadow = struct {
         var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
         defer root.close(io);
         try Dir.cwd().createDirPath(io, options.shadow_abs);
+        try ensureNoLinks(options.root_abs, options.shadow_abs);
+        try grantLowIntegrityWrite(options.shadow_abs);
         var dir = try Dir.openDirAbsolute(io, options.shadow_abs, .{});
         errdefer dir.close(io);
 
@@ -246,6 +248,33 @@ fn ensureNoLinks(root_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceI
     }
 }
 
+pub fn grantLowIntegrityWrite(dir_abs: []const u8) error{ LabelFailed, NameTooLong, InvalidWtf8 }!void {
+    if (builtin.os.tag != .windows) return;
+    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const handle = win.CreateFileW(
+        try toExtendedWide(&path_w, dir_abs),
+        win.read_control | win.write_owner,
+        win.file_share_all,
+        null,
+        win.open_existing,
+        win.flag_backup_semantics | win.flag_open_reparse_point,
+        null,
+    );
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.LabelFailed;
+    defer std.os.windows.CloseHandle(handle);
+
+    var descriptor: ?*anyopaque = null;
+    const sddl = std.unicode.utf8ToUtf16LeStringLiteral("S:(ML;OICI;NW;;;LW)");
+    if (win.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, win.sddl_revision_1, &descriptor, null) == .FALSE) return error.LabelFailed;
+    defer _ = win.LocalFree(descriptor);
+
+    var present: std.os.windows.BOOL = .FALSE;
+    var defaulted: std.os.windows.BOOL = .FALSE;
+    var sacl: ?*anyopaque = null;
+    if (win.GetSecurityDescriptorSacl(descriptor.?, &present, &sacl, &defaulted) == .FALSE or present == .FALSE) return error.LabelFailed;
+    if (win.SetSecurityInfo(handle, win.se_file_object, win.label_security_information, null, null, null, sacl) != 0) return error.LabelFailed;
+}
+
 pub fn isReparsePoint(path: []const u8) error{ AttributeCheckFailed, NameTooLong, InvalidWtf8 }!bool {
     var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
     const wide = try toExtendedWide(&path_w, path);
@@ -313,7 +342,17 @@ const win = struct {
     const error_path_not_found: windows.DWORD = 3;
     const error_sharing_violation: windows.DWORD = 32;
     const error_access_denied: windows.DWORD = 5;
+    const read_control: windows.DWORD = 0x00020000;
+    const write_owner: windows.DWORD = 0x00080000;
+    const file_share_all: windows.DWORD = 0x7;
+    const sddl_revision_1: windows.DWORD = 1;
+    const se_file_object: c_int = 1;
+    const label_security_information: windows.DWORD = 0x00000010;
 
+    extern "advapi32" fn ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl: [*:0]const u16, revision: windows.DWORD, descriptor: *?*anyopaque, size: ?*windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn GetSecurityDescriptorSacl(descriptor: *anyopaque, present: *windows.BOOL, sacl: *?*anyopaque, defaulted: *windows.BOOL) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn SetSecurityInfo(handle: windows.HANDLE, object_type: c_int, info: windows.DWORD, owner: ?*anyopaque, group: ?*anyopaque, dacl: ?*anyopaque, sacl: ?*anyopaque) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn LocalFree(memory: ?*anyopaque) callconv(.winapi) ?*anyopaque;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetFinalPathNameByHandleW(handle: windows.HANDLE, path: [*]u16, count: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
