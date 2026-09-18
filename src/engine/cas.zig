@@ -3,6 +3,7 @@ const ts = @import("tree_sitter.zig");
 const symbol = @import("symbol.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 const Profile = @import("lang/profile.zig").Profile;
+const Runtime = @import("runtime.zig").Runtime;
 const test_util = @import("test_util.zig");
 
 const Allocator = std.mem.Allocator;
@@ -103,15 +104,36 @@ pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
     };
 
     const slot: Span = .{ .start = start, .end = start + @as(u32, @intCast(new_body.len)) };
-    const statements = try topLevelStatementsIn(base.profile, next.tree.root(), slot);
-    const declared = try soleTopLevelSymbol(after.*, slot);
-    if (statements != 1) return error.ExtraTopLevelCode;
-    if (!declared.ref.eql(insertion.ref)) return error.SymbolNameMismatch;
-    try rejectPlaceholder(base.profile, declared.body);
+    const declared = try expectSoleDeclaration(base.profile, next.tree.root(), after.*, slot, insertion.ref);
     const end: Span = .{ .start = @intCast(base.source.len), .end = @intCast(base.source.len) };
     try expectUntouchedOutside(before.*, after.*, end, slot);
 
     return .{ .snapshot = next, .hash = declared.hash, .body = slot };
+}
+
+pub fn create(runtime: *Runtime, profile: *const Profile, insertion: Insertion) Error!Applied {
+    const new_body = normalizeBody(insertion.new_body);
+    const source = try std.mem.concat(runtime.gpa, u8, &.{ new_body, "\n" });
+    const next = try Snapshot.fromSource(runtime, profile, source);
+    errdefer next.destroy();
+    const after = next.symbols() catch |err| switch (err) {
+        error.SourceHasErrors => return error.MutationSyntaxInvalid,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    const slot: Span = .{ .start = 0, .end = @intCast(new_body.len) };
+    const declared = try expectSoleDeclaration(profile, next.tree.root(), after.*, slot, insertion.ref);
+
+    return .{ .snapshot = next, .hash = declared.hash, .body = slot };
+}
+
+fn expectSoleDeclaration(profile: *const Profile, root: ts.Node, table: symbol.Table, slot: Span, ref: symbol.Ref) Error!*const symbol.Symbol {
+    const statements = try topLevelStatementsIn(profile, root, slot);
+    const declared = try soleTopLevelSymbol(table, slot);
+    if (statements != 1) return error.ExtraTopLevelCode;
+    if (!declared.ref.eql(ref)) return error.SymbolNameMismatch;
+    try rejectPlaceholder(profile, declared.body);
+    return declared;
 }
 
 fn lineEnding(source: []const u8) error{MissingTrailingNewline}![]const u8 {
@@ -699,4 +721,31 @@ test "insert follows a CRLF file's line ending and never rewrites the bytes alre
     const body = "function f() { return 1; }";
     try expectInserted(runtime, "function add() {\r\n  return 1;\r\n}\r\n", "f", body, "function add() {\r\n  return 1;\r\n}\r\n\r\nfunction f() { return 1; }\r\n");
     try expectInserted(runtime, "function add() {\r\n  return 1;\r\n}\r\n\r\n", "f", body, "function add() {\r\n  return 1;\r\n}\r\n\r\nfunction f() { return 1; }\r\n");
+}
+
+fn createWith(runtime: *Runtime, ref_text: []const u8, body: []const u8) !Applied {
+    const ref = try symbol.Ref.parse(testing.allocator, ref_text);
+    defer ref.deinit(testing.allocator);
+    return create(runtime, test_util.language, .{ .ref = ref, .new_body = body });
+}
+
+test "create builds a file of exactly one top-level symbol and one trailing newline" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const created = try createWith(runtime, "mul", "\n  export function mul(a: number, b: number): number {\n  return a * b;\n}\n\n");
+    defer created.snapshot.destroy();
+    try testing.expectEqualStrings("export function mul(a: number, b: number): number {\n  return a * b;\n}\n", created.snapshot.source);
+    try testing.expectEqual(try hashOfRef(created.snapshot, "mul"), created.hash);
+    try testing.expectEqualStrings(normalizeBody("export function mul(a: number, b: number): number {\n  return a * b;\n}"), created.snapshot.source[created.body.start..created.body.end]);
+}
+
+test "create applies the same body rules as insert" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    try testing.expectError(error.NoTopLevelSymbol, createWith(runtime, "x", "const x = 1;"));
+    try testing.expectError(error.MultipleTopLevelSymbols, createWith(runtime, "a", "function a() { return 1; }\nfunction b() { return 2; }"));
+    try testing.expectError(error.ExtraTopLevelCode, createWith(runtime, "f", "function f() { return 1; }\nfoo();"));
+    try testing.expectError(error.SymbolNameMismatch, createWith(runtime, "g", "function f() { return 1; }"));
+    try testing.expectError(error.PlaceholderBody, createWith(runtime, "f", "function f() {\n  // TODO\n}"));
+    try testing.expectError(error.MutationSyntaxInvalid, createWith(runtime, "f", "function f( { return 1; }"));
 }

@@ -813,3 +813,59 @@ test "purple: a batch item with hash absent is refused by name and the repositor
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
     try expectPristine(&repo);
 }
+
+fn newFileCall(tool: []const u8, file: []const u8) ![]u8 {
+    const escaped = try jsonEscaped(file);
+    defer testing.allocator.free(escaped);
+    return std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"{s}\",\"arguments\":{{\"file\":\"{s}\",\"symbol\":\"mul\",\"hash\":\"absent\",\"body\":\"export function mul(a: number, b: number): number {{ return a * b; }}\"}}}}}}", .{ tool, escaped });
+}
+
+test "purple: hash absent on a missing file creates it through emetgate_try, and emetgate_mutate only previews it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file = try std.fmt.allocPrint(testing.allocator, "{s}\\src\\mul.ts", .{repo.root_abs});
+    defer testing.allocator.free(file);
+    const policy: server.Policy = .{ .test_command = "cmd /c exit 0", .root = repo.root_abs };
+
+    const preview_line = try newFileCall("emetgate_mutate", file);
+    defer testing.allocator.free(preview_line);
+    const preview = try respondWith(runtime, preview_line, policy);
+    defer testing.allocator.free(preview);
+    errdefer std.debug.print("preview: {s}\n", .{preview});
+    try testing.expect(std.mem.indexOf(u8, preview, "\\\"old_hash\\\":\\\"absent\\\"") != null);
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/mul.ts", .{}));
+
+    const try_line = try newFileCall("emetgate_try", file);
+    defer testing.allocator.free(try_line);
+    const created = try respondWith(runtime, try_line, policy);
+    defer testing.allocator.free(created);
+    errdefer std.debug.print("try: {s}\n", .{created});
+    try testing.expect(std.mem.indexOf(u8, created, "\\\"status\\\":\\\"committed\\\"") != null);
+    const on_disk = try repo.tmp.dir.readFileAlloc(testing.io, "repo/src/mul.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings("export function mul(a: number, b: number): number { return a * b; }\n", on_disk);
+}
+
+test "purple: hash absent in a directory that does not exist is refused by name through MCP" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file = try std.fmt.allocPrint(testing.allocator, "{s}\\src\\nested\\mul.ts", .{repo.root_abs});
+    defer testing.allocator.free(file);
+
+    for ([_][]const u8{ "emetgate_try", "emetgate_mutate" }) |tool| {
+        const line = try newFileCall(tool, file);
+        defer testing.allocator.free(line);
+        const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
+        defer testing.allocator.free(response);
+        errdefer std.debug.print("{s}: {s}\n", .{ tool, response });
+        try testing.expect(std.mem.indexOf(u8, response, "ParentDirectoryMissing") != null);
+    }
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/nested", .{}));
+    try expectPristine(&repo);
+}

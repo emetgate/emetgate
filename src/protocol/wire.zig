@@ -260,6 +260,10 @@ pub fn exitCode(err: anyerror) u8 {
         error.ExtraTopLevelCode => 24,
         error.SymbolNameMismatch => 25,
         error.AbsentInBatch => 26,
+        error.FileExists => 27,
+        error.ParentDirectoryMissing => 28,
+        error.IgnoredPath => 29,
+        error.WrittenButNotIndexed => 30,
         error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
         error.NoTestCommand, error.InvalidConfig => 2,
         error.UntrustedRepoConfig => 15,
@@ -271,6 +275,33 @@ pub fn exitCode(err: anyerror) u8 {
         else => 1,
     };
 }
+
+pub fn writeNotIndexed(writer: *Writer, file: []const u8) !void {
+    const command = "git add -- ";
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("error");
+    try js.objectField("error");
+    try js.write("WrittenButNotIndexed");
+    try js.objectField("exit_code");
+    try js.write(exitCode(error.WrittenButNotIndexed));
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("message");
+    try js.write(not_indexed_message);
+    try js.objectField("fix");
+    try js.beginWriteRaw();
+    try js.writer.writeByte('"');
+    try std.json.Stringify.encodeJsonStringChars(command, .{}, js.writer);
+    try std.json.Stringify.encodeJsonStringChars(file, .{}, js.writer);
+    try js.writer.writeByte('"');
+    js.endWriteRaw();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub const not_indexed_message = "the file was written to disk but was not added to the git index; until it is, proposals to other files run in a shadow copy that does not contain it";
 
 pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
     var js: std.json.Stringify = .{ .writer = writer };

@@ -107,6 +107,31 @@ pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: 
     return replaceInternal(gpa, io, path_abs, data, expected_base, leftover, null, journal_dir);
 }
 
+pub fn create(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8) !void {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
+    var random: [8]u8 = undefined;
+    io.random(&random);
+    const tag = std.fmt.bytesToHex(random, .lower);
+    const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path_abs, &tag });
+    defer gpa.free(temp);
+
+    try writeDurably(io, temp, data);
+    var placed = false;
+    defer if (!placed) {
+        _ = deleteWithRetry(io, temp);
+    };
+    const replacement = try Guard.open(temp);
+    defer replacement.close();
+    replacement.renameTo(gpa, path_abs) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.FileExists,
+        else => |e| return e,
+    };
+    placed = true;
+    const written = replacement.hash(gpa, io) catch return error.WrittenButUnverified;
+    if (!std.mem.eql(u8, &written, &symbol.hashOf(data))) return error.WrittenButUnverified;
+}
+
 pub const Pending = struct {
     gpa: Allocator,
     io: std.Io,
@@ -906,4 +931,40 @@ test "recover refuses a journal target that escapes the repo via .. (A hardening
     try testing.expectEqual(@as(usize, 0), report.restored);
     try testing.expect(report.failed >= 1);
     try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "pwned.ts", .{}));
+}
+
+test "create writes a new file durably and leaves no temp behind" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fixture = try Fixture.init(original);
+    defer fixture.deinit();
+    const dir_abs = try fixture.tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(dir_abs);
+    const fresh = try std.fmt.allocPrint(testing.allocator, "{s}\\fresh.ts", .{dir_abs});
+    defer testing.allocator.free(fresh);
+
+    try create(testing.allocator, testing.io, fresh, updated);
+
+    const written = try fixture.tmp.dir.readFileAlloc(testing.io, "fresh.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(written);
+    try testing.expectEqualStrings(updated, written);
+    var listing = try fixture.tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
+    defer listing.close(testing.io);
+    var iterator = listing.iterate();
+    var count: usize = 0;
+    while (try iterator.next(testing.io)) |entry| {
+        errdefer std.debug.print("unexpected entry: {s}\n", .{entry.name});
+        try testing.expect(std.mem.eql(u8, entry.name, "target.ts") or std.mem.eql(u8, entry.name, "fresh.ts"));
+        count += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), count);
+}
+
+test "create never overwrites an existing file and cleans up its temp" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fixture = try Fixture.init(original);
+    defer fixture.deinit();
+
+    try testing.expectError(error.FileExists, create(testing.allocator, testing.io, fixture.path(), updated));
+    try fixture.expectContent(original);
+    try fixture.expectEntries(1);
 }

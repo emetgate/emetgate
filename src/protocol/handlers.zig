@@ -139,7 +139,18 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
     const expected = try symbol.parseExpected(hash_hex);
-    const base = try loadJailed(gpa, io, runtime, root, file);
+    const place = try repo.jailTarget(gpa, io, root, file, expected == .absent);
+    defer place.deinit(gpa);
+    if (place.creates) {
+        const created = try runner.prepareCreate(gpa, io, runtime, place.root, place.abs, place.rel, ref, body);
+        defer created.snapshot.destroy();
+        event.hash = created.hash;
+        event.chars_emetgate = sym.len + hash_hex.len + body.len;
+        event.chars_fullfile = created.snapshot.source.len;
+        try wire.writeMutated(w, sym, expected, created.hash, created.snapshot.source);
+        return;
+    }
+    const base = try Snapshot.load(runtime, io, .cwd(), place.abs);
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     if (expected == .present) {
@@ -168,7 +179,11 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
-        try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        if (err == error.WrittenButNotIndexed) {
+            try wire.writeNotIndexed(&buffer.writer, file);
+        } else {
+            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        }
         break :blk true;
     };
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
@@ -176,14 +191,14 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    const place = try repo.jail(gpa, io, policy.root, file);
+    const expected = try symbol.parseExpected(hash_hex);
+    const place = try repo.jailTarget(gpa, io, policy.root, file, expected == .absent);
     defer place.deinit(gpa);
     const file_abs = place.abs;
     const test_command = try runner.resolveTestCommand(gpa, io, file_abs, given, policy.allow_repo_config);
     defer gpa.free(test_command);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
-    const expected = try symbol.parseExpected(hash_hex);
     const result = try runner.tryMutate(gpa, io, runtime, .{
         .file_abs = file_abs,
         .ref_text = sym,

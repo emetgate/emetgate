@@ -1286,8 +1286,8 @@
     {
       "id": "J2-jail-internal-paths-accepted",
       "file": "src/platform/repo.zig",
-      "from": "    try refuseInternal(rel);\n",
-      "to": "",
+      "from": "    try refuseInternal(rel);\n    if (rel.len != 0) try expectSameRepo",
+      "to": "    if (rel.len != 0) try expectSameRepo",
       "kills": [
         "purple V8: an MCP write tool cannot edit the emetgate workspace inside the served repository"
       ]
@@ -1565,8 +1565,8 @@
     {
       "id": "NS14-insert-name-mismatch-accepted",
       "file": "src/engine/cas.zig",
-      "from": "    if (!declared.ref.eql(insertion.ref)) return error.SymbolNameMismatch;\n",
-      "to": "",
+      "from": "    if (!declared.ref.eql(ref)) return error.SymbolNameMismatch;\n",
+      "to": "    if (!declared.ref.eql(ref) and false) return error.SymbolNameMismatch;\n",
       "kills": [
         "insert refuses a name that differs from the one the body declares",
         "absent: a proposed name that differs from the body's is refused and the repository is untouched"
@@ -1575,8 +1575,8 @@
     {
       "id": "NS15-insert-placeholder-accepted",
       "file": "src/engine/cas.zig",
-      "from": "    try rejectPlaceholder(base.profile, declared.body);\n",
-      "to": "",
+      "from": "    try rejectPlaceholder(profile, declared.body);\n",
+      "to": "    if (false) try rejectPlaceholder(profile, declared.body);\n",
       "kills": [
         "insert refuses a file without a trailing newline and a body that does not parse"
       ]
@@ -1606,6 +1606,144 @@
       "kills": [
         "propose replaces a body for a hex hash and inserts a symbol for absent",
         "absent: a new top-level symbol is appended, committed, parses and joins the symbol table"
+      ]
+    },
+    {
+      "id": "NF1-create-not-added-to-index",
+      "file": "src/platform/runner.zig",
+      "from": "    try repo.addToIndex(gpa, io, root, rel);\n",
+      "to": "",
+      "kills": [
+        "new file: a later proposal to another file runs in a shadow that contains the created file",
+        "new file: absent on a missing file creates it, the shadow sees it, and it is committed, parsed, listed and indexed"
+      ]
+    },
+    {
+      "id": "NF2-create-ignored-path-accepted",
+      "file": "src/platform/runner.zig",
+      "from": "    if (try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;\n",
+      "to": "    if (try repo.isIgnored(gpa, io, root, rel) and false) return error.IgnoredPath;\n",
+      "kills": [
+        "new file: a path ignored by .gitignore is refused before anything runs"
+      ]
+    },
+    {
+      "id": "NF3-create-unknown-language-defaulted",
+      "file": "src/platform/runner.zig",
+      "from": "const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;",
+      "to": "const profile = registry.forPath(file_abs) orelse registry.forPath(\"x.ts\").?;",
+      "kills": [
+        "new file: an extension with no language profile is refused"
+      ]
+    },
+    {
+      "id": "NF4-jail-new-missing-directory-unnamed",
+      "file": "src/platform/repo.zig",
+      "from": "        error.FileNotFound => return error.ParentDirectoryMissing,\n",
+      "to": "        error.FileNotFound => return error.FileNotFound,\n",
+      "kills": [
+        "new file: a missing directory is refused and nothing is created",
+        "purple: hash absent in a directory that does not exist is refused by name through MCP"
+      ]
+    },
+    {
+      "id": "J3-jail-new-internal-paths-accepted",
+      "file": "src/platform/repo.zig",
+      "from": "    if (rel.len == 0) return error.InvalidPath;\n    try refuseInternal(rel);\n",
+      "to": "    if (rel.len == 0) return error.InvalidPath;\n",
+      "kills": [
+        "new file: paths inside .git and .emetgate, or with an unsafe name, are refused"
+      ]
+    },
+    {
+      "id": "NF5-jail-new-unsafe-name-accepted",
+      "file": "src/platform/repo.zig",
+      "from": "    shadow.validateRelative(name) catch return error.InvalidPath;\n",
+      "to": "",
+      "kills": [
+        "new file: paths inside .git and .emetgate, or with an unsafe name, are refused"
+      ]
+    },
+    {
+      "id": "NF6-jail-new-existing-file-accepted",
+      "file": "src/platform/repo.zig",
+      "from": "    return error.FileExists;\n}\n\npub fn isIgnored",
+      "to": "    return .{ .root = served, .abs = abs, .rel = rel, .creates = true };\n}\n\npub fn isIgnored",
+      "kills": [
+        "new file: absent on a file that already exists appends instead of overwriting, and jailNew refuses it"
+      ]
+    },
+    {
+      "id": "NF7-disk-create-overwrites",
+      "file": "src/platform/disk.zig",
+      "from": "    replacement.renameTo(gpa, path_abs) catch |err| switch (err) {\n        error.PathAlreadyExists => return error.FileExists,",
+      "to": "    replacement.renameReplacing(gpa, path_abs) catch |err| switch (err) {\n        error.PathAlreadyExists => return error.FileExists,",
+      "kills": [
+        "create never overwrites an existing file and cleans up its temp"
+      ]
+    },
+    {
+      "id": "NF8-create-not-routed",
+      "file": "src/platform/runner.zig",
+      "from": "if (options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(",
+      "to": "if (false and options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(",
+      "kills": [
+        "new file: absent on a missing file creates it, the shadow sees it, and it is committed, parsed, listed and indexed"
+      ]
+    },
+    {
+      "id": "NF9-create-rules-gate-skipped",
+      "file": "src/platform/runner.zig",
+      "from": "    if (try rules.gate(gpa, io, root, rel, created.snapshot.profile, created.snapshot.tree, created.body)) |report| return .{ .rule_violation = report };\n",
+      "to": "",
+      "kills": [
+        "new file: a body that breaks a forbid rule is rejected even when the tests pass"
+      ]
+    },
+    {
+      "id": "NF10-create-failed-tests-committed",
+      "file": "src/platform/runner.zig",
+      "from": "    if (!report.passed()) return .{ .rejected = report };\n    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "to": "    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "kills": [
+        "new file: a creation whose tests fail leaves no file on disk and nothing in the index"
+      ]
+    },
+    {
+      "id": "NF11-create-body-rules-skipped",
+      "file": "src/engine/cas.zig",
+      "from": "    const declared = try expectSoleDeclaration(profile, next.tree.root(), after.*, slot, insertion.ref);\n",
+      "to": "    const declared = try soleTopLevelSymbol(after.*, slot);\n",
+      "kills": [
+        "create applies the same body rules as insert"
+      ]
+    },
+    {
+      "id": "NF12-create-trailing-newline-dropped",
+      "file": "src/engine/cas.zig",
+      "from": "const source = try std.mem.concat(runtime.gpa, u8, &.{ new_body, \"\\n\" });",
+      "to": "const source = try std.mem.concat(runtime.gpa, u8, &.{new_body});",
+      "kills": [
+        "create builds a file of exactly one top-level symbol and one trailing newline",
+        "new file: absent on a missing file creates it, the shadow sees it, and it is committed, parsed, listed and indexed"
+      ]
+    },
+    {
+      "id": "NF13-index-failure-silent",
+      "file": "src/platform/repo.zig",
+      "from": "    return error.WrittenButNotIndexed;\n",
+      "to": "",
+      "kills": [
+        "new file: when git add fails the file stays on disk with the written body and the error is WrittenButNotIndexed"
+      ]
+    },
+    {
+      "id": "NF14-mcp-create-not-jailed-new",
+      "file": "src/platform/repo.zig",
+      "from": "        error.FileNotFound => if (may_create) jailNew(gpa, io, root, path) else error.FileNotFound,",
+      "to": "        error.FileNotFound => if (may_create and false) jailNew(gpa, io, root, path) else error.FileNotFound,",
+      "kills": [
+        "purple: hash absent on a missing file creates it through emetgate_try, and emetgate_mutate only previews it"
       ]
     }
   ]
