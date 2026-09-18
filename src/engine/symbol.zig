@@ -40,6 +40,28 @@ pub fn parseHash(hex: []const u8) error{InvalidHash}!Hash {
     return out;
 }
 
+pub const absent_text = "absent";
+
+pub const Expected = union(enum) {
+    present: Hash,
+    absent,
+
+    pub fn text(self: *const Expected, buffer: *[hash_hex_len]u8) []const u8 {
+        switch (self.*) {
+            .present => |hash| {
+                buffer.* = formatHash(hash);
+                return buffer;
+            },
+            .absent => return absent_text,
+        }
+    }
+};
+
+pub fn parseExpected(text: []const u8) error{InvalidHash}!Expected {
+    if (std.mem.eql(u8, text, absent_text)) return .absent;
+    return .{ .present = try parseHash(text) };
+}
+
 pub const Kind = enum {
     function,
     generator,

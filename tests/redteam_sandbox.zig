@@ -164,7 +164,7 @@ fn runAttack(exit_code: u8) !struct { victim: Victim, before: []u8, result: runn
     const result = try runner.tryMutate(gpa, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = try hashOfAdd(runtime, file),
+        .expected_hash = .{ .present = try hashOfAdd(runtime, file) },
         .new_body = "{\n  return a - b;\n}",
         .test_command = command,
     });
@@ -246,7 +246,7 @@ test "redteam sandbox: an unavailable sandbox rejects the proposal and leaves th
     try testing.expectError(error.SandboxUnavailable, runner.tryMutate(gpa, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = try hashOfAdd(runtime, file),
+        .expected_hash = .{ .present = try hashOfAdd(runtime, file) },
         .new_body = "{\n  return a - b;\n}",
         .test_command = command,
     }));

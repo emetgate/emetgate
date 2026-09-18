@@ -780,8 +780,8 @@
     {
       "id": "R1-checks-unknown-check-skipped",
       "file": "src/engine/checks.zig",
-      "from": "if (find(checks, name) == null) return error.UnknownCheck;",
-      "to": "if (find(checks, name) == null) continue;",
+      "from": "const check = find(checks, invocation.name) orelse return error.UnknownCheck;",
+      "to": "const check = find(checks, invocation.name) orelse checks[0];",
       "kills": [
         "an unknown check name is refused before any check runs"
       ]
@@ -1439,6 +1439,173 @@
       "to": "|at| : (from = at + 1) {",
       "kills": [
         "forbid deliberately does not count overlapping occurrences: aaa holds one aa"
+      ]
+    },
+    {
+      "id": "NS1-hash-field-absent-not-recognised",
+      "file": "src/engine/symbol.zig",
+      "from": "    if (std.mem.eql(u8, text, absent_text)) return .absent;\n",
+      "to": "",
+      "kills": [
+        "the hash field is a precondition: a hex hash, or absent, and nothing else"
+      ]
+    },
+    {
+      "id": "NS2-insert-existing-symbol-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "        return error.SymbolExists;\n    } else |err| switch (err) {",
+      "to": "    } else |err| switch (err) {",
+      "kills": [
+        "insert refuses a symbol that already exists, even as a duplicate",
+        "absent: a symbol that already exists is refused and the repository is untouched"
+      ]
+    },
+    {
+      "id": "NS3-insert-duplicate-symbol-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "        error.AmbiguousSymbol => return error.SymbolExists,\n",
+      "to": "        error.AmbiguousSymbol => {},\n",
+      "kills": [
+        "insert refuses a symbol that already exists, even as a duplicate"
+      ]
+    },
+    {
+      "id": "NS4-insert-missing-newline-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "    return error.MissingTrailingNewline;\n",
+      "to": "    return \"\\n\";\n",
+      "kills": [
+        "insert refuses a file without a trailing newline and a body that does not parse",
+        "absent: a file that does not end with a newline is refused and left byte for byte"
+      ]
+    },
+    {
+      "id": "NS5-insert-crlf-ending-ignored",
+      "file": "src/engine/cas.zig",
+      "from": "    if (std.mem.endsWith(u8, source, \"\\r\\n\")) return \"\\r\\n\";\n",
+      "to": "",
+      "kills": [
+        "insert follows a CRLF file's line ending and never rewrites the bytes already there"
+      ]
+    },
+    {
+      "id": "NS6-insert-blank-line-always-added",
+      "file": "src/engine/cas.zig",
+      "from": "const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) \"\" else eol;",
+      "to": "const separator: []const u8 = eol;",
+      "kills": [
+        "insert appends after the last newline with exactly one blank line added only when none is there"
+      ]
+    },
+    {
+      "id": "NS7-insert-blank-line-never-added",
+      "file": "src/engine/cas.zig",
+      "from": "const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) \"\" else eol;",
+      "to": "const separator: []const u8 = \"\";",
+      "kills": [
+        "insert appends after the last newline with exactly one blank line added only when none is there",
+        "absent: a new top-level symbol is appended, committed, parses and joins the symbol table"
+      ]
+    },
+    {
+      "id": "NS8-insert-fused-statement-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "        if (node.startByte() < slot.start and node.endByte() > slot.start) return error.BodyEscape;\n",
+      "to": "",
+      "kills": [
+        "insert refuses a body that fuses with the last statement of the file"
+      ]
+    },
+    {
+      "id": "NS9-insert-extra-top-level-code-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "    if (statements != 1) return error.ExtraTopLevelCode;\n",
+      "to": "    if (statements != 1 and false) return error.ExtraTopLevelCode;\n",
+      "kills": [
+        "insert refuses top-level code beside the one symbol"
+      ]
+    },
+    {
+      "id": "NS10-insert-comment-counted-as-code",
+      "file": "src/engine/cas.zig",
+      "from": "if (!node.isNamed() or profile.isComment(node.kind())) continue;",
+      "to": "if (!node.isNamed() or (profile.isComment(node.kind()) and false)) continue;",
+      "kills": [
+        "insert refuses top-level code beside the one symbol"
+      ]
+    },
+    {
+      "id": "NS11-insert-multiple-symbols-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "        if (found != null) return error.MultipleTopLevelSymbols;\n",
+      "to": "",
+      "kills": [
+        "insert refuses a body that declares more than one top-level symbol"
+      ]
+    },
+    {
+      "id": "NS12-insert-nested-symbols-counted",
+      "file": "src/engine/cas.zig",
+      "from": "candidate.declaration.start < slot.start or candidate.ref.container.len != 0",
+      "to": "candidate.declaration.start < slot.start",
+      "kills": [
+        "insert refuses a body that declares no top-level symbol",
+        "insert names the one top-level symbol the body declares, whatever its declaration form"
+      ]
+    },
+    {
+      "id": "NS13-insert-existing-symbols-counted",
+      "file": "src/engine/cas.zig",
+      "from": "candidate.declaration.start < slot.start or candidate.ref.container.len != 0",
+      "to": "(candidate.declaration.start < slot.start and false) or candidate.ref.container.len != 0",
+      "kills": [
+        "insert names the one top-level symbol the body declares, whatever its declaration form"
+      ]
+    },
+    {
+      "id": "NS14-insert-name-mismatch-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "    if (!declared.ref.eql(insertion.ref)) return error.SymbolNameMismatch;\n",
+      "to": "",
+      "kills": [
+        "insert refuses a name that differs from the one the body declares",
+        "absent: a proposed name that differs from the body's is refused and the repository is untouched"
+      ]
+    },
+    {
+      "id": "NS15-insert-placeholder-accepted",
+      "file": "src/engine/cas.zig",
+      "from": "    try rejectPlaceholder(base.profile, declared.body);\n",
+      "to": "",
+      "kills": [
+        "insert refuses a file without a trailing newline and a body that does not parse"
+      ]
+    },
+    {
+      "id": "NS16-insert-untouched-outside-call-removed",
+      "file": "src/engine/cas.zig",
+      "from": "    try expectUntouchedOutside(before.*, after.*, end, slot);\n",
+      "to": "    _ = end;\n",
+      "expect_status": "survived",
+      "note": "defense in depth for insertion: topLevelStatementsIn refuses any root child that straddles the slot, so every byte and root node before the slot is unchanged and no existing symbol can change its hash; kept so a future relaxation of the straddle rule cannot silently alter existing code"
+    },
+    {
+      "id": "NS17-batch-absent-refused-silently",
+      "file": "src/protocol/handlers.zig",
+      "from": ".absent => return error.AbsentInBatch,",
+      "to": ".absent => return error.InvalidHash,",
+      "kills": [
+        "purple: a batch item with hash absent is refused by name and the repository is untouched"
+      ]
+    },
+    {
+      "id": "NS18-propose-absent-not-routed-to-insert",
+      "file": "src/engine/cas.zig",
+      "from": ".absent => insert(base, .{ .ref = ref, .new_body = new_body }),",
+      "to": ".absent => error.SymbolNotFound,",
+      "kills": [
+        "propose replaces a body for a hex hash and inserts a symbol for absent",
+        "absent: a new top-level symbol is appended, committed, parses and joins the symbol table"
       ]
     }
   ]

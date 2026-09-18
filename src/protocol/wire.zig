@@ -66,8 +66,9 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try writer.writeByte('\n');
 }
 
-pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Hash, new_hash: symbol.Hash) !void {
-    const old_hex = symbol.formatHash(old_hash);
+pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash) !void {
+    var old_buf: [symbol.hash_hex_len]u8 = undefined;
+    const old_hex = old_hash.text(&old_buf);
     const new_hex = symbol.formatHash(new_hash);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -116,8 +117,9 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit) !void {
     try writer.writeByte('\n');
 }
 
-pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Hash, new_hash: symbol.Hash, source: []const u8) !void {
-    const old_hex = symbol.formatHash(old_hash);
+pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash, source: []const u8) !void {
+    var old_buf: [symbol.hash_hex_len]u8 = undefined;
+    const old_hex = old_hash.text(&old_buf);
     const new_hex = symbol.formatHash(new_hash);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -251,6 +253,13 @@ pub fn exitCode(err: anyerror) u8 {
         error.SkeletonInvalid => 9,
         error.PlaceholderBody => 13,
         error.UnknownCheck => 19,
+        error.SymbolExists => 20,
+        error.MissingTrailingNewline => 21,
+        error.NoTopLevelSymbol => 22,
+        error.MultipleTopLevelSymbols => 23,
+        error.ExtraTopLevelCode => 24,
+        error.SymbolNameMismatch => 25,
+        error.AbsentInBatch => 26,
         error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
         error.NoTestCommand, error.InvalidConfig => 2,
         error.UntrustedRepoConfig => 15,
@@ -345,7 +354,7 @@ test "symbol body payload carries ref, hash and the escaped body" {
 test "committed payload names the symbol and both hashes" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeCommitted(&buffer.writer, "validateOrder", symbol.hashOf("a"), symbol.hashOf("b"));
+    try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"));
 
     try testing.expectEqualStrings(
         "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
@@ -358,7 +367,7 @@ test "committed payload names the symbol and both hashes" {
 test "mutated payload embeds the transformed source, escaped, on one line" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeMutated(&buffer.writer, "add", symbol.hashOf("a"), symbol.hashOf("b"), "function add() {\n  return 0;\n}");
+    try writeMutated(&buffer.writer, "add", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), "function add() {\n  return 0;\n}");
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));

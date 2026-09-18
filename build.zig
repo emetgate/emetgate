@@ -201,6 +201,31 @@ const cli_cases = [_]CliCase{
         .stderr_contains = "error: SourceHasErrors",
     },
     .{
+        .name = "mutate with hash absent appends a new top-level symbol after one blank line",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "extra", "--hash", "absent", "--body", "function extra() { return 1; }" },
+        .exit_code = 0,
+        .stdout_contains = "  return greeting;\n}\n\nfunction extra() { return 1; }\n",
+        .stderr_contains = "mutated extra  absent -> ",
+    },
+    .{
+        .name = "mutate json with hash absent reports absent as the old hash",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "extra", "--hash", "absent", "--body", "function extra() { return 1; }", "--json" },
+        .exit_code = 0,
+        .stdout_contains = "\"status\":\"mutated\",\"symbol\":\"extra\",\"old_hash\":\"absent\",\"new_hash\":\"",
+    },
+    .{
+        .name = "mutate with hash absent on an existing symbol",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", "absent", "--body", "export function add(a: number, b: number): number { return 0; }" },
+        .exit_code = 20,
+        .stderr_contains = "error: SymbolExists",
+    },
+    .{
+        .name = "mutate json with hash absent and a mismatched name",
+        .args = &.{ "mutate", e2e_fixture, "--symbol", "extra", "--hash", "absent", "--body", "function other() { return 1; }", "--json" },
+        .exit_code = 25,
+        .stdout = "{\"status\":\"error\",\"error\":\"SymbolNameMismatch\",\"exit_code\":25}\n",
+    },
+    .{
         .name = "mutate with an inline body",
         .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", e2e_add_hash, "--body", "{ return 0; }" },
         .exit_code = 0,

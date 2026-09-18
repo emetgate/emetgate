@@ -476,3 +476,24 @@ test "every unambiguous symbol resolves back to itself through its canonical tex
         }
     }
 }
+
+test "the hash field is a precondition: a hex hash, or absent, and nothing else" {
+    const hex = formatHash(hashOf("add"));
+    const present = try symbol.parseExpected(&hex);
+    try testing.expectEqual(hashOf("add"), present.present);
+    try testing.expectEqual(try parseHash(&hex), present.present);
+
+    try testing.expect(try symbol.parseExpected("absent") == .absent);
+
+    const invalid = [_][]const u8{ "", "Absent", "ABSENT", "absent ", " absent", "absent\n", "absen", "absentx", "00", hex[1..], "zz" ++ hex[2..] };
+    for (invalid) |text| {
+        errdefer std.debug.print("accepted hash field: \"{s}\"\n", .{text});
+        try testing.expectError(error.InvalidHash, symbol.parseExpected(text));
+    }
+    try testing.expectError(error.InvalidHash, parseHash("absent"));
+
+    var buffer: [symbol.hash_hex_len]u8 = undefined;
+    try testing.expectEqualStrings(&hex, present.text(&buffer));
+    const absent: symbol.Expected = .absent;
+    try testing.expectEqualStrings("absent", absent.text(&buffer));
+}
