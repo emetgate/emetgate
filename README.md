@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner.png">
-    <img src="assets/banner-light.png" alt="Emetgate" width="640">
-  </picture>
+  <img src="assets/banner.png" alt="Emetgate" width="640">
 </p>
 
 <p align="center">
