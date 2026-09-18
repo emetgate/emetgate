@@ -55,6 +55,7 @@ pub const profile: Profile = .{
     .expression_statement = "expression_statement",
     .prose_strings = &ecma.prose_strings,
     .directives = &ecma.directives,
+    .literal_values = ecma.literal_values,
     .memberTraits = memberTraits,
 };
 

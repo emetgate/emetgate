@@ -17,6 +17,8 @@ pub const Cases = struct {
     escaping_body: []const u8,
     broken_body: []const u8,
     optional_call_source: []const u8,
+    literal_source: []const u8,
+    literal_flagged: []const []const u8,
 };
 
 pub const Entry = struct {

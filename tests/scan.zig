@@ -656,3 +656,21 @@ test "scope: each rule in one scan keeps its own where" {
     try testing.expectEqual(@as(u8, 0), outcome.code);
     try testing.expect(outcome.has("2 rule(s), 2 file(s) scanned, 0 violation(s); 1 outside rule scope,"));
 }
+
+test "scope: a no_literal rule scoped to one symbol reports only its literal options" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "src/nav.js", .data = "export async function open(page) {\n  await page.goto(u, { timeout: 30000 });\n  await page.goto(u, { timeout: budget(ms) });\n}\nexport async function other(page) {\n  await page.goto(u, { timeout: 5 });\n}\n" },
+        .{ .path = "src/wait.js", .data = "wait({ timeout: 1 });\n" },
+    });
+    defer repo.deinit();
+    try repo.putLedger(scopedRow("ml", "no_literal:timeout", "src/nav.js#open"));
+
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 10), outcome.code);
+    try testing.expect(outcome.has("src/nav.js:2:24: ml (no_literal:timeout): timeout: 30000\n"));
+    try testing.expect(!outcome.has("timeout: 5"));
+    try testing.expect(!outcome.has("src/wait.js:"));
+    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 1 violation(s); 1 outside rule scope,"));
+}

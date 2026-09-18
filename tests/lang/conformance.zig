@@ -3,6 +3,7 @@ const cas = @import("../../src/engine/cas.zig");
 const symbol = @import("../../src/engine/symbol.zig");
 const skeleton = @import("../../src/engine/skeleton.zig");
 const boundedness = @import("../../src/engine/boundedness.zig");
+const checks = @import("../../src/engine/checks.zig");
 const registry = @import("../../src/engine/lang/registry.zig");
 const Profile = @import("../../src/engine/lang/profile.zig").Profile;
 const Runtime = @import("../../src/engine/runtime.zig").Runtime;
@@ -189,6 +190,27 @@ test "conformance: every symbol resolves back to itself through its canonical re
             try testing.expect(!entry.ambiguous);
             const text = try std.fmt.bufPrint(&buf, "{f}", .{entry.ref});
             try testing.expectEqual(entry, try Language.resolve(lang.base, text));
+        }
+    }
+}
+
+test "conformance: no_literal flags only literal values of the named option, spanning the whole pair" {
+    for (registry.profiles) |profile| {
+        errdefer std.debug.print("language: {s}\n", .{profile.name});
+        const cases = casesFor(profile) orelse return error.MissingConformanceCases;
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        const snapshot = try Snapshot.fromSource(runtime, profile, try testing.allocator.dupe(u8, cases.literal_source));
+        defer snapshot.destroy();
+        try testing.expect(!snapshot.tree.root().hasError());
+
+        const whole: symbol.Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
+        const violations = try checks.run(testing.allocator, profile, snapshot.tree, whole, &.{"no_literal:timeout"});
+        defer testing.allocator.free(violations);
+        try testing.expectEqual(cases.literal_flagged.len, violations.len);
+        for (cases.literal_flagged, violations) |want, got| {
+            try testing.expectEqualStrings("no_literal", got.check);
+            try testing.expectEqualStrings(want, snapshot.source[got.span.start..got.span.end]);
         }
     }
 }
