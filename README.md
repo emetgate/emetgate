@@ -13,6 +13,12 @@
 <p align="center"><b>Nothing passes but the truth.</b><br>
 A deterministic verification kernel that sits between a language model and your source tree.</p>
 
+<p align="center">
+  <img src="assets/demo.gif" alt="Five proposals through the gate: four refused, one committed" width="900">
+</p>
+
+<p align="center"><sub>A real session, rendered: a placeholder body, an escaped body, a stale hash and a write outside the shadow copy are all refused; a correct body is committed.</sub></p>
+
 ---
 
 ## The name
