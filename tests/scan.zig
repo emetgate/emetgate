@@ -134,7 +134,7 @@ test "scan: a clean repo reports no violations and exits 0" {
     const outcome = try runScan(&repo, &.{});
     defer outcome.deinit();
     try testing.expectEqual(@as(u8, 0), outcome.code);
-    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 0 violation(s); 0 skipped without a language profile, 0 unreadable, 0 with parse errors\n"));
+    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 0 violation(s); 0 outside rule scope, 0 skipped without a language profile, 0 unreadable, 0 with parse errors\n"));
     try testing.expectEqual(@as(usize, 1), try repo.workspaceEntries());
 }
 
@@ -250,7 +250,7 @@ test "scan: a file with parse errors is still scanned, flagged, and does not sto
     try testing.expect(outcome.has("a.ts:2:3: forbid:networkidle: networkidle\n"));
     try testing.expect(outcome.has("b.ts:1:19: forbid:networkidle: networkidle\n"));
     try testing.expect(outcome.has("warning: a.ts: parse error; tree-based checks may be incomplete\n"));
-    try testing.expect(outcome.has("1 rule(s), 2 file(s) scanned, 2 violation(s); 0 skipped without a language profile, 0 unreadable, 1 with parse errors\n"));
+    try testing.expect(outcome.has("1 rule(s), 2 file(s) scanned, 2 violation(s); 0 outside rule scope, 0 skipped without a language profile, 0 unreadable, 1 with parse errors\n"));
 }
 
 test "scan: an unreadable tracked file is warned about, counted, and does not stop the scan" {
@@ -267,7 +267,7 @@ test "scan: an unreadable tracked file is warned about, counted, and does not st
     try testing.expectEqual(@as(u8, 10), outcome.code);
     try testing.expect(outcome.has("warning: a.ts: not scanned: FileNotFound\n"));
     try testing.expect(outcome.has("b.ts:1:1: forbid:networkidle: networkidle\n"));
-    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 1 violation(s); 0 skipped without a language profile, 1 unreadable, 0 with parse errors\n"));
+    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 1 violation(s); 0 outside rule scope, 0 skipped without a language profile, 1 unreadable, 0 with parse errors\n"));
 }
 
 test "scan: a file with no language profile is skipped and counted" {
@@ -282,7 +282,7 @@ test "scan: a file with no language profile is skipped and counted" {
     const outcome = try runScan(&repo, &.{ "--check", "forbid:networkidle" });
     defer outcome.deinit();
     try testing.expectEqual(@as(u8, 0), outcome.code);
-    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 0 violation(s); 2 skipped without a language profile, 0 unreadable, 0 with parse errors\n"));
+    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 0 violation(s); 0 outside rule scope, 2 skipped without a language profile, 0 unreadable, 0 with parse errors\n"));
 }
 
 const JsonViolation = struct { rule: []const u8, check: []const u8, file: []const u8, line: u32, col: u32, text: []const u8 };
@@ -291,6 +291,7 @@ const JsonScan = struct {
     status: []const u8,
     rules: usize,
     scanned: usize,
+    out_of_scope: usize,
     unsupported: usize,
     unreadable: []const JsonUnreadable,
     parse_errors: []const []const u8,
@@ -342,7 +343,7 @@ test "scan: --json is one parseable line carrying the same report" {
     const clean_outcome = try runScan(&clean, &.{ "--check", "forbid:networkidle", "--json" });
     defer clean_outcome.deinit();
     try testing.expectEqual(@as(u8, 0), clean_outcome.code);
-    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"violations\":[]}\n", clean_outcome.out);
+    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"out_of_scope\":0,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"violations\":[]}\n", clean_outcome.out);
 }
 
 test "scan: a malformed ledger rule stops the scan before any file and names the rule" {
@@ -390,7 +391,7 @@ test "scan: the scanner itself refuses a malformed rule even when no file would 
 test "scan: usage accepts only --json and one --check with a value" {
     try testing.expect(scan_command.Options.parse(&.{}) != null);
     try testing.expect(scan_command.Options.parse(&.{ "--json", "--check", "no_comment" }).?.json);
-    try testing.expectEqualStrings("no_comment", scan_command.Options.parse(&.{ "--check", "no_comment" }).?.source.check);
+    try testing.expectEqualStrings("no_comment", scan_command.Options.parse(&.{ "--check", "no_comment" }).?.source.check.spec);
     try testing.expect(scan_command.Options.parse(&.{"--check"}) == null);
     try testing.expect(scan_command.Options.parse(&.{ "--check", "a", "--check", "b" }) == null);
     try testing.expect(scan_command.Options.parse(&.{ "--json", "--json" }) == null);
@@ -460,4 +461,198 @@ test "scan: a whole ledger is read once without pausing" {
     defer outcome.deinit();
     try testing.expectEqual(@as(u8, 0), outcome.code);
     try testing.expectEqual(@as(usize, 0), repair.pauses);
+}
+
+fn scopedRow(comptime id: []const u8, comptime check: []const u8, comptime where: []const u8) []const u8 {
+    return "{\"id\":\"" ++ id ++ "\",\"scope\":\"file\",\"text\":\"scoped\",\"enforce\":true,\"check\":\"" ++ check ++ "\",\"status\":\"active\",\"supersedes\":null,\"ts\":5,\"where\":\"" ++ where ++ "\"}\n";
+}
+
+const scrape_everywhere = "resolveAndScrape(a);\n" ** 17;
+
+const queue_repo = [_]File{
+    .{ .path = "src/queue.js", .data = "export function enqueue(job) {\n  return jobs.push(job);\n}\n" },
+    .{ .path = "src/scrape.js", .data = scrape_everywhere },
+    .{ .path = "extension/content.js", .data = "export function read() {\n  return document.title;\n}\n" },
+    .{ .path = "extension/background.js", .data = "export function pull() {\n  return fetch(url);\n}\n" },
+    .{ .path = "src/net.js", .data = "fetch(a);\nfetch(b);\nfetch(c);\n" },
+};
+
+test "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    try repo.putLedger(scopedRow("mq", "forbid:resolveAndScrape", "src/queue.js"));
+
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 0), outcome.code);
+    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 0 violation(s); 4 outside rule scope, 0 skipped without a language profile, 0 unreadable, 0 with parse errors\n"));
+
+    const unscoped = try runScan(&repo, &.{ "--check", "forbid:resolveAndScrape" });
+    defer unscoped.deinit();
+    try testing.expect(unscoped.has("1 rule(s), 5 file(s) scanned, 17 violation(s); 0 outside rule scope,"));
+}
+
+test "scope: a rule scoped to extension/content.js reports no fetch( from other files" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    try repo.putLedger(scopedRow("mf", "forbid:fetch(", "extension/content.js"));
+
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 0), outcome.code);
+    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 0 violation(s); 4 outside rule scope,"));
+}
+
+test "scope: a directory scope reports only the violations under that directory" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    try repo.putLedger(scopedRow("md", "forbid:fetch(", "extension/"));
+
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 10), outcome.code);
+    try testing.expect(outcome.has("extension/background.js:2:10: md (forbid:fetch(): fetch(\n"));
+    try testing.expect(!outcome.has("src/net.js"));
+    try testing.expect(outcome.has("1 rule(s), 2 file(s) scanned, 1 violation(s); 3 outside rule scope,"));
+}
+
+test "scope: a symbol scope ignores the same text in another symbol of the same file" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ .path = "src/x.js", .data = "export function f() {\n  return 1;\n}\nexport function g() {\n  return fetch(u);\n}\n" }});
+    defer repo.deinit();
+    try repo.putLedger(scopedRow("ms", "forbid:fetch(", "src/x.js#f"));
+
+    const clean = try runScan(&repo, &.{});
+    defer clean.deinit();
+    try testing.expectEqual(@as(u8, 0), clean.code);
+    try testing.expect(clean.has("1 rule(s), 1 file(s) scanned, 0 violation(s);"));
+
+    const inside = try runScan(&repo, &.{ "--check", "forbid:fetch(", "--in", "src/x.js#g" });
+    defer inside.deinit();
+    try testing.expectEqual(@as(u8, 10), inside.code);
+    try testing.expect(inside.has("src/x.js:5:10: forbid:fetch(: fetch(\n"));
+}
+
+fn expectUnresolved(repo: *Repo, args: []const [:0]const u8, needle: []const u8) !void {
+    const outcome = try runScan(repo, args);
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 31), outcome.code);
+    try testing.expectEqual(@as(usize, 0), outcome.out.len);
+    try testing.expect(std.mem.indexOf(u8, outcome.err, needle) != null);
+}
+
+test "scope: a ledger rule whose where names a deleted file stops the scan with ScopeUnresolved" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    try git(repo.root_abs, &.{ "rm", "-q", "src/queue.js" });
+    try repo.putLedger(comptime scopedRow("mq", "forbid:resolveAndScrape", "src/queue.js"));
+    try expectUnresolved(&repo, &.{}, "error: ScopeUnresolved: rule mq has scope \"src/queue.js\": FileNotTracked\n");
+}
+
+test "scope: a ledger rule whose where names a missing symbol stops the scan with ScopeUnresolved" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ .path = "src/x.js", .data = "export function f() {\n  return fetch(u);\n}\n" }});
+    defer repo.deinit();
+    try repo.putLedger(comptime scopedRow("ms", "forbid:fetch(", "src/x.js#gone"));
+    try expectUnresolved(&repo, &.{}, "error: ScopeUnresolved: rule ms has scope \"src/x.js#gone\": SymbolNotFound\n");
+}
+
+test "scope: an empty directory scope or an unparsable symbol file stops the scan with ScopeUnresolved" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "src/x.js", .data = "export function f() {\n  return 1;\n}\n" },
+        .{ .path = "src/broken.js", .data = "function (\n" },
+    });
+    defer repo.deinit();
+    try expectUnresolved(&repo, &.{ "--check", "forbid:fetch(", "--in", "lib/" }, "NoTrackedFileUnder");
+    try expectUnresolved(&repo, &.{ "--check", "forbid:fetch(", "--in", "src/broken.js#f" }, "SourceHasErrors");
+    try expectUnresolved(&repo, &.{ "--check", "forbid:fetch(", "--in", "src/x.js#f@get" }, "SymbolNotFound");
+}
+
+test "scope: an unresolved scope is reported as one json error line naming rule and where" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--json", "--check", "forbid:fetch(", "--in", "src/gone.js" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 31), outcome.code);
+    try testing.expectEqualStrings("{\"status\":\"error\",\"error\":\"ScopeUnresolved\",\"exit_code\":31,\"rule\":\"forbid:fetch(\",\"where\":\"src/gone.js\",\"reason\":\"FileNotTracked\"}\n", outcome.out);
+}
+
+test "scope: the scanner itself refuses an unresolved scope" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
+    try testing.expectError(error.ScopeUnresolved, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid:x", .where = "src/gone.js" }}));
+}
+
+test "scope: a rule without where scans the whole repository as before" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    try repo.putLedger("{\"id\":\"mn\",\"scope\":\"project\",\"text\":\"no fetch\",\"enforce\":true,\"check\":\"forbid:fetch(\",\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n");
+
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 10), outcome.code);
+    try testing.expect(outcome.has("1 rule(s), 5 file(s) scanned, 4 violation(s); 0 outside rule scope,"));
+}
+
+test "scope: --in narrows an ad-hoc check and the json report counts files outside it" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+
+    const outcome = try runScan(&repo, &.{ "--json", "--check", "forbid:fetch(", "--in", "src/net.js" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 10), outcome.code);
+    const parsed = try std.json.parseFromSlice(JsonScan, testing.allocator, outcome.out, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 1), parsed.value.scanned);
+    try testing.expectEqual(@as(usize, 4), parsed.value.out_of_scope);
+    try testing.expectEqual(@as(usize, 3), parsed.value.violations.len);
+}
+
+test "scope: --in is refused without --check, twice, or without a value" {
+    try testing.expect(scan_command.Options.parse(&.{ "--in", "src/a.ts" }) == null);
+    try testing.expect(scan_command.Options.parse(&.{ "--json", "--in", "src/a.ts" }) == null);
+    try testing.expect(scan_command.Options.parse(&.{ "--check", "no_comment", "--in", "a", "--in", "b" }) == null);
+    try testing.expect(scan_command.Options.parse(&.{ "--check", "no_comment", "--in" }) == null);
+    const options = scan_command.Options.parse(&.{ "--in", "extension/", "--check", "no_comment" }).?;
+    try testing.expectEqualStrings("extension/", options.source.check.where.?);
+}
+
+test "scope: an invalid --in is refused by name before anything is scanned" {
+    try skipOffWindows();
+    var repo = try Repo.init(&queue_repo);
+    defer repo.deinit();
+    for ([_][:0]const u8{ "src/*.js", "../x.js", "C:/x.js", ".git/config" }, [_][]const u8{ "WhereGlob", "WhereParentSegment", "WhereAbsolute", "WhereInternal" }) |bad, name| {
+        const outcome = try runScan(&repo, &.{ "--check", "forbid:fetch(", "--in", bad });
+        defer outcome.deinit();
+        try testing.expectEqual(@as(u8, 2), outcome.code);
+        try testing.expect(std.mem.indexOf(u8, outcome.err, name) != null);
+        try testing.expectEqual(@as(usize, 0), outcome.out.len);
+    }
+}
+
+test "scope: each rule in one scan keeps its own where" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "src/queue.js", .data = "fetch(a);\n" },
+        .{ .path = "src/net.js", .data = "resolveAndScrape(b);\n" },
+        .{ .path = "src/other.js", .data = "fetch(c);\nresolveAndScrape(d);\n" },
+    });
+    defer repo.deinit();
+    try repo.putLedger(comptime scopedRow("mq", "forbid:resolveAndScrape", "src/queue.js") ++ scopedRow("mn", "forbid:fetch(", "src/net.js"));
+
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 0), outcome.code);
+    try testing.expect(outcome.has("2 rule(s), 2 file(s) scanned, 0 violation(s); 1 outside rule scope,"));
 }

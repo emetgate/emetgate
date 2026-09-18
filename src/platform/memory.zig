@@ -2,6 +2,7 @@ const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const disk = @import("disk.zig");
+const where_mod = @import("where.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -26,6 +27,24 @@ pub const Decision = struct {
     status: Status,
     supersedes: ?[]const u8 = null,
     ts: i64,
+    where: ?[]const u8 = null,
+
+    pub fn jsonStringify(self: Decision, js: anytype) !void {
+        try js.beginObject();
+        inline for (std.meta.fields(Decision)) |field| {
+            const value = @field(self, field.name);
+            if (comptime std.mem.eql(u8, field.name, "where")) {
+                if (value) |w| {
+                    try js.objectField(field.name);
+                    try js.write(w);
+                }
+            } else {
+                try js.objectField(field.name);
+                try js.write(value);
+            }
+        }
+        try js.endObject();
+    }
 };
 
 pub const Row = struct {
@@ -77,8 +96,9 @@ const Loaded = struct {
     folded: Folded,
 };
 
-pub fn remember(gpa: Allocator, io: std.Io, root_abs: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8) ![]u8 {
+pub fn remember(gpa: Allocator, io: std.Io, root_abs: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8, where: ?[]const u8) ![]u8 {
     try validateInput(text, check);
+    try where_mod.validate(where);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -94,14 +114,16 @@ pub fn remember(gpa: Allocator, io: std.Io, root_abs: []const u8, scope: Scope, 
         .text = text,
         .enforce = enforce,
         .check = check,
+        .where = where,
         .status = .active,
         .ts = now(io),
     });
     return gpa.dupe(u8, id);
 }
 
-pub fn supersede(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8) ![]u8 {
+pub fn supersede(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8, where: ?[]const u8) ![]u8 {
     try validateInput(text, check);
+    try where_mod.validate(where);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -118,6 +140,7 @@ pub fn supersede(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u
         .text = text,
         .enforce = enforce,
         .check = check,
+        .where = where,
         .status = .active,
         .supersedes = prior.id,
         .ts = now(io),
@@ -311,6 +334,7 @@ fn validateRow(d: Decision) error{LedgerCorrupt}!void {
         if (c.len == 0 or c.len > max_check_bytes) return error.LedgerCorrupt;
         if (!std.unicode.utf8ValidateSlice(c)) return error.LedgerCorrupt;
     }
+    where_mod.validate(d.where) catch return error.LedgerCorrupt;
 }
 
 pub fn foldRows(arena: Allocator, rows: []const Row) !Folded {
@@ -388,7 +412,7 @@ fn refuseSupersedeCycles(arena: Allocator, latest: std.StringHashMapUnmanaged(De
 fn sameDecision(a: Decision, b: Decision) bool {
     return std.mem.eql(u8, a.id, b.id) and a.scope == b.scope and std.mem.eql(u8, a.text, b.text) and
         a.enforce == b.enforce and sameOptional(a.check, b.check) and a.status == b.status and
-        sameOptional(a.supersedes, b.supersedes) and a.ts == b.ts;
+        sameOptional(a.supersedes, b.supersedes) and a.ts == b.ts and sameOptional(a.where, b.where);
 }
 
 fn sameOptional(a: ?[]const u8, b: ?[]const u8) bool {

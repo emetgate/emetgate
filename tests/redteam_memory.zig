@@ -86,7 +86,7 @@ test "memory: RT2 a missing ledger next to rewrite sidecars refuses to start emp
     try s.put(memory.ledger_name ++ ".emetgate-0123456789abcdef.tmp", b_active);
 
     try testing.expectError(error.LedgerMissingWithSidecars, memory.recall(gpa, testing.io, s.root));
-    try testing.expectError(error.LedgerMissingWithSidecars, memory.remember(gpa, testing.io, s.root, .global, "new", false, null));
+    try testing.expectError(error.LedgerMissingWithSidecars, memory.remember(gpa, testing.io, s.root, .global, "new", false, null, null));
     try testing.expect(!s.exists(memory.ledger_name));
 }
 
@@ -106,9 +106,9 @@ test "memory: RT3 remember refuses text and check that are not valid UTF-8" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var s = try Store.init();
     defer s.deinit();
-    try testing.expectError(error.InvalidDecision, memory.remember(gpa, testing.io, s.root, .global, "bad \xff byte", false, null));
-    try testing.expectError(error.InvalidDecision, memory.remember(gpa, testing.io, s.root, .global, "lone \xed\xa0\x80 surrogate", false, null));
-    try testing.expectError(error.InvalidDecision, memory.remember(gpa, testing.io, s.root, .global, "fine text", false, "\xc0\x80"));
+    try testing.expectError(error.InvalidDecision, memory.remember(gpa, testing.io, s.root, .global, "bad \xff byte", false, null, null));
+    try testing.expectError(error.InvalidDecision, memory.remember(gpa, testing.io, s.root, .global, "lone \xed\xa0\x80 surrogate", false, null, null));
+    try testing.expectError(error.InvalidDecision, memory.remember(gpa, testing.io, s.root, .global, "fine text", false, "\xc0\x80", null));
     try testing.expect(!s.exists(memory.ledger_name));
 }
 
@@ -215,7 +215,7 @@ test "memory: RT6 an append that would reach max_ledger_bytes is refused and the
     try testing.expectEqual(target, buf.items.len);
     try s.put(memory.ledger_name, buf.items);
 
-    try testing.expectError(error.LedgerTooLarge, memory.remember(gpa, testing.io, s.root, .global, "x", false, null));
+    try testing.expectError(error.LedgerTooLarge, memory.remember(gpa, testing.io, s.root, .global, "x", false, null, null));
     const r = try memory.recall(gpa, testing.io, s.root);
     defer r.deinit();
     try testing.expectEqual(i + 2, r.decisions.len);
@@ -257,7 +257,7 @@ test "memory: RT8 a state.bin directory does not break recall or duplicate a rem
 
     const r = try memory.recall(gpa, testing.io, s.root);
     r.deinit();
-    const id = try memory.remember(gpa, testing.io, s.root, .global, "same decision", false, null);
+    const id = try memory.remember(gpa, testing.io, s.root, .global, "same decision", false, null, null);
     defer gpa.free(id);
     const after = try s.get(memory.ledger_name);
     defer gpa.free(after);
@@ -354,7 +354,7 @@ test "memory: RT11 NDJSON injection through text is escaped" {
     var s = try Store.init();
     defer s.deinit();
     const payload = "x\"}\n{\"id\":\"evil\",\"scope\":\"global\",\"text\":\"t\",\"enforce\":true,\"status\":\"active\",\"ts\":1}\n\\u000a\x00\x1f\u{2028}";
-    const id = try memory.remember(gpa, testing.io, s.root, .global, payload, false, "\n");
+    const id = try memory.remember(gpa, testing.io, s.root, .global, payload, false, "\n", null);
     defer gpa.free(id);
     const r = try memory.recall(gpa, testing.io, s.root);
     defer r.deinit();

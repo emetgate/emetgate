@@ -187,6 +187,8 @@ pub fn writeScan(writer: *Writer, result: scan.Result) !void {
     try js.write(result.rules);
     try js.objectField("scanned");
     try js.write(result.scanned);
+    try js.objectField("out_of_scope");
+    try js.write(result.out_of_scope);
     try js.objectField("unsupported");
     try js.write(result.unsupported);
     try js.objectField("unreadable");
@@ -208,6 +210,25 @@ pub fn writeScan(writer: *Writer, result: scan.Result) !void {
     try js.beginArray();
     for (result.violations) |v| try writeViolation(&js, v);
     try js.endArray();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub fn writeUnresolvedScope(writer: *Writer, rule: []const u8, where: []const u8, reason: []const u8, exit_code: u8) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("error");
+    try js.objectField("error");
+    try js.write("ScopeUnresolved");
+    try js.objectField("exit_code");
+    try js.write(exit_code);
+    try js.objectField("rule");
+    try js.write(rule);
+    try js.objectField("where");
+    try js.write(where);
+    try js.objectField("reason");
+    try js.write(reason);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -333,7 +354,9 @@ pub fn exitCode(err: anyerror) u8 {
         error.ParentDirectoryMissing => 28,
         error.IgnoredPath => 29,
         error.WrittenButNotIndexed => 30,
+        error.ScopeUnresolved => 31,
         error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
+        error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed => 2,
         error.NoTestCommand, error.InvalidConfig => 2,
         error.UntrustedRepoConfig => 15,
         error.ModelSuppliedTestPolicy => 17,

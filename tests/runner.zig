@@ -568,7 +568,7 @@ test "rules: an enforced no_comment rule rejects a commented body before the tes
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment", null);
     defer testing.allocator.free(id);
 
     const result = try tryAdd(&repo, runtime, commented_body, "exit 1");
@@ -591,7 +591,7 @@ test "rules: a clean body still commits under an enforced rule" {
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment", null);
     defer testing.allocator.free(id);
 
     const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
@@ -605,7 +605,7 @@ test "rules: an enforced forbid rule rejects a body containing its text before t
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs", null);
     defer testing.allocator.free(id);
 
     const result = try tryAdd(&repo, runtime, "{\n  return Math.abs(a) - Math.abs(b);\n}", "exit 0");
@@ -629,7 +629,7 @@ test "rules: a body without the forbidden text still commits under an enforced f
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs", null);
     defer testing.allocator.free(id);
 
     const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
@@ -699,7 +699,7 @@ test "absent: an inserted body that breaks a forbid rule is rejected even when t
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs", null);
     defer testing.allocator.free(id);
 
     const result = try tryInsert(&repo, runtime, "dist", "export function dist(a: number, b: number): number {\n  return Math.abs(a - b);\n}", "exit 0");
@@ -915,7 +915,7 @@ test "new file: a body that breaks a forbid rule is rejected even when the tests
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs", null);
     defer testing.allocator.free(id);
 
     const result = try tryNewFile(&repo, runtime, "src/dist.ts", "dist", "export function dist(a: number, b: number): number {\n  return Math.abs(a - b);\n}", "exit 0");
@@ -949,11 +949,11 @@ test "rules: unenforced, checkless and forgotten rules never block an edit" {
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const unenforced = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "prefer no comments", false, "no_comment");
+    const unenforced = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "prefer no comments", false, "no_comment", null);
     defer testing.allocator.free(unenforced);
-    const checkless = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "be kind", true, null);
+    const checkless = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "be kind", true, null, null);
     defer testing.allocator.free(checkless);
-    const forgotten = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    const forgotten = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment", null);
     defer testing.allocator.free(forgotten);
     try memory.forget(testing.allocator, testing.io, repo.root_abs, forgotten);
 
@@ -968,7 +968,7 @@ test "rules: an unknown check in the ledger fails closed and leaves disk untouch
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "mystery", true, "no_such_check");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "mystery", true, "no_such_check", null);
     defer testing.allocator.free(id);
 
     try testing.expectError(error.UnknownCheck, tryAdd(&repo, runtime, clean_body, "exit 0"));
@@ -981,7 +981,7 @@ test "rules: one violating edit rejects the whole batch and leaves disk untouche
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment", null);
     defer testing.allocator.free(id);
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
@@ -1025,4 +1025,82 @@ test "no shadow workspace survives a run" {
     result.deinit(testing.allocator);
 
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/.emetgate", .{}));
+}
+
+fn tryAddUnder(where: []const u8) !runner.Result {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .file, "no Math.abs", true, "forbid:Math.abs", where);
+    defer testing.allocator.free(id);
+    return tryAdd(&repo, runtime, "{\n  return Math.abs(a - b);\n}", "exit 0");
+}
+
+test "scope: a rule whose where names another file does not block the proposal" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const result = try tryAddUnder("src/other.ts");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
+test "scope: a rule whose where names the proposed file or its directory blocks the proposal" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    for ([_][]const u8{ "src/math.ts", "src/", "SRC/Math.ts" }) |where| {
+        const result = try tryAddUnder(where);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .rule_violation);
+        try testing.expectEqualStrings("Math.abs", result.rule_violation.violations[0].text);
+    }
+}
+
+test "scope: at the gate a where naming a missing file or symbol blocks nothing and raises nothing" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    for ([_][]const u8{ "src/deleted.ts", "src/math.ts#gone", "lib/" }) |where| {
+        const result = try tryAddUnder(where);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .committed);
+    }
+}
+
+test "scope: a symbol-scoped rule blocks only a proposal to that symbol" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const other = try tryAddUnder("src/math.ts#sub");
+    defer other.deinit(testing.allocator);
+    try testing.expect(other == .committed);
+
+    const same = try tryAddUnder("src/math.ts#add");
+    defer same.deinit(testing.allocator);
+    try testing.expect(same == .rule_violation);
+}
+
+fn batchUnder(where: []const u8) !runner.BatchResult {
+    var repo = try TwoFile.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .symbol, "no Math.abs", true, "forbid:Math.abs", where);
+    defer testing.allocator.free(id);
+
+    var buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    var buf_b: [std.fs.max_path_bytes]u8 = undefined;
+    const file_a = try repo.pathA(&buf_a);
+    const file_b = try repo.pathB(&buf_b);
+    const edits = [_]Edit{
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add"), .new_body = "{ return Math.abs(a); }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice"), .new_body = "{ return Math.abs(x); }" },
+    };
+    return tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" });
+}
+
+test "scope: a batch applies a symbol-scoped rule only to the edit of that symbol" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const outside = try batchUnder("src/a.ts#twice");
+    defer outside.deinit(testing.allocator);
+    try testing.expect(outside == .committed);
+
+    const inside = try batchUnder("src/b.ts#twice");
+    defer inside.deinit(testing.allocator);
+    try testing.expect(inside == .rule_violation);
+    try testing.expect(std.mem.endsWith(u8, inside.rule_violation.violations[0].file, "b.ts"));
 }

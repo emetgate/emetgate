@@ -72,17 +72,17 @@ test "memory: operations append rows and never rewrite earlier ledger bytes" {
     var store = try Store.init();
     defer store.deinit();
 
-    const first = try memory.remember(testing.allocator, testing.io, store.root, .project, "first", true, null);
+    const first = try memory.remember(testing.allocator, testing.io, store.root, .project, "first", true, null, null);
     defer testing.allocator.free(first);
     const after_first = try store.get(memory.ledger_name);
     defer testing.allocator.free(after_first);
 
-    const second = try memory.remember(testing.allocator, testing.io, store.root, .file, "second", false, "no_comment");
+    const second = try memory.remember(testing.allocator, testing.io, store.root, .file, "second", false, "no_comment", null);
     defer testing.allocator.free(second);
     const after_second = try store.get(memory.ledger_name);
     defer testing.allocator.free(after_second);
 
-    const replacement = try memory.supersede(testing.allocator, testing.io, store.root, first, .project, "first v2", true, null);
+    const replacement = try memory.supersede(testing.allocator, testing.io, store.root, first, .project, "first v2", true, null, null);
     defer testing.allocator.free(replacement);
     try memory.forget(testing.allocator, testing.io, store.root, second);
     const final = try store.get(memory.ledger_name);
@@ -115,7 +115,7 @@ test "memory: a corrupt ledger line before the end is refused, not skipped" {
         defer store.deinit();
         try store.put(memory.ledger_name, ledger);
         try testing.expectError(error.LedgerCorrupt, memory.recall(testing.allocator, testing.io, store.root));
-        try testing.expectError(error.LedgerCorrupt, memory.remember(testing.allocator, testing.io, store.root, .global, "x", false, null));
+        try testing.expectError(error.LedgerCorrupt, memory.remember(testing.allocator, testing.io, store.root, .global, "x", false, null, null));
         const after = try store.get(memory.ledger_name);
         defer testing.allocator.free(after);
         try testing.expectEqualStrings(ledger, after);
@@ -129,7 +129,7 @@ test "memory: supersede retires the prior decision in the same row" {
     try store.put(memory.ledger_name, a_active ++ c_supersedes_a);
 
     try testing.expectError(error.DecisionNotActive, memory.forget(testing.allocator, testing.io, store.root, "ma"));
-    try testing.expectError(error.DecisionNotActive, memory.supersede(testing.allocator, testing.io, store.root, "ma", .project, "again", true, null));
+    try testing.expectError(error.DecisionNotActive, memory.supersede(testing.allocator, testing.io, store.root, "ma", .project, "again", true, null, null));
     const after = try store.get(memory.ledger_name);
     defer testing.allocator.free(after);
     try testing.expectEqualStrings(a_active ++ c_supersedes_a, after);
@@ -177,14 +177,14 @@ test "memory: a held memory lock blocks every operation and the repo lock does n
     defer testing.allocator.free(lock_path);
 
     const held = try shadow.FileLock.acquire(lock_path);
-    try testing.expectError(error.MemoryBusy, memory.remember(testing.allocator, testing.io, store.root, .global, "blocked", false, null));
+    try testing.expectError(error.MemoryBusy, memory.remember(testing.allocator, testing.io, store.root, .global, "blocked", false, null, null));
     try testing.expectError(error.MemoryBusy, memory.recall(testing.allocator, testing.io, store.root));
     try testing.expectError(error.MemoryBusy, memory.compact(testing.allocator, testing.io, store.root));
     held.release();
 
     const repo = try shadow.Lock.acquire(testing.io, store.root);
     defer repo.release();
-    const id = try memory.remember(testing.allocator, testing.io, store.root, .global, "repo lock is separate", false, null);
+    const id = try memory.remember(testing.allocator, testing.io, store.root, .global, "repo lock is separate", false, null, null);
     defer testing.allocator.free(id);
 }
 
@@ -334,4 +334,85 @@ test "memory: recall folds the ledger and never creates state.bin" {
     recalled.deinit();
     try memory.compact(testing.allocator, testing.io, store.root);
     try testing.expect(!store.exists("state.bin"));
+}
+
+test "where: a ledger row written before where existed reads back with where null" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var store = try Store.init();
+    defer store.deinit();
+    try store.put(memory.ledger_name, a_active ++ b_active);
+
+    const recalled = try memory.recall(testing.allocator, testing.io, store.root);
+    defer recalled.deinit();
+    try testing.expectEqual(@as(usize, 2), recalled.decisions.len);
+    for (recalled.decisions) |d| try testing.expect(d.where == null);
+}
+
+test "where: remember and supersede store where, and an unscoped row carries no where field" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var store = try Store.init();
+    defer store.deinit();
+
+    const plain = try memory.remember(testing.allocator, testing.io, store.root, .project, "plain", true, "no_comment", null);
+    defer testing.allocator.free(plain);
+    const scoped = try memory.remember(testing.allocator, testing.io, store.root, .file, "queue never scrapes", true, "forbid:resolveAndScrape", "src/queue.js");
+    defer testing.allocator.free(scoped);
+    const moved = try memory.supersede(testing.allocator, testing.io, store.root, scoped, .symbol, "only in f", true, "forbid:x", "src/x.js#f");
+    defer testing.allocator.free(moved);
+
+    const bytes = try store.get(memory.ledger_name);
+    defer testing.allocator.free(bytes);
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    try testing.expect(std.mem.indexOf(u8, lines.next().?, "where") == null);
+    try testing.expect(std.mem.indexOf(u8, lines.next().?, "\"where\":\"src/queue.js\"") != null);
+
+    const recalled = try memory.recall(testing.allocator, testing.io, store.root);
+    defer recalled.deinit();
+    try expectIds(recalled.decisions, &.{ plain, moved });
+    try testing.expectEqualStrings("src/x.js#f", recalled.decisions[1].where.?);
+}
+
+test "where: remember and supersede refuse an invalid where by name and write nothing" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var store = try Store.init();
+    defer store.deinit();
+    const id = try memory.remember(testing.allocator, testing.io, store.root, .project, "base", true, "no_comment", null);
+    defer testing.allocator.free(id);
+    const before = try store.get(memory.ledger_name);
+    defer testing.allocator.free(before);
+
+    const cases = [_]struct { where: []const u8, err: anyerror }{
+        .{ .where = "C:/Users/x.js", .err = error.WhereAbsolute },
+        .{ .where = "/abs.js", .err = error.WhereAbsolute },
+        .{ .where = "src/../x.js", .err = error.WhereParentSegment },
+        .{ .where = ".git/hooks/", .err = error.WhereInternal },
+        .{ .where = ".emetgate/ledger.ndjson", .err = error.WhereInternal },
+        .{ .where = "src/*.js", .err = error.WhereGlob },
+        .{ .where = "src/**/", .err = error.WhereGlob },
+        .{ .where = "", .err = error.WhereEmpty },
+    };
+    for (cases) |c| {
+        try testing.expectError(c.err, memory.remember(testing.allocator, testing.io, store.root, .file, "x", true, "no_comment", c.where));
+        try testing.expectError(c.err, memory.supersede(testing.allocator, testing.io, store.root, id, .file, "x", true, "no_comment", c.where));
+    }
+    const after = try store.get(memory.ledger_name);
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings(before, after);
+}
+
+test "where: a ledger row carrying an invalid where is corrupt" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const row = "{\"id\":\"mw\",\"scope\":\"file\",\"text\":\"t\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1,\"where\":\"../x.js\"}\n";
+    try testing.expectError(error.LedgerCorrupt, memory.parseLedger(arena.allocator(), row));
+}
+
+test "where: two rows for one id that differ only in where are corrupt" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const scoped = "{\"id\":\"ma\",\"scope\":\"project\",\"text\":\"use Money for amounts\",\"enforce\":true,\"check\":null,\"status\":\"active\",\"supersedes\":null,\"ts\":1,\"where\":\"src/\"}\n";
+    const rows = try memory.parseLedger(arena.allocator(), a_active ++ scoped);
+    try testing.expectError(error.LedgerCorrupt, memory.foldRows(arena.allocator(), rows));
 }

@@ -23,7 +23,7 @@ const usage =
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
     \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config]
-    \\       emetgate scan [--check <spec>] [--json]
+    \\       emetgate scan [--check <spec> [--in <where>]] [--json]
     \\       emetgate recover
     \\       emetgate lockdown [<claude args>...]
     \\
