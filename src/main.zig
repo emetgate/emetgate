@@ -176,9 +176,11 @@ const TryRequest = struct {
 
 fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) !u8 {
     const gpa = runtime.gpa;
-    const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
-    defer gpa.free(file_abs);
     const expected = try symbol.parseExpected(request.hash);
+    const target = try newFileTarget(init, gpa, request.path, expected);
+    defer if (target) |place| place.deinit(gpa);
+    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    defer gpa.free(file_abs);
 
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
@@ -192,14 +194,17 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
 
-    const result = try runner.tryMutate(gpa, init.io, runtime, .{
+    const result = runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
         .ref_text = request.symbol,
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
         .typecheck_command = typecheck_command,
-    });
+    }) catch |err| {
+        if (err == error.WrittenButNotIndexed) std.debug.print("error: WrittenButNotIndexed: {s}: {s}\nrun: git add -- {s}\n", .{ request.path, wire.not_indexed_message, request.path });
+        return err;
+    };
     defer result.deinit(gpa);
 
     _ = out;
@@ -230,16 +235,31 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
 
 fn tryRunJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) u8 {
     return emitTryJson(init, runtime, request, out, allow_repo_config) catch |err| {
-        wire.writeError(out, @errorName(err), exitCodeFor(err)) catch {};
+        if (err == error.WrittenButNotIndexed) {
+            wire.writeNotIndexed(out, request.path) catch {};
+        } else {
+            wire.writeError(out, @errorName(err), exitCodeFor(err)) catch {};
+        }
         return exitCodeFor(err);
     };
 }
 
+fn newFileTarget(init: std.process.Init, gpa: std.mem.Allocator, path: []const u8, expected: symbol.Expected) !?runner.Jailed {
+    if (expected != .absent) return null;
+    std.Io.Dir.cwd().access(init.io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return try runner.jailNew(gpa, init.io, null, path),
+        else => |e| return e,
+    };
+    return null;
+}
+
 fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) !u8 {
     const gpa = runtime.gpa;
-    const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
-    defer gpa.free(file_abs);
     const expected = try symbol.parseExpected(request.hash);
+    const target = try newFileTarget(init, gpa, request.path, expected);
+    defer if (target) |place| place.deinit(gpa);
+    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    defer gpa.free(file_abs);
 
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
@@ -296,10 +316,12 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     const ref = try symbol.Ref.parse(gpa, request.symbol);
     defer ref.deinit(gpa);
     const expected = try symbol.parseExpected(request.hash);
+    const target = try newFileTarget(init, gpa, request.path, expected);
+    defer if (target) |place| place.deinit(gpa);
 
-    const base = try Snapshot.load(runtime, init.io, .cwd(), request.path);
-    defer base.destroy();
-    if (base.tree.root().hasError()) return error.SourceHasErrors;
+    const base: ?*Snapshot = if (target == null) try Snapshot.load(runtime, init.io, .cwd(), request.path) else null;
+    defer if (base) |snapshot| snapshot.destroy();
+    if (base) |snapshot| if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
 
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
@@ -308,7 +330,10 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const applied = try cas.propose(base, ref, expected, body);
+    const applied = if (target) |place|
+        try runner.prepareCreate(gpa, init.io, runtime, place.root, place.abs, place.rel, ref, body)
+    else
+        try cas.propose(base.?, ref, expected, body);
     defer applied.snapshot.destroy();
 
     try wire.writeMutated(out, request.symbol, expected, applied.hash, applied.snapshot.source);
@@ -416,10 +441,12 @@ fn mutate(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out
     const ref = try symbol.Ref.parse(gpa, request.symbol);
     defer ref.deinit(gpa);
     const expected = try symbol.parseExpected(request.hash);
+    const target = try newFileTarget(init, gpa, request.path, expected);
+    defer if (target) |place| place.deinit(gpa);
 
-    const base = try Snapshot.load(runtime, init.io, .cwd(), request.path);
-    defer base.destroy();
-    if (base.tree.root().hasError()) return error.SourceHasErrors;
+    const base: ?*Snapshot = if (target == null) try Snapshot.load(runtime, init.io, .cwd(), request.path) else null;
+    defer if (base) |snapshot| snapshot.destroy();
+    if (base) |snapshot| if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
 
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
@@ -428,7 +455,10 @@ fn mutate(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const applied = try cas.propose(base, ref, expected, body);
+    const applied = if (target) |place|
+        try runner.prepareCreate(gpa, init.io, runtime, place.root, place.abs, place.rel, ref, body)
+    else
+        try cas.propose(base.?, ref, expected, body);
     defer applied.snapshot.destroy();
 
     try out.writeAll(applied.snapshot.source);

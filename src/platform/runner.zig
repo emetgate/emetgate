@@ -12,12 +12,15 @@ const batch = @import("batch.zig");
 const rules = @import("rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
+const registry = @import("../engine/lang/registry.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub const config_file = test_command_mod.config_file;
 pub const repoRoot = repo.repoRoot;
 pub const relativeUnder = repo.relativeUnder;
+pub const Jailed = repo.Jailed;
+pub const jailNew = repo.jailNew;
 pub const resolveTestCommand = test_command_mod.resolveTestCommand;
 pub const resolveTypecheckCommand = test_command_mod.resolveTypecheckCommand;
 pub const Gate = gate_mod.Gate;
@@ -96,6 +99,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer lock.release();
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
+    if (options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(gpa, io, runtime, options, root, rel);
 
     const base = try Snapshot.load(runtime, io, .cwd(), options.file_abs);
     defer base.destroy();
@@ -151,6 +155,44 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     if (options.trace) |t| t.commit_attempted = true;
     try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir);
     return .{ .committed = applied.hash };
+}
+
+pub fn prepareCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, rel: []const u8, ref: symbol.Ref, new_body: []const u8) !cas.Applied {
+    const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;
+    if (try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;
+    return cas.create(runtime, profile, .{ .ref = ref, .new_body = new_body });
+}
+
+fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, root: []const u8, rel: []const u8) !Result {
+    const ref = try symbol.Ref.parse(gpa, options.ref_text);
+    defer ref.deinit(gpa);
+    const created = try prepareCreate(gpa, io, runtime, root, options.file_abs, rel, ref, options.new_body);
+    defer created.snapshot.destroy();
+    if (try rules.gate(gpa, io, root, rel, created.snapshot.profile, created.snapshot.tree, created.body)) |report| return .{ .rule_violation = report };
+
+    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
+    defer gpa.free(shadow_abs);
+    if (options.trace) |t| t.* = .{ .gate = .full, .base_len = 0, .new_len = created.snapshot.source.len };
+
+    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, created.snapshot.source, options, options.test_command)) {
+        .typecheck => |failed| return .{ .typecheck_failed = failed },
+        .tests => |tests| tests,
+    };
+    if (!report.passed()) return .{ .rejected = report };
+    defer report.deinit(gpa);
+
+    if (options.trace) |t| t.commit_attempted = true;
+    try disk.create(gpa, io, options.file_abs, created.snapshot.source);
+    try repo.addToIndex(gpa, io, root, rel);
+    return .{ .committed = created.hash };
+}
+
+fn fileExists(io: std.Io, path_abs: []const u8) !bool {
+    std.Io.Dir.cwd().access(io, path_abs, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
+    return true;
 }
 
 fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options, command: []const u8) !ShadowRun {
