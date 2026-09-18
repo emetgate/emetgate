@@ -32,7 +32,7 @@ const substituteFile = gate_mod.substituteFile;
 pub const Options = struct {
     file_abs: []const u8,
     ref_text: []const u8,
-    expected_hash: symbol.Hash,
+    expected_hash: symbol.Expected,
     new_body: []const u8,
     test_command: []const u8,
     test_scoped_cmd: ?[]const u8 = null,
@@ -104,26 +104,36 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
 
     const ref = try symbol.Ref.parse(gpa, options.ref_text);
     defer ref.deinit(gpa);
-    const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = options.expected_hash, .new_body = options.new_body });
+    const applied = switch (options.expected_hash) {
+        .present => |hash| try cas.apply(base, .{ .ref = ref, .expected_hash = hash, .new_body = options.new_body }),
+        .absent => try cas.insert(base, .{ .ref = ref, .new_body = options.new_body }),
+    };
     defer applied.snapshot.destroy();
     if (try rules.gate(gpa, io, root, rel, applied.snapshot.profile, applied.snapshot.tree, applied.body)) |report| return .{ .rule_violation = report };
 
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);
 
-    const analysis_target = try (try base.symbols()).resolve(ref);
-    const cut: symbol.Span = .{ .start = analysis_target.body.startByte(), .end = analysis_target.body.endByte() };
-    const frame = boundedness.analyze(gpa, base, ref, cut);
-    defer frame.deinit();
-    const gate = chooseGate(frame.confidence, options.test_scoped_cmd != null);
-    if (options.trace) |t| t.* = .{
+    var gate: Gate = .full;
+    if (options.expected_hash == .present) {
+        const analysis_target = try (try base.symbols()).resolve(ref);
+        const cut: symbol.Span = .{ .start = analysis_target.body.startByte(), .end = analysis_target.body.endByte() };
+        const frame = boundedness.analyze(gpa, base, ref, cut);
+        defer frame.deinit();
+        gate = chooseGate(frame.confidence, options.test_scoped_cmd != null);
+        if (options.trace) |t| t.* = .{
+            .gate = gate,
+            .confidence = frame.confidence,
+            .provenance = frame.provenance,
+            .class = frame.mutation_class,
+            .base_len = base.source.len,
+            .new_len = applied.snapshot.source.len,
+            .old_body_len = cut.end - cut.start,
+        };
+    } else if (options.trace) |t| t.* = .{
         .gate = gate,
-        .confidence = frame.confidence,
-        .provenance = frame.provenance,
-        .class = frame.mutation_class,
         .base_len = base.source.len,
         .new_len = applied.snapshot.source.len,
-        .old_body_len = cut.end - cut.start,
     };
     const scoped_owned: ?[]u8 = if (gate == .scoped)
         try substituteFile(gpa, options.test_scoped_cmd.?, rel)

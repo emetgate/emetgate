@@ -255,7 +255,7 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
         const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
             .file_abs = c.file,
             .ref_text = "add",
-            .expected_hash = try hashOfAdd(runtime, c.file),
+            .expected_hash = .{ .present = try hashOfAdd(runtime, c.file) },
             .new_body = c.body,
             .test_command = "cmd /c exit 0",
             .test_scoped_cmd = c.scoped,

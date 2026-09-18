@@ -138,18 +138,22 @@ fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
 fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, w: *Writer, event: *telemetry.Event) !void {
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
-    const expected = try symbol.parseHash(hash_hex);
+    const expected = try symbol.parseExpected(hash_hex);
     const base = try loadJailed(gpa, io, runtime, root, file);
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
-    const target = try (try base.symbols()).resolve(ref);
-    const old_body_len = target.body.endByte() - target.body.startByte();
-    const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
+    const applied = switch (expected) {
+        .present => |hash| blk: {
+            const target = try (try base.symbols()).resolve(ref);
+            event.chars_sr = target.body.endByte() - target.body.startByte() + body.len;
+            break :blk try cas.apply(base, .{ .ref = ref, .expected_hash = hash, .new_body = body });
+        },
+        .absent => try cas.insert(base, .{ .ref = ref, .new_body = body }),
+    };
     defer applied.snapshot.destroy();
     event.hash = applied.hash;
     event.chars_emetgate = sym.len + hash_hex.len + body.len;
     event.chars_fullfile = applied.snapshot.source.len;
-    event.chars_sr = old_body_len + body.len;
     try wire.writeMutated(w, sym, expected, applied.hash, applied.snapshot.source);
 }
 
@@ -182,7 +186,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
     defer gpa.free(test_command);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
-    const expected = try symbol.parseHash(hash_hex);
+    const expected = try symbol.parseExpected(hash_hex);
     const result = try runner.tryMutate(gpa, io, runtime, .{
         .file_abs = file_abs,
         .ref_text = sym,
@@ -264,7 +268,10 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             .file_abs = places[i].abs,
             .ref_text = getString(item, "symbol").?,
             .new_body = getString(item, "body").?,
-            .expected_hash = try symbol.parseHash(getString(item, "hash").?),
+            .expected_hash = switch (try symbol.parseExpected(getString(item, "hash").?)) {
+                .present => |hash| hash,
+                .absent => return error.AbsentInBatch,
+            },
         };
     }
 

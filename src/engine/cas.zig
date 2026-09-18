@@ -16,7 +16,18 @@ pub const Error = error{
     MutationSyntaxInvalid,
     BodyEscape,
     PlaceholderBody,
+    SymbolExists,
+    MissingTrailingNewline,
+    NoTopLevelSymbol,
+    MultipleTopLevelSymbols,
+    ExtraTopLevelCode,
+    SymbolNameMismatch,
 } || Allocator.Error || ts.Error;
+
+pub const Insertion = struct {
+    ref: symbol.Ref,
+    new_body: []const u8,
+};
 
 pub const Mutation = struct {
     ref: symbol.Ref,
@@ -61,6 +72,67 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
     try expectUntouchedOutside(before.*, after.*, cut, slot);
 
     return .{ .snapshot = next, .hash = patched_target.hash, .body = slot };
+}
+
+pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
+    const new_body = normalizeBody(insertion.new_body);
+    const before = try base.symbols();
+    if (before.resolve(insertion.ref)) |_| {
+        return error.SymbolExists;
+    } else |err| switch (err) {
+        error.AmbiguousSymbol => return error.SymbolExists,
+        error.SymbolNotFound => {},
+    }
+
+    const eol = try lineEnding(base.source);
+    const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) "" else eol;
+    const start: u32 = @intCast(base.source.len + separator.len);
+    const source = try std.mem.concat(base.runtime.gpa, u8, &.{ base.source, separator, new_body, eol });
+    const next = try Snapshot.fromSource(base.runtime, base.profile, source);
+    errdefer next.destroy();
+    const after = next.symbols() catch |err| switch (err) {
+        error.SourceHasErrors => return error.MutationSyntaxInvalid,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    const slot: Span = .{ .start = start, .end = start + @as(u32, @intCast(new_body.len)) };
+    const statements = try topLevelStatementsIn(base.profile, next.tree.root(), slot);
+    const declared = try soleTopLevelSymbol(after.*, slot);
+    if (statements != 1) return error.ExtraTopLevelCode;
+    if (!declared.ref.eql(insertion.ref)) return error.SymbolNameMismatch;
+    try rejectPlaceholder(base.profile, declared.body);
+    const end: Span = .{ .start = @intCast(base.source.len), .end = @intCast(base.source.len) };
+    try expectUntouchedOutside(before.*, after.*, end, slot);
+
+    return .{ .snapshot = next, .hash = declared.hash, .body = slot };
+}
+
+fn lineEnding(source: []const u8) error{MissingTrailingNewline}![]const u8 {
+    if (std.mem.endsWith(u8, source, "\r\n")) return "\r\n";
+    if (std.mem.endsWith(u8, source, "\n")) return "\n";
+    return error.MissingTrailingNewline;
+}
+
+fn topLevelStatementsIn(profile: *const Profile, root: ts.Node, slot: Span) error{BodyEscape}!usize {
+    var count: usize = 0;
+    var i: u32 = 0;
+    while (root.child(i)) |node| : (i += 1) {
+        if (node.startByte() < slot.start and node.endByte() > slot.start) return error.BodyEscape;
+        if (node.startByte() < slot.start) continue;
+        if (!node.isNamed() or profile.isComment(node.kind())) continue;
+        count += 1;
+    }
+    return count;
+}
+
+fn soleTopLevelSymbol(table: symbol.Table, slot: Span) error{ NoTopLevelSymbol, MultipleTopLevelSymbols }!*const symbol.Symbol {
+    var found: ?*const symbol.Symbol = null;
+    for (table.symbols) |*candidate| {
+        if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;
+        if (found != null) return error.MultipleTopLevelSymbols;
+        found = candidate;
+    }
+    return found orelse error.NoTopLevelSymbol;
 }
 
 fn expectExactSlot(profile: *const Profile, body: ts.Node, slot: Span) error{BodyEscape}!void {
@@ -482,4 +554,118 @@ test "ownership: a patched snapshot owns its memory and outlives the base it cam
     const second = try mutate(patched.snapshot, "g", "{ return 20; }", .current);
     defer second.snapshot.destroy();
     try testing.expectEqualStrings("function f() { return 10; }\nfunction g() { return 20; }\n", second.snapshot.source);
+}
+
+fn insertInto(runtime: anytype, source: []const u8, ref_text: []const u8, body: []const u8) !Applied {
+    const base = try test_util.snapshotOf(runtime, source);
+    defer base.destroy();
+    const ref = try symbol.Ref.parse(testing.allocator, ref_text);
+    defer ref.deinit(testing.allocator);
+    return insert(base, .{ .ref = ref, .new_body = body });
+}
+
+fn expectInserted(runtime: anytype, source: []const u8, ref_text: []const u8, body: []const u8, expected: []const u8) !void {
+    const applied = try insertInto(runtime, source, ref_text, body);
+    defer applied.snapshot.destroy();
+    try testing.expectEqualStrings(expected, applied.snapshot.source);
+    try testing.expectEqualStrings(source, applied.snapshot.source[0..source.len]);
+    try testing.expectEqualStrings(normalizeBody(body), applied.snapshot.source[applied.body.start..applied.body.end]);
+    try testing.expectEqual(try hashOfRef(applied.snapshot, ref_text), applied.hash);
+}
+
+test "insert names the one top-level symbol the body declares, whatever its declaration form" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
+    const cases = [_]struct { ref: []const u8, body: []const u8 }{
+        .{ .ref = "sub", .body = "export function sub(a: number, b: number): number {\n  return a - b;\n}" },
+        .{ .ref = "twice", .body = "function twice(x: number) { return x * 2; }" },
+        .{ .ref = "neg", .body = "export const neg = (x: number) => -x;" },
+        .{ .ref = "outer", .body = "function outer() {\n  function inner() { return 1; }\n  return inner();\n}" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("case {s}\n", .{case.ref});
+        const expected = try std.mem.concat(testing.allocator, u8, &.{ base, "\n", case.body, "\n" });
+        defer testing.allocator.free(expected);
+        try expectInserted(runtime, base, case.ref, case.body, expected);
+    }
+}
+
+test "insert refuses a body that declares no top-level symbol" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = "function add() { return 1; }\n";
+    for ([_][]const u8{ "const x = 1;", "foo();", "class C {\n  m() { return 1; }\n}", "const o = { f() { return 1; } };" }) |body| {
+        errdefer std.debug.print("accepted body: {s}\n", .{body});
+        try testing.expectError(error.NoTopLevelSymbol, insertInto(runtime, base, "x", body));
+    }
+}
+
+test "insert refuses a body that declares more than one top-level symbol" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = "function add() { return 1; }\n";
+    for ([_][]const u8{ "function a() { return 1; }\nfunction b() { return 2; }", "const a = () => 1, b = () => 2;" }) |body| {
+        errdefer std.debug.print("accepted body: {s}\n", .{body});
+        try testing.expectError(error.MultipleTopLevelSymbols, insertInto(runtime, base, "a", body));
+    }
+}
+
+test "insert refuses top-level code beside the one symbol" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = "function add() { return 1; }\n";
+    for ([_][]const u8{ "function f() { return 1; }\nfoo();", "const x = 1;\nfunction f() { return x; }", "function f() { return 1; };" }) |body| {
+        errdefer std.debug.print("accepted body: {s}\n", .{body});
+        try testing.expectError(error.ExtraTopLevelCode, insertInto(runtime, base, "f", body));
+    }
+    const applied = try insertInto(runtime, base, "f", "// helper\nfunction f() { return 1; }");
+    applied.snapshot.destroy();
+}
+
+test "insert refuses a name that differs from the one the body declares" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = "function add() { return 1; }\n";
+    try testing.expectError(error.SymbolNameMismatch, insertInto(runtime, base, "sub", "function subtract() { return 1; }"));
+    try testing.expectError(error.SymbolNameMismatch, insertInto(runtime, base, "Math.sub", "function sub() { return 1; }"));
+}
+
+test "insert refuses a symbol that already exists, even as a duplicate" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    try testing.expectError(error.SymbolExists, insertInto(runtime, "function add() { return 1; }\n", "add", "function add() { return 2; }"));
+    try testing.expectError(error.SymbolExists, insertInto(runtime, "function d() {}\nfunction d() {}\n", "d", "function d() { return 3; }"));
+}
+
+test "insert refuses a file without a trailing newline and a body that does not parse" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    try testing.expectError(error.MissingTrailingNewline, insertInto(runtime, "function add() { return 1; }", "f", "function f() { return 1; }"));
+    try testing.expectError(error.MissingTrailingNewline, insertInto(runtime, "", "f", "function f() { return 1; }"));
+    try testing.expectError(error.MutationSyntaxInvalid, insertInto(runtime, "function add() { return 1; }\n", "f", "function f( { return 1; }"));
+    try testing.expectError(error.PlaceholderBody, insertInto(runtime, "function add() { return 1; }\n", "f", "function f() {\n  // TODO\n}"));
+}
+
+test "insert refuses a body that fuses with the last statement of the file" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    try testing.expectError(error.BodyEscape, insertInto(runtime, "function add() { return 1; }\nconst g = add\n", "f", "(function f() { return 1; })"));
+}
+
+test "insert appends after the last newline with exactly one blank line added only when none is there" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const body = "function f() { return 1; }";
+    try expectInserted(runtime, "function add() { return 1; }\n", "f", body, "function add() { return 1; }\n\nfunction f() { return 1; }\n");
+    try expectInserted(runtime, "function add() { return 1; }\n\n", "f", body, "function add() { return 1; }\n\nfunction f() { return 1; }\n");
+    try expectInserted(runtime, "function add() { return 1; }\n\n\n", "f", body, "function add() { return 1; }\n\n\nfunction f() { return 1; }\n");
+}
+
+test "insert follows a CRLF file's line ending and never rewrites the bytes already there" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const body = "function f() { return 1; }";
+    try expectInserted(runtime, "function add() {\r\n  return 1;\r\n}\r\n", "f", body, "function add() {\r\n  return 1;\r\n}\r\n\r\nfunction f() { return 1; }\r\n");
+    try expectInserted(runtime, "function add() {\r\n  return 1;\r\n}\r\n\r\n", "f", body, "function add() {\r\n  return 1;\r\n}\r\n\r\nfunction f() { return 1; }\r\n");
 }

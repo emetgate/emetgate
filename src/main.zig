@@ -20,7 +20,7 @@ const usage =
     \\       emetgate symbols <file.ts> [--json]
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
-    \\       emetgate try <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
+    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
     \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config]
     \\       emetgate recover
     \\       emetgate lockdown [<claude args>...]
@@ -178,7 +178,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     const gpa = runtime.gpa;
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
     defer gpa.free(file_abs);
-    const expected = try symbol.parseHash(request.hash);
+    const expected = try symbol.parseExpected(request.hash);
 
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
@@ -205,7 +205,8 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     _ = out;
     switch (result) {
         .committed => |new_hash| {
-            std.debug.print("committed {s}  {s} -> {s}\n", .{ request.symbol, &symbol.formatHash(expected), &symbol.formatHash(new_hash) });
+            var old_buf: [symbol.hash_hex_len]u8 = undefined;
+            std.debug.print("committed {s}  {s} -> {s}\n", .{ request.symbol, expected.text(&old_buf), &symbol.formatHash(new_hash) });
             return 0;
         },
         .rule_violation => |report| {
@@ -238,7 +239,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     const gpa = runtime.gpa;
     const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
     defer gpa.free(file_abs);
-    const expected = try symbol.parseHash(request.hash);
+    const expected = try symbol.parseExpected(request.hash);
 
     const body_from_file: ?[]u8 = switch (request.body) {
         .file => |path| try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(max_body_len)),
@@ -310,7 +311,7 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
     defer applied.snapshot.destroy();
 
-    try wire.writeMutated(out, request.symbol, expected, applied.hash, applied.snapshot.source);
+    try wire.writeMutated(out, request.symbol, .{ .present = expected }, applied.hash, applied.snapshot.source);
 }
 
 const recover_failed_exit_code: u8 = 16;

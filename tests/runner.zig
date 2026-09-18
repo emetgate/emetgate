@@ -243,7 +243,7 @@ test "gate: a body-only change to an exported symbol runs the full command even 
     const result = try tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{\n  return a - b;\n}",
         .test_command = "exit 1",
         .test_scoped_cmd = "type {file}",
@@ -270,7 +270,7 @@ test "gate: a BOUNDED mutation runs the scoped command against {file}, not the f
     const result = try tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{\n  return a - b;\n}",
         .test_command = "exit 1",
         .test_scoped_cmd = "type {file}",
@@ -296,7 +296,7 @@ test "gate: an empty test command aborts before touching disk" {
     try testing.expectError(error.NoTestCommand, tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{ return a - b; }",
         .test_command = "",
         .test_scoped_cmd = "cmd /c exit 0",
@@ -320,7 +320,7 @@ test "a passing test commits the mutation to disk" {
     const result = try tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{\n  return a - b;\n}",
         .test_command = "exit 0",
     });
@@ -346,7 +346,7 @@ test "a failing test leaves the file on disk untouched" {
     const result = try tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{\n  return a - b;\n}",
         .test_command = "exit 1",
     });
@@ -372,7 +372,7 @@ test "a stale hash is refused before any test runs" {
     try testing.expectError(error.HashMismatch, tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = symbol.hashOf("stale"),
+        .expected_hash = .{ .present = symbol.hashOf("stale") },
         .new_body = "{\n  return a - b;\n}",
         .test_command = "exit 0",
     }));
@@ -400,7 +400,7 @@ test "test command defaults from .emetgaterc.json when the caller omits it" {
     const result = try tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{\n  return a - b;\n}",
         .test_command = cmd,
     });
@@ -449,7 +449,7 @@ test "typecheck: a failing typecheck rejects before the tests run and leaves dis
     const result = try tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{\n  return a - b;\n}",
         .test_command = "exit 0",
         .typecheck_command = "exit 2",
@@ -484,7 +484,7 @@ test "typecheck: it checks the patched shadow copy and only then runs the test c
         const result = try tryMutate(testing.allocator, testing.io, runtime, .{
             .file_abs = file,
             .ref_text = "add",
-            .expected_hash = hash,
+            .expected_hash = .{ .present = hash },
             .new_body = c.body,
             .test_command = c.test_command,
             .typecheck_command = typecheck,
@@ -550,7 +550,7 @@ fn tryAdd(repo: *Repo, runtime: *Runtime, body: []const u8, test_command: []cons
     return tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = body,
         .test_command = test_command,
     });
@@ -637,6 +637,112 @@ test "rules: a body without the forbidden text still commits under an enforced f
     try testing.expect(result == .committed);
 }
 
+const sub_body = "export function sub(a: number, b: number): number {\n  return a - b;\n}";
+
+fn tryInsert(repo: *Repo, runtime: *Runtime, ref_text: []const u8, body: []const u8, test_command: []const u8) !runner.Result {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    return tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = try repo.filePath(&buf),
+        .ref_text = ref_text,
+        .expected_hash = .absent,
+        .new_body = body,
+        .test_command = test_command,
+    });
+}
+
+test "absent: a new top-level symbol is appended, committed, parses and joins the symbol table" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const add_before = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryInsert(&repo, runtime, "sub", sub_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source ++ "\n" ++ sub_body ++ "\n", on_disk);
+    try testing.expectEqual(result.committed, try hashOfRef(testing.allocator, testing.io, runtime, file, "sub"));
+    try testing.expectEqual(add_before, try hashOfRef(testing.allocator, testing.io, runtime, file, "add"));
+}
+
+test "absent: a symbol that already exists is refused and the repository is untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    try testing.expectError(error.SymbolExists, tryInsert(&repo, runtime, "add", "export function add(a: number, b: number): number {\n  return 0;\n}", "exit 0"));
+    try expectPristineRepo(&repo);
+}
+
+test "absent: a proposed name that differs from the body's is refused and the repository is untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    try testing.expectError(error.SymbolNameMismatch, tryInsert(&repo, runtime, "subtract", sub_body, "exit 0"));
+    try expectPristineRepo(&repo);
+}
+
+test "absent: an inserted body that breaks a forbid rule is rejected even when the tests pass" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no Math.abs", true, "forbid:Math.abs");
+    defer testing.allocator.free(id);
+
+    const result = try tryInsert(&repo, runtime, "dist", "export function dist(a: number, b: number): number {\n  return Math.abs(a - b);\n}", "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    const violations = result.rule_violation.violations;
+    try testing.expectEqual(@as(usize, 1), violations.len);
+    try testing.expectEqualStrings(id, violations[0].rule);
+    try testing.expectEqualStrings("Math.abs", violations[0].text);
+    try testing.expectEqual(@as(u32, 6), violations[0].line);
+    try testing.expectEqual(@as(u32, 10), violations[0].col);
+    try expectPristineRepo(&repo);
+}
+
+test "absent: an insertion whose tests fail leaves nothing on disk" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const result = try tryInsert(&repo, runtime, "sub", sub_body, "exit 1");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rejected);
+    try expectPristineRepo(&repo);
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/.emetgate", .{}));
+}
+
+test "absent: a file that does not end with a newline is refused and left byte for byte" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const unterminated = Repo.source[0 .. Repo.source.len - 1];
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.ts", .data = unterminated });
+
+    try testing.expectError(error.MissingTrailingNewline, tryInsert(&repo, runtime, "sub", sub_body, "exit 0"));
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(unterminated, on_disk);
+}
+
 test "rules: unenforced, checkless and forgotten rules never block an edit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
@@ -712,7 +818,7 @@ test "no shadow workspace survives a run" {
     const result = try tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{\n  return a - b;\n}",
         .test_command = "exit 0",
     });

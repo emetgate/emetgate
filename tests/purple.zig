@@ -98,7 +98,7 @@ fn attempt(runtime: *Runtime, file: []const u8, hash: symbol.Hash, body: []const
     return runner.tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = body,
         .test_command = "cmd /c exit 0",
     });
@@ -230,7 +230,7 @@ test "purple C3: a hanging test command times out and nothing commits" {
     const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{ return a - b; }",
         .test_command = "ping -n 20 127.0.0.1 >nul",
         .limits = .{ .timeout_ms = 1500 },
@@ -275,7 +275,7 @@ test "purple C4: a rejected mutation leaves no temp, backup, or shadow artifacts
     const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{ return a - b; }",
         .test_command = "cmd /c exit 1",
     });
@@ -297,7 +297,7 @@ test "purple C4: a committed mutation leaves no temp or backup artifacts" {
     const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
         .file_abs = file,
         .ref_text = "add",
-        .expected_hash = hash,
+        .expected_hash = .{ .present = hash },
         .new_body = "{ return a - b; }",
         .test_command = "cmd /c exit 0",
     });
@@ -793,4 +793,23 @@ test "purple C5: a poisoned .emetgaterc.json is refused, not executed" {
 
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"\"}" });
     try testing.expectError(error.NoTestCommand, runner.resolveTestCommand(testing.allocator, testing.io, file, "", true));
+}
+
+test "purple: a batch item with hash absent is refused by name and the repository is untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+
+    const line = try toolCallLine("emetgate_try_batch", file, "absent", "");
+    defer testing.allocator.free(line);
+    const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
+    defer testing.allocator.free(response);
+    errdefer std.debug.print("response: {s}\n", .{response});
+    try testing.expect(std.mem.indexOf(u8, response, "AbsentInBatch") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+    try expectPristine(&repo);
 }
