@@ -185,3 +185,7 @@ Register the server with an MCP client:
 4. **Check packs.** Domain-specific mechanical checks for backend and frontend code, registered with the same gate.
 
 Each step is held to the same rules as the kernel: fail-closed, mutation-killed, content-addressed, and described in numbers rather than adjectives.
+
+## License
+
+MIT. See [LICENSE](LICENSE). The vendored tree-sitter grammars under `vendor/` keep their own MIT licenses.
