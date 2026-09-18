@@ -5,7 +5,9 @@ const Value = std.json.Value;
 
 pub const Policy = struct {
     test_command: ?[]const u8 = null,
+    typecheck_command: ?[]const u8 = null,
     allow_repo_config: bool = false,
+    root: ?[]const u8 = null,
 };
 
 pub fn parsePolicy(args: anytype) ?Policy {
@@ -22,6 +24,12 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.test_command = command;
+        } else if (std.mem.eql(u8, arg, "--typecheck")) {
+            if (policy.typecheck_command != null or i + 1 >= args.len) return null;
+            i += 1;
+            const command: []const u8 = args[i];
+            if (command.len == 0) return null;
+            policy.typecheck_command = command;
         } else return null;
     }
     return policy;
@@ -29,7 +37,11 @@ pub fn parsePolicy(args: anytype) ?Policy {
 
 pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestPolicy}![]const u8 {
     if (args) |a| {
-        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "allow_repo_config") != null) return error.ModelSuppliedTestPolicy;
+        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null) return error.ModelSuppliedTestPolicy;
     }
     return policy.test_command orelse "";
+}
+
+pub fn trustedTypecheckCommand(policy: Policy) []const u8 {
+    return policy.typecheck_command orelse "";
 }

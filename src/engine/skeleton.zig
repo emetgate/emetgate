@@ -2,19 +2,20 @@ const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
 const symbol = @import("symbol.zig");
+const Profile = @import("lang/profile.zig").Profile;
 const alloc_bridge = @import("alloc_bridge.zig");
 const test_util = @import("test_util.zig");
 
 pub const Error = error{ SourceHasErrors, SkeletonInvalid } || std.mem.Allocator.Error || ts.Error;
 
 const Terminator = enum {
-    semicolon,
-    empty_block,
+    bodyless,
+    empty_body,
 
-    fn text(self: Terminator) []const u8 {
+    fn text(self: Terminator, profile: *const Profile) []const u8 {
         return switch (self) {
-            .semicolon => ";",
-            .empty_block => "{}",
+            .bodyless => profile.bodyless_terminator.?,
+            .empty_body => profile.empty_body,
         };
     }
 };
@@ -25,10 +26,10 @@ const Cut = struct {
     terminator: Terminator,
 };
 
-pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Error![]u8 {
+pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, profile: *const Profile, tree: ts.Tree) Error![]u8 {
     if (tree.root().hasError()) return error.SourceHasErrors;
 
-    const functions = try symbol.collectFunctions(gpa, tree);
+    const functions = try symbol.collectFunctions(gpa, profile, tree);
     defer gpa.free(functions);
 
     var out: std.ArrayList(u8) = try .initCapacity(gpa, tree.source.len);
@@ -36,63 +37,64 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, tree: ts.Tree) Err
 
     var copied: u32 = 0;
     for (functions) |function| {
-        const cut = planCut(tree.source, function) orelse continue;
+        const cut = planCut(profile, tree.source, function) orelse continue;
         if (cut.start < copied) continue;
         out.appendSliceAssumeCapacity(tree.source[copied..cut.start]);
-        out.appendSliceAssumeCapacity(cut.terminator.text());
+        out.appendSliceAssumeCapacity(cut.terminator.text(profile));
         copied = cut.end;
     }
     out.appendSliceAssumeCapacity(tree.source[copied..]);
 
     const skeleton = try out.toOwnedSlice(gpa);
     errdefer gpa.free(skeleton);
-    try verify(parser, skeleton);
+    try verify(parser, tree.language(), skeleton);
     return skeleton;
 }
 
-fn planCut(source: []const u8, function: symbol.Function) ?Cut {
-    if (!std.mem.eql(u8, "statement_block", function.body.kind())) return null;
-    const terminator: Terminator = if (followsComment(function.body)) .empty_block else terminatorFor(function);
+fn planCut(profile: *const Profile, source: []const u8, function: symbol.Function) ?Cut {
+    if (!std.mem.eql(u8, profile.block, function.body.kind())) return null;
+    const terminator: Terminator = if (followsComment(profile, function.body)) .empty_body else terminatorFor(profile, function);
     const body_start = function.body.startByte();
     return .{
-        .start = if (terminator == .semicolon) trimTrailingWhitespace(source, body_start) else body_start,
+        .start = if (terminator == .bodyless) trimTrailingWhitespace(source, body_start) else body_start,
         .end = function.body.endByte(),
         .terminator = terminator,
     };
 }
 
-fn terminatorFor(function: symbol.Function) Terminator {
+fn terminatorFor(profile: *const Profile, function: symbol.Function) Terminator {
+    if (profile.bodyless_terminator == null) return .empty_body;
     return switch (function.kind) {
-        .function_declaration => .semicolon,
-        .method_definition => if (isClassMember(function.node) and !isDecorated(function.node)) .semicolon else .empty_block,
-        .generator_function_declaration,
-        .function_expression,
-        .generator_function,
-        .arrow_function,
-        .class_static_block,
-        => .empty_block,
+        .declaration => .bodyless,
+        .method => if (isClassMember(profile, function.node) and !isDecorated(profile, function.node)) .bodyless else .empty_body,
+        .generator_declaration,
+        .expression,
+        .generator_expression,
+        .arrow,
+        .static_block,
+        => .empty_body,
     };
 }
 
-fn isClassMember(node: ts.Node) bool {
+fn isClassMember(profile: *const Profile, node: ts.Node) bool {
     const parent = node.parent() orelse return false;
-    return std.mem.eql(u8, "class_body", parent.kind());
+    return std.mem.eql(u8, profile.class_body, parent.kind());
 }
 
-fn isDecorated(node: ts.Node) bool {
+fn isDecorated(profile: *const Profile, node: ts.Node) bool {
     if (node.namedChild(0)) |first| {
-        if (isKind(first, "decorator")) return true;
+        if (isKind(first, profile.decorator)) return true;
     }
     var prev = node.prevNamedSibling();
     while (prev) |sibling| : (prev = sibling.prevNamedSibling()) {
-        if (!isKind(sibling, "comment")) return isKind(sibling, "decorator");
+        if (!profile.isComment(sibling.kind())) return isKind(sibling, profile.decorator);
     }
     return false;
 }
 
-fn followsComment(body: ts.Node) bool {
+fn followsComment(profile: *const Profile, body: ts.Node) bool {
     const prev = body.prevSibling() orelse return false;
-    return isKind(prev, "comment");
+    return profile.isComment(prev.kind());
 }
 
 fn isKind(node: ts.Node, kind: []const u8) bool {
@@ -105,8 +107,8 @@ fn trimTrailingWhitespace(source: []const u8, end: u32) u32 {
     return i;
 }
 
-fn verify(parser: ts.Parser, skeleton: []const u8) Error!void {
-    const tree = try parser.parse(skeleton);
+fn verify(parser: ts.Parser, language: *const ts.Language, skeleton: []const u8) Error!void {
+    const tree = try parser.parseIn(language, skeleton);
     defer tree.deinit();
     if (tree.root().hasError()) return error.SkeletonInvalid;
 }
@@ -134,13 +136,13 @@ const fixtures = [_][]const u8{ "functions.ts", "service.ts" };
 fn skeletonOfSource(parser: ts.Parser, source: []const u8) ![]u8 {
     const tree = try parser.parse(source);
     defer tree.deinit();
-    return skeletonize(testing.allocator, parser, tree);
+    return skeletonize(testing.allocator, parser, test_util.language, tree);
 }
 
 fn expectSkeleton(source: []const u8, expected: []const u8) !void {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const skeleton = try skeletonOfSource(parser, source);
@@ -155,12 +157,12 @@ fn expectSkeleton(source: []const u8, expected: []const u8) !void {
 test "functions.ts skeleton matches the golden file byte for byte" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const doc = try test_util.openFixture(parser, "functions.ts");
     defer doc.deinit();
-    const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
+    const skeleton = try skeletonize(testing.allocator, parser, test_util.language, doc.tree);
     defer testing.allocator.free(skeleton);
 
     const golden = try std.Io.Dir.cwd().readFileAlloc(testing.io, test_util.fixture_dir ++ "functions.skeleton.ts", testing.allocator, .unlimited);
@@ -171,7 +173,7 @@ test "functions.ts skeleton matches the golden file byte for byte" {
 test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     for (fixtures) |name| {
@@ -179,7 +181,7 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
         const doc = try test_util.openFixture(parser, name);
         defer doc.deinit();
 
-        const skeleton = try skeletonize(testing.allocator, parser, doc.tree);
+        const skeleton = try skeletonize(testing.allocator, parser, test_util.language, doc.tree);
         defer testing.allocator.free(skeleton);
         const reparsed = try parser.parse(skeleton);
         defer reparsed.deinit();
@@ -190,7 +192,7 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
         try testing.expect(after.bytes < before.bytes);
         try testing.expect(after.tokens < before.tokens);
 
-        const again = try skeletonize(testing.allocator, parser, reparsed);
+        const again = try skeletonize(testing.allocator, parser, test_util.language, reparsed);
         defer testing.allocator.free(again);
         try testing.expectEqualStrings(skeleton, again);
     }
@@ -199,12 +201,12 @@ test "every fixture skeleton is valid TypeScript, smaller, and a fixed point" {
 test "sources with syntax errors are refused instead of guessed at" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const doc = try test_util.openFixture(parser, "broken.ts");
     defer doc.deinit();
-    try testing.expectError(error.SourceHasErrors, skeletonize(testing.allocator, parser, doc.tree));
+    try testing.expectError(error.SourceHasErrors, skeletonize(testing.allocator, parser, test_util.language, doc.tree));
 }
 
 test "expression bodies survive while block functions inside them are stripped" {
@@ -265,7 +267,7 @@ test "CRLF line endings and a UTF-8 BOM are preserved around the cuts" {
 test "a source without functions is returned unchanged" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const parser = try ts.Parser.init(ts.typescript());
+    const parser = try test_util.parser();
     defer parser.deinit();
 
     const source = "export type Id = string;\nexport const limit = 10;\n";

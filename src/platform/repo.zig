@@ -1,22 +1,61 @@
 const std = @import("std");
+const shadow = @import("shadow.zig");
 
 const Allocator = std.mem.Allocator;
 const max_git_output = 64 * 1024;
+
+pub const Jailed = struct {
+    root: []u8,
+    abs: [:0]u8,
+    rel: []u8,
+
+    pub fn deinit(self: Jailed, gpa: Allocator) void {
+        gpa.free(self.root);
+        gpa.free(self.abs);
+        gpa.free(self.rel);
+    }
+};
 
 pub fn repoRoot(gpa: Allocator, io: std.Io) ![]u8 {
     return gitToplevel(gpa, io, ".");
 }
 
-pub fn assertUnderCwdRepo(gpa: Allocator, io: std.Io, file_abs: []const u8) !void {
-    const root = try gitToplevel(gpa, io, ".");
-    defer gpa.free(root);
-    const rel = try relativeUnder(gpa, root, file_abs);
-    gpa.free(rel);
+pub fn servedRoot(gpa: Allocator, io: std.Io, root: ?[]const u8) ![]u8 {
+    const given = root orelse return repoRoot(gpa, io);
+    const owned = try gpa.dupe(u8, given);
+    std.mem.replaceScalar(u8, owned, '/', '\\');
+    return owned;
 }
 
-pub fn repoRelative(gpa: Allocator, io: std.Io, path_abs: []const u8) ![]u8 {
-    const root = try gitToplevel(gpa, io, ".");
-    defer gpa.free(root);
+pub fn jail(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) !Jailed {
+    const served = try servedRoot(gpa, io, root);
+    errdefer gpa.free(served);
+    const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
+    errdefer gpa.free(abs);
+    const rel = try relativeTo(gpa, served, abs);
+    errdefer gpa.free(rel);
+    try refuseInternal(rel);
+    if (rel.len != 0) try expectSameRepo(gpa, io, served, abs);
+    return .{ .root = served, .abs = abs, .rel = rel };
+}
+
+fn expectSameRepo(gpa: Allocator, io: std.Io, root: []const u8, abs: []const u8) !void {
+    const dir = std.fs.path.dirname(abs) orelse return error.FileOutsideRepo;
+    const own = gitToplevel(gpa, io, dir) catch |err| switch (err) {
+        error.NotInRepo => return error.FileOutsideRepo,
+        else => return err,
+    };
+    defer gpa.free(own);
+    if (!std.ascii.eqlIgnoreCase(own, root)) return error.FileOutsideRepo;
+}
+
+pub fn refuseInternal(rel: []const u8) error{InternalPath}!void {
+    var segments = std.mem.tokenizeAny(u8, rel, "/\\");
+    const first = segments.next() orelse return;
+    if (std.ascii.eqlIgnoreCase(first, ".git") or std.ascii.eqlIgnoreCase(first, shadow.workspace_dir)) return error.InternalPath;
+}
+
+pub fn relativeTo(gpa: Allocator, root: []const u8, path_abs: []const u8) ![]u8 {
     const normalized = try gpa.dupe(u8, path_abs);
     defer gpa.free(normalized);
     std.mem.replaceScalar(u8, normalized, '/', '\\');

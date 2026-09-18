@@ -322,6 +322,63 @@ test "purple V6: an MCP read tool cannot escape the project root" {
     try testing.expect(std.mem.indexOf(u8, response, "FileOutsideRepo") != null);
 }
 
+test "purple V7: no MCP tool reaches a repository other than the one being served" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+
+    for ([_][]const u8{ "emetgate_try", "emetgate_try_batch" }) |tool| {
+        const line = try toolCallLine(tool, file, hex[0..], "");
+        defer testing.allocator.free(line);
+        const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0" });
+        defer testing.allocator.free(response);
+        errdefer std.debug.print("{s}: {s}\n", .{ tool, response });
+        try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+        try testing.expect(std.mem.indexOf(u8, response, "FileOutsideRepo") != null);
+        try expectPristine(&repo);
+    }
+
+    const escaped = try jsonEscaped(file);
+    defer testing.allocator.free(escaped);
+    const read_line = try std.fmt.allocPrint(testing.allocator, "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"emetgate_read_file\",\"arguments\":{{\"file\":\"{s}\"}}}}}}", .{escaped});
+    defer testing.allocator.free(read_line);
+    const read = try respondWith(runtime, read_line, .{});
+    defer testing.allocator.free(read);
+    try testing.expect(std.mem.indexOf(u8, read, "FileOutsideRepo") != null);
+    try testing.expect(std.mem.indexOf(u8, read, "return a + b") == null);
+}
+
+test "purple V8: an MCP write tool cannot edit the emetgate workspace inside the served repository" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.tmp.dir.createDirPath(testing.io, "repo/.emetgate");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgate/math.ts", .data = Repo.source });
+    const inner = try std.fmt.allocPrint(testing.allocator, "{s}\\.emetgate\\math.ts", .{repo.root_abs});
+    defer testing.allocator.free(inner);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, inner));
+
+    for ([_][]const u8{ "emetgate_try", "emetgate_try_batch" }) |tool| {
+        const line = try toolCallLine(tool, inner, hex[0..], "");
+        defer testing.allocator.free(line);
+        const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
+        defer testing.allocator.free(response);
+        errdefer std.debug.print("{s}: {s}\n", .{ tool, response });
+        try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+        try testing.expect(std.mem.indexOf(u8, response, "InternalPath") != null);
+        const after = try repo.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/math.ts", testing.allocator, .unlimited);
+        defer testing.allocator.free(after);
+        try testing.expectEqualStrings(Repo.source, after);
+    }
+}
+
 const orig_a = "export function a(): number { return 1; }\n";
 const new_a = "export function a(): number { return 2; }\n";
 
@@ -575,6 +632,38 @@ test "purple C7: a test command supplied by the model is refused and never runs"
     }
 }
 
+test "purple C7: a typecheck command supplied by the model is refused and never runs" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+
+    const marker = try std.fmt.allocPrint(testing.allocator, "{s}\\model-typecheck-ran.txt", .{repo.root_abs});
+    defer testing.allocator.free(marker);
+    const marker_json = try jsonEscaped(marker);
+    defer testing.allocator.free(marker_json);
+    const extra = try std.fmt.allocPrint(testing.allocator, ",\"typecheck_cmd\":\"cmd /c echo ran> {s}\"", .{marker_json});
+    defer testing.allocator.free(extra);
+
+    const policies = [_]server.Policy{ .{ .test_command = "cmd /c exit 0" }, .{ .test_command = "cmd /c exit 0", .typecheck_command = "cmd /c exit 0" } };
+    for ([_][]const u8{ "emetgate_try", "emetgate_try_batch" }) |tool| {
+        for (policies) |policy| {
+            const line = try toolCallLine(tool, file, hex[0..], extra);
+            defer testing.allocator.free(line);
+            const response = try respondWith(runtime, line, policy);
+            defer testing.allocator.free(response);
+            try testing.expect(std.mem.indexOf(u8, response, "ModelSuppliedTestPolicy") != null);
+            try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+            try expectPristine(&repo);
+            try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, marker, .{}));
+        }
+    }
+}
+
 test "purple C7: a repo config opt-in supplied by the model is refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
@@ -610,7 +699,7 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
     const line = try toolCallLine("emetgate_try", file, hex[0..], "");
     defer testing.allocator.free(line);
 
-    for ([_]server.Policy{ .{}, .{ .allow_repo_config = true } }) |policy| {
+    for ([_]server.Policy{ .{ .root = repo.root_abs }, .{ .allow_repo_config = true, .root = repo.root_abs } }) |policy| {
         const response = try respondWith(runtime, line, policy);
         defer testing.allocator.free(response);
         try testing.expect(std.mem.indexOf(u8, response, "NoTestCommand") != null);
@@ -618,11 +707,11 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
     }
 
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"cmd /c exit 0\"}" });
-    const untrusted = try respondWith(runtime, line, .{});
+    const untrusted = try respondWith(runtime, line, .{ .root = repo.root_abs });
     defer testing.allocator.free(untrusted);
     try testing.expect(std.mem.indexOf(u8, untrusted, "UntrustedRepoConfig") != null);
 
-    const committed = try respondWith(runtime, line, .{ .allow_repo_config = true });
+    const committed = try respondWith(runtime, line, .{ .allow_repo_config = true, .root = repo.root_abs });
     defer testing.allocator.free(committed);
     try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"committed\\\"") != null);
     const on_disk = try repo.onDisk();
@@ -637,6 +726,7 @@ test "purple C7: tools/list never offers the model a test command or a repo opt-
     defer testing.allocator.free(response);
     try testing.expect(std.mem.indexOf(u8, response, "emetgate_try_batch") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"test_cmd\"") == null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"typecheck_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, response, "\"allow_repo_config\"") == null);
 }
 
@@ -683,7 +773,7 @@ test "purple C6: an MCP batch frees every resolved path with its real size" {
     try js.endObject();
     try js.endObject();
 
-    const response = try respondWith(runtime, line.written(), .{ .test_command = "cmd /c exit 0" });
+    const response = try respondWith(runtime, line.written(), .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
     const on_disk = try repo.onDisk();

@@ -1,15 +1,12 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner.png">
-    <img src="assets/banner-light.png" alt="Emetgate" width="640">
-  </picture>
+  <img src="assets/banner.png" alt="Emetgate" width="640">
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/status-early-E040FB?style=flat-square" alt="Status: early">
   <img src="https://img.shields.io/badge/zig-0.16.0-F7A41D?style=flat-square&logo=zig&logoColor=white" alt="Zig 0.16.0">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="Languages: TypeScript">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
@@ -73,7 +70,7 @@ This is not a new idea. It is the architecture of LCF-style theorem provers, whe
 
 **Boundedness.** Before running anything, the kernel computes whether the change can affect code beyond the symbol itself. The analysis is a positive, closed-world count: a change is `BOUNDED` only when every way it could escape has been ruled out, and the verdict carries its provenance. Anything the analysis cannot account for is `UNBOUNDED`.
 
-**Test gate.** `UNBOUNDED` changes are applied to a shadow copy and the project's test command is run against it inside a sandbox (a Windows Job Object with kill-on-close, wall-clock and memory limits, and an output cap). If the tests fail, the change is rejected and the output is returned to the model.
+**Test gate.** `UNBOUNDED` changes are applied to a shadow copy and the project's test command is run against it inside a sandbox (a Windows Job Object with kill-on-close, wall-clock and memory limits, and an output cap). The command runs under a low-integrity restricted token, so a body proposed by the model cannot write anywhere outside the shadow copy; if that token cannot be built and verified, the command is refused rather than run unconfined. If the tests fail, the change is rejected and the output is returned to the model.
 
 **Durable commit.** Accepted changes go through a write-ahead journal and an atomic write-rename. A crash at any point leaves either the old file or the new one, never a torn write. `recover` replays the journal and refuses anything it cannot prove: zero-byte files, entries that no longer re-parse, and malformed tags.
 
@@ -118,7 +115,9 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 
 A verification layer that has not been verified is only a more elaborate way of hoping. Two rules apply to every guard in the kernel.
 
-**Mutation kill.** Every guard and every branch that protects an invariant is mutated, forcing its condition to `true` and then to `false`, and the test suite is run against each mutant. At least one test must fail for every mutant. A guard that survives its own mutation is dead code and is treated as a defect. The harness lives in `tools/mutate`, and the list of killed mutations is recorded in `tests/mutations.json`.
+**Mutation kill.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either killed by a new test or recorded in `tests/mutations.json` with the reason it cannot be: an equivalent mutant, with the grammar or code fact that makes it one, or a redundant guard kept on purpose. Mutants with no killing input and no proof of equivalence are marked open rather than hidden. The harness lives in `tools/mutate`.
+
+For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants today: 37 killed, 4 proven equivalent, 1 redundant guard kept as defense in depth, 2 open.
 
 **Adversarial tests.** Dedicated red-team suites attack the gate directly: bodies that escape their braces, stale hashes, torn journal entries, poisoned repository configuration and attempts to open files outside the repository.
 
@@ -134,7 +133,7 @@ Emetgate is early and deliberately narrow.
 | MCP server and locked-down launch | Built |
 | Decision ledger (append-only, supersession, compaction, torn-tail recovery) | Built, not yet exposed as MCP tools |
 | Rule enforcement at the edit gate | In progress |
-| Language support | TypeScript only |
+| Language support | TypeScript and JavaScript (`.js`, `.mjs`, `.cjs`); new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
 | Platform | Windows only (the sandbox relies on Job Objects) |
 
 On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, two of them real files), editing through symbol-level proposals uses a median of **1.80×** fewer tokens than search-and-replace editing, with a range of 1.15× to 3.77×. On the real files the gain is modest, 1.15× to 1.17×. Token savings are a side effect, not the point.
@@ -148,6 +147,7 @@ Some things cannot be made mechanical, and this project does not claim otherwise
 - **Semantic correctness.** Code that parses, stays in bounds and passes the tests can still implement the wrong behaviour. The kernel raises the floor; it does not replace tests that encode intent, or a human decision where one is needed.
 - **The quality of the test suite.** For unbounded changes the test gate is only as strong as the tests it runs.
 - **Mediation.** The guarantees hold for changes that go through the gate. Edits made by other tools bypass it, which is why lockdown exists.
+- **Sandbox scope.** The low-integrity token stops the test command from writing outside the shadow copy; it does not restrict reading or network access, so a hostile test command can still read files it has permission to read and reach the network. Confining those requires an AppContainer, which is planned.
 - **Taste.** Architecture, API design and user experience are not properties a kernel can check.
 
 ## Building
@@ -167,11 +167,13 @@ Register the server with an MCP client:
   "mcpServers": {
     "emetgate": {
       "command": "C:/path/to/zig-out/bin/emetgate.exe",
-      "args": ["mcp", "--test", "npm test"]
+      "args": ["mcp", "--typecheck", "npx tsc --noEmit", "--test", "npm test"]
     }
   }
 }
 ```
+
+`--typecheck` is optional. When it is set, the typecheck command runs on the shadow copy before the test command, and a failure rejects the change with reason `typecheck_failed` without running the tests. Both commands can instead come from `test_cmd` and `typecheck_cmd` in `.emetgaterc.json`, which is read only with `--allow-repo-config`. The model can never supply either command.
 
 ## Roadmap
 
@@ -181,3 +183,7 @@ Register the server with an MCP client:
 4. **Check packs.** Domain-specific mechanical checks for backend and frontend code, registered with the same gate.
 
 Each step is held to the same rules as the kernel: fail-closed, mutation-killed, content-addressed, and described in numbers rather than adjectives.
+
+## License
+
+MIT. See [LICENSE](LICENSE). The vendored tree-sitter grammars under `vendor/` keep their own MIT licenses.

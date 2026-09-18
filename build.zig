@@ -1,7 +1,16 @@
 const std = @import("std");
 
 const ts_core_root = "vendor/tree-sitter/lib";
-const ts_typescript_root = "vendor/tree-sitter-typescript/typescript/src";
+
+const Grammar = struct {
+    root: []const u8,
+    sources: []const []const u8,
+};
+
+const grammars = [_]Grammar{
+    .{ .root = "vendor/tree-sitter-typescript/typescript/src", .sources = &.{ "parser.c", "scanner.c" } },
+    .{ .root = "vendor/tree-sitter-javascript/src", .sources = &.{ "parser.c", "scanner.c" } },
+};
 
 const c_flags: []const []const u8 = &.{"-std=c11"};
 
@@ -308,7 +317,6 @@ fn buildTreeSitter(
 
     module.addIncludePath(b.path(ts_core_root ++ "/include"));
     module.addIncludePath(b.path(ts_core_root ++ "/src"));
-    module.addIncludePath(b.path(ts_typescript_root));
 
     module.addCMacro("_POSIX_C_SOURCE", "200112L");
     module.addCMacro("_DEFAULT_SOURCE", "");
@@ -321,14 +329,17 @@ fn buildTreeSitter(
         .files = &.{"lib.c"},
         .flags = c_flags,
     });
-    module.addCSourceFiles(.{
-        .root = b.path(ts_typescript_root),
-        .files = &.{ "parser.c", "scanner.c" },
-        .flags = c_flags,
-    });
+    for (grammars) |grammar| {
+        const include = b.fmt("-I{s}", .{b.pathFromRoot(grammar.root)});
+        module.addCSourceFiles(.{
+            .root = b.path(grammar.root),
+            .files = grammar.sources,
+            .flags = std.mem.concat(b.allocator, []const u8, &.{ c_flags, &.{include} }) catch @panic("OOM"),
+        });
+    }
 
     return b.addLibrary(.{
-        .name = "tree-sitter-typescript",
+        .name = "tree-sitter-grammars",
         .root_module = module,
     });
 }

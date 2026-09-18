@@ -11,18 +11,27 @@ pub const Error = error{
     ParseFailed,
 };
 
-pub fn typescript() *const Language {
-    return c.tree_sitter_typescript().?;
-}
-
 pub const Parser = struct {
     raw: *c.TSParser,
 
+    pub fn create() Parser {
+        return .{ .raw = c.ts_parser_new().? };
+    }
+
     pub fn init(language: *const Language) Error!Parser {
-        const raw = c.ts_parser_new().?;
-        errdefer c.ts_parser_delete(raw);
-        if (!c.ts_parser_set_language(raw, language)) return error.IncompatibleLanguage;
-        return .{ .raw = raw };
+        const parser = create();
+        errdefer parser.deinit();
+        try parser.setLanguage(language);
+        return parser;
+    }
+
+    pub fn setLanguage(self: Parser, language: *const Language) Error!void {
+        if (!c.ts_parser_set_language(self.raw, language)) return error.IncompatibleLanguage;
+    }
+
+    pub fn parseIn(self: Parser, language: *const Language, source: []const u8) Error!Tree {
+        try self.setLanguage(language);
+        return self.parse(source);
     }
 
     pub fn deinit(self: Parser) void {
@@ -46,6 +55,10 @@ pub const Tree = struct {
 
     pub fn root(self: Tree) Node {
         return .{ .raw = c.ts_tree_root_node(self.raw) };
+    }
+
+    pub fn language(self: Tree) *const Language {
+        return c.ts_tree_language(self.raw).?;
     }
 
     pub fn text(self: Tree, node: Node) []const u8 {
@@ -130,15 +143,6 @@ pub const Node = struct {
 
 const testing = std.testing;
 
-test "typescript grammar is ABI compatible with the core" {
-    try alloc_bridge.install(testing.allocator);
-    defer alloc_bridge.uninstall();
-
-    try testing.expectEqual(@as(u32, 14), c.ts_language_abi_version(typescript()));
-    const parser = try Parser.init(typescript());
-    parser.deinit();
-}
-
 test "parses a function declaration into named, field-addressable nodes" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
@@ -174,7 +178,7 @@ test "bridge accounts a tree that outlives its parser as live memory until delet
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
 
-    const parser = try Parser.init(typescript());
+    const parser = try test_util.parser();
     const tree = tree: {
         defer parser.deinit();
         break :tree try parser.parse("const answer: number = 42;");

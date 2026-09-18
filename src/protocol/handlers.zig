@@ -8,6 +8,7 @@ const policy_mod = @import("policy.zig");
 const read_tools = @import("read_tools.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
+const repo = @import("../platform/repo.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -16,6 +17,7 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 const trustedTestCommand = policy_mod.trustedTestCommand;
+const trustedTypecheckCommand = policy_mod.trustedTypecheckCommand;
 const ToolResult = tool_result.ToolResult;
 const requireString = tool_result.requireString;
 const getField = tool_result.getField;
@@ -25,70 +27,68 @@ const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
-    if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event);
-    if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event);
+    if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event);
-    if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event);
-    if (std.mem.eql(u8, name, "emetgate_search")) return read_tools.callSearch(gpa, io, args, event);
+    if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_search")) return read_tools.callSearch(gpa, io, args, event, policy.root);
     return error.UnknownTool;
 }
 
-fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
+fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const file = try requireString(args, "file");
     event.label = "symbols";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSymbols(gpa, io, runtime, file, &buffer.writer) catch |err| {
+    renderSymbols(gpa, io, runtime, root, file, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8) !*Snapshot {
-    const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
-    defer gpa.free(file_abs);
-    try runner.assertUnderCwdRepo(gpa, io, file_abs);
-    if (!std.ascii.endsWithIgnoreCase(file_abs, ".ts")) return error.NotTypeScript;
-    return Snapshot.load(runtime, io, .cwd(), file_abs);
+fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8) !*Snapshot {
+    const place = try repo.jail(gpa, io, root, file);
+    defer place.deinit(gpa);
+    return Snapshot.load(runtime, io, .cwd(), place.abs);
 }
 
-fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer) !void {
-    const snapshot = try loadJailed(gpa, io, runtime, file);
+fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, w: *Writer) !void {
+    const snapshot = try loadJailed(gpa, io, runtime, root, file);
     defer snapshot.destroy();
     const table = try snapshot.symbols();
     try wire.writeSymbols(gpa, w, file, table.*);
 }
 
-fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
+fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const file = try requireString(args, "file");
     event.label = "skeleton";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSkeleton(gpa, io, runtime, file, &buffer.writer, event) catch |err| {
+    renderSkeleton(gpa, io, runtime, root, file, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
-    const snapshot = try loadJailed(gpa, io, runtime, file);
+fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
+    const snapshot = try loadJailed(gpa, io, runtime, root, file);
     defer snapshot.destroy();
-    const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.tree);
+    const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.profile, snapshot.tree);
     defer gpa.free(text);
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
     try wire.writeSkeleton(w, file, text);
 }
 
-fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
+fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     event.label = "read_symbol";
@@ -96,15 +96,15 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     event.symbol = sym;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSymbolBody(gpa, io, runtime, file, sym, &buffer.writer, event) catch |err| {
+    renderSymbolBody(gpa, io, runtime, root, file, sym, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, w: *Writer, event: *telemetry.Event) !void {
-    const snapshot = try loadJailed(gpa, io, runtime, file);
+fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, w: *Writer, event: *telemetry.Event) !void {
+    const snapshot = try loadJailed(gpa, io, runtime, root, file);
     defer snapshot.destroy();
     const table = try snapshot.symbols();
     const ref = try symbol.Ref.parse(gpa, sym);
@@ -117,7 +117,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
 }
 
-fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event) !ToolResult {
+fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
@@ -128,18 +128,18 @@ fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     event.mutating = true;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderMutate(gpa, io, runtime, file, sym, hash_hex, body, &buffer.writer, event) catch |err| {
+    renderMutate(gpa, io, runtime, root, file, sym, hash_hex, body, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, w: *Writer, event: *telemetry.Event) !void {
+fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, w: *Writer, event: *telemetry.Event) !void {
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
     const expected = try symbol.parseHash(hash_hex);
-    const base = try loadJailed(gpa, io, runtime, file);
+    const base = try loadJailed(gpa, io, runtime, root, file);
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const target = try (try base.symbols()).resolve(ref);
@@ -175,10 +175,13 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, file, gpa);
-    defer gpa.free(file_abs);
+    const place = try repo.jail(gpa, io, policy.root, file);
+    defer place.deinit(gpa);
+    const file_abs = place.abs;
     const test_command = try runner.resolveTestCommand(gpa, io, file_abs, given, policy.allow_repo_config);
     defer gpa.free(test_command);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
+    defer if (typecheck_command) |command| gpa.free(command);
     const expected = try symbol.parseHash(hash_hex);
     const result = try runner.tryMutate(gpa, io, runtime, .{
         .file_abs = file_abs,
@@ -186,6 +189,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .typecheck_command = typecheck_command,
         .trace = &event.trace,
     });
     defer result.deinit(gpa);
@@ -204,6 +208,18 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
             try wire.writeRejected(gpa, w, test_command, report);
+            return true;
+        },
+        .typecheck_failed => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.typecheckReason(report);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
+            return true;
+        },
+        .rule_violation => |report| {
+            event.outcome = .rejected;
+            event.reason = "rule_violation";
+            try wire.writeRuleViolation(w, report);
             return true;
         },
     }
@@ -237,27 +253,26 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const given = try trustedTestCommand(args, policy);
     const edits = try gpa.alloc(runner.Edit, items.len);
     defer gpa.free(edits);
+    const places = try gpa.alloc(repo.Jailed, items.len);
+    defer gpa.free(places);
     var built: usize = 0;
-    defer {
-        var i = built;
-        while (i > 0) {
-            i -= 1;
-            const owned: [:0]const u8 = edits[i].file_abs.ptr[0..edits[i].file_abs.len :0];
-            gpa.free(owned);
-        }
-    }
+    defer for (places[0..built]) |place| place.deinit(gpa);
     for (items, 0..) |item, i| {
-        const file_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, getString(item, "file").?, gpa);
-        edits[i].file_abs = file_abs;
+        places[i] = try repo.jail(gpa, io, policy.root, getString(item, "file").?);
         built = i + 1;
-        edits[i].ref_text = getString(item, "symbol").?;
-        edits[i].new_body = getString(item, "body").?;
-        edits[i].expected_hash = try symbol.parseHash(getString(item, "hash").?);
+        edits[i] = .{
+            .file_abs = places[i].abs,
+            .ref_text = getString(item, "symbol").?,
+            .new_body = getString(item, "body").?,
+            .expected_hash = try symbol.parseHash(getString(item, "hash").?),
+        };
     }
 
     const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, given, policy.allow_repo_config);
     defer gpa.free(resolved);
-    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .trace = &event.trace });
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, edits[0].file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
+    defer if (typecheck_command) |command| gpa.free(command);
+    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .trace = &event.trace });
     defer result.deinit(gpa);
 
     var sent: usize = 0;
@@ -283,6 +298,18 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
             try wire.writeRejected(gpa, w, resolved, report);
+            return true;
+        },
+        .typecheck_failed => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.typecheckReason(report);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
+            return true;
+        },
+        .rule_violation => |report| {
+            event.outcome = .rejected;
+            event.reason = "rule_violation";
+            try wire.writeRuleViolation(w, report);
             return true;
         },
     }

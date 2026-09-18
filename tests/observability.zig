@@ -128,7 +128,7 @@ fn runScenario(runtime: *Runtime, repo: *Repo, observer: ?*telemetry.Observer) !
         var line: Allocating = .init(testing.allocator);
         defer line.deinit();
         try writeCall(&line.writer, "emetgate_try", file, hex[0..], step.body);
-        out[i] = try call(runtime, line.written(), observer, .{ .test_command = step.cmd });
+        out[i] = try call(runtime, line.written(), observer, .{ .test_command = step.cmd, .root = repo.root_abs });
         produced = i + 1;
     }
     return out;
@@ -196,8 +196,8 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
         try testing.expectEqualStrings(plain_out[i], stripped);
     }
 
-    try expectContains(healthy_out[0], "emetgate ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 0 edits");
-    try expectContains(healthy_out[1], "emetgate ✓ committed · BOUNDED · gate full · sent ");
+    try expectContains(healthy_out[0], "emetgate ✗ rejected · tests_failed · UNBOUNDED · gate full · disk untouched · session 0 edits");
+    try expectContains(healthy_out[1], "emetgate ✓ committed · UNBOUNDED · gate full · sent ");
     try expectContains(healthy_out[1], " / file ");
     try expectContains(healthy_out[1], " chars · session 1 edits");
     try expectContains(healthy_out[2], "emetgate ✗ HashMismatch · disk untouched · session 1 edits");
@@ -215,7 +215,7 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
     try expectContains(events, "\"result\":\"committed\"");
     try expectContains(events, "\"result\":\"HashMismatch\"");
     try expectContains(events, "\"gate\":\"full\"");
-    try expectContains(events, "\"confidence\":\"bounded\"");
+    try expectContains(events, "\"confidence\":\"unbounded\"");
 
     const ignore = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/.gitignore", testing.allocator, .unlimited);
     defer testing.allocator.free(ignore);
@@ -238,20 +238,24 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
     defer runtime.destroy() catch @panic("live snapshots");
     var repo = try Repo.init();
     defer repo.deinit();
-    const file = try repo.under("src\\math.ts");
-    defer testing.allocator.free(file);
+    const exported = try repo.under("src\\math.ts");
+    defer testing.allocator.free(exported);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/private.ts", .data = "function add(a: number, b: number): number {\n  return a + b;\n}\nadd(1, 2);\n" });
+    const private = try repo.under("src\\private.ts");
+    defer testing.allocator.free(private);
 
-    const Case = struct { scoped: ?[]const u8, expected: runner.Gate, body: []const u8, label: []const u8 };
+    const Case = struct { file: []const u8, scoped: ?[]const u8, expected: runner.Gate, body: []const u8, label: []const u8 };
     const cases = [_]Case{
-        .{ .scoped = null, .expected = .full, .body = "{\n  return a - b;\n}", .label = " · gate full" },
-        .{ .scoped = "cmd /c exit 0", .expected = .scoped, .body = "{\n  return a * b;\n}", .label = " · gate scoped" },
+        .{ .file = exported, .scoped = null, .expected = .full, .body = "{\n  return a - b;\n}", .label = " · gate full" },
+        .{ .file = exported, .scoped = "cmd /c exit 0", .expected = .full, .body = "{\n  return a * b;\n}", .label = " · gate full" },
+        .{ .file = private, .scoped = "cmd /c exit 0", .expected = .scoped, .body = "{\n  return a * b;\n}", .label = " · gate scoped" },
     };
     for (cases) |c| {
         var trace: runner.Trace = .{};
         const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
-            .file_abs = file,
+            .file_abs = c.file,
             .ref_text = "add",
-            .expected_hash = try hashOfAdd(runtime, file),
+            .expected_hash = try hashOfAdd(runtime, c.file),
             .new_body = c.body,
             .test_command = "cmd /c exit 0",
             .test_scoped_cmd = c.scoped,
@@ -292,7 +296,7 @@ test "fail-soft: events never follow a .emetgate junction out of the repo" {
     defer line.deinit();
     try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     try expectContains(response, "emetgate ");
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "victim/events.ndjson", .{}));
@@ -356,7 +360,7 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     try js.endObject();
     try js.endObject();
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     try expectContains(response, "emetgate ✓ committed · gate full · sent ");
     try expectContains(response, " chars · session 2 edits");
@@ -367,6 +371,25 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     try expectContains(events, "\"result\":\"committed\"");
     try expectContains(events, "\"gate\":\"full\"");
     try expectContains(events, "\"confidence\":null");
+}
+
+fn raceExternalEdit(file_abs: []const u8, shadow_abs: []const u8) void {
+    const io = testing.io;
+    var started_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var raced_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const started = std.fmt.bufPrint(&started_buf, "{s}\\started", .{shadow_abs}) catch return;
+    const raced = std.fmt.bufPrint(&raced_buf, "{s}\\raced", .{shadow_abs}) catch return;
+    var attempt: usize = 0;
+    while (attempt < 3000) : (attempt += 1) {
+        if (std.Io.Dir.cwd().access(io, started, .{})) |_| break else |_| {}
+        io.sleep(.fromMilliseconds(10), .awake) catch return;
+    } else return;
+    const original = std.Io.Dir.cwd().readFileAlloc(io, file_abs, testing.allocator, .unlimited) catch return;
+    defer testing.allocator.free(original);
+    const edited = std.mem.concat(testing.allocator, u8, &.{ original, "// external\n" }) catch return;
+    defer testing.allocator.free(edited);
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_abs, .data = edited }) catch return;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raced, .data = "" }) catch return;
 }
 
 test "a failure after the commit began is reported as commit phase, never disk untouched" {
@@ -381,14 +404,18 @@ test "a failure after the commit began is reported as commit phase, never disk u
     const file = try repo.under("src\\math.ts");
     defer testing.allocator.free(file);
 
-    const racing_cmd = try std.fmt.allocPrint(testing.allocator, "cmd /c echo // external>>{s}", .{file});
-    defer testing.allocator.free(racing_cmd);
+    const shadow_abs = try repo.under(".emetgate\\shadow");
+    defer testing.allocator.free(shadow_abs);
+    const racing_cmd = "echo.> started & (for /l %i in (1,1,3000) do @if exist raced (exit 0) else ping -n 1 127.0.0.1 >nul) & exit 1";
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
     try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = racing_cmd });
+    const racer = try std.Thread.spawn(.{}, raceExternalEdit, .{ file, shadow_abs });
+    const outcome = call(runtime, line.written(), &observer, .{ .test_command = racing_cmd, .root = repo.root_abs });
+    racer.join();
+    const response = try outcome;
     defer testing.allocator.free(response);
     try expectContains(response, "\"isError\":true");
     try expectContains(response, "failed in commit phase, run emetgate recover");
@@ -423,7 +450,7 @@ test "fail-soft: an events file symlinked outside the repo is never written thro
     defer line.deinit();
     try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0" });
+    const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     try expectContains(response, "emetgate ✓ committed");
 

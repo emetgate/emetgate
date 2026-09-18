@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const symbol = @import("../src/engine/symbol.zig");
 const sandbox = @import("../src/platform/sandbox.zig");
+const memory = @import("../src/platform/memory.zig");
 const Runtime = @import("../src/engine/runtime.zig").Runtime;
 const Snapshot = @import("../src/engine/loader.zig").Snapshot;
 
@@ -11,6 +12,7 @@ const Edit = runner.Edit;
 const Gate = runner.Gate;
 const chooseGate = runner.chooseGate;
 const resolveTestCommand = runner.resolveTestCommand;
+const resolveTypecheckCommand = runner.resolveTypecheckCommand;
 const tryMutate = runner.tryMutate;
 const tryMutateBatch = runner.tryMutateBatch;
 
@@ -228,7 +230,7 @@ test "gate: only BOUNDED with a scoped command reaches the scoped path" {
     try testing.expectEqual(Gate.full, chooseGate(.unbounded, false));
 }
 
-test "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command" {
+test "gate: a body-only change to an exported symbol runs the full command even with a scoped one" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -247,11 +249,38 @@ test "gate: a BOUNDED mutation runs the scoped command against {file}, not the f
         .test_scoped_cmd = "type {file}",
     });
     defer result.deinit(testing.allocator);
+    try testing.expect(result == .rejected);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.ts", .data = "function add(a: number, b: number): number {\n  return a + b;\n}\nadd(1, 2);\n" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = "exit 1",
+        .test_scoped_cmd = "type {file}",
+    });
+    defer result.deinit(testing.allocator);
     try testing.expect(result == .committed);
 
     const on_disk = try repo.read();
     defer testing.allocator.free(on_disk);
-    try testing.expectEqualStrings("export function add(a: number, b: number): number {\n  return a - b;\n}\n", on_disk);
+    try testing.expectEqualStrings("function add(a: number, b: number): number {\n  return a - b;\n}\nadd(1, 2);\n", on_disk);
 }
 
 test "gate: an empty test command aborts before touching disk" {
@@ -405,6 +434,220 @@ test "an explicit test command overrides an untrusted repo config" {
     const cmd = try resolveTestCommand(testing.allocator, testing.io, file, "exit 0", false);
     defer testing.allocator.free(cmd);
     try testing.expectEqualStrings("exit 0", cmd);
+}
+
+test "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = "exit 0",
+        .typecheck_command = "exit 2",
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .typecheck_failed);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "typecheck: it checks the patched shadow copy and only then runs the test command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const typecheck = "findstr a-b src\\math.ts";
+    const Case = struct { body: []const u8, test_command: []const u8, expected: std.meta.Tag(runner.Result) };
+    const cases = [_]Case{
+        .{ .body = "{\n  return a*b;\n}", .test_command = "exit 0", .expected = .typecheck_failed },
+        .{ .body = "{\n  return a-b;\n}", .test_command = "exit 1", .expected = .rejected },
+        .{ .body = "{\n  return a-b;\n}", .test_command = "exit 0", .expected = .committed },
+    };
+    for (cases) |c| {
+        errdefer std.debug.print("case body={s} test={s}\n", .{ c.body, c.test_command });
+        var repo = try Repo.init();
+        defer repo.deinit();
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file = try repo.filePath(&buf);
+        const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+        const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+            .file_abs = file,
+            .ref_text = "add",
+            .expected_hash = hash,
+            .new_body = c.body,
+            .test_command = c.test_command,
+            .typecheck_command = typecheck,
+        });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(c.expected, std.meta.activeTag(result));
+    }
+}
+
+test "typecheck: a failing typecheck rejects a whole batch and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = "{\n  return a - b;\n}" }};
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
+        .edits = &edits,
+        .test_command = "exit 0",
+        .typecheck_command = "exit 2",
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .typecheck_failed);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "typecheck command: the flag wins, an untrusted repo config is ignored, a trusted one is read" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 0\",\"typecheck_cmd\":\"tsc --noEmit\"}" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+
+    const given = (try resolveTypecheckCommand(testing.allocator, testing.io, file, "npx tsc", false)).?;
+    defer testing.allocator.free(given);
+    try testing.expectEqualStrings("npx tsc", given);
+
+    try testing.expect((try resolveTypecheckCommand(testing.allocator, testing.io, file, "", false)) == null);
+
+    const trusted = (try resolveTypecheckCommand(testing.allocator, testing.io, file, "", true)).?;
+    defer testing.allocator.free(trusted);
+    try testing.expectEqualStrings("tsc --noEmit", trusted);
+
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgaterc.json", .data = "{\"test_cmd\":\"exit 0\",\"typecheck_cmd\":\"\"}" });
+    try testing.expect((try resolveTypecheckCommand(testing.allocator, testing.io, file, "", true)) == null);
+}
+
+const commented_body = "{\n  // why\n  return a - b;\n}";
+const clean_body = "{\n  return a - b;\n}";
+
+fn tryAdd(repo: *Repo, runtime: *Runtime, body: []const u8, test_command: []const u8) !runner.Result {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+    return tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = hash,
+        .new_body = body,
+        .test_command = test_command,
+    });
+}
+
+fn expectPristineRepo(repo: *Repo) !void {
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "rules: an enforced no_comment rule rejects a commented body before the tests run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, commented_body, "exit 1");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    const violations = result.rule_violation.violations;
+    try testing.expectEqual(@as(usize, 1), violations.len);
+    try testing.expectEqualStrings(id, violations[0].rule);
+    try testing.expectEqualStrings("no_comment", violations[0].check);
+    try testing.expectEqualStrings("// why", violations[0].text);
+    try testing.expectEqualStrings("src\\math.ts", violations[0].file);
+    try testing.expectEqual(@as(u32, 2), violations[0].line);
+    try testing.expectEqual(@as(u32, 3), violations[0].col);
+    try expectPristineRepo(&repo);
+}
+
+test "rules: a clean body still commits under an enforced rule" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
+test "rules: unenforced, checkless and forgotten rules never block an edit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const unenforced = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "prefer no comments", false, "no_comment");
+    defer testing.allocator.free(unenforced);
+    const checkless = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "be kind", true, null);
+    defer testing.allocator.free(checkless);
+    const forgotten = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(forgotten);
+    try memory.forget(testing.allocator, testing.io, repo.root_abs, forgotten);
+
+    const result = try tryAdd(&repo, runtime, commented_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
+test "rules: an unknown check in the ledger fails closed and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "mystery", true, "no_such_check");
+    defer testing.allocator.free(id);
+
+    try testing.expectError(error.UnknownCheck, tryAdd(&repo, runtime, clean_body, "exit 0"));
+    try expectPristineRepo(&repo);
+}
+
+test "rules: one violating edit rejects the whole batch and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no comments", true, "no_comment");
+    defer testing.allocator.free(id);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = commented_body }};
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "exit 0" });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    try expectPristineRepo(&repo);
 }
 
 test "a missing config with no test command is refused" {
