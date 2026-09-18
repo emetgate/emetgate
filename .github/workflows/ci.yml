@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
 
 env:
   ZIG_VERSION: "0.16.0"
@@ -25,3 +27,63 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
       - run: zig build test --summary all
+
+  mutation-corpus:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig
+        shell: pwsh
+        run: |
+          $zip = "zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          $url = "https://ziglang.org/download/$env:ZIG_VERSION/$zip"
+          Invoke-WebRequest $url -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
+          Remove-Item $zip
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
+      - run: zig version
+      - name: Require a clean working tree
+        shell: pwsh
+        run: |
+          $dirty = git status --porcelain --untracked-files=all
+          if ($dirty) {
+            Write-Output "::error::the mutation harness needs a clean working tree"
+            $dirty
+            exit 1
+          }
+      - run: zig build mutate-tool
+      - name: Run the mutation corpus
+        shell: pwsh
+        run: ./zig-out/bin/emetgate-mutate.exe
+      - name: Summarize unexpected outcomes
+        if: always()
+        shell: pwsh
+        run: |
+          $path = ".zig-cache/mutate/report.json"
+          if (-not (Test-Path $path)) {
+            "No report was written; see the harness log above." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $outcomes = Get-Content $path -Raw | ConvertFrom-Json
+          $bad = @($outcomes | Where-Object { -not $_.ok })
+          "## Mutation corpus" >> $env:GITHUB_STEP_SUMMARY
+          "$($outcomes.Count) run, $($outcomes.Count - $bad.Count) as expected, $($bad.Count) not as expected" >> $env:GITHUB_STEP_SUMMARY
+          if ($bad.Count -gt 0) {
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "| id | file | status | wanted | why |" >> $env:GITHUB_STEP_SUMMARY
+            "|---|---|---|---|---|" >> $env:GITHUB_STEP_SUMMARY
+            foreach ($o in $bad) {
+              $why = @($o.detail, $(if ($o.missing_kill) { "did not fail: $($o.missing_kill)" }), $(if ($o.unexpected_kill) { "failed unexpectedly: $($o.unexpected_kill)" })) | Where-Object { $_ }
+              "| $($o.id) | $($o.file) | $($o.status) | $($o.expected_status) | $($why -join '; ') |" >> $env:GITHUB_STEP_SUMMARY
+              Write-Output "::error title=$($o.id)::status=$($o.status) wanted=$($o.expected_status) $($why -join '; ')"
+            }
+          }
+      - name: Upload the mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: .zig-cache/mutate/report.json
+          if-no-files-found: warn
