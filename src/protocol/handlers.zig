@@ -142,14 +142,11 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     const base = try loadJailed(gpa, io, runtime, root, file);
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
-    const applied = switch (expected) {
-        .present => |hash| blk: {
-            const target = try (try base.symbols()).resolve(ref);
-            event.chars_sr = target.body.endByte() - target.body.startByte() + body.len;
-            break :blk try cas.apply(base, .{ .ref = ref, .expected_hash = hash, .new_body = body });
-        },
-        .absent => try cas.insert(base, .{ .ref = ref, .new_body = body }),
-    };
+    if (expected == .present) {
+        const target = try (try base.symbols()).resolve(ref);
+        event.chars_sr = target.body.endByte() - target.body.startByte() + body.len;
+    }
+    const applied = try cas.propose(base, ref, expected, body);
     defer applied.snapshot.destroy();
     event.hash = applied.hash;
     event.chars_emetgate = sym.len + hash_hex.len + body.len;

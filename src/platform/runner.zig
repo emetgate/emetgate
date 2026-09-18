@@ -104,10 +104,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
 
     const ref = try symbol.Ref.parse(gpa, options.ref_text);
     defer ref.deinit(gpa);
-    const applied = switch (options.expected_hash) {
-        .present => |hash| try cas.apply(base, .{ .ref = ref, .expected_hash = hash, .new_body = options.new_body }),
-        .absent => try cas.insert(base, .{ .ref = ref, .new_body = options.new_body }),
-    };
+    const applied = try cas.propose(base, ref, options.expected_hash, options.new_body);
     defer applied.snapshot.destroy();
     if (try rules.gate(gpa, io, root, rel, applied.snapshot.profile, applied.snapshot.tree, applied.body)) |report| return .{ .rule_violation = report };
 

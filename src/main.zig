@@ -19,7 +19,7 @@ const usage =
     \\usage: emetgate skeleton <file.ts>
     \\       emetgate symbols <file.ts> [--json]
     \\       emetgate stats <file.ts>...
-    \\       emetgate mutate <file.ts> --symbol <ref> --hash <hex> (--body <code> | --body-file <path>) [--json]
+    \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
     \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config]
     \\       emetgate recover
@@ -295,7 +295,7 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     const gpa = runtime.gpa;
     const ref = try symbol.Ref.parse(gpa, request.symbol);
     defer ref.deinit(gpa);
-    const expected = try symbol.parseHash(request.hash);
+    const expected = try symbol.parseExpected(request.hash);
 
     const base = try Snapshot.load(runtime, init.io, .cwd(), request.path);
     defer base.destroy();
@@ -308,10 +308,10 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
+    const applied = try cas.propose(base, ref, expected, body);
     defer applied.snapshot.destroy();
 
-    try wire.writeMutated(out, request.symbol, .{ .present = expected }, applied.hash, applied.snapshot.source);
+    try wire.writeMutated(out, request.symbol, expected, applied.hash, applied.snapshot.source);
 }
 
 const recover_failed_exit_code: u8 = 16;
@@ -415,7 +415,7 @@ fn mutate(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out
     const gpa = runtime.gpa;
     const ref = try symbol.Ref.parse(gpa, request.symbol);
     defer ref.deinit(gpa);
-    const expected = try symbol.parseHash(request.hash);
+    const expected = try symbol.parseExpected(request.hash);
 
     const base = try Snapshot.load(runtime, init.io, .cwd(), request.path);
     defer base.destroy();
@@ -428,12 +428,13 @@ fn mutate(init: std.process.Init, runtime: *Runtime, request: MutateRequest, out
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = body });
+    const applied = try cas.propose(base, ref, expected, body);
     defer applied.snapshot.destroy();
 
     try out.writeAll(applied.snapshot.source);
     try out.flush();
-    std.debug.print("mutated {f}  {s} -> {s}\n", .{ ref, &symbol.formatHash(expected), &symbol.formatHash(applied.hash) });
+    var old_buf: [symbol.hash_hex_len]u8 = undefined;
+    std.debug.print("mutated {f}  {s} -> {s}\n", .{ ref, expected.text(&old_buf), &symbol.formatHash(applied.hash) });
 }
 
 const Totals = struct {

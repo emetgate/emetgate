@@ -74,6 +74,13 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
     return .{ .snapshot = next, .hash = patched_target.hash, .body = slot };
 }
 
+pub fn propose(base: *Snapshot, ref: symbol.Ref, expected: symbol.Expected, new_body: []const u8) Error!Applied {
+    return switch (expected) {
+        .present => |hash| apply(base, .{ .ref = ref, .expected_hash = hash, .new_body = new_body }),
+        .absent => insert(base, .{ .ref = ref, .new_body = new_body }),
+    };
+}
+
 pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
     const new_body = normalizeBody(insertion.new_body);
     const before = try base.symbols();
@@ -571,6 +578,30 @@ fn expectInserted(runtime: anytype, source: []const u8, ref_text: []const u8, bo
     try testing.expectEqualStrings(source, applied.snapshot.source[0..source.len]);
     try testing.expectEqualStrings(normalizeBody(body), applied.snapshot.source[applied.body.start..applied.body.end]);
     try testing.expectEqual(try hashOfRef(applied.snapshot, ref_text), applied.hash);
+}
+
+test "propose replaces a body for a hex hash and inserts a symbol for absent" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotOf(runtime, "function add() { return 1; }\n");
+    defer base.destroy();
+    const add = try symbol.Ref.parse(testing.allocator, "add");
+    defer add.deinit(testing.allocator);
+    const sub = try symbol.Ref.parse(testing.allocator, "sub");
+    defer sub.deinit(testing.allocator);
+    const current = try currentHash(base, add);
+
+    const replaced = try propose(base, add, .{ .present = current }, "{ return 2; }");
+    defer replaced.snapshot.destroy();
+    try testing.expectEqualStrings("function add() { return 2; }\n", replaced.snapshot.source);
+
+    const inserted = try propose(base, sub, .absent, "function sub() { return 3; }");
+    defer inserted.snapshot.destroy();
+    try testing.expectEqualStrings("function add() { return 1; }\n\nfunction sub() { return 3; }\n", inserted.snapshot.source);
+
+    try testing.expectError(error.SymbolExists, propose(base, add, .absent, "function add() { return 4; }"));
+    try testing.expectError(error.SymbolNotFound, propose(base, sub, .{ .present = current }, "{ return 5; }"));
+    try testing.expectError(error.HashMismatch, propose(base, add, .{ .present = symbol.hashOf("stale") }, "{ return 6; }"));
 }
 
 test "insert names the one top-level symbol the body declares, whatever its declaration form" {
