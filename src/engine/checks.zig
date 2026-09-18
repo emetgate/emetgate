@@ -50,6 +50,10 @@ fn resolve(checks: []const Check, spec: []const u8) Error!struct { check: Check,
     return .{ .check = check, .arg = invocation.arg };
 }
 
+pub fn validate(spec: []const u8) Error!void {
+    _ = try resolve(&registry, spec);
+}
+
 pub fn find(checks: []const Check, name: []const u8) ?Check {
     for (checks) |check| {
         if (std.mem.eql(u8, check.name, name)) return check;

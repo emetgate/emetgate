@@ -38,13 +38,24 @@ pub const Report = struct {
     violations: []Violation,
 
     pub fn deinit(self: Report, gpa: Allocator) void {
-        for (self.violations) |v| freeViolation(gpa, v);
+        self.deinitItems(gpa);
         gpa.free(self.violations);
+    }
+
+    pub fn deinitItems(self: Report, gpa: Allocator) void {
+        for (self.violations) |v| freeViolation(gpa, v);
     }
 };
 
 pub fn load(gpa: Allocator, io: std.Io, root_abs: []const u8) !Enforced {
-    const recall = try memory.recall(gpa, io, root_abs);
+    return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));
+}
+
+pub fn peek(gpa: Allocator, io: std.Io, root_abs: []const u8) !Enforced {
+    return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));
+}
+
+fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     errdefer recall.deinit();
     var list: std.ArrayList(Rule) = .empty;
     errdefer list.deinit(gpa);

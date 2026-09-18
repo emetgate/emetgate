@@ -154,6 +154,19 @@ pub fn recall(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
     return .{ .arena = arena, .decisions = ledger.folded.active, .conflicts = ledger.folded.conflicts };
 }
 
+pub fn peek(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
+    const arena = try gpa.create(std.heap.ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = .init(gpa);
+    errdefer arena.deinit();
+    const paths = try Paths.init(arena.allocator(), root_abs);
+    const bytes = try readLedger(arena.allocator(), io, paths);
+    if (tornTailStart(arena.allocator(), bytes) != null) return error.LedgerNeedsRepair;
+    const rows = try parseLedger(arena.allocator(), bytes);
+    const folded = try foldRows(arena.allocator(), rows);
+    return .{ .arena = arena, .decisions = folded.active, .conflicts = folded.conflicts };
+}
+
 pub fn compact(gpa: Allocator, io: std.Io, root_abs: []const u8) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();

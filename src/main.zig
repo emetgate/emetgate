@@ -12,6 +12,7 @@ const server = emetgate.server;
 const disk = emetgate.disk;
 const shadow = emetgate.shadow;
 const lockdown = emetgate.lockdown;
+const scan_command = emetgate.scan_command;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
 
@@ -22,6 +23,7 @@ const usage =
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
     \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config]
+    \\       emetgate scan [--check <spec>] [--json]
     \\       emetgate recover
     \\       emetgate lockdown [<claude args>...]
     \\
@@ -86,6 +88,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
         try server.serve(runtime.gpa, init.io, runtime, out, policy);
         return 0;
+    }
+    if (std.mem.eql(u8, command, "scan")) {
+        const options = scan_command.Options.parse(args[2..]) orelse exitWithUsage();
+        return scanCmd(init, runtime, options, out);
     }
     if (std.mem.eql(u8, command, "recover") and args.len == 2) {
         return recoverCmd(init, runtime);
@@ -337,6 +343,23 @@ fn emitMutateJson(init: std.process.Init, runtime: *Runtime, request: MutateRequ
     defer applied.snapshot.destroy();
 
     try wire.writeMutated(out, request.symbol, expected, applied.hash, applied.snapshot.source);
+}
+
+fn scanCmd(init: std.process.Init, runtime: *Runtime, options: scan_command.Options, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = runner.repoRoot(gpa, init.io) catch |err| {
+        if (options.json) {
+            try wire.writeError(out, @errorName(err), exitCodeFor(err));
+            return exitCodeFor(err);
+        }
+        return err;
+    };
+    defer gpa.free(root);
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    const code = try scan_command.run(gpa, init.io, runtime, root, options, out, &stderr_writer.interface);
+    try stderr_writer.interface.flush();
+    return code;
 }
 
 const recover_failed_exit_code: u8 = 16;
