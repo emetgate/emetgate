@@ -288,6 +288,14 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
     try js.write(command);
     try js.objectField("outcome");
     try js.write(outcomeTag(report.outcome));
+    switch (report.outcome) {
+        .crashed => |code| {
+            var code_buf: [10]u8 = undefined;
+            try js.objectField("crash_code");
+            try js.write(try std.fmt.bufPrint(&code_buf, "0x{X:0>8}", .{code}));
+        },
+        .exited, .timed_out, .output_limit => {},
+    }
     try js.objectField("diagnostics");
     try js.beginArray();
     for (from_out) |d| try writeDiagnostic(&js, d);
@@ -317,6 +325,7 @@ fn writeDiagnostic(js: *std.json.Stringify, d: diagnostics.Diagnostic) !void {
 pub fn rejectionReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
         .exited => |code| if (code != 0) "tests_failed" else "leftover_processes",
+        .crashed => "test_crashed",
         .timed_out => "timed_out",
         .output_limit => "output_limit",
     };
@@ -325,6 +334,7 @@ pub fn rejectionReason(report: sandbox.Report) []const u8 {
 pub fn typecheckReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
         .exited => |code| if (code != 0) "typecheck_failed" else "leftover_processes",
+        .crashed => "typecheck_crashed",
         .timed_out => "timed_out",
         .output_limit => "output_limit",
     };
@@ -333,6 +343,7 @@ pub fn typecheckReason(report: sandbox.Report) []const u8 {
 fn outcomeTag(outcome: sandbox.Outcome) []const u8 {
     return switch (outcome) {
         .exited => "exited",
+        .crashed => "crashed",
         .timed_out => "timed_out",
         .output_limit => "output_limit",
     };
@@ -573,6 +584,35 @@ test "a typecheck rejection names its own reason and command, not the test comma
     try testing.expect(std.mem.indexOf(u8, json, "\"typecheck_cmd\":\"npx tsc --noEmit\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"test_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics\":[{\"file\":\"src/x.ts\",\"line\":3,\"col\":5,") != null);
+}
+
+test "a crashed stage is reported as a crash with its hex code, never as a failed verdict" {
+    const report: sandbox.Report = .{
+        .outcome = .{ .crashed = 0xC0000142 },
+        .duration_ns = 0,
+        .stdout = @constCast(""),
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    try testing.expectEqualStrings("test_crashed", rejectionReason(report));
+    try testing.expectEqualStrings("typecheck_crashed", typecheckReason(report));
+
+    var tests_buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer tests_buffer.deinit();
+    try writeRejected(testing.allocator, &tests_buffer.writer, "npm test", report);
+    const tests_json = tests_buffer.written();
+    try testing.expect(std.mem.indexOf(u8, tests_json, "\"reason\":\"test_crashed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, tests_json, "\"outcome\":\"crashed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, tests_json, "\"crash_code\":\"0xC0000142\"") != null);
+
+    var typecheck_buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer typecheck_buffer.deinit();
+    try writeTypecheckRejected(testing.allocator, &typecheck_buffer.writer, "npx tsc --noEmit", report);
+    const typecheck_json = typecheck_buffer.written();
+    try testing.expect(std.mem.indexOf(u8, typecheck_json, "\"reason\":\"typecheck_crashed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, typecheck_json, "\"outcome\":\"crashed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, typecheck_json, "\"crash_code\":\"0xC0000142\"") != null);
 }
 
 test "a rule violation payload lists every violation with its rule and position" {

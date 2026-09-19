@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const symbol = @import("../src/engine/symbol.zig");
 const sandbox = @import("../src/platform/sandbox.zig");
+const wire = @import("../src/protocol/wire.zig");
 const memory = @import("../src/platform/memory.zig");
 const Runtime = @import("../src/engine/runtime.zig").Runtime;
 const Snapshot = @import("../src/engine/loader.zig").Snapshot;
@@ -490,8 +491,131 @@ test "typecheck: it checks the patched shadow copy and only then runs the test c
             .typecheck_command = typecheck,
         });
         defer result.deinit(testing.allocator);
+        errdefer printResult(result);
         try testing.expectEqual(c.expected, std.meta.activeTag(result));
     }
+}
+
+fn printResult(result: anytype) void {
+    switch (result) {
+        .rejected, .typecheck_failed => |report| switch (report.outcome) {
+            .exited, .crashed => |code| std.debug.print("result={t} outcome={t} code=0x{X:0>8} killed_leftovers={} stderr={s}\n", .{ result, report.outcome, code, report.killed_leftovers, report.stderr }),
+            .timed_out, .output_limit => std.debug.print("result={t} outcome={t} stderr={s}\n", .{ result, report.outcome, report.stderr }),
+        },
+        .committed, .rule_violation => std.debug.print("result={t}\n", .{result}),
+    }
+}
+
+const crash_command = "exit -1073741502";
+
+fn expectCrash(result: anytype, stage: std.meta.Tag(@TypeOf(result)), reason: []const u8) !void {
+    errdefer printResult(result);
+    try testing.expectEqual(stage, std.meta.activeTag(result));
+    const report = switch (result) {
+        .rejected, .typecheck_failed => |report| report,
+        .committed, .rule_violation => unreachable,
+    };
+    try testing.expectEqual(sandbox.Outcome{ .crashed = 0xC0000142 }, report.outcome);
+    try testing.expectEqualStrings(reason, if (stage == .typecheck_failed) wire.typecheckReason(report) else wire.rejectionReason(report));
+}
+
+test "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = .{ .present = hash },
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = "exit 0",
+        .typecheck_command = crash_command,
+    });
+    defer result.deinit(testing.allocator);
+    try expectCrash(result, .typecheck_failed, "typecheck_crashed");
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "crash: a test command that crashes rejects as test_crashed and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = .{ .present = hash },
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = crash_command,
+        .typecheck_command = "exit 0",
+    });
+    defer result.deinit(testing.allocator);
+    try expectCrash(result, .rejected, "test_crashed");
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = "{\n  return a - b;\n}" }};
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
+        .edits = &edits,
+        .test_command = "exit 0",
+        .typecheck_command = crash_command,
+    });
+    defer result.deinit(testing.allocator);
+    try expectCrash(result, .typecheck_failed, "typecheck_crashed");
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
+}
+
+test "crash: a test command that crashes rejects a whole batch as test_crashed and leaves disk untouched" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = "{\n  return a - b;\n}" }};
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
+        .edits = &edits,
+        .test_command = crash_command,
+    });
+    defer result.deinit(testing.allocator);
+    try expectCrash(result, .rejected, "test_crashed");
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(Repo.source, on_disk);
 }
 
 test "typecheck: a failing typecheck rejects a whole batch and leaves disk untouched" {
