@@ -2141,7 +2141,7 @@
     {
       "id": "SP28-where-errors-exit-generic",
       "file": "src/protocol/wire.zig",
-      "from": "        error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed => 2,\n",
+      "from": "        error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed, error.WhereExclusionEmpty, error.WhereExclusionGlob, error.WhereExclusionAbsolute, error.WhereExclusionParentSegment, error.WhereExclusionMalformed, error.WhereTooManyExclusions => 2,\n",
       "to": "",
       "kills": [
         "scope: an invalid --in is refused by name before anything is scanned"
@@ -2238,7 +2238,7 @@
     {
       "id": "SU4-scope-file-presence-not-checked",
       "file": "src/platform/scan.zig",
-      "from": "    } else return switch (scope) {\n        .dir => error.NoTrackedFileUnder,\n        else => error.FileNotTracked,\n    };",
+      "from": "    } else return switch (scope.base) {\n        .dir => error.NoTrackedFileUnder,\n        else => error.FileNotTracked,\n    };",
       "to": "    } else return;",
       "kills": [
         "scope: a ledger rule whose where names a deleted file stops the scan with ScopeUnresolved",
@@ -2546,6 +2546,268 @@
       "optimize": "ReleaseSafe",
       "kills": [
         "every vendored grammar parses through its external scanner table"
+      ]
+    },
+    {
+      "id": "EX1-exclusions-ignored",
+      "file": "src/platform/where.zig",
+      "from": "        return self.base.coversFile(rel) and !self.excludes(rel);\n",
+      "to": "        return self.base.coversFile(rel);\n",
+      "kills": [
+        "exclusion: src/ !__tests__/ drops the test directories and keeps production code",
+        "exclusion: two exclusions apply together",
+        "exclusion: a suffix exclusion drops negative type tests",
+        "exclusion: a ledger rule with exclusions is honored by the ledger scan",
+        "scope: at the gate an excluded file is not blocked and a file left in scope is",
+        "nothing in scope: a scope whose every file is excluded is not reported clean",
+        "a directory name exclusion matches that component anywhere in the path",
+        "exclusions apply to the file part of a symbol where"
+      ]
+    },
+    {
+      "id": "EX2-dir-name-only-first-component",
+      "file": "src/platform/where.zig",
+      "from": "        start = i + 1;\n",
+      "to": "",
+      "kills": [
+        "exclusion: src/ !__tests__/ drops the test directories and keeps production code",
+        "exclusion: a directory name is excluded at any depth",
+        "exclusion: two exclusions apply together",
+        "a directory name exclusion matches that component anywhere in the path"
+      ]
+    },
+    {
+      "id": "EX3-slashed-exclusion-as-segment",
+      "file": "src/platform/where.zig",
+      "from": "    if (std.mem.indexOfScalar(u8, name, '/') == null) return .{ .dir_name = name };\n",
+      "to": "    return .{ .dir_name = name };\n",
+      "kills": [
+        "exclusion: a slashed exclusion is a prefix and leaves a same-named segment elsewhere",
+        "exclusions are split off the scope and each keeps its form"
+      ]
+    },
+    {
+      "id": "EX4-suffix-matches-anywhere",
+      "file": "src/platform/where.zig",
+      "from": ".suffix => |s| rel.len > s.len and samePath(s, rel[rel.len - s.len ..]),",
+      "to": ".suffix => |s| std.mem.indexOf(u8, rel, s) != null,",
+      "kills": [
+        "a suffix exclusion matches the end of the file name only"
+      ]
+    },
+    {
+      "id": "EX5-file-exclusion-ignored",
+      "file": "src/platform/where.zig",
+      "from": ".file => |f| samePath(f, rel),",
+      "to": ".file => false,",
+      "kills": [
+        "a file exclusion removes exactly that file",
+        "scope: at the gate an excluded file is not blocked and a file left in scope is",
+        "nothing in scope: a scope excluding its only file resolves, so it is not ScopeUnresolved"
+      ]
+    },
+    {
+      "id": "EX6-exclusion-limit-removed",
+      "file": "src/platform/where.zig",
+      "from": "        if (count > max_exclusions) return error.WhereTooManyExclusions;\n",
+      "to": "",
+      "kills": [
+        "more exclusions than the limit are refused",
+        "where: remember and supersede refuse more exclusions than the limit"
+      ]
+    },
+    {
+      "id": "EX7-star-position-unchecked",
+      "file": "src/platform/where.zig",
+      "from": "        if (star != 0 or std.mem.indexOfScalarPos(u8, text, 1, '*') != null) return error.WhereExclusionGlob;\n",
+      "to": "        if (std.mem.indexOfScalarPos(u8, text, star + 1, '*') != null) return error.WhereExclusionGlob;\n",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse an exclusion whose star is not first"
+      ]
+    },
+    {
+      "id": "EX8-double-star-unchecked",
+      "file": "src/platform/where.zig",
+      "from": "        if (star != 0 or std.mem.indexOfScalarPos(u8, text, 1, '*') != null) return error.WhereExclusionGlob;\n",
+      "to": "        if (star != 0) return error.WhereExclusionGlob;\n",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse an exclusion with two stars",
+        "exclusion: an invalid exclusion in --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "EX9-exclusion-glob-chars-unchecked",
+      "file": "src/platform/where.zig",
+      "from": "    if (std.mem.indexOfAny(u8, text, \"?[]{}\") != null) return error.WhereExclusionGlob;\n",
+      "to": "",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse an exclusion with another glob character"
+      ]
+    },
+    {
+      "id": "EX10-empty-exclusion-unchecked",
+      "file": "src/platform/where.zig",
+      "from": "    if (text.len == 0) return error.WhereExclusionEmpty;\n",
+      "to": "",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse an empty exclusion"
+      ]
+    },
+    {
+      "id": "EX11-absolute-exclusion-unnamed",
+      "file": "src/platform/where.zig",
+      "from": "    if (text[0] == '/' or text[0] == '\\\\' or std.mem.indexOfScalar(u8, text, ':') != null) return error.WhereExclusionAbsolute;\n",
+      "to": "",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse an absolute exclusion"
+      ]
+    },
+    {
+      "id": "EX12-parent-exclusion-unnamed",
+      "file": "src/platform/where.zig",
+      "from": "        error.WhereParentSegment => error.WhereExclusionParentSegment,\n",
+      "to": "",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse an exclusion with a parent segment"
+      ]
+    },
+    {
+      "id": "EX13-bare-star-accepted",
+      "file": "src/platform/where.zig",
+      "from": "        if (suffix.len == 0 or std.mem.indexOfAny(",
+      "to": "        if (std.mem.indexOfAny(",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse a malformed exclusion"
+      ]
+    },
+    {
+      "id": "EX14-exclusion-symbol-accepted",
+      "file": "src/platform/where.zig",
+      "from": "    if (std.mem.indexOfScalar(u8, text, '#') != null) return error.WhereExclusionMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected exclusion is refused under its own name"
+      ]
+    },
+    {
+      "id": "EX15-exclusion-whitespace-accepted",
+      "file": "src/platform/where.zig",
+      "from": "    if (std.mem.indexOfAny(u8, text, \" \\t\") != null) return error.WhereExclusionMalformed;\n",
+      "to": "",
+      "kills": [
+        "every rejected exclusion is refused under its own name"
+      ]
+    },
+    {
+      "id": "EX16-exclusions-unvalidated",
+      "file": "src/platform/where.zig",
+      "from": "        try validateExclusion(body[0..end]);\n",
+      "to": "",
+      "kills": [
+        "every rejected exclusion is refused under its own name",
+        "where: remember and supersede refuse an empty exclusion",
+        "where: remember and supersede refuse an exclusion with two stars",
+        "where: remember and supersede refuse an exclusion whose star is not first",
+        "where: remember and supersede refuse an exclusion with another glob character",
+        "where: remember and supersede refuse an exclusion with a parent segment",
+        "where: remember and supersede refuse an absolute exclusion",
+        "where: remember and supersede refuse a malformed exclusion",
+        "exclusion: an invalid exclusion in --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "EX17-symbol-where-ignores-exclusions",
+      "file": "src/platform/where.zig",
+      "from": "        if (!self.coversFile(rel)) return false;\n",
+      "to": "        if (!self.base.coversFile(rel)) return false;\n",
+      "kills": [
+        "scope: at the gate an excluded file is not blocked and a file left in scope is",
+        "exclusions apply to the file part of a symbol where"
+      ]
+    },
+    {
+      "id": "EX18-resolution-applies-exclusions",
+      "file": "src/platform/scan.zig",
+      "from": "        if (scope.base.coversFile(file)) break file;\n",
+      "to": "        if (scope.coversFile(file)) break file;\n",
+      "kills": [
+        "nothing in scope: a scope excluding its only file resolves, so it is not ScopeUnresolved"
+      ]
+    },
+    {
+      "id": "EX19-exclusion-errors-exit-generic",
+      "file": "src/protocol/wire.zig",
+      "from": " error.WhereExclusionEmpty, error.WhereExclusionGlob, error.WhereExclusionAbsolute, error.WhereExclusionParentSegment, error.WhereExclusionMalformed, error.WhereTooManyExclusions => 2,\n",
+      "to": " => 2,\n",
+      "kills": [
+        "exclusion: an invalid exclusion in --in is refused by name before anything is scanned"
+      ]
+    },
+    {
+      "id": "NS1-nothing-in-scope-never-detected",
+      "file": "src/platform/scan.zig",
+      "from": "        return self.rules != 0 and self.scanned == 0;\n",
+      "to": "        return false;\n",
+      "kills": [
+        "nothing in scope: a scope whose every file is excluded is not reported clean",
+        "nothing in scope: a directory with no language profile is not reported clean",
+        "nothing in scope: a scope excluding its only file resolves, so it is not ScopeUnresolved"
+      ]
+    },
+    {
+      "id": "NS2-nothing-in-scope-exits-zero",
+      "file": "src/protocol/scan_command.zig",
+      "from": "        return wire.exitCode(error.NothingInScope);\n",
+      "to": "        return 0;\n",
+      "kills": [
+        "nothing in scope: a scope whose every file is excluded is not reported clean",
+        "nothing in scope: a directory with no language profile is not reported clean",
+        "nothing in scope: a scope excluding its only file resolves, so it is not ScopeUnresolved"
+      ]
+    },
+    {
+      "id": "NS3-nothing-in-scope-json-says-clean",
+      "file": "src/protocol/wire.zig",
+      "from": "if (result.nothingInScope()) \"nothing_in_scope\" else ",
+      "to": "",
+      "kills": [
+        "nothing in scope: a scope whose every file is excluded is not reported clean"
+      ]
+    },
+    {
+      "id": "NS4-nothing-in-scope-text-unnamed",
+      "file": "src/protocol/scan_command.zig",
+      "from": "        if (!options.json) try out.print(\"{t}: {s}\\n\", .{ error.NothingInScope, nothing_in_scope_message });\n",
+      "to": "",
+      "kills": [
+        "nothing in scope: a scope whose every file is excluded is not reported clean"
+      ]
+    },
+    {
+      "id": "NS5-nothing-in-scope-exit-generic",
+      "file": "src/protocol/wire.zig",
+      "from": "        error.NothingInScope => 32,\n",
+      "to": "",
+      "kills": [
+        "nothing in scope: a scope whose every file is excluded is not reported clean",
+        "nothing in scope: a directory with no language profile is not reported clean",
+        "nothing in scope: a scope excluding its only file resolves, so it is not ScopeUnresolved"
+      ]
+    },
+    {
+      "id": "NS6-nothing-in-scope-without-rules",
+      "file": "src/platform/scan.zig",
+      "from": "self.rules != 0 and ",
+      "to": "",
+      "kills": [
+        "nothing in scope: with no rules and no scannable file the scan stays clean and exits 0"
       ]
     }
   ]

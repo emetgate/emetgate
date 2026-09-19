@@ -44,6 +44,10 @@ pub const Result = struct {
     parse_errors: [][]u8,
     violations: []rules.Violation,
 
+    pub fn nothingInScope(self: Result) bool {
+        return self.rules != 0 and self.scanned == 0;
+    }
+
     pub fn deinit(self: Result, gpa: Allocator) void {
         for (self.unreadable) |u| gpa.free(u.file);
         gpa.free(self.unreadable);
@@ -116,12 +120,12 @@ fn firstUnresolvedIn(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io
 
 fn resolveScope(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io.Dir, files: []const []u8, scope: where_mod.Where) !void {
     const file = for (files) |file| {
-        if (scope.coversFile(file)) break file;
-    } else return switch (scope) {
+        if (scope.base.coversFile(file)) break file;
+    } else return switch (scope.base) {
         .dir => error.NoTrackedFileUnder,
         else => error.FileNotTracked,
     };
-    const ref_text = switch (scope) {
+    const ref_text = switch (scope.base) {
         .symbol => |s| s.ref,
         else => return,
     };
@@ -187,7 +191,7 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
             var span = whole;
             if (scope) |w| {
                 if (!w.coversFile(file)) continue;
-                switch (w) {
+                switch (w.base) {
                     .symbol => |s| span = try symbolSpan(gpa, snapshot, s.ref),
                     else => {},
                 }
