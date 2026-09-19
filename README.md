@@ -159,22 +159,23 @@ Some things cannot be made mechanical, and this project does not claim otherwise
 
 ## Installing
 
-Each release tag publishes a Windows binary and its SHA-256 checksum on the [releases page](https://github.com/emetgate/emetgate/releases). Download both (this only downloads; nothing is run):
+Each release tag publishes a Windows binary and its SHA-256 checksum on the [releases page](https://github.com/emetgate/emetgate/releases). Download both into a fixed folder under your profile (this only downloads; nothing is run):
 
 ```powershell
-foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile $f }
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:USERPROFILE\emetgate\$f" }
 ```
 
 Check the binary against the published checksum before running it; this prints `True` when they match:
 
 ```powershell
-(Get-FileHash .\emetgate.exe -Algorithm SHA256).Hash -eq (Get-Content .\emetgate.exe.sha256).Split(" ")[0]
+(Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:USERPROFILE\emetgate\emetgate.exe.sha256").Split(" ")[0]
 ```
 
-Register it with Claude Code:
+Register it with Claude Code by its absolute path, because Claude Code runs the stored command as written and a relative path does not resolve when Claude Code is started from another directory:
 
 ```powershell
-claude mcp add emetgate -- .\emetgate.exe mcp
+claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp
 ```
 
 The binary is not code-signed, so Windows SmartScreen warns on first run: it flags executables that carry no publisher signature and have little download history, not because it found anything in this one. The checksum above is how to confirm the file is the one the release built.
