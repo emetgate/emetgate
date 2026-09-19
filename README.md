@@ -114,6 +114,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | `emetgate_try` | Verify, gate and commit a proposed body |
 | `emetgate_try_batch` | Several proposals as one unit |
 | `emetgate_read_file`, `emetgate_list`, `emetgate_search` | Reads confined to the repository |
+| `emetgate_scan` | Measure one check expression against the repository, optionally within a `where` scope; writes nothing |
 
 `emetgate lockdown` starts Claude Code with only these tools available, so the model has no path to the disk other than the gate.
 
@@ -155,6 +156,28 @@ Some things cannot be made mechanical, and this project does not claim otherwise
 - **Mediation.** The guarantees hold for changes that go through the gate. Edits made by other tools bypass it, which is why lockdown exists.
 - **Sandbox scope.** The low-integrity token stops the test command from writing outside the shadow copy; it does not restrict reading or network access, so a hostile test command can still read files it has permission to read and reach the network. Confining those requires an AppContainer, which is planned.
 - **Taste.** Architecture, API design and user experience are not properties a kernel can check.
+
+## Installing
+
+Each release tag publishes a Windows binary and its SHA-256 checksum on the [releases page](https://github.com/emetgate/emetgate/releases). Download both (this only downloads; nothing is run):
+
+```powershell
+foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile $f }
+```
+
+Check the binary against the published checksum before running it; this prints `True` when they match:
+
+```powershell
+(Get-FileHash .\emetgate.exe -Algorithm SHA256).Hash -eq (Get-Content .\emetgate.exe.sha256).Split(" ")[0]
+```
+
+Register it with Claude Code:
+
+```powershell
+claude mcp add emetgate -- .\emetgate.exe mcp
+```
+
+The binary is not code-signed, so Windows SmartScreen warns on first run: it flags executables that carry no publisher signature and have little download history, not because it found anything in this one. The checksum above is how to confirm the file is the one the release built.
 
 ## Building
 

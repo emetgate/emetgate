@@ -1,0 +1,42 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-binary:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig
+        shell: pwsh
+        run: |
+          $zip = "zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          $url = "https://ziglang.org/download/$env:ZIG_VERSION/$zip"
+          Invoke-WebRequest $url -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
+          Remove-Item $zip
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
+      - run: zig version
+      - run: zig build test --summary all
+      - run: zig build -Doptimize=ReleaseSafe
+      - name: Compute the SHA-256 checksum
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item zig-out/bin/emetgate.exe dist/emetgate.exe
+          $hash = (Get-FileHash dist/emetgate.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  emetgate.exe" | Out-File -FilePath dist/emetgate.exe.sha256 -Encoding ascii -NoNewline
+          Get-Content dist/emetgate.exe.sha256
+      - name: Create the GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$env:GITHUB_REF_NAME" dist/emetgate.exe dist/emetgate.exe.sha256 --title "$env:GITHUB_REF_NAME" --generate-notes --verify-tag
