@@ -25,8 +25,15 @@ jobs:
           Remove-Item $zip
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
-      - run: zig build test -Doptimize=ReleaseSafe --summary all
-      - run: zig build -Doptimize=ReleaseSafe
+      - run: zig build test -Doptimize=ReleaseSafe -Dcpu=baseline --summary all
+      - run: zig build -Doptimize=ReleaseSafe -Dcpu=baseline
+      - name: Smoke-test the built binary
+        shell: pwsh
+        run: |
+          $out = & zig-out/bin/emetgate.exe symbols tests/bench/master/calc.ts
+          if ($LASTEXITCODE -ne 0) { throw "emetgate symbols exited with $LASTEXITCODE" }
+          $out
+          if (-not ($out -match "function\s+add$")) { throw "emetgate symbols did not list add" }
       - name: Compute the SHA-256 checksum
         shell: pwsh
         run: |
