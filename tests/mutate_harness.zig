@@ -1,5 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const core = @import("../tools/mutate/core.zig");
+const job = @import("../tools/mutate/job.zig");
 
 const testing = std.testing;
 
@@ -86,6 +88,51 @@ test "harness: a clean run is survived and a run with no matching tests is flagg
 test "harness: e2e-lockdown failures are killed" {
     try testing.expectEqual(core.Status.killed, core.classify(.e2e, 1, "FAIL: tool outside the lockdown allow-list: Bash\ne2e-lockdown: 1 failure(s)\n"));
     try testing.expectEqual(core.Status.survived, core.classify(.e2e, 0, "e2e-lockdown: passed\n"));
+}
+
+test "harness: a mutation's own timeout_s replaces the global limit" {
+    try testing.expectEqual(@as(u64, 30), core.timeoutFor(30, 900));
+    try testing.expectEqual(@as(u64, 900), core.timeoutFor(null, 900));
+}
+
+test "harness: --skip-survivors skips expected survivors and nothing else" {
+    try testing.expectEqual(core.Skip.survivor, core.skipReason(.unit, "survived", false, false, true).?);
+    try testing.expect(core.skipReason(.unit, "survived", false, false, false) == null);
+    try testing.expect(core.skipReason(.unit, "killed", false, false, true) == null);
+    try testing.expect(core.skipReason(.unit, "timeout", false, false, true) == null);
+    try testing.expectEqual(core.Skip.e2e, core.skipReason(.e2e, "killed", false, false, true).?);
+}
+
+test "harness: a selected id runs even when it is an expected survivor" {
+    try testing.expect(core.skipReason(.unit, "survived", true, false, true) == null);
+    try testing.expect(core.skipReason(.e2e, "survived", true, false, true) == null);
+}
+
+test "harness: the summary line counts skipped survivors" {
+    var buf: [256]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try core.writeSummary(&w, 5, 1, 2, 9);
+    try testing.expectEqualStrings("5 mutation(s) run, 4 as expected, 1 not as expected, 2 e2e mutation(s) skipped (pass --e2e), 9 expected survivor(s) skipped (drop --skip-survivors)", w.buffered());
+
+    w = .fixed(&buf);
+    try core.writeSummary(&w, 3, 0, 0, 0);
+    try testing.expectEqualStrings("3 mutation(s) run, 3 as expected, 0 not as expected", w.buffered());
+}
+
+test "harness: a timeout kills the grandchildren a command leaves behind" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    try testing.expectError(error.Timeout, job.run(testing.allocator, testing.io, &.{ "cmd", "/c", "start /b ping -n 100 127.0.0.77 & ping -n 100 127.0.0.1" }, 1024 * 1024, 1));
+    const elapsed_ns = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).nanoseconds;
+    try testing.expect(elapsed_ns < 20 * std.time.ns_per_s);
+
+    const probe = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{
+        "powershell", "-NoProfile", "-Command",
+        "@(Get-CimInstance Win32_Process -Filter \"Name = 'PING.EXE'\" | Where-Object { $_.CommandLine -like '*127.0.0.77*' }).Count",
+    } });
+    defer testing.allocator.free(probe.stdout);
+    defer testing.allocator.free(probe.stderr);
+    try testing.expectEqualStrings("0", std.mem.trim(u8, probe.stdout, " \r\n"));
 }
 
 test "harness: an interrupted mutation is restored from the journal on the next start" {

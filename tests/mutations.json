@@ -1371,10 +1371,13 @@
     },
     {
       "id": "PC2-checks-empty-argument-accepted",
+      "expect_status": "timeout",
+      "timeout_s": 30,
+      "note": "without the guard an empty forbid needle matches at every offset without advancing, so the scan never ends and appends violations until the test allocator runs out of memory (about 10 GB and 340 s locally); no test catches the mutant, the scan simply does not finish",
       "file": "src/engine/checks.zig",
       "from": "if (arg.len == 0) return error.EmptyCheckArgument;",
       "to": "_ = arg;",
-      "kills": [
+      "filter": [
         "argument misuse is refused with its own error before any check runs"
       ]
     },

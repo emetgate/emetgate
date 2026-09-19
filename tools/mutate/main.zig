@@ -1,5 +1,6 @@
 const std = @import("std");
 const core = @import("core.zig");
+const job = @import("job.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -22,6 +23,7 @@ const Mutation = struct {
     exact: bool = false,
     optimize: ?[]const u8 = null,
     note: ?[]const u8 = null,
+    timeout_s: ?u64 = null,
 };
 
 const Spec = struct { mutations: []const Mutation };
@@ -44,6 +46,7 @@ const Options = struct {
     include_e2e: bool = false,
     full: bool = false,
     list_only: bool = false,
+    skip_survivors: bool = false,
     timeout_s: u64 = default_timeout_s,
 };
 
@@ -61,6 +64,8 @@ pub fn main(init: std.process.Init) !u8 {
             options.full = true;
         } else if (std.mem.eql(u8, arg, "--list")) {
             options.list_only = true;
+        } else if (std.mem.eql(u8, arg, "--skip-survivors")) {
+            options.skip_survivors = true;
         } else if (std.mem.startsWith(u8, arg, "--timeout-s=")) {
             options.timeout_s = std.fmt.parseInt(u64, arg["--timeout-s=".len..], 10) catch return usage();
         } else if (std.mem.startsWith(u8, arg, "--")) {
@@ -103,14 +108,18 @@ pub fn main(init: std.process.Init) !u8 {
     var outcomes: std.ArrayList(Outcome) = .empty;
     var failures: usize = 0;
     var skipped_e2e: usize = 0;
+    var skipped_survivors: usize = 0;
     for (spec.mutations) |m| {
         if (selected.items.len != 0 and !contains(selected.items, m.id)) continue;
         const kind = kindOf(m.expect) orelse {
             std.debug.print("{s}: unknown expect \"{s}\"\n", .{ m.id, m.expect });
             return 2;
         };
-        if (kind == .e2e and !options.include_e2e and selected.items.len == 0) {
-            skipped_e2e += 1;
+        if (core.skipReason(kind, m.expect_status, selected.items.len != 0, options.include_e2e, options.skip_survivors)) |reason| {
+            switch (reason) {
+                .e2e => skipped_e2e += 1,
+                .survivor => skipped_survivors += 1,
+            }
             continue;
         }
         if (options.list_only) {
@@ -130,14 +139,14 @@ pub fn main(init: std.process.Init) !u8 {
     try js.write(outcomes.items);
     try cwd.writeFile(io, .{ .sub_path = report_path, .data = report.written() });
 
-    std.debug.print("\n{d} mutation(s) run, {d} as expected, {d} not as expected", .{ outcomes.items.len, outcomes.items.len - failures, failures });
-    if (skipped_e2e != 0) std.debug.print(", {d} e2e mutation(s) skipped (pass --e2e)", .{skipped_e2e});
-    std.debug.print("\nreport: {s}\n", .{report_path});
+    var summary: std.Io.Writer.Allocating = .init(arena);
+    try core.writeSummary(&summary.writer, outcomes.items.len, failures, skipped_e2e, skipped_survivors);
+    std.debug.print("\n{s}\nreport: {s}\n", .{ summary.written(), report_path });
     return if (failures == 0) 0 else 1;
 }
 
 fn usage() u8 {
-    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--timeout-s=N] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--timeout-s=N] [id...]\n", .{});
     return 2;
 }
 
@@ -226,15 +235,7 @@ fn runBuild(arena: Allocator, io: std.Io, kind: core.Kind, m: Mutation, options:
         const filters = if (m.filter.len != 0) m.filter else m.kills;
         for (filters) |f| try argv.append(arena, try std.fmt.allocPrint(arena, "-Dtest-filter={s}", .{f}));
     }
-    return std.process.run(arena, io, .{
-        .argv = argv.items,
-        .stdout_limit = .limited(max_output),
-        .stderr_limit = .limited(max_output),
-        .timeout = .{ .duration = .{
-            .raw = .{ .nanoseconds = @as(i96, options.timeout_s) * std.time.ns_per_s },
-            .clock = .awake,
-        } },
-    });
+    return job.run(arena, io, argv.items, max_output, core.timeoutFor(m.timeout_s, options.timeout_s));
 }
 
 fn restore(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, path: []const u8, original: []const u8) !void {

@@ -15,6 +15,25 @@ pub const Summary = struct {
     crashed: u32 = 0,
 };
 
+pub const Skip = enum { e2e, survivor };
+
+pub fn skipReason(kind: Kind, expect_status: []const u8, selected: bool, include_e2e: bool, skip_survivors: bool) ?Skip {
+    if (selected) return null;
+    if (kind == .e2e and !include_e2e) return .e2e;
+    if (skip_survivors and std.mem.eql(u8, expect_status, "survived")) return .survivor;
+    return null;
+}
+
+pub fn timeoutFor(own: ?u64, global: u64) u64 {
+    return own orelse global;
+}
+
+pub fn writeSummary(w: *std.Io.Writer, run: usize, failures: usize, skipped_e2e: usize, skipped_survivors: usize) std.Io.Writer.Error!void {
+    try w.print("{d} mutation(s) run, {d} as expected, {d} not as expected", .{ run, run - failures, failures });
+    if (skipped_e2e != 0) try w.print(", {d} e2e mutation(s) skipped (pass --e2e)", .{skipped_e2e});
+    if (skipped_survivors != 0) try w.print(", {d} expected survivor(s) skipped (drop --skip-survivors)", .{skipped_survivors});
+}
+
 pub fn applyMutation(gpa: Allocator, source: []const u8, from: []const u8, to: []const u8, all: bool) ![]u8 {
     if (from.len == 0) return error.EmptyPattern;
     const count = std.mem.count(u8, source, from);
