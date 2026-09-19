@@ -126,13 +126,26 @@ fn writeText(out: *Writer, result: scan.Result) !void {
     }
     for (result.unreadable) |u| try out.print("warning: {s}: not scanned: {t}\n", .{ u.file, u.reason });
     for (result.parse_errors) |file| try out.print("warning: {s}: parse error; tree-based checks may be incomplete\n", .{file});
-    try out.print("{d} rule(s), {d} file(s) scanned, {d} violation(s); {d} outside rule scope, {d} skipped without a language profile, {d} unreadable, {d} with parse errors\n", .{
-        result.rules,
+    const unreadable = result.unreadable.len;
+    const tracked = result.scanned + result.out_of_scope + result.unsupported + unreadable;
+    try out.print("{d} violation(s) in {d} file(s), {d} rule(s)\n", .{ result.violations.len, filesWithViolations(result), result.rules });
+    try out.print("{d} tracked file(s): {d} scanned, {d} outside rule scope, {d} without a language profile, {d} unreadable\n", .{
+        tracked,
         result.scanned,
-        result.violations.len,
         result.out_of_scope,
         result.unsupported,
-        result.unreadable.len,
-        result.parse_errors.len,
+        unreadable,
     });
+    if (result.parse_errors.len > 0) {
+        try out.print("{d} of the {d} scanned file(s) had parse errors; tree-based checks there may be incomplete\n", .{ result.parse_errors.len, result.scanned });
+    }
+}
+
+fn filesWithViolations(result: scan.Result) usize {
+    const violations = result.violations;
+    var count: usize = 0;
+    for (violations, 0..) |v, i| {
+        if (i == 0 or !std.mem.eql(u8, v.file, violations[i - 1].file)) count += 1;
+    }
+    return count;
 }
