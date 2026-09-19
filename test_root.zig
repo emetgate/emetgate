@@ -10,6 +10,7 @@ test {
     _ = @import("tests/mutate_harness.zig");
     _ = @import("tests/memory.zig");
     _ = @import("tests/scan.zig");
+    _ = @import("tests/scan_tool.zig");
     _ = @import("tests/redteam_memory.zig");
     _ = @import("tests/redteam_sandbox.zig");
     _ = @import("tests/lang/conformance.zig");

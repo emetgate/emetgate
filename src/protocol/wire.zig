@@ -178,7 +178,8 @@ fn writeViolation(js: *std.json.Stringify, v: rules.Violation) !void {
     try js.endObject();
 }
 
-pub fn writeScan(writer: *Writer, result: scan.Result) !void {
+pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize) !void {
+    const shown = if (limit) |max| result.violations[0..@min(max, result.violations.len)] else result.violations;
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
@@ -208,8 +209,14 @@ pub fn writeScan(writer: *Writer, result: scan.Result) !void {
     try js.endArray();
     try js.objectField("violations");
     try js.beginArray();
-    for (result.violations) |v| try writeViolation(&js, v);
+    for (shown) |v| try writeViolation(&js, v);
     try js.endArray();
+    if (limit != null) {
+        try js.objectField("violation_count");
+        try js.write(result.violations.len);
+        try js.objectField("truncated");
+        try js.write(shown.len < result.violations.len);
+    }
     try js.endObject();
     try writer.writeByte('\n');
 }
