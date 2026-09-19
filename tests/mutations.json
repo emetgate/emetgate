@@ -2568,7 +2568,7 @@
       "id": "EX2-dir-name-only-first-component",
       "file": "src/platform/where.zig",
       "from": "        start = i + 1;\n",
-      "to": "",
+      "to": "        start = i;\n",
       "kills": [
         "exclusion: src/ !__tests__/ drops the test directories and keeps production code",
         "exclusion: a directory name is excluded at any depth",
@@ -2579,8 +2579,8 @@
     {
       "id": "EX3-slashed-exclusion-as-segment",
       "file": "src/platform/where.zig",
-      "from": "    if (std.mem.indexOfScalar(u8, name, '/') == null) return .{ .dir_name = name };\n",
-      "to": "    return .{ .dir_name = name };\n",
+      "from": "std.mem.indexOfScalar(u8, name, '/') == null) return .{ .dir_name = name };",
+      "to": "std.mem.indexOfScalar(u8, name, '/') != name.len) return .{ .dir_name = name };",
       "kills": [
         "exclusion: a slashed exclusion is a prefix and leaves a same-named segment elsewhere",
         "exclusions are split off the scope and each keeps its form"
@@ -2754,7 +2754,7 @@
       "id": "NS1-nothing-in-scope-never-detected",
       "file": "src/platform/scan.zig",
       "from": "        return self.rules != 0 and self.scanned == 0;\n",
-      "to": "        return false;\n",
+      "to": "        return self.rules != 0 and self.scanned == std.math.maxInt(usize);\n",
       "kills": [
         "nothing in scope: a scope whose every file is excluded is not reported clean",
         "nothing in scope: a directory with no language profile is not reported clean",

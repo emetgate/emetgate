@@ -323,6 +323,7 @@ test "a suffix exclusion matches the end of the file name only" {
     try testing.expect(!w.coversFile("packages/a/types.test-d.ts"));
     try testing.expect(w.coversFile("packages/a/types.ts"));
     try testing.expect(w.coversFile("packages/a/types.test.ts"));
+    try testing.expect(w.coversFile("packages/a/types.test-d.ts.map"));
 }
 
 test "a file exclusion removes exactly that file" {
