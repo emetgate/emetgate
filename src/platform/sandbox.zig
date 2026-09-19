@@ -11,6 +11,7 @@ pub const Limits = struct {
 
 pub const Outcome = union(enum) {
     exited: u32,
+    crashed: u32,
     timed_out,
     output_limit,
 };
@@ -26,7 +27,7 @@ pub const Report = struct {
     pub fn passed(self: Report) bool {
         return switch (self.outcome) {
             .exited => |code| code == 0 and !self.killed_leftovers,
-            .timed_out, .output_limit => false,
+            .crashed, .timed_out, .output_limit => false,
         };
     }
 
@@ -41,6 +42,12 @@ pub const Command = struct {
     cwd: []const u8,
     limits: Limits = .{},
 };
+
+const ntstatus_error_floor: u32 = 0xC0000000;
+
+fn exitOutcome(code: u32) Outcome {
+    return if (code >= ntstatus_error_floor) .{ .crashed = code } else .{ .exited = code };
+}
 
 const read_reserve = 4096;
 const exit_poll_ns = 50 * std.time.ns_per_ms;
@@ -126,7 +133,7 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
     const stderr = try takeStream(gpa, &reader, 1, limit, &truncated);
 
     return .{
-        .outcome = stopped orelse .{ .exited = exit_code },
+        .outcome = stopped orelse exitOutcome(exit_code),
         .duration_ns = duration_ns,
         .stdout = stdout,
         .stderr = stderr,
@@ -649,16 +656,34 @@ test "a clean exit passes and both streams are captured separately" {
 
 test "exit codes are reported as full 32-bit values, so 256 never reads as success" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    const codes = [_]struct { arg: []const u8, value: u32 }{
-        .{ .arg = "3", .value = 3 },
-        .{ .arg = "256", .value = 256 },
-        .{ .arg = "3221225477", .value = 0xC0000005 },
+    const codes = [_]struct { arg: []const u8, expected: Outcome }{
+        .{ .arg = "3", .expected = .{ .exited = 3 } },
+        .{ .arg = "256", .expected = .{ .exited = 256 } },
+        .{ .arg = "3221225477", .expected = .{ .crashed = 0xC0000005 } },
     };
     for (codes) |code| {
         errdefer std.debug.print("exit code {s} misreported\n", .{code.arg});
         const report = try probe(&.{ "exit", code.arg }, .{ .timeout_ms = 10_000 });
         defer report.deinit(testing.allocator);
-        try testing.expectEqual(Outcome{ .exited = code.value }, report.outcome);
+        try testing.expectEqual(code.expected, report.outcome);
+        try testing.expect(!report.passed());
+    }
+}
+
+test "an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const cases = [_]struct { command: []const u8, expected: Outcome }{
+        .{ .command = "exit -1073741502", .expected = .{ .crashed = 0xC0000142 } },
+        .{ .command = "exit -1073741824", .expected = .{ .crashed = 0xC0000000 } },
+        .{ .command = "exit 2", .expected = .{ .exited = 2 } },
+        .{ .command = "exit 57005", .expected = .{ .exited = 0xDEAD } },
+    };
+    for (cases) |c| {
+        errdefer std.debug.print("command {s} misclassified\n", .{c.command});
+        const argv = [_][]const u8{ "cmd.exe", "/d", "/c", c.command };
+        const report = try run(testing.allocator, testing.io, .{ .argv = &argv, .cwd = ".", .limits = .{ .timeout_ms = 10_000 } });
+        defer report.deinit(testing.allocator);
+        try testing.expectEqual(c.expected, report.outcome);
         try testing.expect(!report.passed());
     }
 }

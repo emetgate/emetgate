@@ -225,17 +225,24 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
             return rejected_exit_code;
         },
         .typecheck_failed => |report| {
-            std.debug.print("rejected: typecheck did not pass ({t})\n", .{report.outcome});
+            printStageRejected("typecheck", report.outcome);
             if (report.stdout.len != 0) std.debug.print("--- stdout ---\n{s}\n", .{report.stdout});
             if (report.stderr.len != 0) std.debug.print("--- stderr ---\n{s}\n", .{report.stderr});
             return rejected_exit_code;
         },
         .rejected => |report| {
-            std.debug.print("rejected: tests did not pass ({t})\n", .{report.outcome});
+            printStageRejected("tests", report.outcome);
             if (report.stdout.len != 0) std.debug.print("--- stdout ---\n{s}\n", .{report.stdout});
             if (report.stderr.len != 0) std.debug.print("--- stderr ---\n{s}\n", .{report.stderr});
             return rejected_exit_code;
         },
+    }
+}
+
+fn printStageRejected(stage: []const u8, outcome: emetgate.sandbox.Outcome) void {
+    switch (outcome) {
+        .crashed => |code| std.debug.print("rejected: {s} crashed (0x{X:0>8})\n", .{ stage, code }),
+        .exited, .timed_out, .output_limit => std.debug.print("rejected: {s} did not pass ({t})\n", .{ stage, outcome }),
     }
 }
 

@@ -2809,6 +2809,111 @@
       "kills": [
         "nothing in scope: with no rules and no scannable file the scan stays clean and exits 0"
       ]
+    },
+    {
+      "id": "CR1-crash-threshold-removed",
+      "file": "src/platform/sandbox.zig",
+      "from": "return if (code >= ntstatus_error_floor) .{ .crashed = code } else .{ .exited = code };",
+      "to": "return .{ .exited = code };",
+      "kills": [
+        "an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits",
+        "exit codes are reported as full 32-bit values, so 256 never reads as success",
+        "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched",
+        "crash: a test command that crashes rejects as test_crashed and leaves disk untouched",
+        "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched",
+        "crash: a test command that crashes rejects a whole batch as test_crashed and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "CR2-crash-threshold-counts-own-kill",
+      "file": "src/platform/sandbox.zig",
+      "from": "const ntstatus_error_floor: u32 = 0xC0000000;",
+      "to": "const ntstatus_error_floor: u32 = 0xDEAD;",
+      "kills": [
+        "an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits"
+      ]
+    },
+    {
+      "id": "CR3-crash-threshold-exclusive",
+      "file": "src/platform/sandbox.zig",
+      "from": "return if (code >= ntstatus_error_floor)",
+      "to": "return if (code > ntstatus_error_floor)",
+      "kills": [
+        "an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits"
+      ]
+    },
+    {
+      "id": "CR4-crash-passes",
+      "file": "src/platform/sandbox.zig",
+      "from": "            .crashed, .timed_out, .output_limit => false,\n",
+      "to": "            .crashed => true,\n            .timed_out, .output_limit => false,\n",
+      "kills": [
+        "an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits",
+        "exit codes are reported as full 32-bit values, so 256 never reads as success",
+        "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched",
+        "crash: a test command that crashes rejects as test_crashed and leaves disk untouched",
+        "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched",
+        "crash: a test command that crashes rejects a whole batch as test_crashed and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "CR5-typecheck-crash-labelled-failed",
+      "file": "src/protocol/wire.zig",
+      "from": ".crashed => \"typecheck_crashed\",",
+      "to": ".crashed => \"typecheck_failed\",",
+      "kills": [
+        "a crashed stage is reported as a crash with its hex code, never as a failed verdict",
+        "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched",
+        "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "CR6-test-crash-labelled-failed",
+      "file": "src/protocol/wire.zig",
+      "from": ".crashed => \"test_crashed\",",
+      "to": ".crashed => \"tests_failed\",",
+      "kills": [
+        "a crashed stage is reported as a crash with its hex code, never as a failed verdict",
+        "crash: a test command that crashes rejects as test_crashed and leaves disk untouched",
+        "crash: a test command that crashes rejects a whole batch as test_crashed and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "CR7-crash-outcome-tagged-exited",
+      "file": "src/protocol/wire.zig",
+      "from": ".crashed => \"crashed\",",
+      "to": ".crashed => \"exited\",",
+      "kills": [
+        "a crashed stage is reported as a crash with its hex code, never as a failed verdict"
+      ]
+    },
+    {
+      "id": "CR8-crash-code-not-hex",
+      "file": "src/protocol/wire.zig",
+      "from": "\"0x{X:0>8}\", .{code}",
+      "to": "\"{d}\", .{code}",
+      "kills": [
+        "a crashed stage is reported as a crash with its hex code, never as a failed verdict"
+      ]
+    },
+    {
+      "id": "CR9-batch-swallows-test-crash",
+      "file": "src/platform/batch.zig",
+      "from": "if (!report.passed()) return .{ .rejected = report };",
+      "to": "if (!report.passed() and report.outcome != .crashed) return .{ .rejected = report };",
+      "kills": [
+        "crash: a test command that crashes rejects a whole batch as test_crashed and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "CR10-typecheck-stage-swallows-crash",
+      "file": "src/platform/runner.zig",
+      "from": "if (!checked.passed()) return .{ .typecheck = checked };",
+      "to": "if (!checked.passed() and checked.outcome != .crashed) return .{ .typecheck = checked };",
+      "kills": [
+        "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched",
+        "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched"
+      ]
     }
   ]
 }
