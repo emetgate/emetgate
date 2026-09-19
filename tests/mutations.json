@@ -2914,6 +2914,42 @@
         "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched",
         "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched"
       ]
+    },
+    {
+      "id": "RC1-recover-swallows-shadow-removal-error",
+      "file": "src/platform/disk.zig",
+      "from": "const removal = shadow.remove(io, root_abs, shadow_abs);",
+      "to": "const removal: anyerror!void = {}; shadow.remove(io, root_abs, shadow_abs) catch {};",
+      "kills": [
+        "purple recover: a shadow that cannot be removed exits 16 and says so after the summary"
+      ]
+    },
+    {
+      "id": "RC2-recover-reports-shadow-error-but-exits-0",
+      "file": "src/platform/disk.zig",
+      "from": "return recover_failed_exit_code;",
+      "to": "return 0;",
+      "kills": [
+        "purple recover: a shadow that cannot be removed exits 16 and says so after the summary"
+      ]
+    },
+    {
+      "id": "RC3-recover-treats-missing-shadow-as-failure",
+      "file": "src/platform/disk.zig",
+      "from": "const removal = shadow.remove(io, root_abs, shadow_abs);",
+      "to": "const removal = std.Io.Dir.cwd().deleteDir(io, shadow_abs);",
+      "kills": [
+        "purple recover: no shadow at all is a clean recover with exit 0"
+      ]
+    },
+    {
+      "id": "RC4-prepare-swallows-stale-shadow-removal-error",
+      "file": "src/platform/shadow.zig",
+      "from": "try remove(io, options.root_abs, options.shadow_abs);",
+      "to": "remove(io, options.root_abs, options.shadow_abs) catch {};",
+      "kills": [
+        "prepare fails instead of carrying on when a stale shadow cannot be removed"
+      ]
     }
   ]
 }
