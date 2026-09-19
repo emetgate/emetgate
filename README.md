@@ -118,6 +118,8 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 
 `emetgate lockdown` starts Claude Code with only these tools available, so the model has no path to the disk other than the gate.
 
+The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, that audits a CLAUDE.md or AGENTS.md file: it sorts every instruction sentence into enforceable, waiting for a mechanism, unverifiable or belief, proposes a check and scope for the enforceable ones, measures each with `emetgate_scan` and reports, changing nothing. To use it in every project, copy the `md-audit` folder into `%USERPROFILE%\.claude\skills\` (`~/.claude/skills/` elsewhere).
+
 ## How the kernel itself is verified
 
 A verification layer that has not been verified is only a more elaborate way of hoping. Two rules apply to every guard in the kernel.
