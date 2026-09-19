@@ -10,6 +10,8 @@ pub const violations_exit_code: u8 = 10;
 
 pub const ledger_needs_repair_message = "the ledger ends in a partial row; the next call that changes the ledger moves it to quarantine, after which scan runs";
 
+pub const nothing_in_scope_message = "no file inside the scope has a language profile, so nothing was measured";
+
 pub const Options = struct {
     source: scan.Source,
     json: bool,
@@ -91,6 +93,10 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
         try wire.writeScan(out, result, options.max_violations);
     } else {
         try writeText(out, result);
+    }
+    if (result.nothingInScope()) {
+        if (!options.json) try out.print("{t}: {s}\n", .{ error.NothingInScope, nothing_in_scope_message });
+        return wire.exitCode(error.NothingInScope);
     }
     return if (result.violations.len == 0) 0 else violations_exit_code;
 }

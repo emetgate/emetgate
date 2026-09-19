@@ -1104,3 +1104,17 @@ test "scope: a batch applies a symbol-scoped rule only to the edit of that symbo
     try testing.expect(inside == .rule_violation);
     try testing.expect(std.mem.endsWith(u8, inside.rule_violation.violations[0].file, "b.ts"));
 }
+
+test "scope: at the gate an excluded file is not blocked and a file left in scope is" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    for ([_][]const u8{ "src/ !src/math.ts", "src/ !*.ts", "src/ !src/" }) |where| {
+        const result = try tryAddUnder(where);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .committed);
+    }
+    for ([_][]const u8{ "src/ !__tests__/", "src/ !*.test.ts", "src/ !src/other.ts", "src/math.ts#add !lib/" }) |where| {
+        const result = try tryAddUnder(where);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .rule_violation);
+    }
+}

@@ -674,3 +674,162 @@ test "scope: a no_literal rule scoped to one symbol reports only its literal opt
     try testing.expect(!outcome.has("src/wait.js:"));
     try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 1 violation(s); 1 outside rule scope,"));
 }
+
+const exclusion_repo = [_]File{
+    .{ .path = "src/server.ts", .data = "export const a = x as any;\n" },
+    .{ .path = "src/a/__tests__/x.ts", .data = "const t = y as any;\n" },
+    .{ .path = "src/b/c/__tests__/y.ts", .data = "const u = z as any;\n" },
+    .{ .path = "packages/core/parse.ts", .data = "JSON.parse(s);\n" },
+    .{ .path = "packages/core/parse.test.ts", .data = "JSON.parse(t);\n" },
+    .{ .path = "packages/core/__fixtures__/data.ts", .data = "JSON.parse(f);\n" },
+    .{ .path = "packages/types/infer.ts", .data = "// @ts-expect-error\nconst n: number = s;\n" },
+    .{ .path = "packages/types/infer.test-d.ts", .data = "// @ts-expect-error\nconst m: number = s;\n" },
+    .{ .path = "packages/gen/out.ts", .data = "JSON.parse(g);\n" },
+    .{ .path = "packages/core/gen/in.ts", .data = "JSON.parse(h);\n" },
+    .{ .path = "docs/readme.md", .data = "as any\n" },
+};
+
+test "exclusion: src/ !__tests__/ drops the test directories and keeps production code" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+
+    const all = try runScan(&repo, &.{ "--check", "forbid:as any", "--in", "src/" });
+    defer all.deinit();
+    try testing.expect(all.has("1 rule(s), 3 file(s) scanned, 3 violation(s);"));
+
+    const production = try runScan(&repo, &.{ "--check", "forbid:as any", "--in", "src/ !__tests__/" });
+    defer production.deinit();
+    try testing.expectEqual(@as(u8, 10), production.code);
+    try testing.expect(production.has("src/server.ts:1:20: forbid:as any: as any\n"));
+    try testing.expect(!production.has("__tests__"));
+    try testing.expect(production.has("1 rule(s), 1 file(s) scanned, 1 violation(s); 10 outside rule scope,"));
+}
+
+test "exclusion: a directory name is excluded at any depth" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const shallow = try runScan(&repo, &.{ "--check", "forbid:as any", "--in", "src/ !__tests__/" });
+    defer shallow.deinit();
+    try testing.expect(!shallow.has("src/a/__tests__/x.ts"));
+    try testing.expect(!shallow.has("src/b/c/__tests__/y.ts"));
+    try testing.expect(shallow.has("10 outside rule scope,"));
+}
+
+test "exclusion: two exclusions apply together" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--check", "forbid:JSON.parse", "--in", "packages/ !*.test.ts !__fixtures__/" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 10), outcome.code);
+    try testing.expect(outcome.has("packages/core/parse.ts:1:1:"));
+    try testing.expect(outcome.has("packages/gen/out.ts:1:1:"));
+    try testing.expect(outcome.has("packages/core/gen/in.ts:1:1:"));
+    try testing.expect(!outcome.has("parse.test.ts"));
+    try testing.expect(!outcome.has("__fixtures__"));
+    try testing.expect(outcome.has(" 3 violation(s);"));
+}
+
+test "exclusion: a suffix exclusion drops negative type tests" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--check", "forbid:@ts-expect-error", "--in", "packages/ !*.test-d.ts" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 10), outcome.code);
+    try testing.expect(outcome.has("packages/types/infer.ts:1:4:"));
+    try testing.expect(!outcome.has("infer.test-d.ts"));
+    try testing.expect(outcome.has(" 1 violation(s);"));
+}
+
+test "exclusion: a slashed exclusion is a prefix and leaves a same-named segment elsewhere" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--check", "forbid:JSON.parse", "--in", "packages/ !packages/gen/" });
+    defer outcome.deinit();
+    try testing.expect(!outcome.has("packages/gen/out.ts"));
+    try testing.expect(outcome.has("packages/core/gen/in.ts:1:1:"));
+}
+
+test "exclusion: a ledger rule with exclusions is honored by the ledger scan" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    try repo.putLedger(scopedRow("mx", "forbid:as any", "src/ !__tests__/"));
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 10), outcome.code);
+    try testing.expect(outcome.has("1 rule(s), 1 file(s) scanned, 1 violation(s);"));
+}
+
+test "nothing in scope: a scope whose every file is excluded is not reported clean" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--check", "forbid:as any", "--in", "src/a/ !__tests__/" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 32), outcome.code);
+    try testing.expect(outcome.has(" 0 file(s) scanned, 0 violation(s);"));
+    try testing.expect(outcome.has("NothingInScope: "));
+
+    const json = try runScan(&repo, &.{ "--json", "--check", "forbid:as any", "--in", "src/a/ !__tests__/" });
+    defer json.deinit();
+    try testing.expectEqual(@as(u8, 32), json.code);
+    const parsed = try std.json.parseFromSlice(JsonScan, testing.allocator, json.out, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings("nothing_in_scope", parsed.value.status);
+    try testing.expectEqual(@as(usize, 0), parsed.value.scanned);
+}
+
+test "nothing in scope: a directory with no language profile is not reported clean" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--check", "forbid:as any", "--in", "docs/" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 32), outcome.code);
+    try testing.expect(outcome.has(" 0 file(s) scanned, 0 violation(s);"));
+    try testing.expect(outcome.has("1 skipped without a language profile"));
+}
+
+test "nothing in scope: a scope excluding its only file resolves, so it is not ScopeUnresolved" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--check", "forbid:x", "--in", "src/server.ts !src/server.ts" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 32), outcome.code);
+    try testing.expectEqual(@as(usize, 0), outcome.err.len);
+}
+
+test "exclusion: an invalid exclusion in --in is refused by name before anything is scanned" {
+    try skipOffWindows();
+    var repo = try Repo.init(&exclusion_repo);
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{ "--check", "forbid:x", "--in", "src/ !*.test.*" });
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 2), outcome.code);
+    try testing.expect(std.mem.indexOf(u8, outcome.err, "WhereExclusionGlob") != null);
+    try testing.expectEqual(@as(usize, 0), outcome.out.len);
+}
+
+test "nothing in scope: with no rules and no scannable file the scan stays clean and exits 0" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ .path = "docs/readme.md", .data = "text\n" }});
+    defer repo.deinit();
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expectEqual(@as(u8, 0), outcome.code);
+    try testing.expect(outcome.has("0 rule(s), 0 file(s) scanned, 0 violation(s);"));
+    try testing.expect(!outcome.has("NothingInScope"));
+
+    const json = try runScan(&repo, &.{"--json"});
+    defer json.deinit();
+    try testing.expectEqual(@as(u8, 0), json.code);
+    const parsed = try std.json.parseFromSlice(JsonScan, testing.allocator, json.out, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings("clean", parsed.value.status);
+}

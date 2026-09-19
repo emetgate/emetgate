@@ -183,7 +183,7 @@ pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write(if (result.violations.len == 0) "clean" else "violations");
+    try js.write(if (result.nothingInScope()) "nothing_in_scope" else if (result.violations.len == 0) "clean" else "violations");
     try js.objectField("rules");
     try js.write(result.rules);
     try js.objectField("scanned");
@@ -362,8 +362,9 @@ pub fn exitCode(err: anyerror) u8 {
         error.IgnoredPath => 29,
         error.WrittenButNotIndexed => 30,
         error.ScopeUnresolved => 31,
+        error.NothingInScope => 32,
         error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
-        error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed => 2,
+        error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed, error.WhereExclusionEmpty, error.WhereExclusionGlob, error.WhereExclusionAbsolute, error.WhereExclusionParentSegment, error.WhereExclusionMalformed, error.WhereTooManyExclusions => 2,
         error.NoTestCommand, error.InvalidConfig => 2,
         error.UntrustedRepoConfig => 15,
         error.ModelSuppliedTestPolicy => 17,

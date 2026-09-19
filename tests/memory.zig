@@ -416,3 +416,70 @@ test "where: two rows for one id that differ only in where are corrupt" {
     const rows = try memory.parseLedger(arena.allocator(), a_active ++ scoped);
     try testing.expectError(error.LedgerCorrupt, memory.foldRows(arena.allocator(), rows));
 }
+
+fn expectExclusionRefused(where: []const u8, err: anyerror) !void {
+    var store = try Store.init();
+    defer store.deinit();
+    const id = try memory.remember(testing.allocator, testing.io, store.root, .project, "base", true, "no_comment", null);
+    defer testing.allocator.free(id);
+    const before = try store.get(memory.ledger_name);
+    defer testing.allocator.free(before);
+    try testing.expectError(err, memory.remember(testing.allocator, testing.io, store.root, .file, "x", true, "no_comment", where));
+    try testing.expectError(err, memory.supersede(testing.allocator, testing.io, store.root, id, .file, "x", true, "no_comment", where));
+    const after = try store.get(memory.ledger_name);
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings(before, after);
+}
+
+test "where: remember and supersede refuse an empty exclusion" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/ !", error.WhereExclusionEmpty);
+}
+
+test "where: remember and supersede refuse an exclusion with two stars" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/ !**.ts", error.WhereExclusionGlob);
+}
+
+test "where: remember and supersede refuse an exclusion whose star is not first" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/ !a*.ts", error.WhereExclusionGlob);
+}
+
+test "where: remember and supersede refuse an exclusion with another glob character" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/ !x?.ts", error.WhereExclusionGlob);
+}
+
+test "where: remember and supersede refuse an exclusion with a parent segment" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/ !../x/", error.WhereExclusionParentSegment);
+}
+
+test "where: remember and supersede refuse an absolute exclusion" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/ !/etc/", error.WhereExclusionAbsolute);
+    try expectExclusionRefused("src/ !C:/x/", error.WhereExclusionAbsolute);
+}
+
+test "where: remember and supersede refuse a malformed exclusion" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/ !*", error.WhereExclusionMalformed);
+    try expectExclusionRefused("src/ !a//b/", error.WhereExclusionMalformed);
+}
+
+test "where: remember and supersede refuse more exclusions than the limit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try expectExclusionRefused("src/" ++ " !a/" ** 17, error.WhereTooManyExclusions);
+}
+
+test "where: a where with exclusions is remembered and recalled verbatim" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var store = try Store.init();
+    defer store.deinit();
+    const id = try memory.remember(testing.allocator, testing.io, store.root, .file, "x", true, "forbid:as any", "src/ !__tests__/ !*.test.ts");
+    defer testing.allocator.free(id);
+    const recalled = try memory.recall(testing.allocator, testing.io, store.root);
+    defer recalled.deinit();
+    try testing.expectEqualStrings("src/ !__tests__/ !*.test.ts", recalled.decisions[0].where.?);
+}
