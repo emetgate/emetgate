@@ -42,4 +42,21 @@ pub const cases: Cases = .{
     \\target?.(1);
     \\
     ,
+    .literal_source =
+    \\async function open(page, timeoutMs) {
+    \\  const navTimeout = budget(timeoutMs);
+    \\  await page.goto(u, { timeout: 30000 });
+    \\  await page.goto(u, { timeout: "30s" });
+    \\  await page.goto(u, { timeout: budget(timeoutMs) });
+    \\  await page.goto(u, { timeout: budget(timeoutMs, { reserveMs: R }) });
+    \\  await page.goto(u, { timeout: navTimeout, delay: 5 });
+    \\  await page.goto(u, { timeout: Math.max(2, Math.round(x)) });
+    \\  await page.goto(u, { timeout });
+    \\  await page.goto(u, { a: { timeout: 5 } });
+    \\  await page.goto(u, { "timeout": 1000, [timeout]: 2 });
+    \\  await page.goto(u, { timeout: -1 });
+    \\}
+    \\
+    ,
+    .literal_flagged = &.{ "timeout: 30000", "timeout: \"30s\"", "timeout: 5", "\"timeout\": 1000", "timeout: -1" },
 };

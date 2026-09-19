@@ -1265,7 +1265,7 @@
       ]
     },
     {
-      "id": "R1-registry-extension-ignored",
+      "id": "R8-registry-extension-ignored",
       "file": "src/engine/lang/registry.zig",
       "from": "if (profile.handles(path)) return profile;",
       "to": "if (profile.handles(path) or true) return profile;",
@@ -2258,6 +2258,200 @@
         "scope: an empty directory scope or an unparsable symbol file stops the scan with ScopeUnresolved",
         "scope: an unresolved scope is reported as one json error line naming rule and where"
       ]
+    },
+    {
+      "id": "NL1-literal-option-name-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "keyName(shape, tree, key), name)) continue;",
+      "to": "keyName(shape, tree, key), name) and false) continue;",
+      "kills": [
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "no_literal matches a quoted key but not a computed one"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL2-literal-value-kind-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "if (!isLiteral(shape, tree, value)) continue;",
+      "to": "if (!isLiteral(shape, tree, value) and false) continue;",
+      "kills": [
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options",
+        "no_literal counts a negated number as a literal but not other unary values"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL3-literal-template-substitution-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "if (isKind(part, shape.substitution)) return false;",
+      "to": "if (isKind(part, shape.substitution) and false) return false;",
+      "kills": [
+        "no_literal leaves budgeted, named, computed and shorthand values alone"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL4-literal-pair-outside-span-reported",
+      "file": "src/engine/checks.zig",
+      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        if (!isKind(node, shape.pair))",
+      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        if (!isKind(node, shape.pair))",
+      "kills": [
+        "no_literal reports only pairs inside the span",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL5-literal-check-takes-no-argument",
+      "file": "src/engine/checks.zig",
+      "from": ".{ .name = \"no_literal\", .collect = noLiteral, .takes_argument = true },",
+      "to": ".{ .name = \"no_literal\", .collect = noLiteral },",
+      "kills": [
+        "no_literal finds the option inside a nested object and spans exactly the pair",
+        "no_literal flags a number, a string and a plain template passed as the named option",
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "no_literal refuses a missing or empty argument",
+        "no_literal reports only pairs inside the span",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options",
+        "no_literal matches a quoted key but not a computed one",
+        "no_literal counts a negated number as a literal but not other unary values"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL6-literal-strings-not-literal",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": ".literals = &.{ \"number\", \"string\" },",
+      "to": ".literals = &.{\"number\"},",
+      "kills": [
+        "no_literal flags a number, a string and a plain template passed as the named option",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL7-literal-template-node-misnamed",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": ".template = \"template_string\",",
+      "to": ".template = \"template_literal\",",
+      "kills": [
+        "no_literal flags a number, a string and a plain template passed as the named option"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL8-literal-booleans-and-null-counted",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": ".literals = &.{ \"number\", \"string\" },",
+      "to": ".literals = &.{ \"number\", \"string\", \"true\", \"false\", \"null\" },",
+      "kills": [
+        "no_literal leaves budgeted, named, computed and shorthand values alone"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL9-literal-quoted-key-read-raw",
+      "file": "src/engine/checks.zig",
+      "from": "if (!isKind(key, shape.quoted_key)) return tree.text(key);",
+      "to": "if (!isKind(key, shape.quoted_key) or true) return tree.text(key);",
+      "kills": [
+        "no_literal matches a quoted key but not a computed one",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL10-literal-quoted-key-escape-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "if (key.namedChildCount() != 1) return \"\";",
+      "to": "if (key.namedChildCount() == 0) return \"\";",
+      "kills": [
+        "no_literal matches a quoted key but not a computed one"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL11-literal-negation-not-literal",
+      "file": "src/engine/checks.zig",
+      "from": "if (isNegatedLiteral(shape, tree, value)) return true;",
+      "to": "if (isNegatedLiteral(shape, tree, value) and false) return true;",
+      "kills": [
+        "no_literal counts a negated number as a literal but not other unary values",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL12-literal-negation-operator-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "return std.mem.eql(u8, tree.text(operator), shape.negation_operator) and isOneOf(",
+      "to": "return std.mem.eql(u8, tree.text(operator), tree.text(operator)) and isOneOf(",
+      "kills": [
+        "no_literal counts a negated number as a literal but not other unary values"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL13-literal-negation-argument-ignored",
+      "file": "src/engine/lang/ecma/common.zig",
+      "from": ".negatable = &.{\"number\"},",
+      "to": ".negatable = &.{ \"number\", \"identifier\", \"string\" },",
+      "kills": [
+        "no_literal counts a negated number as a literal but not other unary values"
+      ],
+      "filter": [
+        "no_literal"
+      ],
+      "exact": true
+    },
+    {
+      "id": "NL14-literal-pair-kind-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "if (!isKind(node, shape.pair)) continue;",
+      "to": "if (!isKind(node, shape.pair) and false) continue;",
+      "expect_status": "survived",
+      "note": "equivalent in the ECMA grammars: the only other node with key and value fields is pair_pattern, whose value is a pattern and can never be a literal; kept so a language added later whose grammar reuses key/value fields elsewhere is still limited to object properties"
     }
   ]
 }

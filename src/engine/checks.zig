@@ -2,7 +2,8 @@ const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const traversal = @import("traversal.zig");
 const symbol = @import("symbol.zig");
-const Profile = @import("lang/profile.zig").Profile;
+const profile_mod = @import("lang/profile.zig");
+const Profile = profile_mod.Profile;
 const isOneOf = @import("functions.zig").isOneOf;
 
 const Allocator = std.mem.Allocator;
@@ -24,6 +25,7 @@ pub const Check = struct {
 pub const registry = [_]Check{
     .{ .name = "no_comment", .collect = noComment },
     .{ .name = "forbid", .collect = forbid, .takes_argument = true },
+    .{ .name = "no_literal", .collect = noLiteral, .takes_argument = true },
 };
 
 pub const Error = error{ UnknownCheck, UnexpectedCheckArgument, MissingCheckArgument, EmptyCheckArgument } || Allocator.Error;
@@ -101,6 +103,46 @@ fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
             try out.append(gpa, .{ .check = "no_comment", .span = .{ .start = node.startByte(), .end = node.endByte() } });
         }
     }
+}
+
+fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+    const name = arg orelse return;
+    const shape = profile.literal_values;
+    var walker = traversal.Walker.init(tree.root());
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        if (node.startByte() < span.start or node.endByte() > span.end) continue;
+        if (!isKind(node, shape.pair)) continue;
+        const key = node.childByField(shape.key_field) orelse continue;
+        const value = node.childByField(shape.value_field) orelse continue;
+        if (!std.mem.eql(u8, keyName(shape, tree, key), name)) continue;
+        if (!isLiteral(shape, tree, value)) continue;
+        try out.append(gpa, .{ .check = "no_literal", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+    }
+}
+
+fn keyName(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) []const u8 {
+    if (!isKind(key, shape.quoted_key)) return tree.text(key);
+    if (key.namedChildCount() != 1) return "";
+    return tree.text(key.namedChild(0).?);
+}
+
+fn isNegatedLiteral(shape: profile_mod.LiteralValues, tree: ts.Tree, value: ts.Node) bool {
+    const operator = value.childByField(shape.negation_operator_field) orelse return false;
+    const argument = value.childByField(shape.negation_argument_field) orelse return false;
+    return std.mem.eql(u8, tree.text(operator), shape.negation_operator) and isOneOf(argument.kind(), shape.negatable);
+}
+
+fn isLiteral(shape: profile_mod.LiteralValues, tree: ts.Tree, value: ts.Node) bool {
+    if (isOneOf(value.kind(), shape.literals)) return true;
+    if (isNegatedLiteral(shape, tree, value)) return true;
+    if (!isKind(value, shape.template)) return false;
+    var i: u32 = 0;
+    while (value.namedChild(i)) |part| : (i += 1) {
+        if (isKind(part, shape.substitution)) return false;
+    }
+    return true;
 }
 
 fn isProseStatement(profile: *const Profile, tree: ts.Tree, node: ts.Node) bool {
@@ -354,4 +396,78 @@ test "forbid deliberately does not count overlapping occurrences: aaa holds one 
 test "forbid matches an argument that contains colons" {
     const source = "function f() { return a ? b::c : d; }\n";
     try expectForbidden(source, wholeSource(source), "forbid:b::c", &.{@intCast(std.mem.indexOf(u8, source, "b::c").?)});
+}
+
+fn literalTexts(source: []const u8, span: Span, spec: []const u8) ![][]const u8 {
+    const violations = try runSpecs(source, span, &.{spec});
+    defer testing.allocator.free(violations);
+    const texts = try testing.allocator.alloc([]const u8, violations.len);
+    for (violations, texts) |v, *text| {
+        try testing.expectEqualStrings("no_literal", v.check);
+        text.* = source[v.span.start..v.span.end];
+    }
+    return texts;
+}
+
+fn expectLiterals(source: []const u8, expected: []const []const u8) !void {
+    const texts = try literalTexts(source, wholeSource(source), "no_literal:timeout");
+    defer testing.allocator.free(texts);
+    errdefer for (texts) |text| std.debug.print("flagged: {s}\n", .{text});
+    try testing.expectEqual(expected.len, texts.len);
+    for (expected, texts) |want, got| try testing.expectEqualStrings(want, got);
+}
+
+test "no_literal flags a number, a string and a plain template passed as the named option" {
+    try expectLiterals("page.goto(u, { timeout: 30000 });\n", &.{"timeout: 30000"});
+    try expectLiterals("run({ timeout: \"30s\" });\n", &.{"timeout: \"30s\""});
+    try expectLiterals("run({ timeout: `30s` });\n", &.{"timeout: `30s`"});
+}
+
+test "no_literal matches a quoted key but not a computed one" {
+    try expectLiterals("run({ \"timeout\": 30000, 'timeout': 5 });\n", &.{ "\"timeout\": 30000", "'timeout': 5" });
+    try expectLiterals("run({ [timeout]: 5, \"timeouts\": 5, \"\": 5, \"timeout\\n\": 5 });\n", &.{});
+}
+
+test "no_literal counts a negated number as a literal but not other unary values" {
+    try expectLiterals("run({ timeout: -5 });\n", &.{"timeout: -5"});
+    try expectLiterals("run({ timeout: +5, timeout: -ms, timeout: -\"5\", timeout: !0 });\n", &.{});
+}
+
+test "no_literal leaves budgeted, named, computed and shorthand values alone" {
+    try expectLiterals("page.goto(u, { timeout: budget(timeoutMs) });\n", &.{});
+    try expectLiterals("page.goto(u, { timeout: budget(p, { reserveMs: R }) });\n", &.{});
+    try expectLiterals("page.goto(u, { timeout: navTimeout });\n", &.{});
+    try expectLiterals("wait({ timeout: Math.max(2, Math.round(x)) });\n", &.{});
+    try expectLiterals("wait({ timeout: cfg.timeout, other: a + 1 });\n", &.{});
+    try expectLiterals("wait({ timeout: `${ms}ms` });\n", &.{});
+    try expectLiterals("wait({ timeout });\n", &.{});
+    try expectLiterals("wait({ timeout: true, timeout2: 5, delay: 5 });\n", &.{});
+}
+
+test "no_literal finds the option inside a nested object and spans exactly the pair" {
+    const source = "run({ a: { timeout: 5 } });\n";
+    const violations = try runSpecs(source, wholeSource(source), &.{"no_literal:timeout"});
+    defer testing.allocator.free(violations);
+    try testing.expectEqual(@as(usize, 1), violations.len);
+    const start: u32 = @intCast(std.mem.indexOf(u8, source, "timeout").?);
+    try testing.expectEqual(start, violations[0].span.start);
+    try testing.expectEqual(start + @as(u32, @intCast("timeout: 5".len)), violations[0].span.end);
+}
+
+test "no_literal reports only pairs inside the span" {
+    const source = "run({ timeout: 1 });\nfunction f() {\n  run({ timeout: 2 });\n}\n";
+    const texts = try literalTexts(source, try spanOf(source, "{\n  run({ timeout: 2 });\n}"), "no_literal:timeout");
+    defer testing.allocator.free(texts);
+    try testing.expectEqual(@as(usize, 1), texts.len);
+    try testing.expectEqualStrings("timeout: 2", texts[0]);
+
+    const cut = try literalTexts(source, try spanOf(source, "1 });\nfunction"), "no_literal:timeout");
+    defer testing.allocator.free(cut);
+    try testing.expectEqual(@as(usize, 0), cut.len);
+}
+
+test "no_literal refuses a missing or empty argument" {
+    const source = "run({ timeout: 1 });\n";
+    try testing.expectError(error.MissingCheckArgument, runSpecs(source, wholeSource(source), &.{"no_literal"}));
+    try testing.expectError(error.EmptyCheckArgument, runSpecs(source, wholeSource(source), &.{"no_literal:"}));
 }

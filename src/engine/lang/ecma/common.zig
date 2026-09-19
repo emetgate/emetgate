@@ -12,6 +12,7 @@ const Container = profile_mod.Container;
 const MemberTraits = profile_mod.MemberTraits;
 const DynamicConstructor = profile_mod.DynamicConstructor;
 const Call = profile_mod.Call;
+const LiteralValues = profile_mod.LiteralValues;
 
 pub const function_nodes = [_]FunctionNode{
     .{ .node = "function_declaration", .kind = .declaration },
@@ -46,6 +47,19 @@ pub const dynamic_constructors = [_]DynamicConstructor{.{ .node = "new_expressio
 pub const strings = [_][]const u8{"string"};
 pub const prose_strings = [_][]const u8{ "string", "template_string" };
 pub const directives = [_][]const u8{ "\"use strict\"", "'use strict'" };
+pub const literal_values: LiteralValues = .{
+    .pair = "pair",
+    .key_field = "key",
+    .value_field = "value",
+    .quoted_key = "string",
+    .literals = &.{ "number", "string" },
+    .negation_operator_field = "operator",
+    .negation_operator = "-",
+    .negation_argument_field = "argument",
+    .negatable = &.{"number"},
+    .template = "template_string",
+    .substitution = "template_substitution",
+};
 
 pub fn call(optional_marker: []const u8) Call {
     return .{ .node = "call_expression", .function_field = "function", .arguments_field = "arguments", .arguments = "arguments", .optional_marker = optional_marker };

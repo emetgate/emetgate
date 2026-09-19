@@ -44,6 +44,20 @@ pub const DynamicConstructor = struct {
     names: []const []const u8,
 };
 
+pub const LiteralValues = struct {
+    pair: []const u8,
+    key_field: []const u8,
+    value_field: []const u8,
+    quoted_key: []const u8,
+    literals: []const []const u8,
+    negation_operator_field: []const u8,
+    negation_operator: []const u8,
+    negation_argument_field: []const u8,
+    negatable: []const []const u8,
+    template: []const u8,
+    substitution: []const u8,
+};
+
 pub const MemberTraits = struct {
     accessor: Accessor = .none,
     is_static: bool = false,
@@ -83,6 +97,7 @@ pub const Profile = struct {
     expression_statement: []const u8,
     prose_strings: []const []const u8,
     directives: []const []const u8,
+    literal_values: LiteralValues,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
 
     pub fn handles(self: *const Profile, path: []const u8) bool {
