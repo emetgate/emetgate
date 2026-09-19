@@ -6,6 +6,7 @@ const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const read_tools = @import("read_tools.zig");
+const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
@@ -36,7 +37,44 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return read_tools.callSearch(gpa, io, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root);
     return error.UnknownTool;
+}
+
+pub const max_scan_violations = 100;
+
+fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
+    const check = try requireString(args, "check");
+    const where: ?[]const u8 = if (getField(args.?, "where")) |field| switch (field) {
+        .string => |text| text,
+        else => return error.MissingArgument,
+    } else null;
+    event.label = "scan";
+    event.file = where;
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    var refusal: ?[]const u8 = null;
+    renderScan(gpa, io, runtime, root, check, where, &buffer.writer, &refusal) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return failure(gpa, &buffer, err, event);
+    };
+    if (refusal) |name| {
+        event.fail(name);
+        return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };
+    }
+    return success(gpa, &buffer);
+}
+
+fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, check: []const u8, where: ?[]const u8, w: *Writer, refusal: *?[]const u8) !void {
+    const root_abs = try repo.servedRoot(gpa, io, root);
+    defer gpa.free(root_abs);
+    var discard: std.Io.Writer.Discarding = .init(&.{});
+    _ = try scan_command.run(gpa, io, runtime, root_abs, .{
+        .source = .{ .check = .{ .spec = check, .where = where } },
+        .json = true,
+        .max_violations = max_scan_violations,
+        .refusal = refusal,
+    }, w, &discard.writer);
 }
 
 fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {

@@ -82,6 +82,14 @@ const tool_defs = [_]Tool{
             .{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true },
         },
     },
+    .{
+        .name = "emetgate_scan",
+        .description = "Measure one check expression against the git-tracked files of the repo and report its violations; nothing is written and the ledger is not read. The report has the same fields as `emetgate scan --check <check> --json`, lists at most 100 violations, and adds violation_count and truncated:true when cut.",
+        .props = &.{
+            .{ .name = "check", .desc = "check expression, e.g. forbid:networkidle" },
+            .{ .name = "where", .desc = "scope: a file, a directory ending in /, or file#symbol; defaults to the whole repo", .optional = true },
+        },
+    },
 };
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {

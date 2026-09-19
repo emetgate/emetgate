@@ -14,6 +14,8 @@ pub const Options = struct {
     source: scan.Source,
     json: bool,
     pause: scan.Pause = .{},
+    max_violations: ?usize = null,
+    refusal: ?*?[]const u8 = null,
 
     pub fn parse(args: []const [:0]const u8) ?Options {
         var options: Options = .{ .source = .ledger, .json = false };
@@ -45,6 +47,7 @@ pub const Options = struct {
 pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, options: Options, out: *Writer, err_out: *Writer) !u8 {
     const enforced = scan.load(gpa, io, root_abs, options.source, options.pause) catch |err| {
         if (err == error.LedgerNeedsRepair) {
+            refuse(options, err);
             const code = wire.exitCode(err);
             if (options.json) {
                 try wire.writeErrorMessage(out, @errorName(err), code, ledger_needs_repair_message);
@@ -58,6 +61,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
     defer enforced.deinit();
 
     if (scan.firstMalformed(enforced.rules)) |bad| {
+        refuse(options, bad.reason);
         const code = wire.exitCode(bad.reason);
         if (options.json) {
             try wire.writeMalformedRule(out, bad.rule.id, bad.rule.check, @errorName(bad.reason), code);
@@ -70,6 +74,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
     const unresolved = scan.firstUnresolved(gpa, io, runtime, root_abs, enforced.rules) catch |err| return report(err, options, out, err_out);
     if (unresolved) |bad| {
         const err = error.ScopeUnresolved;
+        refuse(options, err);
         const code = wire.exitCode(err);
         if (options.json) {
             try wire.writeUnresolvedScope(out, bad.rule.id, bad.rule.where.?, @errorName(bad.reason), code);
@@ -83,14 +88,19 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
     defer result.deinit(gpa);
 
     if (options.json) {
-        try wire.writeScan(out, result);
+        try wire.writeScan(out, result, options.max_violations);
     } else {
         try writeText(out, result);
     }
     return if (result.violations.len == 0) 0 else violations_exit_code;
 }
 
+fn refuse(options: Options, err: anyerror) void {
+    if (options.refusal) |name| name.* = @errorName(err);
+}
+
 fn report(err: anyerror, options: Options, out: *Writer, err_out: *Writer) !u8 {
+    refuse(options, err);
     const code = wire.exitCode(err);
     if (options.json) {
         try wire.writeError(out, @errorName(err), code);

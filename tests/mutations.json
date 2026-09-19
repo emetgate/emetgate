@@ -2452,6 +2452,81 @@
       "to": "if (!isKind(node, shape.pair) and false) continue;",
       "expect_status": "survived",
       "note": "equivalent in the ECMA grammars: the only other node with key and value fields is pair_pattern, whose value is a pattern and can never be a literal; kept so a language added later whose grammar reuses key/value fields elsewhere is still limited to object properties"
+    },
+    {
+      "id": "ST1-scan-tool-cap-removed",
+      "file": "src/protocol/wire.zig",
+      "from": "if (limit) |max| result.violations[0..@min(max, result.violations.len)] else result.violations",
+      "to": "result.violations",
+      "kills": [
+        "scan tool: more violations than the cap are cut and the report says so"
+      ],
+      "filter": [
+        "scan tool"
+      ]
+    },
+    {
+      "id": "ST2-scan-tool-truncated-at-cap",
+      "file": "src/protocol/wire.zig",
+      "from": "try js.write(shown.len < result.violations.len);",
+      "to": "try js.write(shown.len <= result.violations.len);",
+      "kills": [
+        "scan tool: exactly the cap is not cut",
+        "scan tool: a clean check reports no violations",
+        "scan tool: violations are reported with the scan json fields"
+      ],
+      "filter": [
+        "scan tool"
+      ]
+    },
+    {
+      "id": "ST3-scan-tool-cap-raised",
+      "file": "src/protocol/handlers.zig",
+      "from": "pub const max_scan_violations = 100;",
+      "to": "pub const max_scan_violations = 200;",
+      "kills": [
+        "scan tool: more violations than the cap are cut and the report says so"
+      ],
+      "filter": [
+        "scan tool"
+      ]
+    },
+    {
+      "id": "ST4-scan-tool-non-string-where-ignored",
+      "file": "src/protocol/handlers.zig",
+      "from": "        else => return error.MissingArgument,\n    } else null;",
+      "to": "        else => null,\n    } else null;",
+      "kills": [
+        "scan tool: a call without check or with a non-string where is a missing argument"
+      ],
+      "filter": [
+        "scan tool"
+      ]
+    },
+    {
+      "id": "ST5-scan-tool-refusal-not-reported",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (options.refusal) |name| name.* = @errorName(err);",
+      "to": "    if (options.refusal) |name| if (false) { name.* = @errorName(err); };",
+      "kills": [
+        "scan tool: a malformed check is refused by its existing error name",
+        "scan tool: an invalid where is refused by its existing error name"
+      ],
+      "filter": [
+        "scan tool"
+      ]
+    },
+    {
+      "id": "ST6-scan-tool-dispatch-removed",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (std.mem.eql(u8, name, \"emetgate_scan\")) return callScan(gpa, io, runtime, args, event, policy.root);\n",
+      "to": "",
+      "kills": [
+        "scan tool: a clean check reports no violations"
+      ],
+      "filter": [
+        "scan tool"
+      ]
     }
   ]
 }
