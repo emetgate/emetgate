@@ -377,6 +377,22 @@ pub fn recover(gpa: Allocator, io: std.Io, root_abs: []const u8) !RecoverReport 
     return report;
 }
 
+pub const recover_failed_exit_code: u8 = 16;
+
+pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, err_out: *std.Io.Writer) !u8 {
+    const report = try recover(gpa, io, root_abs);
+    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root_abs, shadow.workspace_dir });
+    defer gpa.free(shadow_abs);
+    const removal = shadow.remove(io, root_abs, shadow_abs);
+
+    try err_out.print("recovered {d} file(s), removed {d} orphaned temp file(s), skipped {d}, failed {d}\n", .{ report.restored, report.removed_temps, report.skipped, report.failed });
+    if (removal) |_| {} else |err| {
+        try err_out.print("could not remove shadow: {t}\n", .{err});
+        return recover_failed_exit_code;
+    }
+    return if (report.failed > 0) recover_failed_exit_code else 0;
+}
+
 fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *RecoverReport) !void {
     var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
     const journal_dir = std.fmt.bufPrint(&journal_buf, "{s}\\{s}\\journal", .{ root_abs, shadow.workspace_dir }) catch return;

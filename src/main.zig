@@ -369,8 +369,6 @@ fn scanCmd(init: std.process.Init, runtime: *Runtime, options: scan_command.Opti
     return code;
 }
 
-const recover_failed_exit_code: u8 = 16;
-
 fn recoverCmd(init: std.process.Init, runtime: *Runtime) !u8 {
     const gpa = runtime.gpa;
     const root = try runner.repoRoot(gpa, init.io);
@@ -378,13 +376,11 @@ fn recoverCmd(init: std.process.Init, runtime: *Runtime) !u8 {
     const lock = try shadow.Lock.acquire(init.io, root);
     defer lock.release();
 
-    const report = try disk.recover(gpa, init.io, root);
-    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
-    defer gpa.free(shadow_abs);
-    shadow.remove(init.io, root, shadow_abs) catch {};
-
-    std.debug.print("recovered {d} file(s), removed {d} orphaned temp file(s), skipped {d}, failed {d}\n", .{ report.restored, report.removed_temps, report.skipped, report.failed });
-    return if (report.failed > 0) recover_failed_exit_code else 0;
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    const code = try disk.recoverWorkspace(gpa, init.io, root, &stderr_writer.interface);
+    try stderr_writer.interface.flush();
+    return code;
 }
 
 fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {

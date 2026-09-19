@@ -74,6 +74,40 @@ const Repo = struct {
         self.tmp.dir.access(testing.io, "repo/.emetgate", .{}) catch return false;
         return true;
     }
+
+    fn shadowPath(self: *Repo, buf: []u8) ![]const u8 {
+        return std.fmt.bufPrint(buf, "{s}\\{s}\\shadow", .{ self.root_abs, shadow.workspace_dir });
+    }
+
+    fn reportLeftoverShadow(self: *Repo) void {
+        std.debug.print("leftover {s} entries:\n", .{shadow.workspace_dir});
+        if (self.tmp.dir.openDir(testing.io, "repo/" ++ shadow.workspace_dir, .{ .iterate = true })) |opened| {
+            var dir = opened;
+            defer dir.close(testing.io);
+            var walker = dir.walk(testing.allocator) catch |err| {
+                std.debug.print("  walk failed: {t}\n", .{err});
+                return;
+            };
+            defer walker.deinit();
+            var listed: usize = 0;
+            while (listed < 20) : (listed += 1) {
+                const entry = (walker.next(testing.io) catch |err| {
+                    std.debug.print("  walk failed: {t}\n", .{err});
+                    break;
+                }) orelse break;
+                std.debug.print("  {s}\n", .{entry.path});
+            }
+        } else |err| std.debug.print("  open failed: {t}\n", .{err});
+
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const shadow_abs = self.shadowPath(&buf) catch |err| {
+            std.debug.print("shadow path: {t}\n", .{err});
+            return;
+        };
+        if (shadow.remove(testing.io, self.root_abs, shadow_abs)) |_| {
+            std.debug.print("shadow.remove: removed on retry\n", .{});
+        } else |err| std.debug.print("shadow.remove: {t}\n", .{err});
+    }
 };
 
 fn hashOfAdd(gpa: Allocator, runtime: *Runtime, file: []const u8) !symbol.Hash {
@@ -91,7 +125,10 @@ fn expectPristine(repo: *Repo) !void {
     try testing.expectEqualStrings(Repo.source, on_disk);
     try testing.expect(!try repo.hasSibling(".tmp"));
     try testing.expect(!try repo.hasSibling(".bak"));
-    try testing.expect(!repo.hasShadow());
+    if (repo.hasShadow()) {
+        repo.reportLeftoverShadow();
+        return error.TestUnexpectedResult;
+    }
 }
 
 fn attempt(runtime: *Runtime, file: []const u8, hash: symbol.Hash, body: []const u8) !runner.Result {
@@ -305,7 +342,10 @@ test "purple C4: a committed mutation leaves no temp or backup artifacts" {
     try testing.expect(result == .committed);
     try testing.expect(!try repo.hasSibling(".tmp"));
     try testing.expect(!try repo.hasSibling(".bak"));
-    try testing.expect(!repo.hasShadow());
+    if (repo.hasShadow()) {
+        repo.reportLeftoverShadow();
+        return error.TestUnexpectedResult;
+    }
 }
 
 test "purple V6: an MCP read tool cannot escape the project root" {
@@ -542,6 +582,48 @@ test "purple recover: a symlinked backup is refused (reparse guard, privilege-ga
     const a = try tmp.dir.readFileAlloc(testing.io, "a.ts", testing.allocator, .unlimited);
     defer testing.allocator.free(a);
     try testing.expectEqualStrings(new_a, a);
+}
+
+fn recoverWorkspace(root: []const u8, err_out: *std.Io.Writer.Allocating) !u8 {
+    const lock = try shadow.Lock.acquire(testing.io, root);
+    defer lock.release();
+    return disk.recoverWorkspace(testing.allocator, testing.io, root, &err_out.writer);
+}
+
+test "purple recover: a shadow that cannot be removed exits 16 and says so after the summary" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try tmp.dir.createDirPath(testing.io, ".emetgate/shadow/src");
+    var held_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const held_path = try std.fmt.bufPrint(&held_buf, "{s}\\.emetgate\\shadow\\src\\held.ts", .{root});
+    const held = try shadow.FileLock.acquire(held_path);
+
+    var err_out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer err_out.deinit();
+    const code = recoverWorkspace(root, &err_out);
+    held.release();
+
+    try testing.expectEqual(@as(u8, 16), try code);
+    const text = err_out.written();
+    const summary = std.mem.indexOf(u8, text, "recovered 0 file(s)") orelse return error.TestUnexpectedResult;
+    const failure = std.mem.indexOf(u8, text, "could not remove shadow: ") orelse return error.TestUnexpectedResult;
+    try testing.expect(summary < failure);
+}
+
+test "purple recover: no shadow at all is a clean recover with exit 0" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+
+    var err_out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer err_out.deinit();
+    try testing.expectEqual(@as(u8, 0), try recoverWorkspace(root, &err_out));
+    try testing.expect(std.mem.indexOf(u8, err_out.written(), "could not remove shadow") == null);
 }
 
 fn respond(runtime: *Runtime, line: []const u8) ![]u8 {
