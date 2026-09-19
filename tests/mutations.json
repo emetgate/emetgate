@@ -2527,6 +2527,26 @@
       "filter": [
         "scan tool"
       ]
+    },
+    {
+      "id": "RS1-grammars-built-as-c11",
+      "file": "build.zig",
+      "from": "const grammar_c_flags: []const []const u8 = &.{\"-std=c23\"};",
+      "to": "const grammar_c_flags: []const []const u8 = &.{\"-std=c11\"};",
+      "optimize": "ReleaseSafe",
+      "kills": [
+        "every vendored grammar parses through its external scanner table"
+      ]
+    },
+    {
+      "id": "RS2-grammars-lose-the-std-flag",
+      "file": "build.zig",
+      "from": "&.{ grammar_c_flags, &.{include} }",
+      "to": "&.{ c_flags, &.{include} }",
+      "optimize": "ReleaseSafe",
+      "kills": [
+        "every vendored grammar parses through its external scanner table"
+      ]
     }
   ]
 }

@@ -13,6 +13,7 @@ const grammars = [_]Grammar{
 };
 
 const c_flags: []const []const u8 = &.{"-std=c11"};
+const grammar_c_flags: []const []const u8 = &.{"-std=c23"};
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -359,7 +360,7 @@ fn buildTreeSitter(
         module.addCSourceFiles(.{
             .root = b.path(grammar.root),
             .files = grammar.sources,
-            .flags = std.mem.concat(b.allocator, []const u8, &.{ c_flags, &.{include} }) catch @panic("OOM"),
+            .flags = std.mem.concat(b.allocator, []const u8, &.{ grammar_c_flags, &.{include} }) catch @panic("OOM"),
         });
     }
 

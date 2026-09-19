@@ -190,3 +190,20 @@ test "bridge accounts a tree that outlives its parser as live memory until delet
     try testing.expect(retained.bytes > 0);
     try testing.expectEqual(alloc_bridge.Stats{ .blocks = 0, .bytes = 0 }, alloc_bridge.stats());
 }
+
+test "every vendored grammar parses through its external scanner table" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const grammars = [_]*const Language{
+        @import("lang/javascript/profile.zig").profile.grammar(),
+        @import("lang/typescript/profile.zig").profile.grammar(),
+    };
+    for (grammars) |grammar| {
+        const parser = try Parser.init(grammar);
+        defer parser.deinit();
+        const tree = try parser.parse("const a = `x${1}`;\n");
+        defer tree.deinit();
+        try testing.expect(!tree.root().hasError());
+    }
+}
