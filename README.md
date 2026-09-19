@@ -159,6 +159,8 @@ Some things cannot be made mechanical, and this project does not claim otherwise
 
 ## Installing
 
+The published binary is built for the x86_64 baseline CPU (`-Dcpu=baseline`), so it runs on any 64-bit x86 processor rather than only on ones with the build machine's instruction set.
+
 Each release tag publishes a Windows binary and its SHA-256 checksum on the [releases page](https://github.com/emetgate/emetgate/releases). Download both into a fixed folder under your profile (this only downloads; nothing is run):
 
 ```powershell
