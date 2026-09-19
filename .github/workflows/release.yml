@@ -25,7 +25,7 @@ jobs:
           Remove-Item $zip
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
-      - run: zig build test --summary all
+      - run: zig build test -Doptimize=ReleaseSafe --summary all
       - run: zig build -Doptimize=ReleaseSafe
       - name: Compute the SHA-256 checksum
         shell: pwsh

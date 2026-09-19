@@ -15,6 +15,11 @@ env:
 jobs:
   test:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        optimize: [Debug, ReleaseSafe]
+    name: test (${{ matrix.optimize }})
     steps:
       - uses: actions/checkout@v4
       - name: Install Zig
@@ -26,7 +31,7 @@ jobs:
           Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
-      - run: zig build test --summary all
+      - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
 
   mutation-corpus:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

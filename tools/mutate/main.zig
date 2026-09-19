@@ -20,6 +20,7 @@ const Mutation = struct {
     filter: []const []const u8 = &.{},
     all: bool = false,
     exact: bool = false,
+    optimize: ?[]const u8 = null,
     note: ?[]const u8 = null,
 };
 
@@ -220,6 +221,7 @@ fn runBuild(arena: Allocator, io: std.Io, kind: core.Kind, m: Mutation, options:
     var argv: std.ArrayList([]const u8) = .empty;
     const step = if (kind == .unit) "test" else "e2e-lockdown";
     try argv.appendSlice(arena, &.{ "zig", "build", step, "--summary", "all" });
+    if (m.optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
     if (kind == .unit and !options.full) {
         const filters = if (m.filter.len != 0) m.filter else m.kills;
         for (filters) |f| try argv.append(arena, try std.fmt.allocPrint(arena, "-Dtest-filter={s}", .{f}));
