@@ -23,6 +23,7 @@ pub const memory = @import("platform/memory.zig");
 pub const where = @import("platform/where.zig");
 pub const wire = @import("protocol/wire.zig");
 pub const scan_command = @import("protocol/scan_command.zig");
+pub const rule_command = @import("protocol/rule_command.zig");
 pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
 pub const telemetry = @import("protocol/telemetry.zig");

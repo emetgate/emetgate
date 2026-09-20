@@ -177,6 +177,32 @@ pub fn recall(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
     return .{ .arena = arena, .decisions = ledger.folded.active, .conflicts = ledger.folded.conflicts };
 }
 
+pub fn recallAll(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
+    const arena = try gpa.create(std.heap.ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = .init(gpa);
+    errdefer arena.deinit();
+    const paths = try Paths.init(arena.allocator(), root_abs);
+    const lock = try acquireMemoryLock(io, paths);
+    defer lock.release();
+
+    const ledger = try loadLedger(arena.allocator(), io, paths);
+    return .{
+        .arena = arena,
+        .decisions = try everyDecision(arena.allocator(), ledger.folded),
+        .conflicts = ledger.folded.conflicts,
+    };
+}
+
+fn everyDecision(arena: Allocator, folded: Folded) ![]const Decision {
+    var all: std.ArrayList(Decision) = .empty;
+    var values = folded.latest.valueIterator();
+    while (values.next()) |d| try all.append(arena, d.*);
+    const items = try all.toOwnedSlice(arena);
+    std.mem.sort(Decision, items, {}, decisionBefore);
+    return items;
+}
+
 pub fn peek(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
