@@ -11,7 +11,6 @@ const max_output = 16 * 1024 * 1024;
 const default_timeout_s: u64 = 900;
 const default_pool_size: usize = 16;
 const default_verify_share: usize = 10;
-const rotation_path = work_dir ++ "/rotation";
 
 const Mutation = struct {
     id: []const u8,
@@ -59,6 +58,7 @@ const Options = struct {
     shadow: bool = false,
     pool_size: usize = default_pool_size,
     verify_share: usize = default_verify_share,
+    rotation: usize = 0,
     timeout_s: u64 = default_timeout_s,
 };
 
@@ -102,6 +102,8 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.startsWith(u8, arg, "--verify-share=")) {
             options.verify_share = std.fmt.parseInt(usize, arg["--verify-share=".len..], 10) catch return usage();
             if (options.verify_share > 100) return usage();
+        } else if (std.mem.startsWith(u8, arg, "--rotation=")) {
+            options.rotation = std.fmt.parseInt(usize, arg["--rotation=".len..], 10) catch return usage();
         } else if (std.mem.startsWith(u8, arg, "--timeout-s=")) {
             options.timeout_s = std.fmt.parseInt(u64, arg["--timeout-s=".len..], 10) catch return usage();
         } else if (std.mem.startsWith(u8, arg, "--")) {
@@ -197,7 +199,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn usage() u8 {
-    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--shadow] [--timeout-s=N] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [id...]\n", .{});
     return 2;
 }
 
@@ -215,9 +217,8 @@ fn runSerial(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
 }
 
 fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, chosen: []const Selected, options: Options) !?Run {
-    const buckets = core.rotationBuckets(options.verify_share);
-    const stored = cwd.readFileAlloc(io, rotation_path, arena, .limited(64)) catch null;
-    const bucket = core.parseBucket(stored, buckets);
+    const buckets = if (options.shadow) 0 else core.rotationBuckets(options.verify_share);
+    const bucket = core.rotationBucket(options.rotation, buckets);
 
     const rotating = try arena.alloc(bool, chosen.len);
     @memset(rotating, false);
@@ -282,12 +283,6 @@ fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
     for (rotating) |picked| {
         if (picked) rotated += 1;
     }
-    if (buckets != 0) {
-        var buf: [32]u8 = undefined;
-        const text = try std.fmt.bufPrint(&buf, "{d}\n", .{core.nextBucket(bucket, buckets)});
-        try cwd.writeFile(io, .{ .sub_path = rotation_path, .data = text });
-    }
-
     return .{
         .outcomes = try outcomes.toOwnedSlice(arena),
         .failures = failures,

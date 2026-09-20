@@ -355,17 +355,9 @@ pub fn rotationBuckets(share_percent: usize) usize {
     return (100 + share_percent - 1) / share_percent;
 }
 
-pub fn parseBucket(bytes: ?[]const u8, buckets: usize) usize {
+pub fn rotationBucket(rotation: usize, buckets: usize) usize {
     if (buckets == 0) return 0;
-    const text = bytes orelse return 0;
-    const trimmed = std.mem.trim(u8, text, " \r\n");
-    const value = std.fmt.parseInt(usize, trimmed, 10) catch return 0;
-    return value % buckets;
-}
-
-pub fn nextBucket(bucket: usize, buckets: usize) usize {
-    if (buckets == 0) return 0;
-    return (bucket + 1) % buckets;
+    return rotation % buckets;
 }
 
 pub fn inRotation(ordinal: usize, bucket: usize, buckets: usize) bool {

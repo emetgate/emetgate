@@ -353,9 +353,9 @@ test "harness: a tenth of the corpus is verified one at a time, and it rotates" 
     try testing.expectEqual(@as(usize, 1), core.rotationBuckets(100));
     try testing.expectEqual(@as(usize, 0), core.rotationBuckets(0));
 
-    const first = core.parseBucket(null, buckets);
+    const first = core.rotationBucket(0, buckets);
     try testing.expectEqual(@as(usize, 0), first);
-    const second = core.nextBucket(first, buckets);
+    const second = core.rotationBucket(1, buckets);
     try testing.expectEqual(@as(usize, 1), second);
 
     try testing.expect(core.inRotation(0, first, buckets));
@@ -373,26 +373,40 @@ test "harness: a tenth of the corpus is verified one at a time, and it rotates" 
     try testing.expectEqual(@as(usize, 4), picked_first);
     try testing.expectEqual(@as(usize, 0), overlap);
 
-    var bucket = first;
     var covered = [_]bool{false} ** 10;
-    for (0..buckets) |_| {
+    for (0..buckets) |n| {
+        const bucket = core.rotationBucket(n, buckets);
         for (0..10) |ordinal| {
             if (core.inRotation(ordinal, bucket, buckets)) covered[ordinal] = true;
         }
-        bucket = core.nextBucket(bucket, buckets);
     }
     for (covered) |seen| try testing.expect(seen);
-    try testing.expectEqual(first, bucket);
+    try testing.expectEqual(first, core.rotationBucket(buckets, buckets));
 }
 
-test "harness: a missing or unreadable rotation state starts at the first slice" {
+test "harness: the same rotation number always picks the same slice" {
     const buckets = core.rotationBuckets(10);
-    try testing.expectEqual(@as(usize, 0), core.parseBucket(null, buckets));
-    try testing.expectEqual(@as(usize, 0), core.parseBucket("", buckets));
-    try testing.expectEqual(@as(usize, 0), core.parseBucket("not a number", buckets));
-    try testing.expectEqual(@as(usize, 3), core.parseBucket(" 3\n", buckets));
-    try testing.expectEqual(@as(usize, 3), core.parseBucket("13", buckets));
-    try testing.expectEqual(@as(usize, 0), core.parseBucket("7", 0));
+    try testing.expectEqual(core.rotationBucket(7, buckets), core.rotationBucket(7, buckets));
+    try testing.expectEqual(core.rotationBucket(7, buckets), core.rotationBucket(17, buckets));
+    try testing.expectEqual(@as(usize, 7), core.rotationBucket(7, buckets));
+}
+
+test "harness: consecutive rotation numbers pick different slices" {
+    const buckets = core.rotationBuckets(10);
+    var previous = core.rotationBucket(0, buckets);
+    for (1..buckets) |n| {
+        const bucket = core.rotationBucket(n, buckets);
+        try testing.expect(bucket != previous);
+        previous = bucket;
+    }
+}
+
+test "harness: no rotation number means the first slice, and no rotation at all means none" {
+    const buckets = core.rotationBuckets(10);
+    try testing.expectEqual(@as(usize, 0), core.rotationBucket(0, buckets));
+    try testing.expect(core.inRotation(0, core.rotationBucket(0, buckets), buckets));
+    try testing.expectEqual(@as(usize, 0), core.rotationBucket(9, 0));
+    try testing.expect(!core.inRotation(0, core.rotationBucket(9, 0), 0));
 }
 
 test "harness: the rotating slice never enters a pool" {
@@ -404,7 +418,7 @@ test "harness: the rotating slice never enters a pool" {
     };
     const sources = [_]core.Source{.{ .file = "a.zig", .text = "alpha beta gamma delta" }};
     const buckets = core.rotationBuckets(25);
-    const bucket = core.parseBucket(null, buckets);
+    const bucket = core.rotationBucket(0, buckets);
 
     var pooled: std.ArrayList(core.Candidate) = .empty;
     defer pooled.deinit(testing.allocator);
