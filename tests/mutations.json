@@ -2953,6 +2953,51 @@
       "kills": [
         "prepare fails instead of carrying on when a stale shadow cannot be removed"
       ]
+    },
+    {
+      "id": "SS1-summary-counts-violations-as-files",
+      "file": "src/protocol/scan_command.zig",
+      "from": "filesWithViolations(result), result.rules });",
+      "to": "result.violations.len, result.rules });",
+      "kills": [
+        "summary: violations are counted once and the files holding them once each"
+      ]
+    },
+    {
+      "id": "SS2-summary-total-drops-unreadable",
+      "file": "src/protocol/scan_command.zig",
+      "from": "result.out_of_scope + result.unsupported + unreadable;",
+      "to": "result.out_of_scope + result.unsupported;",
+      "kills": [
+        "summary: the tracked total is the sum of scanned, outside scope, without a profile and unreadable"
+      ]
+    },
+    {
+      "id": "SS3-summary-parse-line-always-printed",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (result.parse_errors.len > 0) {",
+      "to": "    if (true) {",
+      "kills": [
+        "summary: the parse error line appears only when a scanned file had parse errors"
+      ]
+    },
+    {
+      "id": "SS4-summary-parse-line-names-tracked-total",
+      "file": "src/protocol/scan_command.zig",
+      "from": ".{ result.parse_errors.len, result.scanned });",
+      "to": ".{ result.parse_errors.len, tracked });",
+      "kills": [
+        "summary: the parse error line appears only when a scanned file had parse errors"
+      ]
+    },
+    {
+      "id": "SS5-summary-violations-grouped-by-rule-not-file",
+      "file": "src/platform/scan.zig",
+      "from": "        .violations = try violations.toOwnedSlice(gpa),",
+      "to": "        .violations = blk: {\n            std.mem.sort(rules.Violation, violations.items, {}, struct {\n                fn lt(_: void, a: rules.Violation, b: rules.Violation) bool {\n                    return std.mem.lessThan(u8, a.rule, b.rule);\n                }\n            }.lt);\n            break :blk try violations.toOwnedSlice(gpa);\n        },",
+      "kills": [
+        "summary: with two rules the files holding violations are still counted once each"
+      ]
     }
   ]
 }
