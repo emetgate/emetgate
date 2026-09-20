@@ -769,8 +769,8 @@
     {
       "id": "G9-rules-rule-id-not-recorded",
       "file": "src/platform/rules.zig",
-      "from": "const rule_id = try gpa.dupe(u8, rule.id);",
-      "to": "const rule_id = try gpa.dupe(u8, rule.check);",
+      "from": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.id);",
+      "to": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.check);",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run",
         "every violation names its rule, check, file, line, column and offending text",
@@ -1865,7 +1865,7 @@
     {
       "id": "SC12-argument-errors-exit-generic",
       "file": "src/protocol/wire.zig",
-      "from": "error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument => 19,",
+      "from": "error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument, error.EmptyCommandCheck, error.CommandCheckTooLong, error.CommandCheckNotStatic => 19,",
       "to": "error.UnknownCheck => 19,",
       "kills": [
         "scan: every malformed --check spec exits with the malformed-check code"
@@ -2052,8 +2052,8 @@
     {
       "id": "SP18-gate-where-ignored",
       "file": "src/platform/rules.zig",
-      "from": "        if (scope.coversSymbol(file, ref)) try list.append(gpa, rule);",
-      "to": "        if (scope.coversSymbol(file, ref) or true) try list.append(gpa, rule);",
+      "from": "        if (try covers(rule, file, ref)) try list.append(gpa, rule);",
+      "to": "        if (try covers(rule, file, ref) or true) try list.append(gpa, rule);",
       "kills": [
         "scope: a rule whose where names another file does not block the proposal",
         "scope: a symbol-scoped rule blocks only a proposal to that symbol",
