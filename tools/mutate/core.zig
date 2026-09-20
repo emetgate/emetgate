@@ -147,33 +147,168 @@ fn hasFailedTestLine(output: []const u8) bool {
     return false;
 }
 
+pub const Candidate = struct {
+    index: usize,
+    file: []const u8,
+    kills: []const []const u8,
+    filter: []const []const u8,
+};
+
+pub const max_pool_members = 64;
+
+pub fn poolable(kind: Kind, expect_status: []const u8, has_own_timeout: bool, has_own_optimize: bool, kills_len: usize) bool {
+    if (kind != .unit) return false;
+    if (!std.mem.eql(u8, expect_status, "killed")) return false;
+    if (has_own_timeout) return false;
+    if (has_own_optimize) return false;
+    return kills_len != 0;
+}
+
+fn namesOverlap(a: []const []const u8, b: []const []const u8) bool {
+    for (a) |left| {
+        for (b) |right| {
+            if (std.mem.eql(u8, left, right)) return true;
+        }
+    }
+    return false;
+}
+
+fn fits(pool: []const Candidate, c: Candidate) bool {
+    for (pool) |member| {
+        if (std.mem.eql(u8, member.file, c.file)) return false;
+        if (namesOverlap(member.kills, c.kills)) return false;
+    }
+    return true;
+}
+
+pub fn buildPools(gpa: Allocator, candidates: []const Candidate, pool_size: usize) ![]const []const Candidate {
+    var pools: std.ArrayList(std.ArrayList(Candidate)) = .empty;
+    defer {
+        for (pools.items) |*pool| pool.deinit(gpa);
+        pools.deinit(gpa);
+    }
+    for (candidates) |c| {
+        for (pools.items) |*pool| {
+            if (pool.items.len >= pool_size) continue;
+            if (!fits(pool.items, c)) continue;
+            try pool.append(gpa, c);
+            break;
+        } else {
+            var fresh: std.ArrayList(Candidate) = .empty;
+            errdefer fresh.deinit(gpa);
+            try fresh.append(gpa, c);
+            try pools.append(gpa, fresh);
+        }
+    }
+    var out: std.ArrayList([]const Candidate) = .empty;
+    errdefer {
+        for (out.items) |pool| gpa.free(pool);
+        out.deinit(gpa);
+    }
+    for (pools.items) |*pool| try out.append(gpa, try gpa.dupe(Candidate, pool.items));
+    return out.toOwnedSlice(gpa);
+}
+
+pub fn unionNames(gpa: Allocator, pool: []const Candidate, comptime field: []const u8) ![]const []const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    errdefer names.deinit(gpa);
+    for (pool) |member| {
+        for (@field(member, field)) |name| {
+            for (names.items) |seen| {
+                if (std.mem.eql(u8, seen, name)) break;
+            } else try names.append(gpa, name);
+        }
+    }
+    return names.toOwnedSlice(gpa);
+}
+
+pub fn poolFilter(gpa: Allocator, pool: []const Candidate) ![]const []const u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    errdefer names.deinit(gpa);
+    for (pool) |member| {
+        const own = if (member.filter.len != 0) member.filter else member.kills;
+        for (own) |name| {
+            for (names.items) |seen| {
+                if (std.mem.eql(u8, seen, name)) break;
+            } else try names.append(gpa, name);
+        }
+    }
+    return names.toOwnedSlice(gpa);
+}
+
+pub const PoolVerdict = enum { killed, inconclusive };
+
+pub fn poolVerdict(status: Status, failed: []const []const u8, expected: []const []const u8) PoolVerdict {
+    if (status != .killed) return .inconclusive;
+    if (missingKill(failed, expected) != null) return .inconclusive;
+    if (unexpectedKill(failed, expected) != null) return .inconclusive;
+    return .killed;
+}
+
+pub fn splitAt(pool: []const Candidate) usize {
+    return pool.len / 2;
+}
+
+pub fn baselineIsGreen(exit_code: u8, output: []const u8) bool {
+    if (exit_code != 0) return false;
+    const summary = parseSummary(output) orelse return false;
+    return summary.total != 0 and summary.failed == 0 and summary.crashed == 0 and summary.passed == summary.total;
+}
+
+pub const Backup = struct {
+    path: []const u8,
+    original: []const u8,
+};
+
 pub const Journal = struct {
     dir: std.Io.Dir,
     io: std.Io,
 
-    const path_name = "pending.path";
-    const original_name = "pending.orig";
+    const manifest_name = "pending.manifest";
 
-    pub fn record(self: Journal, file_path: []const u8, original: []const u8) !void {
-        try self.dir.writeFile(self.io, .{ .sub_path = original_name, .data = original });
-        try self.dir.writeFile(self.io, .{ .sub_path = path_name, .data = file_path });
+    fn originalName(buf: []u8, index: usize) []const u8 {
+        return std.fmt.bufPrint(buf, "pending.{d}.orig", .{index}) catch unreachable;
+    }
+
+    pub fn record(self: Journal, gpa: Allocator, backups: []const Backup) !void {
+        var manifest: std.Io.Writer.Allocating = .init(gpa);
+        defer manifest.deinit();
+        var buf: [64]u8 = undefined;
+        for (backups, 0..) |backup, i| {
+            try self.dir.writeFile(self.io, .{ .sub_path = originalName(&buf, i), .data = backup.original });
+            try manifest.writer.print("{s}\n", .{backup.path});
+        }
+        try self.dir.writeFile(self.io, .{ .sub_path = manifest_name, .data = manifest.written() });
     }
 
     pub fn clear(self: Journal) void {
-        self.dir.deleteFile(self.io, path_name) catch {};
-        self.dir.deleteFile(self.io, original_name) catch {};
+        self.dir.deleteFile(self.io, manifest_name) catch {};
+        var buf: [64]u8 = undefined;
+        for (0..max_pool_members) |i| {
+            self.dir.deleteFile(self.io, originalName(&buf, i)) catch {};
+        }
     }
 
-    pub fn recover(self: Journal, gpa: Allocator, root: std.Io.Dir) !?[]u8 {
-        const file_path = self.dir.readFileAlloc(self.io, path_name, gpa, .limited(std.fs.max_path_bytes)) catch |err| switch (err) {
+    pub fn recover(self: Journal, gpa: Allocator, root: std.Io.Dir) !?[]const []const u8 {
+        const manifest = self.dir.readFileAlloc(self.io, manifest_name, gpa, .limited(max_pool_members * std.fs.max_path_bytes)) catch |err| switch (err) {
             error.FileNotFound => return null,
             else => return err,
         };
-        errdefer gpa.free(file_path);
-        const original = try self.dir.readFileAlloc(self.io, original_name, gpa, .limited(max_source_bytes));
-        defer gpa.free(original);
-        try root.writeFile(self.io, .{ .sub_path = file_path, .data = original });
+        defer gpa.free(manifest);
+        var restored: std.ArrayList([]const u8) = .empty;
+        errdefer restored.deinit(gpa);
+        var buf: [64]u8 = undefined;
+        var lines = std.mem.splitScalar(u8, manifest, '\n');
+        var index: usize = 0;
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            const original = try self.dir.readFileAlloc(self.io, originalName(&buf, index), gpa, .limited(max_source_bytes));
+            defer gpa.free(original);
+            try root.writeFile(self.io, .{ .sub_path = line, .data = original });
+            try restored.append(gpa, try gpa.dupe(u8, line));
+            index += 1;
+        }
         self.clear();
-        return file_path;
+        return try restored.toOwnedSlice(gpa);
     }
 };
