@@ -80,6 +80,97 @@ This is not a new idea. It is the architecture of LCF-style theorem provers, whe
 
 **Durable commit.** Accepted changes go through a write-ahead journal and an atomic write-rename. A crash at any point leaves either the old file or the new one, never a torn write. `recover` replays the journal and refuses anything it cannot prove: zero-byte files, entries that no longer re-parse, and malformed tags.
 
+## Rules
+
+A rule is written once, on the command line, and the ledger keeps it:
+
+```
+emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
+emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
+emetgate rule add "no raw SQL" --check "cmd:./scripts/no-raw-sql.sh" --enforce
+emetgate rule list
+```
+
+An `--enforce` rule runs at the edit gate: a proposal that violates it is rejected with
+reason `rule_violation` before the tests are ever started. A rule without `--enforce` is
+advisory — recorded and shown, never enforced. `--in` scopes a rule to a file, a directory
+ending in `/`, or `file#symbol`; a rule out of scope for the file being edited does not run
+at all.
+
+### Predicates
+
+`--check` names the predicate. Two kinds exist and the prefix decides which:
+
+| Form | Meaning |
+|---|---|
+| `no_comment`, `forbid:<text>`, `no_literal:<option>` | Built-in AST checks, run against the proposed body in memory |
+| `cmd:<command line>` | A command, run in the shadow copy inside the sandbox |
+
+There is no silent fallback. Anything that is not prefixed `cmd:` is looked up in the
+built-in registry and refused with `UnknownCheck` if it is not there, so a typo stays a
+typo instead of quietly becoming a shell command.
+
+A `cmd:` command is validated when the rule is added — empty, blank and over-long commands
+are refused — but it is **not run** at that moment: there is no shadow copy yet, and adding
+a rule must not execute anything on the user's machine.
+
+### What a command predicate is allowed to see
+
+The command runs on the same path as the test gate: a Windows Job Object with kill-on-close,
+the wall-clock and memory limits and the output cap, under a low-integrity restricted token.
+If that token cannot be built or verified, the command is refused rather than run unconfined.
+Its working directory is the **shadow copy**, not the real tree, so a command that writes,
+deletes or rewrites files touches only the throwaway copy.
+
+### Three outcomes, not two
+
+| Result | Meaning |
+|---|---|
+| exit code 0 | the rule is satisfied |
+| non-zero exit, normal termination | **violation** — the command's stdout and stderr are returned to the model as the reason (subject to the output cap) |
+| crash, timeout, output limit, leftover processes, program not found, sandbox unavailable | **not a verdict** — reason `rule_check_crashed`, with a `detail` naming which of them it was |
+
+A tool that crashed did not decide anything. Treating its exit code as a verdict would let
+a broken linter pass every proposal or fail every proposal, and neither is a decision the
+gate is entitled to make. The proposal is refused either way, but the reason says which
+happened. Because `cmd.exe /c` reports a missing program with the same exit code 1 a real
+failure uses, the program named by the command is resolved against `PATH`, `PATHEXT`, the
+shadow working directory and the `cmd.exe` builtins *before* anything is spawned; an
+unresolvable program is `command_not_found`, never a violation.
+
+`emetgate scan` refuses a `cmd:` rule by name (`CommandCheckNotStatic`) instead of running
+it: a scan reads the working tree and has no shadow copy to run anything in.
+
+### What a command predicate costs
+
+Measured on this machine, same proposal, interleaved so drift cancels, 30 paired runs each
+(`python tests/bench/rule_command_cost.py`):
+
+| | median | worst |
+|---|---|---|
+| proposal with no command rule | 203 ms | 278 ms |
+| proposal with one `cmd:exit 0` rule | 265 ms | 285 ms |
+| **added per proposal** (paired difference) | **62 ms** | **81 ms** |
+
+That is the kernel's own overhead — one more sandboxed process in the shadow copy — with a
+command that does nothing. It is not the cost of the tool you put behind `cmd:`. A real
+`npx eslint` run adds its own seconds on top, every proposal, and the gate cannot make that
+cheaper.
+
+### Rules are readable by the model, never writable
+
+`emetgate_skeleton` returns, beside the outline, every adopted rule that covers that file:
+its id, its text, whether it is `enforce` or `advisory`, its predicate and its scope. The
+model reads the rules before it writes a body, so it can obey them instead of proposing a
+violation, getting rejected and trying again.
+
+That direction is one-way and is the point of the project. There is no tool on the model
+side that adopts, changes or forgets a rule, or turns an `enforce` rule into an `advisory`
+one. `rule add`, `rule supersede` and `rule forget` exist only on the command line. A test
+(`red line: the served tool surface is exactly this list`) pins the served tool names, so
+adding any tool at all turns it red, and a second test proves that rule-writing tool names
+are refused by the dispatcher.
+
 ## Architecture
 
 ```
@@ -108,7 +199,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | Tool | Purpose |
 |---|---|
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
-| `emetgate_skeleton` | Signatures and structure without bodies |
+| `emetgate_skeleton` | Signatures and structure without bodies, plus every adopted rule that covers the file (read-only) |
 | `emetgate_read_symbol` | The source of one symbol |
 | `emetgate_mutate` | Verify a proposed body structurally and return the result without writing |
 | `emetgate_try` | Verify, gate and commit a proposed body |
@@ -140,8 +231,8 @@ Emetgate is early and deliberately narrow.
 | Boundedness analysis and test gate | Built, mutation-tested |
 | Journal, atomic commit, recovery, sandbox | Built |
 | MCP server and locked-down launch | Built |
-| Decision ledger (append-only, supersession, compaction, torn-tail recovery) | Built, not yet exposed as MCP tools |
-| Rule enforcement at the edit gate | In progress |
+| Decision ledger (append-only, supersession, compaction, torn-tail recovery) | Built; readable by the model through `emetgate_skeleton`, writable only from the CLI |
+| Rule enforcement at the edit gate | Built, mutation-tested: AST checks and `cmd:` command predicates |
 | Language support | TypeScript and JavaScript (`.js`, `.mjs`, `.cjs`); new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
 | Platform | Windows only (the sandbox relies on Job Objects) |
 
