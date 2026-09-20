@@ -13,6 +13,7 @@ const disk = emetgate.disk;
 const shadow = emetgate.shadow;
 const lockdown = emetgate.lockdown;
 const scan_command = emetgate.scan_command;
+const rule_command = emetgate.rule_command;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
 
@@ -24,8 +25,15 @@ const usage =
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
     \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config]
     \\       emetgate scan [--check <spec> [--in <where>]] [--json]
+    \\       emetgate rule add <text> [--check <spec>] [--in <where>] [--enforce]
+    \\       emetgate rule list [--all] [--json]
+    \\       emetgate rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]
+    \\       emetgate rule forget <id>
     \\       emetgate recover
     \\       emetgate lockdown [<claude args>...]
+    \\
+    \\rule writes to the ledger and is deliberately CLI-only: an audited model
+    \\has no mcp tool for adopting, superseding or forgetting a rule.
     \\
     \\lockdown starts claude with only ToolSearch and the .mcp.json servers
     \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config).
@@ -92,6 +100,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "scan")) {
         const options = scan_command.Options.parse(args[2..]) orelse exitWithUsage();
         return scanCmd(init, runtime, options, out);
+    }
+    if (std.mem.eql(u8, command, "rule")) {
+        const request = rule_command.parse(args[2..]) orelse exitWithUsage();
+        return ruleCmd(init, runtime, request, out);
     }
     if (std.mem.eql(u8, command, "recover") and args.len == 2) {
         return recoverCmd(init, runtime);
@@ -367,6 +379,14 @@ fn scanCmd(init: std.process.Init, runtime: *Runtime, options: scan_command.Opti
     const code = try scan_command.run(gpa, init.io, runtime, root, options, out, &stderr_writer.interface);
     try stderr_writer.interface.flush();
     return code;
+}
+
+fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Request, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = try runner.repoRoot(gpa, init.io);
+    defer gpa.free(root);
+    try rule_command.run(gpa, init.io, root, request, out);
+    return 0;
 }
 
 fn recoverCmd(init: std.process.Init, runtime: *Runtime) !u8 {
