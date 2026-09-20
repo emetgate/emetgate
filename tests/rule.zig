@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const memory = @import("../src/platform/memory.zig");
+const checks = @import("../src/engine/checks.zig");
 const rule_command = @import("../src/protocol/rule_command.zig");
 const scan_command = @import("../src/protocol/scan_command.zig");
 const wire = @import("../src/protocol/wire.zig");
@@ -361,4 +362,65 @@ test "rule: every refusal the command owns has its own exit code" {
     };
     try testing.expectEqualSlices(u8, &.{ 33, 34, 35, 36 }, &codes);
     for (codes) |code| try testing.expect(code != wire.exitCode(error.Unexpected));
+}
+
+test "rule: a cmd: check is accepted, stored verbatim and never run while the rule is added" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    const marker = "repo_was_written_during_add.txt";
+    const spec = "cmd:echo x > " ++ marker;
+    const id = try addRule(&repo, &.{ "add", "no console.log", "--check", spec, "--enforce" });
+    defer testing.allocator.free(id);
+
+    const listed = try runRule(&repo, &.{"list"});
+    defer testing.allocator.free(listed);
+    var listed_it = lines(listed);
+    const row = listed_it.next().?;
+    try testing.expectEqualStrings("enforce", fieldOf(row, 2));
+    try testing.expectEqualStrings(spec, fieldOf(row, 3));
+
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/" ++ marker, .{}));
+}
+
+test "rule: an empty or blank cmd: check is refused before the ledger is touched" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    try testing.expectError(error.EmptyCommandCheck, runRule(&repo, &.{ "add", "empty", "--check", "cmd:", "--enforce" }));
+    try testing.expectError(error.EmptyCommandCheck, runRule(&repo, &.{ "add", "blank", "--check", "cmd:   ", "--enforce" }));
+    try testing.expectError(error.EmptyCommandCheck, runRule(&repo, &.{ "add", "tabs", "--check", "cmd:\t", "--enforce" }));
+    try expectLedgerUntouched(&repo);
+}
+
+test "rule: a cmd: check at the length limit still fits the ledger field, one byte over is refused" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    const at_limit = "cmd:" ++ ("x" ** checks.max_command_bytes);
+    try testing.expectEqual(memory.max_check_bytes, at_limit.len);
+    const id = try addRule(&repo, &.{ "add", "long but legal", "--check", at_limit, "--enforce" });
+    defer testing.allocator.free(id);
+
+    const over = "cmd:" ++ ("x" ** (checks.max_command_bytes + 1));
+    try testing.expectError(error.CommandCheckTooLong, runRule(&repo, &.{ "add", "too long", "--check", over, "--enforce" }));
+}
+
+test "rule: scan refuses a command rule by name instead of running it" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ .path = "src/nav.ts", .data = with_networkidle }});
+    defer repo.deinit();
+
+    const marker = "repo_was_written_during_scan.txt";
+    const id = try addRule(&repo, &.{ "add", "no console.log", "--check", "cmd:echo x > " ++ marker, "--enforce" });
+    defer testing.allocator.free(id);
+
+    const outcome = try runScan(&repo);
+    defer outcome.deinit();
+    try testing.expectEqual(wire.exitCode(error.CommandCheckNotStatic), outcome.code);
+    try testing.expect(std.mem.indexOf(u8, outcome.err, "CommandCheckNotStatic") != null);
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/" ++ marker, .{}));
 }

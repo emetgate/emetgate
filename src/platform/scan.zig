@@ -92,7 +92,7 @@ fn covers(scopes: []const ?where_mod.Where, file: []const u8) bool {
 
 pub fn firstMalformed(list: []const rules.Rule) ?Malformed {
     for (list) |rule| {
-        checks.validate(rule.check) catch |err| return .{ .rule = rule, .reason = err };
+        checks.validateStatic(rule.check) catch |err| return .{ .rule = rule, .reason = err };
     }
     return null;
 }

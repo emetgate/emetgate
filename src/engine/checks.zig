@@ -28,7 +28,21 @@ pub const registry = [_]Check{
     .{ .name = "no_literal", .collect = noLiteral, .takes_argument = true },
 };
 
-pub const Error = error{ UnknownCheck, UnexpectedCheckArgument, MissingCheckArgument, EmptyCheckArgument } || Allocator.Error;
+pub const Error = error{ UnknownCheck, UnexpectedCheckArgument, MissingCheckArgument, EmptyCheckArgument, EmptyCommandCheck, CommandCheckTooLong, CommandCheckNotStatic } || Allocator.Error;
+
+pub const command_prefix = "cmd:";
+pub const max_command_bytes = 4 * 1024 - command_prefix.len;
+const command_whitespace = " \t\r\n";
+
+pub fn commandOf(spec: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, spec, command_prefix)) return null;
+    return spec[command_prefix.len..];
+}
+
+pub fn validateCommand(command: []const u8) Error!void {
+    if (std.mem.trim(u8, command, command_whitespace).len == 0) return error.EmptyCommandCheck;
+    if (command.len > max_command_bytes) return error.CommandCheckTooLong;
+}
 
 pub const Invocation = struct {
     name: []const u8,
@@ -53,6 +67,12 @@ fn resolve(checks: []const Check, spec: []const u8) Error!struct { check: Check,
 }
 
 pub fn validate(spec: []const u8) Error!void {
+    if (commandOf(spec)) |command| return validateCommand(command);
+    _ = try resolve(&registry, spec);
+}
+
+pub fn validateStatic(spec: []const u8) Error!void {
+    if (commandOf(spec) != null) return error.CommandCheckNotStatic;
     _ = try resolve(&registry, spec);
 }
 
@@ -470,4 +490,46 @@ test "no_literal refuses a missing or empty argument" {
     const source = "run({ timeout: 1 });\n";
     try testing.expectError(error.MissingCheckArgument, runSpecs(source, wholeSource(source), &.{"no_literal"}));
     try testing.expectError(error.EmptyCheckArgument, runSpecs(source, wholeSource(source), &.{"no_literal:"}));
+}
+
+test "only a cmd: prefix names a command predicate, and every other spec stays a registry lookup" {
+    try testing.expect(commandOf("cmd:npx eslint --rule no-console") != null);
+    try testing.expectEqualStrings("npx eslint --rule no-console", commandOf("cmd:npx eslint --rule no-console").?);
+    try testing.expectEqualStrings(" ", commandOf("cmd: ").?);
+    try testing.expect(commandOf("no_comment") == null);
+    try testing.expect(commandOf("forbid:cmd:x") == null);
+    try testing.expect(commandOf("Cmd:x") == null);
+    try testing.expect(commandOf("cmd") == null);
+    try testing.expect(commandOf("xcmd:x") == null);
+}
+
+test "an unknown check name is still refused instead of being run as a command" {
+    try testing.expectError(error.UnknownCheck, validate("npx eslint"));
+    try testing.expectError(error.UnknownCheck, validate("eslint:--rule"));
+    try testing.expectError(error.UnknownCheck, validate("frbid:x"));
+}
+
+test "a command check is validated for shape without being run, and the ast path refuses it outright" {
+    try validate("cmd:npx eslint --rule no-console");
+    try validate("cmd:./scripts/no-raw-sql.sh");
+    try testing.expectError(error.EmptyCommandCheck, validate("cmd:"));
+    try testing.expectError(error.EmptyCommandCheck, validate("cmd:   "));
+    try testing.expectError(error.EmptyCommandCheck, validate("cmd:\t\r\n"));
+
+    const long = "cmd:" ++ ("x" ** (max_command_bytes + 1));
+    try testing.expectError(error.CommandCheckTooLong, validate(long));
+    const at_limit = "cmd:" ++ ("x" ** max_command_bytes);
+    try validate(at_limit);
+
+    const source = "function f() { /* c */ }\n";
+    try testing.expectError(error.UnknownCheck, runSpecs(source, wholeSource(source), &.{"cmd:exit 0"}));
+    try testing.expectError(error.UnknownCheck, runSpecs(source, wholeSource(source), &.{ "no_comment", "cmd:exit 0" }));
+}
+
+test "a static-only caller refuses a command check by its own name" {
+    try validateStatic("no_comment");
+    try validateStatic("forbid:x");
+    try testing.expectError(error.CommandCheckNotStatic, validateStatic("cmd:exit 0"));
+    try testing.expectError(error.CommandCheckNotStatic, validateStatic("cmd:"));
+    try testing.expectError(error.UnknownCheck, validateStatic("frbid:x"));
 }

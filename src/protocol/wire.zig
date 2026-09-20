@@ -360,7 +360,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.BodyEscape => 8,
         error.SkeletonInvalid => 9,
         error.PlaceholderBody => 13,
-        error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument => 19,
+        error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument, error.EmptyCommandCheck, error.CommandCheckTooLong, error.CommandCheckNotStatic => 19,
         error.SymbolExists => 20,
         error.MissingTrailingNewline => 21,
         error.NoTopLevelSymbol => 22,
