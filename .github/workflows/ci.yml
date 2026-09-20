@@ -8,9 +8,14 @@ on:
   workflow_dispatch:
     inputs:
       full:
-        description: Run the full corpus, expected survivors included
+        description: Run the full corpus, expected survivors included (ignored when mode is shadow)
         type: boolean
         default: false
+      mode:
+        description: How the mutation corpus runs
+        type: choice
+        options: [serial, pool, shadow]
+        default: serial
   schedule:
     - cron: "0 2 * * 1-6"
     - cron: "0 3 * * 0"
@@ -45,11 +50,23 @@ jobs:
     timeout-minutes: 240
     env:
       FULL_RUN: ${{ github.event.schedule == '0 3 * * 0' || inputs.full == true }}
+      RUN_MODE: ${{ inputs.mode || 'serial' }}
+      ROTATION: ${{ github.run_number }}
     steps:
       - name: Report the run mode
         shell: pwsh
         run: |
-          if ($env:FULL_RUN -eq 'true') { Write-Output "mode: full corpus, expected survivors included" } else { Write-Output "mode: expected survivors skipped (--skip-survivors)" }
+          switch ($env:RUN_MODE) {
+            'pool' {
+              $corpus = if ($env:FULL_RUN -eq 'true') { "full corpus" } else { "expected survivors skipped" }
+              Write-Output "mode: pool, $corpus, rotation=$env:ROTATION"
+            }
+            'shadow' { Write-Output "mode: shadow, full corpus pooled and then run one at a time; the full input is ignored and no slice rotates" }
+            default {
+              $corpus = if ($env:FULL_RUN -eq 'true') { "full corpus, expected survivors included" } else { "expected survivors skipped (--skip-survivors)" }
+              Write-Output "mode: serial, $corpus"
+            }
+          }
       - uses: actions/checkout@v4
       - name: Install Zig
         shell: pwsh
@@ -74,7 +91,16 @@ jobs:
       - name: Run the mutation corpus
         shell: pwsh
         run: |
-          if ($env:FULL_RUN -eq 'true') { ./zig-out/bin/emetgate-mutate.exe } else { ./zig-out/bin/emetgate-mutate.exe --skip-survivors }
+          $mutate = "./zig-out/bin/emetgate-mutate.exe"
+          $flags = @()
+          if ($env:RUN_MODE -eq 'shadow') {
+            $flags += "--shadow"
+          } else {
+            if ($env:RUN_MODE -eq 'pool') { $flags += @("--pool", "--rotation=$env:ROTATION") }
+            if ($env:FULL_RUN -ne 'true') { $flags += "--skip-survivors" }
+          }
+          Write-Output "running: $mutate $flags"
+          & $mutate @flags
       - name: Summarize unexpected outcomes
         if: always()
         shell: pwsh
