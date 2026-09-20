@@ -28,10 +28,11 @@ pub fn timeoutFor(own: ?u64, global: u64) u64 {
     return own orelse global;
 }
 
-pub fn writeSummary(w: *std.Io.Writer, run: usize, failures: usize, skipped_e2e: usize, skipped_survivors: usize) std.Io.Writer.Error!void {
+pub fn writeSummary(w: *std.Io.Writer, run: usize, failures: usize, skipped_e2e: usize, skipped_survivors: usize, rotation: usize) std.Io.Writer.Error!void {
     try w.print("{d} mutation(s) run, {d} as expected, {d} not as expected", .{ run, run - failures, failures });
     if (skipped_e2e != 0) try w.print(", {d} e2e mutation(s) skipped (pass --e2e)", .{skipped_e2e});
     if (skipped_survivors != 0) try w.print(", {d} expected survivor(s) skipped (drop --skip-survivors)", .{skipped_survivors});
+    if (rotation != 0) try w.print(", {d} mutation(s) verified one at a time this run", .{rotation});
 }
 
 pub fn applyMutation(gpa: Allocator, source: []const u8, from: []const u8, to: []const u8, all: bool) ![]u8 {
@@ -346,6 +347,30 @@ pub fn poolFilter(gpa: Allocator, pool: []const Candidate) ![]const []const u8 {
         }
     }
     return names.toOwnedSlice(gpa);
+}
+
+pub fn rotationBuckets(share_percent: usize) usize {
+    if (share_percent == 0) return 0;
+    if (share_percent >= 100) return 1;
+    return (100 + share_percent - 1) / share_percent;
+}
+
+pub fn parseBucket(bytes: ?[]const u8, buckets: usize) usize {
+    if (buckets == 0) return 0;
+    const text = bytes orelse return 0;
+    const trimmed = std.mem.trim(u8, text, " \r\n");
+    const value = std.fmt.parseInt(usize, trimmed, 10) catch return 0;
+    return value % buckets;
+}
+
+pub fn nextBucket(bucket: usize, buckets: usize) usize {
+    if (buckets == 0) return 0;
+    return (bucket + 1) % buckets;
+}
+
+pub fn inRotation(ordinal: usize, bucket: usize, buckets: usize) bool {
+    if (buckets == 0) return false;
+    return ordinal % buckets == bucket;
 }
 
 pub const PoolVerdict = enum { killed, inconclusive };

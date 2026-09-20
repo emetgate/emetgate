@@ -10,6 +10,8 @@ const report_path = work_dir ++ "/report.json";
 const max_output = 16 * 1024 * 1024;
 const default_timeout_s: u64 = 900;
 const default_pool_size: usize = 16;
+const default_verify_share: usize = 10;
+const rotation_path = work_dir ++ "/rotation";
 
 const Mutation = struct {
     id: []const u8,
@@ -56,6 +58,7 @@ const Options = struct {
     pool: bool = false,
     shadow: bool = false,
     pool_size: usize = default_pool_size,
+    verify_share: usize = default_verify_share,
     timeout_s: u64 = default_timeout_s,
 };
 
@@ -70,6 +73,7 @@ const Run = struct {
     pools: usize = 0,
     inconclusive: usize = 0,
     splits: usize = 0,
+    rotated: usize = 0,
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -95,6 +99,9 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.startsWith(u8, arg, "--pool-size=")) {
             options.pool_size = std.fmt.parseInt(usize, arg["--pool-size=".len..], 10) catch return usage();
             if (options.pool_size == 0 or options.pool_size > core.max_pool_members) return usage();
+        } else if (std.mem.startsWith(u8, arg, "--verify-share=")) {
+            options.verify_share = std.fmt.parseInt(usize, arg["--verify-share=".len..], 10) catch return usage();
+            if (options.verify_share > 100) return usage();
         } else if (std.mem.startsWith(u8, arg, "--timeout-s=")) {
             options.timeout_s = std.fmt.parseInt(u64, arg["--timeout-s=".len..], 10) catch return usage();
         } else if (std.mem.startsWith(u8, arg, "--")) {
@@ -172,6 +179,7 @@ pub fn main(init: std.process.Init) !u8 {
             .pools = pooled.pools,
             .inconclusive = pooled.inconclusive,
             .splits = pooled.splits,
+            .rotated = pooled.rotated,
         };
         break :pooled merged;
     } else try runSerial(arena, io, cwd, journal, chosen.items, options);
@@ -182,14 +190,14 @@ pub fn main(init: std.process.Init) !u8 {
     try cwd.writeFile(io, .{ .sub_path = report_path, .data = report.written() });
 
     var summary: std.Io.Writer.Allocating = .init(arena);
-    try core.writeSummary(&summary.writer, run.outcomes.len, run.failures, skipped_e2e, skipped_survivors);
+    try core.writeSummary(&summary.writer, run.outcomes.len, run.failures, skipped_e2e, skipped_survivors, run.rotated);
     std.debug.print("\n{s}\nreport: {s}\n", .{ summary.written(), report_path });
     if (shadow_mismatch != 0) return 5;
     return if (run.failures == 0) 0 else 1;
 }
 
 fn usage() u8 {
-    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--shadow] [--timeout-s=N] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--shadow] [--timeout-s=N] [id...]\n", .{});
     return 2;
 }
 
@@ -207,10 +215,23 @@ fn runSerial(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
 }
 
 fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, chosen: []const Selected, options: Options) !?Run {
+    const buckets = core.rotationBuckets(options.verify_share);
+    const stored = cwd.readFileAlloc(io, rotation_path, arena, .limited(64)) catch null;
+    const bucket = core.parseBucket(stored, buckets);
+
+    const rotating = try arena.alloc(bool, chosen.len);
+    @memset(rotating, false);
+
     var candidates: std.ArrayList(core.Candidate) = .empty;
+    var ordinal: usize = 0;
     for (chosen, 0..) |entry, i| {
         const m = entry.m;
         if (!core.poolable(entry.kind, m.expect_status, m.timeout_s != null, m.optimize != null, m.kills.len)) continue;
+        defer ordinal += 1;
+        if (core.inRotation(ordinal, bucket, buckets)) {
+            rotating[i] = true;
+            continue;
+        }
         try candidates.append(arena, .{
             .index = i,
             .file = m.file,
@@ -248,20 +269,32 @@ fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
     var failures: usize = 0;
     for (chosen, 0..) |entry, i| {
         const outcome = slots[i] orelse blk: {
-            std.debug.print("running {s} on {s} ...\n", .{ entry.m.id, entry.m.file });
-            const single = try runOne(arena, io, cwd, journal, entry.m, entry.kind, options, "single", null);
+            const origin = if (rotating[i]) "single-rotation" else "single";
+            std.debug.print("running {s} on {s} ({s}) ...\n", .{ entry.m.id, entry.m.file, origin });
+            const single = try runOne(arena, io, cwd, journal, entry.m, entry.kind, options, origin, null);
             printOutcome(single);
             break :blk single;
         };
         if (!outcome.ok) failures += 1;
         try outcomes.append(arena, outcome);
     }
+    var rotated: usize = 0;
+    for (rotating) |picked| {
+        if (picked) rotated += 1;
+    }
+    if (buckets != 0) {
+        var buf: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&buf, "{d}\n", .{core.nextBucket(bucket, buckets)});
+        try cwd.writeFile(io, .{ .sub_path = rotation_path, .data = text });
+    }
+
     return .{
         .outcomes = try outcomes.toOwnedSlice(arena),
         .failures = failures,
         .pools = state.pools,
         .inconclusive = state.inconclusive,
         .splits = state.splits,
+        .rotated = rotated,
     };
 }
 

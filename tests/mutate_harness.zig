@@ -111,11 +111,11 @@ test "harness: a selected id runs even when it is an expected survivor" {
 test "harness: the summary line counts skipped survivors" {
     var buf: [256]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    try core.writeSummary(&w, 5, 1, 2, 9);
-    try testing.expectEqualStrings("5 mutation(s) run, 4 as expected, 1 not as expected, 2 e2e mutation(s) skipped (pass --e2e), 9 expected survivor(s) skipped (drop --skip-survivors)", w.buffered());
+    try core.writeSummary(&w, 5, 1, 2, 9, 4);
+    try testing.expectEqualStrings("5 mutation(s) run, 4 as expected, 1 not as expected, 2 e2e mutation(s) skipped (pass --e2e), 9 expected survivor(s) skipped (drop --skip-survivors), 4 mutation(s) verified one at a time this run", w.buffered());
 
     w = .fixed(&buf);
-    try core.writeSummary(&w, 3, 0, 0, 0);
+    try core.writeSummary(&w, 3, 0, 0, 0, 0);
     try testing.expectEqualStrings("3 mutation(s) run, 3 as expected, 0 not as expected", w.buffered());
 }
 
@@ -203,6 +203,30 @@ test "harness: members whose kills overlap land in different pools" {
     const shape = try poolShape(testing.allocator, pools);
     defer testing.allocator.free(shape);
     try testing.expectEqualStrings("0,|1,|", shape);
+}
+
+test "harness: pools from different files merge only while their kills stay apart" {
+    const sources = [_]core.Source{
+        .{ .file = "a.zig", .text = "alpha" },
+        .{ .file = "b.zig", .text = "one" },
+    };
+
+    const apart = [_]core.Candidate{
+        anchored(0, "a.zig", &.{"a"}, "alpha", "ALPHA"),
+        anchored(1, "b.zig", &.{"b"}, "one", "ONE"),
+    };
+    const merged = try core.buildPools(testing.allocator, &apart, 16, &sources);
+    defer freePools(testing.allocator, merged);
+    try testing.expectEqual(@as(usize, 1), merged.len);
+    try testing.expectEqual(@as(usize, 2), merged[0].len);
+
+    const clashing = [_]core.Candidate{
+        anchored(0, "a.zig", &.{"shared"}, "alpha", "ALPHA"),
+        anchored(1, "b.zig", &.{"shared"}, "one", "ONE"),
+    };
+    const kept = try core.buildPools(testing.allocator, &clashing, 16, &sources);
+    defer freePools(testing.allocator, kept);
+    try testing.expectEqual(@as(usize, 2), kept.len);
 }
 
 test "harness: a pool never grows past its size" {
@@ -319,6 +343,88 @@ test "harness: a pool run is compared against the union of its members" {
     try testing.expectEqual(@as(usize, 2), filters.len);
     try testing.expectEqualStrings("prefix: ", filters[0]);
     try testing.expectEqualStrings("a1", filters[1]);
+}
+
+test "harness: a tenth of the corpus is verified one at a time, and it rotates" {
+    const buckets = core.rotationBuckets(10);
+    try testing.expectEqual(@as(usize, 10), buckets);
+    try testing.expectEqual(@as(usize, 4), core.rotationBuckets(25));
+    try testing.expectEqual(@as(usize, 4), core.rotationBuckets(30));
+    try testing.expectEqual(@as(usize, 1), core.rotationBuckets(100));
+    try testing.expectEqual(@as(usize, 0), core.rotationBuckets(0));
+
+    const first = core.parseBucket(null, buckets);
+    try testing.expectEqual(@as(usize, 0), first);
+    const second = core.nextBucket(first, buckets);
+    try testing.expectEqual(@as(usize, 1), second);
+
+    try testing.expect(core.inRotation(0, first, buckets));
+    try testing.expect(!core.inRotation(1, first, buckets));
+    try testing.expect(core.inRotation(1, second, buckets));
+
+    var overlap: usize = 0;
+    var picked_first: usize = 0;
+    for (0..40) |ordinal| {
+        const in_first = core.inRotation(ordinal, first, buckets);
+        const in_second = core.inRotation(ordinal, second, buckets);
+        if (in_first) picked_first += 1;
+        if (in_first and in_second) overlap += 1;
+    }
+    try testing.expectEqual(@as(usize, 4), picked_first);
+    try testing.expectEqual(@as(usize, 0), overlap);
+
+    var bucket = first;
+    var covered = [_]bool{false} ** 10;
+    for (0..buckets) |_| {
+        for (0..10) |ordinal| {
+            if (core.inRotation(ordinal, bucket, buckets)) covered[ordinal] = true;
+        }
+        bucket = core.nextBucket(bucket, buckets);
+    }
+    for (covered) |seen| try testing.expect(seen);
+    try testing.expectEqual(first, bucket);
+}
+
+test "harness: a missing or unreadable rotation state starts at the first slice" {
+    const buckets = core.rotationBuckets(10);
+    try testing.expectEqual(@as(usize, 0), core.parseBucket(null, buckets));
+    try testing.expectEqual(@as(usize, 0), core.parseBucket("", buckets));
+    try testing.expectEqual(@as(usize, 0), core.parseBucket("not a number", buckets));
+    try testing.expectEqual(@as(usize, 3), core.parseBucket(" 3\n", buckets));
+    try testing.expectEqual(@as(usize, 3), core.parseBucket("13", buckets));
+    try testing.expectEqual(@as(usize, 0), core.parseBucket("7", 0));
+}
+
+test "harness: the rotating slice never enters a pool" {
+    const all = [_]core.Candidate{
+        anchored(0, "a.zig", &.{"a"}, "alpha", "ALPHA"),
+        anchored(1, "a.zig", &.{"b"}, "beta", "BETA"),
+        anchored(2, "a.zig", &.{"c"}, "gamma", "GAMMA"),
+        anchored(3, "a.zig", &.{"d"}, "delta", "DELTA"),
+    };
+    const sources = [_]core.Source{.{ .file = "a.zig", .text = "alpha beta gamma delta" }};
+    const buckets = core.rotationBuckets(25);
+    const bucket = core.parseBucket(null, buckets);
+
+    var pooled: std.ArrayList(core.Candidate) = .empty;
+    defer pooled.deinit(testing.allocator);
+    var singles: usize = 0;
+    for (all, 0..) |c, ordinal| {
+        if (core.inRotation(ordinal, bucket, buckets)) {
+            singles += 1;
+            continue;
+        }
+        try pooled.append(testing.allocator, c);
+    }
+    try testing.expectEqual(@as(usize, 1), singles);
+    try testing.expectEqual(@as(usize, 1), pooled.items[0].index);
+
+    const pools = try core.buildPools(testing.allocator, pooled.items, 16, &sources);
+    defer freePools(testing.allocator, pools);
+    for (pools) |pool| {
+        for (pool) |member| try testing.expect(!core.inRotation(member.index, bucket, buckets));
+    }
+    try testing.expectEqual(@as(usize, 3), pools[0].len);
 }
 
 test "harness: pooling refuses to start unless the unmutated tree is green" {
