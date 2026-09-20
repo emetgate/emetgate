@@ -43,6 +43,9 @@ const Outcome = struct {
     detail: ?[]const u8 = null,
     origin: []const u8 = "single",
     pool: ?[]const u8 = null,
+    pooled_status: ?[]const u8 = null,
+    pooled_origin: ?[]const u8 = null,
+    pooled_pool: ?[]const u8 = null,
 };
 
 const Options = struct {
@@ -163,7 +166,14 @@ pub fn main(init: std.process.Init) !u8 {
         std.debug.print("\nshadow: running the same corpus one at a time\n", .{});
         const serial = try runSerial(arena, io, cwd, journal, chosen.items, options);
         shadow_mismatch = reportShadow(pooled.outcomes, serial.outcomes);
-        break :pooled serial;
+        const merged: Run = .{
+            .outcomes = try withShadow(arena, serial.outcomes, pooled.outcomes),
+            .failures = serial.failures,
+            .pools = pooled.pools,
+            .inconclusive = pooled.inconclusive,
+            .splits = pooled.splits,
+        };
+        break :pooled merged;
     } else try runSerial(arena, io, cwd, journal, chosen.items, options);
 
     var report: std.Io.Writer.Allocating = .init(arena);
@@ -201,9 +211,18 @@ fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
     for (chosen, 0..) |entry, i| {
         const m = entry.m;
         if (!core.poolable(entry.kind, m.expect_status, m.timeout_s != null, m.optimize != null, m.kills.len)) continue;
-        try candidates.append(arena, .{ .index = i, .file = m.file, .kills = m.kills, .filter = m.filter });
+        try candidates.append(arena, .{
+            .index = i,
+            .file = m.file,
+            .kills = m.kills,
+            .filter = m.filter,
+            .from = m.from,
+            .to = m.to,
+            .all = m.all,
+        });
     }
-    const pools = try core.buildPools(arena, candidates.items, options.pool_size);
+    const sources = try readSources(arena, io, cwd, candidates.items);
+    const pools = try core.buildPools(arena, candidates.items, options.pool_size, sources);
 
     if (pools.len != 0 and !try baselineIsGreen(arena, io, pools, options)) return null;
 
@@ -273,35 +292,42 @@ fn runPool(
         return false;
     }
 
-    std.debug.print("running {s} with {d} mutation(s) ...\n", .{ label, pool.len });
+    const modules = core.modulesIn(pool);
+    std.debug.print("running {s} with {d} mutation(s) in {d} module(s) ...\n", .{ label, pool.len, modules });
     const expected = try core.unionNames(arena, pool, "kills");
     const filters = try core.poolFilter(arena, pool);
 
     var backups: std.ArrayList(core.Backup) = .empty;
+    var working: std.ArrayList([]const u8) = .empty;
     for (pool) |member| {
         const m = chosen[member.index].m;
-        if (!try knownToGitAndClean(arena, io, m.file)) {
-            std.debug.print("{s}: {s} is not known to git or has uncommitted changes\n", .{ label, m.file });
-            return error.DirtyTree;
+        for (backups.items) |seen| {
+            if (std.mem.eql(u8, seen.path, m.file)) break;
+        } else {
+            if (!try knownToGitAndClean(arena, io, m.file)) {
+                std.debug.print("{s}: {s} is not known to git or has uncommitted changes\n", .{ label, m.file });
+                return error.DirtyTree;
+            }
+            const original = try cwd.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes));
+            try backups.append(arena, .{ .path = m.file, .original = original });
+            try working.append(arena, original);
         }
-        const original = try cwd.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes));
-        try backups.append(arena, .{ .path = m.file, .original = original });
     }
 
-    var mutated: std.ArrayList([]const u8) = .empty;
-    for (pool, backups.items) |member, backup| {
+    for (pool) |member| {
         const m = chosen[member.index].m;
-        const text = core.applyMutation(arena, backup.original, m.from, m.to, m.all) catch {
+        const at = indexOfPath(backups.items, m.file).?;
+        const text = core.applyMutation(arena, working.items[at], m.from, m.to, m.all) catch {
             state.inconclusive += 1;
             std.debug.print("{s}: {s} did not apply, splitting\n", .{ label, m.id });
             return true;
         };
-        try mutated.append(arena, text);
+        working.items[at] = text;
     }
 
     try journal.record(arena, backups.items);
     errdefer restoreAll(arena, io, cwd, journal, backups.items) catch {};
-    for (backups.items, mutated.items) |backup, text| {
+    for (backups.items, working.items) |backup, text| {
         try cwd.writeFile(io, .{ .sub_path = backup.path, .data = text });
     }
 
@@ -373,6 +399,26 @@ fn baselineIsGreen(arena: Allocator, io: std.Io, pools: []const []const core.Can
     return true;
 }
 
+fn indexOfPath(backups: []const core.Backup, path: []const u8) ?usize {
+    for (backups, 0..) |backup, i| {
+        if (std.mem.eql(u8, backup.path, path)) return i;
+    }
+    return null;
+}
+
+fn readSources(arena: Allocator, io: std.Io, cwd: std.Io.Dir, candidates: []const core.Candidate) ![]const core.Source {
+    var sources: std.ArrayList(core.Source) = .empty;
+    for (candidates) |c| {
+        for (sources.items) |seen| {
+            if (std.mem.eql(u8, seen.file, c.file)) break;
+        } else {
+            const text = try cwd.readFileAlloc(io, c.file, arena, .limited(core.max_source_bytes));
+            try sources.append(arena, .{ .file = c.file, .text = text });
+        }
+    }
+    return sources.toOwnedSlice(arena);
+}
+
 fn restoreAll(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, backups: []const core.Backup) !void {
     for (backups) |backup| {
         try cwd.writeFile(io, .{ .sub_path = backup.path, .data = backup.original });
@@ -380,6 +426,16 @@ fn restoreAll(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journ
         if (!std.mem.eql(u8, back, backup.original)) return error.RestoreMismatch;
     }
     journal.clear();
+}
+
+fn withShadow(arena: Allocator, serial: []const Outcome, pooled: []const Outcome) ![]const Outcome {
+    const merged = try arena.dupe(Outcome, serial);
+    for (merged, pooled) |*outcome, shadow| {
+        outcome.pooled_status = shadow.status;
+        outcome.pooled_origin = shadow.origin;
+        outcome.pooled_pool = shadow.pool;
+    }
+    return merged;
 }
 
 fn reportShadow(pooled: []const Outcome, serial: []const Outcome) usize {

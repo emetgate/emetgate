@@ -120,7 +120,11 @@ test "harness: the summary line counts skipped survivors" {
 }
 
 fn candidate(index: usize, file: []const u8, kills: []const []const u8) core.Candidate {
-    return .{ .index = index, .file = file, .kills = kills, .filter = &.{} };
+    return .{ .index = index, .file = file, .kills = kills, .filter = &.{}, .from = "", .to = "" };
+}
+
+fn anchored(index: usize, file: []const u8, kills: []const []const u8, from: []const u8, to: []const u8) core.Candidate {
+    return .{ .index = index, .file = file, .kills = kills, .filter = &.{}, .from = from, .to = to };
 }
 
 fn poolShape(gpa: std.mem.Allocator, pools: []const []const core.Candidate) ![]u8 {
@@ -138,28 +142,77 @@ fn freePools(gpa: std.mem.Allocator, pools: []const []const core.Candidate) void
     gpa.free(pools);
 }
 
-test "harness: a pool holds distinct files whose kills do not overlap" {
+test "harness: mutations in one file share a pool so only one module changes" {
     const candidates = [_]core.Candidate{
-        candidate(0, "a.zig", &.{"kills a"}),
-        candidate(1, "a.zig", &.{"kills a again"}),
-        candidate(2, "b.zig", &.{"kills a"}),
-        candidate(3, "c.zig", &.{"kills c"}),
+        anchored(0, "a.zig", &.{"a1"}, "alpha", "ALPHA"),
+        anchored(1, "b.zig", &.{"b1"}, "one", "ONE"),
+        anchored(2, "a.zig", &.{"a2"}, "beta", "BETA"),
+        anchored(3, "a.zig", &.{"a3"}, "gamma", "GAMMA"),
     };
-    const pools = try core.buildPools(testing.allocator, &candidates, 16);
+    const sources = [_]core.Source{
+        .{ .file = "a.zig", .text = "alpha beta gamma" },
+        .{ .file = "b.zig", .text = "one" },
+    };
+    const pools = try core.buildPools(testing.allocator, &candidates, 16, &sources);
     defer freePools(testing.allocator, pools);
 
     const shape = try poolShape(testing.allocator, pools);
     defer testing.allocator.free(shape);
-    try testing.expectEqualStrings("0,3,|1,2,|", shape);
+    try testing.expectEqualStrings("0,2,3,1,|", shape);
+    try testing.expectEqual(@as(usize, 2), core.modulesIn(pools[0]));
+}
+
+test "harness: a member whose anchor is gone waits for the next pool" {
+    const candidates = [_]core.Candidate{
+        anchored(0, "a.zig", &.{"a1"}, "needle", "thread"),
+        anchored(1, "a.zig", &.{"a2"}, "needle", "pin"),
+        anchored(2, "a.zig", &.{"a3"}, "haystack", "barn"),
+    };
+    const sources = [_]core.Source{.{ .file = "a.zig", .text = "needle in a haystack" }};
+    const pools = try core.buildPools(testing.allocator, &candidates, 16, &sources);
+    defer freePools(testing.allocator, pools);
+
+    const shape = try poolShape(testing.allocator, pools);
+    defer testing.allocator.free(shape);
+    try testing.expectEqualStrings("0,2,|1,|", shape);
+}
+
+test "harness: a member whose anchor is ambiguous is never pooled" {
+    const candidates = [_]core.Candidate{
+        anchored(0, "a.zig", &.{"a1"}, "twice", "once"),
+        anchored(1, "a.zig", &.{"a2"}, "unique", "changed"),
+    };
+    const sources = [_]core.Source{.{ .file = "a.zig", .text = "twice twice unique" }};
+    const pools = try core.buildPools(testing.allocator, &candidates, 16, &sources);
+    defer freePools(testing.allocator, pools);
+
+    const shape = try poolShape(testing.allocator, pools);
+    defer testing.allocator.free(shape);
+    try testing.expectEqualStrings("1,|", shape);
+}
+
+test "harness: members whose kills overlap land in different pools" {
+    const candidates = [_]core.Candidate{
+        anchored(0, "a.zig", &.{"shared"}, "alpha", "ALPHA"),
+        anchored(1, "a.zig", &.{"shared"}, "beta", "BETA"),
+    };
+    const sources = [_]core.Source{.{ .file = "a.zig", .text = "alpha beta" }};
+    const pools = try core.buildPools(testing.allocator, &candidates, 16, &sources);
+    defer freePools(testing.allocator, pools);
+
+    const shape = try poolShape(testing.allocator, pools);
+    defer testing.allocator.free(shape);
+    try testing.expectEqualStrings("0,|1,|", shape);
 }
 
 test "harness: a pool never grows past its size" {
     const candidates = [_]core.Candidate{
-        candidate(0, "a.zig", &.{"a"}),
-        candidate(1, "b.zig", &.{"b"}),
-        candidate(2, "c.zig", &.{"c"}),
+        anchored(0, "a.zig", &.{"a"}, "alpha", "ALPHA"),
+        anchored(1, "a.zig", &.{"b"}, "beta", "BETA"),
+        anchored(2, "a.zig", &.{"c"}, "gamma", "GAMMA"),
     };
-    const pools = try core.buildPools(testing.allocator, &candidates, 2);
+    const sources = [_]core.Source{.{ .file = "a.zig", .text = "alpha beta gamma" }};
+    const pools = try core.buildPools(testing.allocator, &candidates, 2, &sources);
     defer freePools(testing.allocator, pools);
 
     const shape = try poolShape(testing.allocator, pools);
@@ -169,15 +222,21 @@ test "harness: a pool never grows past its size" {
 
 test "harness: the same corpus always builds the same pools" {
     const candidates = [_]core.Candidate{
-        candidate(0, "a.zig", &.{"a"}),
-        candidate(1, "a.zig", &.{"b"}),
-        candidate(2, "b.zig", &.{"a"}),
-        candidate(3, "c.zig", &.{"c"}),
-        candidate(4, "d.zig", &.{"b"}),
+        anchored(0, "a.zig", &.{"a"}, "alpha", "ALPHA"),
+        anchored(1, "a.zig", &.{"b"}, "beta", "BETA"),
+        anchored(2, "b.zig", &.{"a"}, "one", "ONE"),
+        anchored(3, "c.zig", &.{"c"}, "solo", "SOLO"),
+        anchored(4, "d.zig", &.{"b"}, "four", "FOUR"),
     };
-    const first = try core.buildPools(testing.allocator, &candidates, 3);
+    const sources = [_]core.Source{
+        .{ .file = "a.zig", .text = "alpha beta" },
+        .{ .file = "b.zig", .text = "one" },
+        .{ .file = "c.zig", .text = "solo" },
+        .{ .file = "d.zig", .text = "four" },
+    };
+    const first = try core.buildPools(testing.allocator, &candidates, 3, &sources);
     defer freePools(testing.allocator, first);
-    const second = try core.buildPools(testing.allocator, &candidates, 3);
+    const second = try core.buildPools(testing.allocator, &candidates, 3, &sources);
     defer freePools(testing.allocator, second);
 
     const a = try poolShape(testing.allocator, first);

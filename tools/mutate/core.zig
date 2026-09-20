@@ -152,6 +152,14 @@ pub const Candidate = struct {
     file: []const u8,
     kills: []const []const u8,
     filter: []const []const u8,
+    from: []const u8 = "",
+    to: []const u8 = "",
+    all: bool = false,
+};
+
+pub const Source = struct {
+    file: []const u8,
+    text: []const u8,
 };
 
 pub const max_pool_members = 64;
@@ -173,33 +181,137 @@ fn namesOverlap(a: []const []const u8, b: []const []const u8) bool {
     return false;
 }
 
-fn fits(pool: []const Candidate, c: Candidate) bool {
+fn killsClash(pool: []const Candidate, c: Candidate) bool {
     for (pool) |member| {
-        if (std.mem.eql(u8, member.file, c.file)) return false;
-        if (namesOverlap(member.kills, c.kills)) return false;
+        if (namesOverlap(member.kills, c.kills)) return true;
     }
-    return true;
+    return false;
 }
 
-pub fn buildPools(gpa: Allocator, candidates: []const Candidate, pool_size: usize) ![]const []const Candidate {
+fn shareAFile(a: []const Candidate, b: []const Candidate) bool {
+    for (a) |left| {
+        for (b) |right| {
+            if (std.mem.eql(u8, left.file, right.file)) return true;
+        }
+    }
+    return false;
+}
+
+pub fn modulesIn(pool: []const Candidate) usize {
+    var count: usize = 0;
+    for (pool, 0..) |member, i| {
+        for (pool[0..i]) |earlier| {
+            if (std.mem.eql(u8, earlier.file, member.file)) break;
+        } else count += 1;
+    }
+    return count;
+}
+
+fn sourceFor(sources: []const Source, file: []const u8) ?[]const u8 {
+    for (sources) |source| {
+        if (std.mem.eql(u8, source.file, file)) return source.text;
+    }
+    return null;
+}
+
+fn packOneFile(
+    gpa: Allocator,
+    pools: *std.ArrayList(std.ArrayList(Candidate)),
+    members: []const Candidate,
+    original: []const u8,
+    pool_size: usize,
+) !void {
+    var pending: std.ArrayList(Candidate) = .empty;
+    defer pending.deinit(gpa);
+    try pending.appendSlice(gpa, members);
+
+    while (pending.items.len != 0) {
+        var pool: std.ArrayList(Candidate) = .empty;
+        errdefer pool.deinit(gpa);
+        var deferred: std.ArrayList(Candidate) = .empty;
+        defer deferred.deinit(gpa);
+
+        var text = try gpa.dupe(u8, original);
+        defer gpa.free(text);
+
+        for (pending.items) |c| {
+            if (pool.items.len >= pool_size or killsClash(pool.items, c)) {
+                try deferred.append(gpa, c);
+                continue;
+            }
+            const next = applyMutation(gpa, text, c.from, c.to, c.all) catch {
+                if (pool.items.len != 0) try deferred.append(gpa, c);
+                continue;
+            };
+            gpa.free(text);
+            text = next;
+            try pool.append(gpa, c);
+        }
+
+        if (pool.items.len == 0) {
+            pool.deinit(gpa);
+            return;
+        }
+        try pools.append(gpa, pool);
+        pending.clearRetainingCapacity();
+        try pending.appendSlice(gpa, deferred.items);
+    }
+}
+
+fn mergeResiduals(gpa: Allocator, pools: *std.ArrayList(std.ArrayList(Candidate)), pool_size: usize) !void {
+    var at: usize = 0;
+    while (at < pools.items.len) : (at += 1) {
+        var other = at + 1;
+        while (other < pools.items.len) {
+            const host = &pools.items[at];
+            const guest = pools.items[other];
+            if (host.items.len + guest.items.len > pool_size or
+                shareAFile(host.items, guest.items) or
+                overlapAcross(host.items, guest.items))
+            {
+                other += 1;
+                continue;
+            }
+            try host.appendSlice(gpa, guest.items);
+            var removed = pools.orderedRemove(other);
+            removed.deinit(gpa);
+        }
+    }
+}
+
+fn overlapAcross(a: []const Candidate, b: []const Candidate) bool {
+    for (b) |c| {
+        if (killsClash(a, c)) return true;
+    }
+    return false;
+}
+
+pub fn buildPools(gpa: Allocator, candidates: []const Candidate, pool_size: usize, sources: []const Source) ![]const []const Candidate {
     var pools: std.ArrayList(std.ArrayList(Candidate)) = .empty;
     defer {
         for (pools.items) |*pool| pool.deinit(gpa);
         pools.deinit(gpa);
     }
+
+    var seen: std.ArrayList([]const u8) = .empty;
+    defer seen.deinit(gpa);
     for (candidates) |c| {
-        for (pools.items) |*pool| {
-            if (pool.items.len >= pool_size) continue;
-            if (!fits(pool.items, c)) continue;
-            try pool.append(gpa, c);
-            break;
+        for (seen.items) |file| {
+            if (std.mem.eql(u8, file, c.file)) break;
         } else {
-            var fresh: std.ArrayList(Candidate) = .empty;
-            errdefer fresh.deinit(gpa);
-            try fresh.append(gpa, c);
-            try pools.append(gpa, fresh);
+            try seen.append(gpa, c.file);
+            const original = sourceFor(sources, c.file) orelse return error.MissingSource;
+            var members: std.ArrayList(Candidate) = .empty;
+            defer members.deinit(gpa);
+            for (candidates) |other| {
+                if (std.mem.eql(u8, other.file, c.file)) try members.append(gpa, other);
+            }
+            try packOneFile(gpa, &pools, members.items, original, pool_size);
         }
     }
+
+    try mergeResiduals(gpa, &pools, pool_size);
+
     var out: std.ArrayList([]const Candidate) = .empty;
     errdefer {
         for (out.items) |pool| gpa.free(pool);
