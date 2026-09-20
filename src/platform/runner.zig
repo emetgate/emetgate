@@ -61,12 +61,14 @@ pub const Result = union(enum) {
     rejected: sandbox.Report,
     typecheck_failed: sandbox.Report,
     rule_violation: rules.Report,
+    rule_check_failed: rules.Failure,
 
     pub fn deinit(self: Result, gpa: Allocator) void {
         switch (self) {
             .committed => {},
             .rejected, .typecheck_failed => |report| report.deinit(gpa),
             .rule_violation => |report| report.deinit(gpa),
+            .rule_check_failed => |failure| failure.deinit(gpa),
         }
     }
 };
@@ -74,7 +76,18 @@ pub const Result = union(enum) {
 pub const ShadowRun = union(enum) {
     typecheck: sandbox.Report,
     tests: sandbox.Report,
+    rule_violation: rules.Report,
+    rule_check_failed: rules.Failure,
 };
+
+pub fn runCommandRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, limits: sandbox.Limits) !?ShadowRun {
+    const gated = try rules.commandGate(gpa, io, root, targets, .{ .shadow_abs = shadow_abs, .limits = limits });
+    return switch (gated) {
+        .ok => null,
+        .violated => |report| .{ .rule_violation = report },
+        .failed => |failure| .{ .rule_check_failed = failure },
+    };
+}
 
 pub fn runStages(gpa: Allocator, io: std.Io, cwd: []const u8, typecheck_command: ?[]const u8, test_command: []const u8, limits: sandbox.Limits) !ShadowRun {
     if (typecheck_command) |typecheck| {
@@ -143,8 +156,10 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer if (scoped_owned) |s| gpa.free(s);
     const command = scoped_owned orelse options.test_command;
 
-    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, applied.snapshot.source, options, command)) {
+    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, applied.snapshot.source, options, command, &.{.{ .file = rel, .ref = ref }})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
+        .rule_violation => |report| return .{ .rule_violation = report },
+        .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
         .tests => |tests| tests,
     };
 
@@ -174,8 +189,10 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     defer gpa.free(shadow_abs);
     if (options.trace) |t| t.* = .{ .gate = .full, .base_len = 0, .new_len = created.snapshot.source.len };
 
-    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, created.snapshot.source, options, options.test_command)) {
+    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, created.snapshot.source, options, options.test_command, &.{.{ .file = rel, .ref = ref }})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
+        .rule_violation => |report| return .{ .rule_violation = report },
+        .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
         .tests => |tests| tests,
     };
     if (!report.passed()) return .{ .rejected = report };
@@ -195,7 +212,7 @@ fn fileExists(io: std.Io, path_abs: []const u8) !bool {
     return true;
 }
 
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options, command: []const u8) !ShadowRun {
+fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options, command: []const u8, targets: []const rules.Target) !ShadowRun {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
@@ -212,5 +229,6 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const
     }
     try workspace.writeFile(rel, patched);
 
+    if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits)) |gated| return gated;
     return runStages(gpa, io, shadow_abs, options.typecheck_command, command, options.limits);
 }

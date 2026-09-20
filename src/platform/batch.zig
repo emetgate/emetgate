@@ -36,12 +36,14 @@ pub const BatchResult = union(enum) {
     rejected: sandbox.Report,
     typecheck_failed: sandbox.Report,
     rule_violation: rules.Report,
+    rule_check_failed: rules.Failure,
 
     pub fn deinit(self: BatchResult, gpa: Allocator) void {
         switch (self) {
             .committed => |hashes| gpa.free(hashes),
             .rejected, .typecheck_failed => |report| report.deinit(gpa),
             .rule_violation => |report| report.deinit(gpa),
+            .rule_check_failed => |failure| failure.deinit(gpa),
         }
     }
 };
@@ -110,6 +112,8 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     }
     const report = switch (try runBatchInShadow(gpa, io, root, shadow_abs, prepared.items, options)) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
+        .rule_violation => |violated| return .{ .rule_violation = violated },
+        .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
         .tests => |tests| tests,
     };
     if (!report.passed()) return .{ .rejected = report };
@@ -157,6 +161,16 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []
         shadow.remove(io, root, shadow_abs) catch {};
     }
     for (prepared) |p| try workspace.writeFile(p.rel, p.applied.snapshot.source);
+
+    const targets = try gpa.alloc(rules.Target, prepared.len);
+    defer gpa.free(targets);
+    var built: usize = 0;
+    defer for (targets[0..built]) |target| target.ref.deinit(gpa);
+    for (prepared, options.edits[0..prepared.len]) |p, edit| {
+        targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
+        built += 1;
+    }
+    if (try runner.runCommandRules(gpa, io, root, shadow_abs, targets, options.limits)) |gated| return gated;
 
     return runner.runStages(gpa, io, shadow_abs, options.typecheck_command, options.test_command, options.limits);
 }

@@ -276,6 +276,12 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             try wire.writeRuleViolation(w, report);
             return true;
         },
+        .rule_check_failed => |crashed| {
+            event.outcome = .rejected;
+            event.reason = wire.rule_check_crashed_reason;
+            try wire.writeRuleCheckFailed(w, crashed);
+            return true;
+        },
     }
 }
 
@@ -367,6 +373,12 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             event.outcome = .rejected;
             event.reason = "rule_violation";
             try wire.writeRuleViolation(w, report);
+            return true;
+        },
+        .rule_check_failed => |crashed| {
+            event.outcome = .rejected;
+            event.reason = wire.rule_check_crashed_reason;
+            try wire.writeRuleCheckFailed(w, crashed);
             return true;
         },
     }

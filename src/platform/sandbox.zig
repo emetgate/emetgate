@@ -316,6 +316,15 @@ fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command) !std.proce
     };
 }
 
+pub fn environmentValue(arena: Allocator, name: [:0]const u16) !?[]u8 {
+    const needed = win.GetEnvironmentVariableW(name.ptr, null, 0);
+    if (needed == 0) return null;
+    const value_w = try arena.alloc(u16, needed);
+    const written = win.GetEnvironmentVariableW(name.ptr, value_w.ptr, needed);
+    if (written == 0 or written >= needed) return null;
+    return try std.unicode.wtf16LeToWtf8Alloc(arena, value_w[0..written]);
+}
+
 fn resolveProgram(arena: Allocator, cwd: []const u8, name: []const u8) ![:0]u16 {
     if (name.len == 0 or std.mem.indexOfScalar(u8, name, 0) != null) return error.FileNotFound;
     const base = std.fs.path.basename(name);

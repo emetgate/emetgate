@@ -161,6 +161,29 @@ pub fn writeRuleViolation(writer: *Writer, report: rules.Report) !void {
     try writer.writeByte('\n');
 }
 
+pub const rule_check_crashed_reason = "rule_check_crashed";
+
+pub fn writeRuleCheckFailed(writer: *Writer, failure: rules.Failure) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("rejected");
+    try js.objectField("reason");
+    try js.write(rule_check_crashed_reason);
+    try js.objectField("rule");
+    try js.write(failure.rule);
+    try js.objectField("check");
+    try js.write(failure.check);
+    try js.objectField("file");
+    try js.write(failure.file);
+    try js.objectField("detail");
+    try js.write(failure.detail);
+    try js.objectField("output");
+    try js.write(failure.text);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 fn writeViolation(js: *std.json.Stringify, v: rules.Violation) !void {
     try js.beginObject();
     try js.objectField("rule");

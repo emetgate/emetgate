@@ -248,6 +248,10 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
             if (report.stderr.len != 0) std.debug.print("--- stderr ---\n{s}\n", .{report.stderr});
             return rejected_exit_code;
         },
+        .rule_check_failed => |crashed| {
+            std.debug.print("rejected: {s}: rule {s} ({s}) on {s}: {s}: {s}\n", .{ wire.rule_check_crashed_reason, crashed.rule, crashed.check, crashed.file, crashed.detail, crashed.text });
+            return rejected_exit_code;
+        },
     }
 }
 
@@ -323,6 +327,10 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         },
         .rule_violation => |report| {
             try wire.writeRuleViolation(out, report);
+            return rejected_exit_code;
+        },
+        .rule_check_failed => |crashed| {
+            try wire.writeRuleCheckFailed(out, crashed);
             return rejected_exit_code;
         },
     }

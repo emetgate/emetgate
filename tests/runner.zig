@@ -502,7 +502,7 @@ fn printResult(result: anytype) void {
             .exited, .crashed => |code| std.debug.print("result={t} outcome={t} code=0x{X:0>8} killed_leftovers={} stderr={s}\n", .{ result, report.outcome, code, report.killed_leftovers, report.stderr }),
             .timed_out, .output_limit => std.debug.print("result={t} outcome={t} stderr={s}\n", .{ result, report.outcome, report.stderr }),
         },
-        .committed, .rule_violation => std.debug.print("result={t}\n", .{result}),
+        .committed, .rule_violation, .rule_check_failed => std.debug.print("result={t}\n", .{result}),
     }
 }
 
@@ -513,7 +513,7 @@ fn expectCrash(result: anytype, stage: std.meta.Tag(@TypeOf(result)), reason: []
     try testing.expectEqual(stage, std.meta.activeTag(result));
     const report = switch (result) {
         .rejected, .typecheck_failed => |report| report,
-        .committed, .rule_violation => unreachable,
+        .committed, .rule_violation, .rule_check_failed => unreachable,
     };
     try testing.expectEqual(sandbox.Outcome{ .crashed = 0xC0000142 }, report.outcome);
     try testing.expectEqualStrings(reason, if (stage == .typecheck_failed) wire.typecheckReason(report) else wire.rejectionReason(report));
@@ -1241,4 +1241,188 @@ test "scope: at the gate an excluded file is not blocked and a file left in scop
         defer result.deinit(testing.allocator);
         try testing.expect(result == .rule_violation);
     }
+}
+
+const probe_rel = "probe.txt";
+
+fn addCommandRule(repo: *Repo, command: []const u8, where: ?[]const u8) ![]u8 {
+    const spec = try std.fmt.allocPrint(testing.allocator, "cmd:{s}", .{command});
+    defer testing.allocator.free(spec);
+    return memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "command rule", true, spec, where);
+}
+
+fn tryAddLimited(repo: *Repo, runtime: *Runtime, body: []const u8, test_command: []const u8, limits: sandbox.Limits) !runner.Result {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+    return tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = .{ .present = hash },
+        .new_body = body,
+        .test_command = test_command,
+        .limits = limits,
+    });
+}
+
+fn expectNoProbe(repo: *Repo) !void {
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/" ++ probe_rel, .{}));
+}
+
+fn expectRuleCheckFailed(result: runner.Result, id: []const u8, detail: []const u8) !void {
+    errdefer printResult(result);
+    try testing.expect(result == .rule_check_failed);
+    try testing.expectEqualStrings(id, result.rule_check_failed.rule);
+    try testing.expectEqualStrings("src\\math.ts", result.rule_check_failed.file);
+    try testing.expectEqualStrings(detail, result.rule_check_failed.detail);
+}
+
+test "cmd rule: a non-zero exit is a violation carrying the output of the command, and nothing is written" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "echo no console.log allowed& exit 3", null);
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    const violations = result.rule_violation.violations;
+    try testing.expectEqual(@as(usize, 1), violations.len);
+    try testing.expectEqualStrings(id, violations[0].rule);
+    try testing.expectEqualStrings("cmd:echo no console.log allowed& exit 3", violations[0].check);
+    try testing.expectEqualStrings("src\\math.ts", violations[0].file);
+    try testing.expectEqualStrings("no console.log allowed", violations[0].text);
+    try expectPristineRepo(&repo);
+}
+
+test "cmd rule: exit zero lets the proposal through to the tests and on to disk" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "exit 0", null);
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+}
+
+test "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "echo tainted> src\\math.ts& echo ran> " ++ probe_rel, null);
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+
+    const on_disk = try repo.read();
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings("export function add(a: number, b: number): number {\n  return a - b;\n}\n", on_disk);
+    try expectNoProbe(&repo);
+}
+
+test "cmd rule: a crashing command is not a verdict, it is rule_check_crashed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, crash_command, null);
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try expectRuleCheckFailed(result, id, "crashed");
+    try expectPristineRepo(&repo);
+}
+
+test "cmd rule: a command that does not exist is not a verdict either" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "emetgate-no-such-binary-xyz", null);
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try expectRuleCheckFailed(result, id, "command_not_found");
+    try expectPristineRepo(&repo);
+}
+
+test "cmd rule: a command that outlives the wall clock is not a verdict either" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "ping -n 20 127.0.0.1 > nul", null);
+    defer testing.allocator.free(id);
+
+    const result = try tryAddLimited(&repo, runtime, clean_body, "exit 0", .{ .timeout_ms = 500 });
+    defer result.deinit(testing.allocator);
+    try expectRuleCheckFailed(result, id, "timed_out");
+    try expectPristineRepo(&repo);
+}
+
+test "cmd rule: a sandbox that cannot be built refuses the command instead of running it unrestricted" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    defer sandbox.injected_fault = null;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "echo ran> " ++ probe_rel, null);
+    defer testing.allocator.free(id);
+
+    inline for (std.meta.fields(sandbox.TokenStep)) |field| {
+        sandbox.injected_fault = @enumFromInt(field.value);
+        const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+        defer result.deinit(testing.allocator);
+        try expectRuleCheckFailed(result, id, "sandbox_unavailable");
+        try testing.expectEqualStrings("SandboxUnavailable", result.rule_check_failed.text);
+        try expectNoProbe(&repo);
+        try expectPristineRepo(&repo);
+    }
+}
+
+test "cmd rule: a scope that excludes the file keeps the command from running at all" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "echo ran> " ++ probe_rel ++ "& exit 3", "src/other.ts");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+    try expectNoProbe(&repo);
+}
+
+test "cmd rule: a scope that covers the file still runs the command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try addCommandRule(&repo, "exit 3", "src/math.ts#add");
+    defer testing.allocator.free(id);
+
+    const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    try testing.expectEqualStrings(id, result.rule_violation.violations[0].rule);
 }
