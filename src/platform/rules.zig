@@ -152,6 +152,47 @@ fn freeViolation(gpa: Allocator, v: Violation) void {
     gpa.free(v.text);
 }
 
+pub const Adopted = struct {
+    id: []const u8,
+    text: []const u8,
+    mode: []const u8,
+    check: ?[]const u8 = null,
+    where: ?[]const u8 = null,
+};
+
+pub const AdoptedList = struct {
+    gpa: Allocator,
+    recall: memory.Recall,
+    items: []const Adopted,
+
+    pub fn deinit(self: AdoptedList) void {
+        self.gpa.free(self.items);
+        self.recall.deinit();
+    }
+};
+
+pub fn adoptedFor(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8) !AdoptedList {
+    const recall = try memory.peek(gpa, io, root_abs);
+    errdefer recall.deinit();
+    var list: std.ArrayList(Adopted) = .empty;
+    errdefer list.deinit(gpa);
+    for (recall.decisions) |decision| {
+        if (decision.status != .active) continue;
+        if (decision.where) |text| {
+            const scope = try where_mod.parse(text);
+            if (!scope.coversFile(rel)) continue;
+        }
+        try list.append(gpa, .{
+            .id = decision.id,
+            .text = decision.text,
+            .mode = if (decision.enforce) "enforce" else "advisory",
+            .check = decision.check,
+            .where = decision.where,
+        });
+    }
+    return .{ .gpa = gpa, .recall = recall, .items = try list.toOwnedSlice(gpa) };
+}
+
 pub const Verdict = enum { passed, violated, crashed };
 
 pub const Failure = struct {

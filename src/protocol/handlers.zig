@@ -10,6 +10,7 @@ const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
+const rules = @import("../platform/rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -117,13 +118,17 @@ fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
 }
 
 fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
-    const snapshot = try loadJailed(gpa, io, runtime, root, file);
+    const place = try repo.jail(gpa, io, root, file);
+    defer place.deinit(gpa);
+    const snapshot = try Snapshot.load(runtime, io, .cwd(), place.abs);
     defer snapshot.destroy();
     const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.profile, snapshot.tree);
     defer gpa.free(text);
+    const adopted = try rules.adoptedFor(gpa, io, place.root, place.rel);
+    defer adopted.deinit();
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSkeleton(w, file, text);
+    try wire.writeSkeleton(w, file, text, adopted.items);
 }
 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {

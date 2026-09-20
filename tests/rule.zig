@@ -5,6 +5,8 @@ const checks = @import("../src/engine/checks.zig");
 const rule_command = @import("../src/protocol/rule_command.zig");
 const scan_command = @import("../src/protocol/scan_command.zig");
 const wire = @import("../src/protocol/wire.zig");
+const handlers = @import("../src/protocol/handlers.zig");
+const telemetry = @import("../src/protocol/telemetry.zig");
 const Runtime = @import("../src/engine/runtime.zig").Runtime;
 
 const testing = std.testing;
@@ -144,7 +146,7 @@ fn statusOf(out: []const u8, id: []const u8) ![]const u8 {
     return error.NoSuchRow;
 }
 
-const with_networkidle ="export function open() {\n  return wait(\"networkidle\");\n}\n";
+const with_networkidle = "export function open() {\n  return wait(\"networkidle\");\n}\n";
 
 test "rule: a rule added from the command line is listed and enforced by the very next scan" {
     try skipOffWindows();
@@ -423,4 +425,81 @@ test "rule: scan refuses a command rule by name instead of running it" {
     try testing.expectEqual(wire.exitCode(error.CommandCheckNotStatic), outcome.code);
     try testing.expect(std.mem.indexOf(u8, outcome.err, "CommandCheckNotStatic") != null);
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/" ++ marker, .{}));
+}
+
+fn skeletonOf(repo: *Repo, rel: []const u8) !std.json.Parsed(std.json.Value) {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
+    const file_abs = try std.fmt.allocPrint(testing.allocator, "{s}\\{s}", .{ repo.root_abs, rel });
+    defer testing.allocator.free(file_abs);
+
+    var args: std.json.ObjectMap = .empty;
+    defer args.deinit(testing.allocator);
+    try args.put(testing.allocator, "file", .{ .string = file_abs });
+
+    var event: telemetry.Event = .{ .tool = "emetgate_skeleton" };
+    const result = try handlers.callTool(testing.allocator, testing.io, runtime, "emetgate_skeleton", .{ .object = args }, &event, .{ .root = repo.root_abs });
+    defer testing.allocator.free(result.text);
+    if (result.is_error) return error.SkeletonRefused;
+    const end = std.mem.indexOfScalar(u8, result.text, '\n') orelse result.text.len;
+    return std.json.parseFromSlice(std.json.Value, testing.allocator, result.text[0..end], .{ .allocate = .alloc_always });
+}
+
+fn ruleRow(body: std.json.Value, id: []const u8) ?std.json.Value {
+    for (body.object.get("rules").?.array.items) |row| {
+        if (std.mem.eql(u8, row.object.get("id").?.string, id)) return row;
+    }
+    return null;
+}
+
+test "rule: the skeleton the model reads carries every adopted rule that covers the file" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ .path = "src/nav.ts", .data = with_networkidle }});
+    defer repo.deinit();
+
+    const enforced = try addRule(&repo, &.{ "add", "no networkidle", "--check", "forbid:networkidle", "--enforce" });
+    defer testing.allocator.free(enforced);
+    const advisory = try addRule(&repo, &.{ "add", "prefer explicit waits" });
+    defer testing.allocator.free(advisory);
+    const elsewhere = try addRule(&repo, &.{ "add", "no fetch there", "--check", "forbid:fetch(", "--in", "src/other.ts", "--enforce" });
+    defer testing.allocator.free(elsewhere);
+    const commanded = try addRule(&repo, &.{ "add", "no console.log", "--check", "cmd:npx eslint --rule no-console", "--in", "src/", "--enforce" });
+    defer testing.allocator.free(commanded);
+    const forgotten = try addRule(&repo, &.{ "add", "an old habit", "--check", "no_comment", "--enforce" });
+    defer testing.allocator.free(forgotten);
+    const printed = try runRule(&repo, &.{ "forget", forgotten });
+    testing.allocator.free(printed);
+
+    var body = try skeletonOf(&repo, "src\\nav.ts");
+    defer body.deinit();
+
+    try testing.expect(std.mem.indexOf(u8, body.value.object.get("skeleton").?.string, "export function open") != null);
+
+    const first = ruleRow(body.value, enforced).?;
+    try testing.expectEqualStrings("no networkidle", first.object.get("text").?.string);
+    try testing.expectEqualStrings("enforce", first.object.get("mode").?.string);
+    try testing.expectEqualStrings("forbid:networkidle", first.object.get("check").?.string);
+    try testing.expectEqual(std.json.Value.null, first.object.get("where").?);
+
+    const second = ruleRow(body.value, advisory).?;
+    try testing.expectEqualStrings("advisory", second.object.get("mode").?.string);
+    try testing.expectEqual(std.json.Value.null, second.object.get("check").?);
+
+    const third = ruleRow(body.value, commanded).?;
+    try testing.expectEqualStrings("cmd:npx eslint --rule no-console", third.object.get("check").?.string);
+    try testing.expectEqualStrings("src/", third.object.get("where").?.string);
+
+    try testing.expect(ruleRow(body.value, elsewhere) == null);
+    try testing.expect(ruleRow(body.value, forgotten) == null);
+    try testing.expectEqual(@as(usize, 3), body.value.object.get("rules").?.array.items.len);
+}
+
+test "rule: a file with no adopted rule still gets an explicit empty list" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ .path = "src/nav.ts", .data = with_networkidle }});
+    defer repo.deinit();
+
+    var body = try skeletonOf(&repo, "src\\nav.ts");
+    defer body.deinit();
+    try testing.expectEqual(@as(usize, 0), body.value.object.get("rules").?.array.items.len);
 }

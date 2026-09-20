@@ -208,3 +208,52 @@ test "emetgate_mutate with a stale hash is a tool error, not a protocol error" {
     try testing.expect(std.mem.indexOf(u8, response, "\\\"error\\\":\\\"HashMismatch\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"code\":-320") == null);
 }
+
+const handlers = @import("../src/protocol/handlers.zig");
+const telemetry = @import("../src/protocol/telemetry.zig");
+
+const served_tools = [_][]const u8{
+    "emetgate_symbols",
+    "emetgate_skeleton",
+    "emetgate_read_symbol",
+    "emetgate_try",
+    "emetgate_mutate",
+    "emetgate_read_file",
+    "emetgate_list",
+    "emetgate_search",
+    "emetgate_scan",
+};
+
+test "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed" {
+    try testing.expectEqual(served_tools.len, server.tool_defs.len);
+    for (server.tool_defs, served_tools) |tool, expected| {
+        try testing.expectEqualStrings(expected, tool.name);
+    }
+    for (server.tool_defs) |tool| {
+        for (tool.props) |prop| {
+            try testing.expect(std.mem.indexOf(u8, prop.name, "rule") == null);
+            try testing.expect(std.mem.indexOf(u8, prop.name, "enforce") == null);
+            try testing.expect(std.mem.indexOf(u8, prop.name, "advisory") == null);
+        }
+    }
+}
+
+test "red line: no tool on the model side can adopt, change or forget a rule" {
+    const writers = [_][]const u8{
+        "emetgate_rule",
+        "emetgate_rule_add",
+        "emetgate_rule_supersede",
+        "emetgate_rule_forget",
+        "emetgate_rules_write",
+        "emetgate_remember",
+        "emetgate_forget",
+        "emetgate_enforce",
+        "rule",
+        "rule_add",
+    };
+    for (writers) |name| {
+        var event: telemetry.Event = .{ .tool = name };
+        try testing.expectError(error.UnknownTool, handlers.callTool(testing.allocator, testing.io, undefined, name, null, &event, .{}));
+        for (server.tool_defs) |tool| try testing.expect(!std.mem.eql(u8, tool.name, name));
+    }
+}

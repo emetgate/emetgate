@@ -22,10 +22,10 @@ const server_name = "emetgate";
 const server_version = "0.1.0";
 const max_message_bytes = 4 * 1024 * 1024;
 
-const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string" };
-const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
+pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string" };
+pub const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
 
-const tool_defs = [_]Tool{
+pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_symbols",
         .description = "List addressable function symbols in a source file of a registered language with their content hashes.",
@@ -33,7 +33,7 @@ const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_skeleton",
-        .description = "Structural outline of a source file in a registered language: every symbol's signature with bodies elided. Read this instead of the whole file to locate a target cheaply. Files of other languages are refused; use emetgate_read_file for docs and config.",
+        .description = "Structural outline of a source file in a registered language: every symbol's signature with bodies elided, plus every adopted rule that covers this file (id, text, enforce or advisory, predicate, scope). Read this instead of the whole file to locate a target cheaply, and write a body that already obeys the listed rules: an enforced rule rejects a proposal before the tests run. The rules are read-only here; they are adopted, superseded and forgotten only from the emetgate CLI. Files of other languages are refused; use emetgate_read_file for docs and config.",
         .props = &.{.{ .name = "file", .desc = "path to a source file in a registered language" }},
     },
     .{

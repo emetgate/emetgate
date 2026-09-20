@@ -40,13 +40,30 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
     try writer.writeByte('\n');
 }
 
-pub fn writeSkeleton(writer: *Writer, file: []const u8, skeleton_text: []const u8) !void {
+pub fn writeSkeleton(writer: *Writer, file: []const u8, skeleton_text: []const u8, adopted: []const rules.Adopted) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
     try js.objectField("skeleton");
     try js.write(skeleton_text);
+    try js.objectField("rules");
+    try js.beginArray();
+    for (adopted) |rule| {
+        try js.beginObject();
+        try js.objectField("id");
+        try js.write(rule.id);
+        try js.objectField("text");
+        try js.write(rule.text);
+        try js.objectField("mode");
+        try js.write(rule.mode);
+        try js.objectField("check");
+        try js.write(rule.check);
+        try js.objectField("where");
+        try js.write(rule.where);
+        try js.endObject();
+    }
+    try js.endArray();
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -501,12 +518,28 @@ test "file paths with backslashes and quotes are JSON-escaped" {
 test "skeleton payload embeds the outline as one JSON line" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSkeleton(&buffer.writer, "src/a.ts", "export function add(a: number, b: number): number;\n");
+    try writeSkeleton(&buffer.writer, "src/a.ts", "export function add(a: number, b: number): number;\n", &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
     try testing.expect(std.mem.indexOf(u8, json, "\"file\":\"src/a.ts\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"skeleton\":\"export function add(a: number, b: number): number;\\n\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"rules\":[]") != null);
+}
+
+test "the skeleton payload carries every adopted rule as data, with no way to change one" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const adopted = [_]rules.Adopted{
+        .{ .id = "m1", .text = "no console.log", .mode = "enforce", .check = "cmd:npx eslint", .where = "src/" },
+        .{ .id = "m2", .text = "prefer Money", .mode = "advisory" },
+    };
+    try writeSkeleton(&buffer.writer, "src/a.ts", "export function add(): void;\n", &adopted);
+
+    const json = buffer.written();
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
+    try testing.expect(std.mem.indexOf(u8, json, "{\"id\":\"m1\",\"text\":\"no console.log\",\"mode\":\"enforce\",\"check\":\"cmd:npx eslint\",\"where\":\"src/\"}") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "{\"id\":\"m2\",\"text\":\"prefer Money\",\"mode\":\"advisory\",\"check\":null,\"where\":null}") != null);
 }
 
 test "symbol body payload carries ref, hash and the escaped body" {
