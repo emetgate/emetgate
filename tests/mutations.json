@@ -2998,6 +2998,137 @@
       "kills": [
         "summary: with two rules the files holding violations are still counted once each"
       ]
+    },
+    {
+      "id": "CMD1-cmd-prefix-dropped",
+      "file": "src/engine/checks.zig",
+      "from": "    if (!std.mem.startsWith(u8, spec, command_prefix)) return null;",
+      "to": "    if (!std.mem.startsWith(u8, spec, command_prefix)) return spec;",
+      "kills": [
+        "only a cmd: prefix names a command predicate, and every other spec stays a registry lookup",
+        "an unknown check name is still refused instead of being run as a command"
+      ]
+    },
+    {
+      "id": "CMD2-empty-command-accepted-on-add",
+      "file": "src/engine/checks.zig",
+      "from": "    if (std.mem.trim(u8, command, command_whitespace).len == 0) return error.EmptyCommandCheck;\n",
+      "to": "",
+      "kills": [
+        "rule: an empty or blank cmd: check is refused before the ledger is touched"
+      ]
+    },
+    {
+      "id": "CMD3-command-cwd-is-the-real-repo",
+      "file": "src/platform/runner.zig",
+      "from": "if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits)) |gated| return gated;",
+      "to": "if (try runCommandRules(gpa, io, root, root, targets, options.limits)) |gated| return gated;",
+      "kills": [
+        "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
+      ]
+    },
+    {
+      "id": "CMD4-command-scope-ignored",
+      "file": "src/platform/rules.zig",
+      "from": "        if (try covers(rule, target.file, target.ref)) return target.file;",
+      "to": "        if (try covers(rule, target.file, target.ref) or true) return target.file;",
+      "kills": [
+        "cmd rule: a scope that excludes the file keeps the command from running at all"
+      ]
+    },
+    {
+      "id": "CMD5-ntstatus-floor-broken",
+      "file": "src/platform/sandbox.zig",
+      "from": "    return if (code >= ntstatus_error_floor) .{ .crashed = code } else .{ .exited = code };",
+      "to": "    return .{ .exited = code };",
+      "kills": [
+        "cmd rule: a crashing command is not a verdict, it is rule_check_crashed"
+      ]
+    },
+    {
+      "id": "CMD6-crash-counted-as-a-violation",
+      "file": "src/platform/rules.zig",
+      "from": "        .crashed, .timed_out, .output_limit => .crashed,\n    };\n}\n\npub fn failureDetail",
+      "to": "        .crashed => .violated,\n        .timed_out, .output_limit => .crashed,\n    };\n}\n\npub fn failureDetail",
+      "kills": [
+        "a command verdict has three outcomes: pass, violation, and no verdict at all",
+        "cmd rule: a crashing command is not a verdict, it is rule_check_crashed"
+      ]
+    },
+    {
+      "id": "CMD7-spawned-integrity-not-verified",
+      "file": "src/platform/sandbox.zig",
+      "from": "    try requireLowIntegrity(child.id.?);\n",
+      "to": "",
+      "kills": [
+        "cmd rule: a sandbox that cannot be built refuses the command instead of running it unrestricted",
+        "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all"
+      ]
+    },
+    {
+      "id": "CMD8-command-not-found-called-a-violation",
+      "file": "src/platform/rules.zig",
+      "from": "    if (!try resolvable(gpa, io, options.shadow_abs, head))",
+      "to": "    if (false and !try resolvable(gpa, io, options.shadow_abs, head))",
+      "kills": [
+        "cmd rule: a command that does not exist is not a verdict either"
+      ]
+    },
+    {
+      "id": "RO1-a-new-tool-slips-into-the-surface",
+      "file": "src/protocol/server.zig",
+      "from": "        .name = \"emetgate_scan\",",
+      "to": "        .name = \"emetgate_rule_add\",",
+      "kills": [
+        "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed"
+      ]
+    },
+    {
+      "id": "RO2-a-rule-writing-tool-is-dispatched",
+      "file": "src/protocol/handlers.zig",
+      "from": "    return error.UnknownTool;\n}",
+      "to": "    if (std.mem.eql(u8, name, \"emetgate_rule_add\")) return callScan(gpa, io, runtime, args, event, policy.root);\n    return error.UnknownTool;\n}",
+      "kills": [
+        "red line: no tool on the model side can adopt, change or forget a rule"
+      ]
+    },
+    {
+      "id": "RO3-rules-dropped-from-the-skeleton",
+      "file": "src/protocol/handlers.zig",
+      "from": "    try wire.writeSkeleton(w, file, text, adopted.items);",
+      "to": "    try wire.writeSkeleton(w, file, text, &.{});",
+      "kills": [
+        "rule: the skeleton the model reads carries every adopted rule that covers the file"
+      ]
+    },
+    {
+      "id": "RO4-skeleton-shows-rules-scoped-elsewhere",
+      "file": "src/platform/rules.zig",
+      "from": "            if (!scope.coversFile(rel)) continue;",
+      "to": "            if (!scope.coversFile(rel) and false) continue;",
+      "kills": [
+        "rule: the skeleton the model reads carries every adopted rule that covers the file"
+      ]
+    },
+    {
+      "id": "RO5-skeleton-shows-forgotten-rules",
+      "file": "src/platform/rules.zig",
+      "from": "        if (decision.status != .active) continue;\n        if (decision.where) |text| {",
+      "to": "        if (decision.where) |text| {",
+      "expect_status": "survived",
+      "filter": [
+        "rule: the skeleton the model reads carries every adopted rule that covers the file"
+      ],
+      "note": "memory.peek already folds the ledger down to active decisions, so the status guard in adoptedFor is defensive only and no test can see it go. enforcedFrom carries the same redundant guard; both are kept so a future peek that returns tombstones cannot leak a forgotten rule to the model."
+    },
+    {
+      "id": "CMD9-scan-runs-a-command-rule",
+      "file": "src/platform/scan.zig",
+      "from": "        checks.validateStatic(rule.check) catch |err| return .{ .rule = rule, .reason = err };",
+      "to": "        checks.validate(rule.check) catch |err| return .{ .rule = rule, .reason = err };",
+      "kills": [
+        "rule: scan refuses a command rule by name instead of running it"
+      ]
     }
   ]
 }
