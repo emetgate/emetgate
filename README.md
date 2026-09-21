@@ -10,47 +10,41 @@
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
-<p align="center"><b>Nothing passes but the truth.</b><br>
-A deterministic verification kernel that sits between a language model and your source tree.</p>
+<p align="center">
+A deterministic verification kernel between language models and source code.</p>
 
 <p align="center">
   <img src="assets/demo.gif" alt="Five proposals through the gate: four refused, one committed" width="900">
 </p>
 
-<p align="center"><sub>A real session, rendered: a placeholder body, an escaped body, a stale hash and a write outside the shadow copy are all refused; a correct body is committed.</sub></p>
+<p align="center"><sub>A session in which four invalid proposals are rejected and one valid proposal is committed.</sub></p>
 
 ---
 
 ## The name
 
-In the legend of the Golem of Prague, a rabbi shapes a figure out of river clay. It is strong, tireless and obedient, and it has no judgment of its own. What animates it is a single word written on its forehead: **אמת**, *emet*, "truth". When the golem runs out of control, the rabbi erases the first letter. What remains is **מת**, *met*, "dead", and the golem falls back into clay.
-
-The three letters of *emet* are the first, the middle and the last letter of the Hebrew alphabet. The traditional reading is that truth has to hold from beginning to end; take one piece away and it is no longer truth.
-
-A language model is a golem in the precise sense of the story. It produces a great deal of work, quickly, and it has no way of knowing whether that work is correct. Emetgate is the word on the forehead and the gate in front of the door: the model may propose anything, and only what can be verified is allowed through.
+The name comes from the legend of the Golem of Prague. The word **אמת** (*emet*, "truth") animates the golem; removing its first letter leaves **מת** (*met*, "dead"). Emetgate uses the name for the boundary it puts between generated code and the source tree: a proposed change must pass deterministic checks before it is written.
 
 ## Why this exists
 
-The failure modes of LLM-generated code are well known to anyone who has used it seriously:
+LLM-generated code has several recurring failure modes:
 
 - The code compiles and is still wrong.
 - The model reports a task as done when it is not.
 - A rule stated three turns ago is silently forgotten.
 - A plan agreed at the start of a session has evaporated by the end of it.
 
-These look like separate problems. They share one cause: **nothing between the model and the disk is responsible for checking what the model produced.** The current generation of tools competes on autonomy and speed, which increases the volume of unverified output. The model itself cannot close the gap. It is a sampler, not an oracle; it has no persistent memory, and it cannot verify its own work.
-
-Emetgate takes the opposite position. The model holds no authority at all. A small deterministic kernel holds all of it.
+These problems require checks outside the model. Emetgate puts a deterministic verification layer between the model and the source tree. The model proposes changes; the kernel decides whether they can be written.
 
 ## Core principle
 
-> **The model proposes. The kernel verifies. Nothing unverified reaches the disk.**
+> **The model proposes. The kernel verifies.**
 
-- The model can read code, and it can propose a change to a symbol. It cannot write a file, it cannot mark work as finished, and its claims about its own output carry no weight.
-- The kernel decides. Every proposal is checked structurally and, where the change is not provably contained, against the project's test command. It is either committed atomically or rejected with a reason.
-- The kernel is **fail-closed**. When it cannot prove that a change is safe, the change is refused. Uncertainty is never resolved in favour of the proposal.
+- The model can read code and propose a change to a symbol, but it cannot write files directly.
+- The kernel checks each proposal structurally. If the change is not provably contained, it also runs the project's test command. The change is then committed atomically or rejected with a reason.
+- The kernel is **fail-closed**: if a required check cannot complete, the proposal is rejected.
 
-This is not a new idea. It is the architecture of LCF-style theorem provers, where tactics may suggest anything but only a small trusted kernel can produce a theorem, and it is what de Bruijn meant when he argued that a proof checker should rest on a core small enough to be trusted by inspection. Emetgate applies the same discipline to code written by a model.
+The design follows LCF-style theorem provers, where an untrusted component may suggest a result but only a small trusted kernel can accept it. Emetgate applies that separation to model-generated code changes.
 
 ## How a change moves through the gate
 
@@ -106,13 +100,11 @@ at all.
 | `no_comment`, `forbid:<text>`, `no_literal:<option>` | Built-in AST checks, run against the proposed body in memory |
 | `cmd:<command line>` | A command, run in the shadow copy inside the sandbox |
 
-There is no silent fallback. Anything that is not prefixed `cmd:` is looked up in the
-built-in registry and refused with `UnknownCheck` if it is not there, so a typo stays a
-typo instead of quietly becoming a shell command.
+Anything without the `cmd:` prefix is looked up in the built-in registry. An unknown name
+returns `UnknownCheck`; it is not interpreted as a shell command.
 
-A `cmd:` command is validated when the rule is added — empty, blank and over-long commands
-are refused — but it is **not run** at that moment: there is no shadow copy yet, and adding
-a rule must not execute anything on the user's machine.
+A `cmd:` command is validated when the rule is added. Empty, blank and over-long commands
+are refused, but the command is **not run** until a proposal is checked in a shadow copy.
 
 ### What a command predicate is allowed to see
 
@@ -122,7 +114,7 @@ If that token cannot be built or verified, the command is refused rather than ru
 Its working directory is the **shadow copy**, not the real tree, so a command that writes,
 deletes or rewrites files touches only the throwaway copy.
 
-### Three outcomes, not two
+### Command outcomes
 
 | Result | Meaning |
 |---|---|
@@ -130,21 +122,20 @@ deletes or rewrites files touches only the throwaway copy.
 | non-zero exit, normal termination | **violation** — the command's stdout and stderr are returned to the model as the reason (subject to the output cap) |
 | crash, timeout, output limit, leftover processes, program not found, sandbox unavailable | **not a verdict** — reason `rule_check_crashed`, with a `detail` naming which of them it was |
 
-A tool that crashed did not decide anything. Treating its exit code as a verdict would let
-a broken linter pass every proposal or fail every proposal, and neither is a decision the
-gate is entitled to make. The proposal is refused either way, but the reason says which
-happened. Because `cmd.exe /c` reports a missing program with the same exit code 1 a real
-failure uses, the program named by the command is resolved against `PATH`, `PATHEXT`, the
-shadow working directory and the `cmd.exe` builtins *before* anything is spawned; an
-unresolvable program is `command_not_found`, never a violation.
+A crash does not count as a rule verdict. The proposal is refused, but the reported reason
+distinguishes a rule violation from an execution failure. Because `cmd.exe /c` uses exit
+code 1 both for a missing program and for ordinary command failures, the executable is
+resolved against `PATH`, `PATHEXT`, the shadow working directory and the `cmd.exe` builtins
+before it is spawned. If it cannot be resolved, the result is `command_not_found` rather
+than a rule violation.
 
 `emetgate scan` refuses a `cmd:` rule by name (`CommandCheckNotStatic`) instead of running
 it: a scan reads the working tree and has no shadow copy to run anything in.
 
 ### What a command predicate costs
 
-Measured on this machine, same proposal, interleaved so drift cancels, 30 paired runs each
-(`python tests/bench/rule_command_cost.py`):
+The following results were measured on the same machine and proposal using 30 interleaved,
+paired runs (`python tests/bench/rule_command_cost.py`):
 
 | | median | worst |
 |---|---|---|
@@ -152,10 +143,10 @@ Measured on this machine, same proposal, interleaved so drift cancels, 30 paired
 | proposal with one `cmd:exit 0` rule | 265 ms | 285 ms |
 | **added per proposal** (paired difference) | **62 ms** | **81 ms** |
 
-That is the kernel's own overhead — one more sandboxed process in the shadow copy — with a
-command that does nothing. It is not the cost of the tool you put behind `cmd:`. A real
-`npx eslint` run adds its own seconds on top, every proposal, and the gate cannot make that
-cheaper.
+These figures measure the kernel's overhead for starting one additional sandboxed process
+in the shadow copy with a no-op command. They do not include the runtime of the command
+configured after `cmd:`; for example, an `npx eslint` invocation adds its own runtime to
+every proposal.
 
 ### Rules are readable by the model, never writable
 
@@ -164,12 +155,11 @@ its id, its text, whether it is `enforce` or `advisory`, its predicate and its s
 model reads the rules before it writes a body, so it can obey them instead of proposing a
 violation, getting rejected and trying again.
 
-That direction is one-way and is the point of the project. There is no tool on the model
-side that adopts, changes or forgets a rule, or turns an `enforce` rule into an `advisory`
-one. `rule add`, `rule supersede` and `rule forget` exist only on the command line. A test
-(`red line: the served tool surface is exactly this list`) pins the served tool names, so
-adding any tool at all turns it red, and a second test proves that rule-writing tool names
-are refused by the dispatcher.
+Rule management is available only from the command line. The model-facing tools cannot
+adopt, change or remove a rule, or change an `enforce` rule to `advisory`. A test
+(`red line: the served tool surface is exactly this list`) pins the served tool names and
+fails if another tool is added. A second test verifies that the dispatcher rejects
+rule-writing tool names.
 
 ## Architecture
 
@@ -213,9 +203,9 @@ The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, th
 
 ## How the kernel itself is verified
 
-A verification layer that has not been verified is only a more elaborate way of hoping. Two rules apply to every guard in the kernel.
+The kernel's guards are tested in two ways.
 
-**Mutation kill.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either killed by a new test or recorded in `tests/mutations.json` with the reason it cannot be: an equivalent mutant, with the grammar or code fact that makes it one, or a redundant guard kept on purpose. Mutants with no killing input and no proof of equivalence are marked open rather than hidden. The harness lives in `tools/mutate`.
+**Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`.
 
 For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants today: 37 killed, 4 proven equivalent, 1 redundant guard kept as defense in depth, 2 open.
 
@@ -223,7 +213,7 @@ For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants 
 
 ## Status
 
-Emetgate is early and deliberately narrow.
+Emetgate currently has a narrow scope.
 
 | Area | State |
 |---|---|
@@ -236,15 +226,15 @@ Emetgate is early and deliberately narrow.
 | Language support | TypeScript and JavaScript (`.js`, `.mjs`, `.cjs`); new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
 | Platform | Windows only (the sandbox relies on Job Objects) |
 
-On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, two of them real files), editing through symbol-level proposals uses a median of **1.80×** fewer tokens than search-and-replace editing, with a range of 1.15× to 3.77×. On the real files the gain is modest, 1.15× to 1.17×. Token savings are a side effect, not the point.
+On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, two of them real files), editing through symbol-level proposals uses a median of **1.80×** fewer tokens than search-and-replace editing, with a range of 1.15× to 3.77×. On the real files the gain is 1.15× to 1.17×.
 
-Each scenario counts the tokens both approaches actually spend on one symbol edit: ingest plus emit. Search-and-replace reads the whole file and sends the old and new block; the kernel reads a skeleton plus one symbol body and sends a symbol reference, a content hash and the new body. Search-and-replace is the baseline; a whole-file rewrite is the upper bound (2.88× on the same set). The tokenizer is a GPT-4o-family proxy, so the ratio is the signal, not the absolute count. It is deterministic and offline — build the binary and run `python tests/bench/run4.py` to reproduce every number here.
+Each scenario counts the tokens both approaches spend on one symbol edit: ingest plus emit. Search-and-replace reads the whole file and sends the old and new block; the kernel reads a skeleton plus one symbol body and sends a symbol reference, a content hash and the new body. Search-and-replace is the baseline; a whole-file rewrite is the upper bound (2.88× on the same set). The tokenizer is a GPT-4o-family proxy, so the ratio matters more than the absolute count. The benchmark runs offline and can be reproduced with `python tests/bench/run4.py` after building the binary.
 
 ## Limits
 
-Some things cannot be made mechanical, and this project does not claim otherwise.
+The verification guarantees have the following limits:
 
-- **Semantic correctness.** Code that parses, stays in bounds and passes the tests can still implement the wrong behaviour. The kernel raises the floor; it does not replace tests that encode intent, or a human decision where one is needed.
+- **Semantic correctness.** Code that parses, stays in bounds and passes the tests can still implement the wrong behaviour. The kernel does not replace tests that encode intent or human review where it is needed.
 - **The quality of the test suite.** For unbounded changes the test gate is only as strong as the tests it runs.
 - **Mediation.** The guarantees hold for changes that go through the gate. Edits made by other tools bypass it, which is why lockdown exists.
 - **Sandbox scope.** The low-integrity token stops the test command from writing outside the shadow copy; it does not restrict reading or network access, so a hostile test command can still read files it has permission to read and reach the network. Confining those requires an AppContainer, which is planned.
@@ -306,8 +296,6 @@ Register the server with an MCP client:
 2. **Codebase understanding.** A content-addressed, incremental index of symbols, imports and git history, so the model is given the minimal slice of the program a task touches instead of the whole repository.
 3. **Deterministic driver.** For tasks with a known shape, the kernel drives the work and calls the model only at the points that genuinely require judgment.
 4. **Check packs.** Domain-specific mechanical checks for backend and frontend code, registered with the same gate.
-
-Each step is held to the same rules as the kernel: fail-closed, mutation-killed, content-addressed, and described in numbers rather than adjectives.
 
 ## License
 
