@@ -281,3 +281,57 @@ test "internal workspace and git paths are refused, others pass" {
     try read_tools.refuseInternal("docs\\.git-notes.md");
     try read_tools.refuseInternal("src\\main.zig");
 }
+
+fn callToolServed(runtime: *Runtime, root: []const u8, tool: []const u8, args: anytype) !Reply {
+    var line: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer line.deinit();
+    var js: std.json.Stringify = .{ .writer = &line.writer };
+    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = tool, .arguments = args } });
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
+
+    const parsed = try std.json.parseFromSlice(Value, testing.allocator, out.written(), .{ .allocate = .alloc_always });
+    errdefer parsed.deinit();
+    const result = parsed.value.object.get("result") orelse return error.NotAToolResult;
+    const content = result.object.get("content").?.array.items[0];
+    return .{ .parsed = parsed, .is_error = result.object.get("isError").?.bool, .text = content.object.get("text").?.string };
+}
+
+test "read tools refuse .git internals in a git worktree, where .git is a file" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "main");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "main/a.ts", .data = "export const a = 1;\n" });
+    const main_abs = try tmp.dir.realPathFileAlloc(testing.io, "main", testing.allocator);
+    defer testing.allocator.free(main_abs);
+    try commitAll(main_abs);
+    try gitIn(main_abs, &.{ "worktree", "add", "-q", "../wt" });
+    const wt_abs = try tmp.dir.realPathFileAlloc(testing.io, "wt", testing.allocator);
+    defer testing.allocator.free(wt_abs);
+
+    const dot_git = try tmp.dir.statFile(testing.io, "wt/.git", .{});
+    try testing.expectEqual(std.Io.File.Kind.file, dot_git.kind);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    for ([_][]const u8{ ".git/HEAD", ".git/config", ".GIT/HEAD", ".git" }) |inside| {
+        const file = try std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ wt_abs, inside });
+        defer testing.allocator.free(file);
+        var reply = try callToolServed(runtime, wt_abs, "emetgate_read_file", .{ .file = file });
+        defer reply.deinit();
+        errdefer std.debug.print("{s}: {s}\n", .{ inside, reply.text });
+        try testing.expect(reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expectEqualStrings("InternalPath", body.value.object.get("error").?.string);
+    }
+
+    const served = try std.fmt.allocPrint(testing.allocator, "{s}/a.ts", .{wt_abs});
+    defer testing.allocator.free(served);
+    var ok = try callToolServed(runtime, wt_abs, "emetgate_read_file", .{ .file = served });
+    defer ok.deinit();
+    try testing.expect(!ok.is_error);
+}

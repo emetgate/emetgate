@@ -31,6 +31,7 @@ pub fn servedRoot(gpa: Allocator, io: std.Io, root: ?[]const u8) ![]u8 {
 pub fn jail(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) !Jailed {
     const served = try servedRoot(gpa, io, root);
     errdefer gpa.free(served);
+    try refuseInternalAsWritten(gpa, io, served, path);
     const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
     errdefer gpa.free(abs);
     const rel = try relativeTo(gpa, served, abs);
@@ -38,6 +39,19 @@ pub fn jail(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) !Ja
     try refuseInternal(rel);
     if (rel.len != 0) try expectSameRepo(gpa, io, served, abs);
     return .{ .root = served, .abs = abs, .rel = rel };
+}
+
+fn refuseInternalAsWritten(gpa: Allocator, io: std.Io, served: []const u8, path: []const u8) !void {
+    const cwd_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd_abs);
+    const resolved = try std.fs.path.resolve(gpa, &.{ cwd_abs, path });
+    defer gpa.free(resolved);
+    const rel = relativeTo(gpa, served, resolved) catch |err| switch (err) {
+        error.FileOutsideRepo => return,
+        else => |e| return e,
+    };
+    defer gpa.free(rel);
+    try refuseInternal(rel);
 }
 
 pub fn jailTarget(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8, may_create: bool) !Jailed {
