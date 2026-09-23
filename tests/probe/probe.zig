@@ -99,6 +99,26 @@ pub fn main(init: std.process.Init) !void {
         _ = CloseHandle(pi.hThread);
         ExitProcess(0);
     }
+    if (std.mem.eql(u8, mode, "nap")) {
+        Sleep(try std.fmt.parseInt(windows.DWORD, args[2], 10));
+        ExitProcess(0);
+    }
+    if (std.mem.eql(u8, mode, "drift")) {
+        var utf8_buf: [1024]u8 = undefined;
+        const cmdline = try std.fmt.bufPrint(&utf8_buf, "\"{s}\" nap {s}", .{ args[0], args[2] });
+        var wide: [1024:0]u16 = undefined;
+        const n = try std.unicode.wtf8ToWtf16Le(&wide, cmdline);
+        wide[n] = 0;
+
+        var si: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+        si.cb = @sizeOf(windows.STARTUPINFOW);
+        var pi: PROCESS_INFORMATION = undefined;
+        const detached_process: windows.DWORD = 0x00000008;
+        if (CreateProcessW(null, &wide, null, null, .FALSE, detached_process, null, null, &si, &pi) == .FALSE) return error.SpawnFailed;
+        _ = CloseHandle(pi.hProcess);
+        _ = CloseHandle(pi.hThread);
+        ExitProcess(0);
+    }
     if (std.mem.eql(u8, mode, "grandchild")) {
         const child = try std.process.spawn(init.io, .{
             .argv = &.{ args[0], "sleep" },
