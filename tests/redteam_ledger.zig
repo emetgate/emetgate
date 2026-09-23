@@ -255,7 +255,7 @@ test "redteam ledger: a q: rule in a committed ledger never runs without --allow
     defer clone.deinit();
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
-    try adoptQueryRule(&clone, "q:((statement_block" ++ " (_) @violation ." ** 7 ++ " (_) @violation) (#eq? @violation @violation))");
+    try adoptQueryRule(&clone, "q:((statement_block" ++ " (_) @violation ." ** 7 ++ " (_) @violation) (#eq? @violation \"never\"))");
     try clone.commitLedger();
 
     const started = std.Io.Timestamp.now(testing.io, .awake);

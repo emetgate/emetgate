@@ -1289,7 +1289,7 @@
       "from": "    try refuseInternal(rel);\n    if (rel.len != 0) try expectSameRepo",
       "to": "    if (rel.len != 0) try expectSameRepo",
       "kills": [
-        "purple V8: an MCP write tool cannot edit the emetgate workspace inside the served repository"
+        "read tools refuse a path that only reaches .git through a junction"
       ]
     },
     {

@@ -299,6 +299,33 @@ fn callToolServed(runtime: *Runtime, root: []const u8, tool: []const u8, args: a
     return .{ .parsed = parsed, .is_error = result.object.get("isError").?.bool, .text = content.object.get("text").?.string };
 }
 
+test "read tools refuse a path that only reaches .git through a junction" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/a.ts", .data = "export const a = 1;\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const made = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "cmd", "/c", "mklink", "/J", "alias", ".git" }, .cwd = .{ .path = root_abs } });
+    testing.allocator.free(made.stdout);
+    testing.allocator.free(made.stderr);
+    try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, made.term);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file = try std.fmt.allocPrint(testing.allocator, "{s}/alias/HEAD", .{root_abs});
+    defer testing.allocator.free(file);
+    var reply = try callToolServed(runtime, root_abs, "emetgate_read_file", .{ .file = file });
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("InternalPath", body.value.object.get("error").?.string);
+}
+
 test "read tools refuse .git internals in a git worktree, where .git is a file" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var tmp = testing.tmpDir(.{});
