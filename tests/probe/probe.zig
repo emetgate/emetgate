@@ -103,6 +103,15 @@ pub fn main(init: std.process.Init) !void {
         Sleep(try std.fmt.parseInt(windows.DWORD, args[2], 10));
         ExitProcess(0);
     }
+    if (std.mem.eql(u8, mode, "linger")) {
+        _ = try std.process.spawn(init.io, .{
+            .argv = &.{ args[0], "nap", args[2] },
+            .stdin = .ignore,
+            .stdout = .inherit,
+            .stderr = .inherit,
+        });
+        ExitProcess(0);
+    }
     if (std.mem.eql(u8, mode, "drift")) {
         var utf8_buf: [1024]u8 = undefined;
         const cmdline = try std.fmt.bufPrint(&utf8_buf, "\"{s}\" nap {s}", .{ args[0], args[2] });

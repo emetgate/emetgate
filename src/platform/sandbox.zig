@@ -88,6 +88,7 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
 
     var stopped: ?Outcome = null;
     var killed_leftovers = false;
+    var drain_end: ?std.Io.Clock.Timestamp = null;
     while (true) {
         const now = std.Io.Clock.Timestamp.now(io, .awake);
         if (now.compare(.gte, deadline)) {
@@ -99,9 +100,14 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
         reader.fill(read_reserve, .{ .deadline = slice_end }) catch |err| switch (err) {
             error.EndOfStream => break,
             error.Timeout => {
-                if (!killed_leftovers and hasExited(child.id.?)) {
-                    job.terminate();
-                    killed_leftovers = true;
+                if (killed_leftovers) continue;
+                if (drain_end) |end| {
+                    if (std.Io.Clock.Timestamp.now(io, .awake).compare(.gte, end)) {
+                        job.terminate();
+                        killed_leftovers = true;
+                    }
+                } else if (hasExited(child.id.?)) {
+                    drain_end = graceEnd(io, deadline);
                 }
                 continue;
             },
@@ -812,6 +818,17 @@ test "a detached worker that holds no pipe is still caught by job accounting, no
     try testing.expect(report.duration_ns < 5 * std.time.ns_per_s);
     const pid = try std.fmt.parseInt(u32, std.mem.trim(u8, report.stdout, " \r\n"), 10);
     try testing.expect(processIsGone(pid));
+}
+
+test "a worker that holds the pipe and ends within the grace is waited for, not reported as a leftover" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const report = try probe(&.{ "linger", "700" }, .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer printReport(report);
+
+    try testing.expect(!report.killed_leftovers);
+    try testing.expect(report.passed());
+    try testing.expect(report.duration_ns >= 700 * std.time.ns_per_ms);
 }
 
 test "a detached worker that ends within the grace is waited for through the job, not reported as a leftover" {
