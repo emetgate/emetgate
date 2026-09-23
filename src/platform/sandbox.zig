@@ -127,10 +127,10 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
         _ = try child.wait(io);
         reaped = true;
         if (!killed_leftovers and job.outlasts(console_host, millisUntil(io, graceEnd(io, deadline)))) killed_leftovers = true;
-        job.terminate();
+        job.stop();
         if (!killed_leftovers) try reader.checkAnyError();
     } else {
-        job.terminate();
+        job.stop();
         exit_code = try waitExitCode(child.id.?);
     }
     if (!reaped) _ = try child.wait(io);
@@ -535,6 +535,7 @@ const win = struct {
     const job_object_associate_completion_port_information: c_int = 7;
     const job_object_msg_active_process_zero: windows.DWORD = 4;
     const process_console_host_process: c_int = 49;
+    const stop_wait_ms: windows.DWORD = 5000;
     const infinite: windows.DWORD = 0xFFFFFFFF;
     const wait_object_0: windows.DWORD = 0;
     const synchronize: windows.DWORD = 0x00100000;
@@ -646,6 +647,11 @@ const Job = struct {
 
     fn terminate(self: Job) void {
         _ = win.TerminateJobObject(self.handle, win.terminated_exit_code);
+    }
+
+    fn stop(self: Job) void {
+        self.terminate();
+        _ = self.outlasts(null, win.stop_wait_ms);
     }
 
     fn close(self: Job) void {
@@ -790,6 +796,23 @@ test "grandchild processes die with the job when the command times out" {
     try testing.expectEqual(Outcome.timed_out, report.outcome);
     const pid = try std.fmt.parseInt(u32, std.mem.trim(u8, report.stdout, " \r\n"), 10);
     try testing.expect(processIsGone(pid));
+}
+
+fn processIsGoneNow(pid: u32) bool {
+    const handle = win.OpenProcess(win.synchronize, .FALSE, pid) orelse return true;
+    defer std.os.windows.CloseHandle(handle);
+    return win.WaitForSingleObject(handle, 0) == win.wait_object_0;
+}
+
+test "a timed out run returns only after every process in its job has exited" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const report = try probe(&.{"grandchild"}, .{ .timeout_ms = 1500 });
+    defer report.deinit(testing.allocator);
+    errdefer printReport(report);
+
+    try testing.expectEqual(Outcome.timed_out, report.outcome);
+    const pid = try std.fmt.parseInt(u32, std.mem.trim(u8, report.stdout, " \r\n"), 10);
+    try testing.expect(processIsGoneNow(pid));
 }
 
 test "a command that exits but leaves a background process is reported by its own exit code" {

@@ -3354,6 +3354,15 @@
       "kills": [
         "the leftover wait ends at the command's deadline, not after the full grace"
       ]
+    },
+    {
+      "id": "LW6-stop-does-not-wait",
+      "file": "src/platform/sandbox.zig",
+      "from": "        _ = self.outlasts(null, win.stop_wait_ms);\n",
+      "to": "        _ = self.outlasts(null, 0);\n",
+      "kills": [
+        "a timed out run returns only after every process in its job has exited"
+      ]
     }
   ]
 }
