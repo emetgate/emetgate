@@ -3315,7 +3315,8 @@
       "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;",
       "to": "if (node.startByte() > node.endByte()) continue;",
       "kills": [
-        "q: only nodes wholly inside the span are reported"
+        "q: only nodes wholly inside the span are reported",
+        "redteam query: at the gate a node that encloses the body is not reported, one inside it is"
       ]
     },
     {

@@ -228,6 +228,23 @@ test "redteam query: an enforced q: rule rejects a matching body with start and 
     try repo.expectPristine();
 }
 
+test "redteam query: at the gate a node that encloses the body is not reported, one inside it is" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.adopt("q:[(function_declaration) (return_statement)] @violation");
+
+    const result = try repo.propose(runtime, "src/math.ts", "{\n  return a - b;\n}");
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
+    const violations = result.rule_violation.violations;
+    try testing.expectEqual(@as(usize, 1), violations.len);
+    try testing.expectEqualStrings("return a - b;", violations[0].text);
+    try repo.expectPristine();
+}
+
 test "redteam query: a q: rule that outruns its budget rejects the proposal and is not a violation" {
     try skipOffWindows();
     var repo = try Repo.init();
