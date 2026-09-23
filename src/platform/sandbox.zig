@@ -200,7 +200,7 @@ pub const low_integrity_rid: u32 = 0x1000;
 
 pub const TokenStep = enum { open, restrict, label, spawn_as_user, verify };
 pub var injected_fault: ?TokenStep = null;
-var last_stop_emptied: ?bool = null;
+var last_stop: ?struct { opened: usize, exited: usize } = null;
 
 fn faulted(step: TokenStep) bool {
     return builtin.is_test and injected_fault == step;
@@ -540,6 +540,7 @@ const win = struct {
     const infinite: windows.DWORD = 0xFFFFFFFF;
     const wait_object_0: windows.DWORD = 0;
     const synchronize: windows.DWORD = 0x00100000;
+    const process_query_limited_information: windows.DWORD = 0x1000;
     const terminated_exit_code: windows.UINT = 0xDEAD;
 
     const BasicLimitInformation = extern struct {
@@ -589,6 +590,7 @@ const win = struct {
     extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetExitCodeProcess(process: windows.HANDLE, code: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn OpenProcess(access: windows.DWORD, inherit: windows.BOOL, pid: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
+    extern "kernel32" fn IsProcessInJob(process: windows.HANDLE, job: windows.HANDLE, result: *windows.BOOL) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetProcessId(process: windows.HANDLE) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn CreateIoCompletionPort(file: windows.HANDLE, existing: ?windows.HANDLE, key: usize, threads: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
     extern "kernel32" fn GetQueuedCompletionStatus(port: windows.HANDLE, bytes: *windows.DWORD, key: *usize, overlapped: *?*anyopaque, milliseconds: windows.DWORD) callconv(.winapi) windows.BOOL;
@@ -618,14 +620,25 @@ const Job = struct {
         return .{ .handle = handle, .port = port };
     }
 
-    fn leftovers(self: Job, console_host: ?usize) !usize {
-        var buf: [2 * @sizeOf(u32) + win.active_process_cap * @sizeOf(usize)]u8 align(@alignOf(usize)) = undefined;
-        if (win.QueryInformationJobObject(self.handle, win.job_object_basic_process_id_list, &buf, buf.len, null) == .FALSE) {
+    const PidList = struct {
+        buf: [2 * @sizeOf(u32) + win.active_process_cap * @sizeOf(usize)]u8 align(@alignOf(usize)) = undefined,
+
+        fn pids(self: *const PidList) []const usize {
+            const listed = std.mem.readInt(u32, self.buf[4..8], .little);
+            return @alignCast(std.mem.bytesAsSlice(usize, self.buf[8..][0 .. listed * @sizeOf(usize)]));
+        }
+    };
+
+    fn members(self: Job, list: *PidList) ![]const usize {
+        if (win.QueryInformationJobObject(self.handle, win.job_object_basic_process_id_list, &list.buf, list.buf.len, null) == .FALSE) {
             return error.JobQueryFailed;
         }
-        const listed = std.mem.readInt(u32, buf[4..8], .little);
-        const pids = std.mem.bytesAsSlice(usize, buf[8..][0 .. listed * @sizeOf(usize)]);
-        return leftoverCount(@alignCast(pids), console_host);
+        return list.pids();
+    }
+
+    fn leftovers(self: Job, console_host: ?usize) !usize {
+        var list: PidList = .{};
+        return leftoverCount(try self.members(&list), console_host);
     }
 
     fn outlasts(self: Job, console_host: ?usize, wait_ms: std.os.windows.DWORD) bool {
@@ -651,9 +664,29 @@ const Job = struct {
     }
 
     fn stop(self: Job) void {
+        var list: PidList = .{};
+        var handles: [win.active_process_cap]std.os.windows.HANDLE = undefined;
+        var opened: usize = 0;
+        defer for (handles[0..opened]) |handle| std.os.windows.CloseHandle(handle);
+        for (self.members(&list) catch &.{}) |pid| {
+            const handle = win.OpenProcess(win.synchronize | win.process_query_limited_information, .FALSE, @intCast(pid)) orelse continue;
+            var inside: std.os.windows.BOOL = .FALSE;
+            if (win.IsProcessInJob(handle, self.handle, &inside) == .FALSE or inside == .FALSE) {
+                std.os.windows.CloseHandle(handle);
+                continue;
+            }
+            handles[opened] = handle;
+            opened += 1;
+        }
         self.terminate();
-        const emptied = !self.outlasts(null, win.stop_wait_ms);
-        if (builtin.is_test) last_stop_emptied = emptied;
+        const until = win.GetTickCount64() + win.stop_wait_ms;
+        var exited: usize = 0;
+        for (handles[0..opened]) |handle| {
+            const now = win.GetTickCount64();
+            const left: std.os.windows.DWORD = if (now >= until) 0 else @intCast(until - now);
+            if (win.WaitForSingleObject(handle, left) == win.wait_object_0) exited += 1;
+        }
+        if (builtin.is_test) last_stop = .{ .opened = opened, .exited = exited };
     }
 
     fn close(self: Job) void {
@@ -808,13 +841,15 @@ fn processIsGoneNow(pid: u32) bool {
 
 test "a timed out run returns only after every process in its job has exited" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    last_stop_emptied = null;
+    last_stop = null;
     const report = try probe(&.{"grandchild"}, .{ .timeout_ms = 1500 });
     defer report.deinit(testing.allocator);
     errdefer printReport(report);
 
     try testing.expectEqual(Outcome.timed_out, report.outcome);
-    try testing.expectEqual(@as(?bool, true), last_stop_emptied);
+    const stop = last_stop orelse return error.TestUnexpectedResult;
+    try testing.expect(stop.opened >= 2);
+    try testing.expectEqual(stop.opened, stop.exited);
     const pid = try std.fmt.parseInt(u32, std.mem.trim(u8, report.stdout, " \r\n"), 10);
     try testing.expect(processIsGoneNow(pid));
 }

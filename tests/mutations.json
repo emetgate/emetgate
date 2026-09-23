@@ -3358,8 +3358,8 @@
     {
       "id": "LW6-stop-does-not-wait",
       "file": "src/platform/sandbox.zig",
-      "from": "        const emptied = !self.outlasts(null, win.stop_wait_ms);\n",
-      "to": "        const emptied = !self.outlasts(null, 0);\n",
+      "from": "            if (win.WaitForSingleObject(handle, left) == win.wait_object_0) exited += 1;\n",
+      "to": "            if (win.WaitForSingleObject(handle, left * 0) == win.wait_object_0) exited += 1;\n",
       "kills": [
         "a timed out run returns only after every process in its job has exited"
       ]
