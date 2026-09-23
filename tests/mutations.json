@@ -3578,6 +3578,42 @@
       "kills": [
         "rule: a q: check that compiles for no language is refused and writes nothing"
       ]
+    },
+    {
+      "id": "Q28-regex-vim-word-boundary-read-as-literal",
+      "file": "src/engine/regex.zig",
+      "from": "            '<', '>' => if (in_class) self.single(ch) else self.unsupported(\"word boundary\", at, 2),\n",
+      "to": "",
+      "kills": [
+        "regex refuses GNU and Vim word boundaries and buffer anchors instead of reading them as literals"
+      ]
+    },
+    {
+      "id": "Q29-regex-shorthand-range-start-accepted",
+      "file": "src/engine/regex.zig",
+      "from": "            if (lo.len != 1 or lo[0].lo != lo[0].hi) return self.syntax(\"class shorthand as a range start\"",
+      "to": "            if (false and (lo.len != 1 or lo[0].lo != lo[0].hi)) return self.syntax(\"class shorthand as a range start\"",
+      "kills": [
+        "regex refuses a class shorthand as the start of a range, as RE2 does"
+      ]
+    },
+    {
+      "id": "Q30-regex-invalid-utf8-pattern-read-as-replacement",
+      "file": "src/engine/regex.zig",
+      "from": "        const code_point = std.unicode.utf8Decode(rest[0..len]) catch return self.invalidUtf8();",
+      "to": "        const code_point = std.unicode.utf8Decode(rest[0..len]) catch 0xFFFD;",
+      "kills": [
+        "regex refuses invalid UTF-8 in the pattern"
+      ]
+    },
+    {
+      "id": "Q31-regex-error-at-ends-inside-a-character",
+      "file": "src/engine/regex.zig",
+      "from": "            while (end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;\n",
+      "to": "            while (false and end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;\n",
+      "kills": [
+        "regex errors point at whole characters, never into the middle of one"
+      ]
     }
   ]
 }
