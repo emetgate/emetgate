@@ -323,7 +323,7 @@ The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, th
 
 The kernel's guards are tested in two ways.
 
-**Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`.
+**Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`. `zig build test` fails when a mutation's `from` text no longer occurs in its file as the harness would apply it, or when a test it expects to kill no longer exists by that name, so a refactor cannot leave a mutant silently testing nothing.
 
 For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants today: 37 killed, 4 proven equivalent, 1 redundant guard kept as defense in depth, 2 open.
 
@@ -402,9 +402,18 @@ Requires Zig 0.16.0. tree-sitter and the TypeScript grammar are vendored.
 
 ```sh
 zig build                 # zig-out/bin/emetgate
-zig build test            # unit and end-to-end tests
+zig build test            # unit and end-to-end tests, nine test binaries in parallel
+zig build test-fast       # engine unit tests only: no git, no sandbox, a few seconds
+zig build test-timing     # every test one by one, with the slowest tests and per-suite totals
+zig build bench           # session benchmarks at full size
 zig build mutate-tool     # mutation harness
 ```
+
+`zig build test` builds `test-unit` from `src/root.zig` and one binary per suite from
+`test_root.zig` (`runner`, `runner_rules`, `scan`, `redteam`, `purple`, `query`, `rule`,
+`rest`). `-Dtest-filter` applies to each. Test files reach the code through the `emetgate`
+module, so a `src` test runs once, in `test-unit`. `tests/suites.zig` fails the run if a test
+file is in no suite or in two, or if a test file imports another that declares tests.
 
 Register the server with an MCP client:
 
