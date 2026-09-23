@@ -272,10 +272,11 @@ test "redteam query: a q: rule that outruns its budget rejects the proposal and 
 
 test "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs" {
     try skipOffWindows();
-    for ([_][]const u8{ repeated_capture_query, many_captures_query }) |check| try expectRefusedBeforeRunning(check);
+    try expectRefusedBeforeRunning(repeated_capture_query, wide_body);
+    try expectRefusedBeforeRunning(many_captures_query, "{\n" ++ "  a;\n" ** 300 ++ "}");
 }
 
-fn expectRefusedBeforeRunning(check: []const u8) !void {
+fn expectRefusedBeforeRunning(check: []const u8, body: []const u8) !void {
     var repo = try Repo.init();
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
@@ -283,7 +284,7 @@ fn expectRefusedBeforeRunning(check: []const u8) !void {
     try repo.adopt(check);
 
     const started = std.Io.Timestamp.now(testing.io, .awake);
-    const result = try repo.propose(runtime, "src/math.ts", wide_body);
+    const result = try repo.propose(runtime, "src/math.ts", body);
     defer result.deinit(testing.allocator);
     const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
     try expectCheckFailed(result, "query_malformed", "typescript");

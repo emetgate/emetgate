@@ -3505,6 +3505,54 @@
       "kills": [
         "q: string comparisons count their bytes against the budget"
       ]
+    },
+    {
+      "id": "Q21-committed-query-rule-runs-without-flag",
+      "file": "src/platform/rules.zig",
+      "from": "    if (!allow_repo_memory and anyQuery(applicable)) {",
+      "to": "    if (allow_repo_memory and anyQuery(applicable)) {",
+      "kills": [
+        "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
+      ]
+    },
+    {
+      "id": "Q22-batch-trusts-a-committed-query-rule",
+      "file": "src/platform/batch.zig",
+      "from": "p.applied.body, options.allow_repo_memory)) {",
+      "to": "p.applied.body, true)) {",
+      "kills": [
+        "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
+      ]
+    },
+    {
+      "id": "Q23-repeated-capture-accepted",
+      "file": "src/engine/query.zig",
+      "from": "        if (repeatsCapture(own)) {",
+      "to": "        if (false and repeatsCapture(own)) {",
+      "kills": [
+        "q: a capture repeated with + or * is refused, one with ? or an uncaptured repeat is not",
+        "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs",
+        "rule: a q: check without @violation, with an unknown predicate or a directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q24-capture-count-unlimited",
+      "file": "src/engine/query.zig",
+      "from": "if (captureCount(own) > max_captures_per_pattern) {",
+      "to": "if (captureCount(own) > max_captures_per_pattern * 1000) {",
+      "kills": [
+        "q: more than eight captures in one pattern are refused, predicate arguments do not count",
+        "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs"
+      ]
+    },
+    {
+      "id": "Q25-predicate-arguments-counted-as-captures",
+      "file": "src/engine/query.zig",
+      "from": "                i = if (next < text.len and text[next] == '#') predicateEnd(text, next) else i + 1;",
+      "to": "                i += 1;",
+      "kills": [
+        "q: more than eight captures in one pattern are refused, predicate arguments do not count"
+      ]
     }
   ]
 }
