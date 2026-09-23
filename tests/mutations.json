@@ -3129,6 +3129,185 @@
       "kills": [
         "rule: scan refuses a command rule by name instead of running it"
       ]
+    },
+    {
+      "id": "RM1-gate-skips-the-ledger-trust-check",
+      "file": "src/platform/rules.zig",
+      "from": "            if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;\n",
+      "to": "",
+      "kills": [
+        "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory",
+        "redteam ledger: a committed ledger spelled in another case is still untrusted",
+        "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
+      ]
+    },
+    {
+      "id": "RM2-trust-check-pathspec-case-sensitive",
+      "file": "src/platform/rules.zig",
+      "from": "\":(icase,literal)\"",
+      "to": "\":(literal)\"",
+      "kills": [
+        "redteam ledger: a committed ledger spelled in another case is still untrusted"
+      ]
+    },
+    {
+      "id": "RM3-ledger-listing-compared-case-sensitively",
+      "file": "src/platform/rules.zig",
+      "from": "std.ascii.eqlIgnoreCase(entry, ledger_rel)",
+      "to": "std.mem.eql(u8, entry, ledger_rel)",
+      "kills": [
+        "a tracked ledger, under any spelling or as a tracked workspace entry, is recognized; anything else is not",
+        "redteam ledger: a committed ledger spelled in another case is still untrusted"
+      ]
+    },
+    {
+      "id": "RM4-tracked-workspace-entry-ignored",
+      "file": "src/platform/rules.zig",
+      "from": "std.ascii.eqlIgnoreCase(entry, shadow.workspace_dir) or ",
+      "to": "",
+      "kills": [
+        "a tracked ledger, under any spelling or as a tracked workspace entry, is recognized; anything else is not"
+      ]
+    },
+    {
+      "id": "RM5-every-ledger-trusted-by-default",
+      "file": "src/platform/rules.zig",
+      "from": "var trusted = options.allow_repo_memory;",
+      "to": "var trusted = true;",
+      "kills": [
+        "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory",
+        "redteam ledger: a committed ledger spelled in another case is still untrusted",
+        "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
+      ]
+    },
+    {
+      "id": "RM6-flag-ignored-at-the-gate",
+      "file": "src/platform/rules.zig",
+      "from": "var trusted = options.allow_repo_memory;",
+      "to": "var trusted = false;",
+      "kills": [
+        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run",
+        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run in a batch",
+        "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
+      ]
+    },
+    {
+      "id": "RM7-untracked-ledger-treated-as-committed",
+      "file": "src/platform/rules.zig",
+      "from": "    return false;\n}\n\npub fn ledgerTracked",
+      "to": "    return true;\n}\n\npub fn ledgerTracked",
+      "kills": [
+        "redteam ledger: an untracked local ledger runs its cmd rule without the flag",
+        "a tracked ledger, under any spelling or as a tracked workspace entry, is recognized; anything else is not"
+      ]
+    },
+    {
+      "id": "RM8-runner-forces-trust",
+      "file": "src/platform/runner.zig",
+      "from": "options.limits, options.allow_repo_memory)) |gated|",
+      "to": "options.limits, true)) |gated|",
+      "kills": [
+        "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
+      ]
+    },
+    {
+      "id": "RM9-runner-drops-the-flag",
+      "file": "src/platform/runner.zig",
+      "from": "options.limits, options.allow_repo_memory)) |gated|",
+      "to": "options.limits, false)) |gated|",
+      "kills": [
+        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run"
+      ]
+    },
+    {
+      "id": "RM10-command-gate-forces-trust",
+      "file": "src/platform/runner.zig",
+      "from": ".allow_repo_memory = allow_repo_memory });",
+      "to": ".allow_repo_memory = allow_repo_memory or true });",
+      "kills": [
+        "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
+      ]
+    },
+    {
+      "id": "RM11-batch-forces-trust",
+      "file": "src/platform/batch.zig",
+      "from": "options.limits, options.allow_repo_memory)) |gated|",
+      "to": "options.limits, true)) |gated|",
+      "kills": [
+        "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
+      ]
+    },
+    {
+      "id": "RM12-batch-drops-the-flag",
+      "file": "src/platform/batch.zig",
+      "from": "options.limits, options.allow_repo_memory)) |gated|",
+      "to": "options.limits, false)) |gated|",
+      "kills": [
+        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run in a batch"
+      ]
+    },
+    {
+      "id": "RM13-mcp-try-forces-trust",
+      "file": "src/protocol/handlers.zig",
+      "from": ".allow_repo_memory = policy.allow_repo_memory,\n",
+      "to": ".allow_repo_memory = true,\n",
+      "kills": [
+        "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
+      ]
+    },
+    {
+      "id": "RM14-mcp-try-drops-the-flag",
+      "file": "src/protocol/handlers.zig",
+      "from": ".allow_repo_memory = policy.allow_repo_memory,\n",
+      "to": ".allow_repo_memory = false,\n",
+      "kills": [
+        "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
+      ]
+    },
+    {
+      "id": "RM15-mcp-batch-forces-trust",
+      "file": "src/protocol/handlers.zig",
+      "from": ".allow_repo_memory = policy.allow_repo_memory, .trace",
+      "to": ".allow_repo_memory = true, .trace",
+      "kills": [
+        "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
+      ]
+    },
+    {
+      "id": "RM16-mcp-batch-drops-the-flag",
+      "file": "src/protocol/handlers.zig",
+      "from": ".allow_repo_memory = policy.allow_repo_memory, .trace",
+      "to": ".allow_repo_memory = false, .trace",
+      "kills": [
+        "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
+      ]
+    },
+    {
+      "id": "RM17-model-may-pass-allow-repo-memory",
+      "file": "src/protocol/policy.zig",
+      "from": " or tool_result.getField(a, \"allow_repo_memory\") != null",
+      "to": "",
+      "kills": [
+        "redteam ledger: the model cannot pass allow_repo_memory, and nothing runs when it tries"
+      ]
+    },
+    {
+      "id": "RM18-policy-flag-never-set",
+      "file": "src/protocol/policy.zig",
+      "from": "policy.allow_repo_memory = true;",
+      "to": "policy.allow_repo_memory = false;",
+      "kills": [
+        "serve policy comes only from the command line emetgate was started with"
+      ]
+    },
+    {
+      "id": "RM19-policy-flag-accepted-twice",
+      "file": "src/protocol/policy.zig",
+      "from": "            if (policy.allow_repo_memory) return null;\n",
+      "to": "",
+      "kills": [
+        "serve policy comes only from the command line emetgate was started with"
+      ]
     }
   ]
 }

@@ -249,6 +249,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .new_body = body,
         .test_command = test_command,
         .typecheck_command = typecheck_command,
+        .allow_repo_memory = policy.allow_repo_memory,
         .trace = &event.trace,
     });
     defer result.deinit(gpa);
@@ -340,7 +341,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer gpa.free(resolved);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, edits[0].file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
-    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .trace = &event.trace });
+    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .trace = &event.trace });
     defer result.deinit(gpa);
 
     var sent: usize = 0;

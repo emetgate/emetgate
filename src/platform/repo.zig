@@ -100,6 +100,21 @@ pub fn isIgnored(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const 
     };
 }
 
+pub fn trackedListing(gpa: Allocator, io: std.Io, root_abs: []const u8, pathspec: []const u8) ![]u8 {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "git", "ls-files", "-z", "--", pathspec },
+        .cwd = .{ .path = root_abs },
+        .stdout_limit = .limited(max_git_output),
+    }) catch return error.GitFailed;
+    defer gpa.free(result.stderr);
+    errdefer gpa.free(result.stdout);
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.GitFailed,
+        else => return error.GitFailed,
+    }
+    return result.stdout;
+}
+
 pub fn addToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8) !void {
     var attempt: usize = 0;
     while (attempt < index_add_attempts) : (attempt += 1) {

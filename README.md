@@ -81,7 +81,7 @@ A rule is written once, on the command line, and the ledger keeps it:
 ```
 emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
 emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
-emetgate rule add "no raw SQL" --check "cmd:./scripts/no-raw-sql.sh" --enforce
+emetgate rule add "no raw SQL" --check "cmd:scripts\no-raw-sql.cmd" --enforce
 emetgate rule list
 ```
 
@@ -105,6 +105,11 @@ returns `UnknownCheck`; it is not interpreted as a shell command.
 
 A `cmd:` command is validated when the rule is added. Empty, blank and over-long commands
 are refused, but the command is **not run** until a proposal is checked in a shadow copy.
+
+A command runs through `cmd.exe /c`, so it must be something `cmd.exe` can start: a `.cmd`
+or `.bat` script, an `.exe`, or an interpreter named explicitly (`cmd:node scripts/no-raw-sql.js`).
+A POSIX script such as `./scripts/no-raw-sql.sh` does not run there: `cmd.exe` exits 1 on it,
+which the gate would report as a violation on every proposal.
 
 ### What a command predicate is allowed to see
 
@@ -161,6 +166,33 @@ adopt, change or remove a rule, or change an `enforce` rule to `advisory`. A tes
 fails if another tool is added. A second test verifies that the dispatcher rejects
 rule-writing tool names.
 
+### A ledger committed to the repository
+
+The ledger lives in `.emetgate/ledger.ndjson`. If that file is tracked by git, it arrives with
+a clone: its rules are the repository author's, not yours. Emetgate treats it like
+`.emetgaterc.json` and does not run its commands until you opt in:
+
+| Ledger | `cmd:` rules | AST checks |
+|---|---|---|
+| untracked (written by `emetgate rule` on this machine) | run | enforced |
+| tracked by git, no `--allow-repo-memory` | **never run**: a proposal a `cmd:` rule covers is refused with `UntrustedRepoMemory` (exit code 37) | enforced |
+| tracked by git, `try` or `mcp` started with `--allow-repo-memory` | run | enforced |
+
+"Tracked" means `git ls-files` lists `.emetgate/ledger.ndjson`, or `.emetgate` itself (for
+example as a symlink), under any spelling of case, since Windows opens `.EMETGATE/Ledger.ndjson`
+as the same file. The refusal fails closed: the proposal is rejected with a named error, not
+let through with the rule silently skipped. A `cmd:` rule whose `--in` scope does not cover the
+edit is not consulted, so it does not block. If git cannot answer, the proposal is rejected.
+
+AST checks (`no_comment`, `forbid:`, `no_literal:`) from a tracked ledger stay enforced without
+the flag. They execute nothing: the most a hostile static rule can do is refuse an edit, and every
+rule is visible in `emetgate_skeleton` and `emetgate rule list`.
+
+`--allow-repo-memory` is a startup flag of `emetgate try` and `emetgate mcp`. The model cannot
+grant it: a tool call that carries `allow_repo_memory` is refused with `ModelSuppliedTestPolicy`
+and runs nothing, and `tools/list` does not offer the argument. Review a shared ledger with
+`emetgate rule list` before passing the flag.
+
 ## Architecture
 
 ```
@@ -178,7 +210,7 @@ src/
 │   └── memory                        append-only decision ledger
 └── protocol/    the MCP surface
     ├── server, handlers, wire        tools and typed results
-    ├── policy, telemetry             repo-config trust, event log
+    ├── policy, telemetry             repo-config and repo-ledger trust, event log
     └── read_tools, diagnostics       scoped reads, tsc diagnostics
 ```
 
@@ -238,6 +270,7 @@ The verification guarantees have the following limits:
 - **The quality of the test suite.** For unbounded changes the test gate is only as strong as the tests it runs.
 - **Mediation.** The guarantees hold for changes that go through the gate. Edits made by other tools bypass it, which is why lockdown exists.
 - **Sandbox scope.** The low-integrity token stops the test command from writing outside the shadow copy; it does not restrict reading or network access, so a hostile test command can still read files it has permission to read and reach the network. Confining those requires an AppContainer, which is planned.
+- **Repository ledger.** With `--allow-repo-memory`, a committed ledger's `cmd:` rules run under the same confinement as the test command: they cannot write outside the shadow copy, but they can read and reach the network. Pass the flag only for a ledger you have reviewed. Without the flag only execution is withheld; the text of every rule in a committed ledger is still shown to the model in `emetgate_skeleton`, so a hostile rule text is data the model reads, not a command anything runs.
 - **Taste.** Architecture, API design and user experience are not properties a kernel can check.
 
 ## Installing
@@ -288,7 +321,7 @@ Register the server with an MCP client:
 }
 ```
 
-`--typecheck` is optional. When it is set, the typecheck command runs on the shadow copy before the test command, and a failure rejects the change with reason `typecheck_failed` without running the tests. Both commands can instead come from `test_cmd` and `typecheck_cmd` in `.emetgaterc.json`, which is read only with `--allow-repo-config`. The model can never supply either command.
+`--typecheck` is optional. When it is set, the typecheck command runs on the shadow copy before the test command, and a failure rejects the change with reason `typecheck_failed` without running the tests. Both commands can instead come from `test_cmd` and `typecheck_cmd` in `.emetgaterc.json`, which is read only with `--allow-repo-config`. The model can never supply either command. `--allow-repo-memory` lets the `cmd:` rules of a ledger committed to the repository run; see [A ledger committed to the repository](#a-ledger-committed-to-the-repository).
 
 ## Roadmap
 

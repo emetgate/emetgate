@@ -42,6 +42,7 @@ pub const Options = struct {
     typecheck_command: ?[]const u8 = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
+    allow_repo_memory: bool = false,
     trace: ?*Trace = null,
 };
 
@@ -80,8 +81,8 @@ pub const ShadowRun = union(enum) {
     rule_check_failed: rules.Failure,
 };
 
-pub fn runCommandRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, limits: sandbox.Limits) !?ShadowRun {
-    const gated = try rules.commandGate(gpa, io, root, targets, .{ .shadow_abs = shadow_abs, .limits = limits });
+pub fn runCommandRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
+    const gated = try rules.commandGate(gpa, io, root, targets, .{ .shadow_abs = shadow_abs, .limits = limits, .allow_repo_memory = allow_repo_memory });
     return switch (gated) {
         .ok => null,
         .violated => |report| .{ .rule_violation = report },
@@ -229,6 +230,6 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const
     }
     try workspace.writeFile(rel, patched);
 
-    if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits)) |gated| return gated;
+    if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
     return runStages(gpa, io, shadow_abs, options.typecheck_command, command, options.limits);
 }
