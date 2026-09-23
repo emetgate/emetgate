@@ -83,6 +83,18 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit and end-to-end tests");
     test_step.dependOn(&run_tests.step);
 
+    const timing_tests = b.addTest(.{
+        .name = "timing-tests",
+        .root_module = test_module,
+        .filters = test_filters,
+        .test_runner = .{ .path = b.path("tools/timing_test_runner.zig"), .mode = .simple },
+    });
+    const run_timing = b.addRunArtifact(timing_tests);
+    run_timing.setCwd(b.path("."));
+    run_timing.has_side_effects = true;
+    if (b.args) |args| run_timing.addArgs(args);
+    b.step("test-timing", "Run the unit tests one by one and print the slowest tests and per-suite totals").dependOn(&run_timing.step);
+
     const e2e_step = b.step("e2e", "Run CLI end-to-end tests");
     addEndToEndTests(b, exe, e2e_step);
     if (test_filters.len == 0) test_step.dependOn(e2e_step);
