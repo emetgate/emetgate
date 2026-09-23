@@ -29,6 +29,7 @@ Do not produce a classification table without measurements. Do not fall back to 
    - `forbid:<text>`: flags every occurrence of a literal, case-sensitive substring in the source. It sees comments and strings too.
    - `no_literal:<property>`: flags a key/value pair whose key is `<property>` and whose value is a literal (for example `timeout: 30000`).
    - `no_comment`: flags comments, plus prose smuggled in as a string statement. It takes no argument.
+   - `q:<tree-sitter query>`: flags every node captured as `@violation`. Every pattern must capture `@violation`. Comments and strings are nodes of their own, so `(identifier)` does not match a name inside a comment. Only `#eq?`, `#not-eq?`, `#any-of?`, `#match?` and `#not-match?` are allowed; `#match?` takes an RE2 subset without `{n,m}`, lazy quantifiers, lookaround or backreferences. Example: `q:((call_expression function: (identifier) @violation) (#eq? @violation "scrapeHepsiburadaApi"))`. A query that does not compile for a scanned file's language is reported under `check_failures`, not as a violation; mark the line `ölçülemedi` for that file.
 
    Do not invent a new check name. If a rule needs a check that does not exist, the rule is MEKANİZMA BEKLİYOR, not ZORLANABİLİR.
 3. **A scope has exactly one of three forms:** a file (`src/a.js`), a directory with a trailing slash (`src/scraper/`), or a file and a symbol (`src/a.js#fn`). No glob, no absolute path, no `..`. With no scope, the whole repository is measured.
