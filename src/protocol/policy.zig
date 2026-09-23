@@ -7,6 +7,7 @@ pub const Policy = struct {
     test_command: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
     allow_repo_config: bool = false,
+    allow_repo_memory: bool = false,
     root: ?[]const u8 = null,
 };
 
@@ -18,6 +19,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
         if (std.mem.eql(u8, arg, "--allow-repo-config")) {
             if (policy.allow_repo_config) return null;
             policy.allow_repo_config = true;
+        } else if (std.mem.eql(u8, arg, "--allow-repo-memory")) {
+            if (policy.allow_repo_memory) return null;
+            policy.allow_repo_memory = true;
         } else if (std.mem.eql(u8, arg, "--test")) {
             if (policy.test_command != null or i + 1 >= args.len) return null;
             i += 1;
@@ -37,7 +41,7 @@ pub fn parsePolicy(args: anytype) ?Policy {
 
 pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestPolicy}![]const u8 {
     if (args) |a| {
-        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null) return error.ModelSuppliedTestPolicy;
+        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null or tool_result.getField(a, "allow_repo_memory") != null) return error.ModelSuppliedTestPolicy;
     }
     return policy.test_command orelse "";
 }

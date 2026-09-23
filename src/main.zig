@@ -22,8 +22,8 @@ const usage =
     \\       emetgate symbols <file.ts> [--json]
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
-    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--json]
-    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config]
+    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--allow-repo-memory] [--json]
+    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config] [--allow-repo-memory]
     \\       emetgate scan [--check <spec> [--in <where>]] [--json]
     \\       emetgate rule add <text> [--check <spec>] [--in <where>] [--enforce]
     \\       emetgate rule list [--all] [--json]
@@ -34,6 +34,10 @@ const usage =
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.
+    \\
+    \\A ledger committed to git (.emetgate/ledger.ndjson) came with the clone:
+    \\its cmd: rules never run unless try/mcp is started with --allow-repo-memory;
+    \\a proposal they cover is refused with UntrustedRepoMemory instead.
     \\
     \\lockdown starts claude with only ToolSearch and the .mcp.json servers
     \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config).
@@ -89,8 +93,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "try")) {
         const parsed = extractFlags(init, args[2..]);
         const request = TryRequest.parse(parsed.rest) orelse exitWithUsage();
-        if (parsed.json) return tryRunJson(init, runtime, request, out, parsed.allow_repo_config);
-        return tryRun(init, runtime, request, out, parsed.allow_repo_config);
+        const trust: Trust = .{ .repo_config = parsed.allow_repo_config, .repo_memory = parsed.allow_repo_memory };
+        if (parsed.json) return tryRunJson(init, runtime, request, out, trust);
+        return tryRun(init, runtime, request, out, trust);
     }
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
         const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
@@ -116,22 +121,26 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     exitWithUsage();
 }
 
-const Extracted = struct { json: bool, allow_repo_config: bool, rest: []const [:0]const u8 };
+const Extracted = struct { json: bool, allow_repo_config: bool, allow_repo_memory: bool, rest: []const [:0]const u8 };
+
+const Trust = struct { repo_config: bool, repo_memory: bool };
 
 fn isBoolFlag(arg: []const u8) bool {
-    return std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "--allow-repo-config");
+    return std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "--allow-repo-config") or std.mem.eql(u8, arg, "--allow-repo-memory");
 }
 
 fn extractFlags(init: std.process.Init, args: []const [:0]const u8) Extracted {
     var json = false;
     var allow_repo_config = false;
+    var allow_repo_memory = false;
     var count: usize = 0;
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--json")) json = true;
         if (std.mem.eql(u8, arg, "--allow-repo-config")) allow_repo_config = true;
+        if (std.mem.eql(u8, arg, "--allow-repo-memory")) allow_repo_memory = true;
         if (!isBoolFlag(arg)) count += 1;
     }
-    if (count == args.len) return .{ .json = false, .allow_repo_config = false, .rest = args };
+    if (count == args.len) return .{ .json = false, .allow_repo_config = false, .allow_repo_memory = false, .rest = args };
 
     const rest = init.arena.allocator().alloc([:0]const u8, count) catch exitWithUsage();
     var i: usize = 0;
@@ -140,7 +149,7 @@ fn extractFlags(init: std.process.Init, args: []const [:0]const u8) Extracted {
         rest[i] = arg;
         i += 1;
     }
-    return .{ .json = json, .allow_repo_config = allow_repo_config, .rest = rest };
+    return .{ .json = json, .allow_repo_config = allow_repo_config, .allow_repo_memory = allow_repo_memory, .rest = rest };
 }
 
 fn fail(err: anyerror) u8 {
@@ -192,7 +201,7 @@ const TryRequest = struct {
     }
 };
 
-fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) !u8 {
+fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, trust: Trust) !u8 {
     const gpa = runtime.gpa;
     const expected = try symbol.parseExpected(request.hash);
     const target = try newFileTarget(init, gpa, request.path, expected);
@@ -207,9 +216,9 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, allow_repo_config);
+    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, trust.repo_config);
     defer gpa.free(test_command);
-    const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, allow_repo_config);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, trust.repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
 
     const result = runner.tryMutate(gpa, init.io, runtime, .{
@@ -219,6 +228,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
         .new_body = body,
         .test_command = test_command,
         .typecheck_command = typecheck_command,
+        .allow_repo_memory = trust.repo_memory,
     }) catch |err| {
         if (err == error.WrittenButNotIndexed) std.debug.print("error: WrittenButNotIndexed: {s}: {s}\nrun: git add -- {s}\n", .{ request.path, wire.not_indexed_message, request.path });
         return err;
@@ -262,8 +272,8 @@ fn printStageRejected(stage: []const u8, outcome: emetgate.sandbox.Outcome) void
     }
 }
 
-fn tryRunJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) u8 {
-    return emitTryJson(init, runtime, request, out, allow_repo_config) catch |err| {
+fn tryRunJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, trust: Trust) u8 {
+    return emitTryJson(init, runtime, request, out, trust) catch |err| {
         if (err == error.WrittenButNotIndexed) {
             wire.writeNotIndexed(out, request.path) catch {};
         } else {
@@ -282,7 +292,7 @@ fn newFileTarget(init: std.process.Init, gpa: std.mem.Allocator, path: []const u
     return null;
 }
 
-fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, allow_repo_config: bool) !u8 {
+fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, trust: Trust) !u8 {
     const gpa = runtime.gpa;
     const expected = try symbol.parseExpected(request.hash);
     const target = try newFileTarget(init, gpa, request.path, expected);
@@ -297,9 +307,9 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     defer if (body_from_file) |bytes| gpa.free(bytes);
     const body = body_from_file orelse request.body.inline_text;
 
-    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, allow_repo_config);
+    const test_command = try runner.resolveTestCommand(gpa, init.io, file_abs, request.test_command, trust.repo_config);
     defer gpa.free(test_command);
-    const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, allow_repo_config);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, trust.repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
 
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
@@ -309,6 +319,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         .new_body = body,
         .test_command = test_command,
         .typecheck_command = typecheck_command,
+        .allow_repo_memory = trust.repo_memory,
     });
     defer result.deinit(gpa);
 

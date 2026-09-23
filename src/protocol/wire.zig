@@ -422,6 +422,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed, error.WhereExclusionEmpty, error.WhereExclusionGlob, error.WhereExclusionAbsolute, error.WhereExclusionParentSegment, error.WhereExclusionMalformed, error.WhereTooManyExclusions => 2,
         error.NoTestCommand, error.InvalidConfig => 2,
         error.UntrustedRepoConfig => 15,
+        error.UntrustedRepoMemory => 37,
         error.ModelSuppliedTestPolicy => 17,
         error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern => 18,
         error.WorkspaceBusy, error.WorkspaceLockFailed => 14,

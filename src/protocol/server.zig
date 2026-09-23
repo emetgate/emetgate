@@ -46,7 +46,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_try",
-        .description = "Atomic mutation: replaces the symbol body, runs the project's trusted typecheck command (when configured) and then its test command in a sandbox, and writes to disk only if both pass; otherwise nothing is written. The test command is fixed by the user who started emetgate (emetgate mcp --test <cmd>, or the repo .emetgaterc.json with --allow-repo-config); a call that passes test_cmd, typecheck_cmd or allow_repo_config is refused.",
+        .description = "Atomic mutation: replaces the symbol body, runs the project's trusted typecheck command (when configured) and then its test command in a sandbox, and writes to disk only if both pass; otherwise nothing is written. The test command is fixed by the user who started emetgate (emetgate mcp --test <cmd>, or the repo .emetgaterc.json with --allow-repo-config); a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.",
         .props = &.{
             .{ .name = "file", .desc = "path to a source file in a registered language" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
@@ -285,7 +285,7 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("name");
     try js.write("emetgate_try_batch");
     try js.objectField("description");
-    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd or allow_repo_config is refused.");
+    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.");
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");

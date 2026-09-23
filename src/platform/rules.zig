@@ -7,6 +7,7 @@ const memory = @import("memory.zig");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const where_mod = @import("where.zig");
+const repo = @import("repo.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -232,7 +233,25 @@ pub const Target = struct {
 pub const CommandOptions = struct {
     shadow_abs: []const u8,
     limits: sandbox.Limits = .{},
+    allow_repo_memory: bool = false,
 };
+
+pub const ledger_pathspec = ":(icase,literal)" ++ shadow.workspace_dir;
+const ledger_rel = shadow.workspace_dir ++ "/" ++ memory.ledger_name;
+
+pub fn listsLedger(listing: []const u8) bool {
+    var entries = std.mem.tokenizeScalar(u8, listing, 0);
+    while (entries.next()) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry, shadow.workspace_dir) or std.ascii.eqlIgnoreCase(entry, ledger_rel)) return true;
+    }
+    return false;
+}
+
+pub fn ledgerTracked(gpa: Allocator, io: std.Io, root_abs: []const u8) !bool {
+    const listing = try repo.trackedListing(gpa, io, root_abs, ledger_pathspec);
+    defer gpa.free(listing);
+    return listsLedger(listing);
+}
 
 pub fn verdictOf(report: sandbox.Report) Verdict {
     if (report.killed_leftovers) return .crashed;
@@ -334,9 +353,14 @@ pub fn resolvable(gpa: Allocator, io: std.Io, cwd: []const u8, head: []const u8)
 pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const Target, options: CommandOptions) !CommandGate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
+    var trusted = options.allow_repo_memory;
     for (enforced.rules) |rule| {
         if (!isCommand(rule)) continue;
         const scoped = try firstCovered(rule, targets) orelse continue;
+        if (!trusted) {
+            if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
+            trusted = true;
+        }
         const gated = try runCommandRule(gpa, io, rule, scoped, options);
         if (gated != .ok) return gated;
     }
@@ -534,6 +558,20 @@ test "a program is resolvable through builtins, the working directory and PATH, 
     try testing.expect(try resolvable(testing.allocator, testing.io, cwd, "check"));
     try testing.expect(try resolvable(testing.allocator, testing.io, cwd, "check.cmd"));
     try testing.expect(try resolvable(testing.allocator, testing.io, cwd, ".\\check.cmd"));
+}
+
+test "a tracked ledger, under any spelling or as a tracked workspace entry, is recognized; anything else is not" {
+    try testing.expect(listsLedger(".emetgate/ledger.ndjson\x00"));
+    try testing.expect(listsLedger(".EMETGATE/Ledger.NDJSON\x00"));
+    try testing.expect(listsLedger(".emetgate/notes.md\x00.emetgate/ledger.ndjson\x00"));
+    try testing.expect(listsLedger(".emetgate\x00"));
+    try testing.expect(listsLedger(".Emetgate\x00"));
+
+    try testing.expect(!listsLedger(""));
+    try testing.expect(!listsLedger(".emetgate/notes.md\x00"));
+    try testing.expect(!listsLedger(".emetgate/ledger.ndjson.emetgate-0123.bak\x00"));
+    try testing.expect(!listsLedger("src/.emetgate/ledger.ndjson\x00"));
+    try testing.expect(!listsLedger(".emetgate/ledger.ndjson.old\x00"));
 }
 
 test "a command rule is kept out of the ast gate, which would otherwise fail closed on it" {

@@ -28,6 +28,7 @@ pub const BatchOptions = struct {
     typecheck_command: ?[]const u8 = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
+    allow_repo_memory: bool = false,
     trace: ?*Trace = null,
 };
 
@@ -170,7 +171,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []
         targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
         built += 1;
     }
-    if (try runner.runCommandRules(gpa, io, root, shadow_abs, targets, options.limits)) |gated| return gated;
+    if (try runner.runCommandRules(gpa, io, root, shadow_abs, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
 
     return runner.runStages(gpa, io, shadow_abs, options.typecheck_command, options.test_command, options.limits);
 }
