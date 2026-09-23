@@ -93,15 +93,20 @@ at all.
 
 ### Predicates
 
-`--check` names the predicate. Two kinds exist and the prefix decides which:
+`--check` names the predicate. Two kinds exist and the `cmd:` prefix decides which: a command, or a built-in check run in process.
 
 | Form | Meaning |
 |---|---|
 | `no_comment`, `forbid:<text>`, `no_literal:<option>` | Built-in AST checks, run against the proposed body in memory |
+| `q:<tree-sitter query>` | A tree-sitter query, run in process against the parsed file; see [The `q:` query predicate](#the-q-query-predicate) |
 | `cmd:<command line>` | A command, run in the shadow copy inside the sandbox |
 
 Anything without the `cmd:` prefix is looked up in the built-in registry. An unknown name
 returns `UnknownCheck`; it is not interpreted as a shell command.
+
+Every violation carries the rule id, the check, the file, `line` and `col` of its first
+byte, and `end_line` and `end_col` of its end. `end_col` is the column just past the last
+byte, as in SARIF. A `cmd:` violation has no position and reports 0 for all four.
 
 A `cmd:` command is validated when the rule is added. Empty, blank and over-long commands
 are refused, but the command is **not run** until a proposal is checked in a shadow copy.
@@ -152,6 +157,87 @@ These figures measure the kernel's overhead for starting one additional sandboxe
 in the shadow copy with a no-op command. They do not include the runtime of the command
 configured after `cmd:`; for example, an `npx eslint` invocation adds its own runtime to
 every proposal.
+
+### The `q:` query predicate
+
+`q:<query>` runs a tree-sitter query against the parsed file in the emetgate process.
+Every node captured as `@violation` is a violation.
+
+```
+emetgate rule add "no eval" --check "q:((call_expression function: (identifier) @violation) (#eq? @violation \"eval\"))" --enforce
+emetgate rule add "n11 does not read priceFloat" --check "q:([(identifier) (property_identifier)] @violation (#eq? @violation \"priceFloat\"))" --in src/scraper/n11.js --enforce
+```
+
+A comment and a string are nodes of their own, so `(identifier)` never matches a name that
+only appears inside a comment. `forbid:` cannot make that distinction.
+
+- **`@violation` is required.** Every pattern in the query must capture `@violation`. A query
+  with a pattern that does not is refused with `QueryMissingViolation`, and the pattern is
+  printed.
+- **Scope.** At the edit gate only nodes that lie wholly inside the proposed body count. A node
+  that starts or ends outside it is dropped, even when the body overlaps it. `scan` checks the
+  whole file, or the symbol body with `--in file#symbol`.
+- **Languages.** When the rule is added, the query is compiled against every language profile.
+  It must compile for at least one, and `rule add` prints on stderr each language it does not
+  compile for. At the gate the query is compiled against the edited file's language. If it does
+  not compile there, the proposal is refused with `rule_check_crashed`, detail
+  `query_not_for_language`. The rule is not skipped.
+
+Predicates are evaluated by emetgate; tree-sitter only parses them.
+
+| Predicate | Holds when |
+|---|---|
+| `#eq? @c "text"`, `#eq? @c @d` | the capture's text equals the string, or the other capture's text |
+| `#not-eq?` | the same arguments, negated |
+| `#any-of? @c "a" "b" ...` | the capture's text equals one of the strings |
+| `#match? @c "regex"` | the regex matches somewhere in the capture's text |
+| `#not-match?` | the same arguments, negated |
+
+A capture that matched several nodes must satisfy the predicate for each of them. Any other
+predicate (`#is?`, `#lua-match?`, `#any-eq?` ...) is refused with `QueryUnknownPredicate`,
+and any directive (`#set!`, `#select-adjacent!` ...) with `QueryDirective`, both naming it.
+
+The regex is RE2 syntax run as a Thompson NFA: matching walks a set of states over the text,
+never backtracks, and takes time linear in the text. Supported: literals, `.` (any character
+but a newline), `[...]` and `[^...]`, `\d \w \s \D \W \S`, `^` and `$` (start and end of the
+capture's text), `* + ?`, `|` and `( )`. Anything else is refused with `RegexUnsupported`
+and its name: backreferences, lookahead, lookbehind, named and non-capturing groups, inline
+flags, lazy and possessive quantifiers, counted repetition `{n,m}` (escape a literal brace as
+`\{`), `\b`, `\A` and `\z`, `\p{...}`, numeric escapes and POSIX classes.
+
+| Limit | Value |
+|---|---|
+| query text | 4 KB including `q:`, as for `cmd:` (`QueryTooLong`) |
+| operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match) and the regex (1 per state visited) |
+| in-progress matches | 1024 |
+
+| Result | Meaning |
+|---|---|
+| a `@violation` node inside the scope | **violation**, reason `rule_violation` |
+| operation budget spent, match limit passed, query does not compile for the file's language, malformed query in a hand-edited ledger | **not a verdict**: reason `rule_check_crashed`, detail `query_budget_exceeded`, `query_match_limit_exceeded`, `query_not_for_language` or `query_malformed` |
+
+The cursor stops as soon as the budget runs out or the match limit is passed. When tree-sitter
+drops an in-progress match past the limit, the result could be missing a violation, so it is
+not used. `scan` lists such failures under `check_failures` and exits 38, also when it found
+violations.
+
+### What a query predicate costs
+
+30 interleaved, paired proposals on the same machine, with and without one enforced
+`q:` rule that runs a `#match?` (`python tests/bench/rule_query_cost.py`):
+
+| | Debug build (`zig build`) | ReleaseSafe build |
+|---|---|---|
+| proposal with no `q:` rule, median / worst | 156 ms / 173 ms | 169 ms / 228 ms |
+| proposal with one `q:` rule, median / worst | 203 ms / 234 ms | 171 ms / 204 ms |
+| **added per proposal** (paired difference), median / worst | **46 ms / 76 ms** | **3.5 ms / 47 ms** |
+| proposal whose `q:` rule spends the whole operation budget, median / worst | 525 ms / 581 ms | 134 ms / 135 ms |
+
+The query is compiled against the file's grammar on every proposal and is not cached. The last
+row is the ceiling the budget puts on one rule:
+a 3,001-byte regex over a 20,000-character string, refused with `query_budget_exceeded`.
+The ReleaseSafe worst case in the third row is noise from the process start; its best paired
+difference was negative.
 
 ### Rules are readable by the model, never writable
 
@@ -254,7 +340,7 @@ Emetgate currently has a narrow scope.
 | Journal, atomic commit, recovery, sandbox | Built |
 | MCP server and locked-down launch | Built |
 | Decision ledger (append-only, supersession, compaction, torn-tail recovery) | Built; readable by the model through `emetgate_skeleton`, writable only from the CLI |
-| Rule enforcement at the edit gate | Built, mutation-tested: AST checks and `cmd:` command predicates |
+| Rule enforcement at the edit gate | Built, mutation-tested: AST checks, `q:` tree-sitter queries and `cmd:` command predicates |
 | Language support | TypeScript and JavaScript (`.js`, `.mjs`, `.cjs`); new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
 | Platform | Windows only (the sandbox relies on Job Objects) |
 
