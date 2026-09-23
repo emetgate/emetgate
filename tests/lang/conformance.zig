@@ -214,3 +214,51 @@ test "conformance: no_literal flags only literal values of the named option, spa
         }
     }
 }
+
+const console_query = "q:((call_expression function: (member_expression object: (identifier) @object property: (property_identifier) @violation)) (#eq? @object \"console\") (#any-of? @violation \"log\" \"debug\"))";
+const typed_query = "q:(type_annotation) @violation";
+
+test "conformance: one q: query over nodes both grammars share flags the same calls" {
+    for (registry.profiles) |profile| {
+        errdefer std.debug.print("language: {s}\n", .{profile.name});
+        const cases = casesFor(profile).?;
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        const snapshot = try Snapshot.fromSource(runtime, profile, try testing.allocator.dupe(u8, cases.query_source));
+        defer snapshot.destroy();
+        try testing.expect(!snapshot.tree.root().hasError());
+
+        const whole: symbol.Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
+        const violations = try checks.run(testing.allocator, profile, snapshot.tree, whole, &.{console_query});
+        defer testing.allocator.free(violations);
+        try testing.expectEqual(@as(usize, 2), violations.len);
+        for ([_][]const u8{ "log", "debug" }, violations) |want, got| {
+            try testing.expectEqualStrings("q", got.check);
+            try testing.expectEqualStrings(want, snapshot.source[got.span.start..got.span.end]);
+        }
+        const line = std.mem.count(u8, snapshot.source[0..violations[0].span.start], "\n") + 1;
+        try testing.expectEqual(@as(usize, 3), line);
+    }
+}
+
+test "conformance: a q: query over a node only one grammar has is a named failure elsewhere" {
+    for (registry.profiles) |profile| {
+        errdefer std.debug.print("language: {s}\n", .{profile.name});
+        const cases = casesFor(profile).?;
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        const snapshot = try Snapshot.fromSource(runtime, profile, try testing.allocator.dupe(u8, cases.query_source));
+        defer snapshot.destroy();
+
+        const whole: symbol.Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
+        if (!cases.has_type_annotations) {
+            try testing.expectError(error.QueryNotForLanguage, checks.run(testing.allocator, profile, snapshot.tree, whole, &.{typed_query}));
+            continue;
+        }
+        const violations = try checks.run(testing.allocator, profile, snapshot.tree, whole, &.{typed_query});
+        defer testing.allocator.free(violations);
+        try testing.expectEqual(@as(usize, 2), violations.len);
+        try testing.expectEqualStrings(": number", snapshot.source[violations[0].span.start..violations[0].span.end]);
+    }
+    try checks.validate(testing.allocator, typed_query);
+}

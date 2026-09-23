@@ -59,4 +59,15 @@ pub const cases: Cases = .{
     \\
     ,
     .literal_flagged = &.{ "timeout: 30000", "timeout: \"30s\"", "timeout: 5", "\"timeout\": 1000", "timeout: -1" },
+    .query_source =
+    \\function report(total) {
+    \\  // console.log(total) stays in a comment
+    \\  console.log(total);
+    \\  console.warn("console.debug");
+    \\  logger.log(total);
+    \\  console.debug(total);
+    \\}
+    \\
+    ,
+    .has_type_annotations = false,
 };
