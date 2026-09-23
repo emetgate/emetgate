@@ -8,6 +8,8 @@ const Allocator = std.mem.Allocator;
 
 pub const violations_exit_code: u8 = 10;
 
+pub const check_failed_exit_code: u8 = 38;
+
 pub const ledger_needs_repair_message = "the ledger ends in a partial row; the next call that changes the ledger moves it to quarantine, after which scan runs";
 
 pub const nothing_in_scope_message = "no file inside the scope has a language profile, so nothing was measured";
@@ -62,7 +64,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
     };
     defer enforced.deinit();
 
-    if (scan.firstMalformed(enforced.rules)) |bad| {
+    if (try scan.firstMalformed(gpa, enforced.rules)) |bad| {
         refuse(options, bad.reason);
         const code = wire.exitCode(bad.reason);
         if (options.json) {
@@ -98,6 +100,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
         if (!options.json) try out.print("{t}: {s}\n", .{ error.NothingInScope, nothing_in_scope_message });
         return wire.exitCode(error.NothingInScope);
     }
+    if (result.check_failures.len > 0) return check_failed_exit_code;
     return if (result.violations.len == 0) 0 else violations_exit_code;
 }
 
@@ -124,6 +127,7 @@ fn writeText(out: *Writer, result: scan.Result) !void {
             try out.print("{s}:{d}:{d}: {s} ({s}): {s}\n", .{ v.file, v.line, v.col, v.rule, v.check, v.text });
         }
     }
+    for (result.check_failures) |f| try out.print("error: {s}: rule {s} ({s}) could not run: {s} {s}\n", .{ f.file, f.rule, f.check, f.detail, f.text });
     for (result.unreadable) |u| try out.print("warning: {s}: not scanned: {t}\n", .{ u.file, u.reason });
     for (result.parse_errors) |file| try out.print("warning: {s}: parse error; tree-based checks may be incomplete\n", .{file});
     const unreadable = result.unreadable.len;
@@ -136,6 +140,9 @@ fn writeText(out: *Writer, result: scan.Result) !void {
         result.unsupported,
         unreadable,
     });
+    if (result.check_failures.len > 0) {
+        try out.print("{d} check(s) could not run; the scan is incomplete\n", .{result.check_failures.len});
+    }
     if (result.parse_errors.len > 0) {
         try out.print("{d} of the {d} scanned file(s) had parse errors; tree-based checks there may be incomplete\n", .{ result.parse_errors.len, result.scanned });
     }

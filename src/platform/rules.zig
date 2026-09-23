@@ -35,6 +35,8 @@ pub const Violation = struct {
     file: []u8,
     line: u32,
     col: u32,
+    end_line: u32,
+    end_col: u32,
     text: []u8,
 };
 
@@ -71,7 +73,7 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
 
-pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span) !?Report {
+pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
     const applicable = try applicableTo(gpa, enforced.rules, file, ref);
@@ -99,17 +101,21 @@ pub fn applicableTo(gpa: Allocator, all: []const Rule, file: []const u8, ref: sy
     return list.toOwnedSlice(gpa);
 }
 
-pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!?Report {
+pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!Gate {
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
-    errdefer for (list.items) |v| freeViolation(gpa, v);
+    defer for (list.items) |v| freeViolation(gpa, v);
 
     for (rules) |rule| {
-        const found = try checks.run(gpa, profile, tree, span, &.{rule.check});
+        const found = checks.run(gpa, profile, tree, span, &.{rule.check}) catch |err| switch (err) {
+            error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),
+            else => |e| return e,
+        };
         defer gpa.free(found);
         for (found) |hit| {
-            const at = position(tree.source, hit.span.start);
-            const owned = try ownViolation(gpa, rule, file, at, tree.source[hit.span.start..hit.span.end]);
+            const start = position(tree.source, hit.span.start);
+            const end = position(tree.source, hit.span.end);
+            const owned = try ownViolation(gpa, rule, file, start, end, tree.source[hit.span.start..hit.span.end]);
             list.append(gpa, owned) catch |err| {
                 freeViolation(gpa, owned);
                 return err;
@@ -117,8 +123,18 @@ pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
         }
     }
 
-    if (list.items.len == 0) return null;
-    return .{ .violations = try list.toOwnedSlice(gpa) };
+    if (list.items.len == 0) return .ok;
+    const owned = try list.toOwnedSlice(gpa);
+    return .{ .violated = .{ .violations = owned } };
+}
+
+pub fn unrunnableDetail(err: checks.Unrunnable) []const u8 {
+    return switch (err) {
+        error.QueryMalformed => "query_malformed",
+        error.QueryNotForLanguage => "query_not_for_language",
+        error.QueryBudgetExceeded => "query_budget_exceeded",
+        error.QueryMatchLimitExceeded => "query_match_limit_exceeded",
+    };
 }
 
 const Position = struct { line: u32, col: u32 };
@@ -135,7 +151,7 @@ fn position(source: []const u8, offset: u32) Position {
     return .{ .line = line, .col = @intCast(offset - line_start + 1) };
 }
 
-fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {
+fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, end: Position, text: []const u8) Allocator.Error!Violation {
     const rule_id = try gpa.dupe(u8, rule.id);
     errdefer gpa.free(rule_id);
     const check = try gpa.dupe(u8, rule.check);
@@ -143,7 +159,7 @@ fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text
     const file_owned = try gpa.dupe(u8, file);
     errdefer gpa.free(file_owned);
     const text_owned = try gpa.dupe(u8, text);
-    return .{ .rule = rule_id, .check = check, .file = file_owned, .line = at.line, .col = at.col, .text = text_owned };
+    return .{ .rule = rule_id, .check = check, .file = file_owned, .line = at.line, .col = at.col, .end_line = end.line, .end_col = end.col, .text = text_owned };
 }
 
 fn freeViolation(gpa: Allocator, v: Violation) void {
@@ -211,12 +227,12 @@ pub const Failure = struct {
     }
 };
 
-pub const CommandGate = union(enum) {
+pub const Gate = union(enum) {
     ok,
     violated: Report,
     failed: Failure,
 
-    pub fn deinit(self: CommandGate, gpa: Allocator) void {
+    pub fn deinit(self: Gate, gpa: Allocator) void {
         switch (self) {
             .ok => {},
             .violated => |report| report.deinit(gpa),
@@ -350,7 +366,7 @@ pub fn resolvable(gpa: Allocator, io: std.Io, cwd: []const u8, head: []const u8)
     return false;
 }
 
-pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const Target, options: CommandOptions) !CommandGate {
+pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const Target, options: CommandOptions) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
     var trusted = options.allow_repo_memory;
@@ -374,7 +390,7 @@ fn firstCovered(rule: Rule, targets: []const Target) !?[]const u8 {
     return null;
 }
 
-fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, file: []const u8, options: CommandOptions) !CommandGate {
+fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, file: []const u8, options: CommandOptions) !Gate {
     const command = checks.commandOf(rule.check).?;
     checks.validateCommand(command) catch return failedGate(gpa, rule, file, "malformed", "");
 
@@ -415,7 +431,7 @@ fn saidBy(gpa: Allocator, report: sandbox.Report) ![]u8 {
     return std.fmt.allocPrint(gpa, "{s}\n{s}", .{ out, err });
 }
 
-fn failedGate(gpa: Allocator, rule: Rule, file: []const u8, detail: []const u8, text: []const u8) !CommandGate {
+fn failedGate(gpa: Allocator, rule: Rule, file: []const u8, detail: []const u8, text: []const u8) !Gate {
     const rule_id = try gpa.dupe(u8, rule.id);
     errdefer gpa.free(rule_id);
     const check = try gpa.dupe(u8, rule.check);
@@ -431,8 +447,8 @@ fn failedGate(gpa: Allocator, rule: Rule, file: []const u8, detail: []const u8, 
     } };
 }
 
-fn violatedGate(gpa: Allocator, rule: Rule, file: []const u8, text: []const u8) !CommandGate {
-    const owned = try ownViolation(gpa, rule, file, .{ .line = 0, .col = 0 }, text);
+fn violatedGate(gpa: Allocator, rule: Rule, file: []const u8, text: []const u8) !Gate {
+    const owned = try ownViolation(gpa, rule, file, .{ .line = 0, .col = 0 }, .{ .line = 0, .col = 0 }, text);
     errdefer freeViolation(gpa, owned);
     const list = try gpa.alloc(Violation, 1);
     list[0] = owned;
@@ -449,7 +465,19 @@ fn evaluateSource(source: []const u8, span: Span, rules: []const Rule) !?Report 
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(source);
     defer t.deinit();
-    return evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules);
+    return reportOf(try evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules));
+}
+
+pub fn reportOf(gated: Gate) !?Report {
+    return switch (gated) {
+        .ok => null,
+        .violated => |report| report,
+        .failed => |failure| {
+            std.debug.print("check could not run: {s}\n", .{failure.detail});
+            failure.deinit(testing.allocator);
+            return error.TestUnexpectedCheckFailure;
+        },
+    };
 }
 
 test "every violation names its rule, check, file, line, column and offending text" {

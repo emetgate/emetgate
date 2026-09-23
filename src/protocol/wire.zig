@@ -213,6 +213,10 @@ fn writeViolation(js: *std.json.Stringify, v: rules.Violation) !void {
     try js.write(v.line);
     try js.objectField("col");
     try js.write(v.col);
+    try js.objectField("end_line");
+    try js.write(v.end_line);
+    try js.objectField("end_col");
+    try js.write(v.end_col);
     try js.objectField("text");
     try js.write(v.text);
     try js.endObject();
@@ -223,7 +227,7 @@ pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write(if (result.nothingInScope()) "nothing_in_scope" else if (result.violations.len == 0) "clean" else "violations");
+    try js.write(if (result.nothingInScope()) "nothing_in_scope" else if (result.check_failures.len > 0) "check_failed" else if (result.violations.len == 0) "clean" else "violations");
     try js.objectField("rules");
     try js.write(result.rules);
     try js.objectField("scanned");
@@ -246,6 +250,23 @@ pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize) !void {
     try js.objectField("parse_errors");
     try js.beginArray();
     for (result.parse_errors) |file| try js.write(file);
+    try js.endArray();
+    try js.objectField("check_failures");
+    try js.beginArray();
+    for (result.check_failures) |f| {
+        try js.beginObject();
+        try js.objectField("rule");
+        try js.write(f.rule);
+        try js.objectField("check");
+        try js.write(f.check);
+        try js.objectField("file");
+        try js.write(f.file);
+        try js.objectField("detail");
+        try js.write(f.detail);
+        try js.objectField("output");
+        try js.write(f.text);
+        try js.endObject();
+    }
     try js.endArray();
     try js.objectField("violations");
     try js.beginArray();
@@ -401,6 +422,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.SkeletonInvalid => 9,
         error.PlaceholderBody => 13,
         error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument, error.EmptyCommandCheck, error.CommandCheckTooLong, error.CommandCheckNotStatic => 19,
+        error.QueryTooLong, error.QuerySyntax, error.QueryNodeType, error.QueryField, error.QueryCapture, error.QueryStructure, error.QueryLanguage, error.QueryMissingViolation, error.QueryUnknownPredicate, error.QueryDirective, error.QueryPredicateArguments, error.RegexUnsupported, error.RegexSyntax => 19,
         error.SymbolExists => 20,
         error.MissingTrailingNewline => 21,
         error.NoTopLevelSymbol => 22,
@@ -685,12 +707,14 @@ test "a rule violation payload lists every violation with its rule and position"
         .file = @constCast("src\\a.ts"),
         .line = 2,
         .col = 3,
+        .end_line = 2,
+        .end_col = 12,
         .text = @constCast("// \"why\""),
     }};
     try writeRuleViolation(&buffer.writer, .{ .violations = &violations });
 
     try testing.expectEqualStrings(
-        "{\"status\":\"rejected\",\"reason\":\"rule_violation\",\"violations\":[{\"rule\":\"r7\",\"check\":\"no_comment\",\"file\":\"src\\\\a.ts\",\"line\":2,\"col\":3,\"text\":\"// \\\"why\\\"\"}]}\n",
+        "{\"status\":\"rejected\",\"reason\":\"rule_violation\",\"violations\":[{\"rule\":\"r7\",\"check\":\"no_comment\",\"file\":\"src\\\\a.ts\",\"line\":2,\"col\":3,\"end_line\":2,\"end_col\":12,\"text\":\"// \\\"why\\\"\"}]}\n",
         buffer.written(),
     );
     try testing.expectEqual(@as(u8, 19), exitCode(error.UnknownCheck));

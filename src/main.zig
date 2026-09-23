@@ -404,7 +404,10 @@ fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Requ
     const gpa = runtime.gpa;
     const root = try runner.repoRoot(gpa, init.io);
     defer gpa.free(root);
-    try rule_command.run(gpa, init.io, root, request, out);
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    defer stderr_writer.interface.flush() catch {};
+    try rule_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
     return 0;
 }
 

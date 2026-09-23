@@ -73,7 +73,9 @@ fn runRule(repo: *Repo, args: []const [:0]const u8) ![]u8 {
     const request = rule_command.parse(args) orelse return error.UsageRefused;
     var out: Allocating = .init(testing.allocator);
     defer out.deinit();
-    try rule_command.run(testing.allocator, testing.io, repo.root_abs, request, &out.writer);
+    var err_out: Allocating = .init(testing.allocator);
+    defer err_out.deinit();
+    try rule_command.run(testing.allocator, testing.io, repo.root_abs, request, &out.writer, &err_out.writer);
     return testing.allocator.dupe(u8, out.written());
 }
 

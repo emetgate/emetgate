@@ -357,7 +357,8 @@ test "summary: the parse error line appears only when a scanned file had parse e
     try testing.expect(with.has("\n1 of the 2 scanned file(s) had parse errors; tree-based checks there may be incomplete\n"));
 }
 
-const JsonViolation = struct { rule: []const u8, check: []const u8, file: []const u8, line: u32, col: u32, text: []const u8 };
+const JsonViolation = struct { rule: []const u8, check: []const u8, file: []const u8, line: u32, col: u32, end_line: u32, end_col: u32, text: []const u8 };
+const JsonFailure = struct { rule: []const u8, check: []const u8, file: []const u8, detail: []const u8, output: []const u8 };
 const JsonUnreadable = struct { file: []const u8, @"error": []const u8 };
 const JsonScan = struct {
     status: []const u8,
@@ -367,6 +368,7 @@ const JsonScan = struct {
     unsupported: usize,
     unreadable: []const JsonUnreadable,
     parse_errors: []const []const u8,
+    check_failures: []const JsonFailure,
     violations: []const JsonViolation,
 };
 
@@ -406,6 +408,8 @@ test "scan: --json is one parseable line carrying the same report" {
     try testing.expectEqualStrings("a.ts", first.file);
     try testing.expectEqual(@as(u32, 2), first.line);
     try testing.expectEqual(@as(u32, 3), first.col);
+    try testing.expectEqual(@as(u32, 2), first.end_line);
+    try testing.expectEqual(@as(u32, 14), first.end_col);
     try testing.expectEqualStrings("networkidle", first.text);
     try testing.expectEqualStrings("b.js", report.violations[1].file);
     try testing.expectEqual(@as(u32, 7), report.violations[1].col);
@@ -415,7 +419,7 @@ test "scan: --json is one parseable line carrying the same report" {
     const clean_outcome = try runScan(&clean, &.{ "--check", "forbid:networkidle", "--json" });
     defer clean_outcome.deinit();
     try testing.expectEqual(@as(u8, 0), clean_outcome.code);
-    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"out_of_scope\":0,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"violations\":[]}\n", clean_outcome.out);
+    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"out_of_scope\":0,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"check_failures\":[],\"violations\":[]}\n", clean_outcome.out);
 }
 
 test "scan: a malformed ledger rule stops the scan before any file and names the rule" {
