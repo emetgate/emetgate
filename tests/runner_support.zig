@@ -103,14 +103,4 @@ pub const TwoFile = struct {
     }
 };
 
-pub fn printResult(result: anytype) void {
-    switch (result) {
-        .rejected, .typecheck_failed => |report| switch (report.outcome) {
-            .exited, .crashed => |code| std.debug.print("result={t} outcome={t} code=0x{X:0>8} killed_leftovers={} stderr={s}\n", .{ result, report.outcome, code, report.killed_leftovers, report.stderr }),
-            .timed_out, .output_limit => std.debug.print("result={t} outcome={t} stderr={s}\n", .{ result, report.outcome, report.stderr }),
-        },
-        .committed, .rule_violation, .rule_check_failed => std.debug.print("result={t}\n", .{result}),
-    }
-}
-
 pub const crash_command = "exit -1073741502";

@@ -1,5 +1,6 @@
 const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const symbol = @import("emetgate").symbol;
 const runner = @import("emetgate").runner;
@@ -261,6 +262,7 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
             .trace = &trace,
         });
         defer result.deinit(testing.allocator);
+        errdefer diagnostics.printResult(result);
         try testing.expect(result == .committed);
         try testing.expectEqual(runner.chooseGate(trace.confidence.?, c.scoped != null), trace.gate.?);
         try testing.expectEqual(c.expected, trace.gate.?);

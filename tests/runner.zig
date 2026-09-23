@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const runner = @import("emetgate").runner;
 const symbol = @import("emetgate").symbol;
@@ -21,7 +22,6 @@ const support = @import("runner_support.zig");
 const Repo = support.Repo;
 const TwoFile = support.TwoFile;
 const hashOfRef = support.hashOfRef;
-const printResult = support.printResult;
 const crash_command = support.crash_command;
 
 const testing = std.testing;
@@ -46,6 +46,7 @@ test "a batch commits every file when the shared test passes" {
     };
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 
     const a = try repo.readA();
@@ -184,6 +185,7 @@ test "gate: a BOUNDED mutation runs the scoped command against {file}, not the f
         .test_scoped_cmd = "type {file}",
     });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 
     const on_disk = try repo.read();
@@ -234,6 +236,7 @@ test "a passing test commits the mutation to disk" {
     });
     defer result.deinit(testing.allocator);
 
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     const on_disk = try repo.read();
     defer testing.allocator.free(on_disk);
@@ -313,6 +316,7 @@ test "test command defaults from .emetgaterc.json when the caller omits it" {
         .test_command = cmd,
     });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 }
 
@@ -398,13 +402,13 @@ test "typecheck: it checks the patched shadow copy and only then runs the test c
             .typecheck_command = typecheck,
         });
         defer result.deinit(testing.allocator);
-        errdefer printResult(result);
+        errdefer diagnostics.printResult(result);
         try testing.expectEqual(c.expected, std.meta.activeTag(result));
     }
 }
 
 fn expectCrash(result: anytype, stage: std.meta.Tag(@TypeOf(result)), reason: []const u8) !void {
-    errdefer printResult(result);
+    errdefer diagnostics.printResult(result);
     try testing.expectEqual(stage, std.meta.activeTag(result));
     const report = switch (result) {
         .rejected, .typecheck_failed => |report| report,

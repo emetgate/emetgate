@@ -5,12 +5,6 @@ const Allocator = std.mem.Allocator;
 
 pub const Gate = enum { full, scoped };
 
-// Safety-valve default (no scoped cmd): boundedness is telemetry, not control —
-// BOUNDED and UNBOUNDED both run the full test_command, behavior unchanged; teeth
-// come only from the scoped path. The scoped path is a softer guarantee: it trusts
-// the runner's related-test (import-graph) heuristic, blind to dynamic import / DI /
-// reflection. Prefer the full command when tests reach code dynamically; scoped is
-// a trade-off the user opts into explicitly. Fast-path opens only for BOUNDED.
 pub fn chooseGate(confidence: boundedness.Confidence, has_scoped: bool) Gate {
     if (confidence == .bounded and has_scoped) return .scoped;
     return .full;

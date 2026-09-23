@@ -934,7 +934,6 @@ test "recover refuses a journal target that escapes the repo via .. (A hardening
     defer testing.allocator.free(root);
 
     const mal = "export const PWNED = 1;\n";
-    // the .bak lives in the repo's PARENT, named for the escaping target
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "pwned.ts.emetgate-" ++ recover_tag ++ ".bak", .data = mal });
     var target_buf: [std.fs.max_path_bytes]u8 = undefined;
     const target = try std.fmt.bufPrint(&target_buf, "{s}\\..\\pwned.ts", .{root});

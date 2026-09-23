@@ -1,5 +1,6 @@
 const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const symbol = @import("emetgate").symbol;
@@ -338,6 +339,7 @@ test "purple C4: a committed mutation leaves no temp or backup artifacts" {
         .test_command = "cmd /c exit 0",
     });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     try testing.expect(!try repo.hasSibling(".tmp"));
     try testing.expect(!try repo.hasSibling(".bak"));
@@ -467,7 +469,6 @@ test "purple recover #3 (A): a journal target outside the repo is refused" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
-    // forged journal whose target escapes the repo root entirely
     try tmp.dir.createDirPath(testing.io, ".emetgate/journal");
     try tmp.dir.writeFile(testing.io, .{ .sub_path = ".emetgate/journal/" ++ tag_a ++ ".json", .data = "{\"target\":\"C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts\",\"base_hash\":\"" ++ "af1349b9f5f9a1a6a0404dea36dcc949" ++ "\"}" });
 
@@ -484,7 +485,6 @@ test "purple recover #4 (C): a backup whose content does not match base_hash is 
     defer testing.allocator.free(root);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.emetgate-" ++ tag_a ++ ".bak", .data = "export const STOLEN = 1;\n" });
-    // journal claims the original hash, but the .bak content is attacker-controlled
     try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
 
     const report = try disk.recover(testing.allocator, testing.io, root);
@@ -794,6 +794,7 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
 
     const committed = try respondWith(runtime, line, .{ .allow_repo_config = true, .root = repo.root_abs });
     defer testing.allocator.free(committed);
+    errdefer std.debug.print("response={s}\n", .{committed});
     try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"committed\\\"") != null);
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);
