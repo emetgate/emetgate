@@ -3308,6 +3308,173 @@
       "kills": [
         "serve policy comes only from the command line emetgate was started with"
       ]
+    },
+    {
+      "id": "Q1-scope-keeps-nodes-that-leave-the-span",
+      "file": "src/engine/query.zig",
+      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;",
+      "to": "if (node.startByte() > node.endByte()) continue;",
+      "kills": [
+        "q: only nodes wholly inside the span are reported",
+        "real case: a call inside the orchestrator is caught and the same call elsewhere stays out of scope"
+      ]
+    },
+    {
+      "id": "Q2-pattern-without-violation-accepted",
+      "file": "src/engine/query.zig",
+      "from": "c.ts_query_capture_quantifier_for_id(raw, index, violation) == c.TSQuantifierZero",
+      "to": "false",
+      "kills": [
+        "q: every pattern must capture @violation"
+      ]
+    },
+    {
+      "id": "Q3-eq-predicate-ignored",
+      "file": "src/engine/query.zig",
+      "from": "if (same == p.negate) return false;",
+      "to": "if (same == p.negate and false) return false;",
+      "kills": [
+        "q: #eq? and #not-eq? compare a capture with a string",
+        "q: #eq? and #not-eq? compare two captures",
+        "real case: priceFloat in a comment is not a use, a real read or call is"
+      ]
+    },
+    {
+      "id": "Q4-any-of-predicate-ignored",
+      "file": "src/engine/query.zig",
+      "from": "} else return false;",
+      "to": "}",
+      "kills": [
+        "q: #any-of? accepts a capture equal to one of the strings"
+      ]
+    },
+    {
+      "id": "Q5-match-predicate-ignored",
+      "file": "src/engine/query.zig",
+      "from": "budget) == p.negate) return false;",
+      "to": "budget) == p.negate and false) return false;",
+      "kills": [
+        "q: #match? and #not-match? run the regex over the capture's text"
+      ]
+    },
+    {
+      "id": "Q6-unknown-predicate-accepted",
+      "file": "src/engine/query.zig",
+      "from": "if (std.mem.eql(u8, entry[0], name)) break entry[1];",
+      "to": "if (entry[0].len != 0) break entry[1];",
+      "kills": [
+        "q: an unknown predicate or any directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q7-directive-not-named",
+      "file": "src/engine/query.zig",
+      "from": "if (std.mem.endsWith(u8, name, \"!\")) {",
+      "to": "if (false) {",
+      "kills": [
+        "q: an unknown predicate or any directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q8-regex-backreference-read-as-literal",
+      "file": "src/engine/regex.zig",
+      "from": "'1'...'9' => self.unsupported(\"backreference\", at, 2),",
+      "to": "'1'...'9' => self.single(ch),",
+      "kills": [
+        "regex refuses every construct outside the subset by name",
+        "rule: a q: check without @violation, with an unknown predicate or a directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q9-regex-lazy-quantifier-not-named",
+      "file": "src/engine/regex.zig",
+      "from": "if (after == '?') return self.unsupported(\"lazy quantifier\", at, 2);",
+      "to": "",
+      "kills": [
+        "regex refuses every construct outside the subset by name"
+      ]
+    },
+    {
+      "id": "Q10-cursor-budget-ignored",
+      "file": "src/engine/query.zig",
+      "from": "if (self.budget.* < cost) {",
+      "to": "if (false) {",
+      "kills": [
+        "q: a query that outruns its operation budget fails instead of passing"
+      ]
+    },
+    {
+      "id": "Q11-regex-budget-ignored",
+      "file": "src/engine/regex.zig",
+      "from": "if (budget.* == 0) return error.BudgetExceeded;",
+      "to": "if (false) return error.BudgetExceeded;",
+      "kills": [
+        "running out of budget is an error and never a miss",
+        "q: regex work counts against the same budget",
+        "redteam query: a q: rule that outruns its budget rejects the proposal and is not a violation"
+      ]
+    },
+    {
+      "id": "Q12-match-limit-ignored",
+      "file": "src/engine/query.zig",
+      "from": "if (c.ts_query_cursor_did_exceed_match_limit(self.cursor)) {",
+      "to": "if (false) {",
+      "kills": [
+        "q: dropping in-progress matches past the match limit fails instead of passing",
+        "redteam query: a q: rule past the match limit rejects the proposal and is not a violation"
+      ]
+    },
+    {
+      "id": "Q13-query-length-cap-doubled",
+      "file": "src/engine/query.zig",
+      "from": "if (text.len > max_query_bytes) return error.QueryTooLong;",
+      "to": "if (text.len > max_query_bytes * 2) return error.QueryTooLong;",
+      "kills": [
+        "q: the query text is capped at 4 KB",
+        "rule: a q: check at the length limit fits the ledger field, one byte over is refused"
+      ]
+    },
+    {
+      "id": "Q14-language-mismatch-reported-as-malformed",
+      "file": "src/engine/checks.zig",
+      "from": "error.QueryNotForLanguage else error.QueryMalformed",
+      "to": "error.QueryMalformed else error.QueryMalformed",
+      "kills": [
+        "conformance: a q: query over a node only one grammar has is a named failure elsewhere",
+        "redteam query: a q: rule the file's grammar cannot compile rejects the proposal by name",
+        "rule: scan reports a q: check that does not compile for a file's language apart from violations"
+      ]
+    },
+    {
+      "id": "Q15-unrunnable-check-passes-silently",
+      "file": "src/platform/rules.zig",
+      "from": "=> |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),",
+      "to": "=> continue,",
+      "kills": [
+        "redteam query: a q: rule that outruns its budget rejects the proposal and is not a violation",
+        "redteam query: a q: rule past the match limit rejects the proposal and is not a violation",
+        "redteam query: a q: rule the file's grammar cannot compile rejects the proposal by name",
+        "redteam query: a hand-edited ledger row with a malformed q: query fails closed",
+        "rule: scan reports a q: check that does not compile for a file's language apart from violations"
+      ]
+    },
+    {
+      "id": "Q16-query-that-compiles-nowhere-accepted",
+      "file": "src/engine/checks.zig",
+      "from": "if (!any) return results[0].err.?;",
+      "to": "",
+      "kills": [
+        "rule: a q: check that compiles for no language is refused and writes nothing"
+      ]
+    },
+    {
+      "id": "Q17-scan-check-failure-exits-as-violation",
+      "file": "src/protocol/scan_command.zig",
+      "from": "if (result.check_failures.len > 0) return check_failed_exit_code;",
+      "to": "",
+      "kills": [
+        "rule: scan reports a q: check that does not compile for a file's language apart from violations"
+      ]
     }
   ]
 }
