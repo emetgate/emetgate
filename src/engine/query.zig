@@ -288,8 +288,8 @@ pub fn run(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, limit
             try out.append(gpa, .{ .start = node.startByte(), .end = node.endByte() });
         }
     }
+    _ = progress.spend(0);
     if (progress.stopped) |err| return err;
-    if (c.ts_query_cursor_did_exceed_match_limit(cursor)) return error.QueryMatchLimitExceeded;
     dedupe(out, first);
 }
 
