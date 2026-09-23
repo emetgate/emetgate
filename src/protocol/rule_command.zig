@@ -131,9 +131,16 @@ fn explainQuery(gpa: Allocator, decided: Decided, err_out: *Writer) !void {
         try writeProblem(err_out, err, result.diag);
         return;
     }
+    const kept = for (results) |result| {
+        if (result.err == null) break true;
+    } else false;
     for (results) |result| {
         const err = result.err orelse continue;
-        try err_out.print("q: does not compile for {s}; files in that language fail the check by name: ", .{result.profile.name});
+        if (kept) {
+            try err_out.print("q: does not compile for {s}; files in that language fail the check by name: ", .{result.profile.name});
+        } else {
+            try err_out.print("q: does not compile for {s}: ", .{result.profile.name});
+        }
         try writeProblem(err_out, err, result.diag);
     }
 }

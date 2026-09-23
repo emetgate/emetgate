@@ -542,7 +542,7 @@ test "rule: a q: check that compiles for one language is kept and the other lang
     defer explained.deinit();
     try testing.expect(explained.failure == null);
     try testing.expectEqual(@as(usize, 18), explained.out.len);
-    try testing.expect(std.mem.indexOf(u8, explained.err_out, "q: does not compile for javascript") != null);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "q: does not compile for javascript; files in that language fail the check by name") != null);
     try testing.expect(std.mem.indexOf(u8, explained.err_out, "QueryNodeType") != null);
     try testing.expect(std.mem.indexOf(u8, explained.err_out, "\"type_annotation\"") != null);
     try testing.expect(std.mem.indexOf(u8, explained.err_out, "typescript") == null);
@@ -563,6 +563,7 @@ test "rule: a q: check that compiles for no language is refused and writes nothi
     try testing.expectEqual(@as(?anyerror, error.QueryNodeType), explained.failure);
     try testing.expect(std.mem.indexOf(u8, explained.err_out, "does not compile for typescript") != null);
     try testing.expect(std.mem.indexOf(u8, explained.err_out, "does not compile for javascript") != null);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "fail the check by name") == null);
     try testing.expectEqual(@as(u8, 19), wire.exitCode(error.QueryNodeType));
     try expectLedgerUntouched(&repo);
 }

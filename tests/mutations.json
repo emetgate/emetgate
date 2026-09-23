@@ -3569,6 +3569,15 @@
       "kills": [
         "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38"
       ]
+    },
+    {
+      "id": "Q27-rule-add-promises-a-check-it-refuses",
+      "file": "src/protocol/rule_command.zig",
+      "from": "        if (kept) {\n",
+      "to": "        if (true) {\n",
+      "kills": [
+        "rule: a q: check that compiles for no language is refused and writes nothing"
+      ]
     }
   ]
 }
