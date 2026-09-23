@@ -14,6 +14,8 @@ A useful report includes:
 
 You will get a first reply within a week. When a report is confirmed, the fix and the reproduction are published together, the way [issue-driven findings are already written up](https://emetgate.dev/blog). Credit is given unless you ask otherwise.
 
+Past findings and their fixes are listed in the README under [Security history](README.md#security-history).
+
 ## Supported versions
 
 Emetgate is early. Only the latest commit on `main` is supported; there are no maintained release branches yet.
