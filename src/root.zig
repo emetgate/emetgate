@@ -12,6 +12,8 @@ pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");
 pub const query = @import("engine/query.zig");
 pub const lang_registry = @import("engine/lang/registry.zig");
+pub const lang_profile = @import("engine/lang/profile.zig");
+pub const test_util = @import("engine/test_util.zig");
 pub const session = @import("platform/session.zig");
 pub const shadow = @import("platform/shadow.zig");
 pub const sandbox = @import("platform/sandbox.zig");
@@ -29,6 +31,8 @@ pub const rule_command = @import("protocol/rule_command.zig");
 pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
 pub const telemetry = @import("protocol/telemetry.zig");
+pub const handlers = @import("protocol/handlers.zig");
+pub const read_tools = @import("protocol/read_tools.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

@@ -1,14 +1,14 @@
 const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
-const runner = @import("../src/platform/runner.zig");
-const shadow = @import("../src/platform/shadow.zig");
-const memory = @import("../src/platform/memory.zig");
-const symbol = @import("../src/engine/symbol.zig");
-const server = @import("../src/protocol/server.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
-const Snapshot = @import("../src/engine/loader.zig").Snapshot;
-const query_tests = @import("query.zig");
+const runner = @import("emetgate").runner;
+const shadow = @import("emetgate").shadow;
+const memory = @import("emetgate").memory;
+const symbol = @import("emetgate").symbol;
+const server = @import("emetgate").server;
+const Runtime = @import("emetgate").runtime.Runtime;
+const Snapshot = @import("emetgate").loader.Snapshot;
+const query_cases = @import("query_cases.zig");
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -259,7 +259,7 @@ test "redteam ledger: a q: rule in a committed ledger never runs without --allow
     try clone.commitLedger();
 
     const started = std.Io.Timestamp.now(testing.io, .awake);
-    try testing.expectError(error.UntrustedRepoMemory, clone.propose(runtime, query_tests.wide_body, false));
+    try testing.expectError(error.UntrustedRepoMemory, clone.propose(runtime, query_cases.wide_body, false));
     const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
     try testing.expect(elapsed_ms < 10_000);
     try clone.expectPristine();

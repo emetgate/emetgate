@@ -1,4 +1,4 @@
-const Kind = @import("../../src/engine/symbol.zig").Kind;
+const Kind = @import("emetgate").symbol.Kind;
 
 pub const Member = struct {
     ref: []const u8,

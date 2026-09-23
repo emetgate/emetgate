@@ -1,15 +1,16 @@
 const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
+const query_cases = @import("query_cases.zig");
 const builtin = @import("builtin");
-const runner = @import("../src/platform/runner.zig");
-const rules = @import("../src/platform/rules.zig");
-const memory = @import("../src/platform/memory.zig");
-const wire = @import("../src/protocol/wire.zig");
-const symbol = @import("../src/engine/symbol.zig");
-const checks = @import("../src/engine/checks.zig");
-const lang = @import("../src/engine/lang/registry.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
-const Snapshot = @import("../src/engine/loader.zig").Snapshot;
+const runner = @import("emetgate").runner;
+const rules = @import("emetgate").rules;
+const memory = @import("emetgate").memory;
+const wire = @import("emetgate").wire;
+const symbol = @import("emetgate").symbol;
+const checks = @import("emetgate").checks;
+const lang = @import("emetgate").lang_registry;
+const Runtime = @import("emetgate").runtime.Runtime;
+const Snapshot = @import("emetgate").loader.Snapshot;
 
 const testing = std.testing;
 
@@ -48,11 +49,9 @@ const hb_source =
 
 const hb_query = "q:((call_expression function: (identifier) @violation) (#eq? @violation \"scrapeHepsiburadaApi\"))";
 
-pub const repeated_capture_query = "q:((statement_block (_)+ @violation) (#eq? @violation @violation))";
-
-pub const many_captures_query = "q:((statement_block" ++ " (_) @violation ." ** 200 ++ " (_) @violation) (#eq? @violation @violation))";
-
-pub const wide_body = "{\n" ++ "  a;\n" ** 20_000 ++ "}";
+const repeated_capture_query = query_cases.repeated_capture_query;
+const many_captures_query = query_cases.many_captures_query;
+const wide_body = query_cases.wide_body;
 
 const Hits = struct {
     texts: [][]const u8,

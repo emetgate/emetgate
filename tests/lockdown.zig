@@ -1,5 +1,5 @@
 const std = @import("std");
-const lockdown = @import("../src/platform/lockdown.zig");
+const lockdown = @import("emetgate").lockdown;
 
 const testing = std.testing;
 

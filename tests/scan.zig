@@ -1,9 +1,9 @@
 const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
-const scan = @import("../src/platform/scan.zig");
-const scan_command = @import("../src/protocol/scan_command.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
+const scan = @import("emetgate").scan;
+const scan_command = @import("emetgate").scan_command;
+const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
 const Allocating = std.Io.Writer.Allocating;

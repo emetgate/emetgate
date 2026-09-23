@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const memory = @import("../src/platform/memory.zig");
-const shadow = @import("../src/platform/shadow.zig");
+const memory = @import("emetgate").memory;
+const shadow = @import("emetgate").shadow;
 
 const testing = std.testing;
 

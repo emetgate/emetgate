@@ -46,8 +46,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    const test_module = testModule(b, .{ .target = target, .optimize = optimize, .c_module = c_module, .tree_sitter = tree_sitter, .probe = probe, .bench = false });
-    const bench_module = testModule(b, .{ .target = target, .optimize = optimize, .c_module = c_module, .tree_sitter = tree_sitter, .probe = probe, .bench = true });
+    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .tree_sitter = tree_sitter, .probe = probe };
+    const src_tests = srcModule(b, common, false);
+    const src_bench = srcModule(b, common, true);
 
     const exe = b.addExecutable(.{
         .name = "emetgate",
@@ -65,25 +66,23 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run the emetgate CLI").dependOn(&run_exe.step);
 
     const test_filters = b.option([]const []const u8, "test-filter", "Only run tests whose name contains one of these strings; skips the CLI e2e cases") orelse &.{};
-    const tests = b.addTest(.{ .root_module = test_module, .filters = test_filters });
-    const run_tests = b.addRunArtifact(tests);
-    run_tests.setCwd(b.path("."));
     const test_step = b.step("test", "Run unit and end-to-end tests");
-    test_step.dependOn(&run_tests.step);
+    addTestRun(b, test_step, b.addTest(.{ .name = "test-unit", .root_module = src_tests, .filters = test_filters }));
+    for (test_suites) |suite| {
+        const name = b.fmt("test-{s}", .{suite});
+        addTestRun(b, test_step, b.addTest(.{ .name = name, .root_module = suiteModule(b, common, src_tests, suite), .filters = test_filters }));
+    }
 
-    const timing_tests = b.addTest(.{
-        .name = "timing-tests",
-        .root_module = test_module,
-        .filters = test_filters,
-        .test_runner = .{ .path = b.path("tools/timing_test_runner.zig"), .mode = .simple },
-    });
-    const run_timing = b.addRunArtifact(timing_tests);
-    run_timing.setCwd(b.path("."));
-    run_timing.has_side_effects = true;
-    if (b.args) |args| run_timing.addArgs(args);
-    b.step("test-timing", "Run the unit tests one by one and print the slowest tests and per-suite totals").dependOn(&run_timing.step);
+    const fast_step = b.step("test-fast", "Run the engine unit tests only: no git, no sandbox, no child process");
+    addTestRun(b, fast_step, b.addTest(.{ .name = "test-fast", .root_module = src_tests, .filters = &.{"engine."} }));
 
-    const bench_tests = b.addTest(.{ .name = "bench-tests", .root_module = bench_module, .filters = &.{ "apply/rollback cycles", "rollback latency" } });
+    const timing_step = b.step("test-timing", "Run every test one by one in one process and print the slowest tests and per-suite totals");
+    const timing_unit = timingRun(b, b.addTest(.{ .name = "timing-unit", .root_module = src_tests, .filters = test_filters, .test_runner = .{ .path = b.path("tools/timing_test_runner.zig"), .mode = .simple } }));
+    const timing_suites = timingRun(b, b.addTest(.{ .name = "timing-suites", .root_module = suiteModule(b, common, src_tests, "all"), .filters = test_filters, .test_runner = .{ .path = b.path("tools/timing_test_runner.zig"), .mode = .simple } }));
+    timing_suites.step.dependOn(&timing_unit.step);
+    timing_step.dependOn(&timing_suites.step);
+
+    const bench_tests = b.addTest(.{ .name = "bench-tests", .root_module = src_bench, .filters = &.{ "apply/rollback cycles", "rollback latency" } });
     const run_bench = b.addRunArtifact(bench_tests);
     run_bench.setCwd(b.path("."));
     run_bench.has_side_effects = true;
@@ -121,31 +120,65 @@ pub fn build(b: *std.Build) void {
     b.step("e2e-lockdown", "Launch a real claude through emetgate lockdown and check its tool list (spends tokens)").dependOn(&run_lockdown.step);
 }
 
+const test_suites = [_][]const u8{ "runner", "runner_rules", "scan", "redteam", "purple", "query", "rule", "rest" };
+
 const TestModuleOptions = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     c_module: *std.Build.Module,
     tree_sitter: *std.Build.Step.Compile,
     probe: *std.Build.Step.Compile,
-    bench: bool,
 };
 
-fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
-    const build_options = b.addOptions();
-    build_options.addOptionPath("probe_path", options.probe.getEmittedBin());
-    build_options.addOption(bool, "bench", options.bench);
+fn buildOptions(b: *std.Build, options: TestModuleOptions, suite: []const u8, bench: bool) *std.Build.Module {
+    const values = b.addOptions();
+    values.addOptionPath("probe_path", options.probe.getEmittedBin());
+    values.addOption(bool, "bench", bench);
+    values.addOption([]const u8, "suite", suite);
+    values.addOption([]const []const u8, "suites", &test_suites);
+    return values.createModule();
+}
+
+fn srcModule(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.Module {
     const module = b.createModule(.{
-        .root_source_file = b.path("test_root.zig"),
+        .root_source_file = b.path("src/root.zig"),
         .target = options.target,
         .optimize = options.optimize,
         .link_libc = true,
         .imports = &.{
             .{ .name = "c", .module = options.c_module },
-            .{ .name = "build_options", .module = build_options.createModule() },
+            .{ .name = "build_options", .module = buildOptions(b, options, "unit", bench) },
         },
     });
     module.linkLibrary(options.tree_sitter);
     return module;
+}
+
+fn suiteModule(b: *std.Build, options: TestModuleOptions, src: *std.Build.Module, suite: []const u8) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("test_root.zig"),
+        .target = options.target,
+        .optimize = options.optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "emetgate", .module = src },
+            .{ .name = "build_options", .module = buildOptions(b, options, suite, false) },
+        },
+    });
+}
+
+fn addTestRun(b: *std.Build, step: *std.Build.Step, compiled: *std.Build.Step.Compile) void {
+    const run = b.addRunArtifact(compiled);
+    run.setCwd(b.path("."));
+    step.dependOn(&run.step);
+}
+
+fn timingRun(b: *std.Build, compiled: *std.Build.Step.Compile) *std.Build.Step.Run {
+    const run = b.addRunArtifact(compiled);
+    run.setCwd(b.path("."));
+    run.has_side_effects = true;
+    if (b.args) |args| run.addArgs(args);
+    return run;
 }
 
 const e2e_fixture = "tests/fixtures/functions.ts";

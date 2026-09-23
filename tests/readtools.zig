@@ -1,9 +1,9 @@
 const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
-const server = @import("../src/protocol/server.zig");
-const read_tools = @import("../src/protocol/read_tools.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
+const server = @import("emetgate").server;
+const read_tools = @import("emetgate").read_tools;
+const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
 const Value = std.json.Value;

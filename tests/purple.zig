@@ -2,14 +2,14 @@ const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const symbol = @import("../src/engine/symbol.zig");
-const disk = @import("../src/platform/disk.zig");
-const shadow = @import("../src/platform/shadow.zig");
-const sandbox = @import("../src/platform/sandbox.zig");
-const runner = @import("../src/platform/runner.zig");
-const server = @import("../src/protocol/server.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
-const Snapshot = @import("../src/engine/loader.zig").Snapshot;
+const symbol = @import("emetgate").symbol;
+const disk = @import("emetgate").disk;
+const shadow = @import("emetgate").shadow;
+const sandbox = @import("emetgate").sandbox;
+const runner = @import("emetgate").runner;
+const server = @import("emetgate").server;
+const Runtime = @import("emetgate").runtime.Runtime;
+const Snapshot = @import("emetgate").loader.Snapshot;
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
@@ -857,6 +857,7 @@ test "purple C6: an MCP batch frees every resolved path with its real size" {
 
     const response = try respondWith(runtime, line.written(), .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
+    errdefer std.debug.print("response: {s}\n", .{response});
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);
