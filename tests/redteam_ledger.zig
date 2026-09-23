@@ -1,4 +1,5 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const shadow = @import("../src/platform/shadow.zig");
@@ -35,10 +36,8 @@ const Clone = struct {
         try shadow.grantLowIntegrityWrite(drop_abs);
         const file_abs = try std.fmt.allocPrint(gpa, "{s}\\src\\math.ts", .{root_abs});
         errdefer gpa.free(file_abs);
+        try git_fixture.initRepo(root_abs);
         for ([_][]const []const u8{
-            &.{ "init", "-q" },
-            &.{ "config", "user.email", "t@t" },
-            &.{ "config", "user.name", "t" },
             &.{ "add", "." },
             &.{ "commit", "-q", "-m", "init" },
         }) |args| try git(root_abs, args);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const server = @import("../src/protocol/server.zig");
 const read_tools = @import("../src/protocol/read_tools.zig");
@@ -226,9 +227,7 @@ fn matchedFile(parsed: Value, name: []const u8) bool {
 }
 
 fn commitAll(root: []const u8) !void {
-    try gitIn(root, &.{ "init", "-q" });
-    try gitIn(root, &.{ "config", "user.email", "t@t" });
-    try gitIn(root, &.{ "config", "user.name", "t" });
+    try git_fixture.initRepo(root);
     try gitIn(root, &.{ "add", "." });
     try gitIn(root, &.{ "commit", "-q", "-m", "init" });
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const rules = @import("../src/platform/rules.zig");
@@ -135,10 +136,8 @@ const Repo = struct {
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.js", .data = js_source });
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
+        try git_fixture.initRepo(root_abs);
         inline for (.{
-            &.{ "init", "-q" },
-            &.{ "config", "user.email", "t@t" },
-            &.{ "config", "user.name", "t" },
             &.{ "add", "." },
             &.{ "commit", "-q", "-m", "init" },
         }) |args| try git(root_abs, args);

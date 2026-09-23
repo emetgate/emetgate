@@ -1,4 +1,5 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const memory = @import("../src/platform/memory.zig");
 const checks = @import("../src/engine/checks.zig");
@@ -34,9 +35,7 @@ const Repo = struct {
         }
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
-        try git(root_abs, &.{ "init", "-q" });
-        try git(root_abs, &.{ "config", "user.email", "t@t" });
-        try git(root_abs, &.{ "config", "user.name", "t" });
+        try git_fixture.initRepo(root_abs);
         try git(root_abs, &.{ "add", "." });
         try git(root_abs, &.{ "commit", "-q", "--allow-empty", "-m", "init" });
         return .{ .tmp = tmp, .root_abs = root_abs };
