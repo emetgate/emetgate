@@ -81,9 +81,10 @@ const Clone = struct {
         if (!std.mem.eql(u8, rel, canonical)) {
             const bytes = try self.tmp.dir.readFileAlloc(testing.io, "repo/" ++ canonical, gpa, .unlimited);
             defer gpa.free(bytes);
-            try self.tmp.dir.deleteFile(testing.io, "repo/" ++ canonical);
+            try self.tmp.dir.deleteTree(testing.io, "repo/" ++ shadow.workspace_dir);
             const target = try std.fmt.allocPrint(gpa, "repo/{s}", .{rel});
             defer gpa.free(target);
+            try self.tmp.dir.createDirPath(testing.io, std.fs.path.dirname(target).?);
             try self.tmp.dir.writeFile(testing.io, .{ .sub_path = target, .data = bytes });
         }
         try git(self.root_abs, &.{ "add", "-f", "--", rel });
@@ -170,7 +171,7 @@ test "redteam ledger: a committed ledger spelled in another case is still untrus
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
     try clone.adoptMarkerRule();
-    try clone.commitLedgerAs(shadow.workspace_dir ++ "/Ledger.NDJSON");
+    try clone.commitLedgerAs(".EMETGATE/Ledger.NDJSON");
 
     try testing.expectError(error.UntrustedRepoMemory, clone.propose(runtime, edited_body, false));
     try clone.expectNoMarker();

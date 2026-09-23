@@ -3223,7 +3223,7 @@
       "id": "RM10-command-gate-forces-trust",
       "file": "src/platform/runner.zig",
       "from": ".allow_repo_memory = allow_repo_memory });",
-      "to": ".allow_repo_memory = true });",
+      "to": ".allow_repo_memory = allow_repo_memory or true });",
       "kills": [
         "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
       ]
