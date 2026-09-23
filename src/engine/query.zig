@@ -634,6 +634,16 @@ test "q: a match that captured no node is skipped instead of crashing" {
     try expectFound("f(a);\n", "(arguments (identifier)? @violation)", &.{"a"});
 }
 
+test "q: a predicate on a capture that caught no node holds, as in tree-sitter's own bindings" {
+    const source = "f();\ng(x);\nh(y);\n";
+    const head = "((call_expression function: (identifier) @violation arguments: (arguments . (identifier)? @a)) ";
+    try expectFound(source, head ++ "(#eq? @a \"x\"))", &.{ "f", "g" });
+    try expectFound(source, head ++ "(#not-eq? @a \"x\"))", &.{ "f", "h" });
+    try expectFound(source, head ++ "(#any-of? @a \"y\"))", &.{ "f", "h" });
+    try expectFound(source, head ++ "(#match? @a \"^x$\"))", &.{ "f", "g" });
+    try expectFound(source, head ++ "(#eq? @a @violation))", &.{"f"});
+}
+
 test "q: odd query text is refused or run, never a crash" {
     const odd = [_][]const u8{
         "((identifier) @violation (#))",
