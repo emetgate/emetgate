@@ -3475,6 +3475,15 @@
       "kills": [
         "rule: scan reports a q: check that does not compile for a file's language apart from violations"
       ]
+    },
+    {
+      "id": "Q18-empty-match-captures-sliced",
+      "file": "src/engine/query.zig",
+      "from": "if (match.capture_count == 0) &[_]c.TSQueryCapture{} else match.captures[0..match.capture_count];",
+      "to": "match.captures[0..match.capture_count];",
+      "kills": [
+        "q: a match that captured no node is skipped instead of crashing"
+      ]
     }
   ]
 }

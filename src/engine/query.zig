@@ -275,7 +275,7 @@ pub fn run(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, limit
     var match: c.TSQueryMatch = undefined;
     while (c.ts_query_cursor_next_match(cursor, &match)) {
         if (progress.spend(operations_per_callback)) break;
-        const captures = match.captures[0..match.capture_count];
+        const captures = if (match.capture_count == 0) &[_]c.TSQueryCapture{} else match.captures[0..match.capture_count];
         const holds = satisfies(gpa, query.patterns[match.pattern_index], tree, captures, &budget) catch |err| switch (err) {
             error.BudgetExceeded => return error.QueryBudgetExceeded,
             error.OutOfMemory => return error.OutOfMemory,
@@ -474,6 +474,51 @@ test "q: #match? and #not-match? run the regex over the capture's text" {
 test "q: predicates on one pattern all have to hold" {
     const source = "fetchJson();\nfetchText();\npostJson();\n";
     try expectFound(source, "((call_expression function: (identifier) @violation) (#match? @violation \"^fetch\") (#not-eq? @violation \"fetchText\"))", &.{"fetchJson"});
+}
+
+test "q: a match that captured no node is skipped instead of crashing" {
+    try expectFound("f();\n", "(arguments (identifier)* @violation)", &.{});
+    try expectFound("f(a);\n", "(arguments (identifier)* @violation)", &.{"a"});
+}
+
+test "q: odd query text is refused or run, never a crash" {
+    const odd = [_][]const u8{
+        "((identifier) @violation (#))",
+        "((identifier) @violation (# @violation))",
+        "((identifier) @violation (#eq?))",
+        "((identifier) @violation (#\"eq?\" @violation \"x\"))",
+        "((identifier) @violation (#match? @violation \"\"))",
+        "((identifier) @violation (#any-of? @violation \"\"))",
+        "(_) @violation",
+        "(ERROR) @violation",
+        "(MISSING) @violation",
+        "[(identifier) (identifier)] @violation @violation",
+        "((_) @violation . (_) @violation)",
+        "(program . (_)? @violation .)",
+        "((identifier)+ @violation (#eq? @violation \"a\"))",
+        "\"return\" @violation",
+        "(_ \"(\" @violation)",
+        "",
+        "@violation",
+        "(",
+        ")",
+        "; comment only\n",
+    };
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(typescript.grammar());
+    defer parser.deinit();
+    const source = "function f(a: number) { return a(1, (2)); }\nconst x = [;\n";
+    const tree = try parser.parse(source);
+    defer tree.deinit();
+    for (odd) |text| {
+        errdefer std.debug.print("query: {s}\n", .{text});
+        var query = compile(testing.allocator, typescript.grammar(), text, null) catch continue;
+        defer query.deinit();
+        var spans: std.ArrayList(Span) = .empty;
+        defer spans.deinit(testing.allocator);
+        run(testing.allocator, &query, tree, whole(source), .{}, &spans) catch {};
+    }
 }
 
 test "q: a node reported by two patterns is reported once" {
