@@ -3315,8 +3315,7 @@
       "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;",
       "to": "if (node.startByte() > node.endByte()) continue;",
       "kills": [
-        "q: only nodes wholly inside the span are reported",
-        "real case: a call inside the orchestrator is caught and the same call elsewhere stays out of scope"
+        "q: only nodes wholly inside the span are reported"
       ]
     },
     {
