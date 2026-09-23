@@ -521,3 +521,56 @@ test "harness: every mutation's from text occurs in its file as the harness woul
     }
     try testing.expectEqual(@as(usize, 0), stale);
 }
+
+fn collectTestNames(dir_path: []const u8, names: *std.StringHashMapUnmanaged(void), arena: std.mem.Allocator) !void {
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, dir_path, .{ .iterate = true });
+    defer dir.close(testing.io);
+    var it = dir.iterate();
+    while (try it.next(testing.io)) |entry| {
+        const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ dir_path, entry.name });
+        switch (entry.kind) {
+            .directory => try collectTestNames(path, names, arena),
+            .file => {
+                if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
+                const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(4 * 1024 * 1024));
+                var lines = std.mem.splitScalar(u8, source, '\n');
+                while (lines.next()) |line| {
+                    if (!std.mem.startsWith(u8, line, "test \"")) continue;
+                    var name: std.ArrayList(u8) = .empty;
+                    var i: usize = "test \"".len;
+                    while (i < line.len and line[i] != '"') : (i += 1) {
+                        if (line[i] == '\\' and i + 1 < line.len) i += 1;
+                        try name.append(arena, line[i]);
+                    }
+                    try names.put(arena, name.items, {});
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+test "harness: every test a mutation expects to kill exists by that exact name" {
+    const Entry = struct { id: []const u8, expect: []const u8 = "test", kills: []const []const u8 = &.{} };
+    const Spec = struct { mutations: []const Entry };
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const spec_bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/mutations.json", arena, .limited(1024 * 1024));
+    const spec = try std.json.parseFromSliceLeaky(Spec, arena, spec_bytes, .{ .ignore_unknown_fields = true });
+
+    var names: std.StringHashMapUnmanaged(void) = .empty;
+    for ([_][]const u8{ "src", "tests", "tools" }) |dir| try collectTestNames(dir, &names, arena);
+    try testing.expect(names.count() > 500);
+
+    var unknown: usize = 0;
+    for (spec.mutations) |m| {
+        if (!std.mem.eql(u8, m.expect, "test")) continue;
+        for (m.kills) |kill| {
+            if (names.contains(kill)) continue;
+            std.debug.print("mutation {s} expects to kill a test that does not exist: {s}\n", .{ m.id, kill });
+            unknown += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), unknown);
+}
