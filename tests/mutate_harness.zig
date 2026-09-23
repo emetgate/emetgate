@@ -497,3 +497,27 @@ test "harness: an interrupted mutation is restored from the journal on the next 
     }
     try testing.expect((try journal.recover(testing.allocator, tmp.dir)) == null);
 }
+
+test "harness: every mutation's from text occurs in its file as the harness would apply it" {
+    const Entry = struct { id: []const u8, file: []const u8, from: []const u8, to: []const u8, all: bool = false };
+    const Spec = struct { mutations: []const Entry };
+    const cwd = std.Io.Dir.cwd();
+    const spec_bytes = try cwd.readFileAlloc(testing.io, "tests/mutations.json", testing.allocator, .limited(1024 * 1024));
+    defer testing.allocator.free(spec_bytes);
+    const spec = try std.json.parseFromSlice(Spec, testing.allocator, spec_bytes, .{ .ignore_unknown_fields = true });
+    defer spec.deinit();
+    try testing.expect(spec.value.mutations.len > 0);
+
+    var stale: usize = 0;
+    for (spec.value.mutations) |m| {
+        const source = try cwd.readFileAlloc(testing.io, m.file, testing.allocator, .limited(core.max_source_bytes));
+        defer testing.allocator.free(source);
+        const mutated = core.applyMutation(testing.allocator, source, m.from, m.to, m.all) catch |err| {
+            std.debug.print("stale mutation {s} in {s}: {s}\n", .{ m.id, m.file, @errorName(err) });
+            stale += 1;
+            continue;
+        };
+        testing.allocator.free(mutated);
+    }
+    try testing.expectEqual(@as(usize, 0), stale);
+}
