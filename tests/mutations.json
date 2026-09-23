@@ -3551,6 +3551,15 @@
       "kills": [
         "q: more than eight captures in one pattern are refused, predicate arguments do not count"
       ]
+    },
+    {
+      "id": "F2-internal-path-checked-only-after-resolving",
+      "file": "src/platform/repo.zig",
+      "from": "    try refuseInternalAsWritten(gpa, io, served, path);\n",
+      "to": "",
+      "kills": [
+        "read tools refuse .git internals in a git worktree, where .git is a file"
+      ]
     }
   ]
 }
