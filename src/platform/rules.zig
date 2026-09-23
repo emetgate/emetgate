@@ -119,6 +119,8 @@ pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
     defer for (list.items) |v| freeViolation(gpa, v);
+    var lines: ?Lines = null;
+    defer if (lines) |l| l.deinit(gpa);
 
     for (rules) |rule| {
         const found = checks.run(gpa, profile, tree, span, &.{rule.check}) catch |err| switch (err) {
@@ -126,9 +128,10 @@ pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
             else => |e| return e,
         };
         defer gpa.free(found);
+        if (found.len > 0 and lines == null) lines = try Lines.init(gpa, tree.source);
         for (found) |hit| {
-            const start = position(tree.source, hit.span.start);
-            const end = position(tree.source, hit.span.end);
+            const start = lines.?.position(hit.span.start);
+            const end = lines.?.position(hit.span.end);
             const owned = try ownViolation(gpa, rule, file, start, end, tree.source[hit.span.start..hit.span.end]);
             list.append(gpa, owned) catch |err| {
                 freeViolation(gpa, owned);
@@ -152,6 +155,34 @@ pub fn unrunnableDetail(err: checks.Unrunnable) []const u8 {
 }
 
 const Position = struct { line: u32, col: u32 };
+
+const Lines = struct {
+    starts: []u32,
+
+    fn init(gpa: Allocator, source: []const u8) Allocator.Error!Lines {
+        var starts: std.ArrayList(u32) = .empty;
+        errdefer starts.deinit(gpa);
+        try starts.append(gpa, 0);
+        for (source, 0..) |byte, i| {
+            if (byte == '\n') try starts.append(gpa, @intCast(i + 1));
+        }
+        return .{ .starts = try starts.toOwnedSlice(gpa) };
+    }
+
+    fn deinit(self: Lines, gpa: Allocator) void {
+        gpa.free(self.starts);
+    }
+
+    fn position(self: Lines, offset: u32) Position {
+        var lo: usize = 0;
+        var hi: usize = self.starts.len;
+        while (hi - lo > 1) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.starts[mid] <= offset) lo = mid else hi = mid;
+        }
+        return .{ .line = @intCast(lo + 1), .col = offset - self.starts[lo] + 1 };
+    }
+};
 
 fn position(source: []const u8, offset: u32) Position {
     var line: u32 = 1;
@@ -480,6 +511,18 @@ fn evaluateSource(source: []const u8, span: Span, rules: []const Rule) !?Report 
     const t = try test_util.TestTree.init(source);
     defer t.deinit();
     return reportOf(try evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules));
+}
+
+test "the line index gives the same line and column as a scan from the start, at every offset" {
+    for ([_][]const u8{ "", "\n", "a", "ab\ncd\n\nef", "x\r\ny\r\n", "şğ\nü\n" }) |source| {
+        const lines = try Lines.init(testing.allocator, source);
+        defer lines.deinit(testing.allocator);
+        var offset: u32 = 0;
+        while (offset <= source.len) : (offset += 1) {
+            errdefer std.debug.print("source \"{s}\" offset {d}\n", .{ source, offset });
+            try testing.expectEqual(position(source, offset), lines.position(offset));
+        }
+    }
 }
 
 pub fn reportOf(gated: Gate) !?Report {
