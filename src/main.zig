@@ -36,7 +36,7 @@ const usage =
     \\has no mcp tool for adopting, superseding or forgetting a rule.
     \\
     \\A ledger committed to git (.emetgate/ledger.ndjson) came with the clone:
-    \\its cmd: rules never run unless try/mcp is started with --allow-repo-memory;
+    \\its cmd: and q: rules never run unless try/mcp is started with --allow-repo-memory;
     \\a proposal they cover is refused with UntrustedRepoMemory instead.
     \\
     \\lockdown starts claude with only ToolSearch and the .mcp.json servers
