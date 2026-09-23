@@ -1,20 +1,3 @@
-//! Reference-boundedness analysis (Option B, pure tree-sitter, zero dependency).
-//!
-//! Consumption model (this sets the soundness bar):
-//! BOUNDED is a proof that the blast radius of a mutation stays entirely inside
-//! one file, and it alone permits the file-local test gate; UNBOUNDED forces the
-//! full-project test gate. Therefore BOUNDED is produced ONLY by positively
-//! counting EVERY reference to the symbol and proving each is a safe in-file
-//! direct call — a single unrecognized reference shape drops the result to
-//! UNBOUNDED.
-//!
-//! Closed-world ordering (the core invariant): every symbol starts UNBOUNDED.
-//! BOUNDED is reached only through explicit proof branches; every default/else
-//! and every analysis error stays UNBOUNDED. This is a positive whitelist
-//! (prove good), never a blacklist of known-bad escape patterns — an incomplete
-//! blacklist would silently leak false-BOUNDED, which equals an unverified
-//! breaking change reaching disk.
-
 const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const symbol = @import("symbol.zig");
@@ -326,8 +309,6 @@ test "precision: a helper declared inside an exported function body is not itsel
 }
 
 test "whitelist proof: a reference shape outside the escape blacklist still UNBOUNDED" {
-    // returning the symbol as a value is neither eval/string-key nor a call argument,
-    // yet positive enumeration must still refuse it as an unrecognized reference.
     try expectUnbounded(
         \\function process(x: number): number { return x; }
         \\function wrap(): unknown { return process; }

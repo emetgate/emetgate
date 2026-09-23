@@ -470,7 +470,6 @@ test "purple recover #3 (A): a journal target outside the repo is refused" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
-    // forged journal whose target escapes the repo root entirely
     try tmp.dir.createDirPath(testing.io, ".emetgate/journal");
     try tmp.dir.writeFile(testing.io, .{ .sub_path = ".emetgate/journal/" ++ tag_a ++ ".json", .data = "{\"target\":\"C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts\",\"base_hash\":\"" ++ "af1349b9f5f9a1a6a0404dea36dcc949" ++ "\"}" });
 
@@ -487,7 +486,6 @@ test "purple recover #4 (C): a backup whose content does not match base_hash is 
     defer testing.allocator.free(root);
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = new_a });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts.emetgate-" ++ tag_a ++ ".bak", .data = "export const STOLEN = 1;\n" });
-    // journal claims the original hash, but the .bak content is attacker-controlled
     try writeJournal(&tmp, root, tag_a, "a.ts", &symbol.formatHash(symbol.hashOf(orig_a)));
 
     const report = try disk.recover(testing.allocator, testing.io, root);
