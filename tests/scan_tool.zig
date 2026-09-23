@@ -3,6 +3,8 @@ const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const server = @import("emetgate").server;
 const Runtime = @import("emetgate").runtime.Runtime;
+const handlers = @import("emetgate").handlers;
+const telemetry = @import("emetgate").telemetry;
 
 const testing = std.testing;
 const Value = std.json.Value;
@@ -242,4 +244,27 @@ test "scan tool: a call creates no workspace and leaves the ledger untouched" {
     var count: usize = 0;
     while (try it.next(testing.io)) |_| count += 1;
     try testing.expectEqual(@as(usize, 1), count);
+}
+
+test "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{ .{ "src/a.ts", "export function f(x: number) {\n  return x;\n}\n" }, .{ "src/b.js", "export function g(x) {\n  return x;\n}\n" } });
+    defer repo.deinit();
+    var reply = try call(&repo, .{ .check = "q:(type_annotation) @violation" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("check_failed", reply.field("status").string);
+    try testing.expectEqual(@as(usize, 1), reply.field("check_failures").array.items.len);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
+    var args: std.json.ObjectMap = .empty;
+    defer args.deinit(testing.allocator);
+    try args.put(testing.allocator, "check", .{ .string = "q:(type_annotation) @violation" });
+    var event: telemetry.Event = .{ .tool = "emetgate_scan" };
+    const result = try handlers.callTool(testing.allocator, testing.io, runtime, "emetgate_scan", .{ .object = args }, &event, .{ .root = repo.root_abs });
+    defer testing.allocator.free(result.text);
+    try testing.expect(result.is_error);
+    try testing.expectEqual(telemetry.Outcome.failed, event.outcome);
+    try testing.expectEqualStrings("CheckFailed", event.result.?);
 }

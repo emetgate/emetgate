@@ -100,7 +100,10 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
         if (!options.json) try out.print("{t}: {s}\n", .{ error.NothingInScope, nothing_in_scope_message });
         return wire.exitCode(error.NothingInScope);
     }
-    if (result.check_failures.len > 0) return check_failed_exit_code;
+    if (result.check_failures.len > 0) {
+        refuse(options, error.CheckFailed);
+        return check_failed_exit_code;
+    }
     return if (result.violations.len == 0) 0 else violations_exit_code;
 }
 

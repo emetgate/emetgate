@@ -3470,7 +3470,7 @@
     {
       "id": "Q17-scan-check-failure-exits-as-violation",
       "file": "src/protocol/scan_command.zig",
-      "from": "if (result.check_failures.len > 0) return check_failed_exit_code;",
+      "from": "    if (result.check_failures.len > 0) {\n        refuse(options, error.CheckFailed);\n        return check_failed_exit_code;\n    }\n",
       "to": "",
       "kills": [
         "rule: scan reports a q: check that does not compile for a file's language apart from violations"
@@ -3559,6 +3559,15 @@
       "to": "",
       "kills": [
         "read tools refuse .git internals in a git worktree, where .git is a file"
+      ]
+    },
+    {
+      "id": "Q26-mcp-scan-check-failure-reported-as-success",
+      "file": "src/protocol/scan_command.zig",
+      "from": "        refuse(options, error.CheckFailed);\n",
+      "to": "",
+      "kills": [
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38"
       ]
     }
   ]
