@@ -200,6 +200,7 @@ pub const low_integrity_rid: u32 = 0x1000;
 
 pub const TokenStep = enum { open, restrict, label, spawn_as_user, verify };
 pub var injected_fault: ?TokenStep = null;
+var last_stop_emptied: ?bool = null;
 
 fn faulted(step: TokenStep) bool {
     return builtin.is_test and injected_fault == step;
@@ -651,7 +652,8 @@ const Job = struct {
 
     fn stop(self: Job) void {
         self.terminate();
-        _ = self.outlasts(null, win.stop_wait_ms);
+        const emptied = !self.outlasts(null, win.stop_wait_ms);
+        if (builtin.is_test) last_stop_emptied = emptied;
     }
 
     fn close(self: Job) void {
@@ -806,11 +808,13 @@ fn processIsGoneNow(pid: u32) bool {
 
 test "a timed out run returns only after every process in its job has exited" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
+    last_stop_emptied = null;
     const report = try probe(&.{"grandchild"}, .{ .timeout_ms = 1500 });
     defer report.deinit(testing.allocator);
     errdefer printReport(report);
 
     try testing.expectEqual(Outcome.timed_out, report.outcome);
+    try testing.expectEqual(@as(?bool, true), last_stop_emptied);
     const pid = try std.fmt.parseInt(u32, std.mem.trim(u8, report.stdout, " \r\n"), 10);
     try testing.expect(processIsGoneNow(pid));
 }

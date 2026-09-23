@@ -3358,8 +3358,8 @@
     {
       "id": "LW6-stop-does-not-wait",
       "file": "src/platform/sandbox.zig",
-      "from": "        _ = self.outlasts(null, win.stop_wait_ms);\n",
-      "to": "        _ = self.outlasts(null, 0);\n",
+      "from": "        const emptied = !self.outlasts(null, win.stop_wait_ms);\n",
+      "to": "        const emptied = !self.outlasts(null, 0);\n",
       "kills": [
         "a timed out run returns only after every process in its job has exited"
       ]
