@@ -28,6 +28,7 @@ Anything that breaks one of the guarantees the kernel claims:
 - **Content addressing**: writing over a symbol whose hash no longer matches, or a hash collision that the gate accepts.
 - **Atomicity**: a crash or a race that leaves a torn file, or a journal that replays into an unprovable state.
 - **Jail**: reading or writing outside the served repository through any MCP tool.
+- **Repository ledger trust**: a `cmd:` rule from a ledger tracked by git (`.emetgate/ledger.ndjson`, under any spelling) running without `--allow-repo-memory`, or the model supplying that opt-in through a tool call.
 
 ## Known limits, not vulnerabilities
 
