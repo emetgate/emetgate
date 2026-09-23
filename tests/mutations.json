@@ -3021,8 +3021,8 @@
     {
       "id": "CMD3-command-cwd-is-the-real-repo",
       "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits)) |gated| return gated;",
-      "to": "if (try runCommandRules(gpa, io, root, root, targets, options.limits)) |gated| return gated;",
+      "from": "if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "to": "if (try runCommandRules(gpa, io, root, root, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
       ]
