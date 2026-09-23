@@ -132,7 +132,7 @@ pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
         for (found) |hit| {
             const start = lines.?.position(hit.span.start);
             const end = lines.?.position(hit.span.end);
-            const owned = try ownViolation(gpa, rule, file, start, end, tree.source[hit.span.start..hit.span.end]);
+            const owned = try ownViolation(gpa, rule, file, start, end, shown(tree.source[hit.span.start..hit.span.end]));
             list.append(gpa, owned) catch |err| {
                 freeViolation(gpa, owned);
                 return err;
@@ -152,6 +152,15 @@ pub fn unrunnableDetail(err: checks.Unrunnable) []const u8 {
         error.QueryBudgetExceeded => "query_budget_exceeded",
         error.QueryMatchLimitExceeded => "query_match_limit_exceeded",
     };
+}
+
+pub const max_violation_text = 256;
+
+fn shown(text: []const u8) []const u8 {
+    if (text.len <= max_violation_text) return text;
+    var len: usize = max_violation_text;
+    while (len > 0 and text[len] & 0xC0 == 0x80) len -= 1;
+    return text[0..len];
 }
 
 const Position = struct { line: u32, col: u32 };
@@ -511,6 +520,23 @@ fn evaluateSource(source: []const u8, span: Span, rules: []const Rule) !?Report 
     const t = try test_util.TestTree.init(source);
     defer t.deinit();
     return reportOf(try evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules));
+}
+
+test "a violation's text is cut to 256 bytes on a character boundary, its position still spans the node" {
+    const long = "x" ** 255 ++ "ş" ++ "y" ** 100;
+    const source = "export function f() {\n  return \"" ++ long ++ "\";\n}\n";
+    const start: u32 = @intCast(std.mem.indexOf(u8, source, "{").?);
+    const report = (try evaluateSource(source, .{ .start = start, .end = @intCast(source.len) }, &.{.{ .id = "r", .check = "q:(string) @violation" }})) orelse return error.TestExpectedViolation;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    const v = report.violations[0];
+    try testing.expectEqualStrings("\"" ++ "x" ** 255, v.text);
+    try testing.expectEqual(@as(u32, 2), v.line);
+    try testing.expectEqual(@as(u32, 2), v.end_line);
+    try testing.expectEqual(@as(u32, 10 + long.len + 2), v.end_col);
+    try testing.expectEqualStrings(shown(long), "x" ** 255);
+    try testing.expectEqualStrings(shown("short"), "short");
+    try testing.expectEqualStrings(shown("a" ** 254 ++ "ş"), "a" ** 254 ++ "ş");
 }
 
 test "the line index gives the same line and column as a scan from the start, at every offset" {
