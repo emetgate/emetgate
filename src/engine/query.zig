@@ -52,7 +52,9 @@ pub const Diagnostic = struct {
 
     fn set(self: *Diagnostic, what: []const u8, at_text: []const u8) void {
         self.what = what;
-        self.len = @min(at_text.len, self.buffer.len);
+        var len = @min(at_text.len, self.buffer.len);
+        while (len > 0 and len < at_text.len and at_text[len] & 0xC0 == 0x80) len -= 1;
+        self.len = len;
         @memcpy(self.buffer[0..self.len], at_text[0..self.len]);
     }
 
@@ -558,6 +560,16 @@ test "q: tree-sitter compile errors keep their kind and point at the offending t
     try expectCompileError("(no_such_node) @violation", error.QueryNodeType, "no_such_node");
     try expectCompileError("(call_expression no_such_field: (identifier)) @violation", error.QueryField, "no_such_field:");
     try expectCompileError("((identifier) @violation (#eq? @other \"x\"))", error.QueryCapture, "other");
+}
+
+test "q: a diagnostic cut to its buffer ends on a whole character" {
+    var diag: Diagnostic = .{};
+    const text = "a" ** 63 ++ "ş" ++ "tail";
+    diag.set("x", text);
+    try testing.expectEqualStrings("a" ** 63, diag.at());
+    diag.set("x", "a" ** 62 ++ "ş");
+    try testing.expectEqualStrings("a" ** 62 ++ "ş", diag.at());
+    try expectCompileError("((identifier) @violation (#match? @violation \"[ş-a]\"))", error.RegexSyntax, "ş-a");
 }
 
 test "q: every pattern must capture @violation" {

@@ -183,8 +183,23 @@ const Parser = struct {
     pos: usize = 0,
 
     fn fail(self: *Parser, err: Error, what: []const u8, at: usize, len: usize) Error {
-        if (self.diag) |d| d.* = .{ .what = what, .at = self.pattern[at..@min(self.pattern.len, at + len)] };
+        if (self.diag) |d| {
+            var start = @min(at, self.pattern.len);
+            while (start > 0 and start < self.pattern.len and isContinuation(self.pattern[start])) start -= 1;
+            var end = @min(self.pattern.len, at + len);
+            while (end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;
+            d.* = .{ .what = what, .at = self.pattern[start..end] };
+        }
         return err;
+    }
+
+    fn invalidUtf8(self: *Parser) Error {
+        if (self.diag) |d| d.* = .{ .what = "invalid UTF-8", .at = "" };
+        return error.RegexSyntax;
+    }
+
+    fn isContinuation(byte: u8) bool {
+        return byte & 0xC0 == 0x80;
     }
 
     fn unsupported(self: *Parser, what: []const u8, at: usize, len: usize) Error {
@@ -294,6 +309,8 @@ const Parser = struct {
     fn groupKind(rest: []const u8) []const u8 {
         if (std.mem.startsWith(u8, rest, "?=") or std.mem.startsWith(u8, rest, "?!")) return "lookahead";
         if (std.mem.startsWith(u8, rest, "?<=") or std.mem.startsWith(u8, rest, "?<!")) return "lookbehind";
+        if (std.mem.startsWith(u8, rest, "?P=")) return "named backreference";
+        if (std.mem.startsWith(u8, rest, "?#")) return "comment";
         if (std.mem.startsWith(u8, rest, "?P<") or std.mem.startsWith(u8, rest, "?<")) return "named group";
         if (std.mem.startsWith(u8, rest, "?:")) return "non-capturing group; ( ) already does not capture";
         if (std.mem.startsWith(u8, rest, "?>")) return "atomic group";
@@ -301,9 +318,12 @@ const Parser = struct {
     }
 
     fn literal(self: *Parser) Error!u21 {
-        const step = decode(self.pattern[self.pos..]);
-        self.pos += step.len;
-        return step.code_point;
+        const rest = self.pattern[self.pos..];
+        const len = std.unicode.utf8ByteSequenceLength(rest[0]) catch return self.invalidUtf8();
+        if (len > rest.len) return self.invalidUtf8();
+        const code_point = std.unicode.utf8Decode(rest[0..len]) catch return self.invalidUtf8();
+        self.pos += len;
+        return code_point;
     }
 
     fn single(self: *Parser, code_point: u21) Error![]const Range {
@@ -331,6 +351,8 @@ const Parser = struct {
             'v' => self.single(0x0B),
             '1'...'9' => self.unsupported("backreference", at, 2),
             'b', 'B' => if (in_class) self.unsupported("escape inside a class", at, 2) else self.unsupported("word boundary", at, 2),
+            '<', '>' => if (in_class) self.single(ch) else self.unsupported("word boundary", at, 2),
+            '`', '\'' => if (in_class) self.single(ch) else self.unsupported("text anchor; use ^ or $", at, 2),
             'A', 'z', 'Z' => self.unsupported("text anchor; use ^ or $", at, 2),
             'p', 'P' => self.unsupported("unicode class", at, 2),
             'x', 'u', '0' => self.unsupported("numeric escape", at, 2),
@@ -340,6 +362,8 @@ const Parser = struct {
                 self.unsupported("unknown escape", at, 2)
             else if (ch < 0x80)
                 self.single(ch)
+            else if (!std.unicode.utf8ValidateSlice(self.pattern[at + 1 .. @min(self.pattern.len, at + 1 + (std.unicode.utf8ByteSequenceLength(ch) catch 1))]))
+                self.invalidUtf8()
             else
                 self.syntax("backslash before a non-ASCII character", at, 2),
         };
@@ -393,16 +417,19 @@ const Parser = struct {
             if (ch == '[' and self.pos + 1 < self.pattern.len and (self.pattern[self.pos + 1] == ':' or self.pattern[self.pos + 1] == '=' or self.pattern[self.pos + 1] == '.')) {
                 return self.unsupported("POSIX class", self.pos, 2);
             }
+            const lo_start = self.pos;
             const lo = try self.classAtom();
-            if (lo.len != 1 or lo[0].lo != lo[0].hi or self.peek() != '-' or self.pos + 1 >= self.pattern.len or self.pattern[self.pos + 1] == ']') {
+            const is_range = self.peek() == '-' and self.pos + 1 < self.pattern.len and self.pattern[self.pos + 1] != ']';
+            if (!is_range) {
                 try members.appendSlice(self.arena, lo);
                 continue;
             }
+            if (lo.len != 1 or lo[0].lo != lo[0].hi) return self.syntax("class shorthand as a range start", lo_start, self.pos + 1 - lo_start);
             const dash = self.pos;
             self.pos += 1;
             const hi = try self.classAtom();
-            if (hi.len != 1 or hi[0].lo != hi[0].hi) return self.syntax("class shorthand as a range end", dash, 2);
-            if (hi[0].lo < lo[0].lo) return self.syntax("range out of order", dash - 1, 3);
+            if (hi.len != 1 or hi[0].lo != hi[0].hi) return self.syntax("class shorthand as a range end", dash, self.pos - dash);
+            if (hi[0].lo < lo[0].lo) return self.syntax("range out of order", lo_start, self.pos - lo_start);
             try members.append(self.arena, .{ .lo = lo[0].lo, .hi = hi[0].lo });
         }
         self.pos += 1;
@@ -629,6 +656,62 @@ test "regex refuses malformed patterns as syntax errors" {
     try expectRefused("a\\", error.RegexSyntax, "trailing backslash");
     try expectRefused("(" ** (max_nesting + 1) ++ ")" ** (max_nesting + 1), error.RegexSyntax, "groups nested too deep");
     try expectMatch("(" ** max_nesting ++ "a" ++ ")" ** max_nesting, "a");
+}
+
+fn expectRefusedAt(pattern: []const u8, err: Error, what: []const u8, at: []const u8) !void {
+    try expectRefused(pattern, err, what);
+    var diag: Diagnostic = .{};
+    _ = Regex.compile(testing.allocator, pattern, &diag) catch {};
+    try testing.expectEqualStrings(at, diag.at);
+}
+
+test "regex refuses GNU and Vim word boundaries and buffer anchors instead of reading them as literals" {
+    try expectRefusedAt("\\<word", error.RegexUnsupported, "word boundary", "\\<");
+    try expectRefusedAt("word\\>", error.RegexUnsupported, "word boundary", "\\>");
+    try expectRefusedAt("\\`word", error.RegexUnsupported, "text anchor", "\\`");
+    try expectRefusedAt("word\\'", error.RegexUnsupported, "text anchor", "\\'");
+    try expectMatch("^[\\<\\>]+$", "<>");
+    try expectMatch("^[\\`\\']+$", "`'");
+}
+
+test "regex names a comment group and a named backreference by what they are" {
+    try expectRefused("(?#note)a", error.RegexUnsupported, "comment");
+    try expectRefused("a(?P=n)", error.RegexUnsupported, "named backreference");
+    try expectRefused("(?i)a", error.RegexUnsupported, "inline flags");
+}
+
+test "regex refuses a class shorthand as the start of a range, as RE2 does" {
+    try expectRefusedAt("[\\d-z]", error.RegexSyntax, "class shorthand as a range start", "\\d-");
+    try expectRefusedAt("[\\w-a]", error.RegexSyntax, "class shorthand as a range start", "\\w-");
+    try expectRefused("[\\s-\\d]", error.RegexSyntax, "class shorthand as a range start");
+    try expectMatch("^[\\d-]+$", "1-2");
+    try expectMatch("^[-\\d]+$", "-3");
+    try expectMatch("^[a-z\\d]+$", "a1");
+}
+
+test "regex refuses invalid UTF-8 in the pattern" {
+    try expectRefusedAt("a\xffb", error.RegexSyntax, "invalid UTF-8", "");
+    try expectRefusedAt("a\xe2\x82", error.RegexSyntax, "invalid UTF-8", "");
+    try expectRefusedAt("[\xc3]", error.RegexSyntax, "invalid UTF-8", "");
+    try expectRefusedAt("\\\xff", error.RegexSyntax, "invalid UTF-8", "");
+    try expectRefusedAt("\xed\xa0\x80", error.RegexSyntax, "invalid UTF-8", "");
+    try expectMatch("ş", "şu");
+}
+
+test "regex errors point at whole characters, never into the middle of one" {
+    try expectRefusedAt("[ş-a]", error.RegexSyntax, "range out of order", "ş-a");
+    try expectRefusedAt("\\ş", error.RegexSyntax, "backslash before a non-ASCII character", "\\ş");
+    try expectRefusedAt("(?<ş>a)", error.RegexUnsupported, "named group", "(?<ş");
+    try expectRefusedAt("a{ş}", error.RegexUnsupported, "counted repetition", "{");
+    for ([_][]const u8{ "[ş-a]", "\\ş", "(?<ş>a)", "(?Pş", "[ğ-a]", "a{ğ" }) |pattern| {
+        var diag: Diagnostic = .{};
+        if (Regex.compile(testing.allocator, pattern, &diag)) |re| {
+            re.deinit(testing.allocator);
+            return error.TestExpectedRefusal;
+        } else |_| {}
+        errdefer std.debug.print("pattern {s} at \"{s}\"\n", .{ pattern, diag.at });
+        try testing.expect(std.unicode.utf8ValidateSlice(diag.at));
+    }
 }
 
 test "regex reads invalid UTF-8 as replacement characters instead of failing" {
