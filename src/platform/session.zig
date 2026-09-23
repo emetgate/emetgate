@@ -267,11 +267,12 @@ test "baseHash is the hash of the bytes on disk at load time and survives applie
     try testing.expectEqual(on_disk, session.baseHash());
 }
 
-const cycles = 1000;
+const bench = @import("build_options").bench;
+const cycles = if (bench) 1000 else 10;
 const deep_depth = 64;
-const deep_repeats = 20;
+const deep_repeats = if (bench) 20 else 2;
 
-test "1000 apply/rollback cycles keep the bridge at its steady state and reach zero on close" {
+test "apply/rollback cycles keep the bridge at its steady state and reach zero on close" {
     const runtime = try test_util.openRuntime();
     var runtime_open = true;
     defer if (runtime_open) test_util.closeRuntime(runtime);

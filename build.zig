@@ -46,20 +46,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    const test_options = b.addOptions();
-    test_options.addOptionPath("probe_path", probe.getEmittedBin());
-
-    const test_module = b.createModule(.{
-        .root_source_file = b.path("test_root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "c", .module = c_module },
-            .{ .name = "build_options", .module = test_options.createModule() },
-        },
-    });
-    test_module.linkLibrary(tree_sitter);
+    const test_module = testModule(b, .{ .target = target, .optimize = optimize, .c_module = c_module, .tree_sitter = tree_sitter, .probe = probe, .bench = false });
+    const bench_module = testModule(b, .{ .target = target, .optimize = optimize, .c_module = c_module, .tree_sitter = tree_sitter, .probe = probe, .bench = true });
 
     const exe = b.addExecutable(.{
         .name = "emetgate",
@@ -95,6 +83,12 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_timing.addArgs(args);
     b.step("test-timing", "Run the unit tests one by one and print the slowest tests and per-suite totals").dependOn(&run_timing.step);
 
+    const bench_tests = b.addTest(.{ .name = "bench-tests", .root_module = bench_module, .filters = &.{ "apply/rollback cycles", "rollback latency" } });
+    const run_bench = b.addRunArtifact(bench_tests);
+    run_bench.setCwd(b.path("."));
+    run_bench.has_side_effects = true;
+    b.step("bench", "Run the session benchmarks at full size (1000 cycles), which the test step runs at 10").dependOn(&run_bench.step);
+
     const e2e_step = b.step("e2e", "Run CLI end-to-end tests");
     addEndToEndTests(b, exe, e2e_step);
     if (test_filters.len == 0) test_step.dependOn(e2e_step);
@@ -125,6 +119,33 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_lockdown.addArgs(args);
     run_lockdown.step.dependOn(b.getInstallStep());
     b.step("e2e-lockdown", "Launch a real claude through emetgate lockdown and check its tool list (spends tokens)").dependOn(&run_lockdown.step);
+}
+
+const TestModuleOptions = struct {
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    c_module: *std.Build.Module,
+    tree_sitter: *std.Build.Step.Compile,
+    probe: *std.Build.Step.Compile,
+    bench: bool,
+};
+
+fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
+    const build_options = b.addOptions();
+    build_options.addOptionPath("probe_path", options.probe.getEmittedBin());
+    build_options.addOption(bool, "bench", options.bench);
+    const module = b.createModule(.{
+        .root_source_file = b.path("test_root.zig"),
+        .target = options.target,
+        .optimize = options.optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "c", .module = options.c_module },
+            .{ .name = "build_options", .module = build_options.createModule() },
+        },
+    });
+    module.linkLibrary(options.tree_sitter);
+    return module;
 }
 
 const e2e_fixture = "tests/fixtures/functions.ts";
