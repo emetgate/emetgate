@@ -810,6 +810,7 @@ test "purple C7: tools/list never offers the model a test command or a repo opt-
     try testing.expect(std.mem.indexOf(u8, response, "\"test_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, response, "\"typecheck_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, response, "\"allow_repo_config\"") == null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"allow_repo_memory\"") == null);
 }
 
 test "purple C6: an MCP batch frees every resolved path with its real size" {

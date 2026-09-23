@@ -50,15 +50,22 @@ test "serve policy comes only from the command line emetgate was started with" {
     const empty = server.parsePolicy(&[_][]const u8{}).?;
     try testing.expect(empty.test_command == null);
     try testing.expect(!empty.allow_repo_config);
+    try testing.expect(!empty.allow_repo_memory);
 
     const full = server.parsePolicy(&[_][]const u8{ "--test", "npm test", "--allow-repo-config" }).?;
     try testing.expectEqualStrings("npm test", full.test_command.?);
     try testing.expect(full.allow_repo_config);
+    try testing.expect(!full.allow_repo_memory);
+
+    const memory = server.parsePolicy(&[_][]const u8{ "--test", "npm test", "--allow-repo-memory" }).?;
+    try testing.expect(memory.allow_repo_memory);
+    try testing.expect(!memory.allow_repo_config);
 
     try testing.expect(server.parsePolicy(&[_][]const u8{"--test"}) == null);
     try testing.expect(server.parsePolicy(&[_][]const u8{ "--test", "" }) == null);
     try testing.expect(server.parsePolicy(&[_][]const u8{ "--test", "a", "--test", "b" }) == null);
     try testing.expect(server.parsePolicy(&[_][]const u8{ "--allow-repo-config", "--allow-repo-config" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--allow-repo-memory", "--allow-repo-memory" }) == null);
     try testing.expect(server.parsePolicy(&[_][]const u8{"--bogus"}) == null);
 }
 

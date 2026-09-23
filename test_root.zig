@@ -14,5 +14,6 @@ test {
     _ = @import("tests/scan_tool.zig");
     _ = @import("tests/redteam_memory.zig");
     _ = @import("tests/redteam_sandbox.zig");
+    _ = @import("tests/redteam_ledger.zig");
     _ = @import("tests/lang/conformance.zig");
 }
