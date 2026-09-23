@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const symbol = @import("../src/engine/symbol.zig");
@@ -339,6 +340,7 @@ test "purple C4: a committed mutation leaves no temp or backup artifacts" {
         .test_command = "cmd /c exit 0",
     });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     try testing.expect(!try repo.hasSibling(".tmp"));
     try testing.expect(!try repo.hasSibling(".bak"));
@@ -795,6 +797,7 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
 
     const committed = try respondWith(runtime, line, .{ .allow_repo_config = true, .root = repo.root_abs });
     defer testing.allocator.free(committed);
+    errdefer std.debug.print("response={s}\n", .{committed});
     try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"committed\\\"") != null);
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);
@@ -858,6 +861,7 @@ test "purple C6: an MCP batch frees every resolved path with its real size" {
 
     const response = try respondWith(runtime, line.written(), .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
+    errdefer std.debug.print("response={s}\n", .{response});
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);

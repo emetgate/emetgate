@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const symbol = @import("../src/engine/symbol.zig");
 const runner = @import("../src/platform/runner.zig");
@@ -262,6 +263,7 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
             .trace = &trace,
         });
         defer result.deinit(testing.allocator);
+        errdefer diagnostics.printResult(result);
         try testing.expect(result == .committed);
         try testing.expectEqual(runner.chooseGate(trace.confidence.?, c.scoped != null), trace.gate.?);
         try testing.expectEqual(c.expected, trace.gate.?);

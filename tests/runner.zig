@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const symbol = @import("../src/engine/symbol.zig");
@@ -139,6 +140,7 @@ test "a batch commits every file when the shared test passes" {
     };
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 
     const a = try repo.readA();
@@ -277,6 +279,7 @@ test "gate: a BOUNDED mutation runs the scoped command against {file}, not the f
         .test_scoped_cmd = "type {file}",
     });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 
     const on_disk = try repo.read();
@@ -327,6 +330,7 @@ test "a passing test commits the mutation to disk" {
     });
     defer result.deinit(testing.allocator);
 
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     const on_disk = try repo.read();
     defer testing.allocator.free(on_disk);
@@ -406,6 +410,7 @@ test "test command defaults from .emetgaterc.json when the caller omits it" {
         .test_command = cmd,
     });
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 }
 
@@ -491,25 +496,15 @@ test "typecheck: it checks the patched shadow copy and only then runs the test c
             .typecheck_command = typecheck,
         });
         defer result.deinit(testing.allocator);
-        errdefer printResult(result);
+        errdefer diagnostics.printResult(result);
         try testing.expectEqual(c.expected, std.meta.activeTag(result));
-    }
-}
-
-fn printResult(result: anytype) void {
-    switch (result) {
-        .rejected, .typecheck_failed => |report| switch (report.outcome) {
-            .exited, .crashed => |code| std.debug.print("result={t} outcome={t} code=0x{X:0>8} killed_leftovers={} stderr={s}\n", .{ result, report.outcome, code, report.killed_leftovers, report.stderr }),
-            .timed_out, .output_limit => std.debug.print("result={t} outcome={t} stderr={s}\n", .{ result, report.outcome, report.stderr }),
-        },
-        .committed, .rule_violation, .rule_check_failed => std.debug.print("result={t}\n", .{result}),
     }
 }
 
 const crash_command = "exit -1073741502";
 
 fn expectCrash(result: anytype, stage: std.meta.Tag(@TypeOf(result)), reason: []const u8) !void {
-    errdefer printResult(result);
+    errdefer diagnostics.printResult(result);
     try testing.expectEqual(stage, std.meta.activeTag(result));
     const report = switch (result) {
         .rejected, .typecheck_failed => |report| report,
@@ -720,6 +715,7 @@ test "rules: a clean body still commits under an enforced rule" {
 
     const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 }
 
@@ -758,6 +754,7 @@ test "rules: a body without the forbidden text still commits under an enforced f
 
     const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 }
 
@@ -786,6 +783,7 @@ test "absent: a new top-level symbol is appended, committed, parses and joins th
 
     const result = try tryInsert(&repo, runtime, "sub", sub_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 
     const on_disk = try repo.read();
@@ -913,6 +911,7 @@ test "new file: absent on a missing file creates it, the shadow sees it, and it 
 
     const result = try tryNewFile(&repo, runtime, "src/mul.ts", "mul", mul_body, sees_mul);
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 
     const on_disk = try repo.tmp.dir.readFileAlloc(testing.io, "repo/src/mul.ts", testing.allocator, .unlimited);
@@ -934,11 +933,13 @@ test "new file: a later proposal to another file runs in a shadow that contains 
 
     const created = try tryNewFile(&repo, runtime, "src/mul.ts", "mul", mul_body, "exit 0");
     defer created.deinit(testing.allocator);
+    errdefer diagnostics.printResult(created);
     try testing.expect(created == .committed);
 
     const next = try tryAdd(&repo, runtime, clean_body, sees_mul);
     defer next.deinit(testing.allocator);
     errdefer if (next == .rejected) std.debug.print("second proposal: {t}\n", .{next.rejected.outcome});
+    errdefer diagnostics.printResult(next);
     try testing.expect(next == .committed);
 }
 
@@ -951,6 +952,7 @@ test "new file: absent on a file that already exists appends instead of overwrit
 
     const result = try tryNewFile(&repo, runtime, "src/math.ts", "mul", mul_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     const on_disk = try repo.read();
     defer testing.allocator.free(on_disk);
@@ -1083,6 +1085,7 @@ test "rules: unenforced, checkless and forgotten rules never block an edit" {
 
     const result = try tryAdd(&repo, runtime, commented_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 }
 
@@ -1165,6 +1168,7 @@ test "scope: a rule whose where names another file does not block the proposal" 
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const result = try tryAddUnder("src/other.ts");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 }
 
@@ -1183,6 +1187,7 @@ test "scope: at the gate a where naming a missing file or symbol blocks nothing 
     for ([_][]const u8{ "src/deleted.ts", "src/math.ts#gone", "lib/" }) |where| {
         const result = try tryAddUnder(where);
         defer result.deinit(testing.allocator);
+        errdefer diagnostics.printResult(result);
         try testing.expect(result == .committed);
     }
 }
@@ -1191,6 +1196,7 @@ test "scope: a symbol-scoped rule blocks only a proposal to that symbol" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const other = try tryAddUnder("src/math.ts#sub");
     defer other.deinit(testing.allocator);
+    errdefer diagnostics.printResult(other);
     try testing.expect(other == .committed);
 
     const same = try tryAddUnder("src/math.ts#add");
@@ -1221,6 +1227,7 @@ test "scope: a batch applies a symbol-scoped rule only to the edit of that symbo
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const outside = try batchUnder("src/a.ts#twice");
     defer outside.deinit(testing.allocator);
+    errdefer diagnostics.printResult(outside);
     try testing.expect(outside == .committed);
 
     const inside = try batchUnder("src/b.ts#twice");
@@ -1234,6 +1241,7 @@ test "scope: at the gate an excluded file is not blocked and a file left in scop
     for ([_][]const u8{ "src/ !src/math.ts", "src/ !*.ts", "src/ !src/" }) |where| {
         const result = try tryAddUnder(where);
         defer result.deinit(testing.allocator);
+        errdefer diagnostics.printResult(result);
         try testing.expect(result == .committed);
     }
     for ([_][]const u8{ "src/ !__tests__/", "src/ !*.test.ts", "src/ !src/other.ts", "src/math.ts#add !lib/" }) |where| {
@@ -1270,7 +1278,7 @@ fn expectNoProbe(repo: *Repo) !void {
 }
 
 fn expectRuleCheckFailed(result: runner.Result, id: []const u8, detail: []const u8) !void {
-    errdefer printResult(result);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .rule_check_failed);
     try testing.expectEqualStrings(id, result.rule_check_failed.rule);
     try testing.expectEqualStrings("src\\math.ts", result.rule_check_failed.file);
@@ -1309,6 +1317,7 @@ test "cmd rule: exit zero lets the proposal through to the tests and on to disk"
 
     const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 }
 
@@ -1323,6 +1332,7 @@ test "cmd rule: the command runs in the shadow copy, so its writes never reach t
 
     const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
 
     const on_disk = try repo.read();
@@ -1408,6 +1418,7 @@ test "cmd rule: a scope that excludes the file keeps the command from running at
 
     const result = try tryAdd(&repo, runtime, clean_body, "exit 0");
     defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     try expectNoProbe(&repo);
 }

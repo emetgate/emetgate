@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const shadow = @import("../src/platform/shadow.zig");
@@ -189,6 +190,7 @@ test "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run
 
     const result = try clone.propose(runtime, edited_body, true);
     defer result.deinit(gpa);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     try testing.expect(clone.markerExists());
     try clone.expectEdited();
@@ -205,6 +207,7 @@ test "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run
 
     const result = try clone.proposeBatch(runtime, true);
     defer result.deinit(gpa);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     try testing.expect(clone.markerExists());
     try clone.expectEdited();
@@ -220,6 +223,7 @@ test "redteam ledger: an untracked local ledger runs its cmd rule without the fl
 
     const result = try clone.propose(runtime, edited_body, false);
     defer result.deinit(gpa);
+    errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
     try testing.expect(clone.markerExists());
     try clone.expectEdited();
@@ -241,6 +245,7 @@ test "redteam ledger: static rules in a committed ledger still enforce without t
 
     const clean = try clone.propose(runtime, edited_body, false);
     defer clean.deinit(gpa);
+    errdefer diagnostics.printResult(clean);
     try testing.expect(clean == .committed);
 }
 

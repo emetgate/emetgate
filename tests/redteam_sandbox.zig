@@ -1,4 +1,5 @@
 const std = @import("std");
+const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const runner = @import("../src/platform/runner.zig");
 const shadow = @import("../src/platform/shadow.zig");
@@ -178,6 +179,7 @@ test "redteam sandbox: a passing test command cannot write outside the shadow, a
     defer gpa.free(run.before);
     defer run.result.deinit(gpa);
 
+    errdefer diagnostics.printResult(run.result);
     try testing.expect(run.result == .committed);
     try expectOnlyTargetChanged(&run.victim, run.before, "export function add(a: number, b: number): number {\n  return a - b;\n}\n");
 }
@@ -223,6 +225,7 @@ test "redteam sandbox: every failure to build the low-integrity token refuses to
         .limits = .{ .timeout_ms = 10_000 },
     });
     defer report.deinit(gpa);
+    errdefer diagnostics.printReport(report);
     try testing.expect(report.passed());
     try tmp.dir.access(testing.io, "ran.txt", .{});
 }
