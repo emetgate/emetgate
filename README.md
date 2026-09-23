@@ -106,7 +106,11 @@ returns `UnknownCheck`; it is not interpreted as a shell command.
 
 Every violation carries the rule id, the check, the file, `line` and `col` of its first
 byte, and `end_line` and `end_col` of its end. `end_col` is the column just past the last
-byte, as in SARIF. A `cmd:` violation has no position and reports 0 for all four.
+byte. Columns count bytes from 1; SARIF counts UTF-16 code units by default, so a column on a
+line with non-ASCII text has to be converted before it goes into a SARIF file. The violation's
+`text` is the node's text cut to its first 256 bytes, on a character boundary; the four
+positions still span the whole node. A `cmd:` violation has no position and reports 0 for all
+four.
 
 A `cmd:` command is validated when the rule is added. Empty, blank and over-long commands
 are refused, but the command is **not run** until a proposal is checked in a shadow copy.
@@ -182,6 +186,16 @@ only appears inside a comment. `forbid:` cannot make that distinction.
   compile for. At the gate the query is compiled against the edited file's language. If it does
   not compile there, the proposal is refused with `rule_check_crashed`, detail
   `query_not_for_language`. The rule is not skipped.
+- **Captures.** A capture may not be repeated with `+` or `*` (`(_)+ @c`, `((_) @c)*`), and a
+  pattern may hold at most 8 captures; arguments of a predicate do not count. The query is
+  refused with `QueryQuantifiedCapture` or `QueryTooManyCaptures` and the pattern is printed.
+  `?` and a repeat that captures nothing (`(arguments (_)+)`) are allowed. The reason is work
+  tree-sitter does inside its cursor that the operation budget cannot see: a repeated capture
+  copies its capture list for every child, so 20,000 children took 4 to 6.5 s in a ReleaseSafe
+  build (24 to 41 s in Debug), and one pattern with K captures grows about as K³ (231 captures
+  over 2,000 children: 53.6 s, ReleaseSafe). `@violation` already yields one match per node, so
+  a rule does not need either. A hand-edited ledger row that breaks a limit fails closed at the
+  gate as `query_malformed`.
 
 Predicates are evaluated by emetgate; tree-sitter only parses them.
 
@@ -193,22 +207,32 @@ Predicates are evaluated by emetgate; tree-sitter only parses them.
 | `#match? @c "regex"` | the regex matches somewhere in the capture's text |
 | `#not-match?` | the same arguments, negated |
 
-A capture that matched several nodes must satisfy the predicate for each of them. Any other
+A capture name used twice in a pattern holds several nodes, and each must satisfy the
+predicate. A capture under `?` that caught no node satisfies every predicate on it, as in
+tree-sitter's Rust binding and in Neovim, so a query ported from either reports the same nodes:
+`((call_expression arguments: (arguments . (identifier)? @a)) @violation (#eq? @a "x"))`
+reports `f()` as well as `g(x)`. Leave out the `?` to require the node. Any other
 predicate (`#is?`, `#lua-match?`, `#any-eq?` ...) is refused with `QueryUnknownPredicate`,
 and any directive (`#set!`, `#select-adjacent!` ...) with `QueryDirective`, both naming it.
 
 The regex is RE2 syntax run as a Thompson NFA: matching walks a set of states over the text,
-never backtracks, and takes time linear in the text. Supported: literals, `.` (any character
-but a newline), `[...]` and `[^...]`, `\d \w \s \D \W \S`, `^` and `$` (start and end of the
-capture's text), `* + ?`, `|` and `( )`. Anything else is refused with `RegexUnsupported`
-and its name: backreferences, lookahead, lookbehind, named and non-capturing groups, inline
-flags, lazy and possessive quantifiers, counted repetition `{n,m}` (escape a literal brace as
-`\{`), `\b`, `\A` and `\z`, `\p{...}`, numeric escapes and POSIX classes.
+never backtracks, and takes time linear in the text. It searches: `#match? @c "Api"` holds when
+`Api` occurs anywhere in the capture's text; anchor with `^` and `$`, which mean the start and
+end of the whole text (there is no multi-line mode). `\d \w \s` are ASCII only, as in RE2:
+`\w` is `[0-9A-Za-z_]`, so it does not match `ş`. Supported: literals, `.` (any character but
+a newline), `[...]` and `[^...]`, `\d \w \s \D \W \S`, `^` and `$`, `* + ?`, `|` and `( )`.
+Anything else is refused with `RegexUnsupported` and its name: backreferences and named
+backreferences, lookahead, lookbehind, named and non-capturing groups, comments `(?#...)`,
+inline flags, lazy and possessive quantifiers, counted repetition `{n,m}` (escape a literal
+brace as `\{`), word boundaries `\b`, `\<` and `\>`, text anchors `\A`, `\z`, `` \` `` and
+`\'`, `\p{...}`, numeric escapes and POSIX classes. A pattern that is not valid UTF-8, or a
+class shorthand used as a range end point (`[\d-z]`), is refused with `RegexSyntax`.
 
 | Limit | Value |
 |---|---|
 | query text | 4 KB including `q:`, as for `cmd:` (`QueryTooLong`) |
-| operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match) and the regex (1 per state visited) |
+| captures | at most 8 per pattern, none repeated with `+` or `*` |
+| operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited) and the other predicates (1 per capture visited, and 1 plus the bytes compared for each comparison) |
 | in-progress matches | 1024 |
 
 | Result | Meaning |
@@ -239,6 +263,19 @@ a 3,001-byte regex over a 20,000-character string, refused with `query_budget_ex
 The ReleaseSafe worst case in the third row is noise from the process start; its best paired
 difference was negative.
 
+`python tests/bench/query_growth.py` runs `emetgate scan --check q:...` for 22 query shapes
+(quantifiers, anchors, alternations, nesting, many captures, each predicate) over 6 source
+shapes (wide statement lists, argument lists and arrays; deep `a + a + ...`, `a.b.b...` and
+`f(f(...))` chains) at 2,000, 4,000, 8,000 and 16,000 elements, and flags every combination
+that grows faster than n^1.35. On a ReleaseSafe build, 123 of the 132 grow linearly. The
+other 9 are all on a deep left-leaning chain (`a + a + ... + a` or `a.b.b...b`, 16,000 levels):
+a pattern nested three levels deep (`(_ (_ (_) @violation))`, 10.9 s at 16,000), six levels
+deep (past 30 s), or anchored to a last child (`(_ (_) @violation .)`, 3.9 s). That time is
+spent inside tree-sitter's query cursor, grows with the depth of the tree, and is not stopped by
+the operation budget or the match limit; ordinary code is not that deep. Two costs of emetgate's
+own that the run found are fixed: violations were placed by rescanning the file from the
+start, and their text was copied whole, both n^2 on these inputs.
+
 ### Rules are readable by the model, never writable
 
 `emetgate_skeleton` returns, beside the outline, every adopted rule that covers that file:
@@ -258,21 +295,27 @@ The ledger lives in `.emetgate/ledger.ndjson`. If that file is tracked by git, i
 a clone: its rules are the repository author's, not yours. Emetgate treats it like
 `.emetgaterc.json` and does not run its commands until you opt in:
 
-| Ledger | `cmd:` rules | AST checks |
+| Ledger | `cmd:` and `q:` rules | AST checks |
 |---|---|---|
 | untracked (written by `emetgate rule` on this machine) | run | enforced |
-| tracked by git, no `--allow-repo-memory` | **never run**: a proposal a `cmd:` rule covers is refused with `UntrustedRepoMemory` (exit code 37) | enforced |
+| tracked by git, no `--allow-repo-memory` | **never run**: a proposal a `cmd:` or `q:` rule covers is refused with `UntrustedRepoMemory` (exit code 37) | enforced |
 | tracked by git, `try` or `mcp` started with `--allow-repo-memory` | run | enforced |
 
 "Tracked" means `git ls-files` lists `.emetgate/ledger.ndjson`, or `.emetgate` itself (for
 example as a symlink), under any spelling of case, since Windows opens `.EMETGATE/Ledger.ndjson`
 as the same file. The refusal fails closed: the proposal is rejected with a named error, not
-let through with the rule silently skipped. A `cmd:` rule whose `--in` scope does not cover the
-edit is not consulted, so it does not block. If git cannot answer, the proposal is rejected.
+let through with the rule silently skipped. A `cmd:` or `q:` rule whose `--in` scope does not
+cover the edit is not consulted, so it does not block. If git cannot answer, the proposal is
+rejected.
+
+A `q:` query runs in the emetgate process, and part of tree-sitter's work inside the query
+cursor is not visible to the operation budget (see the capture limits above). The limits keep
+the known cases small, but they are a guard for your own rules, not a proof about someone
+else's, so a committed ledger's `q:` rules wait for the flag like its commands.
 
 AST checks (`no_comment`, `forbid:`, `no_literal:`) from a tracked ledger stay enforced without
-the flag. They execute nothing: the most a hostile static rule can do is refuse an edit, and every
-rule is visible in `emetgate_skeleton` and `emetgate rule list`.
+the flag. They execute nothing and cost time linear in the body: the most a hostile one can do
+is refuse an edit, and every rule is visible in `emetgate_skeleton` and `emetgate rule list`.
 
 `--allow-repo-memory` is a startup flag of `emetgate try` and `emetgate mcp`. The model cannot
 grant it: a tool call that carries `allow_repo_memory` is refused with `ModelSuppliedTestPolicy`
@@ -368,7 +411,7 @@ The verification guarantees have the following limits:
 - **The quality of the test suite.** For unbounded changes the test gate is only as strong as the tests it runs.
 - **Mediation.** The guarantees hold for changes that go through the gate. Edits made by other tools bypass it, which is why lockdown exists.
 - **Sandbox scope.** The low-integrity token stops the test command from writing outside the shadow copy; it does not restrict reading or network access, so a hostile test command can still read files it has permission to read and reach the network. Confining those requires an AppContainer, which is planned.
-- **Repository ledger.** With `--allow-repo-memory`, a committed ledger's `cmd:` rules run under the same confinement as the test command: they cannot write outside the shadow copy, but they can read and reach the network. Pass the flag only for a ledger you have reviewed. Without the flag only execution is withheld; the text of every rule in a committed ledger is still shown to the model in `emetgate_skeleton`, so a hostile rule text is data the model reads, not a command anything runs.
+- **Repository ledger.** With `--allow-repo-memory`, a committed ledger's `cmd:` rules run under the same confinement as the test command: they cannot write outside the shadow copy, but they can read and reach the network. Its `q:` rules run in the emetgate process under the operation budget and the capture limits, which do not bound every cost inside tree-sitter's query cursor, so a hostile query can still slow each edit it covers. Pass the flag only for a ledger you have reviewed. Without the flag only execution is withheld; the text of every rule in a committed ledger is still shown to the model in `emetgate_skeleton`, so a hostile rule text is data the model reads, not a command anything runs.
 - **Taste.** Architecture, API design and user experience are not properties a kernel can check.
 
 ## Installing
