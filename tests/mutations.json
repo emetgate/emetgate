@@ -3614,6 +3614,15 @@
       "kills": [
         "regex errors point at whole characters, never into the middle of one"
       ]
+    },
+    {
+      "id": "Q32-violation-text-uncut",
+      "file": "src/platform/rules.zig",
+      "from": "shown(tree.source[hit.span.start..hit.span.end])",
+      "to": "tree.source[hit.span.start..hit.span.end]",
+      "kills": [
+        "a violation's text is cut to 256 bytes on a character boundary, its position still spans the node"
+      ]
     }
   ]
 }
