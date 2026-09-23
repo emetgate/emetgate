@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 pub const prefix = "q:";
 pub const max_query_bytes = 4 * 1024 - prefix.len;
 pub const violation_capture = "violation";
+pub const max_captures_per_pattern = 8;
 
 const operations_per_callback = 100;
 
@@ -29,6 +30,8 @@ pub const CompileError = error{
     QueryUnknownPredicate,
     QueryDirective,
     QueryPredicateArguments,
+    QueryQuantifiedCapture,
+    QueryTooManyCaptures,
     RegexUnsupported,
     RegexSyntax,
 };
@@ -118,9 +121,145 @@ pub fn compile(gpa: Allocator, language: *const ts.Language, text: []const u8, d
             if (diag) |d| d.set("a pattern without @" ++ violation_capture, patternText(raw, text, index));
             return error.QueryMissingViolation;
         }
+        const own = rawPatternText(raw, text, index);
+        if (repeatsCapture(own)) {
+            if (diag) |d| d.set("a capture repeated with + or * costs tree-sitter quadratic work the budget cannot see; capture one node per match", patternText(raw, text, index));
+            return error.QueryQuantifiedCapture;
+        }
+        if (captureCount(own) > max_captures_per_pattern) {
+            if (diag) |d| d.set("more than " ++ std.fmt.comptimePrint("{d}", .{max_captures_per_pattern}) ++ " captures in one pattern cost tree-sitter work the budget cannot see", patternText(raw, text, index));
+            return error.QueryTooManyCaptures;
+        }
         slot.* = try predicatesOf(arena, raw, index, diag);
     }
     return .{ .raw = raw, .arena = arena_state, .patterns = patterns, .violation = violation };
+}
+
+fn rawPatternText(raw: *const c.TSQuery, text: []const u8, pattern: u32) []const u8 {
+    const start = @min(c.ts_query_start_byte_for_pattern(raw, pattern), text.len);
+    const end = @min(c.ts_query_end_byte_for_pattern(raw, pattern), text.len);
+    return text[@min(start, end)..end];
+}
+
+fn captureCount(text: []const u8) usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"' => i = stringEnd(text, i),
+            ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
+            '(' => {
+                var next = i + 1;
+                while (next < text.len and std.ascii.isWhitespace(text[next])) next += 1;
+                i = if (next < text.len and text[next] == '#') predicateEnd(text, next) else i + 1;
+            },
+            '@' => {
+                count += 1;
+                i = tokenEnd(text, i + 1);
+            },
+            else => i += 1,
+        }
+    }
+    return count;
+}
+
+fn predicateEnd(text: []const u8, from: usize) usize {
+    var i = from;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"' => i = stringEnd(text, i),
+            ')' => return i + 1,
+            else => i += 1,
+        }
+    }
+    return text.len;
+}
+
+fn repeatsCapture(text: []const u8) bool {
+    var opens: [max_query_bytes]u32 = undefined;
+    var depth: usize = 0;
+    var item: ?usize = null;
+    var i: usize = 0;
+    while (i < text.len) {
+        const ch = text[i];
+        switch (ch) {
+            ' ', '\t', '\r', '\n' => i += 1,
+            ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
+            '"' => {
+                item = i;
+                i = stringEnd(text, i);
+            },
+            '(', '[' => {
+                if (depth == opens.len) return true;
+                opens[depth] = @intCast(i);
+                depth += 1;
+                item = null;
+                i += 1;
+            },
+            ')', ']' => {
+                item = if (depth > 0) opens[depth - 1] else null;
+                depth -|= 1;
+                i += 1;
+            },
+            '+', '*' => {
+                if (item) |from| {
+                    if (hasCapture(text[from..i]) or nextIsCapture(text, i + 1)) return true;
+                }
+                i += 1;
+            },
+            '@' => {
+                item = null;
+                i = tokenEnd(text, i + 1);
+            },
+            else => {
+                item = i;
+                i = tokenEnd(text, i + 1);
+            },
+        }
+    }
+    return false;
+}
+
+fn stringEnd(text: []const u8, open: usize) usize {
+    var i = open + 1;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            '\\' => i += 1,
+            '"' => return i + 1,
+            else => {},
+        }
+    }
+    return text.len;
+}
+
+fn tokenEnd(text: []const u8, from: usize) usize {
+    var i = from;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            ' ', '\t', '\r', '\n', '(', ')', '[', ']', '"', '@', ';', '+', '*' => return i,
+            else => {},
+        }
+    }
+    return text.len;
+}
+
+fn hasCapture(text: []const u8) bool {
+    var i: usize = 0;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"' => i = stringEnd(text, i),
+            ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
+            '@' => return true,
+            else => i += 1,
+        }
+    }
+    return false;
+}
+
+fn nextIsCapture(text: []const u8, from: usize) bool {
+    var i = from;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
+    return i < text.len and text[i] == '@';
 }
 
 fn tokenAt(text: []const u8, offset: u32) []const u8 {
@@ -491,8 +630,8 @@ test "q: predicates on one pattern all have to hold" {
 }
 
 test "q: a match that captured no node is skipped instead of crashing" {
-    try expectFound("f();\n", "(arguments (identifier)* @violation)", &.{});
-    try expectFound("f(a);\n", "(arguments (identifier)* @violation)", &.{"a"});
+    try expectFound("f();\n", "(arguments (identifier)? @violation)", &.{});
+    try expectFound("f(a);\n", "(arguments (identifier)? @violation)", &.{"a"});
 }
 
 test "q: odd query text is refused or run, never a crash" {
@@ -574,14 +713,35 @@ test "q: regex work counts against the same budget" {
     try testing.expectEqual(@as(usize, 0), found.texts.len);
 }
 
-test "q: comparing a quantified capture with itself counts against the budget" {
-    const source = "a;\n" ** 6000;
-    const text = "((program (_)+ @violation) (#eq? @violation @violation))";
-    try testing.expectError(error.QueryBudgetExceeded, findIn(typescript.grammar(), source, whole(source), text, .{}));
-    const small = "a;\n" ** 20;
-    const found = try findIn(typescript.grammar(), small, whole(small), text, .{});
+test "q: comparing captures with each other counts against the budget" {
+    const source = "a;\n" ** 100;
+    const text = "((program (_) @violation" ++ " . (_) @violation" ** 7 ++ ") (#eq? @violation @violation))";
+    const found = try findIn(typescript.grammar(), source, whole(source), text, .{});
     defer found.deinit();
-    try testing.expectEqual(@as(usize, 20), found.texts.len);
+    try testing.expectEqual(@as(usize, 100), found.texts.len);
+    try testing.expectError(error.QueryBudgetExceeded, findIn(typescript.grammar(), source, whole(source), text, .{ .operations = 20_000 }));
+}
+
+test "q: more than eight captures in one pattern are refused, predicate arguments do not count" {
+    const eight = "(program (_) @violation" ++ " . (_) @violation" ** 7 ++ ")";
+    const nine = "(program (_) @violation" ++ " . (_) @violation" ** 8 ++ ")";
+    try expectCompileError(nine, error.QueryTooManyCaptures, nine[0..64]);
+    try expectCompileError("(identifier) @violation " ++ nine, error.QueryTooManyCaptures, nine[0..64]);
+    try expectFound("a;\n" ** 8, eight, &.{ "a;", "a;", "a;", "a;", "a;", "a;", "a;", "a;" });
+    try expectFound("a;\n" ** 8, "(" ++ eight ++ " (#eq? @violation @violation) (#not-eq? @violation \"@x @y\"))", &.{ "a;", "a;", "a;", "a;", "a;", "a;", "a;", "a;" });
+}
+
+test "q: a capture repeated with + or * is refused, one with ? or an uncaptured repeat is not" {
+    try expectCompileError("(program (_)+ @violation)", error.QueryQuantifiedCapture, "(program (_)+ @violation)");
+    try expectCompileError("(arguments (identifier)* @violation)", error.QueryQuantifiedCapture, "(arguments (identifier)* @violation)");
+    try expectCompileError("((arguments (identifier)+ @args) @violation)", error.QueryQuantifiedCapture, "((arguments (identifier)+ @args) @violation)");
+    try expectCompileError("(identifier) @violation (arguments ((identifier) @a)+) @violation", error.QueryQuantifiedCapture, "(arguments ((identifier) @a)+) @violation");
+    try expectCompileError("[(identifier) (string)]* @violation", error.QueryQuantifiedCapture, "[(identifier) (string)]* @violation");
+    try expectFound("f(a, b);\n", "((arguments (identifier)+) @violation)", &.{"(a, b)"});
+    try expectFound("f(a, b);\n", "(arguments . (identifier)? @violation)", &.{"a"});
+    try expectFound("f(a, b);\n", "(arguments . (identifier) @violation . (identifier) @violation)", &.{ "a", "b" });
+    try expectFound("f(a, b);\n", "((identifier) @violation (#not-match? @violation \"a+@*\") ; (_)+ @x\n)", &.{ "f", "b" });
+    try expectFound("f(a, b);\n", "((identifier) @violation (#any-of? @violation \"*\" \"f\"))", &.{"f"});
 }
 
 test "q: string comparisons count their bytes against the budget" {

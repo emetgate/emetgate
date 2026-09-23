@@ -73,16 +73,30 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
 
-pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span) !Gate {
+pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span, allow_repo_memory: bool) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
     const applicable = try applicableTo(gpa, enforced.rules, file, ref);
     defer gpa.free(applicable);
+    if (!allow_repo_memory and anyQuery(applicable)) {
+        if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
+    }
     return evaluate(gpa, file, profile, tree, span, applicable);
 }
 
 pub fn isCommand(rule: Rule) bool {
     return checks.commandOf(rule.check) != null;
+}
+
+pub fn isQuery(rule: Rule) bool {
+    return std.mem.eql(u8, checks.parse(rule.check).name, checks.query_name);
+}
+
+fn anyQuery(list: []const Rule) bool {
+    for (list) |rule| {
+        if (isQuery(rule)) return true;
+    }
+    return false;
 }
 
 pub fn covers(rule: Rule, file: []const u8, ref: symbol.Ref) !bool {

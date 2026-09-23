@@ -422,7 +422,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.SkeletonInvalid => 9,
         error.PlaceholderBody => 13,
         error.UnknownCheck, error.UnexpectedCheckArgument, error.MissingCheckArgument, error.EmptyCheckArgument, error.EmptyCommandCheck, error.CommandCheckTooLong, error.CommandCheckNotStatic => 19,
-        error.QueryTooLong, error.QuerySyntax, error.QueryNodeType, error.QueryField, error.QueryCapture, error.QueryStructure, error.QueryLanguage, error.QueryMissingViolation, error.QueryUnknownPredicate, error.QueryDirective, error.QueryPredicateArguments, error.RegexUnsupported, error.RegexSyntax => 19,
+        error.QueryTooLong, error.QuerySyntax, error.QueryNodeType, error.QueryField, error.QueryCapture, error.QueryStructure, error.QueryLanguage, error.QueryMissingViolation, error.QueryUnknownPredicate, error.QueryDirective, error.QueryPredicateArguments, error.QueryQuantifiedCapture, error.QueryTooManyCaptures, error.RegexUnsupported, error.RegexSyntax => 19,
         error.SymbolExists => 20,
         error.MissingTrailingNewline => 21,
         error.NoTopLevelSymbol => 22,

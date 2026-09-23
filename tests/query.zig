@@ -47,9 +47,11 @@ const hb_source =
 
 const hb_query = "q:((call_expression function: (identifier) @violation) (#eq? @violation \"scrapeHepsiburadaApi\"))";
 
-pub const self_compare_query = "q:((statement_block (_)+ @violation) (#eq? @violation @violation))";
+pub const repeated_capture_query = "q:((statement_block (_)+ @violation) (#eq? @violation @violation))";
 
-pub const self_compare_body = "{\n" ++ "  a;\n" ** 6_000 ++ "}";
+pub const many_captures_query = "q:((statement_block" ++ " (_) @violation ." ** 200 ++ " (_) @violation) (#eq? @violation @violation))";
+
+pub const wide_body = "{\n" ++ "  a;\n" ** 20_000 ++ "}";
 
 const Hits = struct {
     texts: [][]const u8,
@@ -268,19 +270,23 @@ test "redteam query: a q: rule that outruns its budget rejects the proposal and 
     try repo.expectPristine();
 }
 
-test "redteam query: comparing a quantified capture with itself is cut off by the budget" {
+test "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs" {
     try skipOffWindows();
+    for ([_][]const u8{ repeated_capture_query, many_captures_query }) |check| try expectRefusedBeforeRunning(check);
+}
+
+fn expectRefusedBeforeRunning(check: []const u8) !void {
     var repo = try Repo.init();
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    try repo.adopt(self_compare_query);
+    try repo.adopt(check);
 
     const started = std.Io.Timestamp.now(testing.io, .awake);
-    const result = try repo.propose(runtime, "src/math.ts", self_compare_body);
+    const result = try repo.propose(runtime, "src/math.ts", wide_body);
     defer result.deinit(testing.allocator);
     const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
-    try expectCheckFailed(result, "query_budget_exceeded", "typescript");
+    try expectCheckFailed(result, "query_malformed", "typescript");
     try testing.expect(elapsed_ms < 10_000);
     try repo.expectPristine();
 }

@@ -245,29 +245,59 @@ test "redteam ledger: static rules in a committed ledger still enforce without t
     try testing.expect(clean == .committed);
 }
 
-test "redteam ledger: a costly q: rule in a committed ledger refuses the edit within the budget instead of hanging it" {
+fn adoptQueryRule(clone: *Clone, check: []const u8) !void {
+    const id = try memory.remember(gpa, testing.io, clone.root_abs, .global, "query rule", true, check, null);
+    gpa.free(id);
+}
+
+test "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var clone = try Clone.init();
     defer clone.deinit();
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
-    const id = try memory.remember(gpa, testing.io, clone.root_abs, .global, "costly query", true, query_tests.self_compare_query, null);
-    gpa.free(id);
+    try adoptQueryRule(&clone, "q:((statement_block" ++ " (_) @violation ." ** 7 ++ " (_) @violation) (#eq? @violation @violation))");
     try clone.commitLedger();
 
     const started = std.Io.Timestamp.now(testing.io, .awake);
-    const refused = try clone.propose(runtime, query_tests.self_compare_body, false);
-    defer refused.deinit(gpa);
+    try testing.expectError(error.UntrustedRepoMemory, clone.propose(runtime, query_tests.wide_body, false));
     const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
-    errdefer std.debug.print("result: {t}\n", .{refused});
-    try testing.expect(refused == .rule_check_failed);
-    try testing.expectEqualStrings("query_budget_exceeded", refused.rule_check_failed.detail);
     try testing.expect(elapsed_ms < 10_000);
     try clone.expectPristine();
+    try testing.expectError(error.UntrustedRepoMemory, clone.proposeBatch(runtime, false));
+    try clone.expectPristine();
+}
 
-    const clean = try clone.propose(runtime, "{\n  const d = a - b;\n  return d;\n}", false);
-    defer clean.deinit(gpa);
-    try testing.expect(clean == .committed);
+test "redteam ledger: --allow-repo-memory lets a committed ledger's q: rule run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var clone = try Clone.init();
+    defer clone.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try adoptQueryRule(&clone, "q:((binary_expression operator: \"-\") @violation)");
+    try clone.commitLedger();
+
+    const single = try clone.propose(runtime, edited_body, true);
+    defer single.deinit(gpa);
+    try testing.expect(single == .rule_violation);
+    const batch = try clone.proposeBatch(runtime, true);
+    defer batch.deinit(gpa);
+    try testing.expect(batch == .rule_violation);
+    try clone.expectPristine();
+}
+
+test "redteam ledger: a q: rule in an untracked local ledger runs without the flag" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var clone = try Clone.init();
+    defer clone.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try adoptQueryRule(&clone, "q:((binary_expression operator: \"-\") @violation)");
+
+    const blocked = try clone.propose(runtime, edited_body, false);
+    defer blocked.deinit(gpa);
+    try testing.expect(blocked == .rule_violation);
+    try clone.expectPristine();
 }
 
 fn jsonEscaped(text: []const u8) ![]u8 {

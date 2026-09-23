@@ -124,7 +124,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer ref.deinit(gpa);
     const applied = try cas.propose(base, ref, options.expected_hash, options.new_body);
     defer applied.snapshot.destroy();
-    switch (try rules.gate(gpa, io, root, rel, ref, applied.snapshot.profile, applied.snapshot.tree, applied.body)) {
+    switch (try rules.gate(gpa, io, root, rel, ref, applied.snapshot.profile, applied.snapshot.tree, applied.body, options.allow_repo_memory)) {
         .ok => {},
         .violated => |report| return .{ .rule_violation = report },
         .failed => |failure| return .{ .rule_check_failed = failure },
@@ -188,7 +188,7 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     defer ref.deinit(gpa);
     const created = try prepareCreate(gpa, io, runtime, root, options.file_abs, rel, ref, options.new_body);
     defer created.snapshot.destroy();
-    switch (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body)) {
+    switch (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body, options.allow_repo_memory)) {
         .ok => {},
         .violated => |report| return .{ .rule_violation = report },
         .failed => |failure| return .{ .rule_check_failed = failure },

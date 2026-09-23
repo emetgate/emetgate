@@ -579,6 +579,7 @@ test "rule: a q: check without @violation, with an unknown predicate or a direct
         .{ .spec = "q:((identifier) @violation (#lua-match? @violation \"x\"))", .err = error.QueryUnknownPredicate, .named = "\"lua-match?\"" },
         .{ .spec = "q:((identifier) @violation (#set! key value))", .err = error.QueryDirective, .named = "\"set!\"" },
         .{ .spec = "q:((identifier) @violation (#match? @violation \"(a)\\\\1\"))", .err = error.RegexUnsupported, .named = "backreference" },
+        .{ .spec = "q:((statement_block (_)+ @violation) (#eq? @violation @violation))", .err = error.QueryQuantifiedCapture, .named = "(statement_block (_)+ @violation)" },
     };
     for (cases) |case| {
         errdefer std.debug.print("spec: {s}\n", .{case.spec});
