@@ -184,8 +184,7 @@ const Parser = struct {
 
     fn fail(self: *Parser, err: Error, what: []const u8, at: usize, len: usize) Error {
         if (self.diag) |d| {
-            var start = @min(at, self.pattern.len);
-            while (start > 0 and start < self.pattern.len and isContinuation(self.pattern[start])) start -= 1;
+            const start = @min(at, self.pattern.len);
             var end = @min(self.pattern.len, at + len);
             while (end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;
             d.* = .{ .what = what, .at = self.pattern[start..end] };
