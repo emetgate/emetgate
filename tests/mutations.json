@@ -682,8 +682,8 @@
     {
       "id": "G1-rules-gate-skipped-for-single-edit",
       "file": "src/platform/runner.zig",
-      "from": "applied.body)) |report| return .{ .rule_violation = report };",
-      "to": "applied.body)) |report| report.deinit(gpa);",
+      "from": "applied.snapshot.tree, applied.body)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },",
+      "to": "applied.snapshot.tree, applied.body)) {\n        .ok => {},\n        .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run"
       ]
@@ -691,8 +691,8 @@
     {
       "id": "G2-rules-gate-skipped-for-batch",
       "file": "src/platform/batch.zig",
-      "from": "p.applied.body)) |report| return .{ .rule_violation = report };",
-      "to": "p.applied.body)) |report| report.deinit(gpa);",
+      "from": "p.applied.body)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
+      "to": "p.applied.body)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: one violating edit rejects the whole batch and leaves disk untouched"
       ]
@@ -729,8 +729,8 @@
     {
       "id": "G7-rules-empty-report-returned",
       "file": "src/platform/rules.zig",
-      "from": "if (list.items.len == 0) return null;",
-      "to": "if (list.items.len == 99999) return null;",
+      "from": "if (list.items.len == 0) return .ok;",
+      "to": "if (list.items.len == 99999) return .ok;",
       "kills": [
         "purple C3: a hanging test command times out and nothing commits",
         "purple C4: a rejected mutation leaves no temp, backup, or shadow artifacts",
@@ -769,8 +769,8 @@
     {
       "id": "G9-rules-rule-id-not-recorded",
       "file": "src/platform/rules.zig",
-      "from": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.id);",
-      "to": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.check);",
+      "from": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, end: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.id);",
+      "to": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, end: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.check);",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run",
         "every violation names its rule, check, file, line, column and offending text",
@@ -1697,7 +1697,7 @@
     {
       "id": "NF9-create-rules-gate-skipped",
       "file": "src/platform/runner.zig",
-      "from": "    if (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body)) |report| return .{ .rule_violation = report };\n",
+      "from": "    switch (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },\n        .failed => |failure| return .{ .rule_check_failed = failure },\n    }\n",
       "to": "",
       "kills": [
         "new file: a body that breaks a forbid rule is rejected even when the tests pass"
@@ -1752,7 +1752,7 @@
     {
       "id": "SC1-scan-command-malformed-precheck-removed",
       "file": "src/protocol/scan_command.zig",
-      "from": "    if (scan.firstMalformed(enforced.rules)) |bad| {",
+      "from": "    if (try scan.firstMalformed(gpa, enforced.rules)) |bad| {",
       "to": "    if (@as(?scan.Malformed, null)) |bad| {",
       "kills": [
         "scan: a malformed ledger rule stops the scan before any file and names the rule"
@@ -1761,7 +1761,7 @@
     {
       "id": "SC2-scanner-malformed-guard-removed",
       "file": "src/platform/scan.zig",
-      "from": "    if (firstMalformed(list)) |bad| return bad.reason;\n",
+      "from": "    if (try firstMalformed(gpa, list)) |bad| return bad.reason;\n",
       "to": "",
       "kills": [
         "scan: the scanner itself refuses a malformed rule even when no file would run it"
@@ -3021,8 +3021,8 @@
     {
       "id": "CMD3-command-cwd-is-the-real-repo",
       "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits)) |gated| return gated;",
-      "to": "if (try runCommandRules(gpa, io, root, root, targets, options.limits)) |gated| return gated;",
+      "from": "if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "to": "if (try runCommandRules(gpa, io, root, root, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
       ]
@@ -3124,8 +3124,8 @@
     {
       "id": "CMD9-scan-runs-a-command-rule",
       "file": "src/platform/scan.zig",
-      "from": "        checks.validateStatic(rule.check) catch |err| return .{ .rule = rule, .reason = err };",
-      "to": "        checks.validate(rule.check) catch |err| return .{ .rule = rule, .reason = err };",
+      "from": "        checks.validateStatic(gpa, rule.check) catch |err| switch (err) {",
+      "to": "        checks.validate(gpa, rule.check) catch |err| switch (err) {",
       "kills": [
         "rule: scan refuses a command rule by name instead of running it"
       ]
