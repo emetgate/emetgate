@@ -3308,6 +3308,52 @@
       "kills": [
         "serve policy comes only from the command line emetgate was started with"
       ]
+    },
+    {
+      "id": "LW1-completion-wait-removed",
+      "file": "src/platform/sandbox.zig",
+      "from": "            if (now >= until) return true;\n",
+      "to": "            if (now >= now) return true;\n",
+      "kills": [
+        "a detached worker that ends within the grace is waited for through the job, not reported as a leftover"
+      ]
+    },
+    {
+      "id": "LW2-grace-zero",
+      "file": "src/platform/sandbox.zig",
+      "from": "const leftover_grace_ns = 2 * std.time.ns_per_s;\n",
+      "to": "const leftover_grace_ns = 0;\n",
+      "kills": [
+        "a worker that holds the pipe and ends within the grace is waited for, not reported as a leftover",
+        "a detached worker that ends within the grace is waited for through the job, not reported as a leftover"
+      ]
+    },
+    {
+      "id": "LW3-console-host-counted",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (console_host != null and pid == console_host.?) continue;\n",
+      "to": "        if (console_host == null and pid == 0) continue;\n",
+      "kills": [
+        "the exited command's own console host is not a leftover, any other process in the job is"
+      ]
+    },
+    {
+      "id": "LW4-slice-kills-without-grace",
+      "file": "src/platform/sandbox.zig",
+      "from": "                    drain_end = graceEnd(io, deadline);\n",
+      "to": "                    drain_end = std.Io.Clock.Timestamp.now(io, .awake);\n",
+      "kills": [
+        "a worker that holds the pipe and ends within the grace is waited for, not reported as a leftover"
+      ]
+    },
+    {
+      "id": "LW5-grace-past-deadline",
+      "file": "src/platform/sandbox.zig",
+      "from": "    return if (end.compare(.lt, deadline)) end else deadline;\n",
+      "to": "    return if (end.compare(.lt, deadline) or true) end else deadline;\n",
+      "kills": [
+        "the leftover wait ends at the command's deadline, not after the full grace"
+      ]
     }
   ]
 }
