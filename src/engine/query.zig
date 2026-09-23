@@ -313,22 +313,25 @@ fn satisfies(gpa: Allocator, predicates: []const Predicate, tree: ts.Tree, captu
     for (predicates) |predicate| {
         switch (predicate) {
             .eq => |p| for (captures) |capture| {
+                try charge(budget, 1);
                 if (capture.index != p.capture) continue;
                 const text = textOf(tree, capture.node);
                 const same = switch (p.other) {
-                    .string => |s| std.mem.eql(u8, text, s),
-                    .capture => |other| otherEquals(tree, captures, other, text),
+                    .string => |s| try equal(budget, text, s),
+                    .capture => |other| try otherEquals(tree, captures, other, text, budget),
                 };
                 if (same == p.negate) return false;
             },
             .any_of => |p| for (captures) |capture| {
+                try charge(budget, 1);
                 if (capture.index != p.capture) continue;
                 const text = textOf(tree, capture.node);
                 for (p.values) |value| {
-                    if (std.mem.eql(u8, text, value)) break;
+                    if (try equal(budget, text, value)) break;
                 } else return false;
             },
             .match => |p| for (captures) |capture| {
+                try charge(budget, 1);
                 if (capture.index != p.capture) continue;
                 if (try p.re.isMatch(gpa, textOf(tree, capture.node), budget) == p.negate) return false;
             },
@@ -337,12 +340,23 @@ fn satisfies(gpa: Allocator, predicates: []const Predicate, tree: ts.Tree, captu
     return true;
 }
 
-fn otherEquals(tree: ts.Tree, captures: []const c.TSQueryCapture, other: u32, text: []const u8) bool {
+fn otherEquals(tree: ts.Tree, captures: []const c.TSQueryCapture, other: u32, text: []const u8, budget: *u64) error{BudgetExceeded}!bool {
     for (captures) |capture| {
+        try charge(budget, 1);
         if (capture.index != other) continue;
-        if (!std.mem.eql(u8, textOf(tree, capture.node), text)) return false;
+        if (!try equal(budget, textOf(tree, capture.node), text)) return false;
     }
     return true;
+}
+
+fn equal(budget: *u64, a: []const u8, b: []const u8) error{BudgetExceeded}!bool {
+    try charge(budget, 1 + @min(a.len, b.len));
+    return std.mem.eql(u8, a, b);
+}
+
+fn charge(budget: *u64, cost: u64) error{BudgetExceeded}!void {
+    if (budget.* < cost) return error.BudgetExceeded;
+    budget.* -= cost;
 }
 
 fn textOf(tree: ts.Tree, node: c.TSNode) []const u8 {
@@ -558,6 +572,30 @@ test "q: regex work counts against the same budget" {
     const found = try findIn(typescript.grammar(), source, whole(source), text, .{});
     defer found.deinit();
     try testing.expectEqual(@as(usize, 0), found.texts.len);
+}
+
+test "q: comparing a quantified capture with itself counts against the budget" {
+    const source = "a;\n" ** 6000;
+    const text = "((program (_)+ @violation) (#eq? @violation @violation))";
+    try testing.expectError(error.QueryBudgetExceeded, findIn(typescript.grammar(), source, whole(source), text, .{}));
+    const small = "a;\n" ** 20;
+    const found = try findIn(typescript.grammar(), small, whole(small), text, .{});
+    defer found.deinit();
+    try testing.expectEqual(@as(usize, 20), found.texts.len);
+}
+
+test "q: string comparisons count their bytes against the budget" {
+    const source = "const s = \"" ++ "a" ** 4000 ++ "\";\n";
+    const eq = "((string_fragment) @violation (#eq? @violation \"" ++ "a" ** 3000 ++ "\"))";
+    const any_of = "((string_fragment) @violation (#any-of? @violation \"" ++ "a" ** 3000 ++ "\"))";
+    const self = "((string_fragment) @violation (#eq? @violation @violation))";
+    for ([_][]const u8{ eq, any_of, self }) |text| {
+        errdefer std.debug.print("query: {s}\n", .{text[0..@min(text.len, 60)]});
+        const found = try findIn(typescript.grammar(), source, whole(source), text, .{});
+        found.deinit();
+        const operations: u64 = if (text.ptr == self.ptr) 2500 else 1500;
+        try testing.expectError(error.QueryBudgetExceeded, findIn(typescript.grammar(), source, whole(source), text, .{ .operations = operations }));
+    }
 }
 
 test "q: dropping in-progress matches past the match limit fails instead of passing" {

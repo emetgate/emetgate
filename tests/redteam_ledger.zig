@@ -7,6 +7,7 @@ const symbol = @import("../src/engine/symbol.zig");
 const server = @import("../src/protocol/server.zig");
 const Runtime = @import("../src/engine/runtime.zig").Runtime;
 const Snapshot = @import("../src/engine/loader.zig").Snapshot;
+const query_tests = @import("query.zig");
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -240,6 +241,31 @@ test "redteam ledger: static rules in a committed ledger still enforce without t
     try clone.expectPristine();
 
     const clean = try clone.propose(runtime, edited_body, false);
+    defer clean.deinit(gpa);
+    try testing.expect(clean == .committed);
+}
+
+test "redteam ledger: a costly q: rule in a committed ledger refuses the edit within the budget instead of hanging it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var clone = try Clone.init();
+    defer clone.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const id = try memory.remember(gpa, testing.io, clone.root_abs, .global, "costly query", true, query_tests.self_compare_query, null);
+    gpa.free(id);
+    try clone.commitLedger();
+
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const refused = try clone.propose(runtime, query_tests.self_compare_body, false);
+    defer refused.deinit(gpa);
+    const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+    errdefer std.debug.print("result: {t}\n", .{refused});
+    try testing.expect(refused == .rule_check_failed);
+    try testing.expectEqualStrings("query_budget_exceeded", refused.rule_check_failed.detail);
+    try testing.expect(elapsed_ms < 10_000);
+    try clone.expectPristine();
+
+    const clean = try clone.propose(runtime, "{\n  const d = a - b;\n  return d;\n}", false);
     defer clean.deinit(gpa);
     try testing.expect(clean == .committed);
 }
