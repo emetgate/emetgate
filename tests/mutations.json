@@ -3484,6 +3484,27 @@
       "kills": [
         "q: a match that captured no node is skipped instead of crashing"
       ]
+    },
+    {
+      "id": "Q19-predicate-comparisons-not-charged",
+      "file": "src/engine/query.zig",
+      "from": "    if (budget.* < cost) return error.BudgetExceeded;\n    budget.* -= cost;\n",
+      "to": "    _ = .{ budget, cost };\n",
+      "kills": [
+        "q: comparing a quantified capture with itself counts against the budget",
+        "q: string comparisons count their bytes against the budget",
+        "redteam query: comparing a quantified capture with itself is cut off by the budget",
+        "redteam ledger: a costly q: rule in a committed ledger refuses the edit within the budget instead of hanging it"
+      ]
+    },
+    {
+      "id": "Q20-predicate-compared-bytes-not-charged",
+      "file": "src/engine/query.zig",
+      "from": "try charge(budget, 1 + @min(a.len, b.len));",
+      "to": "try charge(budget, 1);",
+      "kills": [
+        "q: string comparisons count their bytes against the budget"
+      ]
     }
   ]
 }
