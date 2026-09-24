@@ -367,12 +367,12 @@ fn runPool(
     const seconds: u64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_s));
 
     const verdict = verdictOf(arena, result, expected) catch |err| switch (err) {
-        error.Timeout => core.PoolVerdict.inconclusive,
+        error.Timeout => Verdict{ .verdict = .inconclusive, .why = "timed out" },
         else => return err,
     };
-    if (verdict == .inconclusive) {
+    if (verdict.verdict == .inconclusive) {
         state.inconclusive += 1;
-        std.debug.print("{s} inconclusive after {d}s, splitting\n", .{ label, seconds });
+        std.debug.print("{s} inconclusive after {d}s ({s}), splitting\n", .{ label, seconds, verdict.why });
         return true;
     }
 
@@ -395,7 +395,9 @@ fn runPool(
     return false;
 }
 
-fn verdictOf(arena: Allocator, run: anyerror!std.process.RunResult, expected: []const []const u8) !core.PoolVerdict {
+const Verdict = struct { verdict: core.PoolVerdict, why: []const u8 };
+
+fn verdictOf(arena: Allocator, run: anyerror!std.process.RunResult, expected: []const []const u8) !Verdict {
     const result = try run;
     const output = try std.mem.concat(arena, u8, &.{ result.stdout, result.stderr });
     const code: u8 = switch (result.term) {
@@ -403,7 +405,13 @@ fn verdictOf(arena: Allocator, run: anyerror!std.process.RunResult, expected: []
         else => 255,
     };
     const failed = try core.failedTests(arena, output);
-    return core.poolVerdict(core.classify(.unit, code, output), failed, expected);
+    const status = core.classify(.unit, code, output);
+    const verdict = core.poolVerdict(status, failed, expected);
+    if (verdict == .killed) return .{ .verdict = verdict, .why = "" };
+    if (status != .killed) return .{ .verdict = verdict, .why = try std.fmt.allocPrint(arena, "status {t}: {s}", .{ status, firstErrorLine(output) orelse "no error line" }) };
+    if (core.missingKill(failed, expected)) |name| return .{ .verdict = verdict, .why = try std.fmt.allocPrint(arena, "expected to fail but did not: {s}", .{name}) };
+    if (core.unexpectedKill(failed, expected)) |name| return .{ .verdict = verdict, .why = try std.fmt.allocPrint(arena, "failed but no member expects it: {s}", .{name}) };
+    return .{ .verdict = verdict, .why = "unknown" };
 }
 
 fn baselineIsGreen(arena: Allocator, io: std.Io, pools: []const []const core.Candidate, options: Options) !bool {
