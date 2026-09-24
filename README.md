@@ -404,7 +404,7 @@ The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, th
 
 The kernel's guards are tested in two ways.
 
-**Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`. It copies the working tree's non-ignored files into `.zig-cache/mutate/tree` and applies every mutant and runs every build there, so a run that is killed never leaves a mutant in the working tree. `zig build test` fails when a mutation's `from` text no longer occurs in its file as the harness would apply it, or when a test it expects to kill no longer exists by that name in a file some suite compiles, so a refactor cannot leave a mutant silently testing nothing.
+**Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`. It copies the working tree's non-ignored files into `.zig-cache/mutate/tree` and works only there, so a run that is killed never leaves a mutant in the working tree. It puts every mutant into one test binary as a copy of the function it changes, with a dispatch on the function's first line, and runs each mutant in its own process with only the tests it names; a mutation that cannot be copied that way gets its own build. `--changed-since <ref>` limits a run to the mutations on lines changed since `<ref>`. `zig build test` fails when a mutation's `from` text no longer occurs in its file as the harness would apply it, or when a test it expects to kill no longer exists by that name in a file some suite compiles, so a refactor cannot leave a mutant silently testing nothing.
 
 For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants today: 37 killed, 4 proven equivalent, 1 redundant guard kept as defense in depth, 2 open.
 
@@ -483,19 +483,26 @@ The binary is not code-signed, so Windows SmartScreen warns on first run: it fla
 Requires Zig 0.16.0. tree-sitter and the TypeScript grammar are vendored.
 
 ```sh
-zig build                 # zig-out/bin/emetgate
-zig build test            # unit and end-to-end tests, nine test binaries in parallel
-zig build test-fast       # engine unit tests only: no git, no sandbox, a few seconds
-zig build test-timing     # every test one by one, with the slowest tests and per-suite totals
-zig build bench           # session benchmarks at full size
-zig build mutate-tool     # mutation harness
+zig build                   # zig-out/bin/emetgate
+zig build test              # every test from one binary in four processes, then the CLI end-to-end tests
+zig build test -Dslow=true  # also the tests over one second, which the nightly CI runs
+zig build test-fast         # engine unit tests only: no git, no sandbox, a few seconds
+zig build test-timing       # every test one by one, with the slowest tests and per-file totals
+zig build test-bin          # the test binary alone, zig-out/bin/test-all
+zig build bench             # session benchmarks at full size
+zig build mutate-tool       # mutation harness
+tools/accept.ps1 <ref>      # the tests three times, then the mutations on lines changed since <ref>
 ```
 
-`zig build test` builds `test-unit` from `src/root.zig` and one binary per suite from
-`test_root.zig` (`runner`, `runner_rules`, `scan`, `redteam`, `purple`, `query`, `rule`,
-`rest`). `-Dtest-filter` applies to each. Test files reach the code through the `emetgate`
-module, so a `src` test runs once, in `test-unit`. `tests/suites.zig` fails the run if a test
-file is in no suite or in two, or if a test file imports another that declares tests.
+`zig build test` compiles one test binary, `test-all`, from `test_root.zig`: the `src` tests and
+every file under `tests/`. Its runner, `tools/test_runner.zig`, chooses the tests at run time
+(`--filter`, `--skip`, `--shard`, `--jobs`, `--slow`, `--mutant`), so `-Dtest-filter` does not
+recompile anything, and a filter that matches no test fails the run. With `--jobs` the binary
+starts itself as shards and fails unless together they ran every selected test exactly once.
+`tests/suites.zig` fails the run if a test file under `tests/` is not imported exactly once by
+`test_root.zig`. On the development machine (Windows, Debug) the binary compiles in about 10 s
+with 0.7 GB of memory; the run takes about 20 s, and 40 s with the slow tests. The nine binaries
+this replaced took 28 s to compile in parallel after a one-line change.
 
 Register the server with an MCP client:
 
