@@ -289,6 +289,38 @@ test "scan tool: a model query that captures a repeating group or alternation is
     }
 }
 
+test "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ "src/deep.ts", "export const x = " ++ "a + " ** 64_000 ++ "a;\n" },
+        .{ "src/flat.ts", "export const y = f(a);\n" },
+    });
+    defer repo.deinit();
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    var reply = try call(&repo, .{ .check = "q:(call_expression) @violation" });
+    defer reply.deinit();
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 10_000);
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("check_failed", reply.field("status").string);
+    try testing.expectEqual(@as(i64, 1), reply.field("violation_count").integer);
+    const failures = reply.field("check_failures").array.items;
+    try testing.expectEqual(@as(usize, 1), failures.len);
+    try testing.expectEqualStrings("src/deep.ts", failures[0].object.get("file").?.string);
+    try testing.expectEqualStrings("query_depth_exceeded", failures[0].object.get("detail").?.string);
+}
+
+test "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ "src/mid.ts", "export const y = " ++ "a + " ** 150 ++ "a;\n" }});
+    defer repo.deinit();
+    var reply = try call(&repo, .{ .check = "q:" ++ "(_ " ** 49 ++ "(_) @violation" ++ ")" ** 49 });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    const failures = reply.field("check_failures").array.items;
+    try testing.expectEqual(@as(usize, 1), failures.len);
+    try testing.expectEqualStrings("query_depth_exceeded", failures[0].object.get("detail").?.string);
+}
+
 test "scan tool: one call has a total operation budget, and the files past it come back as check failures" {
     try skipOffWindows();
     const file = "const s = \"" ++ "a" ** 20_000 ++ "\";\n";

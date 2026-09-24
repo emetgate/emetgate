@@ -290,6 +290,24 @@ fn expectRefusedBeforeRunning(check: []const u8, body: []const u8) !void {
     try repo.expectPristine();
 }
 
+test "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.adopt("q:(_ (_ (_) @violation))");
+
+    const body = "{\n  return " ++ "a + " ** 2_500 ++ "b;\n}";
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const result = try repo.propose(runtime, "src/math.ts", body);
+    defer result.deinit(testing.allocator);
+    const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+    try expectCheckFailed(result, "query_depth_exceeded", "typescript");
+    try testing.expect(elapsed_ms < 10_000);
+    try repo.expectPristine();
+}
+
 test "redteam query: a q: rule past the match limit rejects the proposal and is not a violation" {
     try skipOffWindows();
     var repo = try Repo.init();

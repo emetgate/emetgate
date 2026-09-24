@@ -545,6 +545,24 @@ test "scan: a whole ledger is read once without pausing" {
     try testing.expectEqual(@as(usize, 0), repair.pauses);
 }
 
+test "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "src/deep.ts", .data = "export const x = " ++ "a + " ** 64_000 ++ "a;\n" },
+        .{ .path = "src/flat.ts", .data = "export const y = f(a);\n" },
+    });
+    defer repo.deinit();
+    try repo.putLedger("{\"id\":\"mq\",\"scope\":\"project\",\"text\":\"no calls\",\"enforce\":true,\"check\":\"q:(call_expression) @violation\",\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n");
+
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 10_000);
+    try testing.expectEqual(@as(u8, 38), outcome.code);
+    try testing.expect(outcome.has("error: src/deep.ts: rule mq (q:(call_expression) @violation) could not run: query_depth_exceeded typescript\n"));
+    try testing.expect(outcome.has("src/flat.ts:1:18: mq (q:(call_expression) @violation): f(a)\n"));
+}
+
 fn scopedRow(comptime id: []const u8, comptime check: []const u8, comptime where: []const u8) []const u8 {
     return "{\"id\":\"" ++ id ++ "\",\"scope\":\"file\",\"text\":\"scoped\",\"enforce\":true,\"check\":\"" ++ check ++ "\",\"status\":\"active\",\"supersedes\":null,\"ts\":5,\"where\":\"" ++ where ++ "\"}\n";
 }
