@@ -17,6 +17,7 @@ pub const lang_profile = @import("engine/lang/profile.zig");
 pub const test_util = @import("engine/test_util.zig");
 pub const session = @import("platform/session.zig");
 pub const shadow = @import("platform/shadow.zig");
+pub const link_tree = @import("platform/link_tree.zig");
 pub const sandbox = @import("platform/sandbox.zig");
 pub const disk = @import("platform/disk.zig");
 pub const runner = @import("platform/runner.zig");

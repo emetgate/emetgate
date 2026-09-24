@@ -19,6 +19,7 @@ pub const lang_profile = src.lang_profile;
 pub const test_util = src.test_util;
 pub const session = src.session;
 pub const shadow = src.shadow;
+pub const link_tree = src.link_tree;
 pub const sandbox = src.sandbox;
 pub const disk = src.disk;
 pub const runner = src.runner;
