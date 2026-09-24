@@ -1,0 +1,225 @@
+{
+  "note": "stage C candidate task set, not run yet. Each task pairs a real closed issue/fix commit with its parent commit and its own fail-to-pass tests. The task text describes the observed bug, not the fix. windows_tests_pass is unverified until stage C actually runs npm test on Windows for that parent commit.",
+  "tasks": [
+    {
+      "id": "express-01",
+      "repo": "expressjs/express",
+      "parent_commit": "3ce6d0eb86e9d93529ff3191c6bb5db8ce6e72c8",
+      "fix_commit": "9a34acf03cb818ff3f8bc40e44176e277a25cbb9",
+      "issue_ref": "#7459",
+      "task": "When res.send() is called with an object or array while Transfer-Encoding is already set on the response, the automatically generated ETag stops matching the actual body. Find and fix the cause in lib/response.js.",
+      "changed_files": ["lib/response.js"],
+      "test_files": ["test/res.send.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-02",
+      "repo": "expressjs/express",
+      "parent_commit": "59e205a57a04fced6bb7b8ec0b5dec29461a9996",
+      "fix_commit": "18e5985b8a9d5e8423db0a9121f22bdaecd5b120",
+      "issue_ref": "#4893",
+      "task": "res.send() adds a Content-Length header even when a Transfer-Encoding header is already present on the response, which violates HTTP semantics. Fix lib/response.js so Content-Length is only added when Transfer-Encoding is absent.",
+      "changed_files": ["lib/response.js"],
+      "test_files": ["test/res.send.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-03",
+      "repo": "expressjs/express",
+      "parent_commit": "3e81873b52e107898ed7ba45874959fb0546df3f",
+      "fix_commit": "6cd404eb28ff861180f435b3015f8d0c8c0b44d4",
+      "issue_ref": "#6088",
+      "task": "req.acceptsCharsets() does not behave correctly for some Accept-Charset header values and argument shapes. Review lib/request.js and correct the charset negotiation.",
+      "changed_files": ["lib/request.js"],
+      "test_files": ["test/req.acceptsCharsets.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-04",
+      "repo": "expressjs/express",
+      "parent_commit": "125bb742a38cd97938a3932b47cc301e41c31f5d",
+      "fix_commit": "54271f69b511fea198471e6ff3400ab805d6b553",
+      "issue_ref": null,
+      "task": "res.redirect() writes the raw redirect target straight into the generated HTML anchor's href attribute, so a URL containing HTML-significant characters is rendered unescaped. Fix lib/response.js to render the value safely.",
+      "changed_files": ["lib/response.js"],
+      "test_files": ["test/res.redirect.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-05",
+      "repo": "expressjs/express",
+      "parent_commit": "9bc1742937253825d2dc1e9a48c8e8424f0a315b",
+      "fix_commit": "74beeac0718c928b4ba249aba3652c52fbe32ca8",
+      "issue_ref": null,
+      "task": "A route added without an HTTP method restriction fails to match incoming requests correctly. Fix the route matching in lib/router/route.js.",
+      "changed_files": ["lib/router/route.js"],
+      "test_files": ["test/Route.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-06",
+      "repo": "expressjs/express",
+      "parent_commit": "ab2c70b954ac2ceb3aaf466b0f59089999952dd0",
+      "fix_commit": "7ec5dd2b3c5e7379f68086dae72859f5573c8b9b",
+      "issue_ref": "#4913",
+      "task": "Routing a request through a route with a large number of layered handlers regressed and now behaves incorrectly (previously fixed, then broken again by a later change). Fix lib/router/route.js.",
+      "changed_files": ["lib/router/route.js"],
+      "test_files": ["test/Route.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-07",
+      "repo": "expressjs/express",
+      "parent_commit": "75e0c7a2c91665f44d053d83be15f8ecd0177f41",
+      "fix_commit": "631ada0c645dc84c6df8788f5a7eb2b8100acea5",
+      "issue_ref": "#4899",
+      "task": "Dispatching a request through a router with a large stack of synchronous middleware/routes hangs instead of completing. Find and fix the cause in lib/router/index.js.",
+      "changed_files": ["lib/router/index.js"],
+      "test_files": ["test/Router.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-08",
+      "repo": "expressjs/express",
+      "parent_commit": "1cc816993832eba829a2f556f7c08e27e6371301",
+      "fix_commit": "5855339455a7f60774bef4166829e742a5056fa8",
+      "issue_ref": "#3935",
+      "task": "Passing null or undefined as the maxAge option to res.cookie() produces the wrong cookie expiry behavior instead of being treated as \"no maxAge\". Fix lib/response.js.",
+      "changed_files": ["lib/response.js"],
+      "test_files": ["test/res.cookie.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-09",
+      "repo": "expressjs/express",
+      "parent_commit": "9dd0e7afdb6d022e18add1e009c4e3a66258c1fa",
+      "fix_commit": "f275e87dff1aaef86080e6931888de4968585fd8",
+      "issue_ref": "#4744",
+      "task": "With the \"json escape\" setting enabled, sending an undefined value through res.json()/res.jsonp() is handled incorrectly. Fix lib/response.js.",
+      "changed_files": ["lib/response.js"],
+      "test_files": ["test/res.json.js", "test/res.jsonp.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "express-10",
+      "repo": "expressjs/express",
+      "parent_commit": "b11122be85377375465b2aa103da43301e56f128",
+      "fix_commit": "246f6f5aeebad1b9d6a0ea08cd96d3fe19f8f23c",
+      "issue_ref": "#6091",
+      "task": "lib/application.js depends on the external utils-merge package for a simple object merge; the dependency should be dropped in favor of plain object spread with equivalent merge behavior, and lib/response.js's use of the same helper updated to match.",
+      "changed_files": ["lib/application.js", "lib/response.js", "package.json"],
+      "test_files": ["test/res.cookie.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-01",
+      "repo": "eslint/eslint",
+      "parent_commit": "3782dd458fdfbe492e600d9a54b295a9721ed815",
+      "fix_commit": "686630eb34ec1cddf399a4e6eaeebb080116a532",
+      "issue_ref": "#21337",
+      "task": "The no-loss-of-precision rule reports a false positive on the numeric literal 0.e5. Fix the precision-loss detection in lib/rules/no-loss-of-precision.js.",
+      "changed_files": ["lib/rules/no-loss-of-precision.js"],
+      "test_files": ["tests/lib/rules/no-loss-of-precision.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-02",
+      "repo": "eslint/eslint",
+      "parent_commit": "686630eb34ec1cddf399a4e6eaeebb080116a532",
+      "fix_commit": "69aac01d898837a934c9e735e0b7881cc1df09e8",
+      "issue_ref": "#21335",
+      "task": "getFunctionHeadLoc in lib/rules/utils/ast-utils.js does not handle TSFunctionType nodes, which breaks rules (such as max-params) that rely on it for TypeScript function type annotations. Add the missing support.",
+      "changed_files": ["lib/rules/utils/ast-utils.js"],
+      "test_files": ["tests/lib/rules/max-params.js", "tests/lib/rules/utils/ast-utils.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-03",
+      "repo": "eslint/eslint",
+      "parent_commit": "24310e3a0e22b3c086ca402f88448676f2e1cfcd",
+      "fix_commit": "22b09f54f67a9512d4cea39ddbab9b6973d5c476",
+      "issue_ref": "#21311",
+      "task": "prefer-object-spread suggests an autofix for Object.assign() calls that include a __proto__ property, but applying the spread transform in that case changes the object's prototype instead of setting an own property. Make the rule ignore this case.",
+      "changed_files": ["lib/rules/prefer-object-spread.js"],
+      "test_files": ["tests/lib/rules/prefer-object-spread.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-04",
+      "repo": "eslint/eslint",
+      "parent_commit": "6c789ff39bc5420e94e8dafeb328bf2b7e3d35ab",
+      "fix_commit": "26d11bce3e0e21f223613d4bb4be3423839b229e",
+      "issue_ref": "#21310",
+      "task": "object-shorthand reports and autofixes a __proto__: __proto__ property to shorthand form, but shorthand __proto__ has different semantics (it sets the prototype rather than defining an own property). Make the rule skip __proto__ properties.",
+      "changed_files": ["lib/rules/object-shorthand.js"],
+      "test_files": ["tests/lib/rules/object-shorthand.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-05",
+      "repo": "eslint/eslint",
+      "parent_commit": "3c753f18b461bfbf36d41a79a7863c093ef48489",
+      "fix_commit": "87e0a082438264ad90b87fd74165ab4fd90f63ef",
+      "issue_ref": "#21282",
+      "task": "prefer-object-has-own's autofix produces broken code when the global Object identifier is shadowed by a local variable in scope. Fix lib/rules/prefer-object-has-own.js so the autofix accounts for shadowing.",
+      "changed_files": ["lib/rules/prefer-object-has-own.js"],
+      "test_files": ["tests/lib/rules/prefer-object-has-own.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-06",
+      "repo": "eslint/eslint",
+      "parent_commit": "2417cad57d7d1bc4cf3ecf0f0575cfb10ff2011c",
+      "fix_commit": "8e2cb142217f2efee1d10dcc02bfb75145ae775d",
+      "issue_ref": "#21275",
+      "task": "new-cap reports a false positive for calls like Date.UTC(...) when the properties option is set to false. Fix lib/rules/new-cap.js.",
+      "changed_files": ["lib/rules/new-cap.js"],
+      "test_files": ["tests/lib/rules/new-cap.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-07",
+      "repo": "eslint/eslint",
+      "parent_commit": "9cecb8a0a2348070abf72321965d41919c7cc626",
+      "fix_commit": "9f4a364ab0ade048dfce1f37792b1d461d866e55",
+      "issue_ref": "#21276",
+      "task": "no-unreachable incorrectly flags static import statements that appear after a return/throw/etc. as unreachable, even though imports are hoisted and always reachable. Fix lib/rules/no-unreachable.js to ignore them.",
+      "changed_files": ["lib/rules/no-unreachable.js"],
+      "test_files": ["tests/lib/rules/no-unreachable.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-08",
+      "repo": "eslint/eslint",
+      "parent_commit": "ad74a8dada2aaa17bfd0b8cc7b4119ff7a8ac04b",
+      "fix_commit": "1e641c919fc1421493bf913feb607896982451a3",
+      "issue_ref": "#21251",
+      "task": "no-loss-of-precision reports a false positive for a numeric literal that has a trailing decimal point with no digits after it. Fix lib/rules/no-loss-of-precision.js.",
+      "changed_files": ["lib/rules/no-loss-of-precision.js"],
+      "test_files": ["tests/lib/rules/no-loss-of-precision.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-09",
+      "repo": "eslint/eslint",
+      "parent_commit": "55db4791120ae591d88089c43127b7b0e16866d4",
+      "fix_commit": "684b57972e1ddf25e076fb36189c60bbcacee635",
+      "issue_ref": "#21207",
+      "task": "prefer-template's autofix can turn a string concatenation into a template literal that is placed right after an identifier, accidentally creating a tagged template call instead of a plain template literal. Fix lib/rules/prefer-template.js so the autofix cannot produce this.",
+      "changed_files": ["lib/rules/prefer-template.js"],
+      "test_files": ["tests/lib/rules/prefer-template.js"],
+      "windows_tests_pass": null
+    },
+    {
+      "id": "eslint-10",
+      "repo": "eslint/eslint",
+      "parent_commit": "4d7db6628e2badf0857cb88734fe641c3874bce9",
+      "fix_commit": "6898df9364639ee64b9448a4cb6b08a30c16bd37",
+      "issue_ref": "#21166",
+      "task": "id-denylist flags identifier-like meta-property names (such as the target in new.target) as denylisted identifiers, which is not the rule's intent. Fix lib/rules/id-denylist.js to ignore meta-property names.",
+      "changed_files": ["lib/rules/id-denylist.js"],
+      "test_files": ["tests/lib/rules/id-denylist.js"],
+      "windows_tests_pass": null
+    }
+  ]
+}
