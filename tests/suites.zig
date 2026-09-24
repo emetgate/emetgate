@@ -129,3 +129,16 @@ test "suites: an import in a comment or a string is not counted" {
     try testing.expectEqual(@as(usize, 1), try importCount(source, "tests/a.zig"));
     try testing.expectEqual(@as(usize, 0), try importCount("// _ = @import(\"tests/b.zig\");\n", "tests/b.zig"));
 }
+
+test "suites: the guards are imported outside the runs switch, so every suite runs them" {
+    const root = try read("test_root.zig");
+    defer testing.allocator.free(root);
+    var lines = std.mem.splitScalar(u8, root, '\n');
+    var found = false;
+    while (lines.next()) |line| {
+        if (std.mem.indexOf(u8, line, "@import(\"tests/suites.zig\")") == null) continue;
+        found = true;
+        try testing.expect(std.mem.indexOf(u8, line, "runs(") == null);
+    }
+    try testing.expect(found);
+}
