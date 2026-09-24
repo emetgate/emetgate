@@ -1298,7 +1298,8 @@
       "from": "    .{ .language = \"typescript\", .cases = @import(\"typescript/cases.zig\").cases },\n",
       "to": "",
       "kills": [
-        "every registered language has conformance cases"
+        "every registered language has conformance cases",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
       ]
     },
     {
@@ -1366,7 +1367,8 @@
       "from": "const arg = invocation.arg orelse return error.MissingCheckArgument;",
       "to": "const arg = invocation.arg orelse \"x\";",
       "kills": [
-        "argument misuse is refused with its own error before any check runs"
+        "argument misuse is refused with its own error before any check runs",
+        "no_literal refuses a missing or empty argument"
       ]
     },
     {
@@ -1922,7 +1924,8 @@
       "kills": [
         "every rejected where is refused under its own name",
         "where: remember and supersede refuse an invalid where by name and write nothing",
-        "scope: an invalid --in is refused by name before anything is scanned"
+        "scope: an invalid --in is refused by name before anything is scanned",
+        "scan tool: an invalid where is refused by its existing error name"
       ]
     },
     {
@@ -2515,7 +2518,8 @@
       "to": "    if (options.refusal) |name| if (false) { name.* = @errorName(err); };",
       "kills": [
         "scan tool: a malformed check is refused by its existing error name",
-        "scan tool: an invalid where is refused by its existing error name"
+        "scan tool: an invalid where is refused by its existing error name",
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38"
       ],
       "filter": [
         "scan tool"
@@ -3093,7 +3097,8 @@
       "from": "        .name = \"emetgate_scan\",",
       "to": "        .name = \"emetgate_rule_add\",",
       "kills": [
-        "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed"
+        "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed",
+        "scan tool: tools/list offers emetgate_scan with check required and where optional"
       ]
     },
     {
@@ -3486,7 +3491,8 @@
       "from": "    if (result.check_failures.len > 0) {\n        refuse(options, error.CheckFailed);\n        return check_failed_exit_code;\n    }\n",
       "to": "",
       "kills": [
-        "rule: scan reports a q: check that does not compile for a file's language apart from violations"
+        "rule: scan reports a q: check that does not compile for a file's language apart from violations",
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38"
       ]
     },
     {
@@ -3757,7 +3763,8 @@
       "to": "            if (byte == '\\n') try starts.append(gpa, @intCast(i));\n",
       "kills": [
         "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
-        "the line index gives the same line and column as a scan from the start, at every offset"
+        "the line index gives the same line and column as a scan from the start, at every offset",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options"
       ]
     },
     {
