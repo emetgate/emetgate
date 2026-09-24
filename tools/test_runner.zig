@@ -368,6 +368,10 @@ pub fn main(init: std.process.Init.Minimal) void {
         std.process.exit(2);
     };
     emetgate_mutant = options.mutant;
+    std.process.exit(run(gpa, init, options));
+}
+
+fn run(gpa: std.mem.Allocator, init: std.process.Init.Minimal, options: Options) u8 {
     emetgate_slow = options.slow;
 
     const names = withoutSkipped(gpa, testNames(gpa) catch @panic("oom"), options.skips) catch @panic("oom");
@@ -377,25 +381,25 @@ pub fn main(init: std.process.Init.Minimal) void {
         std.debug.print("error: no test matches the filter(s):", .{});
         for (options.filters) |f| std.debug.print(" \"{s}\"", .{f});
         std.debug.print("\n", .{});
-        std.process.exit(2);
+        return 2;
     }
     if (options.shard.count == 1 and selection.indices.len != selection.matched) {
         std.debug.print("error: '{s}' failed: one shard selected {d} of {d} matching tests\n", .{ shard_guard, selection.indices.len, selection.matched });
-        std.process.exit(1);
+        return 1;
     }
     if (options.list) {
         var buf: [4096]u8 = undefined;
         var out = Io.File.stdout().writer(rio, &buf);
         for (selection.indices) |i| out.interface.print("{s}\n", .{names[i]}) catch {};
         out.interface.flush() catch {};
-        std.process.exit(0);
+        return 0;
     }
-    if (options.jobs > 1) std.process.exit(runSharded(gpa, init, names, options));
+    if (options.jobs > 1) return runSharded(gpa, init, names, options);
     if (options.record) |path| writeRecord(path, selection.indices) catch |err| {
         std.debug.print("error: cannot write shard record {s}: {t}\n", .{ path, err });
-        std.process.exit(1);
+        return 1;
     };
-    std.process.exit(runTests(gpa, init, selection.indices, options));
+    return runTests(gpa, init, selection.indices, options);
 }
 
 fn writeRecord(path: []const u8, indices: []const usize) !void {
