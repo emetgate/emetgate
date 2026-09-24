@@ -3,6 +3,7 @@ const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const server = @import("emetgate").server;
 const read_tools = @import("emetgate").read_tools;
+const mirror_mod = @import("emetgate").mirror;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -165,6 +166,77 @@ test "read_file refuses a binary file" {
     try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "BinaryFile");
 }
 
+test "with --mirror, read_file reports unchanged on a repeat and full content after force or a change" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.md", .data = "hello\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "notes.md", testing.allocator);
+    defer testing.allocator.free(file_abs);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = root_abs };
+
+    var first = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs }, policy);
+    defer first.deinit();
+    try testing.expect(!first.is_error);
+    try testing.expect(std.mem.indexOf(u8, first.text, "hello") != null);
+
+    var second = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs }, policy);
+    defer second.deinit();
+    var second_body = try second.payload();
+    defer second_body.deinit();
+    try testing.expectEqualStrings("unchanged", second_body.value.object.get("status").?.string);
+
+    var forced = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs, .force = true }, policy);
+    defer forced.deinit();
+    try testing.expect(std.mem.indexOf(u8, forced.text, "hello") != null);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.md", .data = "goodbye\n" });
+    var changed = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs }, policy);
+    defer changed.deinit();
+    try testing.expect(std.mem.indexOf(u8, changed.text, "goodbye") != null);
+}
+
+test "with --mirror, a changed symbol body is reported again in full with its new hash" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function add(a: number): number {\n  return a;\n}\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "a.ts", testing.allocator);
+    defer testing.allocator.free(file_abs);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = root_abs };
+
+    var first = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer first.deinit();
+    try testing.expect(std.mem.indexOf(u8, first.text, "\"body\":\"") != null);
+
+    var unchanged = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer unchanged.deinit();
+    var unchanged_body = try unchanged.payload();
+    defer unchanged_body.deinit();
+    try testing.expectEqualStrings("unchanged", unchanged_body.value.object.get("status").?.string);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function add(a: number): number {\n  return a + 1;\n}\n" });
+
+    var changed = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer changed.deinit();
+    try testing.expect(std.mem.indexOf(u8, changed.text, "\"body\":\"") != null);
+    try testing.expect(std.mem.indexOf(u8, changed.text, "return a + 1") != null);
+}
+
 test "list returns only tracked files under the requested directory" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
@@ -298,6 +370,10 @@ test "internal workspace and git paths are refused, others pass" {
 }
 
 fn callToolServed(runtime: *Runtime, root: []const u8, tool: []const u8, args: anytype) !Reply {
+    return callToolServedPolicy(runtime, tool, args, .{ .root = root });
+}
+
+fn callToolServedPolicy(runtime: *Runtime, tool: []const u8, args: anytype, policy: server.Policy) !Reply {
     var line: std.Io.Writer.Allocating = .init(testing.allocator);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
@@ -305,7 +381,7 @@ fn callToolServed(runtime: *Runtime, root: []const u8, tool: []const u8, args: a
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
+    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, policy);
 
     const parsed = try std.json.parseFromSlice(Value, testing.allocator, out.written(), .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
