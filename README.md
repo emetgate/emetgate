@@ -72,7 +72,7 @@ The design follows LCF-style theorem provers, where an untrusted component may s
 
 **Test gate.** `UNBOUNDED` changes are applied to a shadow copy and the project's test command is run against it inside a sandbox (a Windows Job Object with kill-on-close, wall-clock and memory limits, and an output cap). The command runs under a low-integrity restricted token, so a body proposed by the model cannot write anywhere outside the shadow copy; if that token cannot be built and verified, the command is refused rather than run unconfined. If the tests fail, the change is rejected and the output is returned to the model. A command that exits but leaves a process behind in the job fails too (`leftover_processes`). After the exit the sandbox reads the pipes to EOF and waits for the job to empty, for up to 2 s and never past the command's deadline; the exited command's own console host is not counted. Whatever is still running after that is killed and reported. When the sandbox kills a job, on a leftover, a timeout or the output limit, it returns only after every killed process has exited, so none of them still holds a file in the shadow copy.
 
-**Durable commit.** Accepted changes go through a write-ahead journal and an atomic write-rename. A crash at any point leaves either the old file or the new one, never a torn write. `recover` replays the journal and refuses anything it cannot prove: zero-byte files, entries that no longer re-parse, and malformed tags.
+**Durable commit.** Accepted changes go through a write-ahead journal and an atomic write-rename. A crash at any point leaves either the old file or the new one, never a torn write. A batch from `emetgate_try_batch` commits as one: after a crash, `recover` leaves every file of the batch old or every file new. `recover` replays the journal and refuses anything it cannot prove: zero-byte files, entries that no longer re-parse, and malformed tags.
 
 ## Rules
 
@@ -370,7 +370,7 @@ src/
 │   ├── cas                           AST-verified mutation and structural guards
 │   └── boundedness                   closed-world blast-radius analysis
 ├── platform/    everything that touches the machine
-│   ├── disk                          journal, atomic write, recovery
+│   ├── disk, commit_record           journal, atomic write, batch commit record, recovery
 │   ├── sandbox                       Job Object isolation and resource limits
 │   ├── shadow, repo, lockdown        shadow workspace, repo lock, locked-down launch
 │   ├── runner, gate, batch           cas → boundedness → test gate
@@ -440,6 +440,8 @@ Findings against the gate, oldest first.
 **F3 — a rejected proposal could write to the real repository during its tests.** The test command ran in a Job Object, which limited time and output but not where the command could write. A body that failed the tests on purpose changed a file in the real tree while they ran: the gate answered `rejected` and the write stayed. Since `6cc77b0` (2026-09-18) the command runs under a low-integrity restricted token, and if the token cannot be built the command does not run. Red-team tests are in `tests/redteam_sandbox.zig`; first released in v0.1.2.
 
 **Repository ledger — `cmd:` rules from a committed ledger ran without consent.** A cloned repository that carried `.emetgate/ledger.ndjson` had its `cmd:` rules run in the sandbox on the first edit. This was found by reading the code during an audit. Fixed in PR #31 (`46f9173` to `66d1ed4`): without `--allow-repo-memory` those rules do not run and the edit is refused with `UntrustedRepoMemory`. Red-team tests are in `tests/redteam_ledger.zig`; first released in v0.1.5.
+
+**F4 — a crash during `emetgate_try_batch` could leave the batch half applied.** `commitBatch` finalized the files one by one, deleting each backup and journal in turn. A crash after the first file and before the last left the finalized files new, and recovery rolled the others back. Each file was valid alone, but only part of the batch that passed the tests together was on disk. Found by model checking the journal protocol with TLA+ (TLC, two and three files). Fixed in `c03083e`: once every swap is verified, one durable batch commit record is written to the journal directory before any backup is deleted, and it is deleted after the last journal. Recovery rolls the batch forward when the record exists, after checking each target against the new hash its journal now carries, and rolls it back otherwise. Crash tests are in `tests/batch_crash.zig`; not yet released.
 
 ## Limits
 
