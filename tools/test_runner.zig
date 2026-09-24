@@ -213,9 +213,46 @@ fn shardArgs(gpa: std.mem.Allocator, exe: []const u8, i: usize, record: []const 
     for (options.filters) |filter| argv.appendSlice(gpa, &.{ "--filter", filter }) catch oom();
     for (options.skips) |skip| argv.appendSlice(gpa, &.{ "--skip", skip }) catch oom();
     if (options.slow) argv.append(gpa, "--slow") catch oom();
-    if (options.verbose) argv.append(gpa, "--verbose") catch oom();
+    argv.append(gpa, "--verbose") catch oom();
     if (options.mutant != 0) argv.appendSlice(gpa, &.{ "--mutant", std.fmt.allocPrint(gpa, "{d}", .{options.mutant}) catch oom() }) catch oom();
     return argv.items;
+}
+
+fn progressLine(line: []const u8) ?struct { name: []const u8, rest: []const u8 } {
+    const slash = std.mem.indexOfScalar(u8, line, '/') orelse return null;
+    const space = std.mem.indexOfScalarPos(u8, line, slash, ' ') orelse return null;
+    if (slash == 0 or space == slash + 1) return null;
+    for (line[0..slash]) |c| if (!std.ascii.isDigit(c)) return null;
+    for (line[slash + 1 .. space]) |c| if (!std.ascii.isDigit(c)) return null;
+    const dots = std.mem.indexOfPos(u8, line, space, "...") orelse return null;
+    return .{ .name = line[space + 1 .. dots], .rest = line[dots + 3 ..] };
+}
+
+fn finishedStatus(rest: []const u8) bool {
+    return std.mem.startsWith(u8, rest, "OK") or std.mem.startsWith(u8, rest, "SKIP") or std.mem.startsWith(u8, rest, "FAIL");
+}
+
+pub fn unfinishedTest(log_text: []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, log_text, '\n');
+    while (lines.next()) |raw| {
+        const p = progressLine(std.mem.trimEnd(u8, raw, " \r")) orelse continue;
+        found = if (finishedStatus(p.rest)) null else p.name;
+    }
+    return found;
+}
+
+fn printShardLog(log_text: []const u8, verbose: bool) void {
+    var lines = std.mem.splitScalar(u8, log_text, '\n');
+    while (lines.next()) |raw| {
+        if (lines.peek() == null and raw.len == 0) break;
+        if (!verbose) {
+            if (progressLine(std.mem.trimEnd(u8, raw, " \r"))) |p| {
+                if (std.mem.startsWith(u8, p.rest, "OK") or std.mem.startsWith(u8, p.rest, "SKIP")) continue;
+            }
+        }
+        std.debug.print("{s}\n", .{raw});
+    }
 }
 
 fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []const []const u8, options: Options) u8 {
@@ -269,13 +306,14 @@ fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []c
             continue;
         };
         const log_text = cwd.readFileAlloc(io, shard.log, gpa, .limited(256 * 1024 * 1024)) catch "";
-        std.debug.print("{s}", .{log_text});
+        printShardLog(log_text, options.verbose);
         const finished = switch (term) {
             .exited => |code| code == 0 or code == 1,
             else => false,
         };
         const totals = parseTotals(log_text);
         if (!finished or totals == null) {
+            if (unfinishedTest(log_text)) |name| std.debug.print("error: '{s}' failed: crashed in shard {d}/{d}\n", .{ name, i, options.jobs });
             std.debug.print("error: shard {d}/{d} did not finish ({any})\n", .{ i, options.jobs, term });
             broken += 1;
         }

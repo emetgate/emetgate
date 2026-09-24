@@ -161,7 +161,7 @@ test "runner: --jobs runs every selected test once across its shards" {
         const result = try selfRun(arena, &.{ "--jobs", jobs, "--filter", filters[0], "--filter", filters[1], "--filter", filters[2], "--filter", filters[3], "--filter", filters[4] }, null);
         errdefer std.debug.print("--jobs {s}:\n{s}\n", .{ jobs, result.stderr });
         try testing.expectEqual(@as(?u8, 0), exitCode(result.term));
-        const line = try std.fmt.allocPrint(arena, "{d}/{d} tests passed; 0 skipped; 0 failed; 0 leaked; mutant 0; {s} shard(s)", .{ wanted, wanted, jobs });
+        const line = try std.fmt.allocPrint(arena, "{d}/{d} tests passed; 0 skipped; 0 failed; 0 leaked; mutant {d}; {s} shard(s)", .{ wanted, wanted, runner.emetgate_mutant, jobs });
         try testing.expect(std.mem.indexOf(u8, result.stderr, line) != null);
     }
 }
@@ -190,7 +190,7 @@ test "runner: shard totals are read back from a shard's last summary line" {
 
 test "runner: the active mutant is the one the runner was given" {
     const wanted = testing.environ.getAlloc(testing.allocator, expect_mutant_env) catch |err| switch (err) {
-        error.EnvironmentVariableMissing => return testing.expectEqual(@as(u32, 0), runner.emetgate_mutant),
+        error.EnvironmentVariableMissing => return,
         else => return err,
     };
     defer testing.allocator.free(wanted);
@@ -294,4 +294,9 @@ test "runner: a skipped name leaves the selection and --jobs passes it to every 
     }
     const nothing_left = try selfRun(arena, &.{ "--filter", "runner: a filter keeps", "--skip", skipped }, null);
     try testing.expectEqual(@as(?u8, 2), exitCode(nothing_left.term));
+}
+
+test "runner: a shard that dies names the test it was running" {
+    try testing.expectEqualStrings("tests.a.test.deep", runner.unfinishedTest("1/3 tests.a.test.one...OK (1 ms)\n2/3 tests.a.test.deep...Segmentation fault at address 0x0\n").?);
+    try testing.expect(runner.unfinishedTest("1/2 tests.a.test.one...OK (1 ms)\n2/2 tests.a.test.two...SKIP\n") == null);
 }

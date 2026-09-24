@@ -2525,6 +2525,7 @@
         "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
         "scan tool: one call has a total operation budget, and the files past it come back as check failures",
         "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded"
       ],
       "filter": [
@@ -2550,6 +2551,7 @@
         "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
         "scan tool: one call has a total operation budget, and the files past it come back as check failures",
         "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded"
       ],
       "exact": true,
@@ -4256,8 +4258,8 @@
     {
       "id": "SC4-unnamed-parameter-not-renamed",
       "file": "tools/mutate/schema.zig",
-      "from": "if (!std.mem.eql(u8, param.name, \"_\")) continue;",
-      "to": "if (true) continue;",
+      "from": "if (!std.mem.eql(u8, param.name, \"_\")) {",
+      "to": "if (true) {",
       "kills": [
         "schema: an unnamed parameter is named in the original so the copy can be given it"
       ]
@@ -4293,7 +4295,7 @@
       "id": "SC8-crash-not-named",
       "file": "tools/mutate/core.zig",
       "from": "found = if (done) null else line[space + 1 .. dots];",
-      "to": "found = null;",
+      "to": "found = if (done or true) null else line[space + 1 .. dots];",
       "kills": [
         "schema: a crash names the test that was running when the process died"
       ]

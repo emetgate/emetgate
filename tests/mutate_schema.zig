@@ -223,3 +223,26 @@ test "schema: a crash names the test that was running when the process died" {
     try testing.expect(core.unfinishedTest("1/1 tests.a.test.one...SKIP\n") == null);
     try testing.expect(core.unfinishedTest("a/b not a test...\n") == null);
 }
+
+test "schema: a discard of a parameter the dispatch now uses is dropped from the original and kept in the copy" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const source =
+        \\fn check(arg: []const u8, n: u32) u32 {
+        \\    _ = arg; return n + 1;
+        \\}
+        \\
+    ;
+    const t = try transformed(arena, source, &.{.{ .number = 2, .from = "n + 1", .to = "n + 2" }});
+    try testing.expectEqualStrings(
+        \\fn check(arg: []const u8, n: u32) u32 { if (@import("root").emetgate_mutant == 2) return check__m2(arg, n);
+        \\     return n + 1;
+        \\}
+        \\
+        \\fn check__m2(arg: []const u8, n: u32) u32 {
+        \\    _ = arg; return n + 2;
+        \\}
+        \\
+    , t.text);
+}

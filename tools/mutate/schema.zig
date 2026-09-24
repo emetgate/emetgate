@@ -224,6 +224,21 @@ pub fn copyText(gpa: Allocator, source: []const u8, entry: Entry) ![]u8 {
     return out.toOwnedSlice();
 }
 
+const Discard = struct { start: u32, len: u32 };
+
+pub fn discardsOf(gpa: Allocator, source: []const u8, from: usize, name: []const u8) ![]const Discard {
+    var found: std.ArrayList(Discard) = .empty;
+    const needle = try std.fmt.allocPrint(gpa, "_ = {s};", .{name});
+    defer gpa.free(needle);
+    var at = from;
+    while (std.mem.indexOfPos(u8, source, at, needle)) |hit| : (at = hit + needle.len) {
+        const before_ok = hit == 0 or std.mem.indexOfScalar(u8, " \t\n\r{;", source[hit - 1]) != null;
+        if (!before_ok) continue;
+        try found.append(gpa, .{ .start = @intCast(hit), .len = @intCast(needle.len) });
+    }
+    return found.toOwnedSlice(gpa);
+}
+
 const Edit = struct {
     offset: u32,
     remove: u32 = 0,
@@ -264,7 +279,12 @@ pub fn transform(gpa: Allocator, source: []const u8, entries: []const Entry) !Tr
         if (fresh) {
             try renamed.append(arena, site.fn_start);
             for (site.params, 0..) |param, i| {
-                if (!std.mem.eql(u8, param.name, "_")) continue;
+                if (!std.mem.eql(u8, param.name, "_")) {
+                    for (try discardsOf(arena, source[0..site.fn_end], site.body_open, param.name)) |at| {
+                        try edits.append(arena, .{ .offset = at.start, .remove = at.len, .text = "" });
+                    }
+                    continue;
+                }
                 try edits.append(arena, .{ .offset = param.token_start, .remove = 1, .text = try argName(arena, param, i) });
             }
         }
@@ -318,6 +338,7 @@ pub fn transform(gpa: Allocator, source: []const u8, entries: []const Entry) !Tr
 pub const CompileError = struct {
     path: []const u8,
     line: u32,
+    message: []const u8 = "",
 };
 
 pub fn compileErrors(gpa: Allocator, output: []const u8) ![]CompileError {
@@ -332,7 +353,7 @@ pub fn compileErrors(gpa: Allocator, output: []const u8) ![]CompileError {
         const line_colon = std.mem.lastIndexOfScalar(u8, head[0..col_colon], ':') orelse continue;
         _ = std.fmt.parseUnsigned(u32, head[col_colon + 1 ..], 10) catch continue;
         const number = std.fmt.parseUnsigned(u32, head[line_colon + 1 .. col_colon], 10) catch continue;
-        try found.append(gpa, .{ .path = head[0..line_colon], .line = number });
+        try found.append(gpa, .{ .path = head[0..line_colon], .line = number, .message = line[marker + ": error: ".len ..] });
     }
     return found.toOwnedSlice(gpa);
 }

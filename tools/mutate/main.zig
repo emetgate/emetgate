@@ -561,6 +561,7 @@ const SchemaStats = struct {
     rounds: usize = 0,
     build_seconds: u64 = 0,
     baseline_seconds: u64 = 0,
+    baseline_red: usize = 0,
     run_seconds: u64 = 0,
     single_seconds: u64 = 0,
 };
@@ -657,19 +658,22 @@ fn buildSchema(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const S
 
         const output = try std.mem.concat(arena, u8, &.{ result.stdout, result.stderr });
         var dropped: std.ArrayList(u32) = .empty;
+        var reasons: std.ArrayList([]const u8) = .empty;
         for (try schema.compileErrors(arena, output)) |err| {
             for (backups.items, transformed.items) |backup, t| {
                 if (!schema.samePath(err.path, backup.path)) continue;
+                const before = dropped.items.len;
                 try t.mutantsAt(err.line, &dropped, arena);
+                for (dropped.items[before..]) |_| try reasons.append(arena, err.message);
             }
         }
         if (dropped.items.len == 0) {
             std.debug.print("schema: the build failed outside any mutant copy:\n{s}\n", .{firstErrorLine(output) orelse "no error line"});
             return error.SchemaBuildFailed;
         }
-        for (dropped.items) |number| {
+        for (dropped.items, reasons.items) |number, why| {
             const i = number - 1;
-            std.debug.print("schema: {s} does not compile as a copy, it runs on its own\n", .{chosen[i].m.id});
+            std.debug.print("schema: {s} does not compile as a copy ({s}), it runs on its own\n", .{ chosen[i].m.id, why });
             plans[i] = .{ .fallback = .compile_error };
         }
         if (countSchema(plans) == 0) return null;
@@ -712,7 +716,7 @@ fn schemaArgv(gpa: Allocator, exe: []const u8, number: u32, filters: []const []c
     return argv.items;
 }
 
-fn schemaBaseline(arena: Allocator, io: std.Io, exe: []const u8, chosen: []const Selected, plans: []const Plan, options: Options) !bool {
+fn schemaBaseline(arena: Allocator, io: std.Io, exe: []const u8, chosen: []const Selected, plans: []const Plan, options: Options) !?[]const []const u8 {
     var filters: std.ArrayList([]const u8) = .empty;
     var everything = false;
     for (chosen, plans) |entry, plan| {
@@ -728,17 +732,23 @@ fn schemaBaseline(arena: Allocator, io: std.Io, exe: []const u8, chosen: []const
     const argv = try schemaArgv(arena, exe, 0, filters.items, &.{}, options.jobs orelse 4);
     const result = job.run(arena, io, argv, tree_dir, max_output, options.timeout_s) catch |err| {
         std.debug.print("schema: baseline did not finish: {s}\n", .{@errorName(err)});
-        return false;
+        return null;
     };
     if (exitedZero(result.term)) {
         std.debug.print("schema: baseline is green\n", .{});
-        return true;
+        return &.{};
     }
     const output = try std.mem.concat(arena, u8, &.{ result.stdout, result.stderr });
-    for (try core.failedTests(arena, output)) |name| std.debug.print("schema: baseline failure: {s}\n", .{name});
-    std.debug.print("schema: baseline is not green, stopping\n{s}\n", .{firstErrorLine(output) orelse "no error line"});
-    return false;
+    const red = try core.failedTests(arena, output);
+    const summary = core.parseSummary(output);
+    if (red.len == 0 or summary == null) {
+        std.debug.print("schema: baseline did not run to the end, stopping\n{s}\n", .{firstErrorLine(output) orelse "no error line"});
+        return null;
+    }
+    for (red) |name| std.debug.print("schema: red with no mutant active, left out of every mutant run: {s}\n", .{name});
+    return red;
 }
+
 
 fn judge(gpa: Allocator, outcome: *Outcome, m: Mutation, code: u8, output: []const u8, crashed: []const []const u8) !void {
     var failed: std.ArrayList([]const u8) = .empty;
@@ -766,7 +776,7 @@ fn judge(gpa: Allocator, outcome: *Outcome, m: Mutation, code: u8, output: []con
     if (!outcome.ok and status == .other_error) outcome.detail = firstErrorLine(output);
 }
 
-fn runSchemaMutant(gpa: Allocator, io: std.Io, exe: []const u8, m: Mutation, number: u32, options: Options) !Outcome {
+fn runSchemaMutant(gpa: Allocator, io: std.Io, exe: []const u8, m: Mutation, number: u32, red: []const []const u8, options: Options) !Outcome {
     var outcome: Outcome = .{
         .id = m.id,
         .file = m.file,
@@ -777,11 +787,13 @@ fn runSchemaMutant(gpa: Allocator, io: std.Io, exe: []const u8, m: Mutation, num
         .origin = "schema",
     };
     var crashed: std.ArrayList([]const u8) = .empty;
+    var skips: std.ArrayList([]const u8) = .empty;
+    try skips.appendSlice(gpa, red);
     var output: std.ArrayList(u8) = .empty;
     var code: u8 = 0;
     const started = std.Io.Timestamp.now(io, .awake);
     while (true) {
-        const argv = try schemaArgv(gpa, exe, number, filtersOf(m), crashed.items, null);
+        const argv = try schemaArgv(gpa, exe, number, filtersOf(m), skips.items, null);
         const result = job.run(gpa, io, argv, tree_dir, max_output, core.timeoutFor(m.timeout_s, options.timeout_s)) catch |err| switch (err) {
             error.Timeout => {
                 outcome.status = "timeout";
@@ -802,6 +814,7 @@ fn runSchemaMutant(gpa: Allocator, io: std.Io, exe: []const u8, m: Mutation, num
         const name = core.unfinishedTest(this_output) orelse break;
         if (contains(crashed.items, name) or crashed.items.len >= max_resumes) break;
         try crashed.append(gpa, name);
+        try skips.append(gpa, name);
     }
     outcome.seconds = secondsSince(io, started);
     try judge(gpa, &outcome, m, if (crashed.items.len != 0) 1 else code, output.items, crashed.items);
@@ -815,6 +828,7 @@ const SchemaWork = struct {
     items: []const usize,
     slots: []?Outcome,
     options: Options,
+    red: []const []const u8 = &.{},
     next: std.atomic.Value(usize) = .init(0),
     mutex: std.Io.Mutex = .init,
     done: usize = 0,
@@ -827,7 +841,7 @@ fn schemaWorker(work: *SchemaWork) void {
         if (k >= work.items.len) return;
         const i = work.items[k];
         const m = work.chosen[i].m;
-        const outcome = runSchemaMutant(gpa, work.io, work.exe, m, schemaNumber(i), work.options) catch |err| Outcome{
+        const outcome = runSchemaMutant(gpa, work.io, work.exe, m, schemaNumber(i), work.red, work.options) catch |err| Outcome{
             .id = m.id,
             .file = m.file,
             .expect = m.expect,
@@ -863,13 +877,24 @@ fn runSchemata(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const S
 
     if (exe) |path| {
         const baseline_started = std.Io.Timestamp.now(io, .awake);
-        const green = try schemaBaseline(arena, io, path, chosen, plans, options);
+        const red = try schemaBaseline(arena, io, path, chosen, plans, options) orelse return null;
         stats.baseline_seconds = secondsSince(io, baseline_started);
-        if (!green) return null;
+        stats.baseline_red = red.len;
+        var runnable: std.ArrayList(usize) = .empty;
+        for (items.items) |i| {
+            const m = chosen[i].m;
+            if (red.len != 0 and core.missingKill(red, m.kills) == null and m.kills.len != 0) {
+                slots[i] = .{ .id = m.id, .file = m.file, .expect = m.expect, .expected_status = m.expect_status, .status = "baseline_red", .ok = false, .origin = "schema", .detail = "every test it expects to kill is red with no mutant active" };
+                continue;
+            }
+            try runnable.append(arena, i);
+        }
+        items.clearRetainingCapacity();
+        try items.appendSlice(arena, runnable.items);
 
         const workers = @max(@as(usize, 1), @min(options.jobs orelse 4, items.items.len));
         std.debug.print("schema: {d} mutant(s), {d} at a time, each in its own process\n", .{ items.items.len, workers });
-        var work: SchemaWork = .{ .io = io, .exe = path, .chosen = chosen, .items = items.items, .slots = slots, .options = options };
+        var work: SchemaWork = .{ .io = io, .exe = path, .chosen = chosen, .items = items.items, .slots = slots, .options = options, .red = red };
         const started = std.Io.Timestamp.now(io, .awake);
         const threads = try arena.alloc(std.Thread, workers);
         for (threads) |*t| t.* = try std.Thread.spawn(.{}, schemaWorker, .{&work});
@@ -896,8 +921,8 @@ fn runSchemata(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const S
 }
 
 fn printSchemaStats(stats: SchemaStats, total: usize) void {
-    std.debug.print("\nschema: {d} of {d} mutation(s) ran from one binary; build {d}s in {d} round(s), baseline {d}s, mutants {d}s, on their own {d}s\n", .{
-        stats.in_schema, total, stats.build_seconds, stats.rounds, stats.baseline_seconds, stats.run_seconds, stats.single_seconds,
+    std.debug.print("\nschema: {d} of {d} mutation(s) ran from one binary; build {d}s in {d} round(s), baseline {d}s ({d} red test(s) left out), mutants {d}s, on their own {d}s\n", .{
+        stats.in_schema, total, stats.build_seconds, stats.rounds, stats.baseline_seconds, stats.baseline_red, stats.run_seconds, stats.single_seconds,
     });
     for (stats.refused, 0..) |count, i| {
         if (count == 0) continue;
@@ -1018,7 +1043,7 @@ fn runBuild(arena: Allocator, io: std.Io, kind: core.Kind, m: Mutation, options:
 
 fn runFiltered(arena: Allocator, io: std.Io, filters: []const []const u8, optimize: ?[]const u8, options: Options) !std.process.RunResult {
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{ "zig", "build", "test", "--summary", "all" });
+    try argv.appendSlice(arena, &.{ "zig", "build", "test", "--summary", "all", "-Dslow=true" });
     if (optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
     if (options.jobs) |n| try argv.append(arena, try std.fmt.allocPrint(arena, "-j{d}", .{n}));
     if (!options.full) {
