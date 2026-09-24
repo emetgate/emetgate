@@ -54,6 +54,7 @@ test {
     _ = @import("tests/redteam_sandbox.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_crash.zig");
+    _ = @import("tests/batch_crash_tool.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
