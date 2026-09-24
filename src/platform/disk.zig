@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
+const commit_record = @import("commit_record.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -75,6 +76,37 @@ pub const Guard = struct {
 const Hook = struct {
     context: *anyopaque,
     run: *const fn (context: *anyopaque) anyerror!void,
+};
+
+pub const Step = struct {
+    context: *anyopaque,
+    reached: *const fn (context: *anyopaque) bool,
+
+    fn stops(step: ?*const Step) bool {
+        const s = step orelse return false;
+        return s.reached(s.context);
+    }
+
+    fn gap(step: ?*const Step) ?Hook {
+        const s = step orelse return null;
+        return .{ .context = @constCast(s), .run = runGap };
+    }
+
+    fn runGap(context: *anyopaque) anyerror!void {
+        const s: *const Step = @ptrCast(@alignCast(context));
+        if (s.reached(s.context)) return error.Crashed;
+    }
+};
+
+pub const Batch = struct {
+    gpa: Allocator,
+    io: std.Io,
+    journal_dir: []const u8,
+    tag: commit_record.Tag,
+
+    pub fn init(gpa: Allocator, io: std.Io, journal_dir: []const u8) Batch {
+        return .{ .gpa = gpa, .io = io, .journal_dir = journal_dir, .tag = commit_record.newTag(io) };
+    }
 };
 
 pub const Paths = struct {
@@ -165,12 +197,27 @@ pub const Pending = struct {
     }
 
     pub fn finalize(self: *Pending, leftover: ?*Leftover) void {
+        self.dropBackup(leftover);
+        self.dropJournal();
+        self.freePaths();
+    }
+
+    pub fn abandon(self: *Pending) void {
+        self.replacement.close();
+        self.guard.close();
+        self.freePaths();
+    }
+
+    fn dropBackup(self: *Pending, leftover: ?*Leftover) void {
         self.replacement.close();
         self.guard.close();
         if (!deleteWithRetry(self.io, self.backup)) {
             if (leftover) |out| out.record(self.backup);
         }
-        self.freePaths();
+    }
+
+    fn dropJournal(self: *Pending) void {
+        if (self.journal) |j| _ = deleteWithRetry(self.io, j);
     }
 
     pub fn discard(self: *Pending, leftover: ?*Leftover) void {
@@ -188,21 +235,19 @@ pub const Pending = struct {
             },
         }
         self.guard.close();
+        self.dropJournal();
         self.freePaths();
     }
 
     fn freePaths(self: *Pending) void {
-        if (self.journal) |j| {
-            _ = deleteWithRetry(self.io, j);
-            self.gpa.free(j);
-        }
+        if (self.journal) |j| self.gpa.free(j);
         self.gpa.free(self.path);
         self.gpa.free(self.temp);
         self.gpa.free(self.backup);
     }
 };
 
-pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, journal_dir: ?[]const u8) !Pending {
+pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, journal_dir: ?[]const u8, batch: ?*const Batch) !Pending {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
 
@@ -222,7 +267,7 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
     const backup = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ path_abs, &tag });
     errdefer gpa.free(backup);
 
-    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, path_abs, expected_base) else null;
+    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .target = path_abs, .base_hash = expected_base, .new_hash = symbol.hashOf(data), .batch = if (batch) |b| &b.tag else null }) else null;
     errdefer if (journal) |j| {
         _ = deleteWithRetry(io, j);
         gpa.free(j);
@@ -246,20 +291,34 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
     };
 }
 
-fn writeJournal(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const u8, target_abs: []const u8, base_hash: symbol.Hash) ![]u8 {
+const JournalFields = struct {
+    target: []const u8,
+    base_hash: symbol.Hash,
+    new_hash: symbol.Hash,
+    batch: ?[]const u8 = null,
+};
+
+fn writeJournal(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const u8, fields: JournalFields) ![]u8 {
     std.Io.Dir.cwd().createDirPath(io, journal_dir) catch {};
     const journal_path = try std.fmt.allocPrint(gpa, "{s}\\{s}.json", .{ journal_dir, tag });
     errdefer gpa.free(journal_path);
 
-    const hex = symbol.formatHash(base_hash);
+    const base_hex = symbol.formatHash(fields.base_hash);
+    const new_hex = symbol.formatHash(fields.new_hash);
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     var js: std.json.Stringify = .{ .writer = &buffer.writer };
     try js.beginObject();
     try js.objectField("target");
-    try js.write(target_abs);
+    try js.write(fields.target);
     try js.objectField("base_hash");
-    try js.write(hex[0..]);
+    try js.write(base_hex[0..]);
+    try js.objectField("new_hash");
+    try js.write(new_hex[0..]);
+    if (fields.batch) |b| {
+        try js.objectField("batch");
+        try js.write(b);
+    }
     try js.endObject();
 
     try writeDurably(io, journal_path, buffer.written());
@@ -275,17 +334,24 @@ fn abortSwaps(pendings: []Pending, swapped: usize, leftover: ?*Leftover) void {
     for (pendings[swapped..]) |*rest| rest.discard(leftover);
 }
 
-pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usize) !void {
+fn abandonAll(pendings: []Pending) error{Crashed} {
+    for (pendings) |*p| p.abandon();
+    return error.Crashed;
+}
+
+pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usize, batch: ?*const Batch, step: ?*const Step) !void {
     var swapped: usize = 0;
     while (swapped < pendings.len) : (swapped += 1) {
         if (fail_before) |k| if (k == swapped) {
             abortSwaps(pendings, swapped, leftover);
             return error.BatchAborted;
         };
-        pendings[swapped].swap(null) catch |err| {
+        pendings[swapped].swap(Step.gap(step)) catch |err| {
+            if (err == error.Crashed) return abandonAll(pendings);
             abortSwaps(pendings, swapped, leftover);
             return err;
         };
+        if (Step.stops(step)) return abandonAll(pendings);
     }
     for (pendings) |*p| {
         p.verify() catch {
@@ -293,11 +359,27 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
             return error.WrittenButUnverified;
         };
     }
-    for (pendings) |*p| p.finalize(leftover);
+    if (batch) |b| commit_record.write(b.gpa, b.io, b.journal_dir, &b.tag) catch |err| {
+        for (pendings) |*q| q.discard(leftover);
+        return err;
+    };
+    if (Step.stops(step)) return abandonAll(pendings);
+    for (pendings, 0..) |*p, k| {
+        p.dropBackup(leftover);
+        if (Step.stops(step)) {
+            p.freePaths();
+            return abandonAll(pendings[k + 1 ..]);
+        }
+        p.dropJournal();
+        p.freePaths();
+        if (Step.stops(step)) return abandonAll(pendings[k + 1 ..]);
+    }
+    if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
 }
 
 pub const RecoverReport = struct {
     restored: usize = 0,
+    rolled_forward: usize = 0,
     removed_temps: usize = 0,
     skipped: usize = 0,
     failed: usize = 0,
@@ -306,6 +388,8 @@ pub const RecoverReport = struct {
 const JournalEntry = struct {
     target: []const u8 = "",
     base_hash: []const u8 = "",
+    new_hash: []const u8 = "",
+    batch: []const u8 = "",
 };
 
 const max_journal_bytes = 64 * 1024;
@@ -360,6 +444,13 @@ fn clearReadonly(path_abs: []const u8) void {
     _ = win.SetFileAttributesW(w, win.file_attribute_normal);
 }
 
+fn rollForward(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, new_hash: symbol.Hash) !void {
+    const guard = try Guard.open(target_abs);
+    defer guard.close();
+    if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &new_hash)) return error.TargetUnverified;
+    if (!deleteWithRetry(io, bak_abs)) return error.BackupNotRemoved;
+}
+
 fn restoreVerified(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, base_hash: symbol.Hash) !void {
     if (shadow.isReparsePoint(bak_abs) catch true) return error.BackupUnverified;
     const guard = try Guard.open(bak_abs);
@@ -385,7 +476,7 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, err_ou
     defer gpa.free(shadow_abs);
     const removal = shadow.remove(io, root_abs, shadow_abs);
 
-    try err_out.print("recovered {d} file(s), removed {d} orphaned temp file(s), skipped {d}, failed {d}\n", .{ report.restored, report.removed_temps, report.skipped, report.failed });
+    try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed });
     if (removal) |_| {} else |err| {
         try err_out.print("could not remove shadow: {t}\n", .{err});
         return recover_failed_exit_code;
@@ -417,15 +508,16 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
     for (names.items) |name| {
         var jp_buf: [std.fs.max_path_bytes]u8 = undefined;
         const jp = std.fmt.bufPrint(&jp_buf, "{s}\\{s}", .{ journal_dir, name }) catch continue;
-        applyJournalEntry(gpa, io, root_abs, jp, name, report) catch {
+        applyJournalEntry(gpa, io, root_abs, journal_dir, jp, name, report) catch {
             report.failed += 1;
         };
         _ = deleteWithRetry(io, jp);
     }
+    try commit_record.removeAll(gpa, io, journal_dir);
     std.Io.Dir.cwd().deleteDir(io, journal_dir) catch {};
 }
 
-fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_path: []const u8, name: []const u8, report: *RecoverReport) !void {
+fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, journal_path: []const u8, name: []const u8, report: *RecoverReport) !void {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, journal_path, gpa, .limited(max_journal_bytes));
     defer gpa.free(bytes);
 
@@ -455,6 +547,24 @@ fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_p
     }
     const bak = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ target, tag });
     defer gpa.free(bak);
+
+    const batch = parsed.value.batch;
+    if (batch.len != 0 and !isValidTag(batch)) {
+        report.failed += 1;
+        return;
+    }
+    if (batch.len != 0 and try commit_record.exists(gpa, io, journal_dir, batch)) {
+        const new_hash = symbol.parseHash(parsed.value.new_hash) catch {
+            report.failed += 1;
+            return;
+        };
+        rollForward(gpa, io, bak, target, new_hash) catch {
+            report.failed += 1;
+            return;
+        };
+        report.rolled_forward += 1;
+        return;
+    }
 
     restoreVerified(gpa, io, bak, target, base_hash) catch |err| switch (err) {
         error.BaseChanged, error.FileLocked => {
@@ -491,7 +601,7 @@ fn clearOrphanTemps(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
 }
 
 fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook, journal_dir: ?[]const u8) !void {
-    var pending = try prepare(gpa, io, path_abs, data, expected_base, journal_dir);
+    var pending = try prepare(gpa, io, path_abs, data, expected_base, journal_dir, null);
     var done = false;
     defer if (!done) pending.discard(leftover);
     try pending.swap(in_gap);
@@ -839,10 +949,10 @@ test "commitBatch writes every file when all swaps succeed and leaves no sidecar
     defer b.deinit();
 
     var pendings = [_]Pending{
-        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null),
-        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null),
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null, null),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null, null),
     };
-    try commitBatch(&pendings, null, null);
+    try commitBatch(&pendings, null, null, null, null);
 
     try a.expectContent(updated);
     try b.expectContent(updated);
@@ -858,10 +968,10 @@ test "commitBatch rolls every committed file back when one swap fails midway" {
     defer b.deinit();
 
     var pendings = [_]Pending{
-        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null),
-        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null),
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null, null),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null, null),
     };
-    try testing.expectError(error.BatchAborted, commitBatch(&pendings, null, 1));
+    try testing.expectError(error.BatchAborted, commitBatch(&pendings, null, 1, null, null));
 
     try a.expectContent(original);
     try b.expectContent(original);
@@ -878,7 +988,7 @@ fn seedRecover(root_abs: []const u8, tmp: *testing.TmpDir, target_content: []con
     const target_abs = try std.fmt.bufPrint(&target_buf, "{s}\\f.ts", .{root_abs});
     var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.emetgate\\journal", .{root_abs});
-    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, target_abs, symbol.hashOf(original));
+    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, .{ .target = target_abs, .base_hash = symbol.hashOf(original), .new_hash = symbol.hashOf(updated) });
     testing.allocator.free(jp);
 }
 
@@ -939,7 +1049,7 @@ test "recover refuses a journal target that escapes the repo via .. (A hardening
     const target = try std.fmt.bufPrint(&target_buf, "{s}\\..\\pwned.ts", .{root});
     var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.emetgate\\journal", .{root});
-    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, target, symbol.hashOf(mal));
+    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, .{ .target = target, .base_hash = symbol.hashOf(mal), .new_hash = symbol.hashOf(mal) });
     testing.allocator.free(jp);
 
     const report = try recover(testing.allocator, testing.io, root);

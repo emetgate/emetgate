@@ -137,13 +137,14 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     };
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
+    const batch = disk.Batch.init(gpa, io, journal_dir);
     if (options.trace) |t| t.commit_attempted = true;
     for (prepared.items, 0..) |p, i| {
-        pendings[i] = try disk.prepare(gpa, io, options.edits[i].file_abs, p.applied.snapshot.source, p.base_hash, journal_dir);
+        pendings[i] = try disk.prepare(gpa, io, options.edits[i].file_abs, p.applied.snapshot.source, p.base_hash, journal_dir, &batch);
         count = i + 1;
     }
     commit_entered = true;
-    try disk.commitBatch(pendings, null, null);
+    try disk.commitBatch(pendings, null, null, &batch, null);
 
     const hashes = try gpa.alloc(symbol.Hash, prepared.items.len);
     for (prepared.items, 0..) |p, i| hashes[i] = p.applied.hash;
