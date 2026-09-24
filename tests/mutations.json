@@ -3965,57 +3965,6 @@
       ]
     },
     {
-      "id": "PF1-pool-ignores-a-shared-function",
-      "file": "tools/mutate/core.zig",
-      "from": " or sharesFunction(hits, taken.items, hits[i])) {\n",
-      "to": ") {\n",
-      "kills": [
-        "harness: mutations that change one function land in different pools",
-        "harness: a pattern that spans two functions keeps apart from both"
-      ],
-      "exact": true
-    },
-    {
-      "id": "PF2-function-must-contain-the-whole-pattern",
-      "file": "tools/mutate/core.zig",
-      "from": "            if (first >= end or stop <= hit) continue;\n",
-      "to": "            if (first > hit or stop < end) continue;\n",
-      "kills": [
-        "harness: a pattern that spans two functions keeps apart from both"
-      ],
-      "exact": true
-    },
-    {
-      "id": "PF3-test-block-not-a-function",
-      "file": "tools/mutate/core.zig",
-      "from": "                .fn_decl, .test_decl => {},\n",
-      "to": "                .fn_decl => {},\n",
-      "kills": [
-        "harness: only Zig functions and tests count as a function a mutation hits"
-      ],
-      "exact": true
-    },
-    {
-      "id": "FM1-pool-ignores-a-shared-family",
-      "file": "tools/mutate/core.zig",
-      "from": "        if (familiesMeet(member.kills, c.kills)) return true;\n",
-      "to": "",
-      "kills": [
-        "harness: members whose kills share a family land in different pools"
-      ],
-      "exact": true
-    },
-    {
-      "id": "FM2-family-is-the-whole-name",
-      "file": "tools/mutate/core.zig",
-      "from": "    return name[0..colon];\n",
-      "to": "    return name;\n",
-      "kills": [
-        "harness: members whose kills share a family land in different pools"
-      ],
-      "exact": true
-    },
-    {
       "id": "QD1-depth-check-skipped",
       "file": "src/engine/query.zig",
       "from": "    if (!depthWithin(tree, span, limits.depth_product / query.depth)) return error.QueryDepthExceeded;\n",

@@ -14,8 +14,6 @@ const tree_list = work_dir ++ "/tree.list";
 const schema_dir = work_dir ++ "/schema";
 const max_output = 16 * 1024 * 1024;
 const default_timeout_s: u64 = 900;
-const default_pool_size: usize = 16;
-const default_verify_share: usize = 10;
 const max_resumes = 32;
 
 const Mutation = struct {
@@ -49,10 +47,6 @@ const Outcome = struct {
     unexpected_kill: ?[]const u8 = null,
     detail: ?[]const u8 = null,
     origin: []const u8 = "single",
-    pool: ?[]const u8 = null,
-    pooled_status: ?[]const u8 = null,
-    pooled_origin: ?[]const u8 = null,
-    pooled_pool: ?[]const u8 = null,
     schema_refusal: ?[]const u8 = null,
 };
 
@@ -61,14 +55,8 @@ const Options = struct {
     full: bool = false,
     list_only: bool = false,
     skip_survivors: bool = false,
-    pool: bool = false,
-    shadow: bool = false,
-    pool_size: usize = default_pool_size,
-    verify_share: usize = default_verify_share,
-    rotation: usize = 0,
     timeout_s: u64 = default_timeout_s,
     jobs: ?usize = null,
-    plan_only: bool = false,
     single: bool = false,
     compare: bool = false,
     changed_since: ?[]const u8 = null,
@@ -83,10 +71,6 @@ const Selected = struct {
 const Run = struct {
     outcomes: []const Outcome,
     failures: usize,
-    pools: usize = 0,
-    inconclusive: usize = 0,
-    splits: usize = 0,
-    rotated: usize = 0,
 };
 
 pub fn main(init: std.process.Init) !u8 {
@@ -111,12 +95,6 @@ pub fn main(init: std.process.Init) !u8 {
             options.list_only = true;
         } else if (std.mem.eql(u8, arg, "--skip-survivors")) {
             options.skip_survivors = true;
-        } else if (std.mem.eql(u8, arg, "--pool")) {
-            options.pool = true;
-        } else if (std.mem.eql(u8, arg, "--shadow")) {
-            options.shadow = true;
-        } else if (std.mem.eql(u8, arg, "--plan")) {
-            options.plan_only = true;
         } else if (std.mem.eql(u8, arg, "--single")) {
             options.single = true;
         } else if (std.mem.eql(u8, arg, "--compare")) {
@@ -135,14 +113,6 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.startsWith(u8, arg, "--jobs=")) {
             options.jobs = std.fmt.parseInt(usize, arg["--jobs=".len..], 10) catch return usage();
             if (options.jobs.? == 0) return usage();
-        } else if (std.mem.startsWith(u8, arg, "--pool-size=")) {
-            options.pool_size = std.fmt.parseInt(usize, arg["--pool-size=".len..], 10) catch return usage();
-            if (options.pool_size == 0 or options.pool_size > core.max_pool_members) return usage();
-        } else if (std.mem.startsWith(u8, arg, "--verify-share=")) {
-            options.verify_share = std.fmt.parseInt(usize, arg["--verify-share=".len..], 10) catch return usage();
-            if (options.verify_share > 100) return usage();
-        } else if (std.mem.startsWith(u8, arg, "--rotation=")) {
-            options.rotation = std.fmt.parseInt(usize, arg["--rotation=".len..], 10) catch return usage();
         } else if (std.mem.startsWith(u8, arg, "--timeout-s=")) {
             options.timeout_s = std.fmt.parseInt(u64, arg["--timeout-s=".len..], 10) catch return usage();
         } else if (std.mem.startsWith(u8, arg, "--")) {
@@ -212,25 +182,8 @@ pub fn main(init: std.process.Init) !u8 {
     }
     if (options.list_only) return 0;
 
-    var shadow_mismatch: usize = 0;
     var compare_mismatch: usize = 0;
-    const run = if (options.pool or options.shadow or options.plan_only) pooled: {
-        const pooled = try runPooled(arena, io, tree, chosen.items, options) orelse return if (options.plan_only) 0 else 4;
-        std.debug.print("\npools: {d}, inconclusive: {d}, splits: {d}\n", .{ pooled.pools, pooled.inconclusive, pooled.splits });
-        if (!options.shadow) break :pooled pooled;
-        std.debug.print("\nshadow: running the same corpus one at a time\n", .{});
-        const serial = try runSerial(arena, io, tree, chosen.items, options);
-        shadow_mismatch = reportShadow(pooled.outcomes, serial.outcomes);
-        const merged: Run = .{
-            .outcomes = try withShadow(arena, serial.outcomes, pooled.outcomes),
-            .failures = serial.failures,
-            .pools = pooled.pools,
-            .inconclusive = pooled.inconclusive,
-            .splits = pooled.splits,
-            .rotated = pooled.rotated,
-        };
-        break :pooled merged;
-    } else if (options.single) try runSerial(arena, io, tree, chosen.items, options) else schemata: {
+    const run = if (options.single) try runSerial(arena, io, tree, chosen.items, options) else schemata: {
         var stats: SchemaStats = .{};
         const schemata = try runSchemata(arena, io, tree, chosen.items, options, &stats) orelse return 4;
         printSchemaStats(stats, schemata.outcomes.len);
@@ -244,14 +197,14 @@ pub fn main(init: std.process.Init) !u8 {
     try cwd.writeFile(io, .{ .sub_path = report_path, .data = report.written() });
 
     var summary: std.Io.Writer.Allocating = .init(arena);
-    try core.writeSummary(&summary.writer, run.outcomes.len, run.failures, skipped_e2e, skipped_survivors, run.rotated);
+    try core.writeSummary(&summary.writer, run.outcomes.len, run.failures, skipped_e2e, skipped_survivors);
     std.debug.print("\n{s}\nreport: {s}\n", .{ summary.written(), report_path });
-    if (shadow_mismatch != 0 or compare_mismatch != 0) return 5;
+    if (compare_mismatch != 0) return 5;
     return if (run.failures == 0) 0 else 1;
 }
 
 fn usage() u8 {
-    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [--jobs=N] [--plan] [--single] [--compare] [--changed-since REF] [--slice=I/N] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--timeout-s=N] [--jobs=N] [--single] [--compare] [--changed-since REF] [--slice=I/N] [id...]\n", .{});
     return 2;
 }
 
@@ -260,260 +213,12 @@ fn runSerial(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Sel
     var failures: usize = 0;
     for (chosen) |entry| {
         std.debug.print("running {s} on {s} ...\n", .{ entry.m.id, entry.m.file });
-        const outcome = try runOne(arena, io, tree, entry.m, entry.kind, options, "single", null);
+        const outcome = try runOne(arena, io, tree, entry.m, entry.kind, options, "single");
         printOutcome(outcome);
         if (!outcome.ok) failures += 1;
         try outcomes.append(arena, outcome);
     }
     return .{ .outcomes = try outcomes.toOwnedSlice(arena), .failures = failures };
-}
-
-fn runPooled(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Selected, options: Options) !?Run {
-    const buckets = if (options.shadow) 0 else core.rotationBuckets(options.verify_share);
-    const bucket = core.rotationBucket(options.rotation, buckets);
-
-    const rotating = try arena.alloc(bool, chosen.len);
-    @memset(rotating, false);
-
-    var candidates: std.ArrayList(core.Candidate) = .empty;
-    var ordinal: usize = 0;
-    for (chosen, 0..) |entry, i| {
-        const m = entry.m;
-        if (!core.poolable(entry.kind, m.expect_status, m.timeout_s != null, m.optimize != null, m.kills.len)) continue;
-        defer ordinal += 1;
-        if (core.inRotation(ordinal, bucket, buckets)) {
-            rotating[i] = true;
-            continue;
-        }
-        try candidates.append(arena, .{
-            .index = i,
-            .file = m.file,
-            .kills = m.kills,
-            .filter = m.filter,
-            .from = m.from,
-            .to = m.to,
-            .all = m.all,
-        });
-    }
-    const sources = try readSources(arena, io, tree, candidates.items);
-    const pools = try core.buildPools(arena, candidates.items, options.pool_size, sources);
-    if (options.plan_only) {
-        printPlan(chosen, pools);
-        return null;
-    }
-
-    if (pools.len != 0 and !try baselineIsGreen(arena, io, pools, options)) return null;
-
-    const slots = try arena.alloc(?Outcome, chosen.len);
-    @memset(slots, null);
-    var state: PoolState = .{};
-    var queue: std.ArrayList([]const core.Candidate) = .empty;
-    try queue.appendSlice(arena, pools);
-    state.pools = pools.len;
-    var at: usize = 0;
-    while (at < queue.items.len) : (at += 1) {
-        const pool = queue.items[at];
-        const label = try std.fmt.allocPrint(arena, "pool-{d}", .{at + 1});
-        if (try runPool(arena, io, tree, chosen, pool, options, slots, &state, label)) {
-            state.splits += 1;
-            const cut = core.splitAt(pool);
-            try queue.append(arena, pool[0..cut]);
-            try queue.append(arena, pool[cut..]);
-        }
-    }
-
-    var outcomes: std.ArrayList(Outcome) = .empty;
-    var failures: usize = 0;
-    for (chosen, 0..) |entry, i| {
-        const outcome = slots[i] orelse blk: {
-            const origin = if (rotating[i]) "single-rotation" else "single";
-            std.debug.print("running {s} on {s} ({s}) ...\n", .{ entry.m.id, entry.m.file, origin });
-            const single = try runOne(arena, io, tree, entry.m, entry.kind, options, origin, null);
-            printOutcome(single);
-            break :blk single;
-        };
-        if (!outcome.ok) failures += 1;
-        try outcomes.append(arena, outcome);
-    }
-    var rotated: usize = 0;
-    for (rotating) |picked| {
-        if (picked) rotated += 1;
-    }
-    return .{
-        .outcomes = try outcomes.toOwnedSlice(arena),
-        .failures = failures,
-        .pools = state.pools,
-        .inconclusive = state.inconclusive,
-        .splits = state.splits,
-        .rotated = rotated,
-    };
-}
-
-const PoolState = struct {
-    pools: usize = 0,
-    inconclusive: usize = 0,
-    splits: usize = 0,
-};
-
-fn runPool(
-    arena: Allocator,
-    io: std.Io,
-    tree: std.Io.Dir,
-    chosen: []const Selected,
-    pool: []const core.Candidate,
-    options: Options,
-    slots: []?Outcome,
-    state: *PoolState,
-    label: []const u8,
-) !bool {
-    if (pool.len == 1) {
-        const entry = chosen[pool[0].index];
-        std.debug.print("running {s} on {s} (bisected from {s}) ...\n", .{ entry.m.id, entry.m.file, label });
-        const outcome = try runOne(arena, io, tree, entry.m, entry.kind, options, "bisected", label);
-        printOutcome(outcome);
-        slots[pool[0].index] = outcome;
-        return false;
-    }
-
-    const modules = core.modulesIn(pool);
-    std.debug.print("running {s} with {d} mutation(s) in {d} module(s) ...\n", .{ label, pool.len, modules });
-    const expected = try core.unionNames(arena, pool, "kills");
-    const filters = try core.poolFilter(arena, pool);
-
-    var backups: std.ArrayList(core.Backup) = .empty;
-    var working: std.ArrayList([]const u8) = .empty;
-    for (pool) |member| {
-        const m = chosen[member.index].m;
-        for (backups.items) |seen| {
-            if (std.mem.eql(u8, seen.path, m.file)) break;
-        } else {
-            if (!try knownToGitAndClean(arena, io, m.file)) {
-                std.debug.print("{s}: {s} is not known to git or has uncommitted changes\n", .{ label, m.file });
-                return error.DirtyTree;
-            }
-            const original = try tree.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes));
-            try backups.append(arena, .{ .path = m.file, .original = original });
-            try working.append(arena, original);
-        }
-    }
-
-    for (pool) |member| {
-        const m = chosen[member.index].m;
-        const at = indexOfPath(backups.items, m.file).?;
-        const text = core.applyMutation(arena, working.items[at], m.from, m.to, m.all) catch {
-            state.inconclusive += 1;
-            std.debug.print("{s}: {s} did not apply, splitting\n", .{ label, m.id });
-            return true;
-        };
-        working.items[at] = text;
-    }
-
-    errdefer restoreAll(arena, io, tree, backups.items) catch {};
-    for (backups.items, working.items) |backup, text| {
-        try tree.writeFile(io, .{ .sub_path = backup.path, .data = text });
-    }
-
-    const started = std.Io.Timestamp.now(io, .awake);
-    const result = runFiltered(arena, io, filters, null, options);
-    try restoreAll(arena, io, tree, backups.items);
-    const elapsed_ns: i96 = started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
-    const seconds: u64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_s));
-
-    const verdict = verdictOf(arena, result, expected) catch |err| switch (err) {
-        error.Timeout => Verdict{ .verdict = .inconclusive, .why = "timed out" },
-        else => return err,
-    };
-    if (verdict.verdict == .inconclusive) {
-        state.inconclusive += 1;
-        std.debug.print("{s} inconclusive after {d}s ({s}), splitting\n", .{ label, seconds, verdict.why });
-        return true;
-    }
-
-    std.debug.print("{s} killed {d} mutation(s) in {d}s\n", .{ label, pool.len, seconds });
-    for (pool) |member| {
-        const entry = chosen[member.index];
-        slots[member.index] = .{
-            .id = entry.m.id,
-            .file = entry.m.file,
-            .expect = entry.m.expect,
-            .expected_status = entry.m.expect_status,
-            .status = "killed",
-            .ok = true,
-            .seconds = seconds,
-            .failed_tests = member.kills,
-            .origin = "pooled",
-            .pool = label,
-        };
-    }
-    return false;
-}
-
-const Verdict = struct { verdict: core.PoolVerdict, why: []const u8 };
-
-fn verdictOf(arena: Allocator, run: anyerror!std.process.RunResult, expected: []const []const u8) !Verdict {
-    const result = try run;
-    const output = try std.mem.concat(arena, u8, &.{ result.stdout, result.stderr });
-    const code: u8 = switch (result.term) {
-        .exited => |c| c,
-        else => 255,
-    };
-    const failed = try core.failedTests(arena, output);
-    const status = core.classify(.unit, code, output);
-    const verdict = core.poolVerdict(status, failed, expected);
-    if (verdict == .killed) return .{ .verdict = verdict, .why = "" };
-    if (status != .killed) return .{ .verdict = verdict, .why = try std.fmt.allocPrint(arena, "status {t}: {s}", .{ status, firstErrorLine(output) orelse "no error line" }) };
-    if (core.missingKill(failed, expected)) |name| return .{ .verdict = verdict, .why = try std.fmt.allocPrint(arena, "expected to fail but did not: {s}", .{name}) };
-    if (core.unexpectedKill(failed, expected)) |name| return .{ .verdict = verdict, .why = try std.fmt.allocPrint(arena, "failed but no member expects it: {s}", .{name}) };
-    return .{ .verdict = verdict, .why = "unknown" };
-}
-
-fn baselineIsGreen(arena: Allocator, io: std.Io, pools: []const []const core.Candidate, options: Options) !bool {
-    var all: std.ArrayList(core.Candidate) = .empty;
-    for (pools) |pool| try all.appendSlice(arena, pool);
-    const filters = try core.poolFilter(arena, all.items);
-    std.debug.print("baseline: {d} filter(s) on the unmutated tree ...\n", .{filters.len});
-    const result = runFiltered(arena, io, filters, null, options) catch |err| {
-        std.debug.print("baseline did not finish: {s}\n", .{@errorName(err)});
-        return false;
-    };
-    const output = try std.mem.concat(arena, u8, &.{ result.stdout, result.stderr });
-    const code: u8 = switch (result.term) {
-        .exited => |c| c,
-        else => 255,
-    };
-    if (!core.baselineIsGreen(code, output)) {
-        std.debug.print("baseline is not green, stopping\n{s}\n", .{firstErrorLine(output) orelse "no error line"});
-        return false;
-    }
-    std.debug.print("baseline is green\n", .{});
-    return true;
-}
-
-fn printPlan(chosen: []const Selected, pools: []const []const core.Candidate) void {
-    for (pools, 1..) |pool, n| {
-        std.debug.print("pool-{d}: {d} mutation(s) in {d} module(s)\n", .{ n, pool.len, core.modulesIn(pool) });
-        for (pool) |member| std.debug.print("  {s}  {s}\n", .{ chosen[member.index].m.id, member.file });
-    }
-}
-
-fn indexOfPath(backups: []const core.Backup, path: []const u8) ?usize {
-    for (backups, 0..) |backup, i| {
-        if (std.mem.eql(u8, backup.path, path)) return i;
-    }
-    return null;
-}
-
-fn readSources(arena: Allocator, io: std.Io, tree: std.Io.Dir, candidates: []const core.Candidate) ![]const core.Source {
-    var sources: std.ArrayList(core.Source) = .empty;
-    for (candidates) |c| {
-        for (sources.items) |seen| {
-            if (std.mem.eql(u8, seen.file, c.file)) break;
-        } else {
-            const text = try tree.readFileAlloc(io, c.file, arena, .limited(core.max_source_bytes));
-            try sources.append(arena, .{ .file = c.file, .text = text });
-        }
-    }
-    return sources.toOwnedSlice(arena);
 }
 
 fn restoreAll(arena: Allocator, io: std.Io, tree: std.Io.Dir, backups: []const core.Backup) !void {
@@ -548,31 +253,6 @@ fn prepareTree(arena: Allocator, io: std.Io, cwd: std.Io.Dir) !std.Io.Dir {
     try cwd.writeFile(io, .{ .sub_path = tree_list, .data = list });
     std.debug.print("mirror {s}: {d} file(s), {d} refreshed; mutations run there and never in the working tree\n", .{ tree_dir, files.items.len, written });
     return tree;
-}
-
-fn withShadow(arena: Allocator, serial: []const Outcome, pooled: []const Outcome) ![]const Outcome {
-    const merged = try arena.dupe(Outcome, serial);
-    for (merged, pooled) |*outcome, shadow| {
-        outcome.pooled_status = shadow.status;
-        outcome.pooled_origin = shadow.origin;
-        outcome.pooled_pool = shadow.pool;
-    }
-    return merged;
-}
-
-fn reportShadow(pooled: []const Outcome, serial: []const Outcome) usize {
-    var mismatch: usize = 0;
-    for (pooled, serial) |a, b| {
-        if (std.mem.eql(u8, a.status, b.status) and a.ok == b.ok) continue;
-        mismatch += 1;
-        std.debug.print("shadow mismatch {s}: pooled={s} (ok={}) serial={s} (ok={})\n", .{ a.id, a.status, a.ok, b.status, b.ok });
-    }
-    if (mismatch == 0) {
-        std.debug.print("shadow: {d} mutation(s) agree\n", .{pooled.len});
-    } else {
-        std.debug.print("shadow: {d} mutation(s) disagree\n", .{mismatch});
-    }
-    return mismatch;
 }
 
 const Plan = union(enum) {
@@ -933,7 +613,7 @@ fn runSchemata(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const S
     for (chosen, plans, 0..) |entry, plan, i| {
         const outcome = slots[i] orelse blk: {
             std.debug.print("running {s} on {s} on its own ({t}) ...\n", .{ entry.m.id, entry.m.file, plan.fallback });
-            var single = try runOne(arena, io, tree, entry.m, entry.kind, options, "single", null);
+            var single = try runOne(arena, io, tree, entry.m, entry.kind, options, "single");
             single.schema_refusal = @tagName(plan.fallback);
             printOutcome(single);
             break :blk single;
@@ -962,7 +642,7 @@ fn compareWithSingle(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []c
         if (!std.mem.eql(u8, outcome.origin, "schema")) continue;
         compared += 1;
         std.debug.print("compare {d}: {s} on its own ...\n", .{ compared, entry.m.id });
-        const single = try runOne(arena, io, tree, entry.m, entry.kind, options, "single", null);
+        const single = try runOne(arena, io, tree, entry.m, entry.kind, options, "single");
         if (std.mem.eql(u8, single.status, outcome.status) and single.ok == outcome.ok) continue;
         mismatch += 1;
         std.debug.print("compare mismatch {s}: schema={s} (ok={}) single={s} (ok={})\n", .{ entry.m.id, outcome.status, outcome.ok, single.status, single.ok });
@@ -1045,7 +725,7 @@ fn kindOf(expect: []const u8) ?core.Kind {
     return null;
 }
 
-fn runOne(arena: Allocator, io: std.Io, tree: std.Io.Dir, m: Mutation, kind: core.Kind, options: Options, origin: []const u8, pool: ?[]const u8) !Outcome {
+fn runOne(arena: Allocator, io: std.Io, tree: std.Io.Dir, m: Mutation, kind: core.Kind, options: Options, origin: []const u8) !Outcome {
     var outcome: Outcome = .{
         .id = m.id,
         .file = m.file,
@@ -1054,7 +734,6 @@ fn runOne(arena: Allocator, io: std.Io, tree: std.Io.Dir, m: Mutation, kind: cor
         .status = "refused",
         .ok = false,
         .origin = origin,
-        .pool = pool,
     };
     if (!try knownToGitAndClean(arena, io, m.file)) {
         outcome.detail = "file is not known to git or has uncommitted changes";
