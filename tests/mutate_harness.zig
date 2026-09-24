@@ -489,7 +489,7 @@ test "harness: a mutation left in the mirror by a killed run never reaches the w
     try testing.expectEqual(@as(usize, 2), try core.syncMirror(testing.allocator, testing.io, work, mirror, &files, &.{}));
     try testing.expectEqual(@as(usize, 0), try core.syncMirror(testing.allocator, testing.io, work, mirror, &files, &files));
 
-    try mirror.writeFile(testing.io, .{ .sub_path = "src/target.zig", .data = "mutated and never restored" });
+    try mirror.writeFile(testing.io, .{ .sub_path = "src/target.zig", .data = "0riginal" });
     try expectContent(work, "src/target.zig", "original");
 
     try testing.expectEqual(@as(usize, 1), try core.syncMirror(testing.allocator, testing.io, work, mirror, &files, &files));
