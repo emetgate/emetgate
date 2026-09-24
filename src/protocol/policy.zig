@@ -1,5 +1,6 @@
 const std = @import("std");
 const tool_result = @import("tool_result.zig");
+const mirror_mod = @import("mirror.zig");
 
 const Value = std.json.Value;
 
@@ -9,6 +10,8 @@ pub const Policy = struct {
     allow_repo_config: bool = false,
     allow_repo_memory: bool = false,
     root: ?[]const u8 = null,
+    mirror_enabled: bool = false,
+    mirror: ?*mirror_mod.Mirror = null,
 };
 
 pub fn parsePolicy(args: anytype) ?Policy {
@@ -28,6 +31,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.test_command = command;
+        } else if (std.mem.eql(u8, arg, "--mirror")) {
+            if (policy.mirror_enabled) return null;
+            policy.mirror_enabled = true;
         } else if (std.mem.eql(u8, arg, "--typecheck")) {
             if (policy.typecheck_command != null or i + 1 >= args.len) return null;
             i += 1;

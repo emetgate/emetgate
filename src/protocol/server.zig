@@ -6,6 +6,7 @@ const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
+const mirror_mod = @import("mirror.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -33,18 +34,22 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_skeleton",
-        .description = "Structural outline of a source file in a registered language: every symbol's signature with bodies elided, plus every adopted rule that covers this file (id, text, enforce or advisory, predicate, scope). Read this instead of the whole file to locate a target cheaply, and write a body that already obeys the listed rules: an enforced rule rejects a proposal before the tests run. The rules are read-only here; they are adopted, superseded and forgotten only from the emetgate CLI. Files of other languages are refused; use emetgate_read_file for docs and config.",
-        .props = &.{.{ .name = "file", .desc = "path to a source file in a registered language" }},
+        .description = "Structural outline of a source file in a registered language: every symbol's signature with bodies elided, plus every adopted rule that covers this file (id, text, enforce or advisory, predicate, scope). Read this instead of the whole file to locate a target cheaply, and write a body that already obeys the listed rules: an enforced rule rejects a proposal before the tests run. The rules are read-only here; they are adopted, superseded and forgotten only from the emetgate CLI. Files of other languages are refused; use emetgate_read_file for docs and config. When the server was started with --mirror, an unchanged skeleton comes back as a one-line 'unchanged: <file> #<hash>' instead of the full outline; pass force:true to always get the full outline.",
+        .props = &.{
+            .{ .name = "file", .desc = "path to a source file in a registered language" },
+            .{ .name = "force", .desc = "always return the full outline even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
+        },
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair.",
+        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair. When the server was started with --mirror, a symbol whose hash was already sent unchanged this session comes back as a one-line 'unchanged: <file>#<symbol> #<hash>' instead of its body; pass force:true to always get the full body.",
         .props = &.{
             .{ .name = "file", .desc = "path to a source file in a registered language" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add", .optional = true },
             .{ .name = "symbols", .desc = "array of symbol refs to read together", .optional = true, .ty = "array" },
             .{ .name = "line_start", .desc = "1-based start line of a range to read, widened to symbol boundaries", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "1-based end line of a range to read, widened to symbol boundaries", .optional = true, .ty = "integer" },
+            .{ .name = "force", .desc = "always return the full body even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -69,10 +74,11 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. A source file of a registered language is refused (error UseSymbolToolsForSource): use emetgate_symbols, emetgate_skeleton or emetgate_read_symbol instead, or pass raw:true to read it verbatim anyway. Paths outside the repo, .git and .emetgate are refused.",
+        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. A source file of a registered language is refused (error UseSymbolToolsForSource): use emetgate_symbols, emetgate_skeleton or emetgate_read_symbol instead, or pass raw:true to read it verbatim anyway. Paths outside the repo, .git and .emetgate are refused. When the server was started with --mirror, unchanged content comes back as a one-line 'unchanged: <file> #<hash>' instead of the full content; pass force:true to always get the full content.",
         .props = &.{
             .{ .name = "file", .desc = "path inside the repo" },
             .{ .name = "raw", .desc = "read a source file of a registered language verbatim instead of being refused", .optional = true, .ty = "boolean" },
+            .{ .name = "force", .desc = "always return the full content even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -107,6 +113,9 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     const observer_ptr: ?*telemetry.Observer = if (observer) |*o| o else null;
     var served = policy;
     served.root = root;
+    var session_mirror: mirror_mod.Mirror = .init(gpa, policy.mirror_enabled);
+    defer session_mirror.deinit();
+    served.mirror = &session_mirror;
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);

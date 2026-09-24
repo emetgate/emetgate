@@ -85,10 +85,30 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try writer.writeByte('\n');
 }
 
+pub fn writeUnchanged(writer: *Writer, file: []const u8, unit: ?[]const u8, hash: symbol.Hash) !void {
+    const hex = symbol.formatHash(hash);
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("unchanged");
+    try js.objectField("file");
+    try js.write(file);
+    if (unit) |u| {
+        try js.objectField("symbol");
+        try js.write(u);
+    }
+    try js.objectField("hash");
+    try js.write(hex[0..]);
+    try js.objectField("hint");
+    try js.write("already sent unchanged this session; pass force:true to get the full content again");
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub const SymbolEntry = struct {
     ref: []const u8,
     hash: symbol.Hash,
-    body: []const u8,
+    body: ?[]const u8,
 };
 
 pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const SymbolEntry) !void {
@@ -105,8 +125,13 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
         try js.write(entry.ref);
         try js.objectField("hash");
         try js.write(hex[0..]);
-        try js.objectField("body");
-        try js.write(entry.body);
+        if (entry.body) |body| {
+            try js.objectField("body");
+            try js.write(body);
+        } else {
+            try js.objectField("status");
+            try js.write("unchanged");
+        }
         try js.endObject();
     }
     try js.endArray();
@@ -117,7 +142,7 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
 pub const RangeEntry = struct {
     ref: []const u8,
     hash: symbol.Hash,
-    text: []const u8,
+    text: ?[]const u8,
     start_line: u32,
     end_line: u32,
 };
@@ -144,8 +169,13 @@ pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32,
         try js.write(entry.start_line);
         try js.objectField("end_line");
         try js.write(entry.end_line);
-        try js.objectField("text");
-        try js.write(entry.text);
+        if (entry.text) |text| {
+            try js.objectField("text");
+            try js.write(text);
+        } else {
+            try js.objectField("status");
+            try js.write("unchanged");
+        }
         try js.endObject();
     }
     try js.endArray();

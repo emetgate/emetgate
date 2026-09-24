@@ -5,6 +5,9 @@ const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
+const symbol = @import("../engine/symbol.zig");
+const wire = @import("wire.zig");
+const mirror_mod = @import("mirror.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -47,21 +50,22 @@ pub fn inDirectory(path: []const u8, prefix: []const u8) bool {
     return path[prefix.len] == '/' or path[prefix.len] == '\\';
 }
 
-pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
+pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror) !ToolResult {
     const file = try requireString(args, "file");
     const raw = if (args) |a| tool_result.getBool(a, "raw") orelse false else false;
+    const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     event.label = "read_file";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderReadFile(gpa, io, root, file, raw, &buffer.writer, event) catch |err| {
+    renderReadFile(gpa, io, root, file, raw, force, mirror, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, raw: bool, w: *Writer, event: *telemetry.Event) !void {
+fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, raw: bool, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
     const place = try repo.jail(gpa, io, root, file);
     defer place.deinit(gpa);
     if (!raw and lang_registry.forPath(file) != null) return error.UseSymbolToolsForSource;
@@ -70,6 +74,16 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     if (looksBinary(bytes)) return error.BinaryFile;
     const shown = utf8Prefix(bytes, max_read_bytes);
     if (!std.unicode.utf8ValidateSlice(shown)) return error.NotUtf8;
+    if (mirror) |m| {
+        const hash = symbol.hashOf(shown);
+        const key = try std.fmt.allocPrint(gpa, "file:{s}", .{file});
+        defer gpa.free(key);
+        if (try m.check(key, hash, force) == .unchanged) {
+            event.chars_emetgate = 0;
+            event.chars_fullfile = bytes.len;
+            return wire.writeUnchanged(w, file, null, hash);
+        }
+    }
     event.chars_emetgate = shown.len;
     event.chars_fullfile = bytes.len;
     var js: std.json.Stringify = .{ .writer = w };
