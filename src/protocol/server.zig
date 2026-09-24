@@ -69,8 +69,11 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. For TypeScript code use emetgate_skeleton and emetgate_read_symbol instead. Paths outside the repo, .git and .emetgate are refused.",
-        .props = &.{.{ .name = "file", .desc = "path inside the repo" }},
+        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. A source file of a registered language is refused (error UseSymbolToolsForSource): use emetgate_symbols, emetgate_skeleton or emetgate_read_symbol instead, or pass raw:true to read it verbatim anyway. Paths outside the repo, .git and .emetgate are refused.",
+        .props = &.{
+            .{ .name = "file", .desc = "path inside the repo" },
+            .{ .name = "raw", .desc = "read a source file of a registered language verbatim instead of being refused", .optional = true, .ty = "boolean" },
+        },
     },
     .{
         .name = "emetgate_list",

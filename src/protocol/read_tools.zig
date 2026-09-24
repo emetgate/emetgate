@@ -4,6 +4,7 @@ const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
+const lang_registry = @import("../engine/lang/registry.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -48,20 +49,22 @@ pub fn inDirectory(path: []const u8, prefix: []const u8) bool {
 
 pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const file = try requireString(args, "file");
+    const raw = if (args) |a| tool_result.getBool(a, "raw") orelse false else false;
     event.label = "read_file";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderReadFile(gpa, io, root, file, &buffer.writer, event) catch |err| {
+    renderReadFile(gpa, io, root, file, raw, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, w: *Writer, event: *telemetry.Event) !void {
+fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, raw: bool, w: *Writer, event: *telemetry.Event) !void {
     const place = try repo.jail(gpa, io, root, file);
     defer place.deinit(gpa);
+    if (!raw and lang_registry.forPath(file) != null) return error.UseSymbolToolsForSource;
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, place.abs, gpa, .limited(max_read_source_bytes));
     defer gpa.free(bytes);
     if (looksBinary(bytes)) return error.BinaryFile;

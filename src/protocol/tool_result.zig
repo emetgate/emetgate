@@ -49,6 +49,14 @@ pub fn getInt(value: Value, key: []const u8) ?i64 {
     };
 }
 
+pub fn getBool(value: Value, key: []const u8) ?bool {
+    const field = getField(value, key) orelse return null;
+    return switch (field) {
+        .bool => |b| b,
+        else => null,
+    };
+}
+
 pub fn getStringArray(value: Value, key: []const u8) ?[]const Value {
     const field = getField(value, key) orelse return null;
     return switch (field) {
