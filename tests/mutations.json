@@ -3914,8 +3914,7 @@
       "to": "        if (tree.nodeTag(@enumFromInt(i)) == .test_decl or true) return true;\n",
       "kills": [
         "suites: a test is found in any form and position, and a commented one is not",
-        "suites: every test file under tests/ is imported by exactly one suite",
-        "suites: no test file imports another file that declares tests, so no test runs in two suites"
+        "suites: every test file under tests/ is imported exactly once by test_root.zig"
       ]
     },
     {
@@ -3928,12 +3927,12 @@
       ]
     },
     {
-      "id": "ZS6-suite-guards-only-in-rest",
+      "id": "ZS6-a-test-file-left-out-of-the-binary",
       "file": "test_root.zig",
-      "from": "    _ = @import(\"tests/suites.zig\");\n",
-      "to": "    if (comptime runs(\"rest\")) _ = @import(\"tests/suites.zig\");\n",
+      "from": "    _ = @import(\"tests/lockdown.zig\");\n",
+      "to": "",
       "kills": [
-        "suites: the guards are imported outside the runs switch, so every suite runs them"
+        "suites: every test file under tests/ is imported exactly once by test_root.zig"
       ]
     },
     {
@@ -4101,6 +4100,89 @@
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
         "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time",
         "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "RN1-shard-selection-off-by-one",
+      "file": "tools/test_runner.zig",
+      "from": "return ordinal % shard.count == shard.index - 1;",
+      "to": "return ordinal % shard.count == shard.index % shard.count;",
+      "kills": [
+        "runner: the shards of any count together select every matching test exactly once",
+        "runner: the shards of the test binary together list every test exactly once"
+      ]
+    },
+    {
+      "id": "RN2-empty-filter-passes",
+      "file": "tools/test_runner.zig",
+      "from": "if (options.filters.len != 0 and selection.matched == 0) {",
+      "to": "if (false) {",
+      "kills": [
+        "runner: a filter that matches no test fails the run instead of passing it empty"
+      ]
+    },
+    {
+      "id": "RN3-a-shard-left-out",
+      "file": "tools/test_runner.zig",
+      "from": "const shards = gpa.alloc(ShardRun, options.jobs) catch oom();",
+      "to": "const shards = gpa.alloc(ShardRun, options.jobs - 1) catch oom();",
+      "kills": [
+        "runner: --jobs runs every selected test once across its shards"
+      ]
+    },
+    {
+      "id": "RN4-coverage-ignores-a-missing-test",
+      "file": "tools/test_runner.zig",
+      "from": "if (seen[i] == 0) return .{ .missing = i };",
+      "to": "if (seen[i] == 0) continue;",
+      "kills": [
+        "runner: shard coverage names a test no shard ran, one two shards ran and a stray index"
+      ]
+    },
+    {
+      "id": "RN5-mutant-never-set",
+      "file": "tools/test_runner.zig",
+      "from": "emetgate_mutant = options.mutant;",
+      "to": "emetgate_mutant = 0;",
+      "kills": [
+        "runner: --mutant sets the global that the schemata dispatch reads",
+        "runner: a failing test in one shard fails the --jobs run and the mutant reaches every shard"
+      ]
+    },
+    {
+      "id": "RN6-mutant-not-passed-to-shards",
+      "file": "tools/test_runner.zig",
+      "from": "if (options.mutant != 0) argv.appendSlice(gpa, &.{ \"--mutant\"",
+      "to": "if (false) argv.appendSlice(gpa, &.{ \"--mutant\"",
+      "kills": [
+        "runner: a failing test in one shard fails the --jobs run and the mutant reaches every shard"
+      ]
+    },
+    {
+      "id": "RN7-failing-shard-ignored",
+      "file": "tools/test_runner.zig",
+      "from": "return if (broken != 0 or uncovered or sum.failed != 0 or sum.leaked != 0) 1 else 0;",
+      "to": "return if (broken != 0 or uncovered or sum.leaked != 0) 1 else 0;",
+      "kills": [
+        "runner: a failing test in one shard fails the --jobs run and the mutant reaches every shard"
+      ]
+    },
+    {
+      "id": "RN8-logged-error-not-a-failure",
+      "file": "tools/test_runner.zig",
+      "from": "if (why == null and log_err_count != 0) why = \"logged an error\";",
+      "to": "",
+      "kills": [
+        "runner: a test that logs an error fails even when it returns normally"
+      ]
+    },
+    {
+      "id": "RN9-no-match-is-not-no-tests",
+      "file": "tools/mutate/core.zig",
+      "from": "    if (std.mem.indexOf(u8, output, no_match_marker) != null) return .no_tests;\n",
+      "to": "",
+      "kills": [
+        "harness: a filter that matches no test is no_tests, not a kill or an error"
       ]
     }
   ]

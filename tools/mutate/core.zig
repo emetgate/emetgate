@@ -118,6 +118,8 @@ pub fn unexpectedKill(failed: []const []const u8, expected: []const []const u8) 
     return null;
 }
 
+pub const no_match_marker = "error: no test matches the filter(s)";
+
 pub fn classify(kind: Kind, exit_code: u8, output: []const u8) Status {
     if (exit_code == 0) {
         if (kind == .e2e) return .survived;
@@ -125,6 +127,7 @@ pub fn classify(kind: Kind, exit_code: u8, output: []const u8) Status {
         return if (summary.total == 0) .no_tests else .survived;
     }
     if (isCompileError(output)) return .compile_error;
+    if (std.mem.indexOf(u8, output, no_match_marker) != null) return .no_tests;
     switch (kind) {
         .unit => {
             if (parseSummary(output)) |s| {

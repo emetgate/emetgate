@@ -86,6 +86,12 @@ test "harness: a clean run is survived and a run with no matching tests is flagg
     try testing.expectEqual(core.Status.other_error, core.classify(.unit, 1, "error: FileNotFound\n"));
 }
 
+test "harness: a filter that matches no test is no_tests, not a kill or an error" {
+    const output = "error: no test matches the filter(s): \"gone\"\nerror: the following build command failed with exit code 1:\n";
+    try testing.expectEqual(core.Status.no_tests, core.classify(.unit, 1, output));
+    try testing.expectEqual(core.Status.no_tests, core.classify(.unit, 2, "error: no test matches the filter(s): \"gone\"\n"));
+}
+
 test "harness: e2e-lockdown failures are killed" {
     try testing.expectEqual(core.Status.killed, core.classify(.e2e, 1, "FAIL: tool outside the lockdown allow-list: Bash\ne2e-lockdown: 1 failure(s)\n"));
     try testing.expectEqual(core.Status.survived, core.classify(.e2e, 0, "e2e-lockdown: passed\n"));
