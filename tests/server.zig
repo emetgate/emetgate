@@ -1,6 +1,6 @@
 const std = @import("std");
-const server = @import("../src/protocol/server.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
+const server = @import("emetgate").server;
+const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
@@ -216,8 +216,8 @@ test "emetgate_mutate with a stale hash is a tool error, not a protocol error" {
     try testing.expect(std.mem.indexOf(u8, response, "\"code\":-320") == null);
 }
 
-const handlers = @import("../src/protocol/handlers.zig");
-const telemetry = @import("../src/protocol/telemetry.zig");
+const handlers = @import("emetgate").handlers;
+const telemetry = @import("emetgate").telemetry;
 
 const served_tools = [_][]const u8{
     "emetgate_symbols",

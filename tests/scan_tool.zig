@@ -1,7 +1,11 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
-const server = @import("../src/protocol/server.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
+const server = @import("emetgate").server;
+const Runtime = @import("emetgate").runtime.Runtime;
+const handlers = @import("emetgate").handlers;
+const telemetry = @import("emetgate").telemetry;
+const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
 const Value = std.json.Value;
@@ -23,9 +27,7 @@ const Repo = struct {
         }
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
-        try git(root_abs, &.{ "init", "-q" });
-        try git(root_abs, &.{ "config", "user.email", "t@t" });
-        try git(root_abs, &.{ "config", "user.name", "t" });
+        try git_fixture.initRepo(root_abs);
         try git(root_abs, &.{ "add", "." });
         try git(root_abs, &.{ "commit", "-q", "--allow-empty", "-m", "init" });
         return .{ .tmp = tmp, .root_abs = root_abs };
@@ -243,4 +245,107 @@ test "scan tool: a call creates no workspace and leaves the ledger untouched" {
     var count: usize = 0;
     while (try it.next(testing.io)) |_| count += 1;
     try testing.expectEqual(@as(usize, 1), count);
+}
+
+test "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{ .{ "src/a.ts", "export function f(x: number) {\n  return x;\n}\n" }, .{ "src/b.js", "export function g(x) {\n  return x;\n}\n" } });
+    defer repo.deinit();
+    var reply = try call(&repo, .{ .check = "q:(type_annotation) @violation" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("check_failed", reply.field("status").string);
+    try testing.expectEqual(@as(usize, 1), reply.field("check_failures").array.items.len);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
+    var args: std.json.ObjectMap = .empty;
+    defer args.deinit(testing.allocator);
+    try args.put(testing.allocator, "check", .{ .string = "q:(type_annotation) @violation" });
+    var event: telemetry.Event = .{ .tool = "emetgate_scan" };
+    const result = try handlers.callTool(testing.allocator, testing.io, runtime, "emetgate_scan", .{ .object = args }, &event, .{ .root = repo.root_abs });
+    defer testing.allocator.free(result.text);
+    try testing.expect(result.is_error);
+    try testing.expectEqual(telemetry.Outcome.failed, event.outcome);
+    try testing.expectEqualStrings("CheckFailed", event.result.?);
+}
+
+test "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ "src/wide.ts", "a;\n" ** 20_000 }});
+    defer repo.deinit();
+    const checks = [_][]const u8{
+        "q:(program ((expression_statement)+) @violation)",
+        "q:(program [(expression_statement)+ (comment)] @violation)",
+        "q:(program [(comment) (expression_statement)*] @violation)",
+        "q:(program (((expression_statement)+)) @violation)",
+        "q:(program ((comment) (expression_statement)+) @violation)",
+    };
+    for (checks) |check| {
+        errdefer std.debug.print("check: {s}\n", .{check});
+        const started = std.Io.Timestamp.now(testing.io, .awake);
+        try expectRefused(&repo, .{ .check = check }, "QueryQuantifiedCapture");
+        const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+        try testing.expect(elapsed_ms < 2_000);
+    }
+}
+
+fn expectDeepChainFailure(comptime levels: usize) !void {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ "src/deep.ts", "export const x = " ++ "a + " ** levels ++ "a;\n" },
+        .{ "src/flat.ts", "export const y = f(a);\n" },
+    });
+    defer repo.deinit();
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    var reply = try call(&repo, .{ .check = "q:(call_expression) @violation" });
+    defer reply.deinit();
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 60_000);
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("check_failed", reply.field("status").string);
+    try testing.expectEqual(@as(i64, 1), reply.field("violation_count").integer);
+    const failures = reply.field("check_failures").array.items;
+    try testing.expectEqual(@as(usize, 1), failures.len);
+    try testing.expectEqualStrings("src/deep.ts", failures[0].object.get("file").?.string);
+    try testing.expectEqualStrings("query_depth_exceeded", failures[0].object.get("detail").?.string);
+}
+
+test "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded" {
+    try expectDeepChainFailure(6_100);
+}
+
+test "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time" {
+    try test_util.slow();
+    try expectDeepChainFailure(64_000);
+}
+
+test "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ "src/mid.ts", "export const y = " ++ "a + " ** 150 ++ "a;\n" }});
+    defer repo.deinit();
+    var reply = try call(&repo, .{ .check = "q:" ++ "(_ " ** 49 ++ "(_) @violation" ++ ")" ** 49 });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    const failures = reply.field("check_failures").array.items;
+    try testing.expectEqual(@as(usize, 1), failures.len);
+    try testing.expectEqualStrings("query_depth_exceeded", failures[0].object.get("detail").?.string);
+}
+
+test "scan tool: one call has a total operation budget, and the files past it come back as check failures" {
+    try test_util.slow();
+    try skipOffWindows();
+    const file = "const s = \"" ++ "a" ** 20_000 ++ "\";\n";
+    var repo = try Repo.init(&.{
+        .{ "src/a.ts", file }, .{ "src/b.ts", file }, .{ "src/c.ts", file }, .{ "src/d.ts", file },
+        .{ "src/e.ts", file }, .{ "src/f.ts", file }, .{ "src/g.ts", file }, .{ "src/h.ts", file },
+    });
+    defer repo.deinit();
+    var reply = try call(&repo, .{ .check = "q:((string_fragment) @violation (#match? @violation \"" ++ "a?" ** 150 ++ "b\"))" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("check_failed", reply.field("status").string);
+    const failures = reply.field("check_failures").array.items;
+    try testing.expect(failures.len >= 1);
+    try testing.expect(failures.len <= 3);
+    for (failures) |f| try testing.expectEqualStrings("call_budget_exceeded", f.object.get("detail").?.string);
 }

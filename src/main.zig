@@ -24,7 +24,7 @@ const usage =
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--allow-repo-memory] [--json]
     \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config] [--allow-repo-memory]
-    \\       emetgate scan [--check <spec> [--in <where>]] [--json]
+    \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\       emetgate rule add <text> [--check <spec>] [--in <where>] [--enforce]
     \\       emetgate rule list [--all] [--json]
     \\       emetgate rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]
@@ -36,8 +36,9 @@ const usage =
     \\has no mcp tool for adopting, superseding or forgetting a rule.
     \\
     \\A ledger committed to git (.emetgate/ledger.ndjson) came with the clone:
-    \\its cmd: rules never run unless try/mcp is started with --allow-repo-memory;
+    \\its cmd: and q: rules never run unless try/mcp is started with --allow-repo-memory;
     \\a proposal they cover is refused with UntrustedRepoMemory instead.
+    \\scan without --allow-repo-memory skips those q: rules and lists each one as not run.
     \\
     \\lockdown starts claude with only ToolSearch and the .mcp.json servers
     \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config).
@@ -404,7 +405,10 @@ fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Requ
     const gpa = runtime.gpa;
     const root = try runner.repoRoot(gpa, init.io);
     defer gpa.free(root);
-    try rule_command.run(gpa, init.io, root, request, out);
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    defer stderr_writer.interface.flush() catch {};
+    try rule_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
     return 0;
 }
 

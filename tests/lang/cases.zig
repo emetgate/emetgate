@@ -1,4 +1,4 @@
-const Kind = @import("../../src/engine/symbol.zig").Kind;
+const Kind = @import("emetgate").symbol.Kind;
 
 pub const Member = struct {
     ref: []const u8,
@@ -19,6 +19,8 @@ pub const Cases = struct {
     optional_call_source: []const u8,
     literal_source: []const u8,
     literal_flagged: []const []const u8,
+    query_source: []const u8,
+    has_type_annotations: bool,
 };
 
 pub const Entry = struct {

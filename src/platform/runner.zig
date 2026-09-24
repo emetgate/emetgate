@@ -124,7 +124,11 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer ref.deinit(gpa);
     const applied = try cas.propose(base, ref, options.expected_hash, options.new_body);
     defer applied.snapshot.destroy();
-    if (try rules.gate(gpa, io, root, rel, ref, applied.snapshot.profile, applied.snapshot.tree, applied.body)) |report| return .{ .rule_violation = report };
+    switch (try rules.gate(gpa, io, root, rel, ref, applied.snapshot.profile, applied.snapshot.tree, applied.body, options.allow_repo_memory)) {
+        .ok => {},
+        .violated => |report| return .{ .rule_violation = report },
+        .failed => |failure| return .{ .rule_check_failed = failure },
+    }
 
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);
@@ -184,7 +188,11 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     defer ref.deinit(gpa);
     const created = try prepareCreate(gpa, io, runtime, root, options.file_abs, rel, ref, options.new_body);
     defer created.snapshot.destroy();
-    if (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body)) |report| return .{ .rule_violation = report };
+    switch (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body, options.allow_repo_memory)) {
+        .ok => {},
+        .violated => |report| return .{ .rule_violation = report },
+        .failed => |failure| return .{ .rule_check_failed = failure },
+    }
 
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
     defer gpa.free(shadow_abs);

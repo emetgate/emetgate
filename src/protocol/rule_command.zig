@@ -1,5 +1,7 @@
 const std = @import("std");
 const checks = @import("../engine/checks.zig");
+const query = @import("../engine/query.zig");
+const lang = @import("../engine/lang/registry.zig");
 const memory = @import("../platform/memory.zig");
 
 const Writer = std.Io.Writer;
@@ -88,16 +90,18 @@ fn parseListing(args: []const [:0]const u8) ?Listing {
     return listing;
 }
 
-pub fn run(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer) !void {
+pub fn run(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer, err_out: *Writer) !void {
     switch (request) {
         .add => |decided| {
-            try refuseUnwritable(decided);
+            try explainQuery(gpa, decided, err_out);
+            try refuseUnwritable(gpa, decided);
             const id = try memory.remember(gpa, io, root_abs, .project, decided.text, decided.enforce, decided.check, decided.where);
             defer gpa.free(id);
             try out.print("{s}\n", .{id});
         },
         .supersede => |target| {
-            try refuseUnwritable(target.decided);
+            try explainQuery(gpa, target.decided, err_out);
+            try refuseUnwritable(gpa, target.decided);
             const decided = target.decided;
             const id = try memory.supersede(gpa, io, root_abs, target.id, .project, decided.text, decided.enforce, decided.check, decided.where);
             defer gpa.free(id);
@@ -108,9 +112,42 @@ pub fn run(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, o
     }
 }
 
-fn refuseUnwritable(decided: Decided) !void {
+fn refuseUnwritable(gpa: Allocator, decided: Decided) !void {
     if (decided.enforce and decided.check == null) return error.EnforceWithoutCheck;
-    if (decided.check) |spec| try checks.validate(spec);
+    if (decided.check) |spec| try checks.validate(gpa, spec);
+}
+
+fn explainQuery(gpa: Allocator, decided: Decided, err_out: *Writer) !void {
+    const spec = decided.check orelse return;
+    const invocation = checks.parse(spec);
+    if (!std.mem.eql(u8, invocation.name, checks.query_name)) return;
+    const text = invocation.arg orelse return;
+    if (text.len == 0) return;
+    var results: [lang.profiles.len]checks.Compiled = undefined;
+    try checks.compileEverywhere(gpa, text, &results);
+    for (results) |result| {
+        const err = result.err orelse continue;
+        if (query.dependsOnLanguage(err)) continue;
+        try writeProblem(err_out, err, result.diag);
+        return;
+    }
+    const kept = for (results) |result| {
+        if (result.err == null) break true;
+    } else false;
+    for (results) |result| {
+        const err = result.err orelse continue;
+        if (kept) {
+            try err_out.print("q: does not compile for {s}; files in that language fail the check by name: ", .{result.profile.name});
+        } else {
+            try err_out.print("q: does not compile for {s}: ", .{result.profile.name});
+        }
+        try writeProblem(err_out, err, result.diag);
+    }
+}
+
+fn writeProblem(err_out: *Writer, err: query.CompileError, diag: query.Diagnostic) !void {
+    if (diag.what.len == 0) return err_out.print("{t}\n", .{err});
+    try err_out.print("{t}: {s}: \"{s}\"\n", .{ err, diag.what, diag.at() });
 }
 
 fn list(gpa: Allocator, io: std.Io, root_abs: []const u8, listing: Listing, out: *Writer) !void {

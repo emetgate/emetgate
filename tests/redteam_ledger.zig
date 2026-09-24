@@ -1,14 +1,17 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
-const runner = @import("../src/platform/runner.zig");
-const shadow = @import("../src/platform/shadow.zig");
-const memory = @import("../src/platform/memory.zig");
-const symbol = @import("../src/engine/symbol.zig");
-const server = @import("../src/protocol/server.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
-const Snapshot = @import("../src/engine/loader.zig").Snapshot;
+const runner = @import("emetgate").runner;
+const shadow = @import("emetgate").shadow;
+const memory = @import("emetgate").memory;
+const symbol = @import("emetgate").symbol;
+const server = @import("emetgate").server;
+const Runtime = @import("emetgate").runtime.Runtime;
+const Snapshot = @import("emetgate").loader.Snapshot;
+const query_cases = @import("query_cases.zig");
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 const gpa = testing.allocator;
 
@@ -35,10 +38,8 @@ const Clone = struct {
         try shadow.grantLowIntegrityWrite(drop_abs);
         const file_abs = try std.fmt.allocPrint(gpa, "{s}\\src\\math.ts", .{root_abs});
         errdefer gpa.free(file_abs);
+        try git_fixture.initRepo(root_abs);
         for ([_][]const []const u8{
-            &.{ "init", "-q" },
-            &.{ "config", "user.email", "t@t" },
-            &.{ "config", "user.name", "t" },
             &.{ "add", "." },
             &.{ "commit", "-q", "-m", "init" },
         }) |args| try git(root_abs, args);
@@ -247,6 +248,62 @@ test "redteam ledger: static rules in a committed ledger still enforce without t
     defer clean.deinit(gpa);
     errdefer diagnostics.printResult(clean);
     try testing.expect(clean == .committed);
+}
+
+fn adoptQueryRule(clone: *Clone, check: []const u8) !void {
+    const id = try memory.remember(gpa, testing.io, clone.root_abs, .global, "query rule", true, check, null);
+    gpa.free(id);
+}
+
+test "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory" {
+    try test_util.slow();
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var clone = try Clone.init();
+    defer clone.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try adoptQueryRule(&clone, "q:((statement_block" ++ " (_) @violation ." ** 7 ++ " (_) @violation) (#eq? @violation \"never\"))");
+    try clone.commitLedger();
+
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    try testing.expectError(error.UntrustedRepoMemory, clone.propose(runtime, query_cases.wide_body, false));
+    const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+    try testing.expect(elapsed_ms < 10_000);
+    try clone.expectPristine();
+    try testing.expectError(error.UntrustedRepoMemory, clone.proposeBatch(runtime, false));
+    try clone.expectPristine();
+}
+
+test "redteam ledger: --allow-repo-memory lets a committed ledger's q: rule run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var clone = try Clone.init();
+    defer clone.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try adoptQueryRule(&clone, "q:((binary_expression operator: \"-\") @violation)");
+    try clone.commitLedger();
+
+    const single = try clone.propose(runtime, edited_body, true);
+    defer single.deinit(gpa);
+    try testing.expect(single == .rule_violation);
+    const batch = try clone.proposeBatch(runtime, true);
+    defer batch.deinit(gpa);
+    try testing.expect(batch == .rule_violation);
+    try clone.expectPristine();
+}
+
+test "redteam ledger: a q: rule in an untracked local ledger runs without the flag" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var clone = try Clone.init();
+    defer clone.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try adoptQueryRule(&clone, "q:((binary_expression operator: \"-\") @violation)");
+
+    const blocked = try clone.propose(runtime, edited_body, false);
+    defer blocked.deinit(gpa);
+    try testing.expect(blocked == .rule_violation);
+    try clone.expectPristine();
 }
 
 fn jsonEscaped(text: []const u8) ![]u8 {

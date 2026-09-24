@@ -93,15 +93,24 @@ at all.
 
 ### Predicates
 
-`--check` names the predicate. Two kinds exist and the prefix decides which:
+`--check` names the predicate. Two kinds exist and the `cmd:` prefix decides which: a command, or a built-in check run in process.
 
 | Form | Meaning |
 |---|---|
 | `no_comment`, `forbid:<text>`, `no_literal:<option>` | Built-in AST checks, run against the proposed body in memory |
+| `q:<tree-sitter query>` | A tree-sitter query, run in process against the parsed file; see [The `q:` query predicate](#the-q-query-predicate) |
 | `cmd:<command line>` | A command, run in the shadow copy inside the sandbox |
 
 Anything without the `cmd:` prefix is looked up in the built-in registry. An unknown name
 returns `UnknownCheck`; it is not interpreted as a shell command.
+
+Every violation carries the rule id, the check, the file, `line` and `col` of its first
+byte, and `end_line` and `end_col` of its end. `end_col` is the column just past the last
+byte. Columns count bytes from 1; SARIF counts UTF-16 code units by default, so a column on a
+line with non-ASCII text has to be converted before it goes into a SARIF file. The violation's
+`text` is the node's text cut to its first 256 bytes, on a character boundary; the four
+positions still span the whole node. A `cmd:` violation has no position and reports 0 for all
+four.
 
 A `cmd:` command is validated when the rule is added. Empty, blank and over-long commands
 are refused, but the command is **not run** until a proposal is checked in a shadow copy.
@@ -153,6 +162,152 @@ in the shadow copy with a no-op command. They do not include the runtime of the 
 configured after `cmd:`; for example, an `npx eslint` invocation adds its own runtime to
 every proposal.
 
+### The `q:` query predicate
+
+`q:<query>` runs a tree-sitter query against the parsed file in the emetgate process.
+Every node captured as `@violation` is a violation.
+
+```
+emetgate rule add "no eval" --check "q:((call_expression function: (identifier) @violation) (#eq? @violation \"eval\"))" --enforce
+emetgate rule add "n11 does not read priceFloat" --check "q:([(identifier) (property_identifier)] @violation (#eq? @violation \"priceFloat\"))" --in src/scraper/n11.js --enforce
+```
+
+A comment and a string are nodes of their own, so `(identifier)` never matches a name that
+only appears inside a comment. `forbid:` cannot make that distinction.
+
+- **`@violation` is required.** Every pattern in the query must capture `@violation`. A query
+  with a pattern that does not is refused with `QueryMissingViolation`, and the pattern is
+  printed.
+- **Scope.** At the edit gate only nodes that lie wholly inside the proposed body count. A node
+  that starts or ends outside it is dropped, even when the body overlaps it. `scan` checks the
+  whole file, or the symbol body with `--in file#symbol`.
+- **Languages.** When the rule is added, the query is compiled against every language profile.
+  It must compile for at least one, and `rule add` prints on stderr each language it does not
+  compile for. At the gate the query is compiled against the edited file's language. If it does
+  not compile there, the proposal is refused with `rule_check_crashed`, detail
+  `query_not_for_language`. The rule is not skipped.
+- **Captures.** A capture may not be repeated with `+` or `*` (`(_)+ @c`, `((_) @c)*`). A
+  capture on a group or an alternation is refused too when a `+` or `*` sits at that group's own
+  level (`((_)+) @c`, `[(a)+ (b)] @c`, `((b) (a)+) @c`): tree-sitter ties such a capture to the
+  group's first step, a repeat can loop back to it, and the capture is recorded again on every
+  pass. A repeat inside a node pattern of the group (`((call (arguments (_)+))) @c`) is allowed.
+  On 20,000 lines of `a;` the refused `(program ((expression_statement)+) @violation)` had
+  taken 41.6 s and its alternation form 65.7 s in a Debug build; both are now refused by name
+  in under 0.2 s. A pattern may hold at most 8 captures; arguments of a predicate do not count. The query is
+  refused with `QueryQuantifiedCapture` or `QueryTooManyCaptures` and the pattern is printed.
+  `?` and a repeat that captures nothing (`(arguments (_)+)`) are allowed. The reason is work
+  tree-sitter does inside its cursor that the operation budget cannot see: a repeated capture
+  copies its capture list for every child, so 20,000 children took 4 to 6.5 s in a ReleaseSafe
+  build (24 to 41 s in Debug), and one pattern with K captures grows about as K³ (231 captures
+  over 2,000 children: 53.6 s, ReleaseSafe). `@violation` already yields one match per node, so
+  a rule does not need either. A hand-edited ledger row that breaks a limit fails closed at the
+  gate as `query_malformed`.
+
+Predicates are evaluated by emetgate; tree-sitter only parses them.
+
+| Predicate | Holds when |
+|---|---|
+| `#eq? @c "text"`, `#eq? @c @d` | the capture's text equals the string, or the other capture's text |
+| `#not-eq?` | the same arguments, negated |
+| `#any-of? @c "a" "b" ...` | the capture's text equals one of the strings |
+| `#match? @c "regex"` | the regex matches somewhere in the capture's text |
+| `#not-match?` | the same arguments, negated |
+
+A capture name used twice in a pattern holds several nodes, and each must satisfy the
+predicate. A capture under `?` that caught no node satisfies every predicate on it, as in
+tree-sitter's Rust binding and in Neovim, so a query ported from either reports the same nodes:
+`((call_expression arguments: (arguments . (identifier)? @a)) @violation (#eq? @a "x"))`
+reports `f()` as well as `g(x)`. Leave out the `?` to require the node. Any other
+predicate (`#is?`, `#lua-match?`, `#any-eq?` ...) is refused with `QueryUnknownPredicate`,
+and any directive (`#set!`, `#select-adjacent!` ...) with `QueryDirective`, both naming it.
+
+The regex is RE2 syntax run as a Thompson NFA: matching walks a set of states over the text,
+never backtracks, and takes time linear in the text. It searches: `#match? @c "Api"` holds when
+`Api` occurs anywhere in the capture's text; anchor with `^` and `$`, which mean the start and
+end of the whole text (there is no multi-line mode). `\d \w \s` are ASCII only, as in RE2:
+`\w` is `[0-9A-Za-z_]`, so it does not match `ş`. Supported: literals, `.` (any character but
+a newline), `[...]` and `[^...]`, `\d \w \s \D \W \S`, `^` and `$`, `* + ?`, `|` and `( )`.
+Anything else is refused with `RegexUnsupported` and its name: backreferences and named
+backreferences, lookahead, lookbehind, named and non-capturing groups, comments `(?#...)`,
+inline flags, lazy and possessive quantifiers, counted repetition `{n,m}` (escape a literal
+brace as `\{`), word boundaries `\b`, `\<` and `\>`, text anchors `\A`, `\z`, `` \` `` and
+`\'`, `\p{...}`, numeric escapes and POSIX classes. A pattern that is not valid UTF-8, or a
+class shorthand used as a range end point (`[\d-z]`), is refused with `RegexSyntax`.
+
+| Limit | Value |
+|---|---|
+| query text | 4 KB including `q:`, as for `cmd:` (`QueryTooLong`) |
+| captures | at most 8 per pattern, none repeated with `+` or `*`, none on a group or alternation with `+` or `*` at its own level |
+| operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited and 1 per probe into a character class) and the other predicates (1 per capture visited, also when the match is reported, and 1 plus the bytes compared for each comparison) |
+| operations per `emetgate_scan` call | 100,000,000 over all files; each file still gets at most 20,000,000 of it |
+| in-progress matches | 1024 |
+| tree depth times pattern depth | 6,000 (`query_depth_exceeded`); the tree depth is that of the deepest node the scope reaches, the pattern depth is how deeply the query's parentheses and brackets nest |
+
+| Result | Meaning |
+|---|---|
+| a `@violation` node inside the scope | **violation**, reason `rule_violation` |
+| operation budget spent, match limit passed, tree too deep for the query, query does not compile for the file's language, malformed query in a hand-edited ledger | **not a verdict**: reason `rule_check_crashed`, detail `query_budget_exceeded`, `query_match_limit_exceeded`, `query_depth_exceeded`, `call_budget_exceeded` (the `emetgate_scan` call budget ran out), `query_not_for_language` or `query_malformed` |
+
+The cursor stops as soon as the budget runs out or the match limit is passed. When tree-sitter
+drops an in-progress match past the limit, the result could be missing a violation, so it is
+not used. `scan` lists such failures under `check_failures` and exits 38, also when it found
+violations.
+
+### What a query predicate costs
+
+30 interleaved, paired proposals on the same machine, with and without one enforced
+`q:` rule that runs a `#match?` (`python tests/bench/rule_query_cost.py`):
+
+| | Debug build (`zig build`) | ReleaseSafe build |
+|---|---|---|
+| proposal with no `q:` rule, median / worst | 156 ms / 173 ms | 169 ms / 228 ms |
+| proposal with one `q:` rule, median / worst | 203 ms / 234 ms | 171 ms / 204 ms |
+| **added per proposal** (paired difference), median / worst | **46 ms / 76 ms** | **3.5 ms / 47 ms** |
+| proposal whose `q:` rule spends the whole operation budget, median / worst | 525 ms / 581 ms | 134 ms / 135 ms |
+
+The query is compiled against the file's grammar on every proposal and is not cached. The last
+row is the ceiling the budget puts on one rule:
+a 3,001-byte regex over a 20,000-character string, refused with `query_budget_exceeded`.
+The ReleaseSafe worst case in the third row is noise from the process start; its best paired
+difference was negative.
+
+`python tests/bench/query_growth.py` runs `emetgate scan --check q:...` for 22 query shapes
+(quantifiers, anchors, alternations, nesting, many captures, each predicate) over 6 source
+shapes (wide statement lists, argument lists and arrays; deep `a + a + ...`, `a.b.b...` and
+`f(f(...))` chains) at 2,000, 4,000, 8,000 and 16,000 elements, and flags every combination
+that grows faster than n^1.35. On a ReleaseSafe build, 123 of the 132 grow linearly. The
+other 9 are all on a deep left-leaning chain (`a + a + ... + a` or `a.b.b...b`, 16,000 levels):
+a pattern nested three levels deep (`(_ (_ (_) @violation))`, 10.9 s at 16,000), six levels
+deep (past 30 s), or anchored to a last child (`(_ (_) @violation .)`, 3.9 s). That time is
+spent inside tree-sitter's query cursor, where the operation budget and the match limit do not
+reach. Two costs of emetgate's own that the run found are fixed: violations were placed by
+rescanning the file from the start, and their text was copied whole, both n^2 on these inputs.
+
+The depth limit answers the rest. Measured on a ReleaseSafe build over `a + a + ... + a`, with
+`emetgate scan --check` on a file in the repository; `emetgate_scan` over MCP took the same
+time within 25%. The times include the process start of about 0.2 s.
+
+| query | 1,000 levels | 4,000 | 16,000 | 64,000 |
+|---|---|---|---|---|
+| `(call_expression) @violation` | 0.23 s | 0.24 s | 0.22 s | 0.39 s |
+| `(_ (_ (_) @violation))` | 0.24 s | 1.4 s | 13.9 s | past 120 s |
+| `(_ (_) @violation .)` | 0.23 s | 0.66 s | 5.4 s | past 120 s |
+
+The depth of the query multiplies it. On 1,000 levels a pattern nested 6 deep took 0.61 s, 12
+deep 1.7 s, 50 deep 19.6 s and 200 deep more than 60 s; a model can send any of them through
+`emetgate_scan`. Across these runs the time follows the product of the two depths: 0.6 to 0.9 s
+at 6,000 and 1.4 to 1.8 s at 12,000. A run whose tree depth times pattern depth passes 6,000 is
+refused before the cursor starts, with `query_depth_exceeded`: a query of depth 1 may meet 6,000
+levels, one of depth 3 2,000 and one of depth 6 1,000. The tree depth is counted with a
+tree-sitter tree cursor, without recursion, only through the nodes that reach the scope, and the
+count stops at the limit. With the limit, all four queries above (the three in the table and
+the one nested 6 deep) are refused at 16,000 and 64,000 levels in 0.21 to 0.33 s, process start
+included, through `scan` and through `emetgate_scan`, with a peak working set of 40 to 44 MB
+at 64,000 levels.
+
+The proposal itself also grows with depth before any rule runs: `emetgate mutate` took 0.33 s
+on a body 4,000 levels deep and 6.3 s on one 16,000 levels deep (ReleaseSafe, no rules).
+
 ### Rules are readable by the model, never writable
 
 `emetgate_skeleton` returns, beside the outline, every adopted rule that covers that file:
@@ -172,23 +327,35 @@ The ledger lives in `.emetgate/ledger.ndjson`. If that file is tracked by git, i
 a clone: its rules are the repository author's, not yours. Emetgate treats it like
 `.emetgaterc.json` and does not run its commands until you opt in:
 
-| Ledger | `cmd:` rules | AST checks |
+| Ledger | `cmd:` and `q:` rules | AST checks |
 |---|---|---|
 | untracked (written by `emetgate rule` on this machine) | run | enforced |
-| tracked by git, no `--allow-repo-memory` | **never run**: a proposal a `cmd:` rule covers is refused with `UntrustedRepoMemory` (exit code 37) | enforced |
+| tracked by git, no `--allow-repo-memory` | **never run**: a proposal a `cmd:` or `q:` rule covers is refused with `UntrustedRepoMemory` (exit code 37) | enforced |
 | tracked by git, `try` or `mcp` started with `--allow-repo-memory` | run | enforced |
 
 "Tracked" means `git ls-files` lists `.emetgate/ledger.ndjson`, or `.emetgate` itself (for
 example as a symlink), under any spelling of case, since Windows opens `.EMETGATE/Ledger.ndjson`
 as the same file. The refusal fails closed: the proposal is rejected with a named error, not
-let through with the rule silently skipped. A `cmd:` rule whose `--in` scope does not cover the
-edit is not consulted, so it does not block. If git cannot answer, the proposal is rejected.
+let through with the rule silently skipped. A `cmd:` or `q:` rule whose `--in` scope does not
+cover the edit is not consulted, so it does not block. If git cannot answer, the proposal is
+rejected.
+
+A `q:` query runs in the emetgate process, and part of tree-sitter's work inside the query
+cursor is not visible to the operation budget (see the capture limits above). The limits keep
+the known cases small, but they are a guard for your own rules, not a proof about someone
+else's, so a committed ledger's `q:` rules wait for the flag like its commands.
 
 AST checks (`no_comment`, `forbid:`, `no_literal:`) from a tracked ledger stay enforced without
-the flag. They execute nothing: the most a hostile static rule can do is refuse an edit, and every
-rule is visible in `emetgate_skeleton` and `emetgate rule list`.
+the flag. They execute nothing and cost time linear in the body: the most a hostile one can do
+is refuse an edit, and every rule is visible in `emetgate_skeleton` and `emetgate rule list`.
 
-`--allow-repo-memory` is a startup flag of `emetgate try` and `emetgate mcp`. The model cannot
+`emetgate scan` follows the same rule for a tracked ledger. Without `--allow-repo-memory` it
+does not run the ledger's `q:` rules; each one is listed by id, as a
+`warning: rule <id> (<check>) not run: untrusted ledger` line in text and under
+`untrusted_not_run` in `--json`, and the other rules are scanned as usual. The listing does not
+change the exit code. A query the operator passes with `--check` runs without the flag.
+
+`--allow-repo-memory` is a startup flag of `emetgate try`, `emetgate mcp` and `emetgate scan`. The model cannot
 grant it: a tool call that carries `allow_repo_memory` is refused with `ModelSuppliedTestPolicy`
 and runs nothing, and `tools/list` does not offer the argument. Review a shared ledger with
 `emetgate rule list` before passing the flag.
@@ -237,7 +404,7 @@ The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, th
 
 The kernel's guards are tested in two ways.
 
-**Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`.
+**Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`. It copies the working tree's non-ignored files into `.zig-cache/mutate/tree` and works only there, so a run that is killed never leaves a mutant in the working tree. It puts every mutant into one test binary as a copy of the function it changes, with a dispatch on the function's first line, and runs each mutant in its own process with only the tests it names; a mutation that cannot be copied that way gets its own build. `--changed-since <ref>` limits a run to the mutations on lines changed since `<ref>`. `zig build test` fails when a mutation's `from` text no longer occurs in its file as the harness would apply it, or when a test it expects to kill no longer exists by that name in a file some suite compiles, so a refactor cannot leave a mutant silently testing nothing.
 
 For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants today: 37 killed, 4 proven equivalent, 1 redundant guard kept as defense in depth, 2 open.
 
@@ -254,7 +421,7 @@ Emetgate currently has a narrow scope.
 | Journal, atomic commit, recovery, sandbox | Built |
 | MCP server and locked-down launch | Built |
 | Decision ledger (append-only, supersession, compaction, torn-tail recovery) | Built; readable by the model through `emetgate_skeleton`, writable only from the CLI |
-| Rule enforcement at the edit gate | Built, mutation-tested: AST checks and `cmd:` command predicates |
+| Rule enforcement at the edit gate | Built, mutation-tested: AST checks, `q:` tree-sitter queries and `cmd:` command predicates |
 | Language support | TypeScript and JavaScript (`.js`, `.mjs`, `.cjs`); new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
 | Platform | Windows only (the sandbox relies on Job Objects) |
 
@@ -267,6 +434,8 @@ Each scenario counts the tokens both approaches spend on one symbol edit: ingest
 Findings against the gate, oldest first.
 
 **F1 — the write tools were not confined to the served repository.** The read tools checked the repository boundary, but `emetgate_try` and `emetgate_try_batch` did not. Given an absolute path, the gate verified a file in another git repository on the machine against that repository's own tests and wrote to it. An audit showed this with a real MCP call that returned `committed`. The same audit attacked the splice, the parse error check, content hashes and the atomic commit, and none of those attacks got through. Fixed in `0226b07` (2026-09-15) and `cab97cd`, which send every tool through `repo.jail` against the served root, first released in v0.1.2.
+
+**F2 — `.git` internals in a git worktree were refused for the wrong reason.** Low severity: the gate failed closed. `repo.jail` resolved a path before checking it for `.git`. In a worktree `.git` is a file, so `.git/HEAD` did not resolve and the read tools answered `FileNotFound` instead of `InternalPath`; the internal-path check never saw the request. Found in an audit. Fixed in `0795790` (2026-09-23): the path as written is checked before it is resolved, with a worktree test in `tests/readtools.zig`.
 
 **F3 — a rejected proposal could write to the real repository during its tests.** The test command ran in a Job Object, which limited time and output but not where the command could write. A body that failed the tests on purpose changed a file in the real tree while they ran: the gate answered `rejected` and the write stayed. Since `6cc77b0` (2026-09-18) the command runs under a low-integrity restricted token, and if the token cannot be built the command does not run. Red-team tests are in `tests/redteam_sandbox.zig`; first released in v0.1.2.
 
@@ -314,10 +483,26 @@ The binary is not code-signed, so Windows SmartScreen warns on first run: it fla
 Requires Zig 0.16.0. tree-sitter and the TypeScript grammar are vendored.
 
 ```sh
-zig build                 # zig-out/bin/emetgate
-zig build test            # unit and end-to-end tests
-zig build mutate-tool     # mutation harness
+zig build                   # zig-out/bin/emetgate
+zig build test              # every test from one binary in four processes, then the CLI end-to-end tests
+zig build test -Dslow=true  # also the tests over one second, which the nightly CI runs
+zig build test-fast         # engine unit tests only: no git, no sandbox, a few seconds
+zig build test-timing       # every test one by one, with the slowest tests and per-file totals
+zig build test-bin          # the test binary alone, zig-out/bin/test-all
+zig build bench             # session benchmarks at full size
+zig build mutate-tool       # mutation harness
+tools/accept.ps1 <ref>      # the tests three times, then the mutations on lines changed since <ref>
 ```
+
+`zig build test` compiles one test binary, `test-all`, from `test_root.zig`: the `src` tests and
+every file under `tests/`. Its runner, `tools/test_runner.zig`, chooses the tests at run time
+(`--filter`, `--skip`, `--shard`, `--jobs`, `--slow`, `--mutant`), so `-Dtest-filter` does not
+recompile anything, and a filter that matches no test fails the run. With `--jobs` the binary
+starts itself as shards and fails unless together they ran every selected test exactly once.
+`tests/suites.zig` fails the run if a test file under `tests/` is not imported exactly once by
+`test_root.zig`. On the development machine (Windows, Debug) the binary compiles in about 10 s
+with 0.7 GB of memory; the run takes about 20 s, and 40 s with the slow tests. The nine binaries
+this replaced took 28 s to compile in parallel after a one-line change.
 
 Register the server with an MCP client:
 

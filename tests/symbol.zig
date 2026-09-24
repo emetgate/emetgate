@@ -1,8 +1,8 @@
 const std = @import("std");
-const symbol = @import("../src/engine/symbol.zig");
-const ts = @import("../src/engine/tree_sitter.zig");
-const alloc_bridge = @import("../src/engine/alloc_bridge.zig");
-const test_util = @import("../src/engine/test_util.zig");
+const symbol = @import("emetgate").symbol;
+const ts = @import("emetgate").tree_sitter;
+const alloc_bridge = @import("emetgate").alloc_bridge;
+const test_util = @import("emetgate").test_util;
 
 const FunctionKind = symbol.FunctionKind;
 const Kind = symbol.Kind;

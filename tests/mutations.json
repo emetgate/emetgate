@@ -682,8 +682,8 @@
     {
       "id": "G1-rules-gate-skipped-for-single-edit",
       "file": "src/platform/runner.zig",
-      "from": "applied.body)) |report| return .{ .rule_violation = report };",
-      "to": "applied.body)) |report| report.deinit(gpa);",
+      "from": "applied.snapshot.tree, applied.body, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },",
+      "to": "applied.snapshot.tree, applied.body, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run"
       ]
@@ -691,8 +691,8 @@
     {
       "id": "G2-rules-gate-skipped-for-batch",
       "file": "src/platform/batch.zig",
-      "from": "p.applied.body)) |report| return .{ .rule_violation = report };",
-      "to": "p.applied.body)) |report| report.deinit(gpa);",
+      "from": "p.applied.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
+      "to": "p.applied.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: one violating edit rejects the whole batch and leaves disk untouched"
       ]
@@ -709,11 +709,11 @@
     {
       "id": "G5-rules-line-counting-broken",
       "file": "src/platform/rules.zig",
-      "from": "            line += 1;\n",
-      "to": "            line += 0;\n",
+      "from": "            if (byte == '\\n') try starts.append(gpa, @intCast(i + 1));\n",
+      "to": "            if (byte == '\\r') try starts.append(gpa, @intCast(i + 1));\n",
       "kills": [
-        "rules: an enforced no_comment rule rejects a commented body before the tests run",
-        "every violation names its rule, check, file, line, column and offending text"
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset"
       ]
     },
     {
@@ -729,8 +729,8 @@
     {
       "id": "G7-rules-empty-report-returned",
       "file": "src/platform/rules.zig",
-      "from": "if (list.items.len == 0) return null;",
-      "to": "if (list.items.len == 99999) return null;",
+      "from": "if (list.items.len == 0) return .ok;",
+      "to": "if (list.items.len == 99999) return .ok;",
       "kills": [
         "purple C3: a hanging test command times out and nothing commits",
         "purple C4: a rejected mutation leaves no temp, backup, or shadow artifacts",
@@ -759,18 +759,18 @@
     {
       "id": "G8-rules-column-off-by-one",
       "file": "src/platform/rules.zig",
-      "from": ".col = @intCast(offset - line_start + 1)",
-      "to": ".col = @intCast(offset - line_start)",
+      "from": ".col = offset - self.starts[lo] + 1 };",
+      "to": ".col = offset - self.starts[lo] };",
       "kills": [
-        "rules: an enforced no_comment rule rejects a commented body before the tests run",
-        "every violation names its rule, check, file, line, column and offending text"
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset"
       ]
     },
     {
       "id": "G9-rules-rule-id-not-recorded",
       "file": "src/platform/rules.zig",
-      "from": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.id);",
-      "to": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.check);",
+      "from": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, end: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.id);",
+      "to": "fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, end: Position, text: []const u8) Allocator.Error!Violation {\n    const rule_id = try gpa.dupe(u8, rule.check);",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run",
         "every violation names its rule, check, file, line, column and offending text",
@@ -1289,7 +1289,7 @@
       "from": "    try refuseInternal(rel);\n    if (rel.len != 0) try expectSameRepo",
       "to": "    if (rel.len != 0) try expectSameRepo",
       "kills": [
-        "purple V8: an MCP write tool cannot edit the emetgate workspace inside the served repository"
+        "read tools refuse a path that only reaches .git through a junction"
       ]
     },
     {
@@ -1298,7 +1298,8 @@
       "from": "    .{ .language = \"typescript\", .cases = @import(\"typescript/cases.zig\").cases },\n",
       "to": "",
       "kills": [
-        "every registered language has conformance cases"
+        "every registered language has conformance cases",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
       ]
     },
     {
@@ -1366,7 +1367,8 @@
       "from": "const arg = invocation.arg orelse return error.MissingCheckArgument;",
       "to": "const arg = invocation.arg orelse \"x\";",
       "kills": [
-        "argument misuse is refused with its own error before any check runs"
+        "argument misuse is refused with its own error before any check runs",
+        "no_literal refuses a missing or empty argument"
       ]
     },
     {
@@ -1697,7 +1699,7 @@
     {
       "id": "NF9-create-rules-gate-skipped",
       "file": "src/platform/runner.zig",
-      "from": "    if (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body)) |report| return .{ .rule_violation = report };\n",
+      "from": "    switch (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },\n        .failed => |failure| return .{ .rule_check_failed = failure },\n    }\n",
       "to": "",
       "kills": [
         "new file: a body that breaks a forbid rule is rejected even when the tests pass"
@@ -1752,7 +1754,7 @@
     {
       "id": "SC1-scan-command-malformed-precheck-removed",
       "file": "src/protocol/scan_command.zig",
-      "from": "    if (scan.firstMalformed(enforced.rules)) |bad| {",
+      "from": "    if (try scan.firstMalformed(gpa, runnable)) |bad| {",
       "to": "    if (@as(?scan.Malformed, null)) |bad| {",
       "kills": [
         "scan: a malformed ledger rule stops the scan before any file and names the rule"
@@ -1761,7 +1763,7 @@
     {
       "id": "SC2-scanner-malformed-guard-removed",
       "file": "src/platform/scan.zig",
-      "from": "    if (firstMalformed(list)) |bad| return bad.reason;\n",
+      "from": "    if (try firstMalformed(gpa, list)) |bad| return bad.reason;\n",
       "to": "",
       "kills": [
         "scan: the scanner itself refuses a malformed rule even when no file would run it"
@@ -1803,7 +1805,8 @@
       "to": "            unsupported += 0;\n",
       "kills": [
         "scan: a file with no language profile is skipped and counted",
-        "scan: --json is one parseable line carrying the same report"
+        "scan: --json is one parseable line carrying the same report",
+        "summary: the parse error line appears only when a scanned file had parse errors"
       ]
     },
     {
@@ -1833,7 +1836,8 @@
       "to": "",
       "kills": [
         "scan: a file with parse errors is still scanned, flagged, and does not stop the scan",
-        "scan: --json is one parseable line carrying the same report"
+        "scan: --json is one parseable line carrying the same report",
+        "summary: the parse error line appears only when a scanned file had parse errors"
       ]
     },
     {
@@ -1922,7 +1926,8 @@
       "kills": [
         "every rejected where is refused under its own name",
         "where: remember and supersede refuse an invalid where by name and write nothing",
-        "scope: an invalid --in is refused by name before anything is scanned"
+        "scope: an invalid --in is refused by name before anything is scanned",
+        "scan tool: an invalid where is refused by its existing error name"
       ]
     },
     {
@@ -2092,7 +2097,8 @@
         "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
         "scope: a rule scoped to extension/content.js reports no fetch( from other files",
         "scope: a directory scope reports only the violations under that directory",
-        "scope: --in narrows an ad-hoc check and the json report counts files outside it"
+        "scope: --in narrows an ad-hoc check and the json report counts files outside it",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options"
       ]
     },
     {
@@ -2119,7 +2125,8 @@
       "from": "    return .{ .start = target.body.startByte(), .end = target.body.endByte() };",
       "to": "    _ = target;\n    return .{ .start = 0, .end = @intCast(snapshot.source.len) };",
       "kills": [
-        "scope: a symbol scope ignores the same text in another symbol of the same file"
+        "scope: a symbol scope ignores the same text in another symbol of the same file",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options"
       ]
     },
     {
@@ -2513,11 +2520,18 @@
       "to": "    if (options.refusal) |name| if (false) { name.* = @errorName(err); };",
       "kills": [
         "scan tool: a malformed check is refused by its existing error name",
-        "scan tool: an invalid where is refused by its existing error name"
+        "scan tool: an invalid where is refused by its existing error name",
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded"
       ],
       "filter": [
         "scan tool"
-      ]
+      ],
+      "exact": true
     },
     {
       "id": "ST6-scan-tool-dispatch-removed",
@@ -2525,8 +2539,22 @@
       "from": "    if (std.mem.eql(u8, name, \"emetgate_scan\")) return callScan(gpa, io, runtime, args, event, policy.root);\n",
       "to": "",
       "kills": [
-        "scan tool: a clean check reports no violations"
+        "scan tool: a call without check or with a non-string where is a missing argument",
+        "scan tool: a malformed check is refused by its existing error name",
+        "scan tool: an invalid where is refused by its existing error name",
+        "scan tool: violations are reported with the scan json fields",
+        "scan tool: a clean check reports no violations",
+        "scan tool: more violations than the cap are cut and the report says so",
+        "scan tool: exactly the cap is not cut",
+        "scan tool: a call creates no workspace and leaves the ledger untouched",
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded"
       ],
+      "exact": true,
       "filter": [
         "scan tool"
       ]
@@ -3080,7 +3108,8 @@
       "from": "        .name = \"emetgate_scan\",",
       "to": "        .name = \"emetgate_rule_add\",",
       "kills": [
-        "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed"
+        "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed",
+        "scan tool: tools/list offers emetgate_scan with check required and where optional"
       ]
     },
     {
@@ -3124,8 +3153,8 @@
     {
       "id": "CMD9-scan-runs-a-command-rule",
       "file": "src/platform/scan.zig",
-      "from": "        checks.validateStatic(rule.check) catch |err| return .{ .rule = rule, .reason = err };",
-      "to": "        checks.validate(rule.check) catch |err| return .{ .rule = rule, .reason = err };",
+      "from": "        checks.validateStatic(gpa, rule.check) catch |err| switch (err) {",
+      "to": "        checks.validate(gpa, rule.check) catch |err| switch (err) {",
       "kills": [
         "rule: scan refuses a command rule by name instead of running it"
       ]
@@ -3310,6 +3339,322 @@
       ]
     },
     {
+      "id": "Q1-scope-keeps-nodes-that-leave-the-span",
+      "file": "src/engine/query.zig",
+      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;",
+      "to": "if (node.startByte() > node.endByte()) continue;",
+      "kills": [
+        "q: only nodes wholly inside the span are reported",
+        "redteam query: at the gate a node that encloses the body is not reported, one inside it is"
+      ]
+    },
+    {
+      "id": "Q2-pattern-without-violation-accepted",
+      "file": "src/engine/query.zig",
+      "from": "c.ts_query_capture_quantifier_for_id(raw, index, violation) == c.TSQuantifierZero",
+      "to": "false",
+      "kills": [
+        "q: every pattern must capture @violation"
+      ]
+    },
+    {
+      "id": "Q3-eq-predicate-ignored",
+      "file": "src/engine/query.zig",
+      "from": "if (same == p.negate) return false;",
+      "to": "if (same == p.negate and false) return false;",
+      "kills": [
+        "q: #eq? and #not-eq? compare a capture with a string",
+        "q: #eq? and #not-eq? compare two captures",
+        "real case: priceFloat in a comment is not a use, a real read or call is"
+      ]
+    },
+    {
+      "id": "Q4-any-of-predicate-ignored",
+      "file": "src/engine/query.zig",
+      "from": "} else return false;",
+      "to": "}",
+      "kills": [
+        "q: #any-of? accepts a capture equal to one of the strings"
+      ]
+    },
+    {
+      "id": "Q5-match-predicate-ignored",
+      "file": "src/engine/query.zig",
+      "from": "budget) == p.negate) return false;",
+      "to": "budget) == p.negate and false) return false;",
+      "kills": [
+        "q: #match? and #not-match? run the regex over the capture's text"
+      ]
+    },
+    {
+      "id": "Q6-unknown-predicate-accepted",
+      "file": "src/engine/query.zig",
+      "from": "if (std.mem.eql(u8, entry[0], name)) break entry[1];",
+      "to": "if (entry[0].len != 0) break entry[1];",
+      "kills": [
+        "q: an unknown predicate or any directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q7-directive-not-named",
+      "file": "src/engine/query.zig",
+      "from": "if (std.mem.endsWith(u8, name, \"!\")) {",
+      "to": "if (false) {",
+      "kills": [
+        "q: an unknown predicate or any directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q8-regex-backreference-read-as-literal",
+      "file": "src/engine/regex.zig",
+      "from": "'1'...'9' => self.unsupported(\"backreference\", at, 2),",
+      "to": "'1'...'9' => self.single(ch),",
+      "kills": [
+        "regex refuses every construct outside the subset by name",
+        "rule: a q: check without @violation, with an unknown predicate or a directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q9-regex-lazy-quantifier-not-named",
+      "file": "src/engine/regex.zig",
+      "from": "if (after == '?') return self.unsupported(\"lazy quantifier\", at, 2);",
+      "to": "",
+      "kills": [
+        "regex refuses every construct outside the subset by name"
+      ]
+    },
+    {
+      "id": "Q10-cursor-budget-ignored",
+      "file": "src/engine/query.zig",
+      "from": "if (self.budget.* < cost) {",
+      "to": "if (false) {",
+      "kills": [
+        "q: a query that outruns its operation budget fails instead of passing"
+      ]
+    },
+    {
+      "id": "Q11-regex-budget-ignored",
+      "file": "src/engine/regex.zig",
+      "from": "if (budget.* == 0) return error.BudgetExceeded;",
+      "to": "if (false) return error.BudgetExceeded;",
+      "kills": [
+        "running out of budget is an error and never a miss",
+        "q: regex work counts against the same budget",
+        "redteam query: a q: rule that outruns its budget rejects the proposal and is not a violation"
+      ]
+    },
+    {
+      "id": "Q12-match-limit-ignored",
+      "file": "src/engine/query.zig",
+      "from": "if (c.ts_query_cursor_did_exceed_match_limit(self.cursor)) {",
+      "to": "if (false) {",
+      "kills": [
+        "q: dropping in-progress matches past the match limit fails instead of passing",
+        "redteam query: a q: rule past the match limit rejects the proposal and is not a violation"
+      ]
+    },
+    {
+      "id": "Q13-query-length-cap-doubled",
+      "file": "src/engine/query.zig",
+      "from": "if (text.len > max_query_bytes) return error.QueryTooLong;",
+      "to": "if (text.len > max_query_bytes * 2) return error.QueryTooLong;",
+      "kills": [
+        "q: the query text is capped at 4 KB",
+        "rule: a q: check at the length limit fits the ledger field, one byte over is refused"
+      ]
+    },
+    {
+      "id": "Q14-language-mismatch-reported-as-malformed",
+      "file": "src/engine/checks.zig",
+      "from": "error.QueryNotForLanguage else error.QueryMalformed",
+      "to": "error.QueryMalformed else error.QueryMalformed",
+      "kills": [
+        "conformance: a q: query over a node only one grammar has is a named failure elsewhere",
+        "redteam query: a q: rule the file's grammar cannot compile rejects the proposal by name",
+        "rule: scan reports a q: check that does not compile for a file's language apart from violations"
+      ]
+    },
+    {
+      "id": "Q15-unrunnable-check-passes-silently",
+      "file": "src/platform/rules.zig",
+      "from": "=> |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),",
+      "to": "=> continue,",
+      "kills": [
+        "redteam query: a q: rule that outruns its budget rejects the proposal and is not a violation",
+        "redteam query: a q: rule past the match limit rejects the proposal and is not a violation",
+        "redteam query: a q: rule the file's grammar cannot compile rejects the proposal by name",
+        "redteam query: a hand-edited ledger row with a malformed q: query fails closed",
+        "rule: scan reports a q: check that does not compile for a file's language apart from violations"
+      ]
+    },
+    {
+      "id": "Q16-query-that-compiles-nowhere-accepted",
+      "file": "src/engine/checks.zig",
+      "from": "if (!any) return results[0].err.?;",
+      "to": "",
+      "kills": [
+        "rule: a q: check that compiles for no language is refused and writes nothing"
+      ]
+    },
+    {
+      "id": "Q17-scan-check-failure-exits-as-violation",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (result.check_failures.len > 0) {\n        refuse(options, error.CheckFailed);\n        return check_failed_exit_code;\n    }\n",
+      "to": "",
+      "kills": [
+        "rule: scan reports a q: check that does not compile for a file's language apart from violations",
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38"
+      ]
+    },
+    {
+      "id": "Q18-empty-match-captures-sliced",
+      "file": "src/engine/query.zig",
+      "from": "if (match.capture_count == 0) &[_]c.TSQueryCapture{} else match.captures[0..match.capture_count];",
+      "to": "match.captures[0..match.capture_count];",
+      "kills": [
+        "q: a match that captured no node is skipped instead of crashing"
+      ]
+    },
+    {
+      "id": "Q19-predicate-comparisons-not-charged",
+      "file": "src/engine/query.zig",
+      "from": "    if (budget.* < cost) return error.BudgetExceeded;\n    budget.* -= cost;\n",
+      "to": "    _ = .{ budget, cost };\n",
+      "kills": [
+        "q: comparing captures with each other counts against the budget",
+        "q: string comparisons count their bytes against the budget"
+      ]
+    },
+    {
+      "id": "Q20-predicate-compared-bytes-not-charged",
+      "file": "src/engine/query.zig",
+      "from": "try charge(budget, 1 + @min(a.len, b.len));",
+      "to": "try charge(budget, 1);",
+      "kills": [
+        "q: string comparisons count their bytes against the budget"
+      ]
+    },
+    {
+      "id": "Q21-committed-query-rule-runs-without-flag",
+      "file": "src/platform/rules.zig",
+      "from": "    if (!allow_repo_memory and anyQuery(applicable)) {",
+      "to": "    if (allow_repo_memory and anyQuery(applicable)) {",
+      "kills": [
+        "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
+      ]
+    },
+    {
+      "id": "Q22-batch-trusts-a-committed-query-rule",
+      "file": "src/platform/batch.zig",
+      "from": "p.applied.body, options.allow_repo_memory)) {",
+      "to": "p.applied.body, true)) {",
+      "kills": [
+        "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
+      ]
+    },
+    {
+      "id": "Q23-repeated-capture-accepted",
+      "file": "src/engine/query.zig",
+      "from": "        if (repeatsCapture(own) or capturedGroupRepeats(own)) {",
+      "to": "        if (false and repeatsCapture(own) or capturedGroupRepeats(own)) {",
+      "kills": [
+        "q: a capture repeated with + or * is refused, one with ? or an uncaptured repeat is not",
+        "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs",
+        "rule: a q: check without @violation, with an unknown predicate or a directive is refused by name"
+      ]
+    },
+    {
+      "id": "Q24-capture-count-unlimited",
+      "file": "src/engine/query.zig",
+      "from": "if (captureCount(own) > max_captures_per_pattern) {",
+      "to": "if (captureCount(own) > max_captures_per_pattern * 1000) {",
+      "kills": [
+        "q: more than eight captures in one pattern are refused, predicate arguments do not count",
+        "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs"
+      ]
+    },
+    {
+      "id": "Q25-predicate-arguments-counted-as-captures",
+      "file": "src/engine/query.zig",
+      "from": "                i = if (next < text.len and text[next] == '#') predicateEnd(text, next) else i + 1;",
+      "to": "                i += 1;",
+      "kills": [
+        "q: more than eight captures in one pattern are refused, predicate arguments do not count"
+      ]
+    },
+    {
+      "id": "F2-internal-path-checked-only-after-resolving",
+      "file": "src/platform/repo.zig",
+      "from": "    try refuseInternalAsWritten(gpa, io, served, path);\n",
+      "to": "",
+      "kills": [
+        "read tools refuse .git internals in a git worktree, where .git is a file"
+      ]
+    },
+    {
+      "id": "Q26-mcp-scan-check-failure-reported-as-success",
+      "file": "src/protocol/scan_command.zig",
+      "from": "        refuse(options, error.CheckFailed);\n",
+      "to": "",
+      "kills": [
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38"
+      ]
+    },
+    {
+      "id": "Q27-rule-add-promises-a-check-it-refuses",
+      "file": "src/protocol/rule_command.zig",
+      "from": "        if (kept) {\n",
+      "to": "        if (kept or true) {\n",
+      "kills": [
+        "rule: a q: check that compiles for no language is refused and writes nothing"
+      ]
+    },
+    {
+      "id": "Q28-regex-vim-word-boundary-read-as-literal",
+      "file": "src/engine/regex.zig",
+      "from": "            '<', '>' => if (in_class) self.single(ch) else self.unsupported(\"word boundary\", at, 2),\n",
+      "to": "",
+      "kills": [
+        "regex refuses GNU and Vim word boundaries and buffer anchors instead of reading them as literals"
+      ]
+    },
+    {
+      "id": "Q29-regex-shorthand-range-start-accepted",
+      "file": "src/engine/regex.zig",
+      "from": "            if (lo.len != 1 or lo[0].lo != lo[0].hi) return self.syntax(\"class shorthand as a range start\"",
+      "to": "            if (false and (lo.len != 1 or lo[0].lo != lo[0].hi)) return self.syntax(\"class shorthand as a range start\"",
+      "kills": [
+        "regex refuses a class shorthand as the start of a range, as RE2 does"
+      ]
+    },
+    {
+      "id": "Q30-regex-invalid-utf8-pattern-read-as-replacement",
+      "file": "src/engine/regex.zig",
+      "from": "        const code_point = std.unicode.utf8Decode(rest[0..len]) catch return self.invalidUtf8();",
+      "to": "        const code_point = std.unicode.utf8Decode(rest[0..len]) catch 0xFFFD;",
+      "kills": [
+        "regex refuses invalid UTF-8 in the pattern"
+      ]
+    },
+    {
+      "id": "Q31-regex-error-at-ends-inside-a-character",
+      "file": "src/engine/regex.zig",
+      "from": "            while (end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;\n",
+      "to": "            while (false and end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;\n",
+      "kills": [
+        "regex errors point at whole characters, never into the middle of one"
+      ]
+    },
+    {
+      "id": "Q32-violation-text-uncut",
+      "file": "src/platform/rules.zig",
+      "from": "shown(tree.source[hit.span.start..hit.span.end])",
+      "to": "tree.source[hit.span.start..hit.span.end]",
+      "kills": [
+        "a violation's text is cut to 256 bytes on a character boundary, its position still spans the node"
+      ]
+    },
+    {
       "id": "LW1-completion-wait-removed",
       "file": "src/platform/sandbox.zig",
       "from": "            if (now >= until) return true;\n",
@@ -3362,6 +3707,636 @@
       "to": "            if (win.WaitForSingleObject(handle, left * 0) == win.wait_object_0) exited += 1;\n",
       "kills": [
         "a timed out run returns only after every process in its job has exited"
+      ]
+    },
+    {
+      "id": "QA1-group-repeat-check-removed",
+      "file": "src/engine/query.zig",
+      "from": "        if (repeatsCapture(own) or capturedGroupRepeats(own)) {\n",
+      "to": "        if (repeatsCapture(own)) {\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs"
+      ]
+    },
+    {
+      "id": "QA2-alternation-not-a-group",
+      "file": "src/engine/query.zig",
+      "from": "    if (text[open] == '[') return true;\n",
+      "to": "    if (text[open] == '[') return false;\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs"
+      ]
+    },
+    {
+      "id": "QA3-capture-loop-uncharged",
+      "file": "src/engine/query.zig",
+      "from": "            if (progress.spend(1)) break;\n",
+      "to": "",
+      "kills": [
+        "q: every capture a match reports is charged to the budget"
+      ]
+    },
+    {
+      "id": "QA4-group-check-looks-inside-nodes",
+      "file": "src/engine/query.zig",
+      "from": "            '(' => i = if (isGroup(text, i)) i + 1 else closingEnd(text, i),\n",
+      "to": "            '(' => i += 1,\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name"
+      ]
+    },
+    {
+      "id": "QA5-parenthesized-group-not-a-group",
+      "file": "src/engine/query.zig",
+      "from": "        '(', '[', '\"', '.' => true,\n",
+      "to": "        '[', '\"', '.' => true,\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs"
+      ]
+    },
+    {
+      "id": "GL1-line-search-misses-line-start",
+      "file": "src/platform/rules.zig",
+      "from": "            if (self.starts[mid] <= offset) lo = mid else hi = mid;\n",
+      "to": "            if (self.starts[mid] < offset) lo = mid else hi = mid;\n",
+      "kills": [
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset"
+      ]
+    },
+    {
+      "id": "GL2-line-start-on-the-newline",
+      "file": "src/platform/rules.zig",
+      "from": "            if (byte == '\\n') try starts.append(gpa, @intCast(i + 1));\n",
+      "to": "            if (byte == '\\n') try starts.append(gpa, @intCast(i));\n",
+      "kills": [
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options"
+      ]
+    },
+    {
+      "id": "RX1-class-probe-uncharged",
+      "file": "src/engine/regex.zig",
+      "from": "    while (lo < hi) {\n        try spend(budget);\n",
+      "to": "    while (lo < hi) {\n        _ = budget;\n",
+      "kills": [
+        "a class of many ranges is searched in logarithmic steps and every step is charged"
+      ]
+    },
+    {
+      "id": "RX2-class-search-wrong-half",
+      "file": "src/engine/regex.zig",
+      "from": "        if (code_point < ranges[mid].lo) {\n",
+      "to": "        if (code_point > ranges[mid].lo) {\n",
+      "kills": [
+        "a class of many ranges is searched in logarithmic steps and every step is charged"
+      ]
+    },
+    {
+      "id": "SCT1-scan-runs-tracked-ledger-queries",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;\n",
+      "to": "    if (!try rules.ledgerTracked(gpa, io, root_abs) or true) return unsplit;\n",
+      "kills": [
+        "scan trust: a committed ledger's q: rules do not run without --allow-repo-memory and each is listed as not run"
+      ]
+    },
+    {
+      "id": "SCT2-scan-ignores-allow-repo-memory",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (options.source != .ledger or options.allow_repo_memory) return unsplit;\n",
+      "to": "    if (options.source != .ledger) return unsplit;\n",
+      "kills": [
+        "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag"
+      ]
+    },
+    {
+      "id": "SCT3-scan-distrusts-untracked-ledger",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;\n",
+      "to": "    _ = try rules.ledgerTracked(gpa, io, root_abs);\n",
+      "kills": [
+        "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag"
+      ]
+    },
+    {
+      "id": "SCT4-scan-skips-untrusted-silently",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    for (untrusted) |rule| try out.print(\"warning: rule {s} ({s}) not run: untrusted ledger, it is committed to the repository; pass --allow-repo-memory to run it\\n\", .{ rule.id, rule.check });\n",
+      "to": "    for (untrusted) |rule| if (false) try out.print(\"warning: rule {s} ({s}) not run: untrusted ledger, it is committed to the repository; pass --allow-repo-memory to run it\\n\", .{ rule.id, rule.check });\n",
+      "kills": [
+        "scan trust: a committed ledger's q: rules do not run without --allow-repo-memory and each is listed as not run"
+      ]
+    },
+    {
+      "id": "SCT5-scan-distrusts-operator-check",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (options.source != .ledger or options.allow_repo_memory) return unsplit;\n",
+      "to": "    if (options.allow_repo_memory) return unsplit;\n",
+      "kills": [
+        "scan trust: an operator's own --check query runs next to a committed ledger without the flag"
+      ]
+    },
+    {
+      "id": "SCT6-scan-flag-not-parsed",
+      "file": "src/protocol/scan_command.zig",
+      "from": "                options.allow_repo_memory = true;\n",
+      "to": "                options.allow_repo_memory = false;\n",
+      "kills": [
+        "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag",
+        "scan trust: --allow-repo-memory twice is a usage error"
+      ]
+    },
+    {
+      "id": "CB1-call-budget-never-spent",
+      "file": "src/engine/query.zig",
+      "from": "    defer pool.* -= granted - left;\n",
+      "to": "    defer pool.* -= 0 * (granted - left);\n",
+      "kills": [
+        "scan: a call budget shared by every file turns the files it cannot pay for into check failures",
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
+      ]
+    },
+    {
+      "id": "CB2-mcp-scan-without-call-budget",
+      "file": "src/protocol/handlers.zig",
+      "from": "        .call_operations = max_scan_operations,\n",
+      "to": "        .call_operations = null,\n",
+      "kills": [
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
+      ]
+    },
+    {
+      "id": "CB3-call-budget-reported-as-query-budget",
+      "file": "src/engine/query.zig",
+      "from": "        if (err == error.QueryBudgetExceeded and granted < limits.operations) return error.CallBudgetExceeded;\n",
+      "to": "        if (err == error.QueryBudgetExceeded and granted > limits.operations) return error.CallBudgetExceeded;\n",
+      "kills": [
+        "scan: a call budget shared by every file turns the files it cannot pay for into check failures",
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
+      ]
+    },
+    {
+      "id": "ZS1-test-name-escapes-not-decoded",
+      "file": "tests/zig_source.zig",
+      "from": "            .string_literal => try names.append(arena, .{ .name = try std.zig.string_literal.parseAlloc(arena, text), .decl = false }),\n",
+      "to": "            .string_literal => try names.append(arena, .{ .name = text, .decl = false }),\n",
+      "kills": [
+        "harness: kill names come only from files a suite compiles, with escapes decoded and identifier tests included",
+        "harness: every test a mutation expects to kill exists by that exact name in a file a suite compiles"
+      ]
+    },
+    {
+      "id": "ZS2-identifier-tests-ignored",
+      "file": "tests/zig_source.zig",
+      "from": "            .identifier => try names.append(arena, .{ .name = text, .decl = true }),\n",
+      "to": "            .identifier => {},\n",
+      "kills": [
+        "harness: kill names come only from files a suite compiles, with escapes decoded and identifier tests included"
+      ]
+    },
+    {
+      "id": "ZS3-imports-not-followed",
+      "file": "tests/zig_source.zig",
+      "from": "            try pending.append(arena, try std.fs.path.resolvePosix(arena, &.{ base, target }));\n",
+      "to": "            _ = try std.fs.path.resolvePosix(arena, &.{ base, target });\n",
+      "kills": [
+        "harness: kill names come only from files a suite compiles, with escapes decoded and identifier tests included",
+        "harness: every test a mutation expects to kill exists by that exact name in a file a suite compiles"
+      ]
+    },
+    {
+      "id": "ZS4-every-file-declares-tests",
+      "file": "tests/zig_source.zig",
+      "from": "        if (tree.nodeTag(@enumFromInt(i)) == .test_decl) return true;\n",
+      "to": "        if (tree.nodeTag(@enumFromInt(i)) == .test_decl or true) return true;\n",
+      "kills": [
+        "suites: a test is found in any form and position, and a commented one is not",
+        "suites: every test file under tests/ is imported exactly once by test_root.zig"
+      ]
+    },
+    {
+      "id": "ZS5-decltest-not-matched",
+      "file": "tools/mutate/core.zig",
+      "from": "    return std.mem.endsWith(u8, prefix, \".test.\") or std.mem.endsWith(u8, prefix, \".decltest.\");\n",
+      "to": "    return std.mem.endsWith(u8, prefix, \".test.\");\n",
+      "kills": [
+        "harness: a failed decltest matches the identifier a mutation names"
+      ]
+    },
+    {
+      "id": "ZS6-a-test-file-left-out-of-the-binary",
+      "file": "test_root.zig",
+      "from": "    _ = @import(\"tests/lockdown.zig\");\n",
+      "to": "",
+      "kills": [
+        "suites: every test file under tests/ is imported exactly once by test_root.zig"
+      ]
+    },
+    {
+      "id": "MR1-mirror-keeps-a-changed-file",
+      "file": "tools/mutate/core.zig",
+      "from": "            if (std.mem.eql(u8, have, want)) continue;\n",
+      "to": "            if (have.len == want.len) continue;\n",
+      "kills": [
+        "harness: a mutation left in the mirror by a killed run never reaches the working tree and the next sync undoes it"
+      ]
+    },
+    {
+      "id": "MR2-mirror-keeps-a-removed-file",
+      "file": "tools/mutate/core.zig",
+      "from": "        } else mirror.deleteFile(io, path) catch {};\n",
+      "to": "        } else {}\n",
+      "kills": [
+        "harness: a mutation left in the mirror by a killed run never reaches the working tree and the next sync undoes it"
+      ]
+    },
+    {
+      "id": "MR3-legacy-record-kept",
+      "file": "tools/mutate/core.zig",
+      "from": "    try work.deleteFile(io, legacy_manifest);\n",
+      "to": "    try work.access(io, legacy_manifest, .{});\n",
+      "kills": [
+        "harness: a recovery record left by an older run on another branch is dropped without touching a file"
+      ]
+    },
+    {
+      "id": "QD1-depth-check-skipped",
+      "file": "src/engine/query.zig",
+      "from": "    if (!depthWithin(tree, span, limits.depth_product / query.depth)) return error.QueryDepthExceeded;\n",
+      "to": "",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs",
+        "q: only the depth inside the span counts",
+        "q: a 6,100 level chain fails by name at the default depth product",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD2-depth-product-not-shared-by-pattern-depth",
+      "file": "src/engine/query.zig",
+      "from": "limits.depth_product / query.depth)) return",
+      "to": "limits.depth_product)) return",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD3-depth-limit-off-by-one",
+      "file": "src/engine/query.zig",
+      "from": "            if (depth > limit) return false;\n",
+      "to": "            if (depth > limit + 1) return false;\n",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs"
+      ]
+    },
+    {
+      "id": "QD4-depth-walk-leaves-the-span",
+      "file": "src/engine/query.zig",
+      "from": "c.ts_node_start_byte(node) <= span.end and c.ts_node_end_byte(node) >= span.start;",
+      "to": "c.ts_node_start_byte(node) <= span.end or c.ts_node_end_byte(node) >= span.start;",
+      "kills": [
+        "q: only the depth inside the span counts"
+      ]
+    },
+    {
+      "id": "QD5-string-parens-count-as-depth",
+      "file": "src/engine/query.zig",
+      "from": "    var deepest: u32 = 1;\n    var i: usize = 0;\n    while (i < text.len) {\n        switch (text[i]) {\n            '\"' => i = stringEnd(text, i),\n",
+      "to": "    var deepest: u32 = 1;\n    var i: usize = 0;\n    while (i < text.len) {\n        switch (text[i]) {\n",
+      "kills": [
+        "q: the pattern depth counts nested nodes, groups and alternations, and skips strings and comments"
+      ]
+    },
+    {
+      "id": "QD6-pattern-depth-never-grows",
+      "file": "src/engine/query.zig",
+      "from": "                deepest = @max(deepest, depth);\n",
+      "to": "                deepest = @max(deepest, 1);\n",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs",
+        "q: the pattern depth counts nested nodes, groups and alternations, and skips strings and comments",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD7-depth-detail-misnamed",
+      "file": "src/platform/rules.zig",
+      "from": "        error.QueryDepthExceeded => \"query_depth_exceeded\",\n",
+      "to": "        error.QueryDepthExceeded => \"query_budget_exceeded\",\n",
+      "kills": [
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD8-depth-refusal-escapes-the-gate",
+      "file": "src/platform/rules.zig",
+      "from": "error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(",
+      "to": "error.CallBudgetExceeded => |e| return failedGate(",
+      "kills": [
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "RN1-shard-selection-off-by-one",
+      "file": "tools/test_runner.zig",
+      "from": "return ordinal % shard.count == shard.index - 1;",
+      "to": "return ordinal % shard.count == shard.index;",
+      "kills": [
+        "shards: every selected test runs in exactly one shard"
+      ]
+    },
+    {
+      "id": "RN2-empty-filter-passes",
+      "file": "tools/test_runner.zig",
+      "from": "if (options.filters.len != 0 and selection.matched == 0) {",
+      "to": "if (false) {",
+      "kills": [
+        "runner: a filter that matches no test fails the run instead of passing it empty"
+      ]
+    },
+    {
+      "id": "RN3-a-shard-left-out",
+      "file": "tools/test_runner.zig",
+      "from": "const shards = gpa.alloc(ShardRun, options.jobs) catch oom();",
+      "to": "const shards = gpa.alloc(ShardRun, options.jobs - 1) catch oom();",
+      "kills": [
+        "runner: --jobs runs every selected test once across its shards"
+      ]
+    },
+    {
+      "id": "RN4-coverage-ignores-a-missing-test",
+      "file": "tools/test_runner.zig",
+      "from": "if (seen[i] == 0) return .{ .missing = i };",
+      "to": "if (seen[i] == 0) continue;",
+      "kills": [
+        "runner: shard coverage names a test no shard ran, one two shards ran and a stray index"
+      ]
+    },
+    {
+      "id": "RN5-mutant-never-set",
+      "file": "tools/test_runner.zig",
+      "from": "emetgate_mutant = options.mutant;",
+      "to": "emetgate_mutant = 0;",
+      "kills": [
+        "runner: --mutant sets the global that the schemata dispatch reads",
+        "runner: a failing test in one shard fails the --jobs run and the mutant reaches every shard"
+      ]
+    },
+    {
+      "id": "RN6-mutant-not-passed-to-shards",
+      "file": "tools/test_runner.zig",
+      "from": "if (options.mutant != 0) argv.appendSlice(gpa, &.{ \"--mutant\"",
+      "to": "if (false) argv.appendSlice(gpa, &.{ \"--mutant\"",
+      "kills": [
+        "runner: a failing test in one shard fails the --jobs run and the mutant reaches every shard"
+      ]
+    },
+    {
+      "id": "RN7-failing-shard-ignored",
+      "file": "tools/test_runner.zig",
+      "from": "return if (broken != 0 or uncovered or sum.failed != 0 or sum.leaked != 0) 1 else 0;",
+      "to": "return if (broken != 0 or uncovered or sum.leaked != 0) 1 else 0;",
+      "kills": [
+        "runner: a failing test in one shard fails the --jobs run and the mutant reaches every shard"
+      ]
+    },
+    {
+      "id": "RN8-logged-error-not-a-failure",
+      "file": "tools/test_runner.zig",
+      "from": "if (why == null and log_err_count != 0) why = \"logged an error\";",
+      "to": "",
+      "kills": [
+        "runner: a test that logs an error fails even when it returns normally"
+      ]
+    },
+    {
+      "id": "RN9-no-match-is-not-no-tests",
+      "file": "tools/mutate/core.zig",
+      "from": "    if (std.mem.indexOf(u8, output, no_match_marker) != null) return .no_tests;\n",
+      "to": "",
+      "kills": [
+        "harness: a filter that matches no test is no_tests, not a kill or an error"
+      ]
+    },
+    {
+      "id": "RN10-failure-line-ignored-on-exit-zero",
+      "file": "tools/mutate/core.zig",
+      "from": "        if (hasFailedTestLine(output)) return .killed;\n        const summary",
+      "to": "        const summary",
+      "kills": [
+        "harness: a failed test line is a kill even when the run exits 0"
+      ]
+    },
+    {
+      "id": "RN11-slow-switch-ignored",
+      "file": "tools/test_runner.zig",
+      "from": "emetgate_slow = options.slow;",
+      "to": "emetgate_slow = false;",
+      "kills": [
+        "runner: a slow test is skipped unless --slow is given, and runs when it is"
+      ]
+    },
+    {
+      "id": "RN12-slow-not-passed-to-shards",
+      "file": "tools/test_runner.zig",
+      "from": "    if (options.slow) argv.append(gpa, \"--slow\") catch oom();\n",
+      "to": "",
+      "kills": [
+        "runner: a slow test is skipped unless --slow is given, and runs when it is"
+      ]
+    },
+    {
+      "id": "SL1-slow-marker-always-runs",
+      "file": "src/engine/test_util.zig",
+      "from": "    if (@hasDecl(root, \"emetgate_slow\") and root.emetgate_slow) return;\n    return error.SkipZigTest;\n",
+      "to": "    _ = root;\n",
+      "kills": [
+        "runner: a slow test is skipped unless --slow is given, and runs when it is"
+      ]
+    },
+    {
+      "id": "SC1-dispatch-skipped",
+      "file": "tools/mutate/schema.zig",
+      "from": "        try edits.append(arena, .{ .offset = site.body_open, .text = try dispatchLine(arena, site, entry.number), .number = entry.number });\n",
+      "to": "",
+      "kills": [
+        "schema: a mutant gets a copy of its function and a dispatch line at the top of the original",
+        "schema: two mutants in one function get two dispatch lines and two copies, in number order",
+        "schema: an unnamed parameter is named in the original so the copy can be given it"
+      ]
+    },
+    {
+      "id": "SC2-dispatch-opens-the-wrong-mutant",
+      "file": "tools/mutate/schema.zig",
+      "from": "== {d}) return {s}__m{d}(\", .{ number, site.name, number });",
+      "to": "== {d}) return {s}__m{d}(\", .{ number + 1, site.name, number });",
+      "kills": [
+        "schema: a mutant gets a copy of its function and a dispatch line at the top of the original",
+        "schema: two mutants in one function get two dispatch lines and two copies, in number order",
+        "schema: an unnamed parameter is named in the original so the copy can be given it"
+      ]
+    },
+    {
+      "id": "SC3-copy-keeps-the-original-body",
+      "file": "tools/mutate/schema.zig",
+      "from": "    try out.writer.writeAll(mutated);",
+      "to": "    try out.writer.writeAll(rest);",
+      "kills": [
+        "schema: a mutant gets a copy of its function and a dispatch line at the top of the original",
+        "schema: two mutants in one function get two dispatch lines and two copies, in number order",
+        "schema: an unnamed parameter is named in the original so the copy can be given it"
+      ]
+    },
+    {
+      "id": "SC4-unnamed-parameter-not-renamed",
+      "file": "tools/mutate/schema.zig",
+      "from": "if (!std.mem.eql(u8, param.name, \"_\")) {",
+      "to": "if (true) {",
+      "kills": [
+        "schema: an unnamed parameter is named in the original so the copy can be given it"
+      ]
+    },
+    {
+      "id": "SC5-test-block-accepted",
+      "file": "tools/mutate/schema.zig",
+      "from": "if (tree.nodeTag(node) == .test_decl) return .{ .refused = .in_test_block };",
+      "to": "if (tree.nodeTag(node) == .test_decl and false) return .{ .refused = .in_test_block };",
+      "kills": [
+        "schema: a mutation outside a function, in a test, across functions or in a signature runs on its own"
+      ]
+    },
+    {
+      "id": "SC6-signature-hit-accepted",
+      "file": "tools/mutate/schema.zig",
+      "from": "if (first_hit < body_open) return .{ .refused = .touches_signature };",
+      "to": "if (first_hit < body_open and false) return .{ .refused = .touches_signature };",
+      "kills": [
+        "schema: a mutation outside a function, in a test, across functions or in a signature runs on its own"
+      ]
+    },
+    {
+      "id": "SC7-copy-error-drops-the-whole-function",
+      "file": "tools/mutate/schema.zig",
+      "from": "if (whole and out.items.len != before) return;",
+      "to": "if (whole and out.items.len != before and false) return;",
+      "kills": [
+        "schema: a compile error in a copy drops that mutant, one in the original drops every mutant of the function"
+      ]
+    },
+    {
+      "id": "SC8-crash-not-named",
+      "file": "tools/mutate/core.zig",
+      "from": "found = if (done) null else line[space + 1 .. dots];",
+      "to": "found = if (done or true) null else line[space + 1 .. dots];",
+      "kills": [
+        "schema: a crash names the test that was running when the process died"
+      ]
+    },
+    {
+      "id": "RN13-skip-ignored",
+      "file": "tools/test_runner.zig",
+      "from": "if (std.mem.eql(u8, name.*, skip)) name.* = \"\";",
+      "to": "if (std.mem.eql(u8, name.*, skip)) name.* = name.*;",
+      "kills": [
+        "runner: a skipped name leaves the selection and --jobs passes it to every shard"
+      ]
+    },
+    {
+      "id": "RN14-skip-not-passed-to-shards",
+      "file": "tools/test_runner.zig",
+      "from": "    for (options.skips) |skip| argv.appendSlice(gpa, &.{ \"--skip\", skip }) catch oom();\n",
+      "to": "",
+      "kills": [
+        "runner: a skipped name leaves the selection and --jobs passes it to every shard"
+      ]
+    },
+    {
+      "id": "CH1-diff-range-off-by-one",
+      "file": "tools/mutate/changes.zig",
+      "from": ".{ .first = start, .last = start + count - 1 });",
+      "to": ".{ .first = start, .last = start + count });",
+      "kills": [
+        "changes: a unified=0 diff gives the changed lines of every file that still exists, a deletion included"
+      ]
+    },
+    {
+      "id": "CH2-deletion-range-dropped",
+      "file": "tools/mutate/changes.zig",
+      "from": "if (count == 0) .{ .first = start, .last = start + 1 } else",
+      "to": "if (count == 0) .{ .first = start, .last = start } else",
+      "kills": [
+        "changes: a unified=0 diff gives the changed lines of every file that still exists, a deletion included"
+      ]
+    },
+    {
+      "id": "CH3-deleted-file-kept",
+      "file": "tools/mutate/changes.zig",
+      "from": "path = if (std.mem.startsWith(u8, target, \"b/\")) target[2..] else null;",
+      "to": "path = if (std.mem.startsWith(u8, target, \"b/\")) target[2..] else target;",
+      "kills": [
+        "changes: a unified=0 diff gives the changed lines of every file that still exists, a deletion included"
+      ]
+    },
+    {
+      "id": "CH4-edge-lines-do-not-meet",
+      "file": "tools/mutate/changes.zig",
+      "from": "return a.first <= b.last and b.first <= a.last;",
+      "to": "return a.first < b.last and b.first < a.last;",
+      "kills": [
+        "changes: a from text is touched when one of its lines meets a changed line, and stale when it is gone"
+      ]
+    },
+    {
+      "id": "CH5-stale-from-not-reported",
+      "file": "tools/mutate/changes.zig",
+      "from": "return if (found) .untouched else .stale;",
+      "to": "return .untouched;",
+      "kills": [
+        "changes: a from text is touched when one of its lines meets a changed line, and stale when it is gone"
+      ]
+    },
+    {
+      "id": "CH6-untouched-test-named",
+      "file": "tools/mutate/changes.zig",
+      "from": "if (!touches(ranges, lineRange(source, first, stop - first))) continue;",
+      "to": "if (!touches(ranges, lineRange(source, first, stop - first)) and false) continue;",
+      "kills": [
+        "changes: a test whose lines changed is named, an untouched one is not"
+      ]
+    },
+    {
+      "id": "CH7-filter-ignored",
+      "file": "tools/mutate/changes.zig",
+      "from": "if (std.mem.indexOf(u8, name, filter) != null) return name;",
+      "to": "if (std.mem.indexOf(u8, name, filter) != null and false) return name;",
+      "kills": [
+        "changes: a kill or a filter that names a changed test selects the mutant"
+      ]
+    },
+    {
+      "id": "CH8-new-entry-not-changed",
+      "file": "tools/mutate/changes.zig",
+      "from": "const old = before orelse return true;",
+      "to": "const old = before orelse return false;",
+      "kills": [
+        "changes: an entry that is new or differs from the one at the ref counts as changed"
       ]
     }
   ]

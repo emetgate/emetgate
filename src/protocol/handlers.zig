@@ -44,6 +44,8 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
 
 pub const max_scan_violations = 100;
 
+pub const max_scan_operations: u64 = 100_000_000;
+
 fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const check = try requireString(args, "check");
     const where: ?[]const u8 = if (getField(args.?, "where")) |field| switch (field) {
@@ -74,6 +76,7 @@ fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
         .source = .{ .check = .{ .spec = check, .where = where } },
         .json = true,
         .max_violations = max_scan_violations,
+        .call_operations = max_scan_operations,
         .refusal = refusal,
     }, w, &discard.writer);
 }

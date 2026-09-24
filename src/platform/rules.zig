@@ -2,6 +2,7 @@ const std = @import("std");
 const ts = @import("../engine/tree_sitter.zig");
 const symbol = @import("../engine/symbol.zig");
 const checks = @import("../engine/checks.zig");
+const query = @import("../engine/query.zig");
 const Profile = @import("../engine/lang/profile.zig").Profile;
 const memory = @import("memory.zig");
 const shadow = @import("shadow.zig");
@@ -35,6 +36,8 @@ pub const Violation = struct {
     file: []u8,
     line: u32,
     col: u32,
+    end_line: u32,
+    end_col: u32,
     text: []u8,
 };
 
@@ -71,16 +74,30 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
 
-pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span) !?Report {
+pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span, allow_repo_memory: bool) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
     const applicable = try applicableTo(gpa, enforced.rules, file, ref);
     defer gpa.free(applicable);
+    if (!allow_repo_memory and anyQuery(applicable)) {
+        if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
+    }
     return evaluate(gpa, file, profile, tree, span, applicable);
 }
 
 pub fn isCommand(rule: Rule) bool {
     return checks.commandOf(rule.check) != null;
+}
+
+pub fn isQuery(rule: Rule) bool {
+    return std.mem.eql(u8, checks.parse(rule.check).name, checks.query_name);
+}
+
+fn anyQuery(list: []const Rule) bool {
+    for (list) |rule| {
+        if (isQuery(rule)) return true;
+    }
+    return false;
 }
 
 pub fn covers(rule: Rule, file: []const u8, ref: symbol.Ref) !bool {
@@ -99,17 +116,28 @@ pub fn applicableTo(gpa: Allocator, all: []const Rule, file: []const u8, ref: sy
     return list.toOwnedSlice(gpa);
 }
 
-pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!?Report {
+pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!Gate {
+    return evaluateLimited(gpa, file, profile, tree, span, rules, .{});
+}
+
+pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule, limits: query.Limits) checks.Error!Gate {
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
-    errdefer for (list.items) |v| freeViolation(gpa, v);
+    defer for (list.items) |v| freeViolation(gpa, v);
+    var lines: ?Lines = null;
+    defer if (lines) |l| l.deinit(gpa);
 
     for (rules) |rule| {
-        const found = try checks.run(gpa, profile, tree, span, &.{rule.check});
+        const found = checks.runLimited(gpa, profile, tree, span, &.{rule.check}, limits) catch |err| switch (err) {
+            error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),
+            else => |e| return e,
+        };
         defer gpa.free(found);
+        if (found.len > 0 and lines == null) lines = try Lines.init(gpa, tree.source);
         for (found) |hit| {
-            const at = position(tree.source, hit.span.start);
-            const owned = try ownViolation(gpa, rule, file, at, tree.source[hit.span.start..hit.span.end]);
+            const start = lines.?.position(hit.span.start);
+            const end = lines.?.position(hit.span.end);
+            const owned = try ownViolation(gpa, rule, file, start, end, shown(tree.source[hit.span.start..hit.span.end]));
             list.append(gpa, owned) catch |err| {
                 freeViolation(gpa, owned);
                 return err;
@@ -117,11 +145,60 @@ pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
         }
     }
 
-    if (list.items.len == 0) return null;
-    return .{ .violations = try list.toOwnedSlice(gpa) };
+    if (list.items.len == 0) return .ok;
+    const owned = try list.toOwnedSlice(gpa);
+    return .{ .violated = .{ .violations = owned } };
+}
+
+pub fn unrunnableDetail(err: checks.Unrunnable) []const u8 {
+    return switch (err) {
+        error.QueryMalformed => "query_malformed",
+        error.QueryNotForLanguage => "query_not_for_language",
+        error.QueryBudgetExceeded => "query_budget_exceeded",
+        error.QueryMatchLimitExceeded => "query_match_limit_exceeded",
+        error.CallBudgetExceeded => "call_budget_exceeded",
+        error.QueryDepthExceeded => "query_depth_exceeded",
+    };
+}
+
+pub const max_violation_text = 256;
+
+fn shown(text: []const u8) []const u8 {
+    if (text.len <= max_violation_text) return text;
+    var len: usize = max_violation_text;
+    while (len > 0 and text[len] & 0xC0 == 0x80) len -= 1;
+    return text[0..len];
 }
 
 const Position = struct { line: u32, col: u32 };
+
+const Lines = struct {
+    starts: []u32,
+
+    fn init(gpa: Allocator, source: []const u8) Allocator.Error!Lines {
+        var starts: std.ArrayList(u32) = .empty;
+        errdefer starts.deinit(gpa);
+        try starts.append(gpa, 0);
+        for (source, 0..) |byte, i| {
+            if (byte == '\n') try starts.append(gpa, @intCast(i + 1));
+        }
+        return .{ .starts = try starts.toOwnedSlice(gpa) };
+    }
+
+    fn deinit(self: Lines, gpa: Allocator) void {
+        gpa.free(self.starts);
+    }
+
+    fn position(self: Lines, offset: u32) Position {
+        var lo: usize = 0;
+        var hi: usize = self.starts.len;
+        while (hi - lo > 1) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.starts[mid] <= offset) lo = mid else hi = mid;
+        }
+        return .{ .line = @intCast(lo + 1), .col = offset - self.starts[lo] + 1 };
+    }
+};
 
 fn position(source: []const u8, offset: u32) Position {
     var line: u32 = 1;
@@ -135,7 +212,7 @@ fn position(source: []const u8, offset: u32) Position {
     return .{ .line = line, .col = @intCast(offset - line_start + 1) };
 }
 
-fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text: []const u8) Allocator.Error!Violation {
+fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, end: Position, text: []const u8) Allocator.Error!Violation {
     const rule_id = try gpa.dupe(u8, rule.id);
     errdefer gpa.free(rule_id);
     const check = try gpa.dupe(u8, rule.check);
@@ -143,7 +220,7 @@ fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, text
     const file_owned = try gpa.dupe(u8, file);
     errdefer gpa.free(file_owned);
     const text_owned = try gpa.dupe(u8, text);
-    return .{ .rule = rule_id, .check = check, .file = file_owned, .line = at.line, .col = at.col, .text = text_owned };
+    return .{ .rule = rule_id, .check = check, .file = file_owned, .line = at.line, .col = at.col, .end_line = end.line, .end_col = end.col, .text = text_owned };
 }
 
 fn freeViolation(gpa: Allocator, v: Violation) void {
@@ -211,12 +288,12 @@ pub const Failure = struct {
     }
 };
 
-pub const CommandGate = union(enum) {
+pub const Gate = union(enum) {
     ok,
     violated: Report,
     failed: Failure,
 
-    pub fn deinit(self: CommandGate, gpa: Allocator) void {
+    pub fn deinit(self: Gate, gpa: Allocator) void {
         switch (self) {
             .ok => {},
             .violated => |report| report.deinit(gpa),
@@ -350,7 +427,7 @@ pub fn resolvable(gpa: Allocator, io: std.Io, cwd: []const u8, head: []const u8)
     return false;
 }
 
-pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const Target, options: CommandOptions) !CommandGate {
+pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const Target, options: CommandOptions) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
     var trusted = options.allow_repo_memory;
@@ -374,7 +451,7 @@ fn firstCovered(rule: Rule, targets: []const Target) !?[]const u8 {
     return null;
 }
 
-fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, file: []const u8, options: CommandOptions) !CommandGate {
+fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, file: []const u8, options: CommandOptions) !Gate {
     const command = checks.commandOf(rule.check).?;
     checks.validateCommand(command) catch return failedGate(gpa, rule, file, "malformed", "");
 
@@ -415,7 +492,7 @@ fn saidBy(gpa: Allocator, report: sandbox.Report) ![]u8 {
     return std.fmt.allocPrint(gpa, "{s}\n{s}", .{ out, err });
 }
 
-fn failedGate(gpa: Allocator, rule: Rule, file: []const u8, detail: []const u8, text: []const u8) !CommandGate {
+fn failedGate(gpa: Allocator, rule: Rule, file: []const u8, detail: []const u8, text: []const u8) !Gate {
     const rule_id = try gpa.dupe(u8, rule.id);
     errdefer gpa.free(rule_id);
     const check = try gpa.dupe(u8, rule.check);
@@ -431,8 +508,8 @@ fn failedGate(gpa: Allocator, rule: Rule, file: []const u8, detail: []const u8, 
     } };
 }
 
-fn violatedGate(gpa: Allocator, rule: Rule, file: []const u8, text: []const u8) !CommandGate {
-    const owned = try ownViolation(gpa, rule, file, .{ .line = 0, .col = 0 }, text);
+fn violatedGate(gpa: Allocator, rule: Rule, file: []const u8, text: []const u8) !Gate {
+    const owned = try ownViolation(gpa, rule, file, .{ .line = 0, .col = 0 }, .{ .line = 0, .col = 0 }, text);
     errdefer freeViolation(gpa, owned);
     const list = try gpa.alloc(Violation, 1);
     list[0] = owned;
@@ -449,7 +526,91 @@ fn evaluateSource(source: []const u8, span: Span, rules: []const Rule) !?Report 
     defer alloc_bridge.uninstall();
     const t = try test_util.TestTree.init(source);
     defer t.deinit();
-    return evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules);
+    return reportOf(try evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules));
+}
+
+test "a violation's text is cut to 256 bytes on a character boundary, its position still spans the node" {
+    const long = "x" ** 255 ++ "ş" ++ "y" ** 100;
+    const source = "export function f() {\n  return \"" ++ long ++ "\";\n}\n";
+    const start: u32 = @intCast(std.mem.indexOf(u8, source, "{").?);
+    const report = (try evaluateSource(source, .{ .start = start, .end = @intCast(source.len) }, &.{.{ .id = "r", .check = "q:(string) @violation" }})) orelse return error.TestExpectedViolation;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    const v = report.violations[0];
+    try testing.expectEqualStrings("\"" ++ "x" ** 255, v.text);
+    try testing.expectEqual(@as(u32, 2), v.line);
+    try testing.expectEqual(@as(u32, 2), v.end_line);
+    try testing.expectEqual(@as(u32, 10 + long.len + 2), v.end_col);
+    try testing.expectEqualStrings(shown(long), "x" ** 255);
+    try testing.expectEqualStrings(shown("short"), "short");
+    try testing.expectEqualStrings(shown("a" ** 254 ++ "ş"), "a" ** 254 ++ "ş");
+}
+
+const Spot = struct { text: []const u8, line: u32, col: u32, end_line: u32, end_col: u32 };
+
+fn expectSpots(source: []const u8, check: []const u8, expected: []const Spot) !void {
+    errdefer std.debug.print("source \"{s}\" check {s}\n", .{ source, check });
+    const report = (try evaluateSource(source, .{ .start = 0, .end = @intCast(source.len) }, &.{.{ .id = "r", .check = check }})) orelse return error.TestExpectedViolation;
+    defer report.deinit(testing.allocator);
+    errdefer for (report.violations) |v| std.debug.print("  {s} {d}:{d}-{d}:{d}\n", .{ v.text, v.line, v.col, v.end_line, v.end_col });
+    try testing.expectEqual(expected.len, report.violations.len);
+    for (expected, report.violations) |want, got| {
+        try testing.expectEqualStrings(want.text, got.text);
+        try testing.expectEqual(want.line, got.line);
+        try testing.expectEqual(want.col, got.col);
+        try testing.expectEqual(want.end_line, got.end_line);
+        try testing.expectEqual(want.end_col, got.end_col);
+    }
+}
+
+test "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes" {
+    try expectSpots("a;\n\nb;", "q:(identifier) @violation", &.{
+        .{ .text = "a", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "b", .line = 3, .col = 1, .end_line = 3, .end_col = 2 },
+    });
+    try expectSpots("a;\n\nb;\n", "q:(identifier) @violation", &.{
+        .{ .text = "a", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "b", .line = 3, .col = 1, .end_line = 3, .end_col = 2 },
+    });
+    try expectSpots("x;\n\n\n  yy;", "q:(identifier) @violation", &.{
+        .{ .text = "x", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "yy", .line = 4, .col = 3, .end_line = 4, .end_col = 5 },
+    });
+    try expectSpots("a;\r\nbb;\r\n", "q:(identifier) @violation", &.{
+        .{ .text = "a", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "bb", .line = 2, .col = 1, .end_line = 2, .end_col = 3 },
+    });
+    try expectSpots("const ş = 1; x;\n", "q:(identifier) @violation", &.{
+        .{ .text = "ş", .line = 1, .col = 7, .end_line = 1, .end_col = 9 },
+        .{ .text = "x", .line = 1, .col = 15, .end_line = 1, .end_col = 16 },
+    });
+    try expectSpots("f(\n  a,\n  b);", "q:(arguments) @violation", &.{
+        .{ .text = "(\n  a,\n  b)", .line = 1, .col = 2, .end_line = 3, .end_col = 5 },
+    });
+}
+
+test "the line index gives the same line and column as a scan from the start, at every offset" {
+    for ([_][]const u8{ "", "\n", "a", "ab\ncd\n\nef", "x\r\ny\r\n", "şğ\nü\n" }) |source| {
+        const lines = try Lines.init(testing.allocator, source);
+        defer lines.deinit(testing.allocator);
+        var offset: u32 = 0;
+        while (offset <= source.len) : (offset += 1) {
+            errdefer std.debug.print("source \"{s}\" offset {d}\n", .{ source, offset });
+            try testing.expectEqual(position(source, offset), lines.position(offset));
+        }
+    }
+}
+
+pub fn reportOf(gated: Gate) !?Report {
+    return switch (gated) {
+        .ok => null,
+        .violated => |report| report,
+        .failed => |failure| {
+            std.debug.print("check could not run: {s}\n", .{failure.detail});
+            failure.deinit(testing.allocator);
+            return error.TestUnexpectedCheckFailure;
+        },
+    };
 }
 
 test "every violation names its rule, check, file, line, column and offending text" {

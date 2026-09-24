@@ -1,8 +1,10 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
-const scan = @import("../src/platform/scan.zig");
-const scan_command = @import("../src/protocol/scan_command.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
+const scan = @import("emetgate").scan;
+const scan_command = @import("emetgate").scan_command;
+const Runtime = @import("emetgate").runtime.Runtime;
+const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
 const Allocating = std.Io.Writer.Allocating;
@@ -34,9 +36,7 @@ const Repo = struct {
         }
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
-        try git(root_abs, &.{ "init", "-q" });
-        try git(root_abs, &.{ "config", "user.email", "t@t" });
-        try git(root_abs, &.{ "config", "user.name", "t" });
+        try git_fixture.initRepo(root_abs);
         try git(root_abs, &.{ "add", "." });
         try git(root_abs, &.{ "commit", "-q", "--allow-empty", "-m", "init" });
         return .{ .tmp = tmp, .root_abs = root_abs };
@@ -354,10 +354,11 @@ test "summary: the parse error line appears only when a scanned file had parse e
     defer broken.deinit();
     const with = try runScan(&broken, &.{ "--check", "forbid:networkidle" });
     defer with.deinit();
-    try testing.expect(with.has("\n1 of the 2 scanned file(s) had parse errors; tree-based checks there may be incomplete\n"));
+    try testing.expect(with.has("3 tracked file(s): 2 scanned, 0 outside rule scope, 1 without a language profile, 0 unreadable\n1 of the 2 scanned file(s) had parse errors; tree-based checks there may be incomplete\n"));
 }
 
-const JsonViolation = struct { rule: []const u8, check: []const u8, file: []const u8, line: u32, col: u32, text: []const u8 };
+const JsonViolation = struct { rule: []const u8, check: []const u8, file: []const u8, line: u32, col: u32, end_line: u32, end_col: u32, text: []const u8 };
+const JsonFailure = struct { rule: []const u8, check: []const u8, file: []const u8, detail: []const u8, output: []const u8 };
 const JsonUnreadable = struct { file: []const u8, @"error": []const u8 };
 const JsonScan = struct {
     status: []const u8,
@@ -367,7 +368,15 @@ const JsonScan = struct {
     unsupported: usize,
     unreadable: []const JsonUnreadable,
     parse_errors: []const []const u8,
+    check_failures: []const JsonFailure,
+    untrusted_not_run: []const JsonUntrusted,
     violations: []const JsonViolation,
+};
+
+const JsonUntrusted = struct {
+    rule: []const u8,
+    check: []const u8,
+    reason: []const u8,
 };
 
 test "scan: --json is one parseable line carrying the same report" {
@@ -406,6 +415,8 @@ test "scan: --json is one parseable line carrying the same report" {
     try testing.expectEqualStrings("a.ts", first.file);
     try testing.expectEqual(@as(u32, 2), first.line);
     try testing.expectEqual(@as(u32, 3), first.col);
+    try testing.expectEqual(@as(u32, 2), first.end_line);
+    try testing.expectEqual(@as(u32, 14), first.end_col);
     try testing.expectEqualStrings("networkidle", first.text);
     try testing.expectEqualStrings("b.js", report.violations[1].file);
     try testing.expectEqual(@as(u32, 7), report.violations[1].col);
@@ -415,7 +426,7 @@ test "scan: --json is one parseable line carrying the same report" {
     const clean_outcome = try runScan(&clean, &.{ "--check", "forbid:networkidle", "--json" });
     defer clean_outcome.deinit();
     try testing.expectEqual(@as(u8, 0), clean_outcome.code);
-    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"out_of_scope\":0,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"violations\":[]}\n", clean_outcome.out);
+    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"out_of_scope\":0,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"check_failures\":[],\"untrusted_not_run\":[],\"violations\":[]}\n", clean_outcome.out);
 }
 
 test "scan: a malformed ledger rule stops the scan before any file and names the rule" {
@@ -457,7 +468,7 @@ test "scan: the scanner itself refuses a malformed rule even when no file would 
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
 
-    try testing.expectError(error.MissingCheckArgument, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid" }}));
+    try testing.expectError(error.MissingCheckArgument, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid" }}, null));
 }
 
 test "scan: usage accepts only --json and one --check with a value" {
@@ -533,6 +544,33 @@ test "scan: a whole ledger is read once without pausing" {
     defer outcome.deinit();
     try testing.expectEqual(@as(u8, 0), outcome.code);
     try testing.expectEqual(@as(usize, 0), repair.pauses);
+}
+
+fn expectDeepLedgerRuleRefused(comptime levels: usize) !void {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "src/deep.ts", .data = "export const x = " ++ "a + " ** levels ++ "a;\n" },
+        .{ .path = "src/flat.ts", .data = "export const y = f(a);\n" },
+    });
+    defer repo.deinit();
+    try repo.putLedger("{\"id\":\"mq\",\"scope\":\"project\",\"text\":\"no calls\",\"enforce\":true,\"check\":\"q:(call_expression) @violation\",\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n");
+
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const outcome = try runScan(&repo, &.{});
+    defer outcome.deinit();
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 60_000);
+    try testing.expectEqual(@as(u8, 38), outcome.code);
+    try testing.expect(outcome.has("error: src/deep.ts: rule mq (q:(call_expression) @violation) could not run: query_depth_exceeded typescript\n"));
+    try testing.expect(outcome.has("src/flat.ts:1:18: mq (q:(call_expression) @violation): f(a)\n"));
+}
+
+test "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name" {
+    try expectDeepLedgerRuleRefused(6_100);
+}
+
+test "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time" {
+    try test_util.slow();
+    try expectDeepLedgerRuleRefused(64_000);
 }
 
 fn scopedRow(comptime id: []const u8, comptime check: []const u8, comptime where: []const u8) []const u8 {
@@ -661,7 +699,7 @@ test "scope: the scanner itself refuses an unresolved scope" {
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
-    try testing.expectError(error.ScopeUnresolved, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid:x", .where = "src/gone.js" }}));
+    try testing.expectError(error.ScopeUnresolved, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid:x", .where = "src/gone.js" }}, null));
 }
 
 test "scope: a rule without where scans the whole repository as before" {
@@ -904,4 +942,106 @@ test "nothing in scope: with no rules and no scannable file the scan stays clean
     const parsed = try std.json.parseFromSlice(JsonScan, testing.allocator, json.out, .{});
     defer parsed.deinit();
     try testing.expectEqualStrings("clean", parsed.value.status);
+}
+
+const enforced_query = "{\"id\":\"mq\",\"scope\":\"project\",\"text\":\"no eval\",\"enforce\":true,\"check\":\"q:((identifier) @violation (#eq? @violation \\\"evil\\\"))\",\"status\":\"active\",\"supersedes\":null,\"ts\":4}\n";
+
+fn trustRepo(commit_ledger: bool) !Repo {
+    var repo = try Repo.init(&.{.{ .path = "src/a.ts", .data = "evil(networkidle);\n" }});
+    errdefer repo.deinit();
+    try repo.putLedger(enforced_forbid ++ enforced_query);
+    if (commit_ledger) {
+        try git(repo.root_abs, &.{ "add", ".emetgate/ledger.ndjson" });
+        try git(repo.root_abs, &.{ "commit", "-q", "-m", "ledger" });
+    }
+    return repo;
+}
+
+fn scanJson(repo: *Repo, args: []const [:0]const u8) !std.json.Parsed(JsonScan) {
+    const outcome = try runScan(repo, args);
+    defer outcome.deinit();
+    errdefer std.debug.print("out: {s}\nerr: {s}\n", .{ outcome.out, outcome.err });
+    return std.json.parseFromSlice(JsonScan, testing.allocator, outcome.out, .{ .allocate = .alloc_always });
+}
+
+test "scan trust: a committed ledger's q: rules do not run without --allow-repo-memory and each is listed as not run" {
+    try skipOffWindows();
+    var repo = try trustRepo(true);
+    defer repo.deinit();
+
+    const parsed = try scanJson(&repo, &.{"--json"});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 1), parsed.value.untrusted_not_run.len);
+    try testing.expectEqualStrings("mq", parsed.value.untrusted_not_run[0].rule);
+    try testing.expectEqualStrings("untrusted_ledger", parsed.value.untrusted_not_run[0].reason);
+    try testing.expectEqual(@as(usize, 1), parsed.value.violations.len);
+    try testing.expectEqualStrings("mf", parsed.value.violations[0].rule);
+
+    const text = try runScan(&repo, &.{});
+    defer text.deinit();
+    try testing.expect(text.has("warning: rule mq ("));
+    try testing.expect(text.has("not run: untrusted ledger"));
+    try testing.expect(!text.has("src/a.ts:1:1: mq"));
+}
+
+test "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag" {
+    try skipOffWindows();
+    for ([_]bool{ true, false }) |committed| {
+        var repo = try trustRepo(committed);
+        defer repo.deinit();
+        const args: []const [:0]const u8 = if (committed) &.{ "--allow-repo-memory", "--json" } else &.{"--json"};
+        const parsed = try scanJson(&repo, args);
+        defer parsed.deinit();
+        errdefer std.debug.print("committed: {any}\n", .{committed});
+        try testing.expectEqual(@as(usize, 0), parsed.value.untrusted_not_run.len);
+        try testing.expectEqual(@as(usize, 2), parsed.value.violations.len);
+    }
+}
+
+test "scan trust: an operator's own --check query runs next to a committed ledger without the flag" {
+    try skipOffWindows();
+    var repo = try trustRepo(true);
+    defer repo.deinit();
+    const parsed = try scanJson(&repo, &.{ "--check", "q:((identifier) @violation (#eq? @violation \"evil\"))", "--json" });
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.value.untrusted_not_run.len);
+    try testing.expectEqual(@as(usize, 1), parsed.value.violations.len);
+    try testing.expectEqualStrings("evil", parsed.value.violations[0].text);
+}
+
+test "scan trust: --allow-repo-memory twice is a usage error" {
+    try testing.expect(scan_command.Options.parse(&.{ "--allow-repo-memory", "--allow-repo-memory" }) == null);
+    try testing.expect(scan_command.Options.parse(&.{"--allow-repo-memory"}).?.allow_repo_memory);
+}
+
+const long_string_file = "const s = \"" ++ "a" ** 20_000 ++ "\";\n";
+
+fn slowMatch(comptime optional: usize) []const u8 {
+    return "q:((string_fragment) @violation (#match? @violation \"" ++ "a?" ** optional ++ "b\"))";
+}
+
+test "scan: a call budget shared by every file turns the files it cannot pay for into check failures" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "a.ts", .data = long_string_file },
+        .{ .path = "b.ts", .data = long_string_file },
+        .{ .path = "c.ts", .data = long_string_file },
+        .{ .path = "d.ts", .data = long_string_file },
+    });
+    defer repo.deinit();
+    const check = slowMatch(20);
+
+    const limited = try runScanWith(&repo, .{ .source = .{ .check = .{ .spec = check, .where = null } }, .json = true, .call_operations = 5_000_000 });
+    defer limited.deinit();
+    errdefer std.debug.print("out: {s}\n", .{limited.out});
+    try testing.expectEqual(@as(u8, 38), limited.code);
+    const parsed = try std.json.parseFromSlice(JsonScan, testing.allocator, limited.out, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 4), parsed.value.scanned);
+    try testing.expectEqual(@as(usize, 2), parsed.value.check_failures.len);
+    for (parsed.value.check_failures) |f| try testing.expectEqualStrings("call_budget_exceeded", f.detail);
+
+    const unlimited = try runScanWith(&repo, .{ .source = .{ .check = .{ .spec = check, .where = null } }, .json = true });
+    defer unlimited.deinit();
+    try testing.expectEqual(@as(u8, 0), unlimited.code);
 }

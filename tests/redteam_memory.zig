@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const memory = @import("../src/platform/memory.zig");
+const memory = @import("emetgate").memory;
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 const gpa = testing.allocator;
 
@@ -177,6 +178,7 @@ test "memory: RT5 corruption before the last row stays fatal and untouched" {
 }
 
 test "memory: RT6 an append that would reach max_ledger_bytes is refused and the ledger stays readable" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var s = try Store.init();
     defer s.deinit();
@@ -222,6 +224,7 @@ test "memory: RT6 an append that would reach max_ledger_bytes is refused and the
 }
 
 test "memory: RT7 a ledger just under the size limit still recalls and compacts" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var s = try Store.init();
     defer s.deinit();

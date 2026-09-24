@@ -5,6 +5,8 @@ const symbol = @import("symbol.zig");
 const profile_mod = @import("lang/profile.zig");
 const Profile = profile_mod.Profile;
 const isOneOf = @import("functions.zig").isOneOf;
+const query = @import("query.zig");
+const lang = @import("lang/registry.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -14,7 +16,11 @@ pub const Violation = struct {
     span: Span,
 };
 
-pub const Collect = *const fn (gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void;
+pub const Unrunnable = error{ QueryMalformed, QueryNotForLanguage } || query.RunError;
+
+pub const CollectError = Unrunnable || Allocator.Error;
+
+pub const Collect = *const fn (gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, limits: query.Limits, out: *std.ArrayList(Violation)) CollectError!void;
 
 pub const Check = struct {
     name: []const u8,
@@ -26,9 +32,12 @@ pub const registry = [_]Check{
     .{ .name = "no_comment", .collect = noComment },
     .{ .name = "forbid", .collect = forbid, .takes_argument = true },
     .{ .name = "no_literal", .collect = noLiteral, .takes_argument = true },
+    .{ .name = query_name, .collect = queryCheck, .takes_argument = true },
 };
 
-pub const Error = error{ UnknownCheck, UnexpectedCheckArgument, MissingCheckArgument, EmptyCheckArgument, EmptyCommandCheck, CommandCheckTooLong, CommandCheckNotStatic } || Allocator.Error;
+pub const query_name = "q";
+
+pub const Error = error{ UnknownCheck, UnexpectedCheckArgument, MissingCheckArgument, EmptyCheckArgument, EmptyCommandCheck, CommandCheckTooLong, CommandCheckNotStatic } || query.CompileError || Unrunnable || Allocator.Error;
 
 pub const command_prefix = "cmd:";
 pub const max_command_bytes = 4 * 1024 - command_prefix.len;
@@ -66,14 +75,51 @@ fn resolve(checks: []const Check, spec: []const u8) Error!struct { check: Check,
     return .{ .check = check, .arg = invocation.arg };
 }
 
-pub fn validate(spec: []const u8) Error!void {
+pub fn validate(gpa: Allocator, spec: []const u8) Error!void {
     if (commandOf(spec)) |command| return validateCommand(command);
-    _ = try resolve(&registry, spec);
+    return validateStatic(gpa, spec);
 }
 
-pub fn validateStatic(spec: []const u8) Error!void {
+pub fn validateStatic(gpa: Allocator, spec: []const u8) Error!void {
     if (commandOf(spec) != null) return error.CommandCheckNotStatic;
-    _ = try resolve(&registry, spec);
+    const resolved = try resolve(&registry, spec);
+    if (std.mem.eql(u8, resolved.check.name, query_name)) {
+        var results: [lang.profiles.len]Compiled = undefined;
+        try compileEverywhere(gpa, resolved.arg.?, &results);
+        try usable(&results);
+    }
+}
+
+pub const Compiled = struct {
+    profile: *const Profile,
+    err: ?query.CompileError = null,
+    diag: query.Diagnostic = .{},
+};
+
+pub fn compileEverywhere(gpa: Allocator, text: []const u8, results: *[lang.profiles.len]Compiled) Allocator.Error!void {
+    for (lang.profiles, results) |profile, *result| {
+        result.* = .{ .profile = profile };
+        var compiled = query.compile(gpa, profile.grammar(), text, &result.diag) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => |e| {
+                result.err = e;
+                continue;
+            },
+        };
+        compiled.deinit();
+    }
+}
+
+pub fn usable(results: []const Compiled) query.CompileError!void {
+    var any = false;
+    for (results) |result| {
+        const err = result.err orelse {
+            any = true;
+            continue;
+        };
+        if (!query.dependsOnLanguage(err)) return err;
+    }
+    if (!any) return results[0].err.?;
 }
 
 pub fn find(checks: []const Check, name: []const u8) ?Check {
@@ -84,21 +130,25 @@ pub fn find(checks: []const Check, name: []const u8) ?Check {
 }
 
 pub fn run(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
-    return runWith(gpa, &registry, profile, tree, span, names);
+    return runWith(gpa, &registry, profile, tree, span, names, .{});
 }
 
-pub fn runWith(gpa: Allocator, checks: []const Check, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
+pub fn runLimited(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8, limits: query.Limits) Error![]Violation {
+    return runWith(gpa, &registry, profile, tree, span, names, limits);
+}
+
+pub fn runWith(gpa: Allocator, checks: []const Check, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8, limits: query.Limits) Error![]Violation {
     for (names) |name| _ = try resolve(checks, name);
     var out: std.ArrayList(Violation) = .empty;
     errdefer out.deinit(gpa);
     for (names) |name| {
         const resolved = try resolve(checks, name);
-        try resolved.check.collect(gpa, profile, tree, span, resolved.arg, &out);
+        try resolved.check.collect(gpa, profile, tree, span, resolved.arg, limits, &out);
     }
     return out.toOwnedSlice(gpa);
 }
 
-fn forbid(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+fn forbid(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     _ = profile;
     const needle = arg orelse return;
     const body = tree.source[span.start..span.end];
@@ -109,7 +159,7 @@ fn forbid(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, ar
     }
 }
 
-fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     _ = arg;
     var walker = traversal.Walker.init(tree.root());
     defer walker.deinit();
@@ -125,7 +175,7 @@ fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
     }
 }
 
-fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     const name = arg orelse return;
     const shape = profile.literal_values;
     var walker = traversal.Walker.init(tree.root());
@@ -141,6 +191,21 @@ fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
         try out.append(gpa, .{ .check = "no_literal", .span = .{ .start = node.startByte(), .end = node.endByte() } });
     }
 }
+
+fn queryCheck(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, limits: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
+    const text = arg orelse return;
+    var compiled = query.compile(gpa, profile.grammar(), text, null) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => |e| return if (query.dependsOnLanguage(e)) error.QueryNotForLanguage else error.QueryMalformed,
+    };
+    defer compiled.deinit();
+    var found: std.ArrayList(Span) = .empty;
+    defer found.deinit(gpa);
+    try query.run(gpa, &compiled, tree, span, limits, &found);
+    try out.ensureUnusedCapacity(gpa, found.items.len);
+    for (found.items) |s| out.appendAssumeCapacity(.{ .check = query_name, .span = s });
+}
+
 
 fn keyName(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) []const u8 {
     if (!isKind(key, shape.quoted_key)) return tree.text(key);
@@ -290,7 +355,7 @@ test "an unknown check name is refused before any check runs" {
 
     const Probe = struct {
         var ran: usize = 0;
-        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, s: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, s: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
             _ = arg;
             _ = gpa;
             _ = profile;
@@ -301,7 +366,7 @@ test "an unknown check name is refused before any check runs" {
         }
     };
     const checks = [_]Check{.{ .name = "probe", .collect = Probe.collect }};
-    try testing.expectError(error.UnknownCheck, runWith(testing.allocator, &checks, test_util.language, t.tree, span, &.{ "probe", "missing" }));
+    try testing.expectError(error.UnknownCheck, runWith(testing.allocator, &checks, test_util.language, t.tree, span, &.{ "probe", "missing" }, .{}));
     try testing.expectEqual(@as(usize, 0), Probe.ran);
 }
 
@@ -313,7 +378,7 @@ test "a new check joins by registration alone and runs in the requested order" {
     defer t.deinit();
 
     const NoEval = struct {
-        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) Allocator.Error!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
             _ = arg;
             var walker = traversal.Walker.init(tree.root());
             defer walker.deinit();
@@ -327,7 +392,7 @@ test "a new check joins by registration alone and runs in the requested order" {
         }
     };
     const checks = registry ++ [_]Check{.{ .name = "no_eval", .collect = NoEval.collect }};
-    const violations = try runWith(testing.allocator, &checks, test_util.language, t.tree, wholeSource(source), &.{ "no_eval", "no_comment" });
+    const violations = try runWith(testing.allocator, &checks, test_util.language, t.tree, wholeSource(source), &.{ "no_eval", "no_comment" }, .{});
     defer testing.allocator.free(violations);
 
     try testing.expectEqual(@as(usize, 2), violations.len);
@@ -504,22 +569,22 @@ test "only a cmd: prefix names a command predicate, and every other spec stays a
 }
 
 test "an unknown check name is still refused instead of being run as a command" {
-    try testing.expectError(error.UnknownCheck, validate("npx eslint"));
-    try testing.expectError(error.UnknownCheck, validate("eslint:--rule"));
-    try testing.expectError(error.UnknownCheck, validate("frbid:x"));
+    try testing.expectError(error.UnknownCheck, validate(testing.allocator, "npx eslint"));
+    try testing.expectError(error.UnknownCheck, validate(testing.allocator, "eslint:--rule"));
+    try testing.expectError(error.UnknownCheck, validate(testing.allocator, "frbid:x"));
 }
 
 test "a command check is validated for shape without being run, and the ast path refuses it outright" {
-    try validate("cmd:npx eslint --rule no-console");
-    try validate("cmd:./scripts/no-raw-sql.sh");
-    try testing.expectError(error.EmptyCommandCheck, validate("cmd:"));
-    try testing.expectError(error.EmptyCommandCheck, validate("cmd:   "));
-    try testing.expectError(error.EmptyCommandCheck, validate("cmd:\t\r\n"));
+    try validate(testing.allocator, "cmd:npx eslint --rule no-console");
+    try validate(testing.allocator, "cmd:./scripts/no-raw-sql.sh");
+    try testing.expectError(error.EmptyCommandCheck, validate(testing.allocator, "cmd:"));
+    try testing.expectError(error.EmptyCommandCheck, validate(testing.allocator, "cmd:   "));
+    try testing.expectError(error.EmptyCommandCheck, validate(testing.allocator, "cmd:\t\r\n"));
 
     const long = "cmd:" ++ ("x" ** (max_command_bytes + 1));
-    try testing.expectError(error.CommandCheckTooLong, validate(long));
+    try testing.expectError(error.CommandCheckTooLong, validate(testing.allocator, long));
     const at_limit = "cmd:" ++ ("x" ** max_command_bytes);
-    try validate(at_limit);
+    try validate(testing.allocator, at_limit);
 
     const source = "function f() { /* c */ }\n";
     try testing.expectError(error.UnknownCheck, runSpecs(source, wholeSource(source), &.{"cmd:exit 0"}));
@@ -527,9 +592,9 @@ test "a command check is validated for shape without being run, and the ast path
 }
 
 test "a static-only caller refuses a command check by its own name" {
-    try validateStatic("no_comment");
-    try validateStatic("forbid:x");
-    try testing.expectError(error.CommandCheckNotStatic, validateStatic("cmd:exit 0"));
-    try testing.expectError(error.CommandCheckNotStatic, validateStatic("cmd:"));
-    try testing.expectError(error.UnknownCheck, validateStatic("frbid:x"));
+    try validateStatic(testing.allocator, "no_comment");
+    try validateStatic(testing.allocator, "forbid:x");
+    try testing.expectError(error.CommandCheckNotStatic, validateStatic(testing.allocator, "cmd:exit 0"));
+    try testing.expectError(error.CommandCheckNotStatic, validateStatic(testing.allocator, "cmd:"));
+    try testing.expectError(error.UnknownCheck, validateStatic(testing.allocator, "frbid:x"));
 }

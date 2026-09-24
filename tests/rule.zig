@@ -1,13 +1,14 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
-const memory = @import("../src/platform/memory.zig");
-const checks = @import("../src/engine/checks.zig");
-const rule_command = @import("../src/protocol/rule_command.zig");
-const scan_command = @import("../src/protocol/scan_command.zig");
-const wire = @import("../src/protocol/wire.zig");
-const handlers = @import("../src/protocol/handlers.zig");
-const telemetry = @import("../src/protocol/telemetry.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
+const memory = @import("emetgate").memory;
+const checks = @import("emetgate").checks;
+const rule_command = @import("emetgate").rule_command;
+const scan_command = @import("emetgate").scan_command;
+const wire = @import("emetgate").wire;
+const handlers = @import("emetgate").handlers;
+const telemetry = @import("emetgate").telemetry;
+const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
 const Allocating = std.Io.Writer.Allocating;
@@ -34,9 +35,7 @@ const Repo = struct {
         }
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
-        try git(root_abs, &.{ "init", "-q" });
-        try git(root_abs, &.{ "config", "user.email", "t@t" });
-        try git(root_abs, &.{ "config", "user.name", "t" });
+        try git_fixture.initRepo(root_abs);
         try git(root_abs, &.{ "add", "." });
         try git(root_abs, &.{ "commit", "-q", "--allow-empty", "-m", "init" });
         return .{ .tmp = tmp, .root_abs = root_abs };
@@ -73,8 +72,36 @@ fn runRule(repo: *Repo, args: []const [:0]const u8) ![]u8 {
     const request = rule_command.parse(args) orelse return error.UsageRefused;
     var out: Allocating = .init(testing.allocator);
     defer out.deinit();
-    try rule_command.run(testing.allocator, testing.io, repo.root_abs, request, &out.writer);
+    var err_out: Allocating = .init(testing.allocator);
+    defer err_out.deinit();
+    try rule_command.run(testing.allocator, testing.io, repo.root_abs, request, &out.writer, &err_out.writer);
     return testing.allocator.dupe(u8, out.written());
+}
+
+const Explained = struct {
+    out: []u8,
+    err_out: []u8,
+    failure: ?anyerror,
+
+    fn deinit(self: Explained) void {
+        testing.allocator.free(self.out);
+        testing.allocator.free(self.err_out);
+    }
+};
+
+fn runRuleExplained(repo: *Repo, args: []const [:0]const u8) !Explained {
+    const request = rule_command.parse(args) orelse return error.UsageRefused;
+    var out: Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var err_out: Allocating = .init(testing.allocator);
+    defer err_out.deinit();
+    var failure: ?anyerror = null;
+    rule_command.run(testing.allocator, testing.io, repo.root_abs, request, &out.writer, &err_out.writer) catch |err| {
+        failure = err;
+    };
+    const printed = try testing.allocator.dupe(u8, out.written());
+    errdefer testing.allocator.free(printed);
+    return .{ .out = printed, .err_out = try testing.allocator.dupe(u8, err_out.written()), .failure = failure };
 }
 
 fn addRule(repo: *Repo, args: []const [:0]const u8) ![:0]u8 {
@@ -502,4 +529,99 @@ test "rule: a file with no adopted rule still gets an explicit empty list" {
     var body = try skeletonOf(&repo, "src\\nav.ts");
     defer body.deinit();
     try testing.expectEqual(@as(usize, 0), body.value.object.get("rules").?.array.items.len);
+}
+
+const typed_only = "q:(type_annotation) @violation";
+
+test "rule: a q: check that compiles for one language is kept and the other language is named" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    const explained = try runRuleExplained(&repo, &.{ "add", "no annotations", "--check", typed_only, "--enforce" });
+    defer explained.deinit();
+    try testing.expect(explained.failure == null);
+    try testing.expectEqual(@as(usize, 18), explained.out.len);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "q: does not compile for javascript; files in that language fail the check by name") != null);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "QueryNodeType") != null);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "\"type_annotation\"") != null);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "typescript") == null);
+
+    const shared = try runRuleExplained(&repo, &.{ "add", "no eval", "--check", "q:((identifier) @violation (#eq? @violation \"eval\"))", "--enforce" });
+    defer shared.deinit();
+    try testing.expect(shared.failure == null);
+    try testing.expectEqualStrings("", shared.err_out);
+}
+
+test "rule: a q: check that compiles for no language is refused and writes nothing" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    const explained = try runRuleExplained(&repo, &.{ "add", "typo", "--check", "q:(no_such_node) @violation", "--enforce" });
+    defer explained.deinit();
+    try testing.expectEqual(@as(?anyerror, error.QueryNodeType), explained.failure);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "does not compile for typescript") != null);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "does not compile for javascript") != null);
+    try testing.expect(std.mem.indexOf(u8, explained.err_out, "fail the check by name") == null);
+    try testing.expectEqual(@as(u8, 19), wire.exitCode(error.QueryNodeType));
+    try expectLedgerUntouched(&repo);
+}
+
+test "rule: a q: check without @violation, with an unknown predicate or a directive is refused by name" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    const Case = struct { spec: [:0]const u8, err: anyerror, named: []const u8 };
+    const cases = [_]Case{
+        .{ .spec = "q:(identifier) @id", .err = error.QueryMissingViolation, .named = "(identifier) @id" },
+        .{ .spec = "q:((identifier) @violation (#lua-match? @violation \"x\"))", .err = error.QueryUnknownPredicate, .named = "\"lua-match?\"" },
+        .{ .spec = "q:((identifier) @violation (#set! key value))", .err = error.QueryDirective, .named = "\"set!\"" },
+        .{ .spec = "q:((identifier) @violation (#match? @violation \"(a)\\\\1\"))", .err = error.RegexUnsupported, .named = "backreference" },
+        .{ .spec = "q:((statement_block (_)+ @violation) (#eq? @violation @violation))", .err = error.QueryQuantifiedCapture, .named = "(statement_block (_)+ @violation)" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("spec: {s}\n", .{case.spec});
+        const explained = try runRuleExplained(&repo, &.{ "add", "bad", "--check", case.spec, "--enforce" });
+        defer explained.deinit();
+        errdefer std.debug.print("stderr: {s}\n", .{explained.err_out});
+        try testing.expectEqual(@as(?anyerror, case.err), explained.failure);
+        try testing.expect(std.mem.indexOf(u8, explained.err_out, @errorName(case.err)) != null);
+        try testing.expect(std.mem.indexOf(u8, explained.err_out, case.named) != null);
+        try testing.expectEqual(@as(u8, 19), wire.exitCode(case.err));
+    }
+    try expectLedgerUntouched(&repo);
+}
+
+test "rule: a q: check at the length limit fits the ledger field, one byte over is refused" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    const head = "q:(identifier) @violation";
+    const at_limit = head ++ (" " ** (memory.max_check_bytes - head.len));
+    const id = try addRule(&repo, &.{ "add", "long but legal", "--check", at_limit, "--enforce" });
+    defer testing.allocator.free(id);
+    try testing.expectError(error.QueryTooLong, runRule(&repo, &.{ "add", "too long", "--check", at_limit ++ " ", "--enforce" }));
+}
+
+test "rule: scan reports a q: check that does not compile for a file's language apart from violations" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "src/a.ts", .data = "export function f(x: number) {\n  return x;\n}\n" },
+        .{ .path = "src/b.js", .data = "export function g(x) {\n  return x;\n}\n" },
+    });
+    defer repo.deinit();
+    const id = try addRule(&repo, &.{ "add", "no annotations", "--check", typed_only, "--enforce" });
+    defer testing.allocator.free(id);
+
+    const outcome = try runScan(&repo);
+    defer outcome.deinit();
+    try testing.expectEqual(scan_command.check_failed_exit_code, outcome.code);
+    try testing.expect(outcome.has("src/a.ts:1:20:"));
+    try testing.expect(outcome.has("error: src/b.js: rule "));
+    try testing.expect(outcome.has("could not run: query_not_for_language javascript"));
+    try testing.expect(outcome.has("1 violation(s) in 1 file(s)"));
+    try testing.expect(outcome.has("1 check(s) could not run"));
 }

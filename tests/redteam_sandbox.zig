@@ -1,12 +1,13 @@
 const std = @import("std");
+const git_fixture = @import("git_fixture.zig");
 const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
-const runner = @import("../src/platform/runner.zig");
-const shadow = @import("../src/platform/shadow.zig");
-const sandbox = @import("../src/platform/sandbox.zig");
-const symbol = @import("../src/engine/symbol.zig");
-const Runtime = @import("../src/engine/runtime.zig").Runtime;
-const Snapshot = @import("../src/engine/loader.zig").Snapshot;
+const runner = @import("emetgate").runner;
+const shadow = @import("emetgate").shadow;
+const sandbox = @import("emetgate").sandbox;
+const symbol = @import("emetgate").symbol;
+const Runtime = @import("emetgate").runtime.Runtime;
+const Snapshot = @import("emetgate").loader.Snapshot;
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -35,10 +36,8 @@ const Victim = struct {
         errdefer gpa.free(top_abs);
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", gpa);
         errdefer gpa.free(root_abs);
+        try git_fixture.initRepo(root_abs);
         for ([_][]const []const u8{
-            &.{ "init", "-q" },
-            &.{ "config", "user.email", "t@t" },
-            &.{ "config", "user.name", "t" },
             &.{ "add", "." },
             &.{ "commit", "-q", "-m", "init" },
         }) |args| try git(root_abs, args);

@@ -46,20 +46,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    const test_options = b.addOptions();
-    test_options.addOptionPath("probe_path", probe.getEmittedBin());
-
-    const test_module = b.createModule(.{
-        .root_source_file = b.path("test_root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "c", .module = c_module },
-            .{ .name = "build_options", .module = test_options.createModule() },
-        },
-    });
-    test_module.linkLibrary(tree_sitter);
+    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .tree_sitter = tree_sitter, .probe = probe };
+    const src_bench = srcModule(b, common, true);
 
     const exe = b.addExecutable(.{
         .name = "emetgate",
@@ -77,11 +65,34 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run the emetgate CLI").dependOn(&run_exe.step);
 
     const test_filters = b.option([]const []const u8, "test-filter", "Only run tests whose name contains one of these strings; skips the CLI e2e cases") orelse &.{};
-    const tests = b.addTest(.{ .root_module = test_module, .filters = test_filters });
-    const run_tests = b.addRunArtifact(tests);
-    run_tests.setCwd(b.path("."));
-    const test_step = b.step("test", "Run unit and end-to-end tests");
-    test_step.dependOn(&run_tests.step);
+    const test_jobs = b.option(usize, "test-jobs", "Number of processes that split the tests of the one test binary") orelse 4;
+    const run_slow = b.option(bool, "slow", "Also run the tests marked slow") orelse false;
+    if (test_jobs == 0) @panic("-Dtest-jobs must be at least 1");
+    const selection: TestSelection = .{ .filters = test_filters, .slow = run_slow };
+
+    const test_all = b.addTest(.{
+        .name = "test-all",
+        .root_module = testModule(b, common),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
+    });
+    b.step("test-bin", "Build the test binary into zig-out/bin/test-all").dependOn(&b.addInstallArtifact(test_all, .{}).step);
+
+    const test_step = b.step("test", "Run every test from one binary in parallel shards, then the CLI end-to-end tests");
+    test_step.dependOn(&testRun(b, test_all, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}) }).step);
+
+    const fast_step = b.step("test-fast", "Run the engine unit tests only: no git, no sandbox, no child process");
+    fast_step.dependOn(&testRun(b, test_all, .{ .filters = &.{"src.engine."} }, &.{}).step);
+
+    const timing_step = b.step("test-timing", "Run every test one by one in one process and print the slowest tests and per-file totals");
+    const timing = testRun(b, test_all, selection, &.{"--timing"});
+    if (b.args) |args| timing.addArgs(args);
+    timing_step.dependOn(&timing.step);
+
+    const bench_tests = b.addTest(.{ .name = "bench-tests", .root_module = src_bench, .filters = &.{ "apply/rollback cycles", "rollback latency" } });
+    const run_bench = b.addRunArtifact(bench_tests);
+    run_bench.setCwd(b.path("."));
+    run_bench.has_side_effects = true;
+    b.step("bench", "Run the session benchmarks at full size (1000 cycles), which the test step runs at 10").dependOn(&run_bench.step);
 
     const e2e_step = b.step("e2e", "Run CLI end-to-end tests");
     addEndToEndTests(b, exe, e2e_step);
@@ -113,6 +124,67 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| run_lockdown.addArgs(args);
     run_lockdown.step.dependOn(b.getInstallStep());
     b.step("e2e-lockdown", "Launch a real claude through emetgate lockdown and check its tool list (spends tokens)").dependOn(&run_lockdown.step);
+}
+
+const TestModuleOptions = struct {
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    c_module: *std.Build.Module,
+    tree_sitter: *std.Build.Step.Compile,
+    probe: *std.Build.Step.Compile,
+};
+
+fn buildOptions(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.Module {
+    const values = b.addOptions();
+    values.addOptionPath("probe_path", options.probe.getEmittedBin());
+    values.addOption(bool, "bench", bench);
+    return values.createModule();
+}
+
+fn srcModule(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.Module {
+    const module = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = options.target,
+        .optimize = options.optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "c", .module = options.c_module },
+            .{ .name = "build_options", .module = buildOptions(b, options, bench) },
+        },
+    });
+    module.linkLibrary(options.tree_sitter);
+    return module;
+}
+
+fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
+    const module = b.createModule(.{
+        .root_source_file = b.path("test_root.zig"),
+        .target = options.target,
+        .optimize = options.optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "c", .module = options.c_module },
+            .{ .name = "build_options", .module = buildOptions(b, options, false) },
+        },
+    });
+    module.addImport("emetgate", module);
+    module.linkLibrary(options.tree_sitter);
+    return module;
+}
+
+const TestSelection = struct {
+    filters: []const []const u8 = &.{},
+    slow: bool = false,
+};
+
+fn testRun(b: *std.Build, compiled: *std.Build.Step.Compile, selection: TestSelection, extra: []const []const u8) *std.Build.Step.Run {
+    const run = b.addRunArtifact(compiled);
+    run.setCwd(b.path("."));
+    run.has_side_effects = true;
+    for (selection.filters) |filter| run.addArgs(&.{ "--filter", filter });
+    if (selection.slow) run.addArg("--slow");
+    run.addArgs(extra);
+    return run;
 }
 
 const e2e_fixture = "tests/fixtures/functions.ts";

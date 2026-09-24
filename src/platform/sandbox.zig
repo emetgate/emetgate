@@ -709,6 +709,7 @@ fn waitExitCode(process: std.os.windows.HANDLE) !u32 {
     return code;
 }
 
+const test_util = @import("../engine/test_util.zig");
 const testing = std.testing;
 const build_options = @import("build_options");
 
@@ -824,6 +825,7 @@ test "an output flood is cut at the byte limit and marked truncated" {
 }
 
 test "grandchild processes die with the job when the command times out" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try probe(&.{"grandchild"}, .{ .timeout_ms = 1500 });
     defer report.deinit(testing.allocator);
@@ -840,6 +842,7 @@ fn processIsGoneNow(pid: u32) bool {
 }
 
 test "a timed out run returns only after every process in its job has exited" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     last_stop = null;
     const report = try probe(&.{"grandchild"}, .{ .timeout_ms = 1500 });
@@ -855,6 +858,7 @@ test "a timed out run returns only after every process in its job has exited" {
 }
 
 test "a command that exits but leaves a background process is reported by its own exit code" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try probe(&.{"orphan"}, .{ .timeout_ms = 20_000 });
     defer report.deinit(testing.allocator);
@@ -869,6 +873,7 @@ test "a command that exits but leaves a background process is reported by its ow
 }
 
 test "a detached worker that holds no pipe is still caught by job accounting, not passed" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try probe(&.{"detached"}, .{ .timeout_ms = 20_000 });
     defer report.deinit(testing.allocator);
@@ -924,6 +929,7 @@ test "the exited command's own console host is not a leftover, any other process
 }
 
 test "a process that closes its output and keeps running is killed at the deadline" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try probe(&.{"closeout"}, .{ .timeout_ms = 1000 });
     defer report.deinit(testing.allocator);

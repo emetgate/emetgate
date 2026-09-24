@@ -1,5 +1,6 @@
 const std = @import("std");
 const scan = @import("../platform/scan.zig");
+const rules = @import("../platform/rules.zig");
 const wire = @import("wire.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -7,6 +8,8 @@ const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
 
 pub const violations_exit_code: u8 = 10;
+
+pub const check_failed_exit_code: u8 = 38;
 
 pub const ledger_needs_repair_message = "the ledger ends in a partial row; the next call that changes the ledger moves it to quarantine, after which scan runs";
 
@@ -18,6 +21,8 @@ pub const Options = struct {
     pause: scan.Pause = .{},
     max_violations: ?usize = null,
     refusal: ?*?[]const u8 = null,
+    allow_repo_memory: bool = false,
+    call_operations: ?u64 = null,
 
     pub fn parse(args: []const [:0]const u8) ?Options {
         var options: Options = .{ .source = .ledger, .json = false };
@@ -33,6 +38,9 @@ pub const Options = struct {
                 if (check != null or i + 1 >= args.len) return null;
                 i += 1;
                 check = args[i];
+            } else if (std.mem.eql(u8, arg, "--allow-repo-memory")) {
+                if (options.allow_repo_memory) return null;
+                options.allow_repo_memory = true;
             } else if (std.mem.eql(u8, arg, "--in")) {
                 if (in != null or i + 1 >= args.len) return null;
                 i += 1;
@@ -62,7 +70,11 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
     };
     defer enforced.deinit();
 
-    if (scan.firstMalformed(enforced.rules)) |bad| {
+    const split = splitUntrusted(gpa, io, root_abs, options, enforced.rules) catch |err| return report(err, options, out, err_out);
+    defer split.deinit(gpa);
+    const runnable = split.runnable;
+
+    if (try scan.firstMalformed(gpa, runnable)) |bad| {
         refuse(options, bad.reason);
         const code = wire.exitCode(bad.reason);
         if (options.json) {
@@ -73,7 +85,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
         return code;
     }
 
-    const unresolved = scan.firstUnresolved(gpa, io, runtime, root_abs, enforced.rules) catch |err| return report(err, options, out, err_out);
+    const unresolved = scan.firstUnresolved(gpa, io, runtime, root_abs, runnable) catch |err| return report(err, options, out, err_out);
     if (unresolved) |bad| {
         const err = error.ScopeUnresolved;
         refuse(options, err);
@@ -86,19 +98,53 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
         return code;
     }
 
-    const result = scan.scan(gpa, io, runtime, root_abs, enforced.rules) catch |err| return report(err, options, out, err_out);
+    const result = scan.scan(gpa, io, runtime, root_abs, runnable, options.call_operations) catch |err| return report(err, options, out, err_out);
     defer result.deinit(gpa);
 
     if (options.json) {
-        try wire.writeScan(out, result, options.max_violations);
+        try wire.writeScan(out, result, options.max_violations, split.untrusted);
     } else {
-        try writeText(out, result);
+        try writeText(out, result, split.untrusted);
     }
     if (result.nothingInScope()) {
         if (!options.json) try out.print("{t}: {s}\n", .{ error.NothingInScope, nothing_in_scope_message });
         return wire.exitCode(error.NothingInScope);
     }
+    if (result.check_failures.len > 0) {
+        refuse(options, error.CheckFailed);
+        return check_failed_exit_code;
+    }
     return if (result.violations.len == 0) 0 else violations_exit_code;
+}
+
+const Split = struct {
+    runnable: []const rules.Rule,
+    untrusted: []const rules.Rule,
+    owned: bool,
+
+    fn deinit(self: Split, gpa: Allocator) void {
+        if (!self.owned) return;
+        gpa.free(self.runnable);
+        gpa.free(self.untrusted);
+    }
+};
+
+fn splitUntrusted(gpa: Allocator, io: std.Io, root_abs: []const u8, options: Options, all: []const rules.Rule) !Split {
+    const unsplit: Split = .{ .runnable = all, .untrusted = &.{}, .owned = false };
+    if (options.source != .ledger or options.allow_repo_memory) return unsplit;
+    for (all) |rule| {
+        if (rules.isQuery(rule)) break;
+    } else return unsplit;
+    if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;
+
+    var runnable: std.ArrayList(rules.Rule) = .empty;
+    defer runnable.deinit(gpa);
+    var untrusted: std.ArrayList(rules.Rule) = .empty;
+    defer untrusted.deinit(gpa);
+    for (all) |rule| try (if (rules.isQuery(rule)) &untrusted else &runnable).append(gpa, rule);
+    const runnable_owned = try runnable.toOwnedSlice(gpa);
+    errdefer gpa.free(runnable_owned);
+    return .{ .runnable = runnable_owned, .untrusted = try untrusted.toOwnedSlice(gpa), .owned = true };
 }
 
 fn refuse(options: Options, err: anyerror) void {
@@ -116,7 +162,7 @@ fn report(err: anyerror, options: Options, out: *Writer, err_out: *Writer) !u8 {
     return code;
 }
 
-fn writeText(out: *Writer, result: scan.Result) !void {
+fn writeText(out: *Writer, result: scan.Result, untrusted: []const rules.Rule) !void {
     for (result.violations) |v| {
         if (std.mem.eql(u8, v.rule, v.check)) {
             try out.print("{s}:{d}:{d}: {s}: {s}\n", .{ v.file, v.line, v.col, v.rule, v.text });
@@ -124,6 +170,8 @@ fn writeText(out: *Writer, result: scan.Result) !void {
             try out.print("{s}:{d}:{d}: {s} ({s}): {s}\n", .{ v.file, v.line, v.col, v.rule, v.check, v.text });
         }
     }
+    for (result.check_failures) |f| try out.print("error: {s}: rule {s} ({s}) could not run: {s} {s}\n", .{ f.file, f.rule, f.check, f.detail, f.text });
+    for (untrusted) |rule| try out.print("warning: rule {s} ({s}) not run: untrusted ledger, it is committed to the repository; pass --allow-repo-memory to run it\n", .{ rule.id, rule.check });
     for (result.unreadable) |u| try out.print("warning: {s}: not scanned: {t}\n", .{ u.file, u.reason });
     for (result.parse_errors) |file| try out.print("warning: {s}: parse error; tree-based checks may be incomplete\n", .{file});
     const unreadable = result.unreadable.len;
@@ -136,6 +184,9 @@ fn writeText(out: *Writer, result: scan.Result) !void {
         result.unsupported,
         unreadable,
     });
+    if (result.check_failures.len > 0) {
+        try out.print("{d} check(s) could not run; the scan is incomplete\n", .{result.check_failures.len});
+    }
     if (result.parse_errors.len > 0) {
         try out.print("{d} of the {d} scanned file(s) had parse errors; tree-based checks there may be incomplete\n", .{ result.parse_errors.len, result.scanned });
     }

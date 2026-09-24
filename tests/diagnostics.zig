@@ -1,5 +1,5 @@
 const std = @import("std");
-const sandbox = @import("../src/platform/sandbox.zig");
+const sandbox = @import("emetgate").sandbox;
 
 pub fn printReport(report: sandbox.Report) void {
     switch (report.outcome) {

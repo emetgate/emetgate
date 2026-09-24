@@ -1,5 +1,6 @@
 const std = @import("std");
 const checks = @import("../engine/checks.zig");
+const query = @import("../engine/query.zig");
 const symbol = @import("../engine/symbol.zig");
 const lang = @import("../engine/lang/registry.zig");
 const Snapshot = @import("../engine/loader.zig").Snapshot;
@@ -43,6 +44,7 @@ pub const Result = struct {
     unreadable: []Unreadable,
     parse_errors: [][]u8,
     violations: []rules.Violation,
+    check_failures: []rules.Failure = &.{},
 
     pub fn nothingInScope(self: Result) bool {
         return self.rules != 0 and self.scanned == 0;
@@ -54,6 +56,8 @@ pub const Result = struct {
         for (self.parse_errors) |file| gpa.free(file);
         gpa.free(self.parse_errors);
         (rules.Report{ .violations = self.violations }).deinit(gpa);
+        for (self.check_failures) |f| f.deinit(gpa);
+        gpa.free(self.check_failures);
     }
 };
 
@@ -90,9 +94,12 @@ fn covers(scopes: []const ?where_mod.Where, file: []const u8) bool {
     return false;
 }
 
-pub fn firstMalformed(list: []const rules.Rule) ?Malformed {
+pub fn firstMalformed(gpa: Allocator, list: []const rules.Rule) Allocator.Error!?Malformed {
     for (list) |rule| {
-        checks.validateStatic(rule.check) catch |err| return .{ .rule = rule, .reason = err };
+        checks.validateStatic(gpa, rule.check) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => |e| return .{ .rule = rule, .reason = e },
+        };
     }
     return null;
 }
@@ -134,8 +141,10 @@ fn resolveScope(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io.Dir,
     _ = try symbolSpan(gpa, snapshot, ref_text);
 }
 
-pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, list: []const rules.Rule) !Result {
-    if (firstMalformed(list)) |bad| return bad.reason;
+pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, list: []const rules.Rule, call_operations: ?u64) !Result {
+    var pool: u64 = call_operations orelse 0;
+    const limits: query.Limits = if (call_operations != null) .{ .pool = &pool } else .{};
+    if (try firstMalformed(gpa, list)) |bad| return bad.reason;
     const scopes = try gpa.alloc(?where_mod.Where, list.len);
     defer gpa.free(scopes);
     for (list, scopes) |rule, *scope| {
@@ -158,6 +167,9 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
     var violations: std.ArrayList(rules.Violation) = .empty;
     defer violations.deinit(gpa);
     errdefer (rules.Report{ .violations = violations.items }).deinitItems(gpa);
+    var check_failures: std.ArrayList(rules.Failure) = .empty;
+    defer check_failures.deinit(gpa);
+    errdefer for (check_failures.items) |f| f.deinit(gpa);
 
     var scanned: usize = 0;
     var unsupported: usize = 0;
@@ -196,7 +208,17 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
                     else => {},
                 }
             }
-            const report = try rules.evaluate(gpa, file, snapshot.profile, snapshot.tree, span, rule[0..1]) orelse continue;
+            const report = switch (try rules.evaluateLimited(gpa, file, snapshot.profile, snapshot.tree, span, rule[0..1], limits)) {
+                .ok => continue,
+                .violated => |report| report,
+                .failed => |failure| {
+                    check_failures.append(gpa, failure) catch |err| {
+                        failure.deinit(gpa);
+                        return err;
+                    };
+                    continue;
+                },
+            };
             defer gpa.free(report.violations);
             violations.ensureUnusedCapacity(gpa, report.violations.len) catch |err| {
                 report.deinitItems(gpa);
@@ -216,6 +238,11 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
         for (owned_parse_errors) |f| gpa.free(f);
         gpa.free(owned_parse_errors);
     }
+    const owned_failures = try check_failures.toOwnedSlice(gpa);
+    errdefer {
+        for (owned_failures) |f| f.deinit(gpa);
+        gpa.free(owned_failures);
+    }
     return .{
         .rules = list.len,
         .scanned = scanned,
@@ -224,6 +251,7 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
         .unreadable = owned_unreadable,
         .parse_errors = owned_parse_errors,
         .violations = try violations.toOwnedSlice(gpa),
+        .check_failures = owned_failures,
     };
 }
 

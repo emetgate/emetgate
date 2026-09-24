@@ -1,13 +1,13 @@
 const std = @import("std");
-const cas = @import("../../src/engine/cas.zig");
-const symbol = @import("../../src/engine/symbol.zig");
-const skeleton = @import("../../src/engine/skeleton.zig");
-const boundedness = @import("../../src/engine/boundedness.zig");
-const checks = @import("../../src/engine/checks.zig");
-const registry = @import("../../src/engine/lang/registry.zig");
-const Profile = @import("../../src/engine/lang/profile.zig").Profile;
-const Runtime = @import("../../src/engine/runtime.zig").Runtime;
-const Snapshot = @import("../../src/engine/loader.zig").Snapshot;
+const cas = @import("emetgate").cas;
+const symbol = @import("emetgate").symbol;
+const skeleton = @import("emetgate").skeleton;
+const boundedness = @import("emetgate").boundedness;
+const checks = @import("emetgate").checks;
+const registry = @import("emetgate").lang_registry;
+const Profile = @import("emetgate").lang_profile.Profile;
+const Runtime = @import("emetgate").runtime.Runtime;
+const Snapshot = @import("emetgate").loader.Snapshot;
 const cases_mod = @import("cases.zig");
 
 const Cases = cases_mod.Cases;
@@ -213,4 +213,52 @@ test "conformance: no_literal flags only literal values of the named option, spa
             try testing.expectEqualStrings(want, snapshot.source[got.span.start..got.span.end]);
         }
     }
+}
+
+const console_query = "q:((call_expression function: (member_expression object: (identifier) @object property: (property_identifier) @violation)) (#eq? @object \"console\") (#any-of? @violation \"log\" \"debug\"))";
+const typed_query = "q:(type_annotation) @violation";
+
+test "conformance: one q: query over nodes both grammars share flags the same calls" {
+    for (registry.profiles) |profile| {
+        errdefer std.debug.print("language: {s}\n", .{profile.name});
+        const cases = casesFor(profile).?;
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        const snapshot = try Snapshot.fromSource(runtime, profile, try testing.allocator.dupe(u8, cases.query_source));
+        defer snapshot.destroy();
+        try testing.expect(!snapshot.tree.root().hasError());
+
+        const whole: symbol.Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
+        const violations = try checks.run(testing.allocator, profile, snapshot.tree, whole, &.{console_query});
+        defer testing.allocator.free(violations);
+        try testing.expectEqual(@as(usize, 2), violations.len);
+        for ([_][]const u8{ "log", "debug" }, violations) |want, got| {
+            try testing.expectEqualStrings("q", got.check);
+            try testing.expectEqualStrings(want, snapshot.source[got.span.start..got.span.end]);
+        }
+        const line = std.mem.count(u8, snapshot.source[0..violations[0].span.start], "\n") + 1;
+        try testing.expectEqual(@as(usize, 3), line);
+    }
+}
+
+test "conformance: a q: query over a node only one grammar has is a named failure elsewhere" {
+    for (registry.profiles) |profile| {
+        errdefer std.debug.print("language: {s}\n", .{profile.name});
+        const cases = casesFor(profile).?;
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        const snapshot = try Snapshot.fromSource(runtime, profile, try testing.allocator.dupe(u8, cases.query_source));
+        defer snapshot.destroy();
+
+        const whole: symbol.Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
+        if (!cases.has_type_annotations) {
+            try testing.expectError(error.QueryNotForLanguage, checks.run(testing.allocator, profile, snapshot.tree, whole, &.{typed_query}));
+            continue;
+        }
+        const violations = try checks.run(testing.allocator, profile, snapshot.tree, whole, &.{typed_query});
+        defer testing.allocator.free(violations);
+        try testing.expectEqual(@as(usize, 2), violations.len);
+        try testing.expectEqualStrings(": number", snapshot.source[violations[0].span.start..violations[0].span.end]);
+    }
+    try checks.validate(testing.allocator, typed_query);
 }

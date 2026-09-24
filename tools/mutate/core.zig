@@ -28,11 +28,10 @@ pub fn timeoutFor(own: ?u64, global: u64) u64 {
     return own orelse global;
 }
 
-pub fn writeSummary(w: *std.Io.Writer, run: usize, failures: usize, skipped_e2e: usize, skipped_survivors: usize, rotation: usize) std.Io.Writer.Error!void {
+pub fn writeSummary(w: *std.Io.Writer, run: usize, failures: usize, skipped_e2e: usize, skipped_survivors: usize) std.Io.Writer.Error!void {
     try w.print("{d} mutation(s) run, {d} as expected, {d} not as expected", .{ run, run - failures, failures });
     if (skipped_e2e != 0) try w.print(", {d} e2e mutation(s) skipped (pass --e2e)", .{skipped_e2e});
     if (skipped_survivors != 0) try w.print(", {d} expected survivor(s) skipped (drop --skip-survivors)", .{skipped_survivors});
-    if (rotation != 0) try w.print(", {d} mutation(s) verified one at a time this run", .{rotation});
 }
 
 pub fn applyMutation(gpa: Allocator, source: []const u8, from: []const u8, to: []const u8, all: bool) ![]u8 {
@@ -80,6 +79,30 @@ fn failedTestName(raw: []const u8) ?[]const u8 {
     return null;
 }
 
+fn allDigits(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
+}
+
+pub fn unfinishedTest(output: []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, " \r");
+        const slash = std.mem.indexOfScalar(u8, line, '/') orelse continue;
+        const space = std.mem.indexOfScalarPos(u8, line, slash, ' ') orelse continue;
+        if (!allDigits(line[0..slash]) or !allDigits(line[slash + 1 .. space])) continue;
+        const dots = std.mem.indexOfPos(u8, line, space, "...") orelse continue;
+        const rest = line[dots + 3 ..];
+        const done = std.mem.startsWith(u8, rest, "OK") or std.mem.startsWith(u8, rest, "SKIP") or std.mem.startsWith(u8, rest, "FAIL");
+        found = if (done) null else line[space + 1 .. dots];
+    }
+    return found;
+}
+
 pub fn failedTests(gpa: Allocator, output: []const u8) ![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
     errdefer names.deinit(gpa);
@@ -93,11 +116,15 @@ pub fn failedTests(gpa: Allocator, output: []const u8) ![]const []const u8 {
     return names.toOwnedSlice(gpa);
 }
 
+fn isTestPrefix(prefix: []const u8) bool {
+    return std.mem.endsWith(u8, prefix, ".test.") or std.mem.endsWith(u8, prefix, ".decltest.");
+}
+
 pub fn missingKill(failed: []const []const u8, expected: []const []const u8) ?[]const u8 {
     outer: for (expected) |want| {
         for (failed) |got| {
             if (std.mem.eql(u8, got, want)) continue :outer;
-            if (got.len > want.len and std.mem.endsWith(u8, got, want) and std.mem.endsWith(u8, got[0 .. got.len - want.len], ".test.")) continue :outer;
+            if (got.len > want.len and std.mem.endsWith(u8, got, want) and isTestPrefix(got[0 .. got.len - want.len])) continue :outer;
         }
         return want;
     }
@@ -108,19 +135,23 @@ pub fn unexpectedKill(failed: []const []const u8, expected: []const []const u8) 
     for (failed) |got| {
         for (expected) |want| {
             if (std.mem.eql(u8, got, want)) break;
-            if (got.len > want.len and std.mem.endsWith(u8, got, want) and std.mem.endsWith(u8, got[0 .. got.len - want.len], ".test.")) break;
+            if (got.len > want.len and std.mem.endsWith(u8, got, want) and isTestPrefix(got[0 .. got.len - want.len])) break;
         } else return got;
     }
     return null;
 }
 
+pub const no_match_marker = "error: no test matches the filter(s)";
+
 pub fn classify(kind: Kind, exit_code: u8, output: []const u8) Status {
     if (exit_code == 0) {
         if (kind == .e2e) return .survived;
+        if (hasFailedTestLine(output)) return .killed;
         const summary = parseSummary(output) orelse return .no_tests;
         return if (summary.total == 0) .no_tests else .survived;
     }
     if (isCompileError(output)) return .compile_error;
+    if (std.mem.indexOf(u8, output, no_match_marker) != null) return .no_tests;
     switch (kind) {
         .unit => {
             if (parseSummary(output)) |s| {
@@ -148,296 +179,57 @@ fn hasFailedTestLine(output: []const u8) bool {
     return false;
 }
 
-pub const Candidate = struct {
-    index: usize,
-    file: []const u8,
-    kills: []const []const u8,
-    filter: []const []const u8,
-    from: []const u8 = "",
-    to: []const u8 = "",
-    all: bool = false,
-};
-
-pub const Source = struct {
-    file: []const u8,
-    text: []const u8,
-};
-
-pub const max_pool_members = 64;
-
-pub fn poolable(kind: Kind, expect_status: []const u8, has_own_timeout: bool, has_own_optimize: bool, kills_len: usize) bool {
-    if (kind != .unit) return false;
-    if (!std.mem.eql(u8, expect_status, "killed")) return false;
-    if (has_own_timeout) return false;
-    if (has_own_optimize) return false;
-    return kills_len != 0;
-}
-
-fn namesOverlap(a: []const []const u8, b: []const []const u8) bool {
-    for (a) |left| {
-        for (b) |right| {
-            if (std.mem.eql(u8, left, right)) return true;
-        }
-    }
-    return false;
-}
-
-fn killsClash(pool: []const Candidate, c: Candidate) bool {
-    for (pool) |member| {
-        if (namesOverlap(member.kills, c.kills)) return true;
-    }
-    return false;
-}
-
-fn shareAFile(a: []const Candidate, b: []const Candidate) bool {
-    for (a) |left| {
-        for (b) |right| {
-            if (std.mem.eql(u8, left.file, right.file)) return true;
-        }
-    }
-    return false;
-}
-
-pub fn modulesIn(pool: []const Candidate) usize {
-    var count: usize = 0;
-    for (pool, 0..) |member, i| {
-        for (pool[0..i]) |earlier| {
-            if (std.mem.eql(u8, earlier.file, member.file)) break;
-        } else count += 1;
-    }
-    return count;
-}
-
-fn sourceFor(sources: []const Source, file: []const u8) ?[]const u8 {
-    for (sources) |source| {
-        if (std.mem.eql(u8, source.file, file)) return source.text;
-    }
-    return null;
-}
-
-fn packOneFile(
-    gpa: Allocator,
-    pools: *std.ArrayList(std.ArrayList(Candidate)),
-    members: []const Candidate,
-    original: []const u8,
-    pool_size: usize,
-) !void {
-    var pending: std.ArrayList(Candidate) = .empty;
-    defer pending.deinit(gpa);
-    try pending.appendSlice(gpa, members);
-
-    while (pending.items.len != 0) {
-        var pool: std.ArrayList(Candidate) = .empty;
-        errdefer pool.deinit(gpa);
-        var deferred: std.ArrayList(Candidate) = .empty;
-        defer deferred.deinit(gpa);
-
-        var text = try gpa.dupe(u8, original);
-        defer gpa.free(text);
-
-        for (pending.items) |c| {
-            if (pool.items.len >= pool_size or killsClash(pool.items, c)) {
-                try deferred.append(gpa, c);
-                continue;
-            }
-            const next = applyMutation(gpa, text, c.from, c.to, c.all) catch {
-                if (pool.items.len != 0) try deferred.append(gpa, c);
-                continue;
-            };
-            gpa.free(text);
-            text = next;
-            try pool.append(gpa, c);
-        }
-
-        if (pool.items.len == 0) {
-            pool.deinit(gpa);
-            return;
-        }
-        try pools.append(gpa, pool);
-        pending.clearRetainingCapacity();
-        try pending.appendSlice(gpa, deferred.items);
-    }
-}
-
-fn mergeResiduals(gpa: Allocator, pools: *std.ArrayList(std.ArrayList(Candidate)), pool_size: usize) !void {
-    var at: usize = 0;
-    while (at < pools.items.len) : (at += 1) {
-        var other = at + 1;
-        while (other < pools.items.len) {
-            const host = &pools.items[at];
-            const guest = pools.items[other];
-            if (host.items.len + guest.items.len > pool_size or
-                shareAFile(host.items, guest.items) or
-                overlapAcross(host.items, guest.items))
-            {
-                other += 1;
-                continue;
-            }
-            try host.appendSlice(gpa, guest.items);
-            var removed = pools.orderedRemove(other);
-            removed.deinit(gpa);
-        }
-    }
-}
-
-fn overlapAcross(a: []const Candidate, b: []const Candidate) bool {
-    for (b) |c| {
-        if (killsClash(a, c)) return true;
-    }
-    return false;
-}
-
-pub fn buildPools(gpa: Allocator, candidates: []const Candidate, pool_size: usize, sources: []const Source) ![]const []const Candidate {
-    var pools: std.ArrayList(std.ArrayList(Candidate)) = .empty;
-    defer {
-        for (pools.items) |*pool| pool.deinit(gpa);
-        pools.deinit(gpa);
-    }
-
-    var seen: std.ArrayList([]const u8) = .empty;
-    defer seen.deinit(gpa);
-    for (candidates) |c| {
-        for (seen.items) |file| {
-            if (std.mem.eql(u8, file, c.file)) break;
-        } else {
-            try seen.append(gpa, c.file);
-            const original = sourceFor(sources, c.file) orelse return error.MissingSource;
-            var members: std.ArrayList(Candidate) = .empty;
-            defer members.deinit(gpa);
-            for (candidates) |other| {
-                if (std.mem.eql(u8, other.file, c.file)) try members.append(gpa, other);
-            }
-            try packOneFile(gpa, &pools, members.items, original, pool_size);
-        }
-    }
-
-    try mergeResiduals(gpa, &pools, pool_size);
-
-    var out: std.ArrayList([]const Candidate) = .empty;
-    errdefer {
-        for (out.items) |pool| gpa.free(pool);
-        out.deinit(gpa);
-    }
-    for (pools.items) |*pool| try out.append(gpa, try gpa.dupe(Candidate, pool.items));
-    return out.toOwnedSlice(gpa);
-}
-
-pub fn unionNames(gpa: Allocator, pool: []const Candidate, comptime field: []const u8) ![]const []const u8 {
-    var names: std.ArrayList([]const u8) = .empty;
-    errdefer names.deinit(gpa);
-    for (pool) |member| {
-        for (@field(member, field)) |name| {
-            for (names.items) |seen| {
-                if (std.mem.eql(u8, seen, name)) break;
-            } else try names.append(gpa, name);
-        }
-    }
-    return names.toOwnedSlice(gpa);
-}
-
-pub fn poolFilter(gpa: Allocator, pool: []const Candidate) ![]const []const u8 {
-    var names: std.ArrayList([]const u8) = .empty;
-    errdefer names.deinit(gpa);
-    for (pool) |member| {
-        const own = if (member.filter.len != 0) member.filter else member.kills;
-        for (own) |name| {
-            for (names.items) |seen| {
-                if (std.mem.eql(u8, seen, name)) break;
-            } else try names.append(gpa, name);
-        }
-    }
-    return names.toOwnedSlice(gpa);
-}
-
-pub fn rotationBuckets(share_percent: usize) usize {
-    if (share_percent == 0) return 0;
-    if (share_percent >= 100) return 1;
-    return (100 + share_percent - 1) / share_percent;
-}
-
-pub fn rotationBucket(rotation: usize, buckets: usize) usize {
-    if (buckets == 0) return 0;
-    return rotation % buckets;
-}
-
-pub fn inRotation(ordinal: usize, bucket: usize, buckets: usize) bool {
-    if (buckets == 0) return false;
-    return ordinal % buckets == bucket;
-}
-
-pub const PoolVerdict = enum { killed, inconclusive };
-
-pub fn poolVerdict(status: Status, failed: []const []const u8, expected: []const []const u8) PoolVerdict {
-    if (status != .killed) return .inconclusive;
-    if (missingKill(failed, expected) != null) return .inconclusive;
-    if (unexpectedKill(failed, expected) != null) return .inconclusive;
-    return .killed;
-}
-
-pub fn splitAt(pool: []const Candidate) usize {
-    return pool.len / 2;
-}
-
-pub fn baselineIsGreen(exit_code: u8, output: []const u8) bool {
-    if (exit_code != 0) return false;
-    const summary = parseSummary(output) orelse return false;
-    return summary.total != 0 and summary.failed == 0 and summary.crashed == 0 and summary.passed == summary.total;
-}
+const legacy_slots = 64;
 
 pub const Backup = struct {
     path: []const u8,
     original: []const u8,
 };
 
-pub const Journal = struct {
-    dir: std.Io.Dir,
-    io: std.Io,
+pub const legacy_manifest = "pending.manifest";
 
-    const manifest_name = "pending.manifest";
-
-    fn originalName(buf: []u8, index: usize) []const u8 {
-        return std.fmt.bufPrint(buf, "pending.{d}.orig", .{index}) catch unreachable;
+pub fn abandonLegacyRecord(gpa: Allocator, io: std.Io, work: std.Io.Dir) !?[]const []const u8 {
+    const manifest = work.readFileAlloc(io, legacy_manifest, gpa, .limited(legacy_slots * std.fs.max_path_bytes)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer gpa.free(manifest);
+    var named: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (named.items) |path| gpa.free(path);
+        named.deinit(gpa);
     }
-
-    pub fn record(self: Journal, gpa: Allocator, backups: []const Backup) !void {
-        var manifest: std.Io.Writer.Allocating = .init(gpa);
-        defer manifest.deinit();
-        var buf: [64]u8 = undefined;
-        for (backups, 0..) |backup, i| {
-            try self.dir.writeFile(self.io, .{ .sub_path = originalName(&buf, i), .data = backup.original });
-            try manifest.writer.print("{s}\n", .{backup.path});
-        }
-        try self.dir.writeFile(self.io, .{ .sub_path = manifest_name, .data = manifest.written() });
+    var lines = std.mem.splitScalar(u8, manifest, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try named.append(gpa, try gpa.dupe(u8, line));
     }
-
-    pub fn clear(self: Journal) void {
-        self.dir.deleteFile(self.io, manifest_name) catch {};
-        var buf: [64]u8 = undefined;
-        for (0..max_pool_members) |i| {
-            self.dir.deleteFile(self.io, originalName(&buf, i)) catch {};
-        }
+    var buf: [64]u8 = undefined;
+    for (0..legacy_slots) |i| {
+        const name = std.fmt.bufPrint(&buf, "pending.{d}.orig", .{i}) catch unreachable;
+        work.deleteFile(io, name) catch {};
     }
+    try work.deleteFile(io, legacy_manifest);
+    return try named.toOwnedSlice(gpa);
+}
 
-    pub fn recover(self: Journal, gpa: Allocator, root: std.Io.Dir) !?[]const []const u8 {
-        const manifest = self.dir.readFileAlloc(self.io, manifest_name, gpa, .limited(max_pool_members * std.fs.max_path_bytes)) catch |err| switch (err) {
-            error.FileNotFound => return null,
-            else => return err,
-        };
-        defer gpa.free(manifest);
-        var restored: std.ArrayList([]const u8) = .empty;
-        errdefer restored.deinit(gpa);
-        var buf: [64]u8 = undefined;
-        var lines = std.mem.splitScalar(u8, manifest, '\n');
-        var index: usize = 0;
-        while (lines.next()) |line| {
-            if (line.len == 0) continue;
-            const original = try self.dir.readFileAlloc(self.io, originalName(&buf, index), gpa, .limited(max_source_bytes));
-            defer gpa.free(original);
-            try root.writeFile(self.io, .{ .sub_path = line, .data = original });
-            try restored.append(gpa, try gpa.dupe(u8, line));
-            index += 1;
-        }
-        self.clear();
-        return try restored.toOwnedSlice(gpa);
+pub fn syncMirror(gpa: Allocator, io: std.Io, source: std.Io.Dir, mirror: std.Io.Dir, files: []const []const u8, previous: []const []const u8) !usize {
+    var written: usize = 0;
+    for (files) |path| {
+        const want = try source.readFileAlloc(io, path, gpa, .limited(max_source_bytes));
+        defer gpa.free(want);
+        if (mirror.readFileAlloc(io, path, gpa, .limited(max_source_bytes))) |have| {
+            defer gpa.free(have);
+            if (std.mem.eql(u8, have, want)) continue;
+        } else |_| {}
+        if (std.fs.path.dirname(path)) |parent| try mirror.createDirPath(io, parent);
+        try mirror.writeFile(io, .{ .sub_path = path, .data = want });
+        written += 1;
     }
-};
+    for (previous) |path| {
+        for (files) |kept| {
+            if (std.mem.eql(u8, kept, path)) break;
+        } else mirror.deleteFile(io, path) catch {};
+    }
+    return written;
+}

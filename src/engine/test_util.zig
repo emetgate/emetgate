@@ -8,6 +8,12 @@ pub const fixture_dir = "tests/fixtures/";
 
 pub const language: *const Profile = &@import("lang/typescript/profile.zig").profile;
 
+pub fn slow() error{SkipZigTest}!void {
+    const root = @import("root");
+    if (@hasDecl(root, "emetgate_slow") and root.emetgate_slow) return;
+    return error.SkipZigTest;
+}
+
 pub fn parser() ts.Error!ts.Parser {
     return ts.Parser.init(language.grammar());
 }
