@@ -323,7 +323,13 @@ AST checks (`no_comment`, `forbid:`, `no_literal:`) from a tracked ledger stay e
 the flag. They execute nothing and cost time linear in the body: the most a hostile one can do
 is refuse an edit, and every rule is visible in `emetgate_skeleton` and `emetgate rule list`.
 
-`--allow-repo-memory` is a startup flag of `emetgate try` and `emetgate mcp`. The model cannot
+`emetgate scan` follows the same rule for a tracked ledger. Without `--allow-repo-memory` it
+does not run the ledger's `q:` rules; each one is listed by id, as a
+`warning: rule <id> (<check>) not run: untrusted ledger` line in text and under
+`untrusted_not_run` in `--json`, and the other rules are scanned as usual. The listing does not
+change the exit code. A query the operator passes with `--check` runs without the flag.
+
+`--allow-repo-memory` is a startup flag of `emetgate try`, `emetgate mcp` and `emetgate scan`. The model cannot
 grant it: a tool call that carries `allow_repo_memory` is refused with `ModelSuppliedTestPolicy`
 and runs nothing, and `tools/list` does not offer the argument. Review a shared ledger with
 `emetgate rule list` before passing the flag.
