@@ -4409,6 +4409,88 @@
         "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new",
         "batch crash through the tool: a crash during the swaps recovers every file old"
       ]
+    },
+    {
+      "id": "BCR1-create-rename-replaces",
+      "file": "src/platform/disk.zig",
+      "from": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameTo(",
+      "to": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameReplacing(",
+      "kills": [
+        "batch create crash: a file that appears at a create target before commit is never overwritten and the batch rolls back",
+        "batch create through the tool: a file that appears at the create target during commit is kept and the batch is refused with Conflict"
+      ]
+    },
+    {
+      "id": "BCR2-create-stages-over-existing-file",
+      "file": "src/platform/disk.zig",
+      "from": "    if (try pathExists(io, path_abs)) return error.FileExists;\n",
+      "to": "",
+      "kills": [
+        "batch create crash: staging a create over an existing file is refused before anything is written"
+      ]
+    },
+    {
+      "id": "BCR3-create-not-journaled",
+      "file": "src/platform/disk.zig",
+      "from": "const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .op = .create",
+      "to": "const journal: ?[]u8 = if (journal_dir == null) null else null;\n    _ = if (false) try writeJournal(gpa, io, \"\", &tag, .{ .op = .create",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a crash during the swaps recovers with the new file gone"
+      ]
+    },
+    {
+      "id": "BCR4-rollback-keeps-created-file",
+      "file": "src/platform/disk.zig",
+      "from": "    if (!deleteWithRetry(io, target_abs)) return error.CreatedNotRemoved;\n",
+      "to": "",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a crash during the swaps recovers with the new file gone"
+      ]
+    },
+    {
+      "id": "BCR5-commit-skips-index",
+      "file": "src/platform/disk.zig",
+      "from": "    try git_repo.addAllToIndex(b.gpa, b.io, root, created.items);",
+      "to": "    _ = root;",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a batch that modifies one file and creates another commits both and indexes the new file",
+        "batch create through the tool: when git add fails the batch stays committed on disk and the error is WrittenButNotIndexed"
+      ]
+    },
+    {
+      "id": "BCR6-roll-forward-skips-index",
+      "file": "src/platform/disk.zig",
+      "from": "        git_repo.addAllToIndex(gpa, io, root_abs, paths) catch {\n            report.not_indexed += paths.len;\n        };",
+      "to": "        _ = paths;",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a crash after the commit record recovers with the new file present and indexed"
+      ]
+    },
+    {
+      "id": "BCR7-symmetry-skips-reference-check",
+      "file": "src/platform/create.zig",
+      "from": "        .unreferenced = !try mentionedAnywhere(gpa, io, root, sources, subject.index, subject.name, subject.slot),",
+      "to": "        .unreferenced = true,",
+      "kills": [
+        "batch create through the tool: a new symbol that another edit of the batch calls is not classed as symmetry"
+      ]
+    },
+    {
+      "id": "BCR8-symmetry-ignores-effects",
+      "file": "src/engine/symmetry.zig",
+      "from": "    if (isEffect(profile, node.kind())) return true;\n",
+      "to": "",
+      "kills": [
+        "symmetry: a call, a new or an assignment in a top-level initializer is an effect"
+      ]
     }
   ]
 }
