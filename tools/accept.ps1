@@ -46,7 +46,7 @@ Invoke-Stage "mutants changed since $Ref" {
     & (Join-Path $root "zig-out/bin/emetgate-mutate.exe") "--jobs=$Jobs" --skip-survivors --changed-since $Ref
 }
 if (Test-Path $report) {
-    $outcomes = @(Get-Content $report -Raw | ConvertFrom-Json)
+    $outcomes = Get-Content $report -Raw | ConvertFrom-Json
     $schema = @($outcomes | Where-Object { $_.origin -eq 'schema' }).Count
     Write-Host ("accept: {0} mutation(s) selected, {1} from the schema binary, {2} on their own" -f $outcomes.Count, $schema, ($outcomes.Count - $schema))
 }
