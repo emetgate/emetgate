@@ -14,6 +14,11 @@ fn profileNamed(name: []const u8) *const Profile {
     @panic("profile not registered");
 }
 
+test "jsx: a .jsx path resolves to the javascript profile and a .tsx path to the tsx profile" {
+    try testing.expectEqual(profileNamed("javascript"), registry.forPath("Component.jsx").?);
+    try testing.expectEqual(profileNamed("tsx"), registry.forPath("Component.tsx").?);
+}
+
 fn symbolCount(profile: *const Profile, source: []const u8) !usize {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
