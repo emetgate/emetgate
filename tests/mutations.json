@@ -869,7 +869,12 @@
       "note": "equivalent: next.symbols() refuses the same tree with SourceHasErrors, which apply maps to MutationSyntaxInvalid; ES13 proves that guard",
       "file": "src/engine/cas.zig",
       "from": "    if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;\n",
-      "to": ""
+      "to": "",
+      "filter": [
+        "broken replacement bodies are refused and never spliced",
+        "purple C2: a syntactically broken body is rejected",
+        "error precedence: each check wins over every later one"
+      ]
     },
     {
       "id": "EC3-cas-exact-slot-call-removed",
@@ -922,7 +927,12 @@
       "note": "defense in depth for body replacement: a 594-case differential spike (ASI, regex/division, template, comment, U+2028, shared declarators, class and object members) found no body that passes every other guard and fails only this one; it is the load-bearing guard for the planned insertion target",
       "file": "src/engine/cas.zig",
       "from": "    try expectUntouchedOutside(before.*, after.*, cut, slot);\n",
-      "to": ""
+      "to": "",
+      "filter": [
+        "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour",
+        "replacement bodies are normalised: a BOM and surrounding whitespace are ignored",
+        "mutating one declarator leaves a sibling declarator's hash intact"
+      ]
     },
     {
       "id": "EC9-cas-twin-check-removed",
@@ -1039,7 +1049,11 @@
       "note": "equivalent: in the grammar property_identifier never has call_expression or arguments as a parent, and shorthand identifiers only sit under object and object patterns, so every non-identifier name still falls through to unrecognized_reference",
       "file": "src/engine/boundedness.zig",
       "from": "    if (!std.mem.eql(u8, node.kind(), profile.identifier)) return .unrecognized_reference;\n",
-      "to": ""
+      "to": "",
+      "filter": [
+        "boundedness.test.corpus: ",
+        "whitelist proof: a reference shape outside the escape blacklist"
+      ]
     },
     {
       "id": "EB10-bnd-arguments-escape-removed",
@@ -1065,7 +1079,13 @@
       "note": "equivalent: in the grammar a call_expression has only function, arguments and type_arguments children, so an identifier child of a call is always the callee",
       "file": "src/engine/boundedness.zig",
       "from": "if (!callee.eql(callee_node)) return false;",
-      "to": "if (!callee.eql(callee_node) and false) return false;"
+      "to": "if (!callee.eql(callee_node) and false) return false;",
+      "filter": [
+        "positive control: a module-private, escape-free, in-file-called symbol is BOUNDED",
+        "reachability: a realistic module-private helper",
+        "completeness: a reference in a nested scope is still counted",
+        "corpus: optional call reference is UNBOUNDED"
+      ]
     },
     {
       "id": "EB13-bnd-optional-call-accepted",
@@ -1101,7 +1121,10 @@
       "note": "equivalent: snapshot.symbols() fails on the same tree and analyze catches it as unbounded(.analysis_error)",
       "file": "src/engine/boundedness.zig",
       "from": "    if (snapshot.tree.root().hasError()) return unbounded(.signature_change, .analysis_error);\n",
-      "to": ""
+      "to": "",
+      "filter": [
+        "boundedness.test."
+      ]
     },
     {
       "id": "EB17-bnd-export-walk-crosses-bodies",
@@ -1208,7 +1231,11 @@
       "note": "open: no killing input found; an accessor or static keyword token after the name would be needed, and none was found in method or field syntax, but this is not proven equivalent",
       "file": "src/engine/lang/ecma/common.zig",
       "from": "if (child.eql(name)) return false;",
-      "to": "if (child.eql(name) and false) return false;"
+      "to": "if (child.eql(name) and false) return false;",
+      "filter": [
+        "static, instance, getter and setter collisions are distinct refs",
+        "only the addressed accessor changes when getter and setter share a name"
+      ]
     },
     {
       "id": "ES12-sym-constructor-outside-class",
@@ -1234,7 +1261,11 @@
       "note": "open: no killing input found; a function sitting under a binding node outside its value field would be needed, and none was found, but this is not proven equivalent",
       "file": "src/engine/functions.zig",
       "from": "return if (bound.eql(value)) parent else null;",
-      "to": "return if (bound.eql(value) or true) parent else null;"
+      "to": "return if (bound.eql(value) or true) parent else null;",
+      "filter": [
+        "names resolve through type assertions, parentheses and compound assignment",
+        "declarators sharing one statement get independent hashes"
+      ]
     },
     {
       "id": "EF2-fn-transparent-wrappers-ignored",
@@ -1591,6 +1622,11 @@
       "file": "src/engine/cas.zig",
       "from": "    try expectUntouchedOutside(before.*, after.*, end, slot);\n",
       "to": "    _ = end;\n",
+      "filter": [
+        "insert names the one top-level symbol the body declares",
+        "insert appends after the last newline",
+        "insert follows a CRLF file's line ending"
+      ],
       "expect_status": "survived",
       "note": "defense in depth for insertion: topLevelStatementsIn refuses any root child that straddles the slot, so every byte and root node before the slot is unchanged and no existing symbol can change its hash; kept so a future relaxation of the straddle rule cannot silently alter existing code"
     },
@@ -2460,6 +2496,9 @@
       "file": "src/engine/checks.zig",
       "from": "if (!isKind(node, shape.pair)) continue;",
       "to": "if (!isKind(node, shape.pair) and false) continue;",
+      "filter": [
+        "no_literal"
+      ],
       "expect_status": "survived",
       "note": "equivalent in the ECMA grammars: the only other node with key and value fields is pair_pattern, whose value is a pattern and can never be a literal; kept so a language added later whose grammar reuses key/value fields elsewhere is still limited to object properties"
     },
