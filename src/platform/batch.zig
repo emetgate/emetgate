@@ -30,6 +30,7 @@ pub const BatchOptions = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     trace: ?*Trace = null,
+    commit_step: ?*const disk.Step = null,
 };
 
 pub const BatchResult = union(enum) {
@@ -144,7 +145,7 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         count = i + 1;
     }
     commit_entered = true;
-    try disk.commitBatch(pendings, null, null, &batch, null);
+    try disk.commitBatch(pendings, null, null, &batch, options.commit_step);
 
     const hashes = try gpa.alloc(symbol.Hash, prepared.items.len);
     for (prepared.items, 0..) |p, i| hashes[i] = p.applied.hash;
