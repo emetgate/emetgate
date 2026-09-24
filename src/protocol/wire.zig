@@ -222,7 +222,7 @@ fn writeViolation(js: *std.json.Stringify, v: rules.Violation) !void {
     try js.endObject();
 }
 
-pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize) !void {
+pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize, untrusted: []const rules.Rule) !void {
     const shown = if (limit) |max| result.violations[0..@min(max, result.violations.len)] else result.violations;
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -265,6 +265,19 @@ pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize) !void {
         try js.write(f.detail);
         try js.objectField("output");
         try js.write(f.text);
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.objectField("untrusted_not_run");
+    try js.beginArray();
+    for (untrusted) |rule| {
+        try js.beginObject();
+        try js.objectField("rule");
+        try js.write(rule.id);
+        try js.objectField("check");
+        try js.write(rule.check);
+        try js.objectField("reason");
+        try js.write("untrusted_ledger");
         try js.endObject();
     }
     try js.endArray();

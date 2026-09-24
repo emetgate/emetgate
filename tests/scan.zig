@@ -368,7 +368,14 @@ const JsonScan = struct {
     unreadable: []const JsonUnreadable,
     parse_errors: []const []const u8,
     check_failures: []const JsonFailure,
+    untrusted_not_run: []const JsonUntrusted,
     violations: []const JsonViolation,
+};
+
+const JsonUntrusted = struct {
+    rule: []const u8,
+    check: []const u8,
+    reason: []const u8,
 };
 
 test "scan: --json is one parseable line carrying the same report" {
@@ -418,7 +425,7 @@ test "scan: --json is one parseable line carrying the same report" {
     const clean_outcome = try runScan(&clean, &.{ "--check", "forbid:networkidle", "--json" });
     defer clean_outcome.deinit();
     try testing.expectEqual(@as(u8, 0), clean_outcome.code);
-    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"out_of_scope\":0,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"check_failures\":[],\"violations\":[]}\n", clean_outcome.out);
+    try testing.expectEqualStrings("{\"status\":\"clean\",\"rules\":1,\"scanned\":1,\"out_of_scope\":0,\"unsupported\":0,\"unreadable\":[],\"parse_errors\":[],\"check_failures\":[],\"untrusted_not_run\":[],\"violations\":[]}\n", clean_outcome.out);
 }
 
 test "scan: a malformed ledger rule stops the scan before any file and names the rule" {
@@ -907,4 +914,74 @@ test "nothing in scope: with no rules and no scannable file the scan stays clean
     const parsed = try std.json.parseFromSlice(JsonScan, testing.allocator, json.out, .{});
     defer parsed.deinit();
     try testing.expectEqualStrings("clean", parsed.value.status);
+}
+
+const enforced_query = "{\"id\":\"mq\",\"scope\":\"project\",\"text\":\"no eval\",\"enforce\":true,\"check\":\"q:((identifier) @violation (#eq? @violation \\\"evil\\\"))\",\"status\":\"active\",\"supersedes\":null,\"ts\":4}\n";
+
+fn trustRepo(commit_ledger: bool) !Repo {
+    var repo = try Repo.init(&.{.{ .path = "src/a.ts", .data = "evil(networkidle);\n" }});
+    errdefer repo.deinit();
+    try repo.putLedger(enforced_forbid ++ enforced_query);
+    if (commit_ledger) {
+        try git(repo.root_abs, &.{ "add", ".emetgate/ledger.ndjson" });
+        try git(repo.root_abs, &.{ "commit", "-q", "-m", "ledger" });
+    }
+    return repo;
+}
+
+fn scanJson(repo: *Repo, args: []const [:0]const u8) !std.json.Parsed(JsonScan) {
+    const outcome = try runScan(repo, args);
+    defer outcome.deinit();
+    errdefer std.debug.print("out: {s}\nerr: {s}\n", .{ outcome.out, outcome.err });
+    return std.json.parseFromSlice(JsonScan, testing.allocator, outcome.out, .{ .allocate = .alloc_always });
+}
+
+test "scan trust: a committed ledger's q: rules do not run without --allow-repo-memory and each is listed as not run" {
+    try skipOffWindows();
+    var repo = try trustRepo(true);
+    defer repo.deinit();
+
+    const parsed = try scanJson(&repo, &.{"--json"});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 1), parsed.value.untrusted_not_run.len);
+    try testing.expectEqualStrings("mq", parsed.value.untrusted_not_run[0].rule);
+    try testing.expectEqualStrings("untrusted_ledger", parsed.value.untrusted_not_run[0].reason);
+    try testing.expectEqual(@as(usize, 1), parsed.value.violations.len);
+    try testing.expectEqualStrings("mf", parsed.value.violations[0].rule);
+
+    const text = try runScan(&repo, &.{});
+    defer text.deinit();
+    try testing.expect(text.has("warning: rule mq ("));
+    try testing.expect(text.has("not run: untrusted ledger"));
+    try testing.expect(!text.has("src/a.ts:1:1: mq"));
+}
+
+test "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag" {
+    try skipOffWindows();
+    for ([_]bool{ true, false }) |committed| {
+        var repo = try trustRepo(committed);
+        defer repo.deinit();
+        const args: []const [:0]const u8 = if (committed) &.{ "--allow-repo-memory", "--json" } else &.{"--json"};
+        const parsed = try scanJson(&repo, args);
+        defer parsed.deinit();
+        errdefer std.debug.print("committed: {any}\n", .{committed});
+        try testing.expectEqual(@as(usize, 0), parsed.value.untrusted_not_run.len);
+        try testing.expectEqual(@as(usize, 2), parsed.value.violations.len);
+    }
+}
+
+test "scan trust: an operator's own --check query runs next to a committed ledger without the flag" {
+    try skipOffWindows();
+    var repo = try trustRepo(true);
+    defer repo.deinit();
+    const parsed = try scanJson(&repo, &.{ "--check", "q:((identifier) @violation (#eq? @violation \"evil\"))", "--json" });
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 0), parsed.value.untrusted_not_run.len);
+    try testing.expectEqual(@as(usize, 1), parsed.value.violations.len);
+    try testing.expectEqualStrings("evil", parsed.value.violations[0].text);
+}
+
+test "scan trust: --allow-repo-memory twice is a usage error" {
+    try testing.expect(scan_command.Options.parse(&.{ "--allow-repo-memory", "--allow-repo-memory" }) == null);
+    try testing.expect(scan_command.Options.parse(&.{"--allow-repo-memory"}).?.allow_repo_memory);
 }
