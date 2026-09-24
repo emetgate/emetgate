@@ -219,6 +219,45 @@ fn sourceFor(sources: []const Source, file: []const u8) ?[]const u8 {
     return null;
 }
 
+pub fn functionsHit(gpa: Allocator, file: []const u8, source: []const u8, from: []const u8) ![]const u32 {
+    var starts: std.ArrayList(u32) = .empty;
+    errdefer starts.deinit(gpa);
+    if (!std.mem.endsWith(u8, file, ".zig") or from.len == 0) return starts.toOwnedSlice(gpa);
+
+    const text = try gpa.dupeZ(u8, source);
+    defer gpa.free(text);
+    var tree = try std.zig.Ast.parse(gpa, text, .zig);
+    defer tree.deinit(gpa);
+
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, source, at, from)) |hit| : (at = hit + 1) {
+        const end = hit + from.len;
+        for (0..tree.nodes.len) |i| {
+            const node: std.zig.Ast.Node.Index = @enumFromInt(i);
+            switch (tree.nodeTag(node)) {
+                .fn_decl, .test_decl => {},
+                else => continue,
+            }
+            const first = tree.tokenStart(tree.firstToken(node));
+            const last = tree.lastToken(node);
+            const stop = tree.tokenStart(last) + tree.tokenSlice(last).len;
+            if (first >= end or stop <= hit) continue;
+            if (std.mem.indexOfScalar(u32, starts.items, first) == null) try starts.append(gpa, first);
+        }
+    }
+    std.mem.sort(u32, starts.items, {}, std.sort.asc(u32));
+    return starts.toOwnedSlice(gpa);
+}
+
+fn sharesFunction(hits: []const []const u32, taken: []const usize, own: []const u32) bool {
+    for (taken) |i| {
+        for (hits[i]) |start| {
+            if (std.mem.indexOfScalar(u32, own, start) != null) return true;
+        }
+    }
+    return false;
+}
+
 fn packOneFile(
     gpa: Allocator,
     pools: *std.ArrayList(std.ArrayList(Candidate)),
@@ -226,31 +265,46 @@ fn packOneFile(
     original: []const u8,
     pool_size: usize,
 ) !void {
-    var pending: std.ArrayList(Candidate) = .empty;
+    const hits = try gpa.alloc([]const u32, members.len);
+    var filled: usize = 0;
+    defer {
+        for (hits[0..filled]) |h| gpa.free(h);
+        gpa.free(hits);
+    }
+    for (members) |c| {
+        hits[filled] = try functionsHit(gpa, c.file, original, c.from);
+        filled += 1;
+    }
+
+    var pending: std.ArrayList(usize) = .empty;
     defer pending.deinit(gpa);
-    try pending.appendSlice(gpa, members);
+    for (0..members.len) |i| try pending.append(gpa, i);
 
     while (pending.items.len != 0) {
         var pool: std.ArrayList(Candidate) = .empty;
         errdefer pool.deinit(gpa);
-        var deferred: std.ArrayList(Candidate) = .empty;
+        var taken: std.ArrayList(usize) = .empty;
+        defer taken.deinit(gpa);
+        var deferred: std.ArrayList(usize) = .empty;
         defer deferred.deinit(gpa);
 
         var text = try gpa.dupe(u8, original);
         defer gpa.free(text);
 
-        for (pending.items) |c| {
-            if (pool.items.len >= pool_size or killsClash(pool.items, c)) {
-                try deferred.append(gpa, c);
+        for (pending.items) |i| {
+            const c = members[i];
+            if (pool.items.len >= pool_size or killsClash(pool.items, c) or sharesFunction(hits, taken.items, hits[i])) {
+                try deferred.append(gpa, i);
                 continue;
             }
             const next = applyMutation(gpa, text, c.from, c.to, c.all) catch {
-                if (pool.items.len != 0) try deferred.append(gpa, c);
+                if (pool.items.len != 0) try deferred.append(gpa, i);
                 continue;
             };
             gpa.free(text);
             text = next;
             try pool.append(gpa, c);
+            try taken.append(gpa, i);
         }
 
         if (pool.items.len == 0) {

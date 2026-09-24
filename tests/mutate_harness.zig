@@ -206,6 +206,64 @@ test "harness: members whose kills overlap land in different pools" {
     try testing.expectEqualStrings("0,|1,|", shape);
 }
 
+const two_functions =
+    \\fn a(x: u8) u8 {
+    \\    _ = x;
+    \\    return 1;
+    \\}
+    \\fn b() u8 {
+    \\    return 2;
+    \\}
+    \\const c = 3;
+    \\
+;
+
+test "harness: mutations that change one function land in different pools" {
+    const candidates = [_]core.Candidate{
+        anchored(0, "f.zig", &.{"k0"}, "_ = x;", ""),
+        anchored(1, "f.zig", &.{"k1"}, "return 1;", "return 0;"),
+        anchored(2, "f.zig", &.{"k2"}, "return 2;", "return 0;"),
+        anchored(3, "f.zig", &.{"k3"}, "const c = 3;", "const c = 4;"),
+    };
+    const sources = [_]core.Source{.{ .file = "f.zig", .text = two_functions }};
+    const pools = try core.buildPools(testing.allocator, &candidates, 16, &sources);
+    defer freePools(testing.allocator, pools);
+
+    const shape = try poolShape(testing.allocator, pools);
+    defer testing.allocator.free(shape);
+    try testing.expectEqualStrings("0,2,3,|1,|", shape);
+}
+
+test "harness: a pattern that spans two functions keeps apart from both" {
+    const candidates = [_]core.Candidate{
+        anchored(0, "f.zig", &.{"k0"}, "return 1;\n}\nfn b", "return 0;\n}\nfn b"),
+        anchored(1, "f.zig", &.{"k1"}, "_ = x;", ""),
+        anchored(2, "f.zig", &.{"k2"}, "return 2;", "return 0;"),
+    };
+    const sources = [_]core.Source{.{ .file = "f.zig", .text = two_functions }};
+    const pools = try core.buildPools(testing.allocator, &candidates, 16, &sources);
+    defer freePools(testing.allocator, pools);
+
+    const shape = try poolShape(testing.allocator, pools);
+    defer testing.allocator.free(shape);
+    try testing.expectEqualStrings("0,|1,2,|", shape);
+}
+
+test "harness: only Zig functions and tests count as a function a mutation hits" {
+    const gpa = testing.allocator;
+    const in_test = try core.functionsHit(gpa, "t.zig", "const k = 1;\ntest \"t\" {\n    _ = k;\n}\n", "_ = k;");
+    defer gpa.free(in_test);
+    try testing.expectEqual(@as(usize, 1), in_test.len);
+
+    const top_level = try core.functionsHit(gpa, "f.zig", two_functions, "const c = 3;");
+    defer gpa.free(top_level);
+    try testing.expectEqual(@as(usize, 0), top_level.len);
+
+    const other_language = try core.functionsHit(gpa, "f.js", "function a() { return 1; }\n", "return 1;");
+    defer gpa.free(other_language);
+    try testing.expectEqual(@as(usize, 0), other_language.len);
+}
+
 test "harness: pools from different files merge only while their kills stay apart" {
     const sources = [_]core.Source{
         .{ .file = "a.zig", .text = "alpha" },
