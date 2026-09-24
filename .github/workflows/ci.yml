@@ -7,18 +7,12 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      full:
-        description: Run the full corpus, expected survivors included (ignored when mode is shadow)
+      survivors:
+        description: Also run the expected survivors in the mutation corpus
         type: boolean
         default: false
-      mode:
-        description: How the mutation corpus runs
-        type: choice
-        options: [serial, pool, shadow]
-        default: serial
   schedule:
-    - cron: "0 2 * * 1-6"
-    - cron: "0 3 * * 0"
+    - cron: "0 2 * * *"
 
 env:
   ZIG_VERSION: "0.16.0"
@@ -44,29 +38,13 @@ jobs:
       - run: zig version
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
 
-  mutation-corpus:
+  nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 240
     env:
-      FULL_RUN: ${{ github.event.schedule == '0 3 * * 0' || inputs.full == true }}
-      RUN_MODE: ${{ inputs.mode || 'serial' }}
-      ROTATION: ${{ github.run_number }}
+      SLICE: ${{ github.run_number }}
     steps:
-      - name: Report the run mode
-        shell: pwsh
-        run: |
-          switch ($env:RUN_MODE) {
-            'pool' {
-              $corpus = if ($env:FULL_RUN -eq 'true') { "full corpus" } else { "expected survivors skipped" }
-              Write-Output "mode: pool, $corpus, rotation=$env:ROTATION"
-            }
-            'shadow' { Write-Output "mode: shadow, full corpus pooled and then run one at a time; the full input is ignored and no slice rotates" }
-            default {
-              $corpus = if ($env:FULL_RUN -eq 'true') { "full corpus, expected survivors included" } else { "expected survivors skipped (--skip-survivors)" }
-              Write-Output "mode: serial, $corpus"
-            }
-          }
       - uses: actions/checkout@v4
       - name: Install Zig
         shell: pwsh
@@ -87,20 +65,36 @@ jobs:
             $dirty
             exit 1
           }
-      - run: zig build mutate-tool
-      - name: Run the mutation corpus
+      - name: Every test, the slow ones included
+        run: zig build test -Dslow=true --summary all
+      - name: Every test 20 times under load
         shell: pwsh
         run: |
-          $mutate = "./zig-out/bin/emetgate-mutate.exe"
-          $flags = @()
-          if ($env:RUN_MODE -eq 'shadow') {
-            $flags += "--shadow"
-          } else {
-            if ($env:RUN_MODE -eq 'pool') { $flags += @("--pool", "--rotation=$env:ROTATION") }
-            if ($env:FULL_RUN -ne 'true') { $flags += "--skip-survivors" }
+          zig build test-bin
+          $exe = (Resolve-Path ./zig-out/bin/test-all.exe).Path
+          $here = (Get-Location).Path
+          $load = Start-Job -ArgumentList $exe, $here -ScriptBlock {
+            param($exe, $here)
+            Set-Location $here
+            while ($true) { & $exe --jobs 2 --slow *> $null }
           }
-          Write-Output "running: $mutate $flags"
-          & $mutate @flags
+          try {
+            for ($i = 1; $i -le 20; $i++) {
+              Write-Output "run $i of 20"
+              & $exe --jobs 8 --slow
+              if ($LASTEXITCODE -ne 0) { Write-Output "::error::run $i of 20 failed"; exit 1 }
+            }
+          } finally {
+            Stop-Job $load
+            Remove-Job $load -Force
+          }
+      - run: zig build mutate-tool
+      - name: The whole mutation corpus from the schema binary
+        shell: pwsh
+        run: |
+          $flags = @("--jobs=4")
+          if ("${{ inputs.survivors }}" -ne "true") { $flags += "--skip-survivors" }
+          ./zig-out/bin/emetgate-mutate.exe @flags
       - name: Summarize unexpected outcomes
         if: always()
         shell: pwsh
@@ -112,8 +106,9 @@ jobs:
           }
           $outcomes = Get-Content $path -Raw | ConvertFrom-Json
           $bad = @($outcomes | Where-Object { -not $_.ok })
+          $schema = @($outcomes | Where-Object { $_.origin -eq 'schema' }).Count
           "## Mutation corpus" >> $env:GITHUB_STEP_SUMMARY
-          "$($outcomes.Count) run, $($outcomes.Count - $bad.Count) as expected, $($bad.Count) not as expected" >> $env:GITHUB_STEP_SUMMARY
+          "$($outcomes.Count) run ($schema from the schema binary), $($outcomes.Count - $bad.Count) as expected, $($bad.Count) not as expected" >> $env:GITHUB_STEP_SUMMARY
           if ($bad.Count -gt 0) {
             "" >> $env:GITHUB_STEP_SUMMARY
             "| id | file | status | wanted | why |" >> $env:GITHUB_STEP_SUMMARY
@@ -131,3 +126,8 @@ jobs:
           name: mutation-report
           path: .zig-cache/mutate/report.json
           if-no-files-found: warn
+      - name: A rotating tenth of the corpus, schema binary against one build per mutant
+        shell: pwsh
+        run: |
+          $slice = ([int]$env:SLICE % 10) + 1
+          ./zig-out/bin/emetgate-mutate.exe --jobs=4 --skip-survivors --compare "--slice=$slice/10"
