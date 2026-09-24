@@ -54,6 +54,7 @@ test {
     _ = @import("tests/redteam_memory.zig");
     _ = @import("tests/redteam_ledger.zig");
     _ = @import("tests/redteam_sandbox.zig");
+    _ = @import("tests/redteam_link_tree.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_crash.zig");
     _ = @import("tests/batch_crash_tool.zig");
