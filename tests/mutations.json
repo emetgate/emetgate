@@ -4375,8 +4375,8 @@
     {
       "id": "CH7-filter-ignored",
       "file": "tools/mutate/changes.zig",
-      "from": "            if (std.mem.indexOf(u8, name, filter) != null) return name;\n",
-      "to": "",
+      "from": "if (std.mem.indexOf(u8, name, filter) != null) return name;",
+      "to": "if (std.mem.indexOf(u8, name, filter) != null and false) return name;",
       "kills": [
         "changes: a kill or a filter that names a changed test selects the mutant"
       ]
