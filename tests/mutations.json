@@ -2092,7 +2092,8 @@
         "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
         "scope: a rule scoped to extension/content.js reports no fetch( from other files",
         "scope: a directory scope reports only the violations under that directory",
-        "scope: --in narrows an ad-hoc check and the json report counts files outside it"
+        "scope: --in narrows an ad-hoc check and the json report counts files outside it",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options"
       ]
     },
     {
@@ -2119,7 +2120,8 @@
       "from": "    return .{ .start = target.body.startByte(), .end = target.body.endByte() };",
       "to": "    _ = target;\n    return .{ .start = 0, .end = @intCast(snapshot.source.len) };",
       "kills": [
-        "scope: a symbol scope ignores the same text in another symbol of the same file"
+        "scope: a symbol scope ignores the same text in another symbol of the same file",
+        "scope: a no_literal rule scoped to one symbol reports only its literal options"
       ]
     },
     {
