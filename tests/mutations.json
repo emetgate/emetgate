@@ -1752,7 +1752,7 @@
     {
       "id": "SC1-scan-command-malformed-precheck-removed",
       "file": "src/protocol/scan_command.zig",
-      "from": "    if (try scan.firstMalformed(gpa, enforced.rules)) |bad| {",
+      "from": "    if (try scan.firstMalformed(gpa, runnable)) |bad| {",
       "to": "    if (@as(?scan.Malformed, null)) |bad| {",
       "kills": [
         "scan: a malformed ledger rule stops the scan before any file and names the rule"
@@ -3525,8 +3525,8 @@
     {
       "id": "Q23-repeated-capture-accepted",
       "file": "src/engine/query.zig",
-      "from": "        if (repeatsCapture(own)) {",
-      "to": "        if (false and repeatsCapture(own)) {",
+      "from": "        if (repeatsCapture(own) or capturedGroupRepeats(own)) {",
+      "to": "        if (false and repeatsCapture(own) or capturedGroupRepeats(own)) {",
       "kills": [
         "q: a capture repeated with + or * is refused, one with ? or an uncaptured repeat is not",
         "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs",
@@ -3766,7 +3766,7 @@
       ]
     },
     {
-      "id": "SC1-scan-runs-tracked-ledger-queries",
+      "id": "SCT1-scan-runs-tracked-ledger-queries",
       "file": "src/protocol/scan_command.zig",
       "from": "    if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;\n",
       "to": "    if (!try rules.ledgerTracked(gpa, io, root_abs) or true) return unsplit;\n",
@@ -3775,7 +3775,7 @@
       ]
     },
     {
-      "id": "SC2-scan-ignores-allow-repo-memory",
+      "id": "SCT2-scan-ignores-allow-repo-memory",
       "file": "src/protocol/scan_command.zig",
       "from": "    if (options.source != .ledger or options.allow_repo_memory) return unsplit;\n",
       "to": "    if (options.source != .ledger) return unsplit;\n",
@@ -3784,7 +3784,7 @@
       ]
     },
     {
-      "id": "SC3-scan-distrusts-untracked-ledger",
+      "id": "SCT3-scan-distrusts-untracked-ledger",
       "file": "src/protocol/scan_command.zig",
       "from": "    if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;\n",
       "to": "    _ = try rules.ledgerTracked(gpa, io, root_abs);\n",
@@ -3793,7 +3793,7 @@
       ]
     },
     {
-      "id": "SC4-scan-skips-untrusted-silently",
+      "id": "SCT4-scan-skips-untrusted-silently",
       "file": "src/protocol/scan_command.zig",
       "from": "    for (untrusted) |rule| try out.print(\"warning: rule {s} ({s}) not run: untrusted ledger, it is committed to the repository; pass --allow-repo-memory to run it\\n\", .{ rule.id, rule.check });\n",
       "to": "    for (untrusted) |rule| if (false) try out.print(\"warning: rule {s} ({s}) not run: untrusted ledger, it is committed to the repository; pass --allow-repo-memory to run it\\n\", .{ rule.id, rule.check });\n",
@@ -3802,7 +3802,7 @@
       ]
     },
     {
-      "id": "SC5-scan-distrusts-operator-check",
+      "id": "SCT5-scan-distrusts-operator-check",
       "file": "src/protocol/scan_command.zig",
       "from": "    if (options.source != .ledger or options.allow_repo_memory) return unsplit;\n",
       "to": "    if (options.allow_repo_memory) return unsplit;\n",
@@ -3811,7 +3811,7 @@
       ]
     },
     {
-      "id": "SC6-scan-flag-not-parsed",
+      "id": "SCT6-scan-flag-not-parsed",
       "file": "src/protocol/scan_command.zig",
       "from": "                options.allow_repo_memory = true;\n",
       "to": "                options.allow_repo_memory = false;\n",
