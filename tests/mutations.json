@@ -3678,6 +3678,54 @@
       "kills": [
         "a timed out run returns only after every process in its job has exited"
       ]
+    },
+    {
+      "id": "QA1-group-repeat-check-removed",
+      "file": "src/engine/query.zig",
+      "from": "        if (repeatsCapture(own) or capturedGroupRepeats(own)) {\n",
+      "to": "        if (repeatsCapture(own)) {\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs"
+      ]
+    },
+    {
+      "id": "QA2-alternation-not-a-group",
+      "file": "src/engine/query.zig",
+      "from": "    if (text[open] == '[') return true;\n",
+      "to": "    if (text[open] == '[') return false;\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs"
+      ]
+    },
+    {
+      "id": "QA3-capture-loop-uncharged",
+      "file": "src/engine/query.zig",
+      "from": "            if (progress.spend(1)) break;\n",
+      "to": "",
+      "kills": [
+        "q: every capture a match reports is charged to the budget"
+      ]
+    },
+    {
+      "id": "QA4-group-check-looks-inside-nodes",
+      "file": "src/engine/query.zig",
+      "from": "            '(' => i = if (isGroup(text, i)) i + 1 else closingEnd(text, i),\n",
+      "to": "            '(' => i += 1,\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name"
+      ]
+    },
+    {
+      "id": "QA5-parenthesized-group-not-a-group",
+      "file": "src/engine/query.zig",
+      "from": "        '(', '[', '\"', '.' => true,\n",
+      "to": "        '[', '\"', '.' => true,\n",
+      "kills": [
+        "q: a capture on a group or alternation with + or * at its own level is refused by name",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs"
+      ]
     }
   ]
 }
