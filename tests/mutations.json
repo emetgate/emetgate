@@ -2524,7 +2524,7 @@
         "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38",
         "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
         "scan tool: one call has a total operation budget, and the files past it come back as check failures",
-        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded"
       ],
       "filter": [
@@ -2549,7 +2549,7 @@
         "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38",
         "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
         "scan tool: one call has a total operation budget, and the files past it come back as check failures",
-        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded"
       ],
       "exact": true,
@@ -4021,10 +4021,10 @@
       "kills": [
         "q: a tree deeper than the depth product allows for the query fails before the cursor runs",
         "q: only the depth inside the span counts",
-        "q: a 64,000 level chain fails by name at the default depth product",
-        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "q: a 6,100 level chain fails by name at the default depth product",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
-        "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time",
+        "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name",
         "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
       ]
     },
@@ -4084,9 +4084,9 @@
       "from": "        error.QueryDepthExceeded => \"query_depth_exceeded\",\n",
       "to": "        error.QueryDepthExceeded => \"query_budget_exceeded\",\n",
       "kills": [
-        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
-        "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time",
+        "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name",
         "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
       ]
     },
@@ -4096,9 +4096,9 @@
       "from": "error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(",
       "to": "error.CallBudgetExceeded => |e| return failedGate(",
       "kills": [
-        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded",
         "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
-        "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time",
+        "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name",
         "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
       ]
     },
@@ -4191,6 +4191,33 @@
       "to": "        const summary",
       "kills": [
         "harness: a failed test line is a kill even when the run exits 0"
+      ]
+    },
+    {
+      "id": "RN11-slow-switch-ignored",
+      "file": "tools/test_runner.zig",
+      "from": "emetgate_slow = options.slow;",
+      "to": "emetgate_slow = false;",
+      "kills": [
+        "runner: a slow test is skipped unless --slow is given, and runs when it is"
+      ]
+    },
+    {
+      "id": "RN12-slow-not-passed-to-shards",
+      "file": "tools/test_runner.zig",
+      "from": "    if (options.slow) argv.append(gpa, \"--slow\") catch oom();\n",
+      "to": "",
+      "kills": [
+        "runner: a slow test is skipped unless --slow is given, and runs when it is"
+      ]
+    },
+    {
+      "id": "SL1-slow-marker-always-runs",
+      "file": "src/engine/test_util.zig",
+      "from": "    if (@hasDecl(root, \"emetgate_slow\") and root.emetgate_slow) return;\n    return error.SkipZigTest;\n",
+      "to": "    _ = root;\n",
+      "kills": [
+        "runner: a slow test is skipped unless --slow is given, and runs when it is"
       ]
     }
   ]

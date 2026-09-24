@@ -12,6 +12,7 @@ const server = @import("emetgate").server;
 const Runtime = @import("emetgate").runtime.Runtime;
 const Snapshot = @import("emetgate").loader.Snapshot;
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
@@ -255,6 +256,7 @@ test "purple C2: every placeholder variant is rejected before any test runs" {
 }
 
 test "purple C3: a hanging test command times out and nothing commits" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -279,6 +281,7 @@ test "purple C3: a hanging test command times out and nothing commits" {
 }
 
 test "purple C3: a test command that leaves a lingering process is caught, not passed" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try sandbox.run(testing.allocator, testing.io, .{
         .argv = &.{ build_options.probe_path, "orphan" },

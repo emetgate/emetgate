@@ -12,6 +12,7 @@ const lang = @import("emetgate").lang_registry;
 const Runtime = @import("emetgate").runtime.Runtime;
 const Snapshot = @import("emetgate").loader.Snapshot;
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 
 const n11_source =
@@ -269,6 +270,7 @@ test "redteam query: a q: rule that outruns its budget rejects the proposal and 
 }
 
 test "redteam query: a hand-written rule with a repeated capture or too many captures fails closed at the gate before it runs" {
+    try test_util.slow();
     try skipOffWindows();
     try expectRefusedBeforeRunning(repeated_capture_query, wide_body);
     try expectRefusedBeforeRunning(many_captures_query, "{\n" ++ "  a;\n" ** 300 ++ "}");
@@ -309,6 +311,7 @@ test "redteam query: a body too deep for the rule's pattern rejects the proposal
 }
 
 test "redteam query: a q: rule past the match limit rejects the proposal and is not a violation" {
+    try test_util.slow();
     try skipOffWindows();
     var repo = try Repo.init();
     defer repo.deinit();

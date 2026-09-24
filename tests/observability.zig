@@ -9,6 +9,7 @@ const telemetry = @import("emetgate").telemetry;
 const Runtime = @import("emetgate").runtime.Runtime;
 const Snapshot = @import("emetgate").loader.Snapshot;
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 const Allocating = std.Io.Writer.Allocating;
 
@@ -152,6 +153,7 @@ fn expectContains(haystack: []const u8, needle: []const u8) !void {
 }
 
 test "fail-soft: a broken event log never changes a tool result or what reaches disk" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");

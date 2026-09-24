@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const runner = @import("root");
+const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
 
@@ -153,11 +154,11 @@ test "runner: --jobs runs every selected test once across its shards" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const filters = [_][]const u8{ "suites: ", "runner: a " };
+    const filters = [_][]const u8{ "runner: a shard parses", "runner: a filter keeps", "runner: shard coverage", "runner: arguments parse", "runner: shard totals" };
     const wanted = countMatching(&filters);
-    try testing.expect(wanted > 5);
+    try testing.expectEqual(@as(usize, 5), wanted);
     for ([_][]const u8{ "2", "3", "40" }) |jobs| {
-        const result = try selfRun(arena, &.{ "--jobs", jobs, "--filter", filters[0], "--filter", filters[1] }, null);
+        const result = try selfRun(arena, &.{ "--jobs", jobs, "--filter", filters[0], "--filter", filters[1], "--filter", filters[2], "--filter", filters[3], "--filter", filters[4] }, null);
         errdefer std.debug.print("--jobs {s}:\n{s}\n", .{ jobs, result.stderr });
         try testing.expectEqual(@as(?u8, 0), exitCode(result.term));
         const line = try std.fmt.allocPrint(arena, "{d}/{d} tests passed; 0 skipped; 0 failed; 0 leaked; mutant 0; {s} shard(s)", .{ wanted, wanted, jobs });
@@ -235,4 +236,26 @@ test "runner: a test that logs an error fails even when it returns normally" {
     const result = try selfRun(arena, &.{ "--filter", log_probe }, &env);
     try testing.expectEqual(@as(?u8, 1), exitCode(result.term));
     try testing.expect(std.mem.indexOf(u8, result.stderr, "' failed: logged an error") != null);
+}
+
+const slow_probe = "runner: a probe marked slow runs only under --slow";
+
+test "runner: a probe marked slow runs only under --slow" {
+    try test_util.slow();
+    try testing.expect(runner.emetgate_slow);
+}
+
+test "runner: a slow test is skipped unless --slow is given, and runs when it is" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const normal = try selfRun(arena, &.{ "--filter", slow_probe }, null);
+    try testing.expectEqual(@as(?u8, 0), exitCode(normal.term));
+    try testing.expect(std.mem.indexOf(u8, normal.stderr, "0/1 tests passed; 1 skipped; 0 failed") != null);
+    const slow = try selfRun(arena, &.{ "--slow", "--filter", slow_probe }, null);
+    try testing.expectEqual(@as(?u8, 0), exitCode(slow.term));
+    try testing.expect(std.mem.indexOf(u8, slow.stderr, "1/1 tests passed; 0 skipped; 0 failed") != null);
+    const sharded = try selfRun(arena, &.{ "--jobs", "2", "--slow", "--filter", slow_probe }, null);
+    try testing.expectEqual(@as(?u8, 0), exitCode(sharded.term));
+    try testing.expect(std.mem.indexOf(u8, sharded.stderr, "1/1 tests passed; 0 skipped; 0 failed") != null);
 }

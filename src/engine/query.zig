@@ -643,6 +643,7 @@ fn textOf(tree: ts.Tree, node: c.TSNode) []const u8 {
 }
 
 const testing = std.testing;
+const test_util = @import("test_util.zig");
 const alloc_bridge = @import("alloc_bridge.zig");
 const typescript = &@import("lang/typescript/profile.zig").profile;
 const javascript = &@import("lang/javascript/profile.zig").profile;
@@ -941,6 +942,7 @@ fn cheapestBudget(source: []const u8, text: []const u8) !u64 {
 }
 
 test "q: every capture a match reports is charged to the budget" {
+    try test_util.slow();
     const source = "f(a, b, c, d, e, g, h);\n";
     const one = "(arguments . (identifier) @violation . (identifier) . (identifier) . (identifier) . (identifier) . (identifier) . (identifier) .)";
     const seven = "(arguments . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation .)";
@@ -992,11 +994,20 @@ test "q: only the depth inside the span counts" {
     try testing.expectError(error.QueryDepthExceeded, findIn(typescript.grammar(), source, whole(source), "(identifier) @violation", .{ .depth_product = 50 }));
 }
 
-test "q: a 64,000 level chain fails by name at the default depth product" {
-    const source = "x = " ++ "a + " ** 64_000 ++ "a;\n";
+fn expectDeepChainRefused(comptime levels: usize) !void {
+    const source = "x = " ++ "a + " ** levels ++ "a;\n";
     const started = std.Io.Timestamp.now(testing.io, .awake);
     try testing.expectError(error.QueryDepthExceeded, findIn(typescript.grammar(), source, whole(source), "(call_expression) @violation", .{}));
     try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 60_000);
+}
+
+test "q: a 6,100 level chain fails by name at the default depth product" {
+    try expectDeepChainRefused(6_100);
+}
+
+test "q: a 64,000 level chain fails by name at the default depth product" {
+    try test_util.slow();
+    try expectDeepChainRefused(64_000);
 }
 
 test "q: the pattern depth counts nested nodes, groups and alternations, and skips strings and comments" {

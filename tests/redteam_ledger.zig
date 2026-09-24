@@ -11,6 +11,7 @@ const Runtime = @import("emetgate").runtime.Runtime;
 const Snapshot = @import("emetgate").loader.Snapshot;
 const query_cases = @import("query_cases.zig");
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 const gpa = testing.allocator;
 
@@ -255,6 +256,7 @@ fn adoptQueryRule(clone: *Clone, check: []const u8) !void {
 }
 
 test "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var clone = try Clone.init();
     defer clone.deinit();

@@ -4,6 +4,7 @@ const core = @import("../tools/mutate/core.zig");
 const job = @import("../tools/mutate/job.zig");
 const zig_source = @import("zig_source.zig");
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 
 test "harness: a pattern must occur exactly once unless all occurrences are requested" {
@@ -549,6 +550,7 @@ test "harness: pooling refuses to start unless the unmutated tree is green" {
 }
 
 test "harness: a timeout kills the grandchildren a command leaves behind" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const started = std.Io.Timestamp.now(testing.io, .awake);
     try testing.expectError(error.Timeout, job.run(testing.allocator, testing.io, &.{ "cmd", "/c", "start /b ping -n 100 127.0.0.77 & ping -n 100 127.0.0.1" }, null, 1024 * 1024, 1));

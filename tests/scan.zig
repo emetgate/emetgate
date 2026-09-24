@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const scan = @import("emetgate").scan;
 const scan_command = @import("emetgate").scan_command;
 const Runtime = @import("emetgate").runtime.Runtime;
+const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
 const Allocating = std.Io.Writer.Allocating;
@@ -545,10 +546,10 @@ test "scan: a whole ledger is read once without pausing" {
     try testing.expectEqual(@as(usize, 0), repair.pauses);
 }
 
-test "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time" {
+fn expectDeepLedgerRuleRefused(comptime levels: usize) !void {
     try skipOffWindows();
     var repo = try Repo.init(&.{
-        .{ .path = "src/deep.ts", .data = "export const x = " ++ "a + " ** 64_000 ++ "a;\n" },
+        .{ .path = "src/deep.ts", .data = "export const x = " ++ "a + " ** levels ++ "a;\n" },
         .{ .path = "src/flat.ts", .data = "export const y = f(a);\n" },
     });
     defer repo.deinit();
@@ -561,6 +562,15 @@ test "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not r
     try testing.expectEqual(@as(u8, 38), outcome.code);
     try testing.expect(outcome.has("error: src/deep.ts: rule mq (q:(call_expression) @violation) could not run: query_depth_exceeded typescript\n"));
     try testing.expect(outcome.has("src/flat.ts:1:18: mq (q:(call_expression) @violation): f(a)\n"));
+}
+
+test "redteam scan: a ledger q: rule over a chain 6,100 levels deep could not run, by name" {
+    try expectDeepLedgerRuleRefused(6_100);
+}
+
+test "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time" {
+    try test_util.slow();
+    try expectDeepLedgerRuleRefused(64_000);
 }
 
 fn scopedRow(comptime id: []const u8, comptime check: []const u8, comptime where: []const u8) []const u8 {

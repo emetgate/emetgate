@@ -24,6 +24,7 @@ const TwoFile = support.TwoFile;
 const hashOfRef = support.hashOfRef;
 const crash_command = support.crash_command;
 
+const test_util = @import("emetgate").test_util;
 const testing = std.testing;
 
 const commented_body = "{\n  // why\n  return a - b;\n}";
@@ -604,6 +605,7 @@ test "scope: a batch applies a symbol-scoped rule only to the edit of that symbo
 }
 
 test "scope: at the gate an excluded file is not blocked and a file left in scope is" {
+    try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     for ([_][]const u8{ "src/ !src/math.ts", "src/ !*.ts", "src/ !src/" }) |where| {
         const result = try tryAddUnder(where);

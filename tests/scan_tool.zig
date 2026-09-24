@@ -5,6 +5,7 @@ const server = @import("emetgate").server;
 const Runtime = @import("emetgate").runtime.Runtime;
 const handlers = @import("emetgate").handlers;
 const telemetry = @import("emetgate").telemetry;
+const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
 const Value = std.json.Value;
@@ -289,10 +290,10 @@ test "scan tool: a model query that captures a repeating group or alternation is
     }
 }
 
-test "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time" {
+fn expectDeepChainFailure(comptime levels: usize) !void {
     try skipOffWindows();
     var repo = try Repo.init(&.{
-        .{ "src/deep.ts", "export const x = " ++ "a + " ** 64_000 ++ "a;\n" },
+        .{ "src/deep.ts", "export const x = " ++ "a + " ** levels ++ "a;\n" },
         .{ "src/flat.ts", "export const y = f(a);\n" },
     });
     defer repo.deinit();
@@ -309,6 +310,15 @@ test "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded i
     try testing.expectEqualStrings("query_depth_exceeded", failures[0].object.get("detail").?.string);
 }
 
+test "scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded" {
+    try expectDeepChainFailure(6_100);
+}
+
+test "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time" {
+    try test_util.slow();
+    try expectDeepChainFailure(64_000);
+}
+
 test "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded" {
     try skipOffWindows();
     var repo = try Repo.init(&.{.{ "src/mid.ts", "export const y = " ++ "a + " ** 150 ++ "a;\n" }});
@@ -322,6 +332,7 @@ test "scan tool: a model query nested 50 levels deep over a 150 level chain come
 }
 
 test "scan tool: one call has a total operation budget, and the files past it come back as check failures" {
+    try test_util.slow();
     try skipOffWindows();
     const file = "const s = \"" ++ "a" ** 20_000 ++ "\";\n";
     var repo = try Repo.init(&.{
