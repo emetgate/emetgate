@@ -186,9 +186,27 @@ fn namesOverlap(a: []const []const u8, b: []const []const u8) bool {
     return false;
 }
 
+pub fn family(name: []const u8) ?[]const u8 {
+    const colon = std.mem.indexOf(u8, name, ": ") orelse return null;
+    if (colon == 0) return null;
+    return name[0..colon];
+}
+
+fn familiesMeet(a: []const []const u8, b: []const []const u8) bool {
+    for (a) |left| {
+        const mine = family(left) orelse continue;
+        for (b) |right| {
+            const theirs = family(right) orelse continue;
+            if (std.mem.eql(u8, mine, theirs)) return true;
+        }
+    }
+    return false;
+}
+
 fn killsClash(pool: []const Candidate, c: Candidate) bool {
     for (pool) |member| {
         if (namesOverlap(member.kills, c.kills)) return true;
+        if (familiesMeet(member.kills, c.kills)) return true;
     }
     return false;
 }

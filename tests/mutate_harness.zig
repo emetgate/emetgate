@@ -206,6 +206,33 @@ test "harness: members whose kills overlap land in different pools" {
     try testing.expectEqualStrings("0,|1,|", shape);
 }
 
+test "harness: members whose kills share a family land in different pools" {
+    const candidates = [_]core.Candidate{
+        anchored(0, "a.zig", &.{"ledger: a flag lets the rule run"}, "alpha", "ALPHA"),
+        anchored(1, "b.zig", &.{"ledger: a committed ledger is untrusted"}, "one", "ONE"),
+        anchored(2, "c.zig", &.{"memory: recall returns active rows"}, "solo", "SOLO"),
+        anchored(3, "d.zig", &.{"no family here: none"}, "four", "FOUR"),
+        anchored(4, "e.zig", &.{"a plain name"}, "five", "FIVE"),
+    };
+    const sources = [_]core.Source{
+        .{ .file = "a.zig", .text = "alpha" },
+        .{ .file = "b.zig", .text = "one" },
+        .{ .file = "c.zig", .text = "solo" },
+        .{ .file = "d.zig", .text = "four" },
+        .{ .file = "e.zig", .text = "five" },
+    };
+    const pools = try core.buildPools(testing.allocator, &candidates, 16, &sources);
+    defer freePools(testing.allocator, pools);
+
+    const shape = try poolShape(testing.allocator, pools);
+    defer testing.allocator.free(shape);
+    try testing.expectEqualStrings("0,2,3,4,|1,|", shape);
+
+    try testing.expectEqualStrings("scan tool", core.family("scan tool: a clean check reports no violations").?);
+    try testing.expect(core.family("a batch commits every file when the shared test passes") == null);
+    try testing.expect(core.family(": no family") == null);
+}
+
 const two_functions =
     \\fn a(x: u8) u8 {
     \\    _ = x;
