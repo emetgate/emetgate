@@ -67,7 +67,7 @@ pub const profile: Profile = .{
     .directives = &.{},
     .literal_values = never_matching_literal_values,
     .memberTraits = memberTraits,
-    .visibility_keyword = "pub",
+    .visibility_keywords = &.{ "pub", "export" },
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {

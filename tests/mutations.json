@@ -4552,8 +4552,8 @@
     {
       "id": "ZIG1-pub-check-inverted",
       "file": "src/engine/lang/profile.zig",
-      "from": "if (!child.isNamed() and std.mem.eql(u8, keyword, child.kind())) return true;",
-      "to": "if (!child.isNamed() and std.mem.eql(u8, keyword, child.kind())) return false;",
+      "from": "if (std.mem.eql(u8, keyword, child.kind())) return true;",
+      "to": "if (std.mem.eql(u8, keyword, child.kind())) return false;",
       "kills": [
         "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
       ]
@@ -4565,6 +4565,15 @@
       "to": "var current = sym.node.parent();",
       "kills": [
         "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
+      ]
+    },
+    {
+      "id": "ZIG5-export-keyword-dropped",
+      "file": "src/engine/lang/zig/profile.zig",
+      "from": ".visibility_keywords = &.{ \"pub\", \"export\" },",
+      "to": ".visibility_keywords = &.{\"pub\"},",
+      "kills": [
+        "zig: an export fn is unbounded, matching pub"
       ]
     },
     {

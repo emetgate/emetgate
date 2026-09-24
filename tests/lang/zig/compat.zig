@@ -117,6 +117,71 @@ test "zig: a stale hash, a placeholder and an escaping body are refused, the nei
     try testing.expectEqual(neighbour_before, neighbour_after.hash);
 }
 
+test "zig: an export fn is unbounded, matching pub" {
+    var case = try Case.init(
+        \\export fn foo() i32 {
+        \\  return 1;
+        \\}
+        \\
+    );
+    defer case.deinit();
+
+    const report = try case.analyze("foo");
+    defer report.deinit();
+    try testing.expectEqual(boundedness.Confidence.unbounded, report.confidence);
+    try testing.expectEqual(boundedness.Provenance.exported_escape, report.provenance.?);
+}
+
+test "zig: a function given to @export by address is unbounded" {
+    var case = try Case.init(
+        \\fn foo() i32 {
+        \\  return 1;
+        \\}
+        \\comptime {
+        \\  @export(&foo, .{ .name = "foo" });
+        \\}
+        \\
+    );
+    defer case.deinit();
+
+    const report = try case.analyze("foo");
+    defer report.deinit();
+    try testing.expectEqual(boundedness.Confidence.unbounded, report.confidence);
+}
+
+test "zig: taking a function's address anywhere in the file is unbounded" {
+    var case = try Case.init(
+        \\fn foo() i32 {
+        \\  return 1;
+        \\}
+        \\const p = &foo;
+        \\
+    );
+    defer case.deinit();
+
+    const report = try case.analyze("foo");
+    defer report.deinit();
+    try testing.expectEqual(boundedness.Confidence.unbounded, report.confidence);
+}
+
+test "zig: a non-pub function only ever plain-called in-file stays bounded" {
+    var case = try Case.init(
+        \\fn helper(a: i32) i32 {
+        \\  return a;
+        \\}
+        \\fn caller() i32 {
+        \\  return helper(1) + helper(2);
+        \\}
+        \\
+    );
+    defer case.deinit();
+
+    const report = try case.analyze("helper");
+    defer report.deinit();
+    try testing.expectEqual(boundedness.Confidence.bounded, report.confidence);
+    try testing.expectEqual(@as(usize, 2), report.same_file_refs.len);
+}
+
 test "zig: a function referenced only through @call's identifier argument is unbounded (first-class escape)" {
     var case = try Case.init(
         \\fn process(x: i32) i32 {
