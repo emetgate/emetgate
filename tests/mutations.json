@@ -2546,7 +2546,9 @@
         "scan tool: a call creates no workspace and leaves the ledger untouched",
         "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38",
         "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
-        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures",
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded"
       ],
       "exact": true,
       "filter": [
@@ -4009,6 +4011,95 @@
         "harness: members whose kills share a family land in different pools"
       ],
       "exact": true
+    },
+    {
+      "id": "QD1-depth-check-skipped",
+      "file": "src/engine/query.zig",
+      "from": "    if (!depthWithin(tree, span, limits.depth_product / query.depth)) return error.QueryDepthExceeded;\n",
+      "to": "",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs",
+        "q: only the depth inside the span counts",
+        "q: a 64,000 level chain fails by name at the default depth product",
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD2-depth-product-not-shared-by-pattern-depth",
+      "file": "src/engine/query.zig",
+      "from": "limits.depth_product / query.depth)) return",
+      "to": "limits.depth_product)) return",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD3-depth-limit-off-by-one",
+      "file": "src/engine/query.zig",
+      "from": "            if (depth > limit) return false;\n",
+      "to": "            if (depth > limit + 1) return false;\n",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs"
+      ]
+    },
+    {
+      "id": "QD4-depth-walk-leaves-the-span",
+      "file": "src/engine/query.zig",
+      "from": "c.ts_node_start_byte(node) <= span.end and c.ts_node_end_byte(node) >= span.start;",
+      "to": "c.ts_node_start_byte(node) <= span.end or c.ts_node_end_byte(node) >= span.start;",
+      "kills": [
+        "q: only the depth inside the span counts"
+      ]
+    },
+    {
+      "id": "QD5-predicate-parens-count-as-depth",
+      "file": "src/engine/query.zig",
+      "from": "                if (text[i] == '(' and next < text.len and text[next] == '#') {\n",
+      "to": "                if (false) {\n",
+      "kills": [
+        "q: the pattern depth counts nodes, groups and alternations, not predicates, strings or comments"
+      ]
+    },
+    {
+      "id": "QD6-pattern-depth-never-grows",
+      "file": "src/engine/query.zig",
+      "from": "                deepest = @max(deepest, depth);\n",
+      "to": "                deepest = @max(deepest, 1);\n",
+      "kills": [
+        "q: a tree deeper than the depth product allows for the query fails before the cursor runs",
+        "q: the pattern depth counts nodes, groups and alternations, not predicates, strings or comments",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD7-depth-detail-misnamed",
+      "file": "src/platform/rules.zig",
+      "from": "        error.QueryDepthExceeded => \"query_depth_exceeded\",\n",
+      "to": "        error.QueryDepthExceeded => \"query_budget_exceeded\",\n",
+      "kills": [
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
+    },
+    {
+      "id": "QD8-depth-refusal-escapes-the-gate",
+      "file": "src/platform/rules.zig",
+      "from": "error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(",
+      "to": "error.CallBudgetExceeded => |e| return failedGate(",
+      "kills": [
+        "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded in bounded time",
+        "scan tool: a model query nested 50 levels deep over a 150 level chain comes back as query_depth_exceeded",
+        "redteam scan: a ledger q: rule over a chain 64,000 levels deep could not run, by name, in bounded time",
+        "redteam query: a body too deep for the rule's pattern rejects the proposal as query_depth_exceeded"
+      ]
     }
   ]
 }
