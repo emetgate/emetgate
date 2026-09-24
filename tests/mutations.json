@@ -4338,6 +4338,55 @@
       "kills": [
         "changes: an entry that is new or differs from the one at the ref counts as changed"
       ]
+    },
+    {
+      "id": "BC1-batch-commit-record-not-written",
+      "file": "src/platform/disk.zig",
+      "from": "    if (batch) |b| commit_record.write(b.gpa, b.io, b.journal_dir, &b.tag) catch |err| {",
+      "to": "    if (@as(?*const Batch, null)) |b| commit_record.write(b.gpa, b.io, b.journal_dir, &b.tag) catch |err| {",
+      "kills": [
+        "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
+        "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "BC2-recover-roll-forward-skipped",
+      "file": "src/platform/disk.zig",
+      "from": "    if (batch.len != 0 and try commit_record.exists(gpa, io, journal_dir, batch)) {",
+      "to": "    if (false and try commit_record.exists(gpa, io, journal_dir, batch)) {",
+      "kills": [
+        "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
+        "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "BC3-roll-forward-new-hash-unchecked",
+      "file": "src/platform/disk.zig",
+      "from": "    if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &new_hash)) return error.TargetUnverified;",
+      "to": "    _ = gpa;\n    _ = new_hash;",
+      "kills": [
+        "batch crash: recover never rolls forward a file whose content is not the journaled new hash"
+      ]
+    },
+    {
+      "id": "BC4-batch-commit-record-removed-before-finalize",
+      "file": "src/platform/disk.zig",
+      "from": "    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings, 0..) |*p, k| {",
+      "to": "    if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};\n    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings, 0..) |*p, k| {",
+      "kills": [
+        "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
+        "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "BC5-recover-leaves-commit-record",
+      "file": "src/platform/disk.zig",
+      "from": "    try commit_record.removeAll(gpa, io, journal_dir);",
+      "to": "",
+      "kills": [
+        "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
+        "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
+      ]
     }
   ]
 }
