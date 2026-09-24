@@ -3984,6 +3984,26 @@
         "harness: only Zig functions and tests count as a function a mutation hits"
       ],
       "exact": true
+    },
+    {
+      "id": "FM1-pool-ignores-a-shared-family",
+      "file": "tools/mutate/core.zig",
+      "from": "        if (familiesMeet(member.kills, c.kills)) return true;\n",
+      "to": "",
+      "kills": [
+        "harness: members whose kills share a family land in different pools"
+      ],
+      "exact": true
+    },
+    {
+      "id": "FM2-family-is-the-whole-name",
+      "file": "tools/mutate/core.zig",
+      "from": "    return name[0..colon];\n",
+      "to": "    return name;\n",
+      "kills": [
+        "harness: members whose kills share a family land in different pools"
+      ],
+      "exact": true
     }
   ]
 }
