@@ -20,6 +20,7 @@ pub const Shard = struct {
 
 pub const Options = struct {
     filters: []const []const u8 = &.{},
+    skips: []const []const u8 = &.{},
     shard: Shard = .{},
     slow: bool = false,
     mutant: u32 = 0,
@@ -31,7 +32,7 @@ pub const Options = struct {
     jobs: usize = 1,
 };
 
-pub const usage_text = "usage: test-all [--filter NAME]... [--jobs N | --shard I/N] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH]\n";
+pub const usage_text = "usage: test-all [--filter NAME]... [--skip FULL_NAME]... [--jobs N | --shard I/N] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH]\n";
 
 pub fn parseShard(text: []const u8) error{InvalidShard}!Shard {
     const slash = std.mem.indexOfScalar(u8, text, '/') orelse return error.InvalidShard;
@@ -44,6 +45,7 @@ pub fn parseShard(text: []const u8) error{InvalidShard}!Shard {
 pub fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8) !Options {
     var options: Options = .{};
     var filters: std.ArrayList([]const u8) = .empty;
+    var skips: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -51,6 +53,10 @@ pub fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8) !Options {
             i += 1;
             if (i == args.len or args[i].len == 0) return error.InvalidArgs;
             try filters.append(gpa, args[i]);
+        } else if (std.mem.eql(u8, arg, "--skip")) {
+            i += 1;
+            if (i == args.len or args[i].len == 0) return error.InvalidArgs;
+            try skips.append(gpa, args[i]);
         } else if (std.mem.eql(u8, arg, "--shard")) {
             i += 1;
             if (i == args.len) return error.InvalidArgs;
@@ -84,10 +90,12 @@ pub fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8) !Options {
     }
     if (options.jobs > 1 and (options.shard.count != 1 or options.record != null)) return error.InvalidArgs;
     options.filters = try filters.toOwnedSlice(gpa);
+    options.skips = try skips.toOwnedSlice(gpa);
     return options;
 }
 
 pub fn matches(name: []const u8, filters: []const []const u8) bool {
+    if (name.len == 0) return false;
     if (filters.len == 0) return true;
     for (filters) |filter| {
         if (std.mem.indexOf(u8, name, filter) != null) return true;
@@ -148,6 +156,17 @@ pub fn parseRecord(gpa: std.mem.Allocator, text: []const u8, out: *std.ArrayList
 
 pub const shard_guard = "shards: every selected test runs in exactly one shard";
 
+pub fn withoutSkipped(gpa: std.mem.Allocator, names: []const []const u8, skips: []const []const u8) ![]const []const u8 {
+    if (skips.len == 0) return names;
+    const kept = try gpa.dupe([]const u8, names);
+    for (kept) |*name| {
+        for (skips) |skip| {
+            if (std.mem.eql(u8, name.*, skip)) name.* = "";
+        }
+    }
+    return kept;
+}
+
 fn testNames(gpa: std.mem.Allocator) ![]const []const u8 {
     const names = try gpa.alloc([]const u8, builtin.test_functions.len);
     for (builtin.test_functions, names) |t, *name| name.* = t.name;
@@ -192,6 +211,7 @@ fn shardArgs(gpa: std.mem.Allocator, exe: []const u8, i: usize, record: []const 
     argv.appendSlice(gpa, &.{ exe, "--shard", std.fmt.allocPrint(gpa, "{d}/{d}", .{ i, options.jobs }) catch oom() }) catch oom();
     argv.append(gpa, std.fmt.allocPrint(gpa, "--record={s}", .{record}) catch oom()) catch oom();
     for (options.filters) |filter| argv.appendSlice(gpa, &.{ "--filter", filter }) catch oom();
+    for (options.skips) |skip| argv.appendSlice(gpa, &.{ "--skip", skip }) catch oom();
     if (options.slow) argv.append(gpa, "--slow") catch oom();
     if (options.verbose) argv.append(gpa, "--verbose") catch oom();
     if (options.mutant != 0) argv.appendSlice(gpa, &.{ "--mutant", std.fmt.allocPrint(gpa, "{d}", .{options.mutant}) catch oom() }) catch oom();
@@ -312,7 +332,7 @@ pub fn main(init: std.process.Init.Minimal) void {
     emetgate_mutant = options.mutant;
     emetgate_slow = options.slow;
 
-    const names = testNames(gpa) catch @panic("oom");
+    const names = withoutSkipped(gpa, testNames(gpa) catch @panic("oom"), options.skips) catch @panic("oom");
 
     const selection = select(gpa, names, options.filters, options.shard) catch @panic("oom");
     if (options.filters.len != 0 and selection.matched == 0) {

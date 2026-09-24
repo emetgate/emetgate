@@ -276,3 +276,22 @@ test "shards: every selected test runs in exactly one shard" {
         try testing.expectEqual(runner.Coverage{}, try runner.coverage(arena, names, &.{}, recorded.items));
     }
 }
+
+test "runner: a skipped name leaves the selection and --jobs passes it to every shard" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const kept = try runner.withoutSkipped(arena, &sample, &.{ "b.test.three", "c.test.six" });
+    const picked = try runner.select(arena, kept, &.{}, .{});
+    try testing.expectEqual(@as(usize, 5), picked.matched);
+    try testing.expectEqualSlices(usize, &.{ 0, 1, 3, 4, 6 }, picked.indices);
+
+    const skipped = "tests.test_runner_harness.test.runner: a filter keeps a test whose name contains any of its strings";
+    for ([_][]const u8{ "1", "2" }) |jobs| {
+        const result = try selfRun(arena, &.{ "--jobs", jobs, "--filter", "runner: a shard parses", "--filter", "runner: a filter keeps", "--skip", skipped }, null);
+        try testing.expectEqual(@as(?u8, 0), exitCode(result.term));
+        try testing.expect(std.mem.indexOf(u8, result.stderr, "1/1 tests passed; 0 skipped; 0 failed") != null);
+    }
+    const nothing_left = try selfRun(arena, &.{ "--filter", "runner: a filter keeps", "--skip", skipped }, null);
+    try testing.expectEqual(@as(?u8, 2), exitCode(nothing_left.term));
+}

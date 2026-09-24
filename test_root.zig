@@ -61,6 +61,7 @@ test {
     _ = @import("tests/lockdown.zig");
     _ = @import("tests/symbol.zig");
     _ = @import("tests/mutate_harness.zig");
+    _ = @import("tests/mutate_schema.zig");
     _ = @import("tests/memory.zig");
     _ = @import("tests/lang/conformance.zig");
     _ = @import("tests/git_fixture_test.zig");

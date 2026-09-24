@@ -80,6 +80,30 @@ fn failedTestName(raw: []const u8) ?[]const u8 {
     return null;
 }
 
+fn allDigits(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
+}
+
+pub fn unfinishedTest(output: []const u8) ?[]const u8 {
+    var found: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, " \r");
+        const slash = std.mem.indexOfScalar(u8, line, '/') orelse continue;
+        const space = std.mem.indexOfScalarPos(u8, line, slash, ' ') orelse continue;
+        if (!allDigits(line[0..slash]) or !allDigits(line[slash + 1 .. space])) continue;
+        const dots = std.mem.indexOfPos(u8, line, space, "...") orelse continue;
+        const rest = line[dots + 3 ..];
+        const done = std.mem.startsWith(u8, rest, "OK") or std.mem.startsWith(u8, rest, "SKIP") or std.mem.startsWith(u8, rest, "FAIL");
+        found = if (done) null else line[space + 1 .. dots];
+    }
+    return found;
+}
+
 pub fn failedTests(gpa: Allocator, output: []const u8) ![]const []const u8 {
     var names: std.ArrayList([]const u8) = .empty;
     errdefer names.deinit(gpa);

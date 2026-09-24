@@ -1,6 +1,7 @@
 const std = @import("std");
 const core = @import("core.zig");
 const job = @import("job.zig");
+const schema = @import("schema.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -9,10 +10,12 @@ const work_dir = ".zig-cache/mutate";
 const report_path = work_dir ++ "/report.json";
 const tree_dir = work_dir ++ "/tree";
 const tree_list = work_dir ++ "/tree.list";
+const schema_dir = work_dir ++ "/schema";
 const max_output = 16 * 1024 * 1024;
 const default_timeout_s: u64 = 900;
 const default_pool_size: usize = 16;
 const default_verify_share: usize = 10;
+const max_resumes = 32;
 
 const Mutation = struct {
     id: []const u8,
@@ -49,6 +52,7 @@ const Outcome = struct {
     pooled_status: ?[]const u8 = null,
     pooled_origin: ?[]const u8 = null,
     pooled_pool: ?[]const u8 = null,
+    schema_refusal: ?[]const u8 = null,
 };
 
 const Options = struct {
@@ -64,6 +68,8 @@ const Options = struct {
     timeout_s: u64 = default_timeout_s,
     jobs: ?usize = null,
     plan_only: bool = false,
+    single: bool = false,
+    compare: bool = false,
 };
 
 const Selected = struct {
@@ -102,6 +108,10 @@ pub fn main(init: std.process.Init) !u8 {
             options.shadow = true;
         } else if (std.mem.eql(u8, arg, "--plan")) {
             options.plan_only = true;
+        } else if (std.mem.eql(u8, arg, "--single")) {
+            options.single = true;
+        } else if (std.mem.eql(u8, arg, "--compare")) {
+            options.compare = true;
         } else if (std.mem.startsWith(u8, arg, "--jobs=")) {
             options.jobs = std.fmt.parseInt(usize, arg["--jobs=".len..], 10) catch return usage();
             if (options.jobs.? == 0) return usage();
@@ -178,6 +188,7 @@ pub fn main(init: std.process.Init) !u8 {
     if (options.list_only) return 0;
 
     var shadow_mismatch: usize = 0;
+    var compare_mismatch: usize = 0;
     const run = if (options.pool or options.shadow or options.plan_only) pooled: {
         const pooled = try runPooled(arena, io, tree, chosen.items, options) orelse return if (options.plan_only) 0 else 4;
         std.debug.print("\npools: {d}, inconclusive: {d}, splits: {d}\n", .{ pooled.pools, pooled.inconclusive, pooled.splits });
@@ -194,7 +205,13 @@ pub fn main(init: std.process.Init) !u8 {
             .rotated = pooled.rotated,
         };
         break :pooled merged;
-    } else try runSerial(arena, io, tree, chosen.items, options);
+    } else if (options.single) try runSerial(arena, io, tree, chosen.items, options) else schemata: {
+        var stats: SchemaStats = .{};
+        const schemata = try runSchemata(arena, io, tree, chosen.items, options, &stats) orelse return 4;
+        printSchemaStats(stats, schemata.outcomes.len);
+        if (options.compare) compare_mismatch = try compareWithSingle(arena, io, tree, chosen.items, schemata, options);
+        break :schemata schemata;
+    };
 
     var report: std.Io.Writer.Allocating = .init(arena);
     var js: std.json.Stringify = .{ .writer = &report.writer };
@@ -204,12 +221,12 @@ pub fn main(init: std.process.Init) !u8 {
     var summary: std.Io.Writer.Allocating = .init(arena);
     try core.writeSummary(&summary.writer, run.outcomes.len, run.failures, skipped_e2e, skipped_survivors, run.rotated);
     std.debug.print("\n{s}\nreport: {s}\n", .{ summary.written(), report_path });
-    if (shadow_mismatch != 0) return 5;
+    if (shadow_mismatch != 0 or compare_mismatch != 0) return 5;
     return if (run.failures == 0) 0 else 1;
 }
 
 fn usage() u8 {
-    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [--jobs=N] [--plan] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [--jobs=N] [--plan] [--single] [--compare] [id...]\n", .{});
     return 2;
 }
 
@@ -530,6 +547,378 @@ fn reportShadow(pooled: []const Outcome, serial: []const Outcome) usize {
     } else {
         std.debug.print("shadow: {d} mutation(s) disagree\n", .{mismatch});
     }
+    return mismatch;
+}
+
+const Plan = union(enum) {
+    schema: schema.Site,
+    fallback: schema.Refusal,
+};
+
+const SchemaStats = struct {
+    in_schema: usize = 0,
+    refused: [@typeInfo(schema.Refusal).@"enum".fields.len]usize = @splat(0),
+    rounds: usize = 0,
+    build_seconds: u64 = 0,
+    baseline_seconds: u64 = 0,
+    run_seconds: u64 = 0,
+    single_seconds: u64 = 0,
+};
+
+fn isExcluded(file: []const u8) bool {
+    for (schema.excluded_files) |excluded| {
+        if (std.mem.eql(u8, excluded, file)) return true;
+    }
+    return false;
+}
+
+fn precheck(m: Mutation, kind: core.Kind) ?schema.Refusal {
+    if (kind != .unit) return .not_a_test_kill;
+    if (!std.mem.endsWith(u8, m.file, ".zig")) return .not_zig;
+    if (isExcluded(m.file)) return .excluded_file;
+    if (m.optimize != null) return .own_optimize;
+    if (std.mem.eql(u8, m.expect_status, "compile_error")) return .expects_compile_error;
+    return null;
+}
+
+fn planSchemata(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Selected) ![]Plan {
+    const plans = try arena.alloc(Plan, chosen.len);
+    for (chosen, plans) |entry, *plan| {
+        plan.* = if (precheck(entry.m, entry.kind)) |why| .{ .fallback = why } else .{ .fallback = .no_hit };
+    }
+    var done: std.ArrayList([]const u8) = .empty;
+    for (chosen, 0..) |entry, i| {
+        if (precheck(entry.m, entry.kind) != null) continue;
+        if (contains(done.items, entry.m.file)) continue;
+        try done.append(arena, entry.m.file);
+        if (!try knownToGitAndClean(arena, io, entry.m.file)) continue;
+        const original = try tree.readFileAlloc(io, entry.m.file, arena, .limited(core.max_source_bytes));
+        var file = try schema.File.parse(arena, original);
+        for (chosen[i..], plans[i..]) |other, *plan| {
+            if (!std.mem.eql(u8, other.m.file, entry.m.file)) continue;
+            if (precheck(other.m, other.kind) != null) continue;
+            _ = core.applyMutation(arena, original, other.m.from, other.m.to, other.m.all) catch continue;
+            plan.* = switch (try file.locate(arena, other.m.from)) {
+                .site => |site| .{ .schema = site },
+                .refused => |why| .{ .fallback = why },
+            };
+        }
+    }
+    return plans;
+}
+
+fn schemaNumber(i: usize) u32 {
+    return @intCast(i + 1);
+}
+
+fn buildSchema(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Selected, plans: []Plan, options: Options, stats: *SchemaStats) !?[]const u8 {
+    var files: std.ArrayList([]const u8) = .empty;
+    for (chosen, plans) |entry, plan| {
+        if (plan == .schema and !contains(files.items, entry.m.file)) try files.append(arena, entry.m.file);
+    }
+    if (files.items.len == 0) return null;
+
+    var backups: std.ArrayList(core.Backup) = .empty;
+    for (files.items) |path| {
+        try backups.append(arena, .{ .path = path, .original = try tree.readFileAlloc(io, path, arena, .limited(core.max_source_bytes)) });
+    }
+
+    while (true) {
+        stats.rounds += 1;
+        var transformed: std.ArrayList(schema.Transformed) = .empty;
+        var written: std.ArrayList(core.Backup) = .empty;
+        errdefer restoreAll(arena, io, tree, backups.items) catch {};
+        for (backups.items) |backup| {
+            var entries: std.ArrayList(schema.Entry) = .empty;
+            for (chosen, plans, 0..) |entry, plan, i| {
+                if (plan != .schema or !std.mem.eql(u8, entry.m.file, backup.path)) continue;
+                try entries.append(arena, .{ .number = schemaNumber(i), .site = plan.schema, .from = entry.m.from, .to = entry.m.to, .all = entry.m.all });
+            }
+            if (entries.items.len == 0) {
+                try transformed.append(arena, .{ .text = @constCast(backup.original), .regions = &.{} });
+                continue;
+            }
+            const t = try schema.transform(arena, backup.original, entries.items);
+            try transformed.append(arena, t);
+            try tree.writeFile(io, .{ .sub_path = backup.path, .data = t.text });
+            try written.append(arena, backup);
+        }
+
+        std.debug.print("schema: building one test binary with {d} mutant(s) in {d} file(s), round {d} ...\n", .{ countSchema(plans), written.items.len, stats.rounds });
+        const started = std.Io.Timestamp.now(io, .awake);
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.appendSlice(arena, &.{ "zig", "build", "test-bin", "--summary", "none" });
+        if (options.jobs) |n| try argv.append(arena, try std.fmt.allocPrint(arena, "-j{d}", .{n}));
+        const built = job.run(arena, io, argv.items, tree_dir, max_output, options.timeout_s);
+        try restoreAll(arena, io, tree, backups.items);
+        stats.build_seconds += secondsSince(io, started);
+        const result = try built;
+        if (exitedZero(result.term)) break;
+
+        const output = try std.mem.concat(arena, u8, &.{ result.stdout, result.stderr });
+        var dropped: std.ArrayList(u32) = .empty;
+        for (try schema.compileErrors(arena, output)) |err| {
+            for (backups.items, transformed.items) |backup, t| {
+                if (!schema.samePath(err.path, backup.path)) continue;
+                try t.mutantsAt(err.line, &dropped, arena);
+            }
+        }
+        if (dropped.items.len == 0) {
+            std.debug.print("schema: the build failed outside any mutant copy:\n{s}\n", .{firstErrorLine(output) orelse "no error line"});
+            return error.SchemaBuildFailed;
+        }
+        for (dropped.items) |number| {
+            const i = number - 1;
+            std.debug.print("schema: {s} does not compile as a copy, it runs on its own\n", .{chosen[i].m.id});
+            plans[i] = .{ .fallback = .compile_error };
+        }
+        if (countSchema(plans) == 0) return null;
+    }
+
+    try std.Io.Dir.cwd().createDirPath(io, schema_dir);
+    const exe_name = if (@import("builtin").os.tag == .windows) "test-all.exe" else "test-all";
+    const from_path = try std.fmt.allocPrint(arena, "zig-out/bin/{s}", .{exe_name});
+    const to_path = schema_dir ++ "/" ++ exe_name;
+    try tree.copyFile(from_path, std.Io.Dir.cwd(), to_path, io, .{});
+    return try std.Io.Dir.cwd().realPathFileAlloc(io, to_path, arena);
+}
+
+fn countSchema(plans: []const Plan) usize {
+    var n: usize = 0;
+    for (plans) |plan| {
+        if (plan == .schema) n += 1;
+    }
+    return n;
+}
+
+fn secondsSince(io: std.Io, started: std.Io.Timestamp) u64 {
+    const ns = started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
+    return @intCast(@divTrunc(@max(ns, 0), std.time.ns_per_s));
+}
+
+fn filtersOf(m: Mutation) []const []const u8 {
+    return if (m.filter.len != 0) m.filter else m.kills;
+}
+
+fn schemaArgv(gpa: Allocator, exe: []const u8, number: u32, filters: []const []const u8, skips: []const []const u8, jobs: ?usize) ![]const []const u8 {
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(gpa, &.{ exe, "--slow" });
+    if (number != 0) {
+        try argv.appendSlice(gpa, &.{ "--mutant", try std.fmt.allocPrint(gpa, "{d}", .{number}), "--verbose" });
+    }
+    if (jobs) |n| try argv.appendSlice(gpa, &.{ "--jobs", try std.fmt.allocPrint(gpa, "{d}", .{n}) });
+    for (filters) |f| try argv.appendSlice(gpa, &.{ "--filter", f });
+    for (skips) |name| try argv.appendSlice(gpa, &.{ "--skip", name });
+    return argv.items;
+}
+
+fn schemaBaseline(arena: Allocator, io: std.Io, exe: []const u8, chosen: []const Selected, plans: []const Plan, options: Options) !bool {
+    var filters: std.ArrayList([]const u8) = .empty;
+    var everything = false;
+    for (chosen, plans) |entry, plan| {
+        if (plan != .schema) continue;
+        const own = filtersOf(entry.m);
+        if (own.len == 0) everything = true;
+        for (own) |f| {
+            if (!contains(filters.items, f)) try filters.append(arena, f);
+        }
+    }
+    if (everything) filters.clearRetainingCapacity();
+    std.debug.print("schema: baseline, {d} filter(s) with no mutant active ...\n", .{filters.items.len});
+    const argv = try schemaArgv(arena, exe, 0, filters.items, &.{}, options.jobs orelse 4);
+    const result = job.run(arena, io, argv, tree_dir, max_output, options.timeout_s) catch |err| {
+        std.debug.print("schema: baseline did not finish: {s}\n", .{@errorName(err)});
+        return false;
+    };
+    if (exitedZero(result.term)) {
+        std.debug.print("schema: baseline is green\n", .{});
+        return true;
+    }
+    const output = try std.mem.concat(arena, u8, &.{ result.stdout, result.stderr });
+    for (try core.failedTests(arena, output)) |name| std.debug.print("schema: baseline failure: {s}\n", .{name});
+    std.debug.print("schema: baseline is not green, stopping\n{s}\n", .{firstErrorLine(output) orelse "no error line"});
+    return false;
+}
+
+fn judge(gpa: Allocator, outcome: *Outcome, m: Mutation, code: u8, output: []const u8, crashed: []const []const u8) !void {
+    var failed: std.ArrayList([]const u8) = .empty;
+    try failed.appendSlice(gpa, try core.failedTests(gpa, output));
+    var status = core.classify(.unit, code, output);
+    for (crashed) |name| {
+        if (!contains(failed.items, name)) try failed.append(gpa, name);
+        if (status != .compile_error) status = .killed;
+    }
+    outcome.status = @tagName(status);
+    outcome.failed_tests = failed.items;
+    outcome.ok = std.mem.eql(u8, outcome.status, m.expect_status);
+    if (outcome.ok and status == .killed) {
+        if (core.missingKill(outcome.failed_tests, m.kills)) |missing| {
+            outcome.ok = false;
+            outcome.missing_kill = missing;
+        }
+    }
+    if (outcome.ok and status == .killed and m.exact) {
+        if (core.unexpectedKill(outcome.failed_tests, m.kills)) |extra| {
+            outcome.ok = false;
+            outcome.unexpected_kill = extra;
+        }
+    }
+    if (!outcome.ok and status == .other_error) outcome.detail = firstErrorLine(output);
+}
+
+fn runSchemaMutant(gpa: Allocator, io: std.Io, exe: []const u8, m: Mutation, number: u32, options: Options) !Outcome {
+    var outcome: Outcome = .{
+        .id = m.id,
+        .file = m.file,
+        .expect = m.expect,
+        .expected_status = m.expect_status,
+        .status = "refused",
+        .ok = false,
+        .origin = "schema",
+    };
+    var crashed: std.ArrayList([]const u8) = .empty;
+    var output: std.ArrayList(u8) = .empty;
+    var code: u8 = 0;
+    const started = std.Io.Timestamp.now(io, .awake);
+    while (true) {
+        const argv = try schemaArgv(gpa, exe, number, filtersOf(m), crashed.items, null);
+        const result = job.run(gpa, io, argv, tree_dir, max_output, core.timeoutFor(m.timeout_s, options.timeout_s)) catch |err| switch (err) {
+            error.Timeout => {
+                outcome.status = "timeout";
+                outcome.ok = std.mem.eql(u8, m.expect_status, "timeout");
+                outcome.seconds = secondsSince(io, started);
+                return outcome;
+            },
+            else => return err,
+        };
+        const this_output = try std.mem.concat(gpa, u8, &.{ result.stdout, result.stderr });
+        try output.appendSlice(gpa, this_output);
+        const this_code: u8 = switch (result.term) {
+            .exited => |c| c,
+            else => 255,
+        };
+        if (code == 0) code = this_code;
+        if (this_code == 0 or this_code == 1 or this_code == 2) break;
+        const name = core.unfinishedTest(this_output) orelse break;
+        if (contains(crashed.items, name) or crashed.items.len >= max_resumes) break;
+        try crashed.append(gpa, name);
+    }
+    outcome.seconds = secondsSince(io, started);
+    try judge(gpa, &outcome, m, if (crashed.items.len != 0) 1 else code, output.items, crashed.items);
+    return outcome;
+}
+
+const SchemaWork = struct {
+    io: std.Io,
+    exe: []const u8,
+    chosen: []const Selected,
+    items: []const usize,
+    slots: []?Outcome,
+    options: Options,
+    next: std.atomic.Value(usize) = .init(0),
+    mutex: std.Io.Mutex = .init,
+    done: usize = 0,
+};
+
+fn schemaWorker(work: *SchemaWork) void {
+    const gpa = std.heap.smp_allocator;
+    while (true) {
+        const k = work.next.fetchAdd(1, .monotonic);
+        if (k >= work.items.len) return;
+        const i = work.items[k];
+        const m = work.chosen[i].m;
+        const outcome = runSchemaMutant(gpa, work.io, work.exe, m, schemaNumber(i), work.options) catch |err| Outcome{
+            .id = m.id,
+            .file = m.file,
+            .expect = m.expect,
+            .expected_status = m.expect_status,
+            .status = "harness_error",
+            .ok = false,
+            .origin = "schema",
+            .detail = @errorName(err),
+        };
+        work.slots[i] = outcome;
+        work.mutex.lockUncancelable(work.io);
+        defer work.mutex.unlock(work.io);
+        work.done += 1;
+        std.debug.print("[{d}/{d}] ", .{ work.done, work.items.len });
+        printOutcome(outcome);
+    }
+}
+
+fn runSchemata(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Selected, options: Options, stats: *SchemaStats) !?Run {
+    const plans = try planSchemata(arena, io, tree, chosen);
+    const exe = try buildSchema(arena, io, tree, chosen, plans, options, stats);
+
+    var items: std.ArrayList(usize) = .empty;
+    for (plans, 0..) |plan, i| {
+        switch (plan) {
+            .schema => try items.append(arena, i),
+            .fallback => |why| stats.refused[@intFromEnum(why)] += 1,
+        }
+    }
+    stats.in_schema = items.items.len;
+    const slots = try arena.alloc(?Outcome, chosen.len);
+    @memset(slots, null);
+
+    if (exe) |path| {
+        const baseline_started = std.Io.Timestamp.now(io, .awake);
+        const green = try schemaBaseline(arena, io, path, chosen, plans, options);
+        stats.baseline_seconds = secondsSince(io, baseline_started);
+        if (!green) return null;
+
+        const workers = @max(@as(usize, 1), @min(options.jobs orelse 4, items.items.len));
+        std.debug.print("schema: {d} mutant(s), {d} at a time, each in its own process\n", .{ items.items.len, workers });
+        var work: SchemaWork = .{ .io = io, .exe = path, .chosen = chosen, .items = items.items, .slots = slots, .options = options };
+        const started = std.Io.Timestamp.now(io, .awake);
+        const threads = try arena.alloc(std.Thread, workers);
+        for (threads) |*t| t.* = try std.Thread.spawn(.{}, schemaWorker, .{&work});
+        for (threads) |t| t.join();
+        stats.run_seconds = secondsSince(io, started);
+    }
+
+    const single_started = std.Io.Timestamp.now(io, .awake);
+    var outcomes: std.ArrayList(Outcome) = .empty;
+    var failures: usize = 0;
+    for (chosen, plans, 0..) |entry, plan, i| {
+        const outcome = slots[i] orelse blk: {
+            std.debug.print("running {s} on {s} on its own ({t}) ...\n", .{ entry.m.id, entry.m.file, plan.fallback });
+            var single = try runOne(arena, io, tree, entry.m, entry.kind, options, "single", null);
+            single.schema_refusal = @tagName(plan.fallback);
+            printOutcome(single);
+            break :blk single;
+        };
+        if (!outcome.ok) failures += 1;
+        try outcomes.append(arena, outcome);
+    }
+    stats.single_seconds = secondsSince(io, single_started);
+    return .{ .outcomes = try outcomes.toOwnedSlice(arena), .failures = failures };
+}
+
+fn printSchemaStats(stats: SchemaStats, total: usize) void {
+    std.debug.print("\nschema: {d} of {d} mutation(s) ran from one binary; build {d}s in {d} round(s), baseline {d}s, mutants {d}s, on their own {d}s\n", .{
+        stats.in_schema, total, stats.build_seconds, stats.rounds, stats.baseline_seconds, stats.run_seconds, stats.single_seconds,
+    });
+    for (stats.refused, 0..) |count, i| {
+        if (count == 0) continue;
+        std.debug.print("  on their own, {t}: {d}\n", .{ @as(schema.Refusal, @enumFromInt(i)), count });
+    }
+}
+
+fn compareWithSingle(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Selected, run: Run, options: Options) !usize {
+    var mismatch: usize = 0;
+    var compared: usize = 0;
+    for (chosen, run.outcomes) |entry, outcome| {
+        if (!std.mem.eql(u8, outcome.origin, "schema")) continue;
+        compared += 1;
+        std.debug.print("compare {d}: {s} on its own ...\n", .{ compared, entry.m.id });
+        const single = try runOne(arena, io, tree, entry.m, entry.kind, options, "single", null);
+        if (std.mem.eql(u8, single.status, outcome.status) and single.ok == outcome.ok) continue;
+        mismatch += 1;
+        std.debug.print("compare mismatch {s}: schema={s} (ok={}) single={s} (ok={})\n", .{ entry.m.id, outcome.status, outcome.ok, single.status, single.ok });
+        printOutcome(single);
+    }
+    std.debug.print("compare: {d} mutation(s) compared, {d} disagree\n", .{ compared, mismatch });
     return mismatch;
 }
 
