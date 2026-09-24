@@ -238,13 +238,14 @@ class shorthand used as a range end point (`[\d-z]`), is refused with `RegexSynt
 |---|---|
 | query text | 4 KB including `q:`, as for `cmd:` (`QueryTooLong`) |
 | captures | at most 8 per pattern, none repeated with `+` or `*`, none on a group or alternation with `+` or `*` at its own level |
-| operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited) and the other predicates (1 per capture visited, and 1 plus the bytes compared for each comparison) |
+| operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited and 1 per probe into a character class) and the other predicates (1 per capture visited, also when the match is reported, and 1 plus the bytes compared for each comparison) |
+| operations per `emetgate_scan` call | 100,000,000 over all files; each file still gets at most 20,000,000 of it |
 | in-progress matches | 1024 |
 
 | Result | Meaning |
 |---|---|
 | a `@violation` node inside the scope | **violation**, reason `rule_violation` |
-| operation budget spent, match limit passed, query does not compile for the file's language, malformed query in a hand-edited ledger | **not a verdict**: reason `rule_check_crashed`, detail `query_budget_exceeded`, `query_match_limit_exceeded`, `query_not_for_language` or `query_malformed` |
+| operation budget spent, match limit passed, query does not compile for the file's language, malformed query in a hand-edited ledger | **not a verdict**: reason `rule_check_crashed`, detail `query_budget_exceeded`, `query_match_limit_exceeded`, `call_budget_exceeded` (the `emetgate_scan` call budget ran out), `query_not_for_language` or `query_malformed` |
 
 The cursor stops as soon as the budget runs out or the match limit is passed. When tree-sitter
 drops an in-progress match past the limit, the result could be missing a violation, so it is
