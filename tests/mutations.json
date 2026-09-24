@@ -4106,7 +4106,7 @@
       "id": "RN1-shard-selection-off-by-one",
       "file": "tools/test_runner.zig",
       "from": "return ordinal % shard.count == shard.index - 1;",
-      "to": "return ordinal % shard.count == shard.index % shard.count;",
+      "to": "return ordinal % shard.count == shard.index;",
       "kills": [
         "runner: the shards of any count together select every matching test exactly once",
         "runner: the shards of the test binary together list every test exactly once"
@@ -4183,6 +4183,15 @@
       "to": "",
       "kills": [
         "harness: a filter that matches no test is no_tests, not a kill or an error"
+      ]
+    },
+    {
+      "id": "RN10-failure-line-ignored-on-exit-zero",
+      "file": "tools/mutate/core.zig",
+      "from": "        if (hasFailedTestLine(output)) return .killed;\n        const summary",
+      "to": "        const summary",
+      "kills": [
+        "harness: a failed test line is a kill even when the run exits 0"
       ]
     }
   ]

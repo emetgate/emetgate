@@ -123,6 +123,7 @@ pub const no_match_marker = "error: no test matches the filter(s)";
 pub fn classify(kind: Kind, exit_code: u8, output: []const u8) Status {
     if (exit_code == 0) {
         if (kind == .e2e) return .survived;
+        if (hasFailedTestLine(output)) return .killed;
         const summary = parseSummary(output) orelse return .no_tests;
         return if (summary.total == 0) .no_tests else .survived;
     }

@@ -92,6 +92,12 @@ test "harness: a filter that matches no test is no_tests, not a kill or an error
     try testing.expectEqual(core.Status.no_tests, core.classify(.unit, 2, "error: no test matches the filter(s): \"gone\"\n"));
 }
 
+test "harness: a failed test line is a kill even when the run exits 0" {
+    const output = "error: 'tests.symbol.test.refs round-trip' failed: TestUnexpectedResult\n1/2 tests passed; 0 skipped; 1 failed; 0 leaked; mutant 0; shard 1/1\n";
+    try testing.expectEqual(core.Status.killed, core.classify(.unit, 0, output));
+    try testing.expectEqual(core.Status.survived, core.classify(.unit, 0, "2/2 tests passed; 0 skipped; 0 failed; 0 leaked; mutant 0; shard 1/1\n"));
+}
+
 test "harness: e2e-lockdown failures are killed" {
     try testing.expectEqual(core.Status.killed, core.classify(.e2e, 1, "FAIL: tool outside the lockdown allow-list: Bash\ne2e-lockdown: 1 failure(s)\n"));
     try testing.expectEqual(core.Status.survived, core.classify(.e2e, 0, "e2e-lockdown: passed\n"));
