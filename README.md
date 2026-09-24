@@ -241,11 +241,12 @@ class shorthand used as a range end point (`[\d-z]`), is refused with `RegexSynt
 | operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited and 1 per probe into a character class) and the other predicates (1 per capture visited, also when the match is reported, and 1 plus the bytes compared for each comparison) |
 | operations per `emetgate_scan` call | 100,000,000 over all files; each file still gets at most 20,000,000 of it |
 | in-progress matches | 1024 |
+| tree depth times pattern depth | 6,000 (`query_depth_exceeded`); the tree depth is that of the deepest node the scope reaches, the pattern depth is how deeply the query's parentheses and brackets nest |
 
 | Result | Meaning |
 |---|---|
 | a `@violation` node inside the scope | **violation**, reason `rule_violation` |
-| operation budget spent, match limit passed, query does not compile for the file's language, malformed query in a hand-edited ledger | **not a verdict**: reason `rule_check_crashed`, detail `query_budget_exceeded`, `query_match_limit_exceeded`, `call_budget_exceeded` (the `emetgate_scan` call budget ran out), `query_not_for_language` or `query_malformed` |
+| operation budget spent, match limit passed, tree too deep for the query, query does not compile for the file's language, malformed query in a hand-edited ledger | **not a verdict**: reason `rule_check_crashed`, detail `query_budget_exceeded`, `query_match_limit_exceeded`, `query_depth_exceeded`, `call_budget_exceeded` (the `emetgate_scan` call budget ran out), `query_not_for_language` or `query_malformed` |
 
 The cursor stops as soon as the budget runs out or the match limit is passed. When tree-sitter
 drops an in-progress match past the limit, the result could be missing a violation, so it is
@@ -278,10 +279,34 @@ that grows faster than n^1.35. On a ReleaseSafe build, 123 of the 132 grow linea
 other 9 are all on a deep left-leaning chain (`a + a + ... + a` or `a.b.b...b`, 16,000 levels):
 a pattern nested three levels deep (`(_ (_ (_) @violation))`, 10.9 s at 16,000), six levels
 deep (past 30 s), or anchored to a last child (`(_ (_) @violation .)`, 3.9 s). That time is
-spent inside tree-sitter's query cursor, grows with the depth of the tree, and is not stopped by
-the operation budget or the match limit; ordinary code is not that deep. Two costs of emetgate's
-own that the run found are fixed: violations were placed by rescanning the file from the
-start, and their text was copied whole, both n^2 on these inputs.
+spent inside tree-sitter's query cursor, where the operation budget and the match limit do not
+reach. Two costs of emetgate's own that the run found are fixed: violations were placed by
+rescanning the file from the start, and their text was copied whole, both n^2 on these inputs.
+
+The depth limit answers the rest. Measured on a ReleaseSafe build over `a + a + ... + a`, with
+`emetgate scan --check` on a file in the repository; `emetgate_scan` over MCP took the same
+time within 25%. The times include the process start of about 0.2 s.
+
+| query | 1,000 levels | 4,000 | 16,000 | 64,000 |
+|---|---|---|---|---|
+| `(call_expression) @violation` | 0.23 s | 0.24 s | 0.22 s | 0.39 s |
+| `(_ (_ (_) @violation))` | 0.24 s | 1.4 s | 13.9 s | past 120 s |
+| `(_ (_) @violation .)` | 0.23 s | 0.66 s | 5.4 s | past 120 s |
+
+The depth of the query multiplies it. On 1,000 levels a pattern nested 6 deep took 0.61 s, 12
+deep 1.7 s, 50 deep 19.6 s and 200 deep more than 60 s; a model can send any of them through
+`emetgate_scan`. Across these runs the time follows the product of the two depths: 0.6 to 0.9 s
+at 6,000 and 1.4 to 1.8 s at 12,000. A run whose tree depth times pattern depth passes 6,000 is
+refused before the cursor starts, with `query_depth_exceeded`: a query of depth 1 may meet 6,000
+levels, one of depth 3 2,000 and one of depth 6 1,000. The tree depth is counted with a
+tree-sitter tree cursor, without recursion, only through the nodes that reach the scope, and the
+count stops at the limit. With the limit, all four queries above (the three in the table and
+the one nested 6 deep) are refused at 16,000 and 64,000 levels in 0.21 to 0.33 s, process start
+included, through `scan` and through `emetgate_scan`, with a peak working set of 40 to 44 MB
+at 64,000 levels.
+
+The proposal itself also grows with depth before any rule runs: `emetgate mutate` took 0.33 s
+on a body 4,000 levels deep and 6.3 s on one 16,000 levels deep (ReleaseSafe, no rules).
 
 ### Rules are readable by the model, never writable
 
