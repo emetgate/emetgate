@@ -235,6 +235,12 @@ test "with --mirror, a changed symbol body is reported again in full with its ne
     defer changed.deinit();
     try testing.expect(std.mem.indexOf(u8, changed.text, "\"body\":\"") != null);
     try testing.expect(std.mem.indexOf(u8, changed.text, "return a + 1") != null);
+
+    var settled = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer settled.deinit();
+    var settled_body = try settled.payload();
+    defer settled_body.deinit();
+    try testing.expectEqualStrings("unchanged", settled_body.value.object.get("status").?.string);
 }
 
 test "list returns only tracked files under the requested directory" {
