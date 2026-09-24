@@ -199,13 +199,17 @@ test "zig: a function nested in a struct literal is still CAS-addressable by its
     try testing.expect(std.mem.indexOf(u8, applied.snapshot.source, "return 2;") != null);
 }
 
-test "zig: the skeleton hides bodies as bodyless declarations and is a fixed point" {
+test "zig: the skeleton hides function bodies, leaves a test block untouched, and is a fixed point" {
     var case = try Case.init(
         \\pub fn api(a: i32) i32 {
         \\  return a + helper(a);
         \\}
         \\fn helper(a: i32) i32 {
         \\  return a * 2;
+        \\}
+        \\test "helper doubles" {
+        \\  const std = @import("std");
+        \\  try std.testing.expectEqual(@as(i32, 4), helper(2));
         \\}
         \\
     );
@@ -215,6 +219,7 @@ test "zig: the skeleton hides bodies as bodyless declarations and is a fixed poi
     defer testing.allocator.free(first);
     try testing.expect(first.len < case.snapshot.source.len);
     try testing.expect(std.mem.indexOf(u8, first, "pub fn api(a: i32) i32;") != null);
+    try testing.expect(std.mem.indexOf(u8, first, "expectEqual(@as(i32, 4), helper(2));") != null);
 
     const reparsed = try Snapshot.fromSource(case.runtime, zigProfile(), try testing.allocator.dupe(u8, first));
     defer reparsed.destroy();

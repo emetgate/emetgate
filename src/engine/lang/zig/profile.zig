@@ -16,7 +16,6 @@ fn grammar() *const ts.Language {
 
 const function_nodes = [_]FunctionNode{
     .{ .node = "function_declaration", .kind = .declaration },
-    .{ .node = "test_declaration", .kind = .expression },
 };
 
 const never_matching_literal_values: LiteralValues = .{
