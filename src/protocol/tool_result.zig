@@ -40,3 +40,19 @@ pub fn getString(value: Value, key: []const u8) ?[]const u8 {
         else => null,
     };
 }
+
+pub fn getInt(value: Value, key: []const u8) ?i64 {
+    const field = getField(value, key) orelse return null;
+    return switch (field) {
+        .integer => |n| n,
+        else => null,
+    };
+}
+
+pub fn getStringArray(value: Value, key: []const u8) ?[]const Value {
+    const field = getField(value, key) orelse return null;
+    return switch (field) {
+        .array => |a| a.items,
+        else => null,
+    };
+}

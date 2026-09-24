@@ -2,6 +2,7 @@ const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const skeleton = @import("../engine/skeleton.zig");
+const line_range = @import("../engine/line_range.zig");
 const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
@@ -24,6 +25,8 @@ const ToolResult = tool_result.ToolResult;
 const requireString = tool_result.requireString;
 const getField = tool_result.getField;
 const getString = tool_result.getString;
+const getInt = tool_result.getInt;
+const getStringArray = tool_result.getStringArray;
 const success = tool_result.success;
 const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
@@ -136,12 +139,30 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const file = try requireString(args, "file");
-    const sym = try requireString(args, "symbol");
     event.label = "read_symbol";
     event.file = file;
-    event.symbol = sym;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
+    const arguments = args.?;
+    const line_start = getInt(arguments, "line_start");
+    const line_end = getInt(arguments, "line_end");
+    const symbols = getStringArray(arguments, "symbols");
+    if (line_start != null or line_end != null) {
+        renderSymbolRange(gpa, io, runtime, root, file, line_start, line_end, &buffer.writer, event) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            return failure(gpa, &buffer, err, event);
+        };
+        return success(gpa, &buffer);
+    }
+    if (symbols) |list| {
+        renderSymbolBodies(gpa, io, runtime, root, file, list, &buffer.writer, event) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            return failure(gpa, &buffer, err, event);
+        };
+        return success(gpa, &buffer);
+    }
+    const sym = try requireString(args, "symbol");
+    event.symbol = sym;
     renderSymbolBody(gpa, io, runtime, root, file, sym, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
@@ -161,6 +182,68 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     event.chars_emetgate = body.len;
     event.chars_fullfile = snapshot.source.len;
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
+}
+
+fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, w: *Writer, event: *telemetry.Event) !void {
+    if (symbols.len == 0) return error.MissingArgument;
+    const snapshot = try loadJailed(gpa, io, runtime, root, file);
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
+    const entries = try gpa.alloc(wire.SymbolEntry, symbols.len);
+    defer gpa.free(entries);
+    var chars: usize = 0;
+    for (symbols, 0..) |item, i| {
+        const sym = switch (item) {
+            .string => |s| s,
+            else => return error.MissingArgument,
+        };
+        const ref = try symbol.Ref.parse(gpa, sym);
+        defer ref.deinit(gpa);
+        const found = try table.resolve(ref);
+        const body = snapshot.tree.text(found.body);
+        entries[i] = .{ .ref = sym, .hash = found.hash, .body = body };
+        chars += body.len;
+    }
+    event.chars_emetgate = chars;
+    event.chars_fullfile = snapshot.source.len;
+    try wire.writeSymbolBodies(w, file, entries);
+}
+
+fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, w: *Writer, event: *telemetry.Event) !void {
+    const start = line_start orelse return error.MissingArgument;
+    const end = line_end orelse return error.MissingArgument;
+    if (start < 1 or end < 1) return error.InvalidLineRange;
+    const snapshot = try loadJailed(gpa, io, runtime, root, file);
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
+    const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
+    const matched = try line_range.symbolsOverlapping(gpa, table.*, requested);
+    defer gpa.free(matched);
+    const entries = try gpa.alloc(wire.RangeEntry, matched.len);
+    defer gpa.free(entries);
+    const ref_text = try gpa.alloc([]u8, matched.len);
+    defer {
+        for (ref_text) |t| gpa.free(t);
+        gpa.free(ref_text);
+    }
+    var chars: usize = 0;
+    for (matched, 0..) |found, i| {
+        ref_text[i] = try std.fmt.allocPrint(gpa, "{f}", .{found.ref});
+        const text = snapshot.source[found.declaration.start..found.declaration.end];
+        const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
+        const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
+        entries[i] = .{
+            .ref = ref_text[i],
+            .hash = found.hash,
+            .text = text,
+            .start_line = @intCast(start_line),
+            .end_line = @intCast(end_line),
+        };
+        chars += text.len;
+    }
+    event.chars_emetgate = chars;
+    event.chars_fullfile = snapshot.source.len;
+    try wire.writeSymbolRange(w, file, @intCast(start), @intCast(end), entries);
 }
 
 fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
