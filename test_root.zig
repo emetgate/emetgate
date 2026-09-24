@@ -30,5 +30,5 @@ test {
     if (comptime runs("rest")) _ = @import("tests/memory.zig");
     if (comptime runs("rest")) _ = @import("tests/lang/conformance.zig");
     if (comptime runs("rest")) _ = @import("tests/git_fixture_test.zig");
-    if (comptime runs("rest")) _ = @import("tests/suites.zig");
+    _ = @import("tests/suites.zig");
 }
