@@ -2525,8 +2525,19 @@
       "from": "    if (std.mem.eql(u8, name, \"emetgate_scan\")) return callScan(gpa, io, runtime, args, event, policy.root);\n",
       "to": "",
       "kills": [
-        "scan tool: a clean check reports no violations"
+        "scan tool: a call without check or with a non-string where is a missing argument",
+        "scan tool: a malformed check is refused by its existing error name",
+        "scan tool: an invalid where is refused by its existing error name",
+        "scan tool: violations are reported with the scan json fields",
+        "scan tool: a clean check reports no violations",
+        "scan tool: more violations than the cap are cut and the report says so",
+        "scan tool: exactly the cap is not cut",
+        "scan tool: a call creates no workspace and leaves the ledger untouched",
+        "scan tool: a check that cannot run on a file is an error result and a failed event, as the CLI exits 38",
+        "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs",
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
       ],
+      "exact": true,
       "filter": [
         "scan tool"
       ]
