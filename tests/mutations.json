@@ -3746,6 +3746,24 @@
         "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
         "the line index gives the same line and column as a scan from the start, at every offset"
       ]
+    },
+    {
+      "id": "RX1-class-probe-uncharged",
+      "file": "src/engine/regex.zig",
+      "from": "    while (lo < hi) {\n        try spend(budget);\n",
+      "to": "    while (lo < hi) {\n        _ = budget;\n",
+      "kills": [
+        "a class of many ranges is searched in logarithmic steps and every step is charged"
+      ]
+    },
+    {
+      "id": "RX2-class-search-wrong-half",
+      "file": "src/engine/regex.zig",
+      "from": "        if (code_point < ranges[mid].lo) {\n",
+      "to": "        if (code_point > ranges[mid].lo) {\n",
+      "kills": [
+        "a class of many ranges is searched in logarithmic steps and every step is charged"
+      ]
     }
   ]
 }
