@@ -3764,6 +3764,61 @@
       "kills": [
         "a class of many ranges is searched in logarithmic steps and every step is charged"
       ]
+    },
+    {
+      "id": "SC1-scan-runs-tracked-ledger-queries",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;\n",
+      "to": "    if (!try rules.ledgerTracked(gpa, io, root_abs) or true) return unsplit;\n",
+      "kills": [
+        "scan trust: a committed ledger's q: rules do not run without --allow-repo-memory and each is listed as not run"
+      ]
+    },
+    {
+      "id": "SC2-scan-ignores-allow-repo-memory",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (options.source != .ledger or options.allow_repo_memory) return unsplit;\n",
+      "to": "    if (options.source != .ledger) return unsplit;\n",
+      "kills": [
+        "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag"
+      ]
+    },
+    {
+      "id": "SC3-scan-distrusts-untracked-ledger",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;\n",
+      "to": "    _ = try rules.ledgerTracked(gpa, io, root_abs);\n",
+      "kills": [
+        "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag"
+      ]
+    },
+    {
+      "id": "SC4-scan-skips-untrusted-silently",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    for (untrusted) |rule| try out.print(\"warning: rule {s} ({s}) not run: untrusted ledger, it is committed to the repository; pass --allow-repo-memory to run it\\n\", .{ rule.id, rule.check });\n",
+      "to": "    for (untrusted) |rule| if (false) try out.print(\"warning: rule {s} ({s}) not run: untrusted ledger, it is committed to the repository; pass --allow-repo-memory to run it\\n\", .{ rule.id, rule.check });\n",
+      "kills": [
+        "scan trust: a committed ledger's q: rules do not run without --allow-repo-memory and each is listed as not run"
+      ]
+    },
+    {
+      "id": "SC5-scan-distrusts-operator-check",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    if (options.source != .ledger or options.allow_repo_memory) return unsplit;\n",
+      "to": "    if (options.allow_repo_memory) return unsplit;\n",
+      "kills": [
+        "scan trust: an operator's own --check query runs next to a committed ledger without the flag"
+      ]
+    },
+    {
+      "id": "SC6-scan-flag-not-parsed",
+      "file": "src/protocol/scan_command.zig",
+      "from": "                options.allow_repo_memory = true;\n",
+      "to": "                options.allow_repo_memory = false;\n",
+      "kills": [
+        "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag",
+        "scan trust: --allow-repo-memory twice is a usage error"
+      ]
     }
   ]
 }
