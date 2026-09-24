@@ -3906,6 +3906,33 @@
       "kills": [
         "suites: the guards are imported outside the runs switch, so every suite runs them"
       ]
+    },
+    {
+      "id": "MR1-mirror-keeps-a-changed-file",
+      "file": "tools/mutate/core.zig",
+      "from": "            if (std.mem.eql(u8, have, want)) continue;\n",
+      "to": "            if (have.len == want.len) continue;\n",
+      "kills": [
+        "harness: a mutation left in the mirror by a killed run never reaches the working tree and the next sync undoes it"
+      ]
+    },
+    {
+      "id": "MR2-mirror-keeps-a-removed-file",
+      "file": "tools/mutate/core.zig",
+      "from": "        } else mirror.deleteFile(io, path) catch {};\n",
+      "to": "        } else {}\n",
+      "kills": [
+        "harness: a mutation left in the mirror by a killed run never reaches the working tree and the next sync undoes it"
+      ]
+    },
+    {
+      "id": "MR3-legacy-record-kept",
+      "file": "tools/mutate/core.zig",
+      "from": "    try work.deleteFile(io, legacy_manifest);\n",
+      "to": "    try work.access(io, legacy_manifest, .{});\n",
+      "kills": [
+        "harness: a recovery record left by an older run on another branch is dropped without touching a file"
+      ]
     }
   ]
 }
