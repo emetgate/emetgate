@@ -9,6 +9,7 @@ pub const symbol = src.symbol;
 pub const skeleton = src.skeleton;
 pub const cas = src.cas;
 pub const boundedness = src.boundedness;
+pub const symmetry = src.symmetry;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
@@ -55,6 +56,9 @@ test {
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_crash.zig");
     _ = @import("tests/batch_crash_tool.zig");
+    _ = @import("tests/batch_create_crash.zig");
+    _ = @import("tests/batch_create_tool.zig");
+    _ = @import("tests/redteam_batch_create.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
