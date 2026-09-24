@@ -4387,6 +4387,37 @@
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
       ]
+    },
+    {
+      "id": "TB1-try-batch-prepares-without-batch",
+      "file": "src/platform/batch.zig",
+      "from": "p.base_hash, journal_dir, &batch);",
+      "to": "p.base_hash, journal_dir, null);",
+      "kills": [
+        "batch crash through the tool: a crash right after the commit record recovers every file new",
+        "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
+      ]
+    },
+    {
+      "id": "TB2-try-batch-commits-without-record",
+      "file": "src/platform/batch.zig",
+      "from": "try disk.commitBatch(pendings, null, null, &batch, options.commit_step);",
+      "to": "try disk.commitBatch(pendings, null, null, null, options.commit_step);",
+      "kills": [
+        "batch crash through the tool: a crash right after the commit record recovers every file new",
+        "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
+      ]
+    },
+    {
+      "id": "TB3-try-batch-drops-commit-step",
+      "file": "src/platform/batch.zig",
+      "from": "try disk.commitBatch(pendings, null, null, &batch, options.commit_step);",
+      "to": "try disk.commitBatch(pendings, null, null, &batch, null);",
+      "kills": [
+        "batch crash through the tool: a crash right after the commit record recovers every file new",
+        "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new",
+        "batch crash through the tool: a crash during the swaps recovers every file old"
+      ]
     }
   ]
 }
