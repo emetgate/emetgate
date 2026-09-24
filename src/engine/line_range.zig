@@ -21,7 +21,7 @@ pub fn byteRangeForLines(source: []const u8, line_start: u32, line_end: u32) Err
     return .{ .start = start.?, .end = @intCast(source.len) };
 }
 
-fn overlaps(a: symbol.Span, b: symbol.Span) bool {
+pub fn overlaps(a: symbol.Span, b: symbol.Span) bool {
     return a.start < b.end and b.start < a.end;
 }
 
@@ -52,6 +52,16 @@ test "byteRangeForLines rejects an inverted or zero-based range" {
 test "byteRangeForLines rejects a start line past the end of the file" {
     const source = "aaa\nbbb\n";
     try testing.expectError(error.LineOutOfRange, byteRangeForLines(source, 10, 12));
+}
+
+test "overlaps rejects two spans that only touch at a shared boundary point" {
+    try testing.expect(!overlaps(.{ .start = 0, .end = 5 }, .{ .start = 5, .end = 10 }));
+    try testing.expect(!overlaps(.{ .start = 5, .end = 10 }, .{ .start = 0, .end = 5 }));
+}
+
+test "overlaps accepts two spans that share at least one byte" {
+    try testing.expect(overlaps(.{ .start = 0, .end = 6 }, .{ .start = 5, .end = 10 }));
+    try testing.expect(overlaps(.{ .start = 2, .end = 8 }, .{ .start = 2, .end = 8 }));
 }
 
 test "byteRangeForLines clamps the end of the last line to the end of the file" {
