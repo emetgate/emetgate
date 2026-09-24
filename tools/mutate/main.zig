@@ -7,6 +7,8 @@ const Allocator = std.mem.Allocator;
 const spec_path = "tests/mutations.json";
 const work_dir = ".zig-cache/mutate";
 const report_path = work_dir ++ "/report.json";
+const tree_dir = work_dir ++ "/tree";
+const tree_list = work_dir ++ "/tree.list";
 const max_output = 16 * 1024 * 1024;
 const default_timeout_s: u64 = 900;
 const default_pool_size: usize = 16;
@@ -124,12 +126,13 @@ pub fn main(init: std.process.Init) !u8 {
     };
     defer lock.close(io);
 
-    var journal_dir = try cwd.openDir(io, work_dir, .{});
-    defer journal_dir.close(io);
-    const journal: core.Journal = .{ .dir = journal_dir, .io = io };
-    if (try journal.recover(arena, cwd)) |restored| {
-        for (restored) |path| std.debug.print("restored {s} left mutated by an interrupted run\n", .{path});
+    var work = try cwd.openDir(io, work_dir, .{});
+    defer work.close(io);
+    if (try core.abandonLegacyRecord(arena, io, work)) |named| {
+        for (named) |path| std.debug.print("ignored a recovery record for {s} left by an older emetgate-mutate; the working tree was not touched\n", .{path});
     }
+    const tree = try prepareTree(arena, io, cwd);
+    defer tree.close(io);
 
     const spec_bytes = try cwd.readFileAlloc(io, spec_path, arena, .limited(1024 * 1024));
     const spec = try std.json.parseFromSliceLeaky(Spec, arena, spec_bytes, .{});
@@ -169,11 +172,11 @@ pub fn main(init: std.process.Init) !u8 {
 
     var shadow_mismatch: usize = 0;
     const run = if (options.pool or options.shadow) pooled: {
-        const pooled = try runPooled(arena, io, cwd, journal, chosen.items, options) orelse return 4;
+        const pooled = try runPooled(arena, io, tree, chosen.items, options) orelse return 4;
         std.debug.print("\npools: {d}, inconclusive: {d}, splits: {d}\n", .{ pooled.pools, pooled.inconclusive, pooled.splits });
         if (!options.shadow) break :pooled pooled;
         std.debug.print("\nshadow: running the same corpus one at a time\n", .{});
-        const serial = try runSerial(arena, io, cwd, journal, chosen.items, options);
+        const serial = try runSerial(arena, io, tree, chosen.items, options);
         shadow_mismatch = reportShadow(pooled.outcomes, serial.outcomes);
         const merged: Run = .{
             .outcomes = try withShadow(arena, serial.outcomes, pooled.outcomes),
@@ -184,7 +187,7 @@ pub fn main(init: std.process.Init) !u8 {
             .rotated = pooled.rotated,
         };
         break :pooled merged;
-    } else try runSerial(arena, io, cwd, journal, chosen.items, options);
+    } else try runSerial(arena, io, tree, chosen.items, options);
 
     var report: std.Io.Writer.Allocating = .init(arena);
     var js: std.json.Stringify = .{ .writer = &report.writer };
@@ -203,12 +206,12 @@ fn usage() u8 {
     return 2;
 }
 
-fn runSerial(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, chosen: []const Selected, options: Options) !Run {
+fn runSerial(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Selected, options: Options) !Run {
     var outcomes: std.ArrayList(Outcome) = .empty;
     var failures: usize = 0;
     for (chosen) |entry| {
         std.debug.print("running {s} on {s} ...\n", .{ entry.m.id, entry.m.file });
-        const outcome = try runOne(arena, io, cwd, journal, entry.m, entry.kind, options, "single", null);
+        const outcome = try runOne(arena, io, tree, entry.m, entry.kind, options, "single", null);
         printOutcome(outcome);
         if (!outcome.ok) failures += 1;
         try outcomes.append(arena, outcome);
@@ -216,7 +219,7 @@ fn runSerial(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
     return .{ .outcomes = try outcomes.toOwnedSlice(arena), .failures = failures };
 }
 
-fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, chosen: []const Selected, options: Options) !?Run {
+fn runPooled(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Selected, options: Options) !?Run {
     const buckets = if (options.shadow) 0 else core.rotationBuckets(options.verify_share);
     const bucket = core.rotationBucket(options.rotation, buckets);
 
@@ -243,7 +246,7 @@ fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
             .all = m.all,
         });
     }
-    const sources = try readSources(arena, io, cwd, candidates.items);
+    const sources = try readSources(arena, io, tree, candidates.items);
     const pools = try core.buildPools(arena, candidates.items, options.pool_size, sources);
 
     if (pools.len != 0 and !try baselineIsGreen(arena, io, pools, options)) return null;
@@ -258,7 +261,7 @@ fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
     while (at < queue.items.len) : (at += 1) {
         const pool = queue.items[at];
         const label = try std.fmt.allocPrint(arena, "pool-{d}", .{at + 1});
-        if (try runPool(arena, io, cwd, journal, chosen, pool, options, slots, &state, label)) {
+        if (try runPool(arena, io, tree, chosen, pool, options, slots, &state, label)) {
             state.splits += 1;
             const cut = core.splitAt(pool);
             try queue.append(arena, pool[0..cut]);
@@ -272,7 +275,7 @@ fn runPooled(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journa
         const outcome = slots[i] orelse blk: {
             const origin = if (rotating[i]) "single-rotation" else "single";
             std.debug.print("running {s} on {s} ({s}) ...\n", .{ entry.m.id, entry.m.file, origin });
-            const single = try runOne(arena, io, cwd, journal, entry.m, entry.kind, options, origin, null);
+            const single = try runOne(arena, io, tree, entry.m, entry.kind, options, origin, null);
             printOutcome(single);
             break :blk single;
         };
@@ -302,8 +305,7 @@ const PoolState = struct {
 fn runPool(
     arena: Allocator,
     io: std.Io,
-    cwd: std.Io.Dir,
-    journal: core.Journal,
+    tree: std.Io.Dir,
     chosen: []const Selected,
     pool: []const core.Candidate,
     options: Options,
@@ -314,7 +316,7 @@ fn runPool(
     if (pool.len == 1) {
         const entry = chosen[pool[0].index];
         std.debug.print("running {s} on {s} (bisected from {s}) ...\n", .{ entry.m.id, entry.m.file, label });
-        const outcome = try runOne(arena, io, cwd, journal, entry.m, entry.kind, options, "bisected", label);
+        const outcome = try runOne(arena, io, tree, entry.m, entry.kind, options, "bisected", label);
         printOutcome(outcome);
         slots[pool[0].index] = outcome;
         return false;
@@ -336,7 +338,7 @@ fn runPool(
                 std.debug.print("{s}: {s} is not known to git or has uncommitted changes\n", .{ label, m.file });
                 return error.DirtyTree;
             }
-            const original = try cwd.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes));
+            const original = try tree.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes));
             try backups.append(arena, .{ .path = m.file, .original = original });
             try working.append(arena, original);
         }
@@ -353,15 +355,14 @@ fn runPool(
         working.items[at] = text;
     }
 
-    try journal.record(arena, backups.items);
-    errdefer restoreAll(arena, io, cwd, journal, backups.items) catch {};
+    errdefer restoreAll(arena, io, tree, backups.items) catch {};
     for (backups.items, working.items) |backup, text| {
-        try cwd.writeFile(io, .{ .sub_path = backup.path, .data = text });
+        try tree.writeFile(io, .{ .sub_path = backup.path, .data = text });
     }
 
     const started = std.Io.Timestamp.now(io, .awake);
     const result = runFiltered(arena, io, filters, null, options);
-    try restoreAll(arena, io, cwd, journal, backups.items);
+    try restoreAll(arena, io, tree, backups.items);
     const elapsed_ns: i96 = started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
     const seconds: u64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_s));
 
@@ -434,26 +435,51 @@ fn indexOfPath(backups: []const core.Backup, path: []const u8) ?usize {
     return null;
 }
 
-fn readSources(arena: Allocator, io: std.Io, cwd: std.Io.Dir, candidates: []const core.Candidate) ![]const core.Source {
+fn readSources(arena: Allocator, io: std.Io, tree: std.Io.Dir, candidates: []const core.Candidate) ![]const core.Source {
     var sources: std.ArrayList(core.Source) = .empty;
     for (candidates) |c| {
         for (sources.items) |seen| {
             if (std.mem.eql(u8, seen.file, c.file)) break;
         } else {
-            const text = try cwd.readFileAlloc(io, c.file, arena, .limited(core.max_source_bytes));
+            const text = try tree.readFileAlloc(io, c.file, arena, .limited(core.max_source_bytes));
             try sources.append(arena, .{ .file = c.file, .text = text });
         }
     }
     return sources.toOwnedSlice(arena);
 }
 
-fn restoreAll(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, backups: []const core.Backup) !void {
+fn restoreAll(arena: Allocator, io: std.Io, tree: std.Io.Dir, backups: []const core.Backup) !void {
     for (backups) |backup| {
-        try cwd.writeFile(io, .{ .sub_path = backup.path, .data = backup.original });
-        const back = try cwd.readFileAlloc(io, backup.path, arena, .limited(core.max_source_bytes));
+        try tree.writeFile(io, .{ .sub_path = backup.path, .data = backup.original });
+        const back = try tree.readFileAlloc(io, backup.path, arena, .limited(core.max_source_bytes));
         if (!std.mem.eql(u8, back, backup.original)) return error.RestoreMismatch;
     }
-    journal.clear();
+}
+
+fn prepareTree(arena: Allocator, io: std.Io, cwd: std.Io.Dir) !std.Io.Dir {
+    const listed = try std.process.run(arena, io, .{ .argv = &.{ "git", "ls-files", "-z", "--cached", "--others", "--exclude-standard" } });
+    if (!exitedZero(listed.term)) return error.GitListFailed;
+    var files: std.ArrayList([]const u8) = .empty;
+    var names = std.mem.splitScalar(u8, listed.stdout, 0);
+    while (names.next()) |name| {
+        if (name.len == 0) continue;
+        cwd.access(io, name, .{}) catch continue;
+        try files.append(arena, name);
+    }
+    const previous_text = cwd.readFileAlloc(io, tree_list, arena, .limited(64 * 1024 * 1024)) catch "";
+    var previous: std.ArrayList([]const u8) = .empty;
+    var old_names = std.mem.splitScalar(u8, previous_text, '\n');
+    while (old_names.next()) |name| {
+        if (name.len != 0) try previous.append(arena, name);
+    }
+
+    try cwd.createDirPath(io, tree_dir);
+    const tree = try cwd.openDir(io, tree_dir, .{});
+    const written = try core.syncMirror(arena, io, cwd, tree, files.items, previous.items);
+    const list = try std.mem.join(arena, "\n", files.items);
+    try cwd.writeFile(io, .{ .sub_path = tree_list, .data = list });
+    std.debug.print("mirror {s}: {d} file(s), {d} refreshed; mutations run there and never in the working tree\n", .{ tree_dir, files.items.len, written });
+    return tree;
 }
 
 fn withShadow(arena: Allocator, serial: []const Outcome, pooled: []const Outcome) ![]const Outcome {
@@ -494,7 +520,7 @@ fn kindOf(expect: []const u8) ?core.Kind {
     return null;
 }
 
-fn runOne(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, m: Mutation, kind: core.Kind, options: Options, origin: []const u8, pool: ?[]const u8) !Outcome {
+fn runOne(arena: Allocator, io: std.Io, tree: std.Io.Dir, m: Mutation, kind: core.Kind, options: Options, origin: []const u8, pool: ?[]const u8) !Outcome {
     var outcome: Outcome = .{
         .id = m.id,
         .file = m.file,
@@ -509,7 +535,7 @@ fn runOne(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, 
         outcome.detail = "file is not known to git or has uncommitted changes";
         return outcome;
     }
-    const original = try cwd.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes));
+    const original = try tree.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes));
     const mutated = core.applyMutation(arena, original, m.from, m.to, m.all) catch |err| {
         outcome.status = "bad_pattern";
         outcome.detail = @errorName(err);
@@ -517,13 +543,12 @@ fn runOne(arena: Allocator, io: std.Io, cwd: std.Io.Dir, journal: core.Journal, 
     };
 
     const backups = [_]core.Backup{.{ .path = m.file, .original = original }};
-    try journal.record(arena, &backups);
-    errdefer restoreAll(arena, io, cwd, journal, &backups) catch {};
-    try cwd.writeFile(io, .{ .sub_path = m.file, .data = mutated });
+    errdefer restoreAll(arena, io, tree, &backups) catch {};
+    try tree.writeFile(io, .{ .sub_path = m.file, .data = mutated });
 
     const started = std.Io.Timestamp.now(io, .awake);
     const run = runBuild(arena, io, kind, m, options);
-    try restoreAll(arena, io, cwd, journal, &backups);
+    try restoreAll(arena, io, tree, &backups);
     const elapsed_ns: i96 = started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
     outcome.seconds = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_s));
 
@@ -565,7 +590,7 @@ fn runBuild(arena: Allocator, io: std.Io, kind: core.Kind, m: Mutation, options:
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(arena, &.{ "zig", "build", "e2e-lockdown", "--summary", "all" });
         if (m.optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
-        return job.run(arena, io, argv.items, max_output, core.timeoutFor(m.timeout_s, options.timeout_s));
+        return job.run(arena, io, argv.items, tree_dir, max_output, core.timeoutFor(m.timeout_s, options.timeout_s));
     }
     const filters = if (options.full) &.{} else if (m.filter.len != 0) m.filter else m.kills;
     return runFiltered(arena, io, filters, m.optimize, .{
@@ -581,7 +606,7 @@ fn runFiltered(arena: Allocator, io: std.Io, filters: []const []const u8, optimi
     if (!options.full) {
         for (filters) |f| try argv.append(arena, try std.fmt.allocPrint(arena, "-Dtest-filter={s}", .{f}));
     }
-    return job.run(arena, io, argv.items, max_output, options.timeout_s);
+    return job.run(arena, io, argv.items, tree_dir, max_output, options.timeout_s);
 }
 
 fn knownToGitAndClean(arena: Allocator, io: std.Io, path: []const u8) !bool {

@@ -393,55 +393,50 @@ pub const Backup = struct {
     original: []const u8,
 };
 
-pub const Journal = struct {
-    dir: std.Io.Dir,
-    io: std.Io,
+pub const legacy_manifest = "pending.manifest";
 
-    const manifest_name = "pending.manifest";
-
-    fn originalName(buf: []u8, index: usize) []const u8 {
-        return std.fmt.bufPrint(buf, "pending.{d}.orig", .{index}) catch unreachable;
+pub fn abandonLegacyRecord(gpa: Allocator, io: std.Io, work: std.Io.Dir) !?[]const []const u8 {
+    const manifest = work.readFileAlloc(io, legacy_manifest, gpa, .limited(max_pool_members * std.fs.max_path_bytes)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer gpa.free(manifest);
+    var named: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (named.items) |path| gpa.free(path);
+        named.deinit(gpa);
     }
-
-    pub fn record(self: Journal, gpa: Allocator, backups: []const Backup) !void {
-        var manifest: std.Io.Writer.Allocating = .init(gpa);
-        defer manifest.deinit();
-        var buf: [64]u8 = undefined;
-        for (backups, 0..) |backup, i| {
-            try self.dir.writeFile(self.io, .{ .sub_path = originalName(&buf, i), .data = backup.original });
-            try manifest.writer.print("{s}\n", .{backup.path});
-        }
-        try self.dir.writeFile(self.io, .{ .sub_path = manifest_name, .data = manifest.written() });
+    var lines = std.mem.splitScalar(u8, manifest, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try named.append(gpa, try gpa.dupe(u8, line));
     }
-
-    pub fn clear(self: Journal) void {
-        self.dir.deleteFile(self.io, manifest_name) catch {};
-        var buf: [64]u8 = undefined;
-        for (0..max_pool_members) |i| {
-            self.dir.deleteFile(self.io, originalName(&buf, i)) catch {};
-        }
+    var buf: [64]u8 = undefined;
+    for (0..max_pool_members) |i| {
+        const name = std.fmt.bufPrint(&buf, "pending.{d}.orig", .{i}) catch unreachable;
+        work.deleteFile(io, name) catch {};
     }
+    try work.deleteFile(io, legacy_manifest);
+    return try named.toOwnedSlice(gpa);
+}
 
-    pub fn recover(self: Journal, gpa: Allocator, root: std.Io.Dir) !?[]const []const u8 {
-        const manifest = self.dir.readFileAlloc(self.io, manifest_name, gpa, .limited(max_pool_members * std.fs.max_path_bytes)) catch |err| switch (err) {
-            error.FileNotFound => return null,
-            else => return err,
-        };
-        defer gpa.free(manifest);
-        var restored: std.ArrayList([]const u8) = .empty;
-        errdefer restored.deinit(gpa);
-        var buf: [64]u8 = undefined;
-        var lines = std.mem.splitScalar(u8, manifest, '\n');
-        var index: usize = 0;
-        while (lines.next()) |line| {
-            if (line.len == 0) continue;
-            const original = try self.dir.readFileAlloc(self.io, originalName(&buf, index), gpa, .limited(max_source_bytes));
-            defer gpa.free(original);
-            try root.writeFile(self.io, .{ .sub_path = line, .data = original });
-            try restored.append(gpa, try gpa.dupe(u8, line));
-            index += 1;
-        }
-        self.clear();
-        return try restored.toOwnedSlice(gpa);
+pub fn syncMirror(gpa: Allocator, io: std.Io, source: std.Io.Dir, mirror: std.Io.Dir, files: []const []const u8, previous: []const []const u8) !usize {
+    var written: usize = 0;
+    for (files) |path| {
+        const want = try source.readFileAlloc(io, path, gpa, .limited(max_source_bytes));
+        defer gpa.free(want);
+        if (mirror.readFileAlloc(io, path, gpa, .limited(max_source_bytes))) |have| {
+            defer gpa.free(have);
+            if (std.mem.eql(u8, have, want)) continue;
+        } else |_| {}
+        if (std.fs.path.dirname(path)) |parent| try mirror.createDirPath(io, parent);
+        try mirror.writeFile(io, .{ .sub_path = path, .data = want });
+        written += 1;
     }
-};
+    for (previous) |path| {
+        for (files) |kept| {
+            if (std.mem.eql(u8, kept, path)) break;
+        } else mirror.deleteFile(io, path) catch {};
+    }
+    return written;
+}

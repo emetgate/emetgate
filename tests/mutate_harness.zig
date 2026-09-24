@@ -454,7 +454,7 @@ test "harness: pooling refuses to start unless the unmutated tree is green" {
 test "harness: a timeout kills the grandchildren a command leaves behind" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const started = std.Io.Timestamp.now(testing.io, .awake);
-    try testing.expectError(error.Timeout, job.run(testing.allocator, testing.io, &.{ "cmd", "/c", "start /b ping -n 100 127.0.0.77 & ping -n 100 127.0.0.1" }, 1024 * 1024, 1));
+    try testing.expectError(error.Timeout, job.run(testing.allocator, testing.io, &.{ "cmd", "/c", "start /b ping -n 100 127.0.0.77 & ping -n 100 127.0.0.1" }, null, 1024 * 1024, 1));
     const elapsed_ns = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).nanoseconds;
     try testing.expect(elapsed_ns < 20 * std.time.ns_per_s);
 
@@ -467,36 +467,59 @@ test "harness: a timeout kills the grandchildren a command leaves behind" {
     try testing.expectEqualStrings("0", std.mem.trim(u8, probe.stdout, " \r\n"));
 }
 
-test "harness: an interrupted mutation is restored from the journal on the next start" {
+fn expectContent(dir: std.Io.Dir, path: []const u8, want: []const u8) !void {
+    const content = try dir.readFileAlloc(testing.io, path, testing.allocator, .unlimited);
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings(want, content);
+}
+
+test "harness: a mutation left in the mirror by a killed run never reaches the working tree and the next sync undoes it" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "target.zig", .data = "original" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "other.zig", .data = "other original" });
-    const journal: core.Journal = .{ .dir = tmp.dir, .io = testing.io };
+    try tmp.dir.createDirPath(testing.io, "work/src");
+    try tmp.dir.createDirPath(testing.io, "mirror");
+    var work = try tmp.dir.openDir(testing.io, "work", .{});
+    defer work.close(testing.io);
+    var mirror = try tmp.dir.openDir(testing.io, "mirror", .{});
+    defer mirror.close(testing.io);
+    try work.writeFile(testing.io, .{ .sub_path = "src/target.zig", .data = "original" });
+    try work.writeFile(testing.io, .{ .sub_path = "build.zig", .data = "build" });
 
-    try testing.expect((try journal.recover(testing.allocator, tmp.dir)) == null);
+    const files = [_][]const u8{ "src/target.zig", "build.zig" };
+    try testing.expectEqual(@as(usize, 2), try core.syncMirror(testing.allocator, testing.io, work, mirror, &files, &.{}));
+    try testing.expectEqual(@as(usize, 0), try core.syncMirror(testing.allocator, testing.io, work, mirror, &files, &files));
 
-    try journal.record(testing.allocator, &.{
-        .{ .path = "target.zig", .original = "original" },
-        .{ .path = "other.zig", .original = "other original" },
-    });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "target.zig", .data = "mutated" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "other.zig", .data = "other mutated" });
+    try mirror.writeFile(testing.io, .{ .sub_path = "src/target.zig", .data = "mutated and never restored" });
+    try expectContent(work, "src/target.zig", "original");
 
-    const restored = (try journal.recover(testing.allocator, tmp.dir)).?;
+    try testing.expectEqual(@as(usize, 1), try core.syncMirror(testing.allocator, testing.io, work, mirror, &files, &files));
+    try expectContent(mirror, "src/target.zig", "original");
+
+    try testing.expectEqual(@as(usize, 0), try core.syncMirror(testing.allocator, testing.io, work, mirror, files[0..1], &files));
+    try testing.expectError(error.FileNotFound, mirror.access(testing.io, "build.zig", .{}));
+}
+
+test "harness: a recovery record left by an older run on another branch is dropped without touching a file" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    var work = try tmp.dir.openDir(testing.io, "work", .{});
+    defer work.close(testing.io);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "runner.zig", .data = "branch B content" });
+    try work.writeFile(testing.io, .{ .sub_path = "pending.0.orig", .data = "branch A content" });
+    try work.writeFile(testing.io, .{ .sub_path = core.legacy_manifest, .data = "runner.zig\n" });
+
+    const named = (try core.abandonLegacyRecord(testing.allocator, testing.io, work)).?;
     defer {
-        for (restored) |path| testing.allocator.free(path);
-        testing.allocator.free(restored);
+        for (named) |path| testing.allocator.free(path);
+        testing.allocator.free(named);
     }
-    try testing.expectEqual(@as(usize, 2), restored.len);
-    try testing.expectEqualStrings("target.zig", restored[0]);
-    try testing.expectEqualStrings("other.zig", restored[1]);
-    for ([_][]const u8{ "target.zig", "other.zig" }, [_][]const u8{ "original", "other original" }) |path, want| {
-        const content = try tmp.dir.readFileAlloc(testing.io, path, testing.allocator, .unlimited);
-        defer testing.allocator.free(content);
-        try testing.expectEqualStrings(want, content);
-    }
-    try testing.expect((try journal.recover(testing.allocator, tmp.dir)) == null);
+    try testing.expectEqual(@as(usize, 1), named.len);
+    try testing.expectEqualStrings("runner.zig", named[0]);
+    try expectContent(tmp.dir, "runner.zig", "branch B content");
+    try testing.expectError(error.FileNotFound, work.access(testing.io, core.legacy_manifest, .{}));
+    try testing.expectError(error.FileNotFound, work.access(testing.io, "pending.0.orig", .{}));
+    try testing.expect((try core.abandonLegacyRecord(testing.allocator, testing.io, work)) == null);
 }
 
 test "harness: every mutation's from text occurs in its file as the harness would apply it" {
