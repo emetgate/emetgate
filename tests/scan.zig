@@ -353,7 +353,7 @@ test "summary: the parse error line appears only when a scanned file had parse e
     defer broken.deinit();
     const with = try runScan(&broken, &.{ "--check", "forbid:networkidle" });
     defer with.deinit();
-    try testing.expect(with.has("\n1 of the 2 scanned file(s) had parse errors; tree-based checks there may be incomplete\n"));
+    try testing.expect(with.has("3 tracked file(s): 2 scanned, 0 outside rule scope, 1 without a language profile, 0 unreadable\n1 of the 2 scanned file(s) had parse errors; tree-based checks there may be incomplete\n"));
 }
 
 const JsonViolation = struct { rule: []const u8, check: []const u8, file: []const u8, line: u32, col: u32, end_line: u32, end_col: u32, text: []const u8 };

@@ -1805,7 +1805,8 @@
       "to": "            unsupported += 0;\n",
       "kills": [
         "scan: a file with no language profile is skipped and counted",
-        "scan: --json is one parseable line carrying the same report"
+        "scan: --json is one parseable line carrying the same report",
+        "summary: the parse error line appears only when a scanned file had parse errors"
       ]
     },
     {
@@ -1835,7 +1836,8 @@
       "to": "",
       "kills": [
         "scan: a file with parse errors is still scanned, flagged, and does not stop the scan",
-        "scan: --json is one parseable line carrying the same report"
+        "scan: --json is one parseable line carrying the same report",
+        "summary: the parse error line appears only when a scanned file had parse errors"
       ]
     },
     {
