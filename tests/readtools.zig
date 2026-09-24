@@ -63,16 +63,31 @@ fn containsString(items: []const Value, needle: []const u8) bool {
 test "read_file returns a small repo file whole" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/functions.ts", testing.allocator, .unlimited);
+    const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "src/protocol/tool_result.zig", testing.allocator, .unlimited);
     defer testing.allocator.free(expected);
 
-    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/functions.ts" });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "src/protocol/tool_result.zig" });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
     try testing.expect(!body.value.object.get("truncated").?.bool);
     try testing.expectEqual(@as(i64, @intCast(expected.len)), body.value.object.get("bytes").?.integer);
+    try testing.expectEqualStrings(expected, body.value.object.get("content").?.string);
+}
+
+test "read_file refuses a source file of a registered language unless raw is set" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/functions.ts" }, "UseSymbolToolsForSource");
+
+    const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/functions.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(expected);
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/functions.ts", .raw = true });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
     try testing.expectEqualStrings(expected, body.value.object.get("content").?.string);
 }
 
@@ -358,7 +373,7 @@ test "read tools refuse .git internals in a git worktree, where .git is a file" 
 
     const served = try std.fmt.allocPrint(testing.allocator, "{s}/a.ts", .{wt_abs});
     defer testing.allocator.free(served);
-    var ok = try callToolServed(runtime, wt_abs, "emetgate_read_file", .{ .file = served });
+    var ok = try callToolServed(runtime, wt_abs, "emetgate_read_file", .{ .file = served, .raw = true });
     defer ok.deinit();
     try testing.expect(!ok.is_error);
 }
