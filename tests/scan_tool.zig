@@ -268,3 +268,23 @@ test "scan tool: a check that cannot run on a file is an error result and a fail
     try testing.expectEqual(telemetry.Outcome.failed, event.outcome);
     try testing.expectEqualStrings("CheckFailed", event.result.?);
 }
+
+test "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ "src/wide.ts", "a;\n" ** 20_000 }});
+    defer repo.deinit();
+    const checks = [_][]const u8{
+        "q:(program ((expression_statement)+) @violation)",
+        "q:(program [(expression_statement)+ (comment)] @violation)",
+        "q:(program [(comment) (expression_statement)*] @violation)",
+        "q:(program (((expression_statement)+)) @violation)",
+        "q:(program ((comment) (expression_statement)+) @violation)",
+    };
+    for (checks) |check| {
+        errdefer std.debug.print("check: {s}\n", .{check});
+        const started = std.Io.Timestamp.now(testing.io, .awake);
+        try expectRefused(&repo, .{ .check = check }, "QueryQuantifiedCapture");
+        const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+        try testing.expect(elapsed_ms < 2_000);
+    }
+}

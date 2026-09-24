@@ -124,8 +124,8 @@ pub fn compile(gpa: Allocator, language: *const ts.Language, text: []const u8, d
             return error.QueryMissingViolation;
         }
         const own = rawPatternText(raw, text, index);
-        if (repeatsCapture(own)) {
-            if (diag) |d| d.set("a capture repeated with + or * costs tree-sitter quadratic work the budget cannot see; capture one node per match", patternText(raw, text, index));
+        if (repeatsCapture(own) or capturedGroupRepeats(own)) {
+            if (diag) |d| d.set("a capture repeated with + or *, or on a group or alternation with + or * inside, costs tree-sitter quadratic work the budget cannot see; capture one node per match", patternText(raw, text, index));
             return error.QueryQuantifiedCapture;
         }
         if (captureCount(own) > max_captures_per_pattern) {
@@ -220,6 +220,80 @@ fn repeatsCapture(text: []const u8) bool {
         }
     }
     return false;
+}
+
+fn capturedGroupRepeats(text: []const u8) bool {
+    var opens: [max_query_bytes]u32 = undefined;
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"' => i = stringEnd(text, i),
+            ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
+            '(', '[' => {
+                if (depth == opens.len) return true;
+                opens[depth] = @intCast(i);
+                depth += 1;
+                i += 1;
+            },
+            ')', ']' => {
+                if (depth > 0) {
+                    depth -= 1;
+                    const open = opens[depth];
+                    if (isGroup(text, open) and nextIsCapture(text, i + 1) and hasRepeat(text[open + 1 .. i])) return true;
+                }
+                i += 1;
+            },
+            else => i += 1,
+        }
+    }
+    return false;
+}
+
+fn isGroup(text: []const u8, open: usize) bool {
+    if (text[open] == '[') return true;
+    var i = open + 1;
+    while (i < text.len and std.ascii.isWhitespace(text[i])) i += 1;
+    return i < text.len and switch (text[i]) {
+        '(', '[', '"', '.' => true,
+        else => false,
+    };
+}
+
+fn hasRepeat(text: []const u8) bool {
+    var i: usize = 0;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"' => i = stringEnd(text, i),
+            ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
+            '(' => i = if (isGroup(text, i)) i + 1 else closingEnd(text, i),
+            '+', '*' => return true,
+            else => i += 1,
+        }
+    }
+    return false;
+}
+
+fn closingEnd(text: []const u8, open: usize) usize {
+    var depth: usize = 0;
+    var i = open;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"' => i = stringEnd(text, i),
+            ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
+            '(', '[' => {
+                depth += 1;
+                i += 1;
+            },
+            ')', ']' => {
+                depth -|= 1;
+                i += 1;
+                if (depth == 0) return i;
+            },
+            else => i += 1,
+        }
+    }
+    return text.len;
 }
 
 fn stringEnd(text: []const u8, open: usize) usize {
@@ -764,6 +838,26 @@ test "q: a capture repeated with + or * is refused, one with ? or an uncaptured 
     try expectFound("f(a, b);\n", "(arguments . (identifier) @violation . (identifier) @violation)", &.{ "a", "b" });
     try expectFound("f(a, b);\n", "((identifier) @violation (#not-match? @violation \"a+@*\") ; (_)+ @x\n)", &.{ "f", "b" });
     try expectFound("f(a, b);\n", "((identifier) @violation (#any-of? @violation \"*\" \"f\"))", &.{"f"});
+}
+
+test "q: a capture on a group or alternation with + or * at its own level is refused by name" {
+    const refused = [_][]const u8{
+        "(program ((expression_statement)+) @violation)",
+        "(program [(expression_statement)+ (comment)] @violation)",
+        "(program [(comment) (expression_statement)*] @violation)",
+        "(program (((expression_statement)+)) @violation)",
+        "(program ((expression_statement)* (comment)) @violation)",
+        "(program ((comment) (expression_statement)+) @violation)",
+        "(program ([(comment) ((expression_statement)+)]) @violation)",
+        "(program ((expression_statement (identifier))+ ) @violation)",
+    };
+    for (refused) |text| {
+        errdefer std.debug.print("query: {s}\n", .{text});
+        try expectCompileError(text, error.QueryQuantifiedCapture, text);
+    }
+    try expectFound("f(a, b);\n", "((call_expression (arguments (identifier)+)) @violation)", &.{"f(a, b)"});
+    try expectFound("f(a, b);\n", "([(call_expression (arguments (identifier)*)) (number)] @violation)", &.{"f(a, b)"});
+    try expectFound("f(a, b);\n", "((identifier) @violation (#match? @violation \"[a-z]+\"))", &.{ "f", "a", "b" });
 }
 
 test "q: string comparisons count their bytes against the budget" {
