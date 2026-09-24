@@ -4286,7 +4286,7 @@
       "id": "SC7-copy-error-drops-the-whole-function",
       "file": "tools/mutate/schema.zig",
       "from": "if (whole and out.items.len != before) return;",
-      "to": "if (false) return;",
+      "to": "if (whole and out.items.len != before and false) return;",
       "kills": [
         "schema: a compile error in a copy drops that mutant, one in the original drops every mutant of the function"
       ]
@@ -4316,6 +4316,78 @@
       "to": "",
       "kills": [
         "runner: a skipped name leaves the selection and --jobs passes it to every shard"
+      ]
+    },
+    {
+      "id": "CH1-diff-range-off-by-one",
+      "file": "tools/mutate/changes.zig",
+      "from": ".{ .first = start, .last = start + count - 1 });",
+      "to": ".{ .first = start, .last = start + count });",
+      "kills": [
+        "changes: a unified=0 diff gives the changed lines of every file that still exists, a deletion included"
+      ]
+    },
+    {
+      "id": "CH2-deletion-range-dropped",
+      "file": "tools/mutate/changes.zig",
+      "from": "if (count == 0) .{ .first = start, .last = start + 1 } else",
+      "to": "if (count == 0) .{ .first = start, .last = start } else",
+      "kills": [
+        "changes: a unified=0 diff gives the changed lines of every file that still exists, a deletion included"
+      ]
+    },
+    {
+      "id": "CH3-deleted-file-kept",
+      "file": "tools/mutate/changes.zig",
+      "from": "path = if (std.mem.startsWith(u8, target, \"b/\")) target[2..] else null;",
+      "to": "path = if (std.mem.startsWith(u8, target, \"b/\")) target[2..] else target;",
+      "kills": [
+        "changes: a unified=0 diff gives the changed lines of every file that still exists, a deletion included"
+      ]
+    },
+    {
+      "id": "CH4-edge-lines-do-not-meet",
+      "file": "tools/mutate/changes.zig",
+      "from": "return a.first <= b.last and b.first <= a.last;",
+      "to": "return a.first < b.last and b.first < a.last;",
+      "kills": [
+        "changes: a from text is touched when one of its lines meets a changed line, and stale when it is gone"
+      ]
+    },
+    {
+      "id": "CH5-stale-from-not-reported",
+      "file": "tools/mutate/changes.zig",
+      "from": "return if (found) .untouched else .stale;",
+      "to": "return .untouched;",
+      "kills": [
+        "changes: a from text is touched when one of its lines meets a changed line, and stale when it is gone"
+      ]
+    },
+    {
+      "id": "CH6-untouched-test-named",
+      "file": "tools/mutate/changes.zig",
+      "from": "if (!touches(ranges, lineRange(source, first, stop - first))) continue;",
+      "to": "if (!touches(ranges, lineRange(source, first, stop - first)) and false) continue;",
+      "kills": [
+        "changes: a test whose lines changed is named, an untouched one is not"
+      ]
+    },
+    {
+      "id": "CH7-filter-ignored",
+      "file": "tools/mutate/changes.zig",
+      "from": "            if (std.mem.indexOf(u8, name, filter) != null) return name;\n",
+      "to": "",
+      "kills": [
+        "changes: a kill or a filter that names a changed test selects the mutant"
+      ]
+    },
+    {
+      "id": "CH8-new-entry-not-changed",
+      "file": "tools/mutate/changes.zig",
+      "from": "const old = before orelse return true;",
+      "to": "const old = before orelse return false;",
+      "kills": [
+        "changes: an entry that is new or differs from the one at the ref counts as changed"
       ]
     }
   ]

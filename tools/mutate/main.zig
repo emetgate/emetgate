@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core.zig");
 const job = @import("job.zig");
 const schema = @import("schema.zig");
+const changes = @import("changes.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -70,6 +71,8 @@ const Options = struct {
     plan_only: bool = false,
     single: bool = false,
     compare: bool = false,
+    changed_since: ?[]const u8 = null,
+    slice: ?[2]usize = null,
 };
 
 const Selected = struct {
@@ -93,7 +96,13 @@ pub fn main(init: std.process.Init) !u8 {
 
     var options: Options = .{};
     var selected: std.ArrayList([]const u8) = .empty;
+    var expect_ref = false;
     for (args[1..]) |arg| {
+        if (expect_ref) {
+            options.changed_since = arg;
+            expect_ref = false;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--e2e")) {
             options.include_e2e = true;
         } else if (std.mem.eql(u8, arg, "--full")) {
@@ -112,6 +121,17 @@ pub fn main(init: std.process.Init) !u8 {
             options.single = true;
         } else if (std.mem.eql(u8, arg, "--compare")) {
             options.compare = true;
+        } else if (std.mem.eql(u8, arg, "--changed-since")) {
+            expect_ref = true;
+        } else if (std.mem.startsWith(u8, arg, "--slice=")) {
+            const text = arg["--slice=".len..];
+            const slash = std.mem.indexOfScalar(u8, text, '/') orelse return usage();
+            const i = std.fmt.parseInt(usize, text[0..slash], 10) catch return usage();
+            const n = std.fmt.parseInt(usize, text[slash + 1 ..], 10) catch return usage();
+            if (n == 0 or i == 0 or i > n) return usage();
+            options.slice = .{ i, n };
+        } else if (std.mem.startsWith(u8, arg, "--changed-since=")) {
+            options.changed_since = arg["--changed-since=".len..];
         } else if (std.mem.startsWith(u8, arg, "--jobs=")) {
             options.jobs = std.fmt.parseInt(usize, arg["--jobs=".len..], 10) catch return usage();
             if (options.jobs.? == 0) return usage();
@@ -132,6 +152,7 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
+    if (expect_ref) return usage();
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, work_dir);
     const lock = cwd.createFile(io, work_dir ++ "/lock", .{ .lock = .exclusive, .lock_nonblocking = true }) catch |err| switch (err) {
@@ -163,11 +184,15 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
 
+    const changed: ?[]const []const u8 = if (options.changed_since) |ref| try changedMutations(arena, io, cwd, ref, spec) else null;
+
     var chosen: std.ArrayList(Selected) = .empty;
     var skipped_e2e: usize = 0;
     var skipped_survivors: usize = 0;
-    for (spec.mutations) |m| {
+    for (spec.mutations, 0..) |m, ordinal| {
         if (selected.items.len != 0 and !contains(selected.items, m.id)) continue;
+        if (changed) |ids| if (!contains(ids, m.id)) continue;
+        if (options.slice) |slice| if (ordinal % slice[1] != slice[0] - 1) continue;
         const kind = kindOf(m.expect) orelse {
             std.debug.print("{s}: unknown expect \"{s}\"\n", .{ m.id, m.expect });
             return 2;
@@ -226,7 +251,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn usage() u8 {
-    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [--jobs=N] [--plan] [--single] [--compare] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [--jobs=N] [--plan] [--single] [--compare] [--changed-since REF] [--slice=I/N] [id...]\n", .{});
     return 2;
 }
 
@@ -945,6 +970,66 @@ fn compareWithSingle(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []c
     }
     std.debug.print("compare: {d} mutation(s) compared, {d} disagree\n", .{ compared, mismatch });
     return mismatch;
+}
+
+fn gitOutput(arena: Allocator, io: std.Io, argv: []const []const u8) !?[]const u8 {
+    const result = try std.process.run(arena, io, .{ .argv = argv, .stdout_limit = .limited(max_output), .stderr_limit = .limited(max_output) });
+    if (!exitedZero(result.term)) return null;
+    return result.stdout;
+}
+
+fn changedMutations(arena: Allocator, io: std.Io, cwd: std.Io.Dir, ref: []const u8, spec: Spec) ![]const []const u8 {
+    const diff = try gitOutput(arena, io, &.{ "git", "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-renames", ref, "--" }) orelse {
+        std.debug.print("git diff {s} failed; is {s} a commit?\n", .{ ref, ref });
+        return error.BadRef;
+    };
+    const touched = try changes.parseDiff(arena, diff);
+
+    var changed_tests: std.ArrayList([]const u8) = .empty;
+    for (touched) |change| {
+        if (!std.mem.endsWith(u8, change.path, ".zig")) continue;
+        const source = cwd.readFileAlloc(io, change.path, arena, .limited(core.max_source_bytes)) catch continue;
+        try changed_tests.appendSlice(arena, try changes.changedTests(arena, source, change.ranges));
+    }
+
+    const show = try std.fmt.allocPrint(arena, "{s}:" ++ spec_path, .{ref});
+    const before_bytes = try gitOutput(arena, io, &.{ "git", "show", show });
+    const before: []const Mutation = if (before_bytes) |bytes| blk: {
+        const old = std.json.parseFromSliceLeaky(Spec, arena, bytes, .{ .ignore_unknown_fields = true }) catch break :blk &.{};
+        break :blk old.mutations;
+    } else &.{};
+
+    var ids: std.ArrayList([]const u8) = .empty;
+    var counts = [_]usize{0} ** @typeInfo(changes.Reason).@"enum".fields.len;
+    for (spec.mutations) |m| {
+        const reason: ?changes.Reason = reason: {
+            const now = try std.json.Stringify.valueAlloc(arena, m, .{});
+            var old: ?[]const u8 = null;
+            for (before) |b| {
+                if (std.mem.eql(u8, b.id, m.id)) old = try std.json.Stringify.valueAlloc(arena, b, .{});
+            }
+            if (changes.entryChanged(old, now)) break :reason .entry_changed;
+            const source = cwd.readFileAlloc(io, m.file, arena, .limited(core.max_source_bytes)) catch break :reason .stale;
+            switch (changes.fromState(source, m.from, changes.rangesOf(touched, m.file) orelse &.{})) {
+                .stale => break :reason .stale,
+                .touched => break :reason .from_changed,
+                .untouched => {},
+            }
+            if (changes.namesATest(changed_tests.items, m.kills, m.filter) != null) break :reason .kill_test_changed;
+            break :reason null;
+        };
+        const why = reason orelse continue;
+        counts[@intFromEnum(why)] += 1;
+        try ids.append(arena, m.id);
+        std.debug.print("changed since {s}: {s} ({t})\n", .{ ref, m.id, why });
+    }
+    std.debug.print("changed since {s}: {d} of {d} mutation(s) selected", .{ ref, ids.items.len, spec.mutations.len });
+    for (counts, 0..) |count, i| {
+        if (count != 0) std.debug.print(", {t} {d}", .{ @as(changes.Reason, @enumFromInt(i)), count });
+    }
+    std.debug.print("\n", .{});
+    if (counts[@intFromEnum(changes.Reason.stale)] != 0) std.debug.print("changed since {s}: a stale mutation's from text is no longer in its file\n", .{ref});
+    return ids.toOwnedSlice(arena);
 }
 
 fn contains(list: []const []const u8, item: []const u8) bool {
