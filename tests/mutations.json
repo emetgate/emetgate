@@ -1595,15 +1595,6 @@
       "note": "defense in depth for insertion: topLevelStatementsIn refuses any root child that straddles the slot, so every byte and root node before the slot is unchanged and no existing symbol can change its hash; kept so a future relaxation of the straddle rule cannot silently alter existing code"
     },
     {
-      "id": "NS17-batch-absent-refused-silently",
-      "file": "src/protocol/handlers.zig",
-      "from": ".absent => return error.AbsentInBatch,",
-      "to": ".absent => return error.InvalidHash,",
-      "kills": [
-        "purple: a batch item with hash absent is refused by name and the repository is untouched"
-      ]
-    },
-    {
       "id": "NS18-propose-absent-not-routed-to-insert",
       "file": "src/engine/cas.zig",
       "from": ".absent => insert(base, .{ .ref = ref, .new_body = new_body }),",
@@ -1625,7 +1616,7 @@
     },
     {
       "id": "NF2-create-ignored-path-accepted",
-      "file": "src/platform/runner.zig",
+      "file": "src/platform/create.zig",
       "from": "    if (try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;\n",
       "to": "    if (try repo.isIgnored(gpa, io, root, rel) and false) return error.IgnoredPath;\n",
       "kills": [
@@ -1634,7 +1625,7 @@
     },
     {
       "id": "NF3-create-unknown-language-defaulted",
-      "file": "src/platform/runner.zig",
+      "file": "src/platform/create.zig",
       "from": "const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;",
       "to": "const profile = registry.forPath(file_abs) orelse registry.forPath(\"x.ts\").?;",
       "kills": [
@@ -1736,8 +1727,8 @@
     {
       "id": "NF13-index-failure-silent",
       "file": "src/platform/repo.zig",
-      "from": "    return error.WrittenButNotIndexed;\n",
-      "to": "",
+      "from": "    return error.WrittenButNotIndexed;\n}\n\npub fn addAllToIndex",
+      "to": "}\n\npub fn addAllToIndex",
       "kills": [
         "new file: when git add fails the file stays on disk with the written body and the error is WrittenButNotIndexed"
       ]
@@ -4352,8 +4343,8 @@
     {
       "id": "BC2-recover-roll-forward-skipped",
       "file": "src/platform/disk.zig",
-      "from": "    if (batch.len != 0 and try commit_record.exists(gpa, io, journal_dir, batch)) {",
-      "to": "    if (false and try commit_record.exists(gpa, io, journal_dir, batch)) {",
+      "from": "    if (committed) {\n        const new_hash",
+      "to": "    if (false) {\n        const new_hash",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
@@ -4371,8 +4362,8 @@
     {
       "id": "BC4-batch-commit-record-removed-before-finalize",
       "file": "src/platform/disk.zig",
-      "from": "    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings, 0..) |*p, k| {",
-      "to": "    if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};\n    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings, 0..) |*p, k| {",
+      "from": "    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings) |*p| {\n        if (p.kind == .create) {",
+      "to": "    if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};\n    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings) |*p| {\n        if (p.kind == .create) {",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
@@ -4391,8 +4382,8 @@
     {
       "id": "TB1-try-batch-prepares-without-batch",
       "file": "src/platform/batch.zig",
-      "from": "p.base_hash, journal_dir, &batch);",
-      "to": "p.base_hash, journal_dir, null);",
+      "from": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, &batch)",
+      "to": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, null)",
       "kills": [
         "batch crash through the tool: a crash right after the commit record recovers every file new",
         "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"

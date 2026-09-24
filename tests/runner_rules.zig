@@ -482,7 +482,7 @@ test "rules: one violating edit rejects the whole batch and leaves disk untouche
     const file = try repo.filePath(&buf);
     const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
 
-    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = commented_body }};
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = .{ .present = hash }, .new_body = commented_body }};
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "exit 0" });
     defer result.deinit(testing.allocator);
     try testing.expect(result == .rule_violation);
@@ -585,8 +585,8 @@ fn batchUnder(where: []const u8) !runner.BatchResult {
     const file_a = try repo.pathA(&buf_a);
     const file_b = try repo.pathB(&buf_b);
     const edits = [_]Edit{
-        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add"), .new_body = "{ return Math.abs(a); }" },
-        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice"), .new_body = "{ return Math.abs(x); }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = .{ .present = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add") }, .new_body = "{ return Math.abs(a); }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = .{ .present = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice") }, .new_body = "{ return Math.abs(x); }" },
     };
     return tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" });
 }

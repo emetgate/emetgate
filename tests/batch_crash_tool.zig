@@ -41,8 +41,8 @@ fn crashThenRecover(stop: usize, expected_a: []const u8, expected_b: []const u8)
     const file_a = try repo.pathA(&buf_a);
     const file_b = try repo.pathB(&buf_b);
     const edits = [_]runner.Edit{
-        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add"), .new_body = "{ return a - b; }" },
-        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice"), .new_body = "{ return x * 2; }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = .{ .present = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add") }, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = .{ .present = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice") }, .new_body = "{ return x * 2; }" },
     };
 
     var at: StopAt = .{ .target = stop };

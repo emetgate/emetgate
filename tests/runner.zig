@@ -41,8 +41,8 @@ test "a batch commits every file when the shared test passes" {
     const hash_b = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice");
 
     const edits = [_]Edit{
-        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
-        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = hash_b, .new_body = "{ return x * 2; }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = .{ .present = hash_a }, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = .{ .present = hash_b }, .new_body = "{ return x * 2; }" },
     };
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" });
     defer result.deinit(testing.allocator);
@@ -71,8 +71,8 @@ test "a batch with one stale hash writes nothing (pre-validation is fail-closed)
     const hash_a = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add");
 
     const edits = [_]Edit{
-        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
-        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = symbol.hashOf("stale"), .new_body = "{ return x * 2; }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = .{ .present = hash_a }, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = .{ .present = symbol.hashOf("stale") }, .new_body = "{ return x * 2; }" },
     };
     try testing.expectError(error.HashMismatch, tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" }));
 
@@ -96,8 +96,8 @@ test "a batch cannot edit the same file twice" {
     const hash_a = try hashOfRef(testing.allocator, testing.io, runtime, file_a, "add");
 
     const edits = [_]Edit{
-        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
-        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return b - a; }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = .{ .present = hash_a }, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = .{ .present = hash_a }, .new_body = "{ return b - a; }" },
     };
     try testing.expectError(error.DuplicateBatchFile, tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0" }));
 }
@@ -117,8 +117,8 @@ test "a batch whose shared test fails writes nothing" {
     const hash_b = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice");
 
     const edits = [_]Edit{
-        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = hash_a, .new_body = "{ return a - b; }" },
-        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = hash_b, .new_body = "{ return x * 2; }" },
+        .{ .file_abs = file_a, .ref_text = "add", .expected_hash = .{ .present = hash_a }, .new_body = "{ return a - b; }" },
+        .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = .{ .present = hash_b }, .new_body = "{ return x * 2; }" },
     };
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 1" });
     defer result.deinit(testing.allocator);
@@ -480,7 +480,7 @@ test "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed
     const file = try repo.filePath(&buf);
     const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
 
-    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = "{\n  return a - b;\n}" }};
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = .{ .present = hash }, .new_body = "{\n  return a - b;\n}" }};
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
         .edits = &edits,
         .test_command = "exit 0",
@@ -504,7 +504,7 @@ test "crash: a test command that crashes rejects a whole batch as test_crashed a
     const file = try repo.filePath(&buf);
     const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
 
-    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = "{\n  return a - b;\n}" }};
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = .{ .present = hash }, .new_body = "{\n  return a - b;\n}" }};
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
         .edits = &edits,
         .test_command = crash_command,
@@ -527,7 +527,7 @@ test "typecheck: a failing typecheck rejects a whole batch and leaves disk untou
     const file = try repo.filePath(&buf);
     const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
 
-    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = hash, .new_body = "{\n  return a - b;\n}" }};
+    const edits = [_]runner.Edit{.{ .file_abs = file, .ref_text = "add", .expected_hash = .{ .present = hash }, .new_body = "{\n  return a - b;\n}" }};
     const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
         .edits = &edits,
         .test_command = "exit 0",

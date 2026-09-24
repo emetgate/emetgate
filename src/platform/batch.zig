@@ -7,6 +7,7 @@ const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
 const rules = @import("rules.zig");
+const create = @import("create.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -18,8 +19,13 @@ const relativeUnder = repo.relativeUnder;
 pub const Edit = struct {
     file_abs: []const u8,
     ref_text: []const u8,
-    expected_hash: symbol.Hash,
+    expected_hash: symbol.Expected,
     new_body: []const u8,
+};
+
+pub const Committed = struct {
+    hash: symbol.Hash,
+    evidence: ?create.Evidence = null,
 };
 
 pub const BatchOptions = struct {
@@ -34,7 +40,7 @@ pub const BatchOptions = struct {
 };
 
 pub const BatchResult = union(enum) {
-    committed: []symbol.Hash,
+    committed: []Committed,
     rejected: sandbox.Report,
     typecheck_failed: sandbox.Report,
     rule_violation: rules.Report,
@@ -42,7 +48,7 @@ pub const BatchResult = union(enum) {
 
     pub fn deinit(self: BatchResult, gpa: Allocator) void {
         switch (self) {
-            .committed => |hashes| gpa.free(hashes),
+            .committed => |edits| gpa.free(edits),
             .rejected, .typecheck_failed => |report| report.deinit(gpa),
             .rule_violation => |report| report.deinit(gpa),
             .rule_check_failed => |failure| failure.deinit(gpa),
@@ -52,8 +58,9 @@ pub const BatchResult = union(enum) {
 
 const Prepared = struct {
     rel: []u8,
-    base_hash: symbol.Hash,
+    base_hash: ?symbol.Hash,
     applied: cas.Applied,
+    absent: bool,
 };
 
 pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !BatchResult {
@@ -83,18 +90,22 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
             if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;
         }
 
-        var base_hash: symbol.Hash = undefined;
-        const applied = blk: {
-            const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
-            defer base.destroy();
-            if (base.tree.root().hasError()) return error.SourceHasErrors;
-            base_hash = symbol.hashOf(base.source);
-            const ref = try symbol.Ref.parse(gpa, edit.ref_text);
-            defer ref.deinit(gpa);
-            break :blk try cas.apply(base, .{ .ref = ref, .expected_hash = edit.expected_hash, .new_body = edit.new_body });
+        const ref = try symbol.Ref.parse(gpa, edit.ref_text);
+        defer ref.deinit(gpa);
+        const plan: create.Plan = switch (edit.expected_hash) {
+            .present => |expected| blk: {
+                const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
+                defer base.destroy();
+                if (base.tree.root().hasError()) return error.SourceHasErrors;
+                break :blk .{
+                    .applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = edit.new_body }),
+                    .base_hash = symbol.hashOf(base.source),
+                };
+            },
+            .absent => try create.planAbsent(gpa, io, runtime, root, edit.file_abs, rel, ref, edit.new_body),
         };
-        errdefer applied.snapshot.destroy();
-        try prepared.append(gpa, .{ .rel = rel, .base_hash = base_hash, .applied = applied });
+        errdefer plan.applied.snapshot.destroy();
+        try prepared.append(gpa, .{ .rel = rel, .base_hash = plan.base_hash, .applied = plan.applied, .absent = edit.expected_hash == .absent });
         keep_rel = true;
     }
 
@@ -125,6 +136,9 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     if (!report.passed()) return .{ .rejected = report };
     defer report.deinit(gpa);
 
+    const committed = try classifyAll(gpa, io, root, prepared.items, options.edits);
+    errdefer gpa.free(committed);
+
     const pendings = try gpa.alloc(disk.Pending, prepared.items.len);
     defer gpa.free(pendings);
     var count: usize = 0;
@@ -138,18 +152,43 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     };
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
-    const batch = disk.Batch.init(gpa, io, journal_dir);
+    var batch = disk.Batch.init(gpa, io, journal_dir);
+    batch.root = root;
     if (options.trace) |t| t.commit_attempted = true;
     for (prepared.items, 0..) |p, i| {
-        pendings[i] = try disk.prepare(gpa, io, options.edits[i].file_abs, p.applied.snapshot.source, p.base_hash, journal_dir, &batch);
+        const file_abs = options.edits[i].file_abs;
+        const source = p.applied.snapshot.source;
+        pendings[i] = if (p.base_hash) |base|
+            try disk.prepare(gpa, io, file_abs, source, base, journal_dir, &batch)
+        else
+            try disk.stageCreate(gpa, io, file_abs, source, journal_dir, &batch);
         count = i + 1;
     }
     commit_entered = true;
     try disk.commitBatch(pendings, null, null, &batch, options.commit_step);
+    return .{ .committed = committed };
+}
 
-    const hashes = try gpa.alloc(symbol.Hash, prepared.items.len);
-    for (prepared.items, 0..) |p, i| hashes[i] = p.applied.hash;
-    return .{ .committed = hashes };
+fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit) ![]Committed {
+    const sources = try gpa.alloc(create.Source, prepared.len);
+    defer gpa.free(sources);
+    for (prepared, 0..) |p, i| sources[i] = .{ .rel = p.rel, .text = p.applied.snapshot.source };
+    const committed = try gpa.alloc(Committed, prepared.len);
+    errdefer gpa.free(committed);
+    for (prepared, 0..) |p, i| {
+        committed[i] = .{ .hash = p.applied.hash };
+        if (!p.absent) continue;
+        const ref = try symbol.Ref.parse(gpa, edits[i].ref_text);
+        defer ref.deinit(gpa);
+        committed[i].evidence = try create.classify(gpa, io, root, sources, .{
+            .index = i,
+            .snapshot = p.applied.snapshot,
+            .slot = p.applied.body,
+            .name = ref.name,
+            .creates = p.base_hash == null,
+        });
+    }
+    return committed;
 }
 
 fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, prepared: []const Prepared, options: BatchOptions) !runner.ShadowRun {

@@ -139,7 +139,7 @@ const Clone = struct {
     }
 
     fn proposeBatch(self: *Clone, runtime: *Runtime, allow_repo_memory: bool) !runner.BatchResult {
-        const edits = [_]runner.Edit{.{ .file_abs = self.file_abs, .ref_text = "add", .expected_hash = try self.hashOfAdd(runtime), .new_body = edited_body }};
+        const edits = [_]runner.Edit{.{ .file_abs = self.file_abs, .ref_text = "add", .expected_hash = .{ .present = try self.hashOfAdd(runtime) }, .new_body = edited_body }};
         return runner.tryMutateBatch(gpa, testing.io, runtime, .{
             .edits = &edits,
             .test_command = "cmd /c exit 0",

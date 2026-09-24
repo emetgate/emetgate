@@ -1,5 +1,6 @@
 const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
+const symmetry = @import("../engine/symmetry.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
@@ -105,8 +106,9 @@ pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expecte
 pub const BatchEdit = struct {
     file: []const u8,
     symbol: []const u8,
-    old_hash: symbol.Hash,
+    old_hash: symbol.Expected,
     new_hash: symbol.Hash,
+    evidence: ?symmetry.Evidence = null,
 };
 
 pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit) !void {
@@ -117,7 +119,8 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit) !void {
     try js.objectField("edits");
     try js.beginArray();
     for (edits) |edit| {
-        const old_hex = symbol.formatHash(edit.old_hash);
+        var old_buf: [symbol.hash_hex_len]u8 = undefined;
+        const old_hex = edit.old_hash.text(&old_buf);
         const new_hex = symbol.formatHash(edit.new_hash);
         try js.beginObject();
         try js.objectField("file");
@@ -125,14 +128,31 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit) !void {
         try js.objectField("symbol");
         try js.write(edit.symbol);
         try js.objectField("old_hash");
-        try js.write(old_hex[0..]);
+        try js.write(old_hex);
         try js.objectField("new_hash");
         try js.write(new_hex[0..]);
+        if (edit.evidence) |evidence| try writeEvidence(&js, evidence);
         try js.endObject();
     }
     try js.endArray();
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+fn writeEvidence(js: *std.json.Stringify, evidence: symmetry.Evidence) !void {
+    try js.objectField("class");
+    try js.write(if (evidence.symmetric()) "symmetry" else "unclassified");
+    try js.objectField("evidence");
+    try js.beginObject();
+    try js.objectField("parses");
+    try js.write(evidence.parses);
+    try js.objectField("unreferenced");
+    try js.write(evidence.unreferenced);
+    try js.objectField("no_top_level_effect");
+    try js.write(evidence.no_top_level_effect);
+    try js.objectField("module_unobserved");
+    try js.write(evidence.module_unobserved);
+    try js.endObject();
 }
 
 pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash, source: []const u8) !void {
@@ -442,7 +462,6 @@ pub fn exitCode(err: anyerror) u8 {
         error.MultipleTopLevelSymbols => 23,
         error.ExtraTopLevelCode => 24,
         error.SymbolNameMismatch => 25,
-        error.AbsentInBatch => 26,
         error.FileExists => 27,
         error.ParentDirectoryMissing => 28,
         error.IgnoredPath => 29,

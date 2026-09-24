@@ -882,7 +882,7 @@ test "purple C5: a poisoned .emetgaterc.json is refused, not executed" {
     try testing.expectError(error.NoTestCommand, runner.resolveTestCommand(testing.allocator, testing.io, file, "", true));
 }
 
-test "purple: a batch item with hash absent is refused by name and the repository is untouched" {
+test "purple: a batch item with hash absent and no declaration is refused and the repository is untouched" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -896,7 +896,6 @@ test "purple: a batch item with hash absent is refused by name and the repositor
     const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
     errdefer std.debug.print("response: {s}\n", .{response});
-    try testing.expect(std.mem.indexOf(u8, response, "AbsentInBatch") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
     try expectPristine(&repo);
 }
