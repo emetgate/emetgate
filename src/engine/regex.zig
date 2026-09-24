@@ -65,7 +65,7 @@ pub const Regex = struct {
             for (current.dense[0..current.len]) |pc| {
                 try spend(budget);
                 const inst = self.insts[pc];
-                if (inst.op == .ranges and inRanges(self.ranges[inst.x..][0..inst.y], step.code_point)) {
+                if (inst.op == .ranges and try inRanges(self.ranges[inst.x..][0..inst.y], step.code_point, budget)) {
                     if (try self.follow(&next, stack, pc + 1, text, pos + step.len, budget)) return true;
                 }
             }
@@ -152,9 +152,17 @@ fn decode(bytes: []const u8) Decoded {
     return .{ .code_point = code_point, .len = len };
 }
 
-fn inRanges(ranges: []const Range, code_point: u21) bool {
-    for (ranges) |r| {
-        if (code_point >= r.lo and code_point <= r.hi) return true;
+fn inRanges(ranges: []const Range, code_point: u21, budget: *u64) error{BudgetExceeded}!bool {
+    var lo: usize = 0;
+    var hi: usize = ranges.len;
+    while (lo < hi) {
+        try spend(budget);
+        const mid = lo + (hi - lo) / 2;
+        if (code_point < ranges[mid].lo) {
+            hi = mid;
+        } else if (code_point > ranges[mid].hi) {
+            lo = mid + 1;
+        } else return true;
     }
     return false;
 }
@@ -748,6 +756,37 @@ test "a pathological pattern runs in linear time on a long input" {
 
     _ = try stepsFor("(a*)*b", long);
     _ = try stepsFor("(a|aa)+$", long);
+}
+
+test "a class of many ranges is searched in logarithmic steps and every step is charged" {
+    var pattern: std.ArrayList(u8) = .empty;
+    defer pattern.deinit(testing.allocator);
+    try pattern.append(testing.allocator, '[');
+    var code_point: u21 = 0x100;
+    var count: usize = 0;
+    while (count < 1500) : (count += 1) {
+        var buf: [4]u8 = undefined;
+        const len = try std.unicode.utf8Encode(code_point, &buf);
+        try pattern.appendSlice(testing.allocator, buf[0..len]);
+        code_point += 2;
+    }
+    try pattern.append(testing.allocator, ']');
+
+    const text = "z" ** 1000;
+    const wide = try stepsFor(pattern.items, text);
+    const narrow = try stepsFor("[\u{100}]", text);
+    try testing.expect(wide >= narrow + text.len * 8);
+    try testing.expect(wide <= narrow + text.len * 16);
+
+    const re = try Regex.compile(testing.allocator, pattern.items, null);
+    defer re.deinit(testing.allocator);
+    var budget: u64 = 1_000_000;
+    try testing.expect(try re.isMatch(testing.allocator, "\u{100}", &budget));
+    try testing.expect(try re.isMatch(testing.allocator, "\u{700}", &budget));
+    try testing.expect(try re.isMatch(testing.allocator, "\u{CB6}", &budget));
+    try testing.expect(!try re.isMatch(testing.allocator, "\u{701}", &budget));
+    try testing.expect(!try re.isMatch(testing.allocator, "\u{FF}", &budget));
+    try testing.expect(!try re.isMatch(testing.allocator, "\u{CB8}", &budget));
 }
 
 test "running out of budget is an error and never a miss" {
