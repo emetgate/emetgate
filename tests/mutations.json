@@ -3946,6 +3946,37 @@
       "kills": [
         "harness: a recovery record left by an older run on another branch is dropped without touching a file"
       ]
+    },
+    {
+      "id": "PF1-pool-ignores-a-shared-function",
+      "file": "tools/mutate/core.zig",
+      "from": " or sharesFunction(hits, taken.items, hits[i])) {\n",
+      "to": ") {\n",
+      "kills": [
+        "harness: mutations that change one function land in different pools",
+        "harness: a pattern that spans two functions keeps apart from both"
+      ],
+      "exact": true
+    },
+    {
+      "id": "PF2-function-must-contain-the-whole-pattern",
+      "file": "tools/mutate/core.zig",
+      "from": "            if (first >= end or stop <= hit) continue;\n",
+      "to": "            if (first > hit or stop < end) continue;\n",
+      "kills": [
+        "harness: a pattern that spans two functions keeps apart from both"
+      ],
+      "exact": true
+    },
+    {
+      "id": "PF3-test-block-not-a-function",
+      "file": "tools/mutate/core.zig",
+      "from": "                .fn_decl, .test_decl => {},\n",
+      "to": "                .fn_decl => {},\n",
+      "kills": [
+        "harness: only Zig functions and tests count as a function a mutation hits"
+      ],
+      "exact": true
     }
   ]
 }
