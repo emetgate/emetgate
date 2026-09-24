@@ -151,12 +151,6 @@ pub fn nestingDepth(text: []const u8) u32 {
             '"' => i = stringEnd(text, i),
             ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
             '(', '[' => {
-                var next = i + 1;
-                while (next < text.len and std.ascii.isWhitespace(text[next])) next += 1;
-                if (text[i] == '(' and next < text.len and text[next] == '#') {
-                    i = predicateEnd(text, next);
-                    continue;
-                }
                 depth += 1;
                 deepest = @max(deepest, depth);
                 i += 1;
@@ -1005,7 +999,7 @@ test "q: a 64,000 level chain fails by name at the default depth product" {
     try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 10_000);
 }
 
-test "q: the pattern depth counts nodes, groups and alternations, not predicates, strings or comments" {
+test "q: the pattern depth counts nested nodes, groups and alternations, and skips strings and comments" {
     try testing.expectEqual(@as(u32, 1), nestingDepth("(identifier) @violation"));
     try testing.expectEqual(@as(u32, 3), nestingDepth("(_ (_ (_) @violation))"));
     try testing.expectEqual(@as(u32, 2), nestingDepth("[(identifier) (string)] @violation"));
