@@ -2,6 +2,7 @@ const std = @import("std");
 const ts = @import("../engine/tree_sitter.zig");
 const symbol = @import("../engine/symbol.zig");
 const checks = @import("../engine/checks.zig");
+const query = @import("../engine/query.zig");
 const Profile = @import("../engine/lang/profile.zig").Profile;
 const memory = @import("memory.zig");
 const shadow = @import("shadow.zig");
@@ -116,6 +117,10 @@ pub fn applicableTo(gpa: Allocator, all: []const Rule, file: []const u8, ref: sy
 }
 
 pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!Gate {
+    return evaluateLimited(gpa, file, profile, tree, span, rules, .{});
+}
+
+pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule, limits: query.Limits) checks.Error!Gate {
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
     defer for (list.items) |v| freeViolation(gpa, v);
@@ -123,8 +128,8 @@ pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
     defer if (lines) |l| l.deinit(gpa);
 
     for (rules) |rule| {
-        const found = checks.run(gpa, profile, tree, span, &.{rule.check}) catch |err| switch (err) {
-            error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),
+        const found = checks.runLimited(gpa, profile, tree, span, &.{rule.check}, limits) catch |err| switch (err) {
+            error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),
             else => |e| return e,
         };
         defer gpa.free(found);
@@ -151,6 +156,7 @@ pub fn unrunnableDetail(err: checks.Unrunnable) []const u8 {
         error.QueryNotForLanguage => "query_not_for_language",
         error.QueryBudgetExceeded => "query_budget_exceeded",
         error.QueryMatchLimitExceeded => "query_match_limit_exceeded",
+        error.CallBudgetExceeded => "call_budget_exceeded",
     };
 }
 

@@ -288,3 +288,21 @@ test "scan tool: a model query that captures a repeating group or alternation is
         try testing.expect(elapsed_ms < 2_000);
     }
 }
+
+test "scan tool: one call has a total operation budget, and the files past it come back as check failures" {
+    try skipOffWindows();
+    const file = "const s = \"" ++ "a" ** 20_000 ++ "\";\n";
+    var repo = try Repo.init(&.{
+        .{ "src/a.ts", file }, .{ "src/b.ts", file }, .{ "src/c.ts", file }, .{ "src/d.ts", file },
+        .{ "src/e.ts", file }, .{ "src/f.ts", file }, .{ "src/g.ts", file }, .{ "src/h.ts", file },
+    });
+    defer repo.deinit();
+    var reply = try call(&repo, .{ .check = "q:((string_fragment) @violation (#match? @violation \"" ++ "a?" ** 150 ++ "b\"))" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("check_failed", reply.field("status").string);
+    const failures = reply.field("check_failures").array.items;
+    try testing.expect(failures.len >= 1);
+    try testing.expect(failures.len <= 3);
+    for (failures) |f| try testing.expectEqualStrings("call_budget_exceeded", f.object.get("detail").?.string);
+}

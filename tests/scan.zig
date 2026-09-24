@@ -467,7 +467,7 @@ test "scan: the scanner itself refuses a malformed rule even when no file would 
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
 
-    try testing.expectError(error.MissingCheckArgument, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid" }}));
+    try testing.expectError(error.MissingCheckArgument, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid" }}, null));
 }
 
 test "scan: usage accepts only --json and one --check with a value" {
@@ -671,7 +671,7 @@ test "scope: the scanner itself refuses an unresolved scope" {
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
-    try testing.expectError(error.ScopeUnresolved, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid:x", .where = "src/gone.js" }}));
+    try testing.expectError(error.ScopeUnresolved, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid:x", .where = "src/gone.js" }}, null));
 }
 
 test "scope: a rule without where scans the whole repository as before" {
@@ -984,4 +984,36 @@ test "scan trust: an operator's own --check query runs next to a committed ledge
 test "scan trust: --allow-repo-memory twice is a usage error" {
     try testing.expect(scan_command.Options.parse(&.{ "--allow-repo-memory", "--allow-repo-memory" }) == null);
     try testing.expect(scan_command.Options.parse(&.{"--allow-repo-memory"}).?.allow_repo_memory);
+}
+
+const long_string_file = "const s = \"" ++ "a" ** 20_000 ++ "\";\n";
+
+fn slowMatch(comptime optional: usize) []const u8 {
+    return "q:((string_fragment) @violation (#match? @violation \"" ++ "a?" ** optional ++ "b\"))";
+}
+
+test "scan: a call budget shared by every file turns the files it cannot pay for into check failures" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{
+        .{ .path = "a.ts", .data = long_string_file },
+        .{ .path = "b.ts", .data = long_string_file },
+        .{ .path = "c.ts", .data = long_string_file },
+        .{ .path = "d.ts", .data = long_string_file },
+    });
+    defer repo.deinit();
+    const check = slowMatch(20);
+
+    const limited = try runScanWith(&repo, .{ .source = .{ .check = .{ .spec = check, .where = null } }, .json = true, .call_operations = 5_000_000 });
+    defer limited.deinit();
+    errdefer std.debug.print("out: {s}\n", .{limited.out});
+    try testing.expectEqual(@as(u8, 38), limited.code);
+    const parsed = try std.json.parseFromSlice(JsonScan, testing.allocator, limited.out, .{});
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 4), parsed.value.scanned);
+    try testing.expectEqual(@as(usize, 2), parsed.value.check_failures.len);
+    for (parsed.value.check_failures) |f| try testing.expectEqualStrings("call_budget_exceeded", f.detail);
+
+    const unlimited = try runScanWith(&repo, .{ .source = .{ .check = .{ .spec = check, .where = null } }, .json = true });
+    defer unlimited.deinit();
+    try testing.expectEqual(@as(u8, 0), unlimited.code);
 }

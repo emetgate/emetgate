@@ -22,6 +22,7 @@ pub const Options = struct {
     max_violations: ?usize = null,
     refusal: ?*?[]const u8 = null,
     allow_repo_memory: bool = false,
+    call_operations: ?u64 = null,
 
     pub fn parse(args: []const [:0]const u8) ?Options {
         var options: Options = .{ .source = .ledger, .json = false };
@@ -97,7 +98,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
         return code;
     }
 
-    const result = scan.scan(gpa, io, runtime, root_abs, runnable) catch |err| return report(err, options, out, err_out);
+    const result = scan.scan(gpa, io, runtime, root_abs, runnable, options.call_operations) catch |err| return report(err, options, out, err_out);
     defer result.deinit(gpa);
 
     if (options.json) {

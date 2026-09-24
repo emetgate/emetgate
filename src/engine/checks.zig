@@ -20,7 +20,7 @@ pub const Unrunnable = error{ QueryMalformed, QueryNotForLanguage } || query.Run
 
 pub const CollectError = Unrunnable || Allocator.Error;
 
-pub const Collect = *const fn (gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) CollectError!void;
+pub const Collect = *const fn (gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, limits: query.Limits, out: *std.ArrayList(Violation)) CollectError!void;
 
 pub const Check = struct {
     name: []const u8,
@@ -130,21 +130,25 @@ pub fn find(checks: []const Check, name: []const u8) ?Check {
 }
 
 pub fn run(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
-    return runWith(gpa, &registry, profile, tree, span, names);
+    return runWith(gpa, &registry, profile, tree, span, names, .{});
 }
 
-pub fn runWith(gpa: Allocator, checks: []const Check, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8) Error![]Violation {
+pub fn runLimited(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8, limits: query.Limits) Error![]Violation {
+    return runWith(gpa, &registry, profile, tree, span, names, limits);
+}
+
+pub fn runWith(gpa: Allocator, checks: []const Check, profile: *const Profile, tree: ts.Tree, span: Span, names: []const []const u8, limits: query.Limits) Error![]Violation {
     for (names) |name| _ = try resolve(checks, name);
     var out: std.ArrayList(Violation) = .empty;
     errdefer out.deinit(gpa);
     for (names) |name| {
         const resolved = try resolve(checks, name);
-        try resolved.check.collect(gpa, profile, tree, span, resolved.arg, &out);
+        try resolved.check.collect(gpa, profile, tree, span, resolved.arg, limits, &out);
     }
     return out.toOwnedSlice(gpa);
 }
 
-fn forbid(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) CollectError!void {
+fn forbid(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     _ = profile;
     const needle = arg orelse return;
     const body = tree.source[span.start..span.end];
@@ -155,7 +159,7 @@ fn forbid(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, ar
     }
 }
 
-fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) CollectError!void {
+fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     _ = arg;
     var walker = traversal.Walker.init(tree.root());
     defer walker.deinit();
@@ -171,7 +175,7 @@ fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
     }
 }
 
-fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) CollectError!void {
+fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     const name = arg orelse return;
     const shape = profile.literal_values;
     var walker = traversal.Walker.init(tree.root());
@@ -188,7 +192,7 @@ fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
     }
 }
 
-fn queryCheck(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) CollectError!void {
+fn queryCheck(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, limits: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     const text = arg orelse return;
     var compiled = query.compile(gpa, profile.grammar(), text, null) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -202,7 +206,6 @@ fn queryCheck(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span
     for (found.items) |s| out.appendAssumeCapacity(.{ .check = query_name, .span = s });
 }
 
-pub const limits: query.Limits = .{};
 
 fn keyName(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) []const u8 {
     if (!isKind(key, shape.quoted_key)) return tree.text(key);
@@ -352,7 +355,7 @@ test "an unknown check name is refused before any check runs" {
 
     const Probe = struct {
         var ran: usize = 0;
-        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, s: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) CollectError!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, s: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
             _ = arg;
             _ = gpa;
             _ = profile;
@@ -363,7 +366,7 @@ test "an unknown check name is refused before any check runs" {
         }
     };
     const checks = [_]Check{.{ .name = "probe", .collect = Probe.collect }};
-    try testing.expectError(error.UnknownCheck, runWith(testing.allocator, &checks, test_util.language, t.tree, span, &.{ "probe", "missing" }));
+    try testing.expectError(error.UnknownCheck, runWith(testing.allocator, &checks, test_util.language, t.tree, span, &.{ "probe", "missing" }, .{}));
     try testing.expectEqual(@as(usize, 0), Probe.ran);
 }
 
@@ -375,7 +378,7 @@ test "a new check joins by registration alone and runs in the requested order" {
     defer t.deinit();
 
     const NoEval = struct {
-        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, out: *std.ArrayList(Violation)) CollectError!void {
+        fn collect(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
             _ = arg;
             var walker = traversal.Walker.init(tree.root());
             defer walker.deinit();
@@ -389,7 +392,7 @@ test "a new check joins by registration alone and runs in the requested order" {
         }
     };
     const checks = registry ++ [_]Check{.{ .name = "no_eval", .collect = NoEval.collect }};
-    const violations = try runWith(testing.allocator, &checks, test_util.language, t.tree, wholeSource(source), &.{ "no_eval", "no_comment" });
+    const violations = try runWith(testing.allocator, &checks, test_util.language, t.tree, wholeSource(source), &.{ "no_eval", "no_comment" }, .{});
     defer testing.allocator.free(violations);
 
     try testing.expectEqual(@as(usize, 2), violations.len);

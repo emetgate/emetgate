@@ -16,6 +16,7 @@ const operations_per_callback = 100;
 pub const Limits = struct {
     operations: u64 = 20_000_000,
     match_limit: u32 = 1024,
+    pool: ?*u64 = null,
 };
 
 pub const CompileError = error{
@@ -36,7 +37,7 @@ pub const CompileError = error{
     RegexSyntax,
 };
 
-pub const RunError = error{ QueryBudgetExceeded, QueryMatchLimitExceeded };
+pub const RunError = error{ QueryBudgetExceeded, QueryMatchLimitExceeded, CallBudgetExceeded };
 
 pub fn dependsOnLanguage(err: CompileError) bool {
     return switch (err) {
@@ -475,13 +476,28 @@ const Progress = struct {
 };
 
 pub fn run(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, limits: Limits, out: *std.ArrayList(Span)) (RunError || Allocator.Error)!void {
+    const pool = limits.pool orelse return runWithin(gpa, query, tree, span, limits.match_limit, limits.operations, out);
+    const granted = @min(limits.operations, pool.*);
+    var left = granted;
+    defer pool.* -= granted - left;
+    runCharged(gpa, query, tree, span, limits.match_limit, &left, out) catch |err| {
+        if (err == error.QueryBudgetExceeded and granted < limits.operations) return error.CallBudgetExceeded;
+        return err;
+    };
+}
+
+fn runWithin(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, match_limit: u32, operations: u64, out: *std.ArrayList(Span)) (RunError || Allocator.Error)!void {
+    var budget = operations;
+    return runCharged(gpa, query, tree, span, match_limit, &budget, out);
+}
+
+fn runCharged(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, match_limit: u32, budget: *u64, out: *std.ArrayList(Span)) (RunError || Allocator.Error)!void {
     const cursor = c.ts_query_cursor_new().?;
     defer c.ts_query_cursor_delete(cursor);
-    c.ts_query_cursor_set_match_limit(cursor, limits.match_limit);
+    c.ts_query_cursor_set_match_limit(cursor, match_limit);
     _ = c.ts_query_cursor_set_byte_range(cursor, span.start, span.end);
 
-    var budget = limits.operations;
-    var progress: Progress = .{ .cursor = cursor, .budget = &budget };
+    var progress: Progress = .{ .cursor = cursor, .budget = budget };
     const options: c.TSQueryCursorOptions = .{ .payload = &progress, .progress_callback = &Progress.callback };
     c.ts_query_cursor_exec_with_options(cursor, query.raw, tree.root().raw, &options);
 
@@ -491,7 +507,7 @@ pub fn run(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, limit
     while (c.ts_query_cursor_next_match(cursor, &match)) {
         if (progress.spend(operations_per_callback)) break;
         const captures = if (match.capture_count == 0) &[_]c.TSQueryCapture{} else match.captures[0..match.capture_count];
-        const holds = satisfies(gpa, query.patterns[match.pattern_index], tree, captures, &budget) catch |err| switch (err) {
+        const holds = satisfies(gpa, query.patterns[match.pattern_index], tree, captures, budget) catch |err| switch (err) {
             error.BudgetExceeded => return error.QueryBudgetExceeded,
             error.OutOfMemory => return error.OutOfMemory,
         };

@@ -1,5 +1,6 @@
 const std = @import("std");
 const checks = @import("../engine/checks.zig");
+const query = @import("../engine/query.zig");
 const symbol = @import("../engine/symbol.zig");
 const lang = @import("../engine/lang/registry.zig");
 const Snapshot = @import("../engine/loader.zig").Snapshot;
@@ -140,7 +141,9 @@ fn resolveScope(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io.Dir,
     _ = try symbolSpan(gpa, snapshot, ref_text);
 }
 
-pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, list: []const rules.Rule) !Result {
+pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, list: []const rules.Rule, call_operations: ?u64) !Result {
+    var pool: u64 = call_operations orelse 0;
+    const limits: query.Limits = if (call_operations != null) .{ .pool = &pool } else .{};
     if (try firstMalformed(gpa, list)) |bad| return bad.reason;
     const scopes = try gpa.alloc(?where_mod.Where, list.len);
     defer gpa.free(scopes);
@@ -205,7 +208,7 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
                     else => {},
                 }
             }
-            const report = switch (try rules.evaluate(gpa, file, snapshot.profile, snapshot.tree, span, rule[0..1])) {
+            const report = switch (try rules.evaluateLimited(gpa, file, snapshot.profile, snapshot.tree, span, rule[0..1], limits)) {
                 .ok => continue,
                 .violated => |report| report,
                 .failed => |failure| {
