@@ -456,13 +456,33 @@ Known Zig limits:
   for a binding-name lookup to use. A function nested in a struct is tracked under its bare
   name; two same-named functions in different structs collide as an ambiguous symbol (a safe
   refusal, not a wrong mutation).
-- **`pub` visibility needed one small engine change.** `boundedness.isExported` used to walk
-  only ancestor node kinds (an `export_statement` wrapper, TypeScript/JavaScript-style).
-  Zig's `pub` is a keyword token inside the declaration node itself, not a wrapping node, so
-  no combination of profile data could express it. `Profile` gained an optional
-  `visibility_keyword` field and a `hasVisibilityKeyword` helper (default `null`, so
-  TypeScript/JavaScript/TSX behaviour is unchanged), and `boundedness.isExported` now checks
-  it first. This is the one line changed under `src/engine` outside `src/engine/lang`.
+- **`pub`/`export` visibility needed one small engine change.** `boundedness.isExported`
+  used to walk only ancestor node kinds (an `export_statement` wrapper, TypeScript/JavaScript
+  style). Zig's `pub` and `export` are keyword tokens inside the declaration node itself, not
+  a wrapping node, so no combination of profile data could express them. `Profile` gained a
+  `visibility_keywords` list field (default `&.{}`, so TypeScript/JavaScript/TSX behaviour is
+  unchanged) and a `hasVisibilityKeyword` helper, and `boundedness.isExported` now checks it
+  first. Zig sets `visibility_keywords = &.{ "pub", "export" }` (`export fn` gives a symbol
+  C ABI/linker visibility, same escape as `pub`). This is the one line changed under
+  `src/engine` outside `src/engine/lang`.
+- **Taking a function's address is already unbounded, with no Zig-specific code.**
+  `&foo`, and `@export(&foo, .{...})`, put the `foo` identifier under a `unary_expression`
+  (address-of), never as the direct callee of a plain call or a bare call argument. The
+  engine's existing `classifyReference` fallback (any reference shape it does not
+  specifically recognise as a safe plain call) already returns `.unrecognized_reference`,
+  i.e. unbounded — the same fallback that already makes `obj[process]()` unbounded for
+  JavaScript. Covered by dedicated Zig tests, not by new engine code.
+- **Identifier-text matching has a pre-existing, language-independent limit**, not special
+  to Zig: a reference built from a runtime/comptime-computed string (Zig: iterating
+  `@typeInfo(@This()).@"struct".decls` and calling `@field(@This(), decl.name)`;
+  JavaScript: `obj["process".slice(0)]()`) never spells the target name as a literal
+  identifier or string anywhere in the file, so nothing in the engine's text-based scan has
+  a match to flag. This is a property of the whole kernel's reference-matching design, not
+  a Zig profile gap, and fixing it is out of this task's scope. `usingnamespace` was also
+  reviewed: it only pulls other namespaces' `pub` declarations into scope, it does not change
+  the exported visibility of this file's own declarations, so it needed no handling.
+  `extern fn` (no body) is simply invisible to `classify` (same as any bodyless declaration),
+  never mutated, so it cannot be wrongly marked BOUNDED.
 
 Each scenario counts the tokens both approaches spend on one symbol edit: ingest plus emit. Search-and-replace reads the whole file and sends the old and new block; the kernel reads a skeleton plus one symbol body and sends a symbol reference, a content hash and the new body. Search-and-replace is the baseline; a whole-file rewrite is the upper bound (2.88× on the same set). The tokenizer is a GPT-4o-family proxy, so the ratio matters more than the absolute count. The benchmark runs offline and can be reproduced with `python tests/bench/run4.py` after building the binary.
 
