@@ -709,11 +709,11 @@
     {
       "id": "G5-rules-line-counting-broken",
       "file": "src/platform/rules.zig",
-      "from": "            line += 1;\n",
-      "to": "            line += 0;\n",
+      "from": "            if (byte == '\\n') try starts.append(gpa, @intCast(i + 1));\n",
+      "to": "            if (byte == '\\r') try starts.append(gpa, @intCast(i + 1));\n",
       "kills": [
-        "rules: an enforced no_comment rule rejects a commented body before the tests run",
-        "every violation names its rule, check, file, line, column and offending text"
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset"
       ]
     },
     {
@@ -759,11 +759,11 @@
     {
       "id": "G8-rules-column-off-by-one",
       "file": "src/platform/rules.zig",
-      "from": ".col = @intCast(offset - line_start + 1)",
-      "to": ".col = @intCast(offset - line_start)",
+      "from": ".col = offset - self.starts[lo] + 1 };",
+      "to": ".col = offset - self.starts[lo] };",
       "kills": [
-        "rules: an enforced no_comment rule rejects a commented body before the tests run",
-        "every violation names its rule, check, file, line, column and offending text"
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset"
       ]
     },
     {
@@ -3725,6 +3725,26 @@
       "kills": [
         "q: a capture on a group or alternation with + or * at its own level is refused by name",
         "scan tool: a model query that captures a repeating group or alternation is refused by name before it runs"
+      ]
+    },
+    {
+      "id": "GL1-line-search-misses-line-start",
+      "file": "src/platform/rules.zig",
+      "from": "            if (self.starts[mid] <= offset) lo = mid else hi = mid;\n",
+      "to": "            if (self.starts[mid] < offset) lo = mid else hi = mid;\n",
+      "kills": [
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset"
+      ]
+    },
+    {
+      "id": "GL2-line-start-on-the-newline",
+      "file": "src/platform/rules.zig",
+      "from": "            if (byte == '\\n') try starts.append(gpa, @intCast(i + 1));\n",
+      "to": "            if (byte == '\\n') try starts.append(gpa, @intCast(i));\n",
+      "kills": [
+        "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
+        "the line index gives the same line and column as a scan from the start, at every offset"
       ]
     }
   ]
