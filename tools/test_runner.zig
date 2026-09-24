@@ -321,6 +321,10 @@ pub fn main(init: std.process.Init.Minimal) void {
         std.debug.print("\n", .{});
         std.process.exit(2);
     }
+    if (options.shard.count == 1 and selection.indices.len != selection.matched) {
+        std.debug.print("error: '{s}' failed: one shard selected {d} of {d} matching tests\n", .{ shard_guard, selection.indices.len, selection.matched });
+        std.process.exit(1);
+    }
     if (options.list) {
         var buf: [4096]u8 = undefined;
         var out = Io.File.stdout().writer(rio, &buf);

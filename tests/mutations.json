@@ -4108,7 +4108,7 @@
       "from": "return ordinal % shard.count == shard.index - 1;",
       "to": "return ordinal % shard.count == shard.index;",
       "kills": [
-        "runner: the shards of the test binary together list every test exactly once"
+        "shards: every selected test runs in exactly one shard"
       ]
     },
     {

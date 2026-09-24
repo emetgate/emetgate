@@ -259,3 +259,20 @@ test "runner: a slow test is skipped unless --slow is given, and runs when it is
     try testing.expectEqual(@as(?u8, 0), exitCode(sharded.term));
     try testing.expect(std.mem.indexOf(u8, sharded.stderr, "1/1 tests passed; 0 skipped; 0 failed") != null);
 }
+
+test "shards: every selected test runs in exactly one shard" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqualStrings(runner.shard_guard, "shards: every selected test runs in exactly one shard");
+    const names = try arena.alloc([]const u8, builtin.test_functions.len);
+    for (builtin.test_functions, names) |t, *name| name.* = t.name;
+    for (1..6) |count| {
+        var recorded: std.ArrayList(usize) = .empty;
+        for (1..count + 1) |index| {
+            const part = try runner.select(arena, names, &.{}, .{ .index = index, .count = count });
+            try recorded.appendSlice(arena, part.indices);
+        }
+        try testing.expectEqual(runner.Coverage{}, try runner.coverage(arena, names, &.{}, recorded.items));
+    }
+}
