@@ -497,6 +497,7 @@ pub fn run(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, limit
         };
         if (!holds) continue;
         for (captures) |capture| {
+            if (progress.spend(1)) break;
             if (capture.index != query.violation) continue;
             const node: ts.Node = .{ .raw = capture.node };
             if (node.startByte() < span.start or node.endByte() > span.end) continue;
@@ -858,6 +859,31 @@ test "q: a capture on a group or alternation with + or * at its own level is ref
     try expectFound("f(a, b);\n", "((call_expression (arguments (identifier)+)) @violation)", &.{"f(a, b)"});
     try expectFound("f(a, b);\n", "([(call_expression (arguments (identifier)*)) (number)] @violation)", &.{"f(a, b)"});
     try expectFound("f(a, b);\n", "((identifier) @violation (#match? @violation \"[a-z]+\"))", &.{ "f", "a", "b" });
+}
+
+fn cheapestBudget(source: []const u8, text: []const u8) !u64 {
+    var low: u64 = 0;
+    var high: u64 = 1_000_000;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (findIn(typescript.grammar(), source, whole(source), text, .{ .operations = mid })) |found| {
+            found.deinit();
+            high = mid;
+        } else |err| {
+            if (err != error.QueryBudgetExceeded) return err;
+            low = mid + 1;
+        }
+    }
+    return low;
+}
+
+test "q: every capture a match reports is charged to the budget" {
+    const source = "f(a, b, c, d, e, g, h);\n";
+    const one = "(arguments . (identifier) @violation . (identifier) . (identifier) . (identifier) . (identifier) . (identifier) . (identifier) .)";
+    const seven = "(arguments . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation . (identifier) @violation .)";
+    const cheap = try cheapestBudget(source, one);
+    const dear = try cheapestBudget(source, seven);
+    try testing.expectEqual(cheap + 6, dear);
 }
 
 test "q: string comparisons count their bytes against the budget" {
