@@ -149,7 +149,7 @@ it: a scan reads the working tree and has no shadow copy to run anything in.
 ### What a command predicate costs
 
 The following results were measured on the same machine and proposal using 30 interleaved,
-paired runs (`python tests/bench/rule_command_cost.py`):
+paired runs (`python tests/bench/rule_command_cost.py`, as of 2026-09-23; not generated or checked in CI):
 
 | | median | worst |
 |---|---|---|
@@ -234,14 +234,18 @@ brace as `\{`), word boundaries `\b`, `\<` and `\>`, text anchors `\A`, `\z`, ``
 `\'`, `\p{...}`, numeric escapes and POSIX classes. A pattern that is not valid UTF-8, or a
 class shorthand used as a range end point (`[\d-z]`), is refused with `RegexSyntax`.
 
+Numbers in this table are generated from the source constants they name by
+`tools/readme_facts.py` and checked in CI; `python tools/readme_facts.py --check`
+fails if a limit changes in code without this table changing too.
+
 | Limit | Value |
 |---|---|
-| query text | 4 KB including `q:`, as for `cmd:` (`QueryTooLong`) |
-| captures | at most 8 per pattern, none repeated with `+` or `*`, none on a group or alternation with `+` or `*` at its own level |
-| operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited and 1 per probe into a character class) and the other predicates (1 per capture visited, also when the match is reported, and 1 plus the bytes compared for each comparison) |
-| operations per `emetgate_scan` call | 100,000,000 over all files; each file still gets at most 20,000,000 of it |
-| in-progress matches | 1024 |
-| tree depth times pattern depth | 6,000 (`query_depth_exceeded`); the tree depth is that of the deepest node the scope reaches, the pattern depth is how deeply the query's parentheses and brackets nest |
+| query text | <!-- generated:max_query_bytes -->4 KB<!-- /generated --> including `q:`, as for `cmd:` (`QueryTooLong`) |
+| captures | at most <!-- generated:max_captures_per_pattern -->8<!-- /generated --> per pattern, none repeated with `+` or `*`, none on a group or alternation with `+` or `*` at its own level |
+| operations per run | <!-- generated:query_operations -->20,000,000<!-- /generated -->, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited and 1 per probe into a character class) and the other predicates (1 per capture visited, also when the match is reported, and 1 plus the bytes compared for each comparison) |
+| operations per `emetgate_scan` call | <!-- generated:max_scan_operations -->100,000,000<!-- /generated --> over all files; each file still gets at most 20,000,000 of it |
+| in-progress matches | <!-- generated:query_match_limit -->1024<!-- /generated --> |
+| tree depth times pattern depth | <!-- generated:max_depth_product -->6,000<!-- /generated --> (`query_depth_exceeded`); the tree depth is that of the deepest node the scope reaches, the pattern depth is how deeply the query's parentheses and brackets nest |
 
 | Result | Meaning |
 |---|---|
@@ -256,7 +260,7 @@ violations.
 ### What a query predicate costs
 
 30 interleaved, paired proposals on the same machine, with and without one enforced
-`q:` rule that runs a `#match?` (`python tests/bench/rule_query_cost.py`):
+`q:` rule that runs a `#match?` (`python tests/bench/rule_query_cost.py`, as of 2026-09-23; not generated or checked in CI):
 
 | | Debug build (`zig build`) | ReleaseSafe build |
 |---|---|---|
@@ -275,7 +279,7 @@ difference was negative.
 (quantifiers, anchors, alternations, nesting, many captures, each predicate) over 6 source
 shapes (wide statement lists, argument lists and arrays; deep `a + a + ...`, `a.b.b...` and
 `f(f(...))` chains) at 2,000, 4,000, 8,000 and 16,000 elements, and flags every combination
-that grows faster than n^1.35. On a ReleaseSafe build, 123 of the 132 grow linearly. The
+that grows faster than n^1.35 (as of 2026-09-23; not generated or checked in CI). On a ReleaseSafe build, 123 of the 132 grow linearly. The
 other 9 are all on a deep left-leaning chain (`a + a + ... + a` or `a.b.b...b`, 16,000 levels):
 a pattern nested three levels deep (`(_ (_ (_) @violation))`, 10.9 s at 16,000), six levels
 deep (past 30 s), or anchored to a last child (`(_ (_) @violation .)`, 3.9 s). That time is
@@ -284,7 +288,7 @@ reach. Two costs of emetgate's own that the run found are fixed: violations were
 rescanning the file from the start, and their text was copied whole, both n^2 on these inputs.
 
 The depth limit answers the rest. Measured on a ReleaseSafe build over `a + a + ... + a`, with
-`emetgate scan --check` on a file in the repository; `emetgate_scan` over MCP took the same
+`emetgate scan --check` on a file in the repository (as of 2026-09-23; not generated or checked in CI); `emetgate_scan` over MCP took the same
 time within 25%. The times include the process start of about 0.2 s.
 
 | query | 1,000 levels | 4,000 | 16,000 | 64,000 |
@@ -404,11 +408,19 @@ The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, th
 
 ## How the kernel itself is verified
 
+Numbers in this README that can be read out of the source or the mutation corpus are
+generated by `tools/readme_facts.py` and `tools/verification_page.py` and checked in CI
+and in `tools/accept.ps1`, so they cannot go stale without a build failing; numbers that
+are the output of a benchmark script instead carry a one-line note naming the script and
+the date they were last measured, since re-running a benchmark on every build is not
+part of this check. See [`VERIFICATION.md`](VERIFICATION.md) for the full mutation and
+red-team breakdown.
+
 The kernel's guards are tested in two ways.
 
 **Mutation testing.** Guards and branches that protect an invariant are mutated (a check removed, a condition weakened, a comparison flipped) and the test suite is run against each mutant. At least one test must fail. A surviving mutant is either made to fail with a new test or recorded in `tests/mutations.json` as equivalent, intentionally redundant, or open. The harness lives in `tools/mutate`. It copies the working tree's non-ignored files into `.zig-cache/mutate/tree` and works only there, so a run that is killed never leaves a mutant in the working tree. It puts every mutant into one test binary as a copy of the function it changes, with a dispatch on the function's first line, and runs each mutant in its own process with only the tests it names; a mutation that cannot be copied that way gets its own build, and so does one in the function that sets the active mutant, the runner's `main`, since it runs before the dispatch can see the mutant. An expected survivor names with `filter` the tests that reach its mutated line, so it proves survival in seconds instead of running the whole suite. `--changed-since <ref>` limits a run to the mutations on lines changed since `<ref>`. `zig build test` fails when a mutation's `from` text no longer occurs in its file as the harness would apply it, or when a test it expects to kill no longer exists by that name in a file some suite compiles, so a refactor cannot leave a mutant silently testing nothing.
 
-For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is 44 mutants today: 37 killed, 4 proven equivalent, 1 redundant guard kept as defense in depth, 2 open.
+For the engine (`cas`, `boundedness`, `symbol`, `functions`) that is <!-- generated:engine-mutant-summary -->59 mutants today: 52 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. Generated by `tools/readme_facts.py` from `tests/mutations.json`; the full breakdown by area is in [`VERIFICATION.md`](VERIFICATION.md).
 
 **Adversarial tests.** Dedicated red-team suites attack the gate directly: bodies that escape their braces, stale hashes, torn journal entries, poisoned repository configuration and attempts to open files outside the repository.
 
@@ -484,7 +496,7 @@ Known Zig limits:
   `extern fn` (no body) is simply invisible to `classify` (same as any bodyless declaration),
   never mutated, so it cannot be wrongly marked BOUNDED.
 
-Each scenario counts the tokens both approaches spend on one symbol edit: ingest plus emit. Search-and-replace reads the whole file and sends the old and new block; the kernel reads a skeleton plus one symbol body and sends a symbol reference, a content hash and the new body. Search-and-replace is the baseline; a whole-file rewrite is the upper bound (2.88× on the same set). The tokenizer is a GPT-4o-family proxy, so the ratio matters more than the absolute count. The benchmark runs offline and can be reproduced with `python tests/bench/run4.py` after building the binary.
+Each scenario counts the tokens both approaches spend on one symbol edit: ingest plus emit. Search-and-replace reads the whole file and sends the old and new block; the kernel reads a skeleton plus one symbol body and sends a symbol reference, a content hash and the new body. Search-and-replace is the baseline; a whole-file rewrite is the upper bound (2.88× on the same set). The tokenizer is a GPT-4o-family proxy, so the ratio matters more than the absolute count. The benchmark runs offline and can be reproduced with `python tests/bench/run4.py` after building the binary; the numbers above are its output as of 2026-09-14, not generated or checked in CI.
 
 ## Security history
 
