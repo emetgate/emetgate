@@ -36,6 +36,7 @@ pub const server = @import("protocol/server.zig");
 pub const telemetry = @import("protocol/telemetry.zig");
 pub const handlers = @import("protocol/handlers.zig");
 pub const read_tools = @import("protocol/read_tools.zig");
+pub const mirror = @import("protocol/mirror.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());
