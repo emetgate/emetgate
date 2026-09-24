@@ -37,6 +37,7 @@ pub const telemetry = @import("protocol/telemetry.zig");
 pub const handlers = @import("protocol/handlers.zig");
 pub const read_tools = @import("protocol/read_tools.zig");
 pub const mirror = @import("protocol/mirror.zig");
+pub const json_pointer = @import("engine/lang/json/pointer.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

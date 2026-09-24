@@ -39,6 +39,7 @@ pub const telemetry = src.telemetry;
 pub const handlers = src.handlers;
 pub const read_tools = src.read_tools;
 pub const mirror = src.mirror;
+pub const json_pointer = src.json_pointer;
 
 comptime {
     for (@typeInfo(src).@"struct".decls) |decl| {
