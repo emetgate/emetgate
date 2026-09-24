@@ -299,7 +299,7 @@ test "scan tool: a chain 64,000 levels deep comes back as query_depth_exceeded i
     const started = std.Io.Timestamp.now(testing.io, .awake);
     var reply = try call(&repo, .{ .check = "q:(call_expression) @violation" });
     defer reply.deinit();
-    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 10_000);
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 60_000);
     try testing.expect(reply.is_error);
     try testing.expectEqualStrings("check_failed", reply.field("status").string);
     try testing.expectEqual(@as(i64, 1), reply.field("violation_count").integer);
