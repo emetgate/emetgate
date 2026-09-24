@@ -71,6 +71,7 @@ test {
     _ = @import("tests/mutate_changes.zig");
     _ = @import("tests/memory.zig");
     _ = @import("tests/lang/conformance.zig");
+    _ = @import("tests/lang/jsx_compat.zig");
     _ = @import("tests/git_fixture_test.zig");
     _ = @import("tests/test_runner_harness.zig");
     _ = @import("tests/suites.zig");

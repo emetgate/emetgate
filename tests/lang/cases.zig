@@ -30,5 +30,6 @@ pub const Entry = struct {
 
 pub const all = [_]Entry{
     .{ .language = "typescript", .cases = @import("typescript/cases.zig").cases },
+    .{ .language = "tsx", .cases = @import("tsx/cases.zig").cases },
     .{ .language = "javascript", .cases = @import("javascript/cases.zig").cases },
 };

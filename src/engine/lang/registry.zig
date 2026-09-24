@@ -3,6 +3,7 @@ const Profile = @import("profile.zig").Profile;
 
 pub const profiles = [_]*const Profile{
     &@import("typescript/profile.zig").profile,
+    &@import("tsx/profile.zig").profile,
     &@import("javascript/profile.zig").profile,
 };
 
