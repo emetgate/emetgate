@@ -62,6 +62,8 @@ const Options = struct {
     verify_share: usize = default_verify_share,
     rotation: usize = 0,
     timeout_s: u64 = default_timeout_s,
+    jobs: ?usize = null,
+    plan_only: bool = false,
 };
 
 const Selected = struct {
@@ -98,6 +100,11 @@ pub fn main(init: std.process.Init) !u8 {
             options.pool = true;
         } else if (std.mem.eql(u8, arg, "--shadow")) {
             options.shadow = true;
+        } else if (std.mem.eql(u8, arg, "--plan")) {
+            options.plan_only = true;
+        } else if (std.mem.startsWith(u8, arg, "--jobs=")) {
+            options.jobs = std.fmt.parseInt(usize, arg["--jobs=".len..], 10) catch return usage();
+            if (options.jobs.? == 0) return usage();
         } else if (std.mem.startsWith(u8, arg, "--pool-size=")) {
             options.pool_size = std.fmt.parseInt(usize, arg["--pool-size=".len..], 10) catch return usage();
             if (options.pool_size == 0 or options.pool_size > core.max_pool_members) return usage();
@@ -171,8 +178,8 @@ pub fn main(init: std.process.Init) !u8 {
     if (options.list_only) return 0;
 
     var shadow_mismatch: usize = 0;
-    const run = if (options.pool or options.shadow) pooled: {
-        const pooled = try runPooled(arena, io, tree, chosen.items, options) orelse return 4;
+    const run = if (options.pool or options.shadow or options.plan_only) pooled: {
+        const pooled = try runPooled(arena, io, tree, chosen.items, options) orelse return if (options.plan_only) 0 else 4;
         std.debug.print("\npools: {d}, inconclusive: {d}, splits: {d}\n", .{ pooled.pools, pooled.inconclusive, pooled.splits });
         if (!options.shadow) break :pooled pooled;
         std.debug.print("\nshadow: running the same corpus one at a time\n", .{});
@@ -202,7 +209,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn usage() u8 {
-    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [id...]\n", .{});
+    std.debug.print("usage: emetgate-mutate [--e2e] [--full] [--list] [--skip-survivors] [--pool] [--pool-size=N] [--verify-share=N] [--rotation=N] [--shadow] [--timeout-s=N] [--jobs=N] [--plan] [id...]\n", .{});
     return 2;
 }
 
@@ -248,6 +255,10 @@ fn runPooled(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const Sel
     }
     const sources = try readSources(arena, io, tree, candidates.items);
     const pools = try core.buildPools(arena, candidates.items, options.pool_size, sources);
+    if (options.plan_only) {
+        printPlan(chosen, pools);
+        return null;
+    }
 
     if (pools.len != 0 and !try baselineIsGreen(arena, io, pools, options)) return null;
 
@@ -436,6 +447,13 @@ fn baselineIsGreen(arena: Allocator, io: std.Io, pools: []const []const core.Can
     return true;
 }
 
+fn printPlan(chosen: []const Selected, pools: []const []const core.Candidate) void {
+    for (pools, 1..) |pool, n| {
+        std.debug.print("pool-{d}: {d} mutation(s) in {d} module(s)\n", .{ n, pool.len, core.modulesIn(pool) });
+        for (pool) |member| std.debug.print("  {s}  {s}\n", .{ chosen[member.index].m.id, member.file });
+    }
+}
+
 fn indexOfPath(backups: []const core.Backup, path: []const u8) ?usize {
     for (backups, 0..) |backup, i| {
         if (std.mem.eql(u8, backup.path, path)) return i;
@@ -598,12 +616,14 @@ fn runBuild(arena: Allocator, io: std.Io, kind: core.Kind, m: Mutation, options:
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(arena, &.{ "zig", "build", "e2e-lockdown", "--summary", "all" });
         if (m.optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
+        if (options.jobs) |n| try argv.append(arena, try std.fmt.allocPrint(arena, "-j{d}", .{n}));
         return job.run(arena, io, argv.items, tree_dir, max_output, core.timeoutFor(m.timeout_s, options.timeout_s));
     }
     const filters = if (options.full) &.{} else if (m.filter.len != 0) m.filter else m.kills;
     return runFiltered(arena, io, filters, m.optimize, .{
         .full = options.full,
         .timeout_s = core.timeoutFor(m.timeout_s, options.timeout_s),
+        .jobs = options.jobs,
     });
 }
 
@@ -611,6 +631,7 @@ fn runFiltered(arena: Allocator, io: std.Io, filters: []const []const u8, optimi
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{ "zig", "build", "test", "--summary", "all" });
     if (optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
+    if (options.jobs) |n| try argv.append(arena, try std.fmt.allocPrint(arena, "-j{d}", .{n}));
     if (!options.full) {
         for (filters) |f| try argv.append(arena, try std.fmt.allocPrint(arena, "-Dtest-filter={s}", .{f}));
     }
