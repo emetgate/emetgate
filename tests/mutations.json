@@ -3819,6 +3819,35 @@
         "scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untracked ledger needs no flag",
         "scan trust: --allow-repo-memory twice is a usage error"
       ]
+    },
+    {
+      "id": "CB1-call-budget-never-spent",
+      "file": "src/engine/query.zig",
+      "from": "    defer pool.* -= granted - left;\n",
+      "to": "    defer pool.* -= 0 * (granted - left);\n",
+      "kills": [
+        "scan: a call budget shared by every file turns the files it cannot pay for into check failures",
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
+      ]
+    },
+    {
+      "id": "CB2-mcp-scan-without-call-budget",
+      "file": "src/protocol/handlers.zig",
+      "from": "        .call_operations = max_scan_operations,\n",
+      "to": "        .call_operations = null,\n",
+      "kills": [
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
+      ]
+    },
+    {
+      "id": "CB3-call-budget-reported-as-query-budget",
+      "file": "src/engine/query.zig",
+      "from": "        if (err == error.QueryBudgetExceeded and granted < limits.operations) return error.CallBudgetExceeded;\n",
+      "to": "        if (err == error.QueryBudgetExceeded and granted > limits.operations) return error.CallBudgetExceeded;\n",
+      "kills": [
+        "scan: a call budget shared by every file turns the files it cannot pay for into check failures",
+        "scan tool: one call has a total operation budget, and the files past it come back as check failures"
+      ]
     }
   ]
 }
