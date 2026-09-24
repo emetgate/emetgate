@@ -66,6 +66,42 @@ def run_inside_sandbox(repo, rel, ref, command, timeout_s=90):
     return {"returncode": out.returncode, "elapsed_ms": elapsed, "parsed": parsed, "stdout_tail": out.stdout[-1500:]}
 
 
+def build_hardlink_tree(src_dir, dst_dir):
+    file_count = 0
+    link_failures = []
+    skipped_symlinks = []
+    t0 = time.perf_counter()
+    for root, dirs, files in os.walk(src_dir, followlinks=False):
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d))]
+        skipped_symlinks.extend(os.path.join(root, d) for d in list(dirs) if os.path.islink(os.path.join(root, d)))
+        rel_root = os.path.relpath(root, src_dir)
+        dst_root = dst_dir if rel_root == "." else os.path.join(dst_dir, rel_root)
+        try:
+            os.makedirs(dst_root, exist_ok=True)
+        except OSError as err:
+            link_failures.append((dst_root, "mkdir: " + str(err)))
+            dirs[:] = []
+            continue
+        for name in files:
+            src_file = os.path.join(root, name)
+            dst_file = os.path.join(dst_root, name)
+            if os.path.islink(src_file):
+                skipped_symlinks.append(src_file)
+                continue
+            try:
+                os.link(src_file, dst_file)
+                file_count += 1
+            except OSError as err:
+                link_failures.append((src_file, str(err)))
+    elapsed_s = time.perf_counter() - t0
+    return {
+        "file_count": file_count,
+        "elapsed_s": elapsed_s,
+        "link_failures": link_failures,
+        "skipped_symlinks": skipped_symlinks,
+    }
+
+
 def report(name, outside, inside):
     print(f"=== {name} ===")
     print("outside sandbox:", outside["returncode"], round(outside["elapsed_ms"], 1), "ms")

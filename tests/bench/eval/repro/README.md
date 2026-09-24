@@ -107,6 +107,75 @@ the shadow copy. Options 1 and 3 touch the boundary directly and need new
 adversarial tests before landing; option 2/2b keeps the existing boundary
 and only changes performance.
 
+## D3 update: hardlink tree confirmed (repro 08)
+
+Team lead's chosen fix direction: replace the `node_modules` junction with a
+real hardlink tree — the shadow gets a real directory (given the same
+low-integrity write label `grantLowIntegrityWrite` already applies to the
+rest of the shadow), and every file inside it is a Windows hardlink
+(`CreateHardLinkW` / `os.link`) to the real file in the original repo, not a
+reparse point. `08_hardlink_tree.py` tests this directly, without touching
+`shadow.zig`: since the proposed shadow layout doesn't exist in code yet, the
+script builds it by hand and runs commands under the *exact same* restricted,
+low-integrity token `sandbox.zig` uses (`low_integrity.py`, a small ctypes
+port of `LowToken.create()` + `spawnRestricted()`: `OpenProcessToken` →
+`CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)` → `SetTokenInformation` to the
+Low mandatory label → `CreateProcessAsUserW`, no restricted SIDs — matching
+the denetmen's note that `sandbox.zig:218` passes `restrict_count 0`).
+
+| Part | What it checks | Result |
+|---|---|---|
+| 1 | `fs.readdirSync`/`realpathSync`/`require.resolve` through a hardlink tree built from `express-test`'s real `node_modules` (6634 files) | all three succeed under the low-integrity token — contrast with repro 07's junction, where the same three all failed |
+| 2 | `fs.appendFileSync` on a hardlinked file | `EPERM` under the low-integrity token; the real file's SHA-256 is unchanged before/after |
+| 3 | deleting the hardlink in the "shadow" copy | only the link disappears; the real file (checked by its original path) still exists |
+| 4 | real `express` `npm test` (`lib/`, `test/`, `examples/`, `index.js`, `package.json`, `History.md` copied plain; `node_modules` a hardlink tree of 6634 files) run under the low-integrity token | **passes**: `1261 passing` in 4 of 5 runs (5–11 s); 1 of 5 runs crashed with the same `0xC0000409` seen in D1/D2 — see below |
+| 5 | hardlink tree build time | `express-test`: 6634 files in 1.3–3.5 s. `eslint-test`: not completed — see limitation below |
+
+Part 1–3 directly confirm the team lead's reasoning: a hardlink is a normal
+directory entry pointing at the same file record, not a reparse point, so
+there is nothing for the low-integrity token to refuse to traverse; the
+file's own security descriptor (inherited from the original, no explicit
+integrity label, default no-write-up policy) lets a low-integrity reader in
+but keeps a low-integrity writer out. Part 4 confirms it end-to-end on the
+same real project that broke in D1/D2: with the junction, the full `npm test`
+suite couldn't even find `mocha`; with a hardlink tree, all 1261 tests run
+and pass in the same sandbox.
+
+**Residual flakiness, not a hardlink problem.** One of five identical part-4
+runs ended with `crashed`, `0xC0000409` — the exact code D1 saw with the
+*junction*-based sandbox on the main clone. Since the other four runs of the
+identical command against the identical hardlink tree passed cleanly with
+all 1261 tests executing, this crash is not the missing-`node_modules`
+failure mode (files were visible and most/all tests had already run by the
+time of the crash) — it looks like a separate, lower-frequency issue
+(possibly a native-addon or teardown race under the low-integrity token,
+unconfirmed) and needs its own investigation before this can be called fully
+solved, but it does not change the hardlink-vs-junction verdict: the junction
+made the suite unable to even locate its dependencies every time; the
+hardlink tree runs the suite to completion the large majority of the time.
+
+**Limitation found: real, non-symlink self-nested `node_modules`.**
+`eslint-test`'s installed tree has a genuine (not a symlink loop)
+`node_modules/eslint/node_modules/eslint/node_modules/eslint/...` chain nine
+levels deep — some transitive dependency pins a different `eslint` version,
+and npm nests a full second (then third, ...) copy rather than deduping it.
+Walking this with `os.walk` and hardlinking every real file it finds copies
+each nested copy's contents again at every level: the walk was still running
+past 117,000 linked files (`eslint-test`'s own unique file count is 38,542)
+when it hit `WinError 206` (path too long) building a directory whose path
+had grown past Windows's `MAX_PATH`, and was stopped rather than run to
+completion. `express-test`'s tree has no such nesting and links cleanly.
+A real implementation of the hardlink-tree fix needs either a depth/cycle
+bound, `\\?\`-prefixed long-path calls, or both — this is a Windows-path-length
+problem the junction approach did not have (a junction is one reparse point
+regardless of how deep the real target nests) and the fix needs to account
+for it, not something to fix by tuning the diagnosis scripts here.
+
+Fix direction verdict for the team lead: **hardlink tree confirmed** for the
+core problem (junction invisibility under low integrity) on a real project;
+two follow-ups before shipping it — the intermittent `0xC0000409` (frequency,
+cause) and the long-path handling for deeply self-nested dependency trees.
+
 ## CLI help text
 
 `emetgate mutate`/`try --help` now documents (this was the only product file
