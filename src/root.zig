@@ -4,6 +4,7 @@ pub const traversal = @import("engine/traversal.zig");
 pub const runtime = @import("engine/runtime.zig");
 pub const loader = @import("engine/loader.zig");
 pub const symbol = @import("engine/symbol.zig");
+pub const line_range = @import("engine/line_range.zig");
 pub const skeleton = @import("engine/skeleton.zig");
 pub const cas = @import("engine/cas.zig");
 pub const boundedness = @import("engine/boundedness.zig");
