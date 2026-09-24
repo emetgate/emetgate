@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const core = @import("../tools/mutate/core.zig");
 const job = @import("../tools/mutate/job.zig");
+const zig_source = @import("zig_source.zig");
 
 const testing = std.testing;
 
@@ -522,35 +523,45 @@ test "harness: every mutation's from text occurs in its file as the harness woul
     try testing.expectEqual(@as(usize, 0), stale);
 }
 
-fn collectTestNames(dir_path: []const u8, names: *std.StringHashMapUnmanaged(void), arena: std.mem.Allocator) !void {
-    var dir = try std.Io.Dir.cwd().openDir(testing.io, dir_path, .{ .iterate = true });
-    defer dir.close(testing.io);
-    var it = dir.iterate();
-    while (try it.next(testing.io)) |entry| {
-        const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ dir_path, entry.name });
-        switch (entry.kind) {
-            .directory => try collectTestNames(path, names, arena),
-            .file => {
-                if (!std.mem.endsWith(u8, entry.name, ".zig")) continue;
-                const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(4 * 1024 * 1024));
-                var lines = std.mem.splitScalar(u8, source, '\n');
-                while (lines.next()) |line| {
-                    if (!std.mem.startsWith(u8, line, "test \"")) continue;
-                    var name: std.ArrayList(u8) = .empty;
-                    var i: usize = "test \"".len;
-                    while (i < line.len and line[i] != '"') : (i += 1) {
-                        if (line[i] == '\\' and i + 1 < line.len) i += 1;
-                        try name.append(arena, line[i]);
-                    }
-                    try names.put(arena, name.items, {});
-                }
-            },
-            else => {},
-        }
+const test_roots = [_][]const u8{ "src/root.zig", "test_root.zig" };
+
+fn namesReachedFrom(arena: std.mem.Allocator, dir: std.Io.Dir, roots: []const []const u8) !std.StringHashMapUnmanaged(void) {
+    var names: std.StringHashMapUnmanaged(void) = .empty;
+    for (try zig_source.reachable(arena, testing.io, dir, roots)) |path| {
+        const source = try dir.readFileAlloc(testing.io, path, arena, .limited(8 * 1024 * 1024));
+        for (try zig_source.testNames(arena, source)) |t| try names.put(arena, t.name, {});
     }
+    return names;
 }
 
-test "harness: every test a mutation expects to kill exists by that exact name" {
+test "harness: kill names come only from files a suite compiles, with escapes decoded and identifier tests included" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "sub");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "root.zig", .data = "const a = @import(\"sub/a.zig\");\n// const c = @import(\"c.zig\");\ntest \"root one\" {}\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "sub/a.zig", .data = "const b = @import(\"../b.zig\");\nconst S = struct {\n    test \"line\\none \\x41\" {}\n};\ntest named_decl {}\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.zig", .data = "test \"from b\" {}\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "c.zig", .data = "test \"only in an unimported file\" {}\n" });
+
+    const names = try namesReachedFrom(arena, tmp.dir, &.{"root.zig"});
+    try testing.expectEqual(@as(usize, 4), names.count());
+    try testing.expect(names.contains("root one"));
+    try testing.expect(names.contains("line\none A"));
+    try testing.expect(names.contains("named_decl"));
+    try testing.expect(names.contains("from b"));
+    try testing.expect(!names.contains("only in an unimported file"));
+}
+
+test "harness: a failed decltest matches the identifier a mutation names" {
+    const failed = [_][]const u8{"platform.rules.decltest.named_decl"};
+    try testing.expect(core.missingKill(&failed, &.{"named_decl"}) == null);
+    try testing.expect(core.unexpectedKill(&failed, &.{"named_decl"}) == null);
+}
+
+test "harness: every test a mutation expects to kill exists by that exact name in a file a suite compiles" {
     const Entry = struct { id: []const u8, expect: []const u8 = "test", kills: []const []const u8 = &.{} };
     const Spec = struct { mutations: []const Entry };
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -559,8 +570,7 @@ test "harness: every test a mutation expects to kill exists by that exact name" 
     const spec_bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/mutations.json", arena, .limited(1024 * 1024));
     const spec = try std.json.parseFromSliceLeaky(Spec, arena, spec_bytes, .{ .ignore_unknown_fields = true });
 
-    var names: std.StringHashMapUnmanaged(void) = .empty;
-    for ([_][]const u8{ "src", "tests", "tools" }) |dir| try collectTestNames(dir, &names, arena);
+    const names = try namesReachedFrom(arena, std.Io.Dir.cwd(), &test_roots);
     try testing.expect(names.count() > 500);
 
     var unknown: usize = 0;
@@ -568,7 +578,7 @@ test "harness: every test a mutation expects to kill exists by that exact name" 
         if (!std.mem.eql(u8, m.expect, "test")) continue;
         for (m.kills) |kill| {
             if (names.contains(kill)) continue;
-            std.debug.print("mutation {s} expects to kill a test that does not exist: {s}\n", .{ m.id, kill });
+            std.debug.print("mutation {s} expects to kill a test that no suite compiles: {s}\n", .{ m.id, kill });
             unknown += 1;
         }
     }

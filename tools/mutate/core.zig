@@ -93,11 +93,15 @@ pub fn failedTests(gpa: Allocator, output: []const u8) ![]const []const u8 {
     return names.toOwnedSlice(gpa);
 }
 
+fn isTestPrefix(prefix: []const u8) bool {
+    return std.mem.endsWith(u8, prefix, ".test.") or std.mem.endsWith(u8, prefix, ".decltest.");
+}
+
 pub fn missingKill(failed: []const []const u8, expected: []const []const u8) ?[]const u8 {
     outer: for (expected) |want| {
         for (failed) |got| {
             if (std.mem.eql(u8, got, want)) continue :outer;
-            if (got.len > want.len and std.mem.endsWith(u8, got, want) and std.mem.endsWith(u8, got[0 .. got.len - want.len], ".test.")) continue :outer;
+            if (got.len > want.len and std.mem.endsWith(u8, got, want) and isTestPrefix(got[0 .. got.len - want.len])) continue :outer;
         }
         return want;
     }
@@ -108,7 +112,7 @@ pub fn unexpectedKill(failed: []const []const u8, expected: []const []const u8) 
     for (failed) |got| {
         for (expected) |want| {
             if (std.mem.eql(u8, got, want)) break;
-            if (got.len > want.len and std.mem.endsWith(u8, got, want) and std.mem.endsWith(u8, got[0 .. got.len - want.len], ".test.")) break;
+            if (got.len > want.len and std.mem.endsWith(u8, got, want) and isTestPrefix(got[0 .. got.len - want.len])) break;
         } else return got;
     }
     return null;
