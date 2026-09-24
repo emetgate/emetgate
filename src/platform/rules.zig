@@ -129,7 +129,7 @@ pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile
 
     for (rules) |rule| {
         const found = checks.runLimited(gpa, profile, tree, span, &.{rule.check}, limits) catch |err| switch (err) {
-            error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),
+            error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),
             else => |e| return e,
         };
         defer gpa.free(found);
@@ -157,6 +157,7 @@ pub fn unrunnableDetail(err: checks.Unrunnable) []const u8 {
         error.QueryBudgetExceeded => "query_budget_exceeded",
         error.QueryMatchLimitExceeded => "query_match_limit_exceeded",
         error.CallBudgetExceeded => "call_budget_exceeded",
+        error.QueryDepthExceeded => "query_depth_exceeded",
     };
 }
 

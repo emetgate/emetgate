@@ -13,10 +13,13 @@ pub const max_captures_per_pattern = 8;
 
 const operations_per_callback = 100;
 
+pub const max_depth_product = 6_000;
+
 pub const Limits = struct {
     operations: u64 = 20_000_000,
     match_limit: u32 = 1024,
     pool: ?*u64 = null,
+    depth_product: u32 = max_depth_product,
 };
 
 pub const CompileError = error{
@@ -37,7 +40,7 @@ pub const CompileError = error{
     RegexSyntax,
 };
 
-pub const RunError = error{ QueryBudgetExceeded, QueryMatchLimitExceeded, CallBudgetExceeded };
+pub const RunError = error{ QueryBudgetExceeded, QueryMatchLimitExceeded, CallBudgetExceeded, QueryDepthExceeded };
 
 pub fn dependsOnLanguage(err: CompileError) bool {
     return switch (err) {
@@ -80,6 +83,7 @@ pub const Query = struct {
     arena: std.heap.ArenaAllocator,
     patterns: []const []const Predicate,
     violation: u32,
+    depth: u32 = 1,
 
     pub fn deinit(self: *Query) void {
         c.ts_query_delete(self.raw);
@@ -135,7 +139,55 @@ pub fn compile(gpa: Allocator, language: *const ts.Language, text: []const u8, d
         }
         slot.* = try predicatesOf(arena, raw, index, diag);
     }
-    return .{ .raw = raw, .arena = arena_state, .patterns = patterns, .violation = violation };
+    return .{ .raw = raw, .arena = arena_state, .patterns = patterns, .violation = violation, .depth = nestingDepth(text) };
+}
+
+pub fn nestingDepth(text: []const u8) u32 {
+    var depth: u32 = 0;
+    var deepest: u32 = 1;
+    var i: usize = 0;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"' => i = stringEnd(text, i),
+            ';' => i = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len,
+            '(', '[' => {
+                var next = i + 1;
+                while (next < text.len and std.ascii.isWhitespace(text[next])) next += 1;
+                if (text[i] == '(' and next < text.len and text[next] == '#') {
+                    i = predicateEnd(text, next);
+                    continue;
+                }
+                depth += 1;
+                deepest = @max(deepest, depth);
+                i += 1;
+            },
+            ')', ']' => {
+                depth -|= 1;
+                i += 1;
+            },
+            else => i += 1,
+        }
+    }
+    return deepest;
+}
+
+pub fn depthWithin(tree: ts.Tree, span: Span, limit: u32) bool {
+    var cursor = c.ts_tree_cursor_new(tree.root().raw);
+    defer c.ts_tree_cursor_delete(&cursor);
+    var depth: u32 = 0;
+    while (true) {
+        const node = c.ts_tree_cursor_current_node(&cursor);
+        const inside = c.ts_node_start_byte(node) <= span.end and c.ts_node_end_byte(node) >= span.start;
+        if (inside and c.ts_tree_cursor_goto_first_child(&cursor)) {
+            depth += 1;
+            if (depth > limit) return false;
+            continue;
+        }
+        while (!c.ts_tree_cursor_goto_next_sibling(&cursor)) {
+            if (depth == 0 or !c.ts_tree_cursor_goto_parent(&cursor)) return true;
+            depth -= 1;
+        }
+    }
 }
 
 fn rawPatternText(raw: *const c.TSQuery, text: []const u8, pattern: u32) []const u8 {
@@ -476,6 +528,7 @@ const Progress = struct {
 };
 
 pub fn run(gpa: Allocator, query: *const Query, tree: ts.Tree, span: Span, limits: Limits, out: *std.ArrayList(Span)) (RunError || Allocator.Error)!void {
+    if (!depthWithin(tree, span, limits.depth_product / query.depth)) return error.QueryDepthExceeded;
     const pool = limits.pool orelse return runWithin(gpa, query, tree, span, limits.match_limit, limits.operations, out);
     const granted = @min(limits.operations, pool.*);
     var left = granted;
@@ -923,6 +976,42 @@ test "q: dropping in-progress matches past the match limit fails instead of pass
     const found = try findIn(typescript.grammar(), source, whole(source), text, .{});
     defer found.deinit();
     try testing.expect(found.texts.len > 0);
+}
+
+test "q: a tree deeper than the depth product allows for the query fails before the cursor runs" {
+    const source = "a;\n";
+    const flat = try findIn(typescript.grammar(), source, whole(source), "(identifier) @violation", .{ .depth_product = 2 });
+    flat.deinit();
+    try testing.expectError(error.QueryDepthExceeded, findIn(typescript.grammar(), source, whole(source), "(identifier) @violation", .{ .depth_product = 1 }));
+
+    const nested = try findIn(typescript.grammar(), source, whole(source), "((identifier) @violation)", .{ .depth_product = 4 });
+    nested.deinit();
+    try testing.expectError(error.QueryDepthExceeded, findIn(typescript.grammar(), source, whole(source), "((identifier) @violation)", .{ .depth_product = 3 }));
+}
+
+test "q: only the depth inside the span counts" {
+    const source = "a;\nx = " ++ "a + " ** 50 ++ "a;\n";
+    const first: Span = .{ .start = 0, .end = 2 };
+    const found = try findIn(typescript.grammar(), source, first, "(identifier) @violation", .{ .depth_product = 2 });
+    defer found.deinit();
+    try testing.expectEqual(@as(usize, 1), found.texts.len);
+    try testing.expectError(error.QueryDepthExceeded, findIn(typescript.grammar(), source, whole(source), "(identifier) @violation", .{ .depth_product = 50 }));
+}
+
+test "q: a 64,000 level chain fails by name at the default depth product" {
+    const source = "x = " ++ "a + " ** 64_000 ++ "a;\n";
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    try testing.expectError(error.QueryDepthExceeded, findIn(typescript.grammar(), source, whole(source), "(call_expression) @violation", .{}));
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 10_000);
+}
+
+test "q: the pattern depth counts nodes, groups and alternations, not predicates, strings or comments" {
+    try testing.expectEqual(@as(u32, 1), nestingDepth("(identifier) @violation"));
+    try testing.expectEqual(@as(u32, 3), nestingDepth("(_ (_ (_) @violation))"));
+    try testing.expectEqual(@as(u32, 2), nestingDepth("[(identifier) (string)] @violation"));
+    try testing.expectEqual(@as(u32, 2), nestingDepth("((identifier) @violation (#eq? @violation \"((((\"))"));
+    try testing.expectEqual(@as(u32, 2), nestingDepth("; ((((\n((identifier) @violation)"));
+    try testing.expectEqual(@as(u32, 3), nestingDepth("(a) @violation ((b (c)) @violation)"));
 }
 
 test "q: a node type only one grammar has compiles only for that grammar" {
