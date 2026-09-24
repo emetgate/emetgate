@@ -176,6 +176,48 @@ test "emetgate_read_symbol returns one body and its hash" {
     try testing.expect(std.mem.indexOf(u8, response, "\\\"body\\\":\\\"") != null);
 }
 
+test "emetgate_read_symbol with symbols reads several bodies at once" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbols":["add","square"]}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"add\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"square\\\"") != null);
+}
+
+test "emetgate_read_symbol with a line range widens to the symbol boundary" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","line_start":10,"line_end":10}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"add\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"start_line\\\":9") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"end_line\\\":11") != null);
+}
+
+test "emetgate_read_symbol with a line range hitting no symbol is a tool error" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","line_start":1,"line_end":1}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"error\\\":\\\"NoSymbolInRange\\\"") != null);
+}
+
 test "emetgate_read_symbol on an unknown symbol is a tool error" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
