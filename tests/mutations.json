@@ -3848,6 +3848,64 @@
         "scan: a call budget shared by every file turns the files it cannot pay for into check failures",
         "scan tool: one call has a total operation budget, and the files past it come back as check failures"
       ]
+    },
+    {
+      "id": "ZS1-test-name-escapes-not-decoded",
+      "file": "tests/zig_source.zig",
+      "from": "            .string_literal => try names.append(arena, .{ .name = try std.zig.string_literal.parseAlloc(arena, text), .decl = false }),\n",
+      "to": "            .string_literal => try names.append(arena, .{ .name = text, .decl = false }),\n",
+      "kills": [
+        "harness: kill names come only from files a suite compiles, with escapes decoded and identifier tests included",
+        "harness: every test a mutation expects to kill exists by that exact name in a file a suite compiles"
+      ]
+    },
+    {
+      "id": "ZS2-identifier-tests-ignored",
+      "file": "tests/zig_source.zig",
+      "from": "            .identifier => try names.append(arena, .{ .name = text, .decl = true }),\n",
+      "to": "            .identifier => {},\n",
+      "kills": [
+        "harness: kill names come only from files a suite compiles, with escapes decoded and identifier tests included"
+      ]
+    },
+    {
+      "id": "ZS3-imports-not-followed",
+      "file": "tests/zig_source.zig",
+      "from": "            try pending.append(arena, try std.fs.path.resolvePosix(arena, &.{ base, target }));\n",
+      "to": "            _ = try std.fs.path.resolvePosix(arena, &.{ base, target });\n",
+      "kills": [
+        "harness: kill names come only from files a suite compiles, with escapes decoded and identifier tests included",
+        "harness: every test a mutation expects to kill exists by that exact name in a file a suite compiles"
+      ]
+    },
+    {
+      "id": "ZS4-every-file-declares-tests",
+      "file": "tests/zig_source.zig",
+      "from": "        if (tree.nodeTag(@enumFromInt(i)) == .test_decl) return true;\n",
+      "to": "        if (tree.nodeTag(@enumFromInt(i)) == .test_decl or true) return true;\n",
+      "kills": [
+        "suites: a test is found in any form and position, and a commented one is not",
+        "suites: every test file under tests/ is imported by exactly one suite",
+        "suites: no test file imports another file that declares tests, so no test runs in two suites"
+      ]
+    },
+    {
+      "id": "ZS5-decltest-not-matched",
+      "file": "tools/mutate/core.zig",
+      "from": "    return std.mem.endsWith(u8, prefix, \".test.\") or std.mem.endsWith(u8, prefix, \".decltest.\");\n",
+      "to": "    return std.mem.endsWith(u8, prefix, \".test.\");\n",
+      "kills": [
+        "harness: a failed decltest matches the identifier a mutation names"
+      ]
+    },
+    {
+      "id": "ZS6-suite-guards-only-in-rest",
+      "file": "test_root.zig",
+      "from": "    _ = @import(\"tests/suites.zig\");\n",
+      "to": "    if (comptime runs(\"rest\")) _ = @import(\"tests/suites.zig\");\n",
+      "kills": [
+        "suites: the guards are imported outside the runs switch, so every suite runs them"
+      ]
     }
   ]
 }
