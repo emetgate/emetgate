@@ -4250,6 +4250,24 @@
       ]
     },
     {
+      "id": "SC9-active-mutant-setter-joins-schema",
+      "file": "tools/mutate/schema.zig",
+      "from": "        if (std.mem.indexOf(u8, file.source[r[0]..r[1]], active_assignment) != null) return .{ .refused = .sets_active_mutant };\n",
+      "to": "",
+      "kills": [
+        "schema: the function that sets the active mutant runs on its own, the functions it calls join the schema"
+      ]
+    },
+    {
+      "id": "SC10-active-mutant-comparison-refused",
+      "file": "tools/mutate/schema.zig",
+      "from": "const active_assignment = active_name ++ \" = \";",
+      "to": "const active_assignment = active_name ++ \" =\";",
+      "kills": [
+        "schema: the function that sets the active mutant runs on its own, the functions it calls join the schema"
+      ]
+    },
+    {
       "id": "RN13-skip-ignored",
       "file": "tools/test_runner.zig",
       "from": "if (std.mem.eql(u8, name.*, skip)) name.* = \"\";",

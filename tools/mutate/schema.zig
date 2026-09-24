@@ -3,9 +3,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Ast = std.zig.Ast;
 
-pub const active_global = "@import(\"root\").emetgate_mutant";
+const active_name = "emetgate_mutant";
+pub const active_global = "@import(\"root\")." ++ active_name;
+const active_assignment = active_name ++ " = ";
 
-pub const excluded_files = [_][]const u8{ "build.zig", "test_root.zig", "tools/test_runner.zig", "tools/mutate/main.zig" };
+pub const excluded_files = [_][]const u8{ "build.zig", "test_root.zig", "tools/mutate/main.zig" };
 
 pub const Refusal = enum {
     not_zig,
@@ -21,6 +23,7 @@ pub const Refusal = enum {
     touches_signature,
     inline_extern_or_export,
     varargs,
+    sets_active_mutant,
     compile_error,
 };
 
@@ -129,6 +132,7 @@ pub const File = struct {
             try params.append(gpa, .{ .name = tree.tokenSlice(tok), .token_start = tree.tokenStart(tok) });
         }
         const r = file.range(node);
+        if (std.mem.indexOf(u8, file.source[r[0]..r[1]], active_assignment) != null) return .{ .refused = .sets_active_mutant };
         return .{ .site = .{
             .fn_start = r[0],
             .fn_end = r[1],
