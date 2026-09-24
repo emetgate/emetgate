@@ -186,8 +186,14 @@ only appears inside a comment. `forbid:` cannot make that distinction.
   compile for. At the gate the query is compiled against the edited file's language. If it does
   not compile there, the proposal is refused with `rule_check_crashed`, detail
   `query_not_for_language`. The rule is not skipped.
-- **Captures.** A capture may not be repeated with `+` or `*` (`(_)+ @c`, `((_) @c)*`), and a
-  pattern may hold at most 8 captures; arguments of a predicate do not count. The query is
+- **Captures.** A capture may not be repeated with `+` or `*` (`(_)+ @c`, `((_) @c)*`). A
+  capture on a group or an alternation is refused too when a `+` or `*` sits at that group's own
+  level (`((_)+) @c`, `[(a)+ (b)] @c`, `((b) (a)+) @c`): tree-sitter ties such a capture to the
+  group's first step, a repeat can loop back to it, and the capture is recorded again on every
+  pass. A repeat inside a node pattern of the group (`((call (arguments (_)+))) @c`) is allowed.
+  On 20,000 lines of `a;` the refused `(program ((expression_statement)+) @violation)` had
+  taken 41.6 s and its alternation form 65.7 s in a Debug build; both are now refused by name
+  in under 0.2 s. A pattern may hold at most 8 captures; arguments of a predicate do not count. The query is
   refused with `QueryQuantifiedCapture` or `QueryTooManyCaptures` and the pattern is printed.
   `?` and a repeat that captures nothing (`(arguments (_)+)`) are allowed. The reason is work
   tree-sitter does inside its cursor that the operation budget cannot see: a repeated capture
@@ -231,7 +237,7 @@ class shorthand used as a range end point (`[\d-z]`), is refused with `RegexSynt
 | Limit | Value |
 |---|---|
 | query text | 4 KB including `q:`, as for `cmd:` (`QueryTooLong`) |
-| captures | at most 8 per pattern, none repeated with `+` or `*` |
+| captures | at most 8 per pattern, none repeated with `+` or `*`, none on a group or alternation with `+` or `*` at its own level |
 | operations per run | 20,000,000, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited) and the other predicates (1 per capture visited, and 1 plus the bytes compared for each comparison) |
 | in-progress matches | 1024 |
 
