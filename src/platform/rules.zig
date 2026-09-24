@@ -539,6 +539,49 @@ test "a violation's text is cut to 256 bytes on a character boundary, its positi
     try testing.expectEqualStrings(shown("a" ** 254 ++ "ş"), "a" ** 254 ++ "ş");
 }
 
+const Spot = struct { text: []const u8, line: u32, col: u32, end_line: u32, end_col: u32 };
+
+fn expectSpots(source: []const u8, check: []const u8, expected: []const Spot) !void {
+    errdefer std.debug.print("source \"{s}\" check {s}\n", .{ source, check });
+    const report = (try evaluateSource(source, .{ .start = 0, .end = @intCast(source.len) }, &.{.{ .id = "r", .check = check }})) orelse return error.TestExpectedViolation;
+    defer report.deinit(testing.allocator);
+    errdefer for (report.violations) |v| std.debug.print("  {s} {d}:{d}-{d}:{d}\n", .{ v.text, v.line, v.col, v.end_line, v.end_col });
+    try testing.expectEqual(expected.len, report.violations.len);
+    for (expected, report.violations) |want, got| {
+        try testing.expectEqualStrings(want.text, got.text);
+        try testing.expectEqual(want.line, got.line);
+        try testing.expectEqual(want.col, got.col);
+        try testing.expectEqual(want.end_line, got.end_line);
+        try testing.expectEqual(want.end_col, got.end_col);
+    }
+}
+
+test "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes" {
+    try expectSpots("a;\n\nb;", "q:(identifier) @violation", &.{
+        .{ .text = "a", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "b", .line = 3, .col = 1, .end_line = 3, .end_col = 2 },
+    });
+    try expectSpots("a;\n\nb;\n", "q:(identifier) @violation", &.{
+        .{ .text = "a", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "b", .line = 3, .col = 1, .end_line = 3, .end_col = 2 },
+    });
+    try expectSpots("x;\n\n\n  yy;", "q:(identifier) @violation", &.{
+        .{ .text = "x", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "yy", .line = 4, .col = 3, .end_line = 4, .end_col = 5 },
+    });
+    try expectSpots("a;\r\nbb;\r\n", "q:(identifier) @violation", &.{
+        .{ .text = "a", .line = 1, .col = 1, .end_line = 1, .end_col = 2 },
+        .{ .text = "bb", .line = 2, .col = 1, .end_line = 2, .end_col = 3 },
+    });
+    try expectSpots("const ş = 1; x;\n", "q:(identifier) @violation", &.{
+        .{ .text = "ş", .line = 1, .col = 7, .end_line = 1, .end_col = 9 },
+        .{ .text = "x", .line = 1, .col = 15, .end_line = 1, .end_col = 16 },
+    });
+    try expectSpots("f(\n  a,\n  b);", "q:(arguments) @violation", &.{
+        .{ .text = "(\n  a,\n  b)", .line = 1, .col = 2, .end_line = 3, .end_col = 5 },
+    });
+}
+
 test "the line index gives the same line and column as a scan from the start, at every offset" {
     for ([_][]const u8{ "", "\n", "a", "ab\ncd\n\nef", "x\r\ny\r\n", "şğ\nü\n" }) |source| {
         const lines = try Lines.init(testing.allocator, source);
