@@ -45,6 +45,9 @@ if (Test-Path $report) { Remove-Item $report }
 Invoke-Stage "mutants changed since $Ref" {
     & (Join-Path $root "zig-out/bin/emetgate-mutate.exe") "--jobs=$Jobs" --skip-survivors --changed-since $Ref
 }
+Invoke-Stage "verification page up to date" {
+    python (Join-Path $root "tools/verification_page.py") --check
+}
 if (Test-Path $report) {
     $outcomes = Get-Content $report -Raw | ConvertFrom-Json
     $schema = @($outcomes | Where-Object { $_.origin -eq 'schema' }).Count
