@@ -41,6 +41,14 @@ pub fn jail(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) !Ja
     return .{ .root = served, .abs = abs, .rel = rel };
 }
 
+pub fn refuseLinkAsWritten(gpa: Allocator, io: std.Io, path: []const u8) !void {
+    const cwd_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd_abs);
+    const resolved = try std.fs.path.resolve(gpa, &.{ cwd_abs, path });
+    defer gpa.free(resolved);
+    if (shadow.isReparsePoint(resolved) catch true) return error.ReparsePoint;
+}
+
 fn refuseInternalAsWritten(gpa: Allocator, io: std.Io, served: []const u8, path: []const u8) !void {
     const cwd_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
     defer gpa.free(cwd_abs);

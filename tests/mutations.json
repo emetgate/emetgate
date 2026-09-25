@@ -691,8 +691,8 @@
     {
       "id": "G2-rules-gate-skipped-for-batch",
       "file": "src/platform/batch.zig",
-      "from": "p.applied.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
-      "to": "p.applied.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
+      "from": "p.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
+      "to": "p.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: one violating edit rejects the whole batch and leaves disk untouched"
       ]
@@ -2236,8 +2236,8 @@
     {
       "id": "SP34-batch-gates-with-first-ref",
       "file": "src/platform/batch.zig",
-      "from": "|p, edit| {\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
-      "to": "|p, edit| {\n        _ = edit;\n        const ref = try symbol.Ref.parse(gpa, options.edits[0].ref_text);",
+      "from": "|p, edit| {\n        if (!p.addsCode()) continue;\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
+      "to": "|p, edit| {\n        if (!p.addsCode()) continue;\n        _ = edit;\n        const ref = try symbol.Ref.parse(gpa, options.edits[0].ref_text);",
       "kills": [
         "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
       ]
@@ -3576,8 +3576,8 @@
     {
       "id": "Q22-batch-trusts-a-committed-query-rule",
       "file": "src/platform/batch.zig",
-      "from": "p.applied.body, options.allow_repo_memory)) {",
-      "to": "p.applied.body, true)) {",
+      "from": "p.body, options.allow_repo_memory)) {",
+      "to": "p.body, true)) {",
       "kills": [
         "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
       ]

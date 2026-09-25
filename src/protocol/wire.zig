@@ -248,6 +248,7 @@ pub const BatchEdit = struct {
     old_hash: symbol.Expected,
     new_hash: symbol.Hash,
     evidence: ?symmetry.Evidence = null,
+    deleted: bool = false,
 };
 
 pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?ShadowNote) !void {
@@ -268,8 +269,13 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
         try js.write(edit.symbol);
         try js.objectField("old_hash");
         try js.write(old_hex);
-        try js.objectField("new_hash");
-        try js.write(new_hex[0..]);
+        if (edit.deleted) {
+            try js.objectField("deleted");
+            try js.write(true);
+        } else {
+            try js.objectField("new_hash");
+            try js.write(new_hex[0..]);
+        }
         if (edit.evidence) |evidence| try writeEvidence(&js, evidence);
         try js.endObject();
     }

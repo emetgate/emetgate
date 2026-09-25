@@ -315,7 +315,7 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("name");
     try js.write("emetgate_try_batch");
     try js.objectField("description");
-    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.");
+    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. hash \"absent\" adds a new top-level symbol or a new file. op \"delete\" with symbol and hash removes an unreferenced top-level symbol; op \"delete\" without symbol deletes the file (hash, when given, is the hash of the whole file). The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.");
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");
@@ -327,14 +327,34 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("type");
     try js.write("array");
     try js.objectField("description");
-    try js.write("one edit per file: {file, symbol, hash, body}");
+    try js.write("one edit per file: {file, symbol, hash, body} to write, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file");
     try js.objectField("items");
     try js.beginObject();
     try js.objectField("type");
     try js.write("object");
+    try js.objectField("properties");
+    try js.beginObject();
+    inline for (.{ "file", "symbol", "hash", "body" }) |field| {
+        try js.objectField(field);
+        try js.beginObject();
+        try js.objectField("type");
+        try js.write("string");
+        try js.endObject();
+    }
+    try js.objectField("op");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("string");
+    try js.objectField("enum");
+    try js.beginArray();
+    try js.write("write");
+    try js.write("delete");
+    try js.endArray();
+    try js.endObject();
+    try js.endObject();
     try js.objectField("required");
     try js.beginArray();
-    inline for (.{ "file", "symbol", "hash", "body" }) |field| try js.write(field);
+    try js.write("file");
     try js.endArray();
     try js.endObject();
     try js.endObject();

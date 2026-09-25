@@ -27,6 +27,7 @@ pub const resolveTypecheckCommand = test_command_mod.resolveTypecheckCommand;
 pub const Gate = gate_mod.Gate;
 pub const chooseGate = gate_mod.chooseGate;
 pub const Edit = batch.Edit;
+pub const EditOp = batch.EditOp;
 pub const BatchOptions = batch.BatchOptions;
 pub const BatchResult = batch.BatchResult;
 pub const tryMutateBatch = batch.tryMutateBatch;
