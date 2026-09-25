@@ -6,18 +6,19 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **804**
-- Mutations declared in `tests/mutations.json`: **480**
-  - killed: **463**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **813**
+- Mutations declared in `tests/mutations.json`: **484**
+  - killed: **465**
   - equivalent: **5**
   - defense in depth: **3**
-  - open: **2**
+  - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-- Red-team suites: **6** files, **53** tests total
+- Red-team suites: **7** files, **56** tests total
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
+  - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
@@ -501,7 +502,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-67 mutation(s).
+71 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -571,6 +572,10 @@ python tools/verification_page.py --check
 | `SR2-shadow-key-ignores-the-path` | `src/platform/shadow_root.zig` | `for (root_abs[0..end]) \|byte\| {` -> `for (root_abs[0..@min(end, 3)]) \|byte\| {` | the shadow key folds case and separators, and two repositories never share one | killed |
 | `SR4-dot-segment-not-flagged` | `src/platform/shadow_root.zig` | `return hasDotSegment(self.shadow);` -> `return hasDotSegment(self.shadow[0..0]);` | redteam sandbox: the shadow lives under the operator's shadow root, outside the... | killed |
 | `SR5-sweep-removes-a-live-shadow` | `src/platform/shadow_root.zig` | `catch \|err\| return err == error.FileNotFound;     return fals...` -> `catch \|err\| return err == error.FileNotFound;     return true;` | sweep removes only stale shadows whose repository is gone, and never follows a ... | killed |
+| `GT1-fsmonitor-override-removed` | `src/protocol/git_tools.zig` | `"core.fsmonitor=false",` -> `` | open: the redteam repo sets core.fsmonitor to a shell command, but git's fsmonitor is a v... | open |
+| `GT2-commit-id-check-removed` | `src/protocol/git_tools.zig` | `if (!isValidCommit(commit)) return error.InvalidCommit;` -> `` | git show returns one commit and refuses a malformed commit id; redteam git: argument inje... | killed |
+| `GT4-output-byte-limit-removed` | `src/protocol/git_tools.zig` | `.stdout_limit = .limited(max_git_output_bytes),` -> `.stdout_limit = .unlimited,` | open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git ... | open |
+| `GT5-output-line-limit-removed` | `src/protocol/git_tools.zig` | `if (kept.items.len < max_output_lines) try kept.append(gpa, lin...` -> `try kept.append(gpa, line);` | git diff caps output at a line count and marks it truncated | killed |
 | `FH3-skeleton-without-file-hash` | `src/protocol/wire.zig` | `try js.write(file);     try writeFileHash(&js, file_hash);     ...` -> `try js.write(file);     _ = file_hash;     try js.objectField("...` | redteam batch delete: an unreferenced file is deleted through the tool and repo... | killed |
 
 ## What this system does not prove
