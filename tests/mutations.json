@@ -4745,8 +4745,8 @@
     {
       "id": "SR1-cleanup-follows-a-linked-workspace",
       "file": "src/platform/shadow.zig",
-      "from": "    try ensureInsideWorkspace(base_abs, shadow_abs);\n    try ensureNoLinks(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
-      "to": "    try ensureInsideWorkspace(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
+      "from": "Links(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
+      "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
       "kills": [
         "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
       ]
