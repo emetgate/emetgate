@@ -14,7 +14,7 @@ const WidePath = [std.fs.max_path_bytes:0]u16;
 pub fn hashFile(gpa: Allocator, io: std.Io, path: []const u8) !symbol.Hash {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
     defer gpa.free(bytes);
-    return symbol.hashOf(bytes);
+    return symbol.fileHash(bytes);
 }
 
 pub fn verifyBase(gpa: Allocator, io: std.Io, path: []const u8, expected: symbol.Hash) !void {
@@ -51,7 +51,7 @@ pub const Guard = struct {
     pub fn hash(self: Guard, gpa: Allocator, io: std.Io) !symbol.Hash {
         const bytes = try self.readAll(gpa, io);
         defer gpa.free(bytes);
-        return symbol.hashOf(bytes);
+        return symbol.fileHash(bytes);
     }
 
     fn readAll(self: Guard, gpa: Allocator, io: std.Io) ![]u8 {
@@ -200,6 +200,7 @@ pub const Pending = struct {
     data_hash: symbol.Hash,
     state: State = .planned,
     freed: bool = false,
+    removed: bool = false,
 
     pub const Kind = enum { modify, create, delete };
     const State = enum { planned, staged, backed_up, swapped };
@@ -270,6 +271,7 @@ pub const Pending = struct {
             .delete => {
                 defer self.closeHandles();
                 try self.guard.?.deleteSelf();
+                self.removed = true;
             },
             .create => self.closeHandles(),
         }
@@ -516,7 +518,7 @@ fn syncBatchIndex(pendings: []const Pending, batch: ?*const Batch) !void {
     defer removed.deinit(b.gpa);
     for (pendings) |p| switch (p.kind) {
         .create => try added.append(b.gpa, p.path),
-        .delete => try removed.append(b.gpa, p.path),
+        .delete => if (p.removed) try removed.append(b.gpa, p.path),
         .modify => {},
     };
     try syncIndex(b.gpa, b.io, root, added.items, removed.items);

@@ -3154,8 +3154,8 @@
     {
       "id": "RO3-rules-dropped-from-the-skeleton",
       "file": "src/protocol/handlers.zig",
-      "from": "    try wire.writeSkeleton(w, file, text, adopted.items);",
-      "to": "    try wire.writeSkeleton(w, file, text, &.{});",
+      "from": "    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, adopted.items);",
+      "to": "    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, &.{});",
       "kills": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
       ]
@@ -4877,6 +4877,34 @@
       "to": "    _ = deleteWithRetry(io, path_abs);\n    return .deleted;",
       "kills": [
         "a verified delete removes the file it hashed even when the path is taken over before the delete"
+      ]
+    },
+    {
+      "id": "FH1-file-delete-without-hash-accepted",
+      "file": "src/platform/batch_plan.zig",
+      "from": "        .absent => return error.MissingFileHash,",
+      "to": "        .absent => current,",
+      "kills": [
+        "batch delete through the tool: a file delete without the whole-file hash is refused and the file stays",
+        "redteam batch delete: a file delete without its whole-file hash is refused"
+      ]
+    },
+    {
+      "id": "FH2-failed-delete-still-unindexed",
+      "file": "src/platform/disk.zig",
+      "from": "        .delete => if (p.removed) try removed.append(b.gpa, p.path),",
+      "to": "        .delete => try removed.append(b.gpa, p.path),",
+      "kills": [
+        "batch delete crash: a delete that fails at finalize leaves the file in the git index"
+      ]
+    },
+    {
+      "id": "FH3-skeleton-without-file-hash",
+      "file": "src/protocol/wire.zig",
+      "from": "    try js.write(file);\n    try writeFileHash(&js, file_hash);\n    try js.objectField(\"skeleton\");",
+      "to": "    try js.write(file);\n    _ = file_hash;\n    try js.objectField(\"skeleton\");",
+      "kills": [
+        "redteam batch delete: an unreferenced file is deleted through the tool and reported as deleted"
       ]
     }
   ]

@@ -309,3 +309,30 @@ test "batch delete crash: per-file journals written before v2 still roll a commi
     }
     try repo.expectNoDebris();
 }
+
+extern "kernel32" fn SetFileAttributesW(name: [*:0]const u16, attributes: std.os.windows.DWORD) callconv(.winapi) std.os.windows.BOOL;
+
+fn setAttributes(path: []const u8, attributes: std.os.windows.DWORD) !void {
+    var wide: [std.fs.max_path_bytes:0]u16 = undefined;
+    const len = try std.unicode.wtf8ToWtf16Le(&wide, path);
+    wide[len] = 0;
+    if (SetFileAttributesW(&wide, attributes) == .FALSE) return error.SetAttributesFailed;
+}
+
+test "batch delete crash: a delete that fails at finalize leaves the file in the git index" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init(&.{ .modify, .delete });
+    defer repo.deinit();
+    const batch = repo.batch();
+    var pendings: [2]disk.Pending = undefined;
+    try repo.prepareAll(&pendings);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try std.fmt.bufPrint(&buf, "{s}\\f1.ts", .{repo.root});
+    try setAttributes(path, 0x1);
+    defer setAttributes(path, 0x80) catch {};
+
+    var leftover: disk.Leftover = .{};
+    try disk.commitBatch(&pendings, &leftover, null, &batch, null);
+    try testing.expect(leftover.path() != null);
+    try repo.expectFile(1, old[1]);
+}

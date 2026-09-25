@@ -42,11 +42,12 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
     try writer.writeByte('\n');
 }
 
-pub fn writeSkeleton(writer: *Writer, file: []const u8, skeleton_text: []const u8, adopted: []const rules.Adopted) !void {
+pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, skeleton_text: []const u8, adopted: []const rules.Adopted) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
+    try writeFileHash(&js, file_hash);
     try js.objectField("skeleton");
     try js.write(skeleton_text);
     try js.objectField("rules");
@@ -86,7 +87,13 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try writer.writeByte('\n');
 }
 
-pub fn writeUnchanged(writer: *Writer, file: []const u8, unit: ?[]const u8, hash: symbol.Hash) !void {
+pub fn writeFileHash(js: *std.json.Stringify, file_hash: symbol.Hash) !void {
+    const hex = symbol.formatHash(file_hash);
+    try js.objectField("file_hash");
+    try js.write(hex[0..]);
+}
+
+pub fn writeUnchanged(writer: *Writer, file: []const u8, unit: ?[]const u8, hash: symbol.Hash, file_hash: ?symbol.Hash) !void {
     const hex = symbol.formatHash(hash);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -100,6 +107,7 @@ pub fn writeUnchanged(writer: *Writer, file: []const u8, unit: ?[]const u8, hash
     }
     try js.objectField("hash");
     try js.write(hex[0..]);
+    if (file_hash) |fh| try writeFileHash(&js, fh);
     try js.objectField("hint");
     try js.write("already sent unchanged this session; pass force:true to get the full content again");
     try js.endObject();
@@ -722,7 +730,7 @@ test "file paths with backslashes and quotes are JSON-escaped" {
 test "skeleton payload embeds the outline as one JSON line" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSkeleton(&buffer.writer, "src/a.ts", "export function add(a: number, b: number): number;\n", &.{});
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(a: number, b: number): number;\n", &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
@@ -738,7 +746,7 @@ test "the skeleton payload carries every adopted rule as data, with no way to ch
         .{ .id = "m1", .text = "no console.log", .mode = "enforce", .check = "cmd:npx eslint", .where = "src/" },
         .{ .id = "m2", .text = "prefer Money", .mode = "advisory" },
     };
-    try writeSkeleton(&buffer.writer, "src/a.ts", "export function add(): void;\n", &adopted);
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(): void;\n", &adopted);
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));

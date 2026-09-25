@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const diagnostics = @import("diagnostics.zig");
 const runner = @import("emetgate").runner;
 const disk = @import("emetgate").disk;
+const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const support = @import("runner_support.zig");
@@ -58,6 +59,10 @@ const Fixture = struct {
         return .{ .file_abs = self.file_a, .ref_text = "add", .expected_hash = .{ .present = try hashOfRef(testing.allocator, testing.io, self.runtime, self.file_a, "add") }, .new_body = body };
     }
 
+    fn deleteB(self: *Fixture) runner.Edit {
+        return .{ .file_abs = self.file_b, .ref_text = "", .expected_hash = .{ .present = symbol.fileHash(TwoFile.b_src) }, .op = .delete };
+    }
+
     fn run(self: *Fixture, edits: []const runner.Edit, step: ?*const disk.Step) !runner.BatchResult {
         return runner.tryMutateBatch(testing.allocator, testing.io, self.runtime, .{ .edits = edits, .test_command = "cmd /c exit 0", .commit_step = step });
     }
@@ -101,7 +106,7 @@ fn crashThenRecover(stop: usize) !void {
 
     var at: StopAt = .{ .target = stop };
     const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
-    const edits = [_]runner.Edit{ try f.modifyA("{ return a - b; }"), .{ .file_abs = f.file_b, .ref_text = "", .expected_hash = .absent, .op = .delete } };
+    const edits = [_]runner.Edit{ try f.modifyA("{ return a - b; }"), f.deleteB() };
     if (f.run(&edits, &step)) |result| {
         defer result.deinit(testing.allocator);
         diagnostics.printResult(result);
@@ -129,7 +134,7 @@ test "batch delete through the tool: a batch that modifies one file and deletes 
     var f: Fixture = .{ .repo = undefined, .runtime = undefined };
     try f.init();
     defer f.deinit();
-    const edits = [_]runner.Edit{ try f.modifyA("{ return a - b; }"), .{ .file_abs = f.file_b, .ref_text = "", .expected_hash = .absent, .op = .delete } };
+    const edits = [_]runner.Edit{ try f.modifyA("{ return a - b; }"), f.deleteB() };
     const result = try f.run(&edits, null);
     defer result.deinit(testing.allocator);
     errdefer diagnostics.printResult(result);
@@ -169,4 +174,28 @@ test "batch delete through the tool: a symbol that another edit of the batch cal
     const edits = [_]runner.Edit{ try f.modifyA("{ return twice(a) + b; }"), .{ .file_abs = f.file_b, .ref_text = "twice", .expected_hash = .{ .present = twice }, .op = .delete } };
     try testing.expectError(error.SymbolReferenced, f.run(&edits, null));
     try f.expectOld();
+}
+
+test "batch delete through the tool: a file delete without the whole-file hash is refused and the file stays" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var f: Fixture = .{ .repo = undefined, .runtime = undefined };
+    try f.init();
+    defer f.deinit();
+    const edits = [_]runner.Edit{.{ .file_abs = f.file_b, .ref_text = "", .expected_hash = .absent, .op = .delete }};
+    try testing.expectError(error.MissingFileHash, f.run(&edits, null));
+    try f.expectOld();
+}
+
+test "batch delete through the tool: a file that changed after its hash was read is refused with HashMismatch" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var f: Fixture = .{ .repo = undefined, .runtime = undefined };
+    try f.init();
+    defer f.deinit();
+    const edits = [_]runner.Edit{f.deleteB()};
+    const edited = "export function twice(x: number): number {\n  return 2 * x;\n}\n";
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/b.ts", .data = edited });
+    try testing.expectError(error.HashMismatch, f.run(&edits, null));
+    const b_now = (try f.b()) orelse return error.FileMissing;
+    defer testing.allocator.free(b_now);
+    try testing.expectEqualStrings(edited, b_now);
 }

@@ -23,6 +23,10 @@ const isOneOf = functions_mod.isOneOf;
 pub const Hash = [16]u8;
 pub const hash_hex_len = @sizeOf(Hash) * 2;
 
+pub fn fileHash(bytes: []const u8) Hash {
+    return hashOf(bytes);
+}
+
 pub fn hashOf(text: []const u8) Hash {
     var out: Hash = undefined;
     std.crypto.hash.Blake3.hash(text, &out, .{});

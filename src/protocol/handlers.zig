@@ -142,14 +142,14 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
         if (try m.check(key, hash, force) == .unchanged) {
             event.chars_emetgate = 0;
             event.chars_fullfile = snapshot.source.len;
-            return wire.writeUnchanged(w, file, null, hash);
+            return wire.writeUnchanged(w, file, null, hash, symbol.fileHash(snapshot.source));
         }
     }
     const adopted = try rules.adoptedFor(gpa, io, place.root, place.rel);
     defer adopted.deinit();
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSkeleton(w, file, text, adopted.items);
+    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, adopted.items);
 }
 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror) !ToolResult {
@@ -204,7 +204,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
         if (try m.check(key, found.hash, force) == .unchanged) {
             event.chars_emetgate = 0;
             event.chars_fullfile = snapshot.source.len;
-            return wire.writeUnchanged(w, file, sym, found.hash);
+            return wire.writeUnchanged(w, file, sym, found.hash, null);
         }
     }
     const body = snapshot.tree.text(found.body);

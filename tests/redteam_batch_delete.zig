@@ -11,6 +11,7 @@ const testing = std.testing;
 const math = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
 const user = "import { add } from './math';\nexport function total(): number {\n  return add(1, 2);\n}\n";
 const spare = "export function unused(): number {\n  return 7;\n}\n";
+const notes = "release notes that no code reads\n";
 const local = "function helper(): number {\n  return 1;\n}\nexport function run(): number {\n  return helper();\n}\n";
 
 const Repo = struct {
@@ -27,6 +28,7 @@ const Repo = struct {
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/user.ts", .data = user });
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/spare.ts", .data = spare });
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/local.ts", .data = local });
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.txt", .data = notes });
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "outside/x.ts", .data = spare });
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
@@ -116,10 +118,54 @@ fn deleteLine(items: []const Item) ![]u8 {
 }
 
 fn call(repo: *Repo, items: []const Item) ![]u8 {
-    const runtime = try Runtime.create(testing.allocator);
-    defer runtime.destroy() catch @panic("live snapshots");
     const line = try deleteLine(items);
     defer testing.allocator.free(line);
+    return callLine(repo, line);
+}
+
+fn readLine(tool: []const u8, file: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    try js.objectField("jsonrpc");
+    try js.write("2.0");
+    try js.objectField("id");
+    try js.write(1);
+    try js.objectField("method");
+    try js.write("tools/call");
+    try js.objectField("params");
+    try js.beginObject();
+    try js.objectField("name");
+    try js.write(tool);
+    try js.objectField("arguments");
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.endObject();
+    try js.endObject();
+    try js.endObject();
+    return testing.allocator.dupe(u8, out.written());
+}
+
+fn fileHashFrom(tool: []const u8, repo: *Repo, file: []const u8) ![symbol.hash_hex_len]u8 {
+    const line = try readLine(tool, file);
+    defer testing.allocator.free(line);
+    const response = try callLine(repo, line);
+    defer testing.allocator.free(response);
+    errdefer std.debug.print("response: {s}\n", .{response});
+    const marker = "file_hash\\\":\\\"";
+    const at = std.mem.indexOf(u8, response, marker) orelse return error.NoFileHash;
+    const start = at + marker.len;
+    if (start + symbol.hash_hex_len > response.len) return error.NoFileHash;
+    var out: [symbol.hash_hex_len]u8 = undefined;
+    @memcpy(&out, response[start..][0..symbol.hash_hex_len]);
+    return out;
+}
+
+fn callLine(repo: *Repo, line: []const u8) ![]u8 {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
     _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line, &buffer.writer, null, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
@@ -233,11 +279,38 @@ test "redteam batch delete: an unreferenced file is deleted through the tool and
     defer repo.deinit();
     const file = try repo.path("src\\spare.ts");
     defer testing.allocator.free(file);
-    const current = symbol.formatHash(symbol.hashOf(spare));
+    const current = try fileHashFrom("emetgate_skeleton", &repo, file);
+    try testing.expectEqualStrings(&symbol.formatHash(symbol.fileHash(spare)), &current);
     const response = try call(&repo, &.{.{ .file = file, .hash = &current }});
     defer testing.allocator.free(response);
     errdefer std.debug.print("response: {s}\n", .{response});
     try testing.expect(std.mem.indexOf(u8, response, "committed") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"deleted\\\":true") != null);
     try testing.expect(!repo.exists("repo/src/spare.ts"));
+}
+
+test "redteam batch delete: a file delete without its whole-file hash is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const file = try repo.path("notes.txt");
+    defer testing.allocator.free(file);
+    const response = try call(&repo, &.{.{ .file = file }});
+    defer testing.allocator.free(response);
+    try expectRefused(response, "MissingFileHash");
+    try testing.expect(repo.exists("repo/notes.txt"));
+}
+
+test "redteam batch delete: the file_hash from emetgate_read_file deletes the file it describes" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const file = try repo.path("notes.txt");
+    defer testing.allocator.free(file);
+    const current = try fileHashFrom("emetgate_read_file", &repo, file);
+    const response = try call(&repo, &.{.{ .file = file, .hash = &current }});
+    defer testing.allocator.free(response);
+    errdefer std.debug.print("response: {s}\n", .{response});
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"deleted\\\":true") != null);
+    try testing.expect(!repo.exists("repo/notes.txt"));
 }

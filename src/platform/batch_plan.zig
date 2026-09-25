@@ -78,11 +78,12 @@ fn planFileDeletion(gpa: Allocator, io: std.Io, edit: Edit, rel: []u8) !Prepared
     try repo.refuseInternal(rel);
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, edit.file_abs, gpa, .unlimited);
     defer gpa.free(bytes);
-    const current = symbol.hashOf(bytes);
-    switch (edit.expected_hash) {
-        .present => |expected| if (!std.mem.eql(u8, &expected, &current)) return error.HashMismatch,
-        .absent => {},
-    }
+    const current = symbol.fileHash(bytes);
+    const expected = switch (edit.expected_hash) {
+        .present => |hash| hash,
+        .absent => return error.MissingFileHash,
+    };
+    if (!std.mem.eql(u8, &expected, &current)) return error.HashMismatch;
     return .{ .rel = rel, .action = .delete_file, .base_hash = current, .hash = current };
 }
 
