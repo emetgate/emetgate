@@ -4858,7 +4858,6 @@
       "to": "            .delete => try self.guard.?.deleteSelf(),\n        }\n    }\n\n    fn replace(",
       "kills": [
         "batch delete crash: a file deleted by a batch stays on disk until the commit record",
-        "batch delete crash: a crash after any step of a modify plus delete commit recovers to all old or all new",
         "batch delete crash: a crash after any step of a modify, create and delete commit recovers to all old or all new"
       ]
     },
@@ -4867,7 +4866,9 @@
       "file": "src/platform/batch_plan.zig",
       "from": "        if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;\n",
       "to": "",
-      "kills": ["redteam batch delete: a file-local symbol that its own file still calls is refused"]
+      "kills": [
+        "redteam batch delete: a file-local symbol that its own file still calls is refused"
+      ]
     },
     {
       "id": "JV6-verified-delete-by-path",

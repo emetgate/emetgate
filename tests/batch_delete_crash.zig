@@ -217,7 +217,7 @@ test "batch delete crash: a crash after any step of a modify, create and delete 
 
 test "batch delete crash: a file deleted by a batch stays on disk until the commit record" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try Repo.init(&.{ .modify, .delete });
+    var repo = try Repo.init(&.{ .delete, .modify });
     defer repo.deinit();
     const batch = repo.batch();
     var pendings: [2]disk.Pending = undefined;
@@ -225,7 +225,7 @@ test "batch delete crash: a file deleted by a batch stays on disk until the comm
     var at: StopAt = .{ .target = 1 + 3 * 1 };
     const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
-    try repo.expectFile(1, old[1]);
+    try repo.expectFile(0, old[0]);
 }
 
 test "batch delete crash: recover leaves a file alone when it changed after the commit record" {
