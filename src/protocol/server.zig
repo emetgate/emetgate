@@ -74,10 +74,13 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Read a non-code file inside the repo (README, JSON, config, docs). Returns at most 16 KiB and sets truncated:true when cut. A source file of a registered language is refused (error UseSymbolToolsForSource): use emetgate_symbols, emetgate_skeleton or emetgate_read_symbol instead, or pass raw:true to read it verbatim anyway. Paths outside the repo, .git and .emetgate are refused. When the server was started with --mirror, unchanged content comes back as a one-line 'unchanged: <file> #<hash>' instead of the full content; pass force:true to always get the full content.",
+        .description = "Read a non-code file inside the repo (README, JSON, config, docs). A .json file defaults to a key tree (every JSON pointer, its value type and content hash) instead of raw text; pass pointer to read one subtree's value and hash instead (e.g. pointer:\"/dependencies/express\"). Any other file defaults to at most 16 KiB of raw content (truncated:true when cut); pass line_start and line_end (1-based, inclusive) to read just that line range with its own hash instead. A source file of a registered language is refused (error UseSymbolToolsForSource): use emetgate_symbols, emetgate_skeleton or emetgate_read_symbol instead, or pass raw:true to read it verbatim (ignores pointer and the line range). Paths outside the repo, .git and .emetgate are refused. When the server was started with --mirror, unchanged content comes back as a one-line 'unchanged: <file> #<hash>' instead of the full content; pass force:true to always get the full content.",
         .props = &.{
             .{ .name = "file", .desc = "path inside the repo" },
-            .{ .name = "raw", .desc = "read a source file of a registered language verbatim instead of being refused", .optional = true, .ty = "boolean" },
+            .{ .name = "raw", .desc = "read a source file of a registered language verbatim instead of being refused, or skip the JSON key tree for a .json file", .optional = true, .ty = "boolean" },
+            .{ .name = "pointer", .desc = "JSON pointer (e.g. /dependencies/express) to read one subtree of a .json file instead of its key tree", .optional = true },
+            .{ .name = "line_start", .desc = "1-based start line of a range to read from a non-JSON, non-source file", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "1-based end line of a range to read from a non-JSON, non-source file", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "always return the full content even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
         },
     },
