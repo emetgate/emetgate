@@ -92,6 +92,62 @@ test "read_file refuses a source file of a registered language unless raw is set
     try testing.expectEqualStrings(expected, body.value.object.get("content").?.string);
 }
 
+test "read_file returns a JSON key tree by default, and a pointer's subtree with pointer given" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var tree_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json" });
+    defer tree_reply.deinit();
+    try testing.expect(!tree_reply.is_error);
+    var tree_body = try tree_reply.payload();
+    defer tree_body.deinit();
+    const keys = tree_body.value.object.get("keys").?.array.items;
+    var found_express = false;
+    for (keys) |k| {
+        if (std.mem.eql(u8, k.object.get("pointer").?.string, "/dependencies/express")) {
+            try testing.expectEqualStrings("string", k.object.get("type").?.string);
+            found_express = true;
+        }
+    }
+    try testing.expect(found_express);
+
+    var value_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .pointer = "/dependencies/express" });
+    defer value_reply.deinit();
+    try testing.expect(!value_reply.is_error);
+    var value_body = try value_reply.payload();
+    defer value_body.deinit();
+    try testing.expectEqualStrings("\"^4.0.0\"", value_body.value.object.get("value").?.string);
+}
+
+test "read_file on an unknown JSON pointer is a tool error" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .pointer = "/nope" }, "PointerNotFound");
+}
+
+test "read_file with raw skips the JSON key tree" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .raw = true });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"keys\"") == null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "dependencies") != null);
+}
+
+test "read_file with a line range returns just that range and its hash" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "README.md", .line_start = 1, .line_end = 1 });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(body.value.object.get("hash") != null);
+    const content = body.value.object.get("content").?.string;
+    try testing.expect(std.mem.count(u8, content, "\n") <= 1);
+}
+
 test "read_file caps a large file and says it was truncated" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
