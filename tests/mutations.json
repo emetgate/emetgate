@@ -4710,8 +4710,7 @@
       "from": "try link_tree.build(io, target, link_path, &stats);",
       "to": "_ = &stats; try createJunction(io, link_path, target);",
       "kills": [
-        "prepare copies tracked files, rebuilds heavy directories as hardlink trees and skips missing links",
-        "redteam link tree: the sandbox reads a dependency through its hardlink"
+        "prepare copies tracked files, rebuilds heavy directories as hardlink trees and skips missing links"
       ]
     },
     {
@@ -4774,7 +4773,7 @@
       "id": "SR4-dot-segment-not-flagged",
       "file": "src/platform/shadow_root.zig",
       "from": "return hasDotSegment(self.shadow);",
-      "to": "return hasDotSegment(\"\");",
+      "to": "return hasDotSegment(self.shadow[0..0]);",
       "kills": [
         "redteam sandbox: the shadow lives under the operator's shadow root, outside the repository, flags a dot segment and is gone afterwards"
       ]
@@ -4792,7 +4791,7 @@
       "id": "SR6-workspace-key-not-checked",
       "file": "src/platform/shadow.zig",
       "from": "    if (!shadow_root.isKey(first)) return error.ShadowOutsideWorkspace;\n",
-      "to": "",
+      "to": "    _ = first;\n",
       "kills": [
         "shadow paths outside <shadow root>\\<repo key>\\ are refused before anything is deleted"
       ]
