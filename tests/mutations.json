@@ -4831,7 +4831,7 @@
       "file": "src/protocol/git_tools.zig",
       "from": ".stdout_limit = .limited(max_git_output_bytes),",
       "to": ".stdout_limit = .unlimited,",
-      "expect": "survived",
+      "expect_status": "survived",
       "note": "open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git stdout) exists in this suite yet, so this mutant is not caught; the line limit (GT5) is covered by a cheaper test"
     },
     {
