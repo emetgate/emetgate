@@ -163,7 +163,7 @@ jobs:
         run: python tools/attack/run.py
       - name: MCP tool description scan (every night, no API key needed)
         run: |
-          python -m pip install snyk-agent-scan
+          python -m pip install -r tools/redteam/requirements.txt
           python tools/redteam/scan_tools.py
       - name: LLM mode (opt-in, needs the ANTHROPIC_API_KEY secret and an explicit dispatch input)
         if: github.event_name == 'workflow_dispatch' && inputs.llm_attack == true
