@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      survivors:
-        description: Also run the expected survivors in the mutation corpus
-        type: boolean
-        default: false
   schedule:
     - cron: "0 2 * * *"
 
@@ -91,10 +86,7 @@ jobs:
       - run: zig build mutate-tool
       - name: The whole mutation corpus from the schema binary
         shell: pwsh
-        run: |
-          $flags = @("--jobs=4")
-          if ("${{ inputs.survivors }}" -ne "true") { $flags += "--skip-survivors" }
-          ./zig-out/bin/emetgate-mutate.exe @flags
+        run: ./zig-out/bin/emetgate-mutate.exe --jobs=4
       - name: Summarize unexpected outcomes
         if: always()
         shell: pwsh

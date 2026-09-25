@@ -246,3 +246,24 @@ test "schema: a discard of a parameter the dispatch now uses is dropped from the
         \\
     , t.text);
 }
+
+test "schema: the function that sets the active mutant runs on its own, the functions it calls join the schema" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const source =
+        \\pub var emetgate_mutant: u32 = 0;
+        \\pub fn main() void {
+        \\    emetgate_mutant = 3;
+        \\    _ = run(1);
+        \\}
+        \\fn run(x: u32) u32 {
+        \\    if (emetgate_mutant == 3) return x + 2;
+        \\    return x + 1;
+        \\}
+        \\
+    ;
+    try testing.expectEqual(@as(?schema.Refusal, .sets_active_mutant), try refusal(arena, source, "_ = run(1);"));
+    try testing.expectEqual(@as(?schema.Refusal, null), try refusal(arena, source, "return x + 1;"));
+    try testing.expectEqual(@as(?schema.Refusal, null), try refusal(arena, source, "return x + 2;"));
+}

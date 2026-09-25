@@ -7,6 +7,7 @@ const testing = std.testing;
 
 const expect_mutant_env = "EMETGATE_EXPECT_MUTANT";
 const mutant_probe = "runner: the active mutant is the one the runner was given";
+const idle_mutant: u32 = 4_000_000_007;
 
 const sample = [_][]const u8{ "a.test.one", "a.test.two", "b.test.three", "b.test.four", "c.test.five", "c.test.six", "c.test.seven" };
 
@@ -166,16 +167,28 @@ test "runner: --jobs runs every selected test once across its shards" {
     }
 }
 
+fn probeMutant() u32 {
+    return if (runner.emetgate_mutant != 0) runner.emetgate_mutant else idle_mutant;
+}
+
+fn expectMutant(arena: std.mem.Allocator, id: u32) !std.process.Environ.Map {
+    var env = try testing.environ.createMap(arena);
+    try env.put(expect_mutant_env, try std.fmt.allocPrint(arena, "{d}", .{id}));
+    return env;
+}
+
 test "runner: a failing test in one shard fails the --jobs run and the mutant reaches every shard" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var env = try testing.environ.createMap(arena);
-    try env.put(expect_mutant_env, "7");
-    const right = try selfRun(arena, &.{ "--jobs", "3", "--mutant", "7", "--filter", mutant_probe }, &env);
+    const id = probeMutant();
+    const arg = try std.fmt.allocPrint(arena, "{d}", .{id});
+    const env = try expectMutant(arena, id);
+    const right = try selfRun(arena, &.{ "--jobs", "3", "--mutant", arg, "--filter", mutant_probe }, &env);
     try testing.expectEqual(@as(?u8, 0), exitCode(right.term));
     try testing.expect(std.mem.indexOf(u8, right.stderr, "1/1 tests passed; 0 skipped; 0 failed") != null);
-    const wrong = try selfRun(arena, &.{ "--jobs", "3", "--mutant", "8", "--filter", mutant_probe }, &env);
+    const other = try expectMutant(arena, id +% 1);
+    const wrong = try selfRun(arena, &.{ "--jobs", "3", "--mutant", arg, "--filter", mutant_probe }, &other);
     try testing.expectEqual(@as(?u8, 1), exitCode(wrong.term));
     try testing.expect(std.mem.indexOf(u8, wrong.stderr, "0/1 tests passed; 0 skipped; 1 failed") != null);
     try testing.expect(std.mem.indexOf(u8, wrong.stderr, "error: 'tests.test_runner_harness.test." ++ mutant_probe ++ "' failed") != null);
@@ -201,16 +214,22 @@ test "runner: --mutant sets the global that the schemata dispatch reads" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var env = try testing.environ.createMap(arena);
-    try env.put(expect_mutant_env, "7");
+    const id = probeMutant();
+    const arg = try std.fmt.allocPrint(arena, "{d}", .{id});
+    const env = try expectMutant(arena, id);
 
-    const right = try selfRun(arena, &.{ "--mutant", "7", "--filter", mutant_probe }, &env);
+    const right = try selfRun(arena, &.{ "--mutant", arg, "--filter", mutant_probe }, &env);
     errdefer std.debug.print("{s}\n", .{right.stderr});
     try testing.expectEqual(@as(?u8, 0), exitCode(right.term));
     try testing.expect(std.mem.indexOf(u8, right.stderr, "1/1 tests passed") != null);
 
-    const wrong = try selfRun(arena, &.{ "--mutant", "8", "--filter", mutant_probe }, &env);
+    const other = try expectMutant(arena, id +% 1);
+    const wrong = try selfRun(arena, &.{ "--mutant", arg, "--filter", mutant_probe }, &other);
     try testing.expectEqual(@as(?u8, 1), exitCode(wrong.term));
+    if (runner.emetgate_mutant != 0) return;
+    const moved = try std.fmt.allocPrint(arena, "{d}", .{id +% 1});
+    const elsewhere = try selfRun(arena, &.{ "--mutant", moved, "--filter", mutant_probe }, &env);
+    try testing.expectEqual(@as(?u8, 1), exitCode(elsewhere.term));
     const none = try selfRun(arena, &.{ "--filter", mutant_probe }, &env);
     try testing.expectEqual(@as(?u8, 1), exitCode(none.term));
 }
