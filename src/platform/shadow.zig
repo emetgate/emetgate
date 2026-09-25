@@ -171,6 +171,15 @@ pub const Shadow = struct {
         try self.dir.writeFile(self.io, .{ .sub_path = sub_path, .data = data });
     }
 
+    pub fn deleteFile(self: Shadow, sub_path: []const u8) !void {
+        try validateRelative(sub_path);
+        if (isUnderAny(sub_path, self.linked)) return error.UnsafePath;
+        self.dir.deleteFile(self.io, sub_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => |e| return e,
+        };
+    }
+
     fn assertResolvesInside(self: Shadow, parent: []const u8) !void {
         if (builtin.os.tag != .windows) return;
         var root_buf: [std.fs.max_path_bytes]u8 = undefined;

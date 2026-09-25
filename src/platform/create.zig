@@ -64,16 +64,17 @@ pub fn classify(gpa: Allocator, io: std.Io, root: []const u8, sources: []const S
     };
 }
 
-fn moduleStem(rel: []const u8) []const u8 {
+pub fn moduleStem(rel: []const u8) []const u8 {
     const base = std.fs.path.basename(rel);
     const dot = std.mem.indexOfScalar(u8, base, '.') orelse return base;
     return base[0..dot];
 }
 
-fn mentionedAnywhere(gpa: Allocator, io: std.Io, root: []const u8, sources: []const Source, own: usize, word: []const u8, own_skip: ?symbol.Span) !bool {
+pub fn mentionedAnywhere(gpa: Allocator, io: std.Io, root: []const u8, sources: []const Source, own: ?usize, word: []const u8, own_skip: ?symbol.Span) !bool {
     for (sources, 0..) |source, i| {
-        const skip = if (i == own) own_skip else null;
-        if (i == own and skip == null) continue;
+        const mine = if (own) |o| o == i else false;
+        const skip = if (mine) own_skip else null;
+        if (mine and skip == null) continue;
         if (symmetry.mentions(source.text, word, skip)) return true;
     }
     const listing = try repo.filesMentioning(gpa, io, root, word);

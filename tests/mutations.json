@@ -691,8 +691,8 @@
     {
       "id": "G2-rules-gate-skipped-for-batch",
       "file": "src/platform/batch.zig",
-      "from": "p.applied.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
-      "to": "p.applied.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
+      "from": "p.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
+      "to": "p.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: one violating edit rejects the whole batch and leaves disk untouched"
       ]
@@ -2236,8 +2236,8 @@
     {
       "id": "SP34-batch-gates-with-first-ref",
       "file": "src/platform/batch.zig",
-      "from": "|p, edit| {\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
-      "to": "|p, edit| {\n        _ = edit;\n        const ref = try symbol.Ref.parse(gpa, options.edits[0].ref_text);",
+      "from": "|p, edit| {\n        if (!p.addsCode()) continue;\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
+      "to": "|p, edit| {\n        if (!p.addsCode()) continue;\n        _ = edit;\n        const ref = try symbol.Ref.parse(gpa, options.edits[0].ref_text);",
       "kills": [
         "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
       ]
@@ -3154,8 +3154,8 @@
     {
       "id": "RO3-rules-dropped-from-the-skeleton",
       "file": "src/protocol/handlers.zig",
-      "from": "    try wire.writeSkeleton(w, file, text, adopted.items);",
-      "to": "    try wire.writeSkeleton(w, file, text, &.{});",
+      "from": "    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, adopted.items);",
+      "to": "    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, &.{});",
       "kills": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
       ]
@@ -3576,8 +3576,8 @@
     {
       "id": "Q22-batch-trusts-a-committed-query-rule",
       "file": "src/platform/batch.zig",
-      "from": "p.applied.body, options.allow_repo_memory)) {",
-      "to": "p.applied.body, true)) {",
+      "from": "p.body, options.allow_repo_memory)) {",
+      "to": "p.body, true)) {",
       "kills": [
         "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -4400,8 +4400,8 @@
     {
       "id": "BC2-recover-roll-forward-skipped",
       "file": "src/platform/disk.zig",
-      "from": "    if (committed) {\n        const new_hash",
-      "to": "    if (false) {\n        const new_hash",
+      "from": "    if (committed) {\n        rollForward(",
+      "to": "    if (committed and false) {\n        rollForward(",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
@@ -4429,21 +4429,11 @@
     {
       "id": "BC5-recover-leaves-commit-record",
       "file": "src/platform/disk.zig",
-      "from": "    try commit_record.removeAll(gpa, io, journal_dir);",
+      "from": "    try commit_record.removeAll(gpa, io, journal_dir, kept.items);\n",
       "to": "",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
-      ]
-    },
-    {
-      "id": "TB1-try-batch-prepares-without-batch",
-      "file": "src/platform/batch.zig",
-      "from": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, &batch)",
-      "to": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, null)",
-      "kills": [
-        "batch crash through the tool: a crash right after the commit record recovers every file new",
-        "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
       ]
     },
     {
@@ -4470,8 +4460,8 @@
     {
       "id": "BCR1-create-rename-replaces",
       "file": "src/platform/disk.zig",
-      "from": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameTo(",
-      "to": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameReplacing(",
+      "from": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.?.renameTo(",
+      "to": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.?.renameReplacing(",
       "kills": [
         "batch create crash: a file that appears at a create target before commit is never overwritten and the batch rolls back",
         "batch create through the tool: a file that appears at the create target during commit is kept and the batch is refused with Conflict"
@@ -4488,9 +4478,9 @@
     },
     {
       "id": "BCR3-create-not-journaled",
-      "file": "src/platform/disk.zig",
-      "from": "const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .op = .create",
-      "to": "const journal: ?[]u8 = if (journal_dir == null) null else null;\n    _ = if (false) try writeJournal(gpa, io, \"\", &tag, .{ .op = .create",
+      "file": "src/platform/journal.zig",
+      "from": "    for (intents) |intent| try writeIntent(&js, intent);",
+      "to": "    for (intents) |intent| if (intent.op != .create) try writeIntent(&js, intent);",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
         "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
@@ -4500,8 +4490,8 @@
     {
       "id": "BCR4-rollback-keeps-created-file",
       "file": "src/platform/disk.zig",
-      "from": "    if (!deleteWithRetry(io, target_abs)) return error.CreatedNotRemoved;\n",
-      "to": "",
+      "from": "    switch (try deleteVerified(gpa, io, target_abs, new_hash, null)) {\n        .deleted => report.restored += 1,",
+      "to": "    switch (Verified.missing) {\n        .deleted => report.restored += 1,",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
         "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
@@ -4511,7 +4501,7 @@
     {
       "id": "BCR5-commit-skips-index",
       "file": "src/platform/disk.zig",
-      "from": "    try git_repo.addAllToIndex(b.gpa, b.io, root, created.items);",
+      "from": "    try syncIndex(b.gpa, b.io, root, added.items, removed.items);",
       "to": "    _ = root;",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
@@ -4523,8 +4513,8 @@
     {
       "id": "BCR6-roll-forward-skips-index",
       "file": "src/platform/disk.zig",
-      "from": "        git_repo.addAllToIndex(gpa, io, root_abs, paths) catch {\n            report.not_indexed += paths.len;\n        };",
-      "to": "        _ = paths;",
+      "from": "        syncIndex(self.gpa, io, root_abs, added, removed) catch {\n            report.not_indexed += self.len();\n        };",
+      "to": "        _ = .{ io, root_abs, added, removed, report };",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
         "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
@@ -4829,6 +4819,92 @@
       "to": "try kept.append(gpa, line);",
       "kills": [
         "git diff caps output at a line count and marks it truncated"
+      ]
+    },
+    {
+      "id": "JV1-v2-journal-writes-no-intents",
+      "file": "src/platform/journal.zig",
+      "from": "    for (intents) |intent| try writeIntent(&js, intent);",
+      "to": "    for (intents) |_| {}",
+      "kills": [
+        "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
+        "batch crash: a crash after any step of a three-file commit recovers to all old or all new",
+        "batch delete crash: a crash after any step of a modify plus delete commit recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "JV2-legacy-journal-not-read",
+      "file": "src/platform/journal.zig",
+      "from": "    if (probe.value.version != 1) return error.CorruptJournal;",
+      "to": "    if (probe.value.version != 1 or bytes.len != 0) return error.CorruptJournal;",
+      "kills": [
+        "batch delete crash: per-file journals written before v2 still roll a committed batch forward",
+        "journal: a v2 journal and a per-file journal from before v2 both parse"
+      ]
+    },
+    {
+      "id": "JV3-replace-back-to-two-renames",
+      "file": "src/platform/disk.zig",
+      "from": "        try writeDurably(self.io, self.backup, bytes);",
+      "to": "        try guard.renameTo(self.gpa, self.backup);",
+      "kills": [
+        "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole"
+      ]
+    },
+    {
+      "id": "JV4-delete-before-commit-record",
+      "file": "src/platform/disk.zig",
+      "from": "            .delete => {},\n        }\n    }\n\n    fn replace(",
+      "to": "            .delete => try self.guard.?.deleteSelf(),\n        }\n    }\n\n    fn replace(",
+      "kills": [
+        "batch delete crash: a file deleted by a batch stays on disk until the commit record",
+        "batch delete crash: a crash after any step of a modify, create and delete commit recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "JV5-delete-skips-reference-check",
+      "file": "src/platform/batch_plan.zig",
+      "from": "        if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;\n",
+      "to": "",
+      "kills": [
+        "redteam batch delete: a file-local symbol that its own file still calls is refused"
+      ]
+    },
+    {
+      "id": "JV6-verified-delete-by-path",
+      "file": "src/platform/disk.zig",
+      "from": "    try guard.deleteSelf();\n    return .deleted;",
+      "to": "    _ = deleteWithRetry(io, path_abs);\n    return .deleted;",
+      "kills": [
+        "a verified delete removes the file it hashed even when the path is taken over before the delete"
+      ]
+    },
+    {
+      "id": "FH1-file-delete-without-hash-accepted",
+      "file": "src/platform/batch_plan.zig",
+      "from": "        .absent => return error.MissingFileHash,",
+      "to": "        .absent => current,",
+      "kills": [
+        "batch delete through the tool: a file delete without the whole-file hash is refused and the file stays",
+        "redteam batch delete: a file delete without its whole-file hash is refused"
+      ]
+    },
+    {
+      "id": "FH2-failed-delete-still-unindexed",
+      "file": "src/platform/disk.zig",
+      "from": "        .delete => if (p.removed) try removed.append(b.gpa, p.path),",
+      "to": "        .delete => try removed.append(b.gpa, p.path),",
+      "kills": [
+        "batch delete crash: a delete that fails at finalize leaves the file in the git index"
+      ]
+    },
+    {
+      "id": "FH3-skeleton-without-file-hash",
+      "file": "src/protocol/wire.zig",
+      "from": "    try js.write(file);\n    try writeFileHash(&js, file_hash);\n    try js.objectField(\"skeleton\");",
+      "to": "    try js.write(file);\n    _ = file_hash;\n    try js.objectField(\"skeleton\");",
+      "kills": [
+        "redteam batch delete: an unreferenced file is deleted through the tool and reported as deleted"
       ]
     }
   ]

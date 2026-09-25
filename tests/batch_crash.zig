@@ -47,10 +47,10 @@ const Repo = struct {
         return std.fmt.bufPrint(buf, "{s}\\f{d}.ts", .{ self.root, i });
     }
 
-    fn prepareAll(self: *const Repo, pendings: []disk.Pending, batch: *const disk.Batch) !void {
+    fn prepareAll(self: *const Repo, pendings: []disk.Pending) !void {
         for (pendings, 0..) |*p, i| {
             var buf: [std.fs.max_path_bytes]u8 = undefined;
-            p.* = try disk.prepare(testing.allocator, testing.io, try self.path(&buf, i), new[i], symbol.hashOf(old[i]), self.journal_dir, batch);
+            p.* = try disk.prepare(testing.allocator, testing.io, try self.path(&buf, i), new[i], symbol.hashOf(old[i]));
         }
     }
 
@@ -122,15 +122,15 @@ const new = [max_files][]const u8{
 };
 
 fn crashAtEveryStep(files: usize) !void {
-    const swap_steps = 2 * files;
-    const steps = swap_steps + 1 + 2 * files;
+    const swap_steps = 1 + 3 * files;
+    const steps = swap_steps + 1 + files + 1;
     var stop: usize = 1;
     while (true) : (stop += 1) {
         var repo = try Repo.init(files);
         defer repo.deinit();
         const batch = disk.Batch.init(testing.allocator, testing.io, repo.journal_dir);
         var pendings: [max_files]disk.Pending = undefined;
-        try repo.prepareAll(pendings[0..files], &batch);
+        try repo.prepareAll(pendings[0..files]);
 
         var at: StopAt = .{ .target = stop };
         const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
@@ -166,9 +166,8 @@ test "batch crash: a crash while files are still being prepared recovers to all 
     for (1..max_files + 1) |prepared| {
         var repo = try Repo.init(max_files);
         defer repo.deinit();
-        const batch = disk.Batch.init(testing.allocator, testing.io, repo.journal_dir);
         var pendings: [max_files]disk.Pending = undefined;
-        try repo.prepareAll(pendings[0..prepared], &batch);
+        try repo.prepareAll(pendings[0..prepared]);
         for (pendings[0..prepared]) |*p| p.abandon();
 
         const report = try repo.recover();
@@ -184,9 +183,9 @@ test "batch crash: recover never rolls forward a file whose content is not the j
     defer repo.deinit();
     const batch = disk.Batch.init(testing.allocator, testing.io, repo.journal_dir);
     var pendings: [2]disk.Pending = undefined;
-    try repo.prepareAll(&pendings, &batch);
+    try repo.prepareAll(&pendings);
 
-    var at: StopAt = .{ .target = 2 * 2 + 1 };
+    var at: StopAt = .{ .target = 1 + 3 * 2 + 1 };
     const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
 

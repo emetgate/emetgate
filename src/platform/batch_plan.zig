@@ -1,0 +1,123 @@
+const std = @import("std");
+const symbol = @import("../engine/symbol.zig");
+const cas = @import("../engine/cas.zig");
+const removal = @import("../engine/removal.zig");
+const symmetry = @import("../engine/symmetry.zig");
+const repo = @import("repo.zig");
+const create = @import("create.zig");
+const Runtime = @import("../engine/runtime.zig").Runtime;
+const Snapshot = @import("../engine/loader.zig").Snapshot;
+
+const Allocator = std.mem.Allocator;
+
+pub const Op = enum { write, delete };
+
+pub const Edit = struct {
+    file_abs: []const u8,
+    ref_text: []const u8,
+    expected_hash: symbol.Expected,
+    new_body: []const u8 = "",
+    op: Op = .write,
+};
+
+pub const Action = enum { write, insert, create, delete_symbol, delete_file };
+
+pub const Prepared = struct {
+    rel: []u8,
+    action: Action,
+    base_hash: ?symbol.Hash,
+    hash: symbol.Hash,
+    snapshot: ?*Snapshot = null,
+    body: symbol.Span = .{ .start = 0, .end = 0 },
+    removed: ?symmetry.Local = null,
+
+    pub fn deinit(self: Prepared, gpa: Allocator) void {
+        if (self.snapshot) |s| s.destroy();
+        gpa.free(self.rel);
+    }
+
+    pub fn source(self: Prepared) []const u8 {
+        const s = self.snapshot orelse return "";
+        return s.source;
+    }
+
+    pub fn addsCode(self: Prepared) bool {
+        return switch (self.action) {
+            .write, .insert, .create => true,
+            .delete_symbol, .delete_file => false,
+        };
+    }
+};
+
+pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
+    return switch (edit.op) {
+        .write => planWrite(gpa, io, runtime, root, edit, rel),
+        .delete => if (edit.ref_text.len == 0) planFileDeletion(gpa, io, edit, rel) else planSymbolDeletion(gpa, io, runtime, edit, rel),
+    };
+}
+
+fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
+    const ref = try symbol.Ref.parse(gpa, edit.ref_text);
+    defer ref.deinit(gpa);
+    switch (edit.expected_hash) {
+        .present => |expected| {
+            const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
+            defer base.destroy();
+            if (base.tree.root().hasError()) return error.SourceHasErrors;
+            const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = edit.new_body });
+            return .{ .rel = rel, .action = .write, .base_hash = symbol.hashOf(base.source), .hash = applied.hash, .snapshot = applied.snapshot, .body = applied.body };
+        },
+        .absent => {
+            const p = try create.planAbsent(gpa, io, runtime, root, edit.file_abs, rel, ref, edit.new_body);
+            return .{ .rel = rel, .action = if (p.base_hash == null) .create else .insert, .base_hash = p.base_hash, .hash = p.applied.hash, .snapshot = p.applied.snapshot, .body = p.applied.body };
+        },
+    }
+}
+
+fn planFileDeletion(gpa: Allocator, io: std.Io, edit: Edit, rel: []u8) !Prepared {
+    try repo.refuseInternal(rel);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, edit.file_abs, gpa, .unlimited);
+    defer gpa.free(bytes);
+    const current = symbol.fileHash(bytes);
+    const expected = switch (edit.expected_hash) {
+        .present => |hash| hash,
+        .absent => return error.MissingFileHash,
+    };
+    if (!std.mem.eql(u8, &expected, &current)) return error.HashMismatch;
+    return .{ .rel = rel, .action = .delete_file, .base_hash = current, .hash = current };
+}
+
+fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u8) !Prepared {
+    const expected = switch (edit.expected_hash) {
+        .present => |hash| hash,
+        .absent => return error.MissingHash,
+    };
+    const ref = try symbol.Ref.parse(gpa, edit.ref_text);
+    defer ref.deinit(gpa);
+    const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
+    defer base.destroy();
+    if (base.tree.root().hasError()) return error.SourceHasErrors;
+    const removed = try removal.remove(base, ref, expected);
+    return .{
+        .rel = rel,
+        .action = .delete_symbol,
+        .base_hash = symbol.hashOf(base.source),
+        .hash = expected,
+        .snapshot = removed.snapshot,
+        .removed = symmetry.inspect(base, removed.cut),
+    };
+}
+
+pub fn checkDeletions(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit) !void {
+    const sources = try gpa.alloc(create.Source, prepared.len);
+    defer gpa.free(sources);
+    for (prepared, sources) |p, *slot| slot.* = .{ .rel = p.rel, .text = p.source() };
+    for (prepared, edits[0..prepared.len], 0..) |p, edit, i| {
+        const local = p.removed orelse continue;
+        const ref = try symbol.Ref.parse(gpa, edit.ref_text);
+        defer ref.deinit(gpa);
+        if (!local.no_top_level_effect) return error.TopLevelEffect;
+        if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;
+        if (local.exported and try create.mentionedAnywhere(gpa, io, root, sources, i, create.moduleStem(p.rel), null)) return error.SymbolReferenced;
+    }
+}

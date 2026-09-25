@@ -41,6 +41,14 @@ pub fn jail(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) !Ja
     return .{ .root = served, .abs = abs, .rel = rel };
 }
 
+pub fn refuseLinkAsWritten(gpa: Allocator, io: std.Io, path: []const u8) !void {
+    const cwd_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd_abs);
+    const resolved = try std.fs.path.resolve(gpa, &.{ cwd_abs, path });
+    defer gpa.free(resolved);
+    if (shadow.isReparsePoint(resolved) catch true) return error.ReparsePoint;
+}
+
 fn refuseInternalAsWritten(gpa: Allocator, io: std.Io, served: []const u8, path: []const u8) !void {
     const cwd_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
     defer gpa.free(cwd_abs);
@@ -164,9 +172,17 @@ pub fn addToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
 }
 
 pub fn addAllToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
+    return runOnPaths(gpa, io, root_abs, &.{ "git", "add", "--" }, paths);
+}
+
+pub fn removeAllFromIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
+    return runOnPaths(gpa, io, root_abs, &.{ "git", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, paths);
+}
+
+fn runOnPaths(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const []const u8, paths: []const []const u8) !void {
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.appendSlice(gpa, &.{ "git", "add", "--" });
+    try argv.appendSlice(gpa, command);
     try argv.appendSlice(gpa, paths);
     var attempt: usize = 0;
     while (attempt < index_add_attempts) : (attempt += 1) {

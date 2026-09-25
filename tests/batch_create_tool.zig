@@ -17,8 +17,8 @@ const helper_body = "export function helper(x: number): number { return x + 1; }
 const helper_file = helper_body ++ "\n";
 const calling_body = "{ return helper(a) + b; }";
 
-const swap_steps = 4;
-const later_steps = [_]usize{ 5, 6, 7, 8, 9 };
+const swap_steps = 7;
+const later_steps = [_]usize{ 8, 9, 10, 11 };
 
 const StopAt = struct {
     target: usize,
@@ -186,7 +186,7 @@ test "batch create through the tool: a file that appears at the create target du
     try f.init();
     defer f.deinit();
 
-    var save: ExternalSave = .{ .fixture = &f, .target = 3 };
+    var save: ExternalSave = .{ .fixture = &f, .target = 6 };
     const step: disk.Step = .{ .context = &save, .reached = ExternalSave.reached };
     try testing.expectError(error.Conflict, f.run("{ return a - b; }", &step));
 

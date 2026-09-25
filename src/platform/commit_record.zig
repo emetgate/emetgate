@@ -9,6 +9,7 @@ pub const Tag = [16]u8;
 
 const record_suffix = ".commit";
 const staged_suffix = ".commit.tmp";
+const staged_journal_suffix = ".json.tmp";
 
 pub fn newTag(io: std.Io) Tag {
     var random: [8]u8 = undefined;
@@ -22,7 +23,9 @@ pub fn write(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const u
     const final = try recordPath(gpa, journal_dir, tag);
     defer gpa.free(final);
 
-    try disk.writeDurably(io, staged, tag);
+    const content = try std.fmt.allocPrint(gpa, "{{\"batch\":\"{s}\"}}", .{tag});
+    defer gpa.free(content);
+    try disk.writeDurably(io, staged, content);
     errdefer std.Io.Dir.deleteFileAbsolute(io, staged) catch {};
     try moveDurably(staged, final);
     flushDir(journal_dir) catch {};
@@ -48,7 +51,7 @@ pub fn remove(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const 
     flushDir(journal_dir) catch {};
 }
 
-pub fn removeAll(gpa: Allocator, io: std.Io, journal_dir: []const u8) !void {
+pub fn removeAll(gpa: Allocator, io: std.Io, journal_dir: []const u8, keep: []const []const u8) !void {
     var dir = std.Io.Dir.openDirAbsolute(io, journal_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return,
         else => |e| return e,
@@ -63,24 +66,32 @@ pub fn removeAll(gpa: Allocator, io: std.Io, journal_dir: []const u8) !void {
     var it = dir.iterate();
     while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.mem.endsWith(u8, entry.name, staged_suffix)) continue;
+        if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.mem.endsWith(u8, entry.name, staged_suffix) and !std.mem.endsWith(u8, entry.name, staged_journal_suffix)) continue;
+        if (kept(entry.name, keep)) continue;
         try names.append(gpa, try gpa.dupe(u8, entry.name));
     }
     for (names.items) |name| dir.deleteFile(io, name) catch {};
     flushDir(journal_dir) catch {};
 }
 
+fn kept(name: []const u8, keep: []const []const u8) bool {
+    for (keep) |tag| {
+        if (std.mem.startsWith(u8, name, tag) and name.len > tag.len and name[tag.len] == '.') return true;
+    }
+    return false;
+}
+
 fn recordPath(gpa: Allocator, journal_dir: []const u8, tag: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa, "{s}\\{s}" ++ record_suffix, .{ journal_dir, tag });
 }
 
-fn moveDurably(from: []const u8, to: []const u8) !void {
+pub fn moveDurably(from: []const u8, to: []const u8) !void {
     var from_wide: WidePath = undefined;
     var to_wide: WidePath = undefined;
     if (win.MoveFileExW(try toWide(&from_wide, from), try toWide(&to_wide, to), win.movefile_write_through) == .FALSE) return error.RenameFailed;
 }
 
-fn flushDir(dir_abs: []const u8) !void {
+pub fn flushDir(dir_abs: []const u8) !void {
     var wide: WidePath = undefined;
     const handle = win.CreateFileW(
         try toWide(&wide, dir_abs),

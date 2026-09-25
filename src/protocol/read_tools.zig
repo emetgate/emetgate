@@ -105,7 +105,7 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
         if (try m.check(key, hash, force) == .unchanged) {
             event.chars_emetgate = 0;
             event.chars_fullfile = bytes.len;
-            return wire.writeUnchanged(w, file, null, hash);
+            return wire.writeUnchanged(w, file, null, hash, symbol.fileHash(bytes));
         }
     }
     event.chars_emetgate = shown.len;
@@ -114,6 +114,7 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
+    try wire.writeFileHash(&js, symbol.fileHash(bytes));
     try js.objectField("bytes");
     try js.write(bytes.len);
     try js.objectField("truncated");
@@ -141,7 +142,7 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
             if (try m.check(key, entry.hash, force) == .unchanged) {
                 event.chars_emetgate = 0;
                 event.chars_fullfile = bytes.len;
-                return wire.writeUnchanged(w, file, p, entry.hash);
+                return wire.writeUnchanged(w, file, p, entry.hash, symbol.fileHash(bytes));
             }
         }
         const text = tree.text(entry.node);
@@ -152,6 +153,7 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
         try js.beginObject();
         try js.objectField("file");
         try js.write(file);
+        try wire.writeFileHash(&js, symbol.fileHash(bytes));
         try js.objectField("pointer");
         try js.write(p);
         try js.objectField("hash");
@@ -171,6 +173,7 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
+    try wire.writeFileHash(&js, symbol.fileHash(bytes));
     try js.objectField("keys");
     try js.beginArray();
     for (entries) |entry| {
@@ -204,7 +207,7 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
             if (try m.check(key, entry.hash, force) == .unchanged) {
                 event.chars_emetgate = 0;
                 event.chars_fullfile = bytes.len;
-                return wire.writeUnchanged(w, file, h, entry.hash);
+                return wire.writeUnchanged(w, file, h, entry.hash, symbol.fileHash(bytes));
             }
         }
         const text = tree.text(entry.node);
@@ -215,6 +218,7 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
         try js.beginObject();
         try js.objectField("file");
         try js.write(file);
+        try wire.writeFileHash(&js, symbol.fileHash(bytes));
         try js.objectField("heading");
         try js.write(h);
         try js.objectField("hash");
@@ -234,6 +238,7 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
+    try wire.writeFileHash(&js, symbol.fileHash(bytes));
     try js.objectField("headings");
     try js.beginArray();
     for (entries) |entry| {
@@ -268,7 +273,7 @@ fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: 
         if (try m.check(key, hash, force) == .unchanged) {
             event.chars_emetgate = 0;
             event.chars_fullfile = bytes.len;
-            return wire.writeUnchanged(w, file, null, hash);
+            return wire.writeUnchanged(w, file, null, hash, symbol.fileHash(bytes));
         }
     }
     event.chars_emetgate = text.len;
@@ -278,6 +283,7 @@ fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: 
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
+    try wire.writeFileHash(&js, symbol.fileHash(bytes));
     try js.objectField("start_line");
     try js.write(start);
     try js.objectField("end_line");

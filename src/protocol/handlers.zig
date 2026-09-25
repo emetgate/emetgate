@@ -142,14 +142,14 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
         if (try m.check(key, hash, force) == .unchanged) {
             event.chars_emetgate = 0;
             event.chars_fullfile = snapshot.source.len;
-            return wire.writeUnchanged(w, file, null, hash);
+            return wire.writeUnchanged(w, file, null, hash, symbol.fileHash(snapshot.source));
         }
     }
     const adopted = try rules.adoptedFor(gpa, io, place.root, place.rel);
     defer adopted.deinit();
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSkeleton(w, file, text, adopted.items);
+    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, adopted.items);
 }
 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror) !ToolResult {
@@ -204,7 +204,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
         if (try m.check(key, found.hash, force) == .unchanged) {
             event.chars_emetgate = 0;
             event.chars_fullfile = snapshot.source.len;
-            return wire.writeUnchanged(w, file, sym, found.hash);
+            return wire.writeUnchanged(w, file, sym, found.hash, null);
         }
     }
     const body = snapshot.tree.text(found.body);
@@ -438,6 +438,7 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
     if (edits_val != .array or edits_val.array.items.len == 0) return error.MissingArgument;
     for (edits_val.array.items) |item| {
         _ = getString(item, "file") orelse return error.MissingArgument;
+        if (try itemOp(item) == .delete) continue;
         _ = getString(item, "symbol") orelse return error.MissingArgument;
         _ = getString(item, "hash") orelse return error.MissingArgument;
         _ = getString(item, "body") orelse return error.MissingArgument;
@@ -460,9 +461,14 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
+fn itemOp(item: Value) !runner.EditOp {
+    const text = getString(item, "op") orelse return .write;
+    return std.meta.stringToEnum(runner.EditOp, text) orelse error.InvalidOp;
+}
+
 fn firstAbsentFile(items: []const Value) []const u8 {
     for (items) |item| {
-        const expected = symbol.parseExpected(getString(item, "hash").?) catch continue;
+        const expected = symbol.parseExpected(getString(item, "hash") orelse continue) catch continue;
         if (expected == .absent) return getString(item, "file").?;
     }
     return getString(items[0], "file").?;
@@ -477,14 +483,18 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     var built: usize = 0;
     defer for (places[0..built]) |place| place.deinit(gpa);
     for (items, 0..) |item, i| {
-        const expected = try symbol.parseExpected(getString(item, "hash").?);
-        places[i] = try repo.jailTarget(gpa, io, policy.root, getString(item, "file").?, expected == .absent);
+        const op = try itemOp(item);
+        const file = getString(item, "file").?;
+        const expected: symbol.Expected = if (getString(item, "hash")) |hash| try symbol.parseExpected(hash) else .absent;
+        places[i] = try repo.jailTarget(gpa, io, policy.root, file, op == .write and expected == .absent);
         built = i + 1;
+        if (op == .delete) try repo.refuseLinkAsWritten(gpa, io, file);
         edits[i] = .{
             .file_abs = places[i].abs,
-            .ref_text = getString(item, "symbol").?,
-            .new_body = getString(item, "body").?,
+            .ref_text = getString(item, "symbol") orelse "",
+            .new_body = getString(item, "body") orelse "",
             .expected_hash = expected,
+            .op = op,
         };
     }
 
@@ -499,7 +509,11 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const note = wire.shadowNote(note_root, event.trace);
 
     var sent: usize = 0;
-    for (items) |item| sent += getString(item, "symbol").?.len + getString(item, "hash").?.len + getString(item, "body").?.len;
+    for (items) |item| {
+        inline for (.{ "symbol", "hash", "body" }) |field| {
+            if (getString(item, field)) |text| sent += text.len;
+        }
+    }
     event.chars_emetgate = sent;
     event.chars_fullfile = event.trace.new_len;
     switch (result) {
@@ -510,10 +524,11 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             defer gpa.free(views);
             for (items, 0..) |item, i| views[i] = .{
                 .file = getString(item, "file").?,
-                .symbol = getString(item, "symbol").?,
-                .old_hash = edits[i].expected_hash,
+                .symbol = getString(item, "symbol") orelse "",
+                .old_hash = if (committed[i].deleted) .{ .present = committed[i].hash } else edits[i].expected_hash,
                 .new_hash = committed[i].hash,
                 .evidence = committed[i].evidence,
+                .deleted = committed[i].deleted,
             };
             try wire.writeBatchCommitted(w, views, note);
             return false;

@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const commit_record = @import("commit_record.zig");
+const journal = @import("journal.zig");
 const git_repo = @import("repo.zig");
 const shadow_root = @import("shadow_root.zig");
 
@@ -13,7 +14,7 @@ const WidePath = [std.fs.max_path_bytes:0]u16;
 pub fn hashFile(gpa: Allocator, io: std.Io, path: []const u8) !symbol.Hash {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
     defer gpa.free(bytes);
-    return symbol.hashOf(bytes);
+    return symbol.fileHash(bytes);
 }
 
 pub fn verifyBase(gpa: Allocator, io: std.Io, path: []const u8, expected: symbol.Hash) !void {
@@ -32,7 +33,7 @@ pub const Guard = struct {
         const handle = win.CreateFileW(
             try toWide(&wide, path_abs),
             win.generic_read | win.delete,
-            win.file_share_read,
+            win.file_share_read | win.file_share_delete,
             null,
             win.open_existing,
             win.file_attribute_normal,
@@ -48,12 +49,28 @@ pub const Guard = struct {
     }
 
     pub fn hash(self: Guard, gpa: Allocator, io: std.Io) !symbol.Hash {
+        const bytes = try self.readAll(gpa, io);
+        defer gpa.free(bytes);
+        return symbol.fileHash(bytes);
+    }
+
+    fn readAll(self: Guard, gpa: Allocator, io: std.Io) ![]u8 {
         const file: std.Io.File = .{ .handle = self.handle, .flags = .{ .nonblocking = false } };
         const len = std.math.cast(usize, try file.length(io)) orelse return error.FileTooBig;
         const bytes = try gpa.alloc(u8, len);
-        defer gpa.free(bytes);
+        errdefer gpa.free(bytes);
         if (try file.readPositionalAll(io, bytes, 0) != len) return error.BaseChanged;
-        return symbol.hashOf(bytes);
+        return bytes;
+    }
+
+    fn deleteSelf(self: Guard) !void {
+        var info: win.FILE_DISPOSITION_INFO_EX = .{ .flags = win.file_disposition_flag_delete | win.file_disposition_flag_posix_semantics };
+        if (win.SetFileInformationByHandle(self.handle, win.file_disposition_info_ex, &info, @sizeOf(win.FILE_DISPOSITION_INFO_EX)) != .FALSE) return;
+        return switch (win.GetLastError()) {
+            win.error_sharing_violation, win.error_lock_violation => error.FileLocked,
+            win.error_access_denied => error.AccessDenied,
+            else => error.DeleteFailed,
+        };
     }
 
     fn attributes(self: Guard) !windows.DWORD {
@@ -170,39 +187,66 @@ pub fn create(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8
 pub const Pending = struct {
     gpa: Allocator,
     io: std.Io,
-    kind: Kind = .modify,
+    kind: Kind,
     guard: ?Guard,
-    replacement: Guard,
+    replacement: ?Guard = null,
     path: []u8,
     temp: []u8,
     backup: []u8,
-    journal: ?[]u8,
+    tag: [16]u8,
+    data: []const u8,
+    base_hash: ?symbol.Hash,
     saved_attributes: windows.DWORD,
     data_hash: symbol.Hash,
-    state: State = .staged,
-    replacement_open: bool = true,
-    guard_open: bool = true,
+    state: State = .planned,
     freed: bool = false,
+    removed: bool = false,
 
-    pub const Kind = enum { modify, create };
-    const State = enum { staged, backed_up, swapped };
+    pub const Kind = enum { modify, create, delete };
+    const State = enum { planned, staged, backed_up, swapped };
+
+    fn intent(self: *const Pending) journal.Intent {
+        return switch (self.kind) {
+            .modify => .{ .op = .modify, .target = self.path, .tag = &self.tag, .base_hash = self.base_hash, .new_hash = self.data_hash },
+            .create => .{ .op = .create, .target = self.path, .tag = &self.tag, .new_hash = self.data_hash },
+            .delete => .{ .op = .delete, .target = self.path, .base_hash = self.base_hash },
+        };
+    }
+
+    fn stageTemp(self: *Pending) !void {
+        if (self.kind == .delete) return;
+        try writeDurably(self.io, self.temp, self.data);
+        self.replacement = Guard.open(self.temp) catch |err| {
+            _ = deleteWithRetry(self.io, self.temp);
+            return err;
+        };
+        self.state = .staged;
+    }
 
     pub fn swap(self: *Pending, in_gap: ?Hook) !void {
-        if (self.kind == .create) return self.place(in_gap);
-        try self.guard.?.renameTo(self.gpa, self.backup);
+        switch (self.kind) {
+            .modify => try self.replace(in_gap),
+            .create => try self.place(in_gap),
+            .delete => {},
+        }
+    }
+
+    fn replace(self: *Pending, in_gap: ?Hook) !void {
+        const guard = self.guard.?;
+        const bytes = try guard.readAll(self.gpa, self.io);
+        defer self.gpa.free(bytes);
+        if (!std.mem.eql(u8, &symbol.hashOf(bytes), &self.base_hash.?)) return error.BaseChanged;
+        try writeDurably(self.io, self.backup, bytes);
         self.state = .backed_up;
         if (in_gap) |hook| try hook.run(hook.context);
-        self.replacement.renameTo(self.gpa, self.path) catch |err| switch (err) {
-            error.PathAlreadyExists => return error.Conflict,
-            else => |e| return e,
-        };
+        try self.replacement.?.renameReplacing(self.gpa, self.path);
         applyAttributes(self.path, self.saved_attributes) catch {};
         self.state = .swapped;
     }
 
     fn place(self: *Pending, in_gap: ?Hook) !void {
         if (in_gap) |hook| try hook.run(hook.context);
-        self.replacement.renameTo(self.gpa, self.path) catch |err| switch (err) {
+        self.replacement.?.renameTo(self.gpa, self.path) catch |err| switch (err) {
             error.PathAlreadyExists => return error.Conflict,
             else => |e| return e,
         };
@@ -210,14 +254,33 @@ pub const Pending = struct {
     }
 
     pub fn verify(self: *Pending) !void {
-        const written = self.replacement.hash(self.gpa, self.io) catch return error.WrittenButUnverified;
-        if (!std.mem.eql(u8, &written, &self.data_hash)) return error.WrittenButUnverified;
+        const handle = if (self.kind == .delete) self.guard.? else self.replacement.?;
+        const expected = if (self.kind == .delete) self.base_hash.? else self.data_hash;
+        const written = handle.hash(self.gpa, self.io) catch return error.WrittenButUnverified;
+        if (!std.mem.eql(u8, &written, &expected)) return error.WrittenButUnverified;
+    }
+
+    fn finish(self: *Pending, leftover: ?*Leftover) !void {
+        switch (self.kind) {
+            .modify => {
+                self.closeHandles();
+                if (!deleteWithRetry(self.io, self.backup)) {
+                    if (leftover) |out| out.record(self.backup);
+                }
+            },
+            .delete => {
+                defer self.closeHandles();
+                try self.guard.?.deleteSelf();
+                self.removed = true;
+            },
+            .create => self.closeHandles(),
+        }
     }
 
     pub fn finalize(self: *Pending, leftover: ?*Leftover) void {
-        if (self.kind == .modify) self.dropBackup(leftover);
-        self.closeHandles();
-        self.dropJournal();
+        self.finish(leftover) catch {
+            if (leftover) |out| out.record(self.path);
+        };
         self.freePaths();
     }
 
@@ -227,93 +290,70 @@ pub const Pending = struct {
     }
 
     fn closeReplacement(self: *Pending) void {
-        if (!self.replacement_open) return;
-        self.replacement.close();
-        self.replacement_open = false;
-    }
-
-    fn closeGuard(self: *Pending) void {
-        if (!self.guard_open) return;
-        if (self.guard) |g| g.close();
-        self.guard_open = false;
+        if (self.replacement) |r| r.close();
+        self.replacement = null;
     }
 
     fn closeHandles(self: *Pending) void {
         self.closeReplacement();
-        self.closeGuard();
-    }
-
-    fn dropBackup(self: *Pending, leftover: ?*Leftover) void {
-        self.closeHandles();
-        if (!deleteWithRetry(self.io, self.backup)) {
-            if (leftover) |out| out.record(self.backup);
-        }
-    }
-
-    fn dropJournal(self: *Pending) void {
-        if (self.freed) return;
-        if (self.journal) |j| _ = deleteWithRetry(self.io, j);
+        if (self.guard) |g| g.close();
+        self.guard = null;
     }
 
     pub fn discard(self: *Pending, leftover: ?*Leftover) void {
         switch (self.kind) {
             .modify => self.restoreBase(leftover),
             .create => self.removeCreated(leftover),
+            .delete => {},
         }
         self.closeHandles();
-        self.dropJournal();
         self.freePaths();
     }
 
     fn restoreBase(self: *Pending, leftover: ?*Leftover) void {
         self.closeReplacement();
-        const guard = self.guard.?;
         switch (self.state) {
+            .planned => {},
             .staged => _ = deleteWithRetry(self.io, self.temp),
             .backed_up => {
-                guard.renameTo(self.gpa, self.path) catch {
+                _ = deleteWithRetry(self.io, self.temp);
+                _ = deleteWithRetry(self.io, self.backup);
+            },
+            .swapped => {
+                const backup = Guard.open(self.backup) catch {
+                    if (leftover) |out| out.record(self.backup);
+                    return;
+                };
+                defer backup.close();
+                backup.renameReplacing(self.gpa, self.path) catch {
                     if (leftover) |out| out.record(self.backup);
                 };
-                _ = deleteWithRetry(self.io, self.temp);
-            },
-            .swapped => guard.renameReplacing(self.gpa, self.path) catch {
-                if (leftover) |out| out.record(self.backup);
             },
         }
     }
 
     fn removeCreated(self: *Pending, leftover: ?*Leftover) void {
         if (self.state == .swapped) {
-            self.replacement.renameTo(self.gpa, self.temp) catch {
+            self.replacement.?.renameTo(self.gpa, self.temp) catch {
                 if (leftover) |out| out.record(self.path);
                 self.closeReplacement();
                 return;
             };
         }
         self.closeReplacement();
-        _ = deleteWithRetry(self.io, self.temp);
+        if (self.state != .planned) _ = deleteWithRetry(self.io, self.temp);
     }
 
     fn freePaths(self: *Pending) void {
         if (self.freed) return;
         self.freed = true;
-        if (self.journal) |j| self.gpa.free(j);
         self.gpa.free(self.path);
         self.gpa.free(self.temp);
         self.gpa.free(self.backup);
     }
 };
 
-pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, journal_dir: ?[]const u8, batch: ?*const Batch) !Pending {
-    if (builtin.os.tag != .windows) return error.Unsupported;
-    if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
-
-    const guard = try Guard.open(path_abs);
-    errdefer guard.close();
-    if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &expected_base)) return error.BaseChanged;
-    const saved_attributes = try guard.attributes();
-    if (saved_attributes & win.file_attribute_readonly != 0) return error.ReadOnlyFile;
-
+fn plan(gpa: Allocator, io: std.Io, kind: Pending.Kind, path_abs: []const u8, data: []const u8, guard: ?Guard, base_hash: ?symbol.Hash, saved_attributes: windows.DWORD) !Pending {
     var random: [8]u8 = undefined;
     io.random(&random);
     const tag = std.fmt.bytesToHex(random, .lower);
@@ -322,76 +362,51 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
     const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path_abs, &tag });
     errdefer gpa.free(temp);
     const backup = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ path_abs, &tag });
-    errdefer gpa.free(backup);
-
-    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .target = path_abs, .base_hash = expected_base, .new_hash = symbol.hashOf(data), .batch = batchTag(batch) }) else null;
-    errdefer if (journal) |j| {
-        _ = deleteWithRetry(io, j);
-        gpa.free(j);
-    };
-
-    try writeDurably(io, temp, data);
-    errdefer _ = deleteWithRetry(io, temp);
-    const replacement = try Guard.open(temp);
-
     return .{
         .gpa = gpa,
         .io = io,
+        .kind = kind,
         .guard = guard,
-        .replacement = replacement,
         .path = path,
         .temp = temp,
         .backup = backup,
-        .journal = journal,
+        .tag = tag,
+        .data = data,
+        .base_hash = base_hash,
         .saved_attributes = saved_attributes,
         .data_hash = symbol.hashOf(data),
     };
 }
 
-fn batchTag(batch: ?*const Batch) ?[]const u8 {
-    const b = batch orelse return null;
-    return &b.tag;
+fn openBase(gpa: Allocator, io: std.Io, path_abs: []const u8, expected_base: symbol.Hash) !struct { guard: Guard, attributes: windows.DWORD } {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
+    const guard = try Guard.open(path_abs);
+    errdefer guard.close();
+    if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &expected_base)) return error.BaseChanged;
+    const attributes = try guard.attributes();
+    if (attributes & win.file_attribute_readonly != 0) return error.ReadOnlyFile;
+    return .{ .guard = guard, .attributes = attributes };
 }
 
-pub fn stageCreate(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, journal_dir: ?[]const u8, batch: ?*const Batch) !Pending {
+pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !Pending {
+    const base = try openBase(gpa, io, path_abs, expected_base);
+    errdefer base.guard.close();
+    return plan(gpa, io, .modify, path_abs, data, base.guard, expected_base, base.attributes);
+}
+
+pub fn stageCreate(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8) !Pending {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
     if (try pathExists(io, path_abs)) return error.FileExists;
+    return plan(gpa, io, .create, path_abs, data, null, null, 0);
+}
 
-    var random: [8]u8 = undefined;
-    io.random(&random);
-    const tag = std.fmt.bytesToHex(random, .lower);
-    const path = try gpa.dupe(u8, path_abs);
-    errdefer gpa.free(path);
-    const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path_abs, &tag });
-    errdefer gpa.free(temp);
-    const backup = try gpa.dupe(u8, "");
-    errdefer gpa.free(backup);
-
-    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .op = .create, .target = path_abs, .new_hash = symbol.hashOf(data), .batch = batchTag(batch) }) else null;
-    errdefer if (journal) |j| {
-        _ = deleteWithRetry(io, j);
-        gpa.free(j);
-    };
-
-    try writeDurably(io, temp, data);
-    errdefer _ = deleteWithRetry(io, temp);
-    const replacement = try Guard.open(temp);
-
-    return .{
-        .gpa = gpa,
-        .io = io,
-        .kind = .create,
-        .guard = null,
-        .guard_open = false,
-        .replacement = replacement,
-        .path = path,
-        .temp = temp,
-        .backup = backup,
-        .journal = journal,
-        .saved_attributes = 0,
-        .data_hash = symbol.hashOf(data),
-    };
+pub fn stageDelete(gpa: Allocator, io: std.Io, path_abs: []const u8, expected_base: symbol.Hash) !Pending {
+    if (shadow.isReparsePoint(path_abs) catch true) return error.ReparsePoint;
+    const base = try openBase(gpa, io, path_abs, expected_base);
+    errdefer base.guard.close();
+    return plan(gpa, io, .delete, path_abs, "", base.guard, expected_base, base.attributes);
 }
 
 fn pathExists(io: std.Io, path_abs: []const u8) !bool {
@@ -402,54 +417,21 @@ fn pathExists(io: std.Io, path_abs: []const u8) !bool {
     return true;
 }
 
-const JournalOp = enum { modify, create };
-
-const JournalFields = struct {
-    op: JournalOp = .modify,
-    target: []const u8,
-    base_hash: ?symbol.Hash = null,
-    new_hash: symbol.Hash,
-    batch: ?[]const u8 = null,
-};
-
-fn writeJournal(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const u8, fields: JournalFields) ![]u8 {
-    std.Io.Dir.cwd().createDirPath(io, journal_dir) catch {};
-    const journal_path = try std.fmt.allocPrint(gpa, "{s}\\{s}.json", .{ journal_dir, tag });
-    errdefer gpa.free(journal_path);
-
-    const new_hex = symbol.formatHash(fields.new_hash);
-    var buffer: std.Io.Writer.Allocating = .init(gpa);
-    defer buffer.deinit();
-    var js: std.json.Stringify = .{ .writer = &buffer.writer };
-    try js.beginObject();
-    try js.objectField("op");
-    try js.write(@tagName(fields.op));
-    try js.objectField("target");
-    try js.write(fields.target);
-    if (fields.base_hash) |base| {
-        const base_hex = symbol.formatHash(base);
-        try js.objectField("base_hash");
-        try js.write(base_hex[0..]);
-    }
-    try js.objectField("new_hash");
-    try js.write(new_hex[0..]);
-    if (fields.batch) |b| {
-        try js.objectField("batch");
-        try js.write(b);
-    }
-    try js.endObject();
-
-    try writeDurably(io, journal_path, buffer.written());
-    return journal_path;
+fn writeBatchJournal(b: *const Batch, pendings: []const Pending) ![]u8 {
+    const intents = try b.gpa.alloc(journal.Intent, pendings.len);
+    defer b.gpa.free(intents);
+    for (pendings, intents) |*p, *slot| slot.* = p.intent();
+    return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, intents);
 }
 
-fn abortSwaps(pendings: []Pending, swapped: usize, leftover: ?*Leftover) void {
-    var k = swapped;
+fn abort(pendings: []Pending, leftover: ?*Leftover, batch: ?*const Batch, journal_path: ?[]const u8) void {
+    var k = pendings.len;
     while (k > 0) {
         k -= 1;
         pendings[k].discard(leftover);
     }
-    for (pendings[swapped..]) |*rest| rest.discard(leftover);
+    const b = batch orelse return;
+    if (journal_path) |jp| _ = deleteWithRetry(b.io, jp);
 }
 
 fn abandonAll(pendings: []Pending) error{Crashed} {
@@ -458,27 +440,43 @@ fn abandonAll(pendings: []Pending) error{Crashed} {
 }
 
 pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usize, batch: ?*const Batch, step: ?*const Step) !void {
-    var swapped: usize = 0;
-    while (swapped < pendings.len) : (swapped += 1) {
-        if (fail_before) |k| if (k == swapped) {
-            abortSwaps(pendings, swapped, leftover);
-            return error.BatchAborted;
-        };
-        pendings[swapped].swap(Step.gap(step)) catch |err| {
-            if (err == error.Crashed) return abandonAll(pendings);
-            abortSwaps(pendings, swapped, leftover);
+    var journal_path: ?[]u8 = null;
+    defer if (journal_path) |jp| batch.?.gpa.free(jp);
+    if (batch) |b| {
+        journal_path = writeBatchJournal(b, pendings) catch |err| {
+            abort(pendings, leftover, null, null);
             return err;
         };
         if (Step.stops(step)) return abandonAll(pendings);
     }
     for (pendings) |*p| {
+        if (p.kind == .delete) continue;
+        p.stageTemp() catch |err| {
+            abort(pendings, leftover, batch, journal_path);
+            return err;
+        };
+        if (Step.stops(step)) return abandonAll(pendings);
+    }
+    for (pendings, 0..) |*p, k| {
+        if (fail_before) |f| if (f == k) {
+            abort(pendings, leftover, batch, journal_path);
+            return error.BatchAborted;
+        };
+        p.swap(Step.gap(step)) catch |err| {
+            if (err == error.Crashed) return abandonAll(pendings);
+            abort(pendings, leftover, batch, journal_path);
+            return err;
+        };
+        if (p.kind != .delete and Step.stops(step)) return abandonAll(pendings);
+    }
+    for (pendings) |*p| {
         p.verify() catch {
-            for (pendings) |*q| q.discard(leftover);
+            abort(pendings, leftover, batch, journal_path);
             return error.WrittenButUnverified;
         };
     }
     if (batch) |b| commit_record.write(b.gpa, b.io, b.journal_dir, &b.tag) catch |err| {
-        for (pendings) |*q| q.discard(leftover);
+        abort(pendings, leftover, batch, journal_path);
         return err;
     };
     if (Step.stops(step)) return abandonAll(pendings);
@@ -487,43 +485,48 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
             p.closeHandles();
             continue;
         }
-        p.dropBackup(leftover);
-        if (Step.stops(step)) return abandonAll(pendings);
-        p.dropJournal();
-        p.freePaths();
-        if (Step.stops(step)) return abandonAll(pendings);
-    }
-    const creates = countCreates(pendings);
-    const indexed = if (creates != 0) indexCreated(pendings, batch) else {};
-    if (creates != 0 and Step.stops(step)) return abandonAll(pendings);
-    for (pendings) |*p| {
-        if (p.kind != .create) continue;
-        p.dropJournal();
-        p.freePaths();
+        p.finish(leftover) catch {
+            if (leftover) |out| out.record(p.path);
+        };
         if (Step.stops(step)) return abandonAll(pendings);
     }
-    if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
+    const indexed = syncBatchIndex(pendings, batch);
+    if (needsIndex(pendings) and Step.stops(step)) return abandonAll(pendings);
+    for (pendings) |*p| p.freePaths();
+    if (batch) |b| {
+        if (journal_path) |jp| _ = deleteWithRetry(b.io, jp);
+        if (Step.stops(step)) return error.Crashed;
+        commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
+    }
     return indexed;
 }
 
-fn countCreates(pendings: []const Pending) usize {
-    var n: usize = 0;
+fn needsIndex(pendings: []const Pending) bool {
     for (pendings) |p| {
-        if (p.kind == .create) n += 1;
+        if (p.kind != .modify) return true;
     }
-    return n;
+    return false;
 }
 
-fn indexCreated(pendings: []Pending, batch: ?*const Batch) !void {
+fn syncBatchIndex(pendings: []const Pending, batch: ?*const Batch) !void {
+    if (!needsIndex(pendings)) return;
     const b = batch orelse return;
     const root = b.root orelse return;
-    var created: std.ArrayList([]const u8) = .empty;
-    defer created.deinit(b.gpa);
-    for (pendings) |*p| {
-        if (p.kind == .create) try created.append(b.gpa, p.path);
-    }
-    if (created.items.len == 0) return;
-    try git_repo.addAllToIndex(b.gpa, b.io, root, created.items);
+    var added: std.ArrayList([]const u8) = .empty;
+    defer added.deinit(b.gpa);
+    var removed: std.ArrayList([]const u8) = .empty;
+    defer removed.deinit(b.gpa);
+    for (pendings) |p| switch (p.kind) {
+        .create => try added.append(b.gpa, p.path),
+        .delete => if (p.removed) try removed.append(b.gpa, p.path),
+        .modify => {},
+    };
+    try syncIndex(b.gpa, b.io, root, added.items, removed.items);
+}
+
+fn syncIndex(gpa: Allocator, io: std.Io, root: []const u8, added: []const []const u8, removed: []const []const u8) !void {
+    if (added.len != 0) try git_repo.addAllToIndex(gpa, io, root, added);
+    if (removed.len != 0) try git_repo.removeAllFromIndex(gpa, io, root, removed);
 }
 
 pub const RecoverReport = struct {
@@ -535,15 +538,6 @@ pub const RecoverReport = struct {
     not_indexed: usize = 0,
 };
 
-const JournalEntry = struct {
-    op: []const u8 = "modify",
-    target: []const u8 = "",
-    base_hash: []const u8 = "",
-    new_hash: []const u8 = "",
-    batch: []const u8 = "",
-};
-
-const max_journal_bytes = 64 * 1024;
 const SidecarKind = enum { tmp, bak };
 
 fn sidecarKind(name: []const u8) ?SidecarKind {
@@ -602,28 +596,6 @@ fn rollForward(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []co
     if (!deleteWithRetry(io, bak_abs)) return error.BackupNotRemoved;
 }
 
-fn hasHash(gpa: Allocator, io: std.Io, path_abs: []const u8, expected: symbol.Hash) bool {
-    const guard = Guard.open(path_abs) catch return false;
-    defer guard.close();
-    const actual = guard.hash(gpa, io) catch return false;
-    return std.mem.eql(u8, &actual, &expected);
-}
-
-fn recoverCreated(gpa: Allocator, io: std.Io, target_abs: []const u8, new_hash: symbol.Hash, committed: bool, index_targets: *std.ArrayList([]u8), report: *RecoverReport) !bool {
-    if (!hasHash(gpa, io, target_abs, new_hash)) {
-        report.skipped += 1;
-        return false;
-    }
-    if (committed) {
-        try index_targets.append(gpa, try gpa.dupe(u8, target_abs));
-        report.rolled_forward += 1;
-        return true;
-    }
-    if (!deleteWithRetry(io, target_abs)) return error.CreatedNotRemoved;
-    report.restored += 1;
-    return false;
-}
-
 fn restoreVerified(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, base_hash: symbol.Hash) !void {
     if (shadow.isReparsePoint(bak_abs) catch true) return error.BackupUnverified;
     const guard = try Guard.open(bak_abs);
@@ -657,6 +629,111 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, shadow
     return if (report.failed > 0 or report.not_indexed > 0) recover_failed_exit_code else 0;
 }
 
+const Verified = enum { deleted, missing, mismatch };
+
+fn deleteVerified(gpa: Allocator, io: std.Io, path_abs: []const u8, expected: symbol.Hash, in_gap: ?Hook) !Verified {
+    const guard = Guard.open(path_abs) catch |err| switch (err) {
+        error.BaseChanged => return .missing,
+        else => |e| return e,
+    };
+    defer guard.close();
+    if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &expected)) return .mismatch;
+    if (in_gap) |hook| try hook.run(hook.context);
+    try guard.deleteSelf();
+    return .deleted;
+}
+
+fn hasHash(gpa: Allocator, io: std.Io, path_abs: []const u8, expected: symbol.Hash) bool {
+    const guard = Guard.open(path_abs) catch return false;
+    defer guard.close();
+    const actual = guard.hash(gpa, io) catch return false;
+    return std.mem.eql(u8, &actual, &expected);
+}
+
+const IndexQueue = struct {
+    gpa: Allocator,
+    added: std.ArrayList([]u8) = .empty,
+    removed: std.ArrayList([]u8) = .empty,
+
+    fn deinit(self: *IndexQueue) void {
+        for (self.added.items) |p| self.gpa.free(p);
+        for (self.removed.items) |p| self.gpa.free(p);
+        self.added.deinit(self.gpa);
+        self.removed.deinit(self.gpa);
+    }
+
+    fn add(self: *IndexQueue, path: []const u8) !void {
+        try self.added.append(self.gpa, try self.gpa.dupe(u8, path));
+    }
+
+    fn remove(self: *IndexQueue, path: []const u8) !void {
+        try self.removed.append(self.gpa, try self.gpa.dupe(u8, path));
+    }
+
+    fn len(self: *const IndexQueue) usize {
+        return self.added.items.len + self.removed.items.len;
+    }
+
+    fn flush(self: *IndexQueue, io: std.Io, root_abs: []const u8, report: *RecoverReport) void {
+        if (self.len() == 0) return;
+        const added: []const []const u8 = self.added.items;
+        const removed: []const []const u8 = self.removed.items;
+        syncIndex(self.gpa, io, root_abs, added, removed) catch {
+            report.not_indexed += self.len();
+        };
+    }
+};
+
+fn recoverCreated(gpa: Allocator, io: std.Io, target_abs: []const u8, new_hash: symbol.Hash, committed: bool, index: *IndexQueue, report: *RecoverReport) !void {
+    if (committed) {
+        if (!hasHash(gpa, io, target_abs, new_hash)) {
+            report.skipped += 1;
+            return;
+        }
+        try index.add(target_abs);
+        report.rolled_forward += 1;
+        return;
+    }
+    switch (try deleteVerified(gpa, io, target_abs, new_hash, null)) {
+        .deleted => report.restored += 1,
+        .missing, .mismatch => report.skipped += 1,
+    }
+}
+
+fn recoverDeleted(gpa: Allocator, io: std.Io, target_abs: []const u8, base_hash: symbol.Hash, index: *IndexQueue, report: *RecoverReport) !void {
+    switch (try deleteVerified(gpa, io, target_abs, base_hash, null)) {
+        .deleted, .missing => {
+            try index.remove(target_abs);
+            report.rolled_forward += 1;
+        },
+        .mismatch => report.skipped += 1,
+    }
+}
+
+fn recoverModified(gpa: Allocator, io: std.Io, target_abs: []const u8, tag: []const u8, base_hash: symbol.Hash, new_hash: ?symbol.Hash, committed: bool, report: *RecoverReport) !void {
+    const bak = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ target_abs, tag });
+    defer gpa.free(bak);
+    if (committed) {
+        rollForward(gpa, io, bak, target_abs, new_hash orelse return error.MissingNewHash) catch {
+            report.failed += 1;
+            return;
+        };
+        report.rolled_forward += 1;
+        return;
+    }
+    restoreVerified(gpa, io, bak, target_abs, base_hash) catch |err| switch (err) {
+        error.BaseChanged, error.FileLocked => {
+            report.skipped += 1;
+            return;
+        },
+        else => {
+            report.failed += 1;
+            return;
+        },
+    };
+    report.restored += 1;
+}
+
 fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *RecoverReport) !void {
     var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
     const journal_dir = std.fmt.bufPrint(&journal_buf, "{s}\\{s}\\journal", .{ root_abs, shadow.workspace_dir }) catch return;
@@ -678,115 +755,140 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
         try names.append(gpa, try gpa.dupe(u8, entry.name));
     }
 
-    var index_targets: std.ArrayList([]u8) = .empty;
-    defer {
-        for (index_targets.items) |t| gpa.free(t);
-        index_targets.deinit(gpa);
-    }
+    var index: IndexQueue = .{ .gpa = gpa };
+    defer index.deinit();
     var index_journals: std.ArrayList([]u8) = .empty;
     defer {
         for (index_journals.items) |j| gpa.free(j);
         index_journals.deinit(gpa);
     }
+    var kept: std.ArrayList([]const u8) = .empty;
+    defer kept.deinit(gpa);
     for (names.items) |name| {
         var jp_buf: [std.fs.max_path_bytes]u8 = undefined;
         const jp = std.fmt.bufPrint(&jp_buf, "{s}\\{s}", .{ journal_dir, name }) catch continue;
-        const keep = applyJournalEntry(gpa, io, root_abs, journal_dir, jp, name, &index_targets, report) catch blk: {
+        const tag = name[0 .. name.len - ".json".len];
+        const outcome = applyJournal(gpa, io, root_abs, journal_dir, jp, tag, &index, report) catch blk: {
             report.failed += 1;
-            break :blk false;
+            break :blk .delete;
         };
-        if (keep) {
-            try index_journals.append(gpa, try gpa.dupe(u8, jp));
-        } else {
-            _ = deleteWithRetry(io, jp);
+        switch (outcome) {
+            .delete => _ = deleteWithRetry(io, jp),
+            .after_index => try index_journals.append(gpa, try gpa.dupe(u8, jp)),
+            .keep => try kept.append(gpa, tag),
         }
     }
-    if (index_targets.items.len != 0) {
-        const paths: []const []const u8 = index_targets.items;
-        git_repo.addAllToIndex(gpa, io, root_abs, paths) catch {
-            report.not_indexed += paths.len;
-        };
-    }
+    index.flush(io, root_abs, report);
     for (index_journals.items) |jp| _ = deleteWithRetry(io, jp);
-    try commit_record.removeAll(gpa, io, journal_dir);
+    try commit_record.removeAll(gpa, io, journal_dir, kept.items);
     std.Io.Dir.cwd().deleteDir(io, journal_dir) catch {};
 }
 
-fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, journal_path: []const u8, name: []const u8, index_targets: *std.ArrayList([]u8), report: *RecoverReport) !bool {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, journal_path, gpa, .limited(max_journal_bytes));
-    defer gpa.free(bytes);
+const JournalOutcome = enum { delete, after_index, keep };
 
-    const parsed = std.json.parseFromSlice(JournalEntry, gpa, bytes, .{ .ignore_unknown_fields = true }) catch {
+fn applyJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, journal_path: []const u8, tag: []const u8, index: *IndexQueue, report: *RecoverReport) !JournalOutcome {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, journal_path, gpa, .limited(journal.max_bytes));
+    defer gpa.free(bytes);
+    const parsed = journal.parse(gpa, bytes) catch {
         report.failed += 1;
-        return false;
+        return .delete;
     };
     defer parsed.deinit();
-    const op = std.meta.stringToEnum(JournalOp, parsed.value.op) orelse {
-        report.failed += 1;
-        return false;
+    return switch (parsed) {
+        .batch => |b| applyBatchJournal(gpa, io, root_abs, journal_dir, tag, b.value, index, report),
+        .legacy => |l| applyLegacyJournal(gpa, io, root_abs, journal_dir, tag, l.value, index, report),
     };
-    const target = parsed.value.target;
-    if (target.len == 0) {
+}
+
+const CheckedIntent = struct {
+    op: journal.Op,
+    target: []const u8,
+    tag: []const u8,
+    base_hash: ?symbol.Hash,
+    new_hash: ?symbol.Hash,
+};
+
+fn checkIntent(root_abs: []const u8, raw: journal.RawIntent) !CheckedIntent {
+    const op = std.meta.stringToEnum(journal.Op, raw.op) orelse return error.CorruptJournal;
+    if (raw.target.len == 0 or !isUnderRoot(root_abs, raw.target)) return error.CorruptJournal;
+    if (try escapesViaReparse(root_abs, raw.target)) return error.CorruptJournal;
+    const base_hash: ?symbol.Hash = if (raw.base_hash.len == 0) null else symbol.parseHash(raw.base_hash) catch return error.CorruptJournal;
+    const new_hash: ?symbol.Hash = if (raw.new_hash.len == 0) null else symbol.parseHash(raw.new_hash) catch return error.CorruptJournal;
+    switch (op) {
+        .modify => if (!isValidTag(raw.tag) or base_hash == null or new_hash == null) return error.CorruptJournal,
+        .create => if (!isValidTag(raw.tag) or new_hash == null) return error.CorruptJournal,
+        .delete => if (base_hash == null) return error.CorruptJournal,
+    }
+    return .{ .op = op, .target = raw.target, .tag = raw.tag, .base_hash = base_hash, .new_hash = new_hash };
+}
+
+fn applyBatchJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, tag: []const u8, batch: journal.Batch, index: *IndexQueue, report: *RecoverReport) !JournalOutcome {
+    if (!isValidTag(batch.batch) or !std.mem.eql(u8, batch.batch, tag)) {
         report.failed += 1;
-        return false;
+        return .keep;
+    }
+    const checked = try gpa.alloc(CheckedIntent, batch.intents.len);
+    defer gpa.free(checked);
+    for (batch.intents, checked) |raw, *slot| {
+        slot.* = checkIntent(root_abs, raw) catch {
+            report.failed += 1;
+            return .keep;
+        };
+    }
+    const committed = try commit_record.exists(gpa, io, journal_dir, batch.batch);
+    for (checked) |intent| switch (intent.op) {
+        .modify => try recoverModified(gpa, io, intent.target, intent.tag, intent.base_hash.?, intent.new_hash, committed, report),
+        .create => try recoverCreated(gpa, io, intent.target, intent.new_hash.?, committed, index, report),
+        .delete => if (committed) try recoverDeleted(gpa, io, intent.target, intent.base_hash.?, index, report),
+    };
+    return if (committed) .after_index else .delete;
+}
+
+fn applyLegacyJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, tag: []const u8, entry: journal.Legacy, index: *IndexQueue, report: *RecoverReport) !JournalOutcome {
+    const op = std.meta.stringToEnum(journal.Op, entry.op) orelse {
+        report.failed += 1;
+        return .delete;
+    };
+    const target = entry.target;
+    if (target.len == 0 or op == .delete) {
+        report.failed += 1;
+        return .delete;
     }
     if (!isUnderRoot(root_abs, target) or try escapesViaReparse(root_abs, target)) {
         report.failed += 1;
-        return false;
+        return .delete;
     }
-
-    const tag = name[0 .. name.len - ".json".len];
     if (!isValidTag(tag)) {
         report.failed += 1;
-        return false;
+        return .delete;
     }
-    const batch = parsed.value.batch;
+    const batch = entry.batch;
     if (batch.len != 0 and !isValidTag(batch)) {
         report.failed += 1;
-        return false;
+        return .delete;
     }
     const committed = batch.len != 0 and try commit_record.exists(gpa, io, journal_dir, batch);
 
     if (op == .create) {
-        const new_hash = symbol.parseHash(parsed.value.new_hash) catch {
+        const new_hash = symbol.parseHash(entry.new_hash) catch {
             report.failed += 1;
-            return false;
+            return .delete;
         };
-        return recoverCreated(gpa, io, target, new_hash, committed, index_targets, report);
+        try recoverCreated(gpa, io, target, new_hash, committed, index, report);
+        return if (committed) .after_index else .delete;
     }
 
-    const base_hash = symbol.parseHash(parsed.value.base_hash) catch {
+    const base_hash = symbol.parseHash(entry.base_hash) catch {
         report.failed += 1;
-        return false;
+        return .delete;
     };
-    const bak = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ target, tag });
-    defer gpa.free(bak);
-
-    if (committed) {
-        const new_hash = symbol.parseHash(parsed.value.new_hash) catch {
-            report.failed += 1;
-            return false;
-        };
-        rollForward(gpa, io, bak, target, new_hash) catch {
-            report.failed += 1;
-            return false;
-        };
-        report.rolled_forward += 1;
-        return false;
+    const new_hash: ?symbol.Hash = symbol.parseHash(entry.new_hash) catch null;
+    if (committed and new_hash == null) {
+        report.failed += 1;
+        return .delete;
     }
-
-    restoreVerified(gpa, io, bak, target, base_hash) catch |err| switch (err) {
-        error.BaseChanged, error.FileLocked => {
-            report.skipped += 1;
-            return false;
-        },
-        else => {
-            report.failed += 1;
-            return false;
-        },
-    };
-    report.restored += 1;
-    return false;
+    try recoverModified(gpa, io, target, tag, base_hash, new_hash, committed, report);
+    return .delete;
 }
 
 fn clearOrphanTemps(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *RecoverReport) !void {
@@ -810,14 +912,10 @@ fn clearOrphanTemps(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
     }
 }
 
-fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, in_gap: ?Hook, journal_dir: ?[]const u8) !void {
-    var pending = try prepare(gpa, io, path_abs, data, expected_base, journal_dir, null);
-    var done = false;
-    defer if (!done) pending.discard(leftover);
-    try pending.swap(in_gap);
-    try pending.verify();
-    pending.finalize(leftover);
-    done = true;
+fn replaceInternal(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, step: ?*const Step, journal_dir: ?[]const u8) !void {
+    var pendings = [1]Pending{try prepare(gpa, io, path_abs, data, expected_base)};
+    const batch: ?Batch = if (journal_dir) |dir| Batch.init(gpa, io, dir) else null;
+    try commitBatch(&pendings, leftover, null, if (batch) |*b| b else null, step);
 }
 
 fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8, replace_existing: bool) !void {
@@ -917,6 +1015,13 @@ const win = struct {
     const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
 
     const file_rename_info_ex: c_int = 22;
+    const file_disposition_info_ex: c_int = 21;
+    const file_disposition_flag_delete: windows.DWORD = 0x00000001;
+    const file_disposition_flag_posix_semantics: windows.DWORD = 0x00000002;
+
+    const FILE_DISPOSITION_INFO_EX = extern struct {
+        flags: windows.DWORD,
+    };
     const file_rename_flag_replace_if_exists: windows.DWORD = 0x00000001;
     const file_rename_flag_posix_semantics: windows.DWORD = 0x00000002;
 
@@ -1114,7 +1219,8 @@ test "while the guard is held no other handle can open the file for writing" {
     const guard = try Guard.open(fixture.path());
     try testing.expectEqual(symbol.hashOf(original), try guard.hash(testing.allocator, testing.io));
     try testing.expectError(error.OpenFailed, fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write | win.file_share_delete));
-    try testing.expectError(error.OpenFailed, fixture.openRaw(win.delete, win.file_share_read | win.file_share_write | win.file_share_delete));
+    const deleter = try fixture.openRaw(win.delete, win.file_share_read | win.file_share_write | win.file_share_delete);
+    windows.CloseHandle(deleter);
     guard.close();
 
     const writer = try fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write | win.file_share_delete);
@@ -1123,32 +1229,73 @@ test "while the guard is held no other handle can open the file for writing" {
 
 const external_save = "export function f() { return 42; } // saved by another tool\n";
 
-const RecreateTarget = struct {
+const ExternalWriter = struct {
     fixture: *Fixture,
+    at: usize,
+    seen: usize = 0,
+    refused: bool = false,
 
-    fn run(context: *anyopaque) anyerror!void {
-        const self: *RecreateTarget = @ptrCast(@alignCast(context));
-        try self.fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "target.ts", .data = external_save });
+    fn reached(context: *anyopaque) bool {
+        const self: *ExternalWriter = @ptrCast(@alignCast(context));
+        self.seen += 1;
+        if (self.seen != self.at) return false;
+        self.fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "target.ts", .data = external_save }) catch {
+            self.refused = true;
+        };
+        return false;
     }
 };
 
-test "a concurrent save that lands in the rename gap is preserved as a Conflict, not overwritten" {
+test "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fixture = try Fixture.init(original);
     defer fixture.deinit();
 
-    var recreate: RecreateTarget = .{ .fixture = &fixture };
-    const hook: Hook = .{ .context = &recreate, .run = RecreateTarget.run };
-    var leftover: Leftover = .{};
-    try testing.expectError(error.Conflict, replaceInternal(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), &leftover, hook, null));
+    var writer: ExternalWriter = .{ .fixture = &fixture, .at = 2 };
+    const step: Step = .{ .context = &writer, .reached = ExternalWriter.reached };
+    try replaceInternal(testing.allocator, testing.io, fixture.path(), updated, symbol.hashOf(original), null, &step, null);
 
-    try fixture.expectContent(external_save);
+    try testing.expect(writer.refused);
+    try fixture.expectContent(updated);
+    try fixture.expectEntries(1);
+}
 
-    const backup_path = leftover.path() orelse return error.NoLeftoverReported;
-    const preserved = try std.Io.Dir.cwd().readFileAlloc(testing.io, backup_path, testing.allocator, .unlimited);
-    defer testing.allocator.free(preserved);
-    try testing.expectEqualStrings(original, preserved);
-    std.Io.Dir.deleteFileAbsolute(testing.io, backup_path) catch {};
+const Relocate = struct {
+    tmp: *testing.TmpDir,
+    path: []const u8,
+    moved: []const u8,
+
+    fn run(context: *anyopaque) anyerror!void {
+        const self: *Relocate = @ptrCast(@alignCast(context));
+        const other = try Guard.open(self.path);
+        defer other.close();
+        try other.renameTo(testing.allocator, self.moved);
+        try self.tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts", .data = external_save });
+    }
+};
+
+test "a verified delete removes the file it hashed even when the path is taken over before the delete" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts", .data = original });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}\\f.ts", .{root});
+    defer testing.allocator.free(path);
+
+    const moved = try std.fmt.allocPrint(testing.allocator, "{s}\\moved.ts", .{root});
+    defer testing.allocator.free(moved);
+    var relocate: Relocate = .{ .tmp = &tmp, .path = path, .moved = moved };
+    const hook: Hook = .{ .context = &relocate, .run = Relocate.run };
+    try testing.expectEqual(Verified.deleted, try deleteVerified(testing.allocator, testing.io, path, symbol.hashOf(original), hook));
+
+    const kept = try tmp.dir.readFileAlloc(testing.io, "f.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(kept);
+    try testing.expectEqualStrings(external_save, kept);
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "moved.ts", .{}));
+    try testing.expectEqual(Verified.mismatch, try deleteVerified(testing.allocator, testing.io, path, symbol.hashOf(original), null));
+    try testing.expectEqual(Verified.missing, try deleteVerified(testing.allocator, testing.io, path[0 .. path.len - 4], symbol.hashOf(original), null));
 }
 
 test "commitBatch writes every file when all swaps succeed and leaves no sidecars" {
@@ -1159,8 +1306,8 @@ test "commitBatch writes every file when all swaps succeed and leaves no sidecar
     defer b.deinit();
 
     var pendings = [_]Pending{
-        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null, null),
-        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null, null),
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original)),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original)),
     };
     try commitBatch(&pendings, null, null, null, null);
 
@@ -1178,8 +1325,8 @@ test "commitBatch rolls every committed file back when one swap fails midway" {
     defer b.deinit();
 
     var pendings = [_]Pending{
-        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original), null, null),
-        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original), null, null),
+        try prepare(testing.allocator, testing.io, a.path(), updated, symbol.hashOf(original)),
+        try prepare(testing.allocator, testing.io, b.path(), updated, symbol.hashOf(original)),
     };
     try testing.expectError(error.BatchAborted, commitBatch(&pendings, null, 1, null, null));
 
@@ -1191,6 +1338,23 @@ test "commitBatch rolls every committed file back when one swap fails midway" {
 
 const recover_tag = "0123456789abcdef";
 
+fn writeLegacyJournal(journal_dir: []const u8, tag: []const u8, target_abs: []const u8, base_hash: symbol.Hash) !void {
+    std.Io.Dir.cwd().createDirPath(testing.io, journal_dir) catch {};
+    const hex = symbol.formatHash(base_hash);
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    var js: std.json.Stringify = .{ .writer = &buffer.writer };
+    try js.beginObject();
+    try js.objectField("target");
+    try js.write(target_abs);
+    try js.objectField("base_hash");
+    try js.write(hex[0..]);
+    try js.endObject();
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}\\{s}.json", .{ journal_dir, tag });
+    defer testing.allocator.free(path);
+    try writeDurably(testing.io, path, buffer.written());
+}
+
 fn seedRecover(root_abs: []const u8, tmp: *testing.TmpDir, target_content: []const u8, bak_content: []const u8) !void {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts", .data = target_content });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "f.ts.emetgate-" ++ recover_tag ++ ".bak", .data = bak_content });
@@ -1198,8 +1362,7 @@ fn seedRecover(root_abs: []const u8, tmp: *testing.TmpDir, target_content: []con
     const target_abs = try std.fmt.bufPrint(&target_buf, "{s}\\f.ts", .{root_abs});
     var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.emetgate\\journal", .{root_abs});
-    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, .{ .target = target_abs, .base_hash = symbol.hashOf(original), .new_hash = symbol.hashOf(updated) });
-    testing.allocator.free(jp);
+    try writeLegacyJournal(jdir, recover_tag, target_abs, symbol.hashOf(original));
 }
 
 test "recover clears a read-only target and restores it, never fails open (ORTA-1)" {
@@ -1259,8 +1422,7 @@ test "recover refuses a journal target that escapes the repo via .. (A hardening
     const target = try std.fmt.bufPrint(&target_buf, "{s}\\..\\pwned.ts", .{root});
     var jdir_buf: [std.fs.max_path_bytes]u8 = undefined;
     const jdir = try std.fmt.bufPrint(&jdir_buf, "{s}\\.emetgate\\journal", .{root});
-    const jp = try writeJournal(testing.allocator, testing.io, jdir, recover_tag, .{ .target = target, .base_hash = symbol.hashOf(mal), .new_hash = symbol.hashOf(mal) });
-    testing.allocator.free(jp);
+    try writeLegacyJournal(jdir, recover_tag, target, symbol.hashOf(mal));
 
     const report = try recover(testing.allocator, testing.io, root);
     try testing.expectEqual(@as(usize, 0), report.restored);

@@ -70,14 +70,14 @@ const Repo = struct {
         return b;
     }
 
-    fn prepareAll(self: *const Repo, pendings: []disk.Pending, batch_ptr: *const disk.Batch) !void {
+    fn prepareAll(self: *const Repo, pendings: []disk.Pending) !void {
         for (pendings, 0..) |*p, i| {
             var buf: [std.fs.max_path_bytes]u8 = undefined;
             const path = try std.fmt.bufPrint(&buf, "{s}\\f{d}.ts", .{ self.root, i });
             p.* = if (self.creates[i])
-                try disk.stageCreate(testing.allocator, testing.io, path, new[i], self.journal_dir, batch_ptr)
+                try disk.stageCreate(testing.allocator, testing.io, path, new[i])
             else
-                try disk.prepare(testing.allocator, testing.io, path, new[i], symbol.hashOf(old[i]), self.journal_dir, batch_ptr);
+                try disk.prepare(testing.allocator, testing.io, path, new[i], symbol.hashOf(old[i]));
         }
     }
 
@@ -141,15 +141,15 @@ fn crashAtEveryStep(creates: []const bool) !void {
     var create_count: usize = 0;
     for (creates) |c| create_count += @intFromBool(c);
     const modify_count = creates.len - create_count;
-    const swap_steps = 2 * creates.len;
-    const steps = swap_steps + 1 + 2 * modify_count + 1 + create_count;
+    const swap_steps = 1 + 3 * creates.len;
+    const steps = swap_steps + 1 + modify_count + 1 + 1;
     var stop: usize = 1;
     while (true) : (stop += 1) {
         var repo = try Repo.init(creates);
         defer repo.deinit();
         const batch = repo.batch();
         var pendings: [max_files]disk.Pending = undefined;
-        try repo.prepareAll(pendings[0..creates.len], &batch);
+        try repo.prepareAll(pendings[0..creates.len]);
 
         var at: StopAt = .{ .target = stop };
         const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
@@ -184,10 +184,9 @@ test "batch create crash: staging a create over an existing file is refused befo
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init(&.{false});
     defer repo.deinit();
-    const batch = repo.batch();
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = try std.fmt.bufPrint(&buf, "{s}\\f0.ts", .{repo.root});
-    try testing.expectError(error.FileExists, disk.stageCreate(testing.allocator, testing.io, path, new[0], repo.journal_dir, &batch));
+    try testing.expectError(error.FileExists, disk.stageCreate(testing.allocator, testing.io, path, new[0]));
     try repo.expectOld();
     try repo.expectNoDebris();
 }
@@ -213,9 +212,9 @@ test "batch create crash: a file that appears at a create target before commit i
     defer repo.deinit();
     const batch = repo.batch();
     var pendings: [2]disk.Pending = undefined;
-    try repo.prepareAll(&pendings, &batch);
+    try repo.prepareAll(&pendings);
 
-    var save: ExternalSave = .{ .repo = &repo, .target = 3 };
+    var save: ExternalSave = .{ .repo = &repo, .target = 6 };
     const step: disk.Step = .{ .context = &save, .reached = ExternalSave.reached };
     try testing.expectError(error.Conflict, disk.commitBatch(&pendings, null, null, &batch, &step));
 
@@ -234,9 +233,9 @@ test "batch create crash: recover leaves a create target alone when its content 
     defer repo.deinit();
     const batch = repo.batch();
     var pendings: [2]disk.Pending = undefined;
-    try repo.prepareAll(&pendings, &batch);
+    try repo.prepareAll(&pendings);
 
-    var at: StopAt = .{ .target = 4 };
+    var at: StopAt = .{ .target = 7 };
     const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "f1.ts", .data = external });
