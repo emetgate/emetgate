@@ -3,6 +3,7 @@ const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const server = @import("emetgate").server;
 const read_tools = @import("emetgate").read_tools;
+const mirror_mod = @import("emetgate").mirror;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -63,10 +64,10 @@ fn containsString(items: []const Value, needle: []const u8) bool {
 test "read_file returns a small repo file whole" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/functions.ts", testing.allocator, .unlimited);
+    const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "src/protocol/tool_result.zig", testing.allocator, .unlimited);
     defer testing.allocator.free(expected);
 
-    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/functions.ts" });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "src/protocol/tool_result.zig", .raw = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -74,6 +75,135 @@ test "read_file returns a small repo file whole" {
     try testing.expect(!body.value.object.get("truncated").?.bool);
     try testing.expectEqual(@as(i64, @intCast(expected.len)), body.value.object.get("bytes").?.integer);
     try testing.expectEqualStrings(expected, body.value.object.get("content").?.string);
+}
+
+test "read_file refuses a source file of a registered language unless raw is set" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/functions.ts" }, "UseSymbolToolsForSource");
+
+    const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "tests/fixtures/functions.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(expected);
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/functions.ts", .raw = true });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings(expected, body.value.object.get("content").?.string);
+}
+
+test "read_file returns a JSON key tree by default, and a pointer's subtree with pointer given" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var tree_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json" });
+    defer tree_reply.deinit();
+    try testing.expect(!tree_reply.is_error);
+    var tree_body = try tree_reply.payload();
+    defer tree_body.deinit();
+    const keys = tree_body.value.object.get("keys").?.array.items;
+    var found_express = false;
+    for (keys) |k| {
+        if (std.mem.eql(u8, k.object.get("pointer").?.string, "/dependencies/express")) {
+            try testing.expectEqualStrings("string", k.object.get("type").?.string);
+            found_express = true;
+        }
+    }
+    try testing.expect(found_express);
+
+    var value_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .pointer = "/dependencies/express" });
+    defer value_reply.deinit();
+    try testing.expect(!value_reply.is_error);
+    var value_body = try value_reply.payload();
+    defer value_body.deinit();
+    try testing.expectEqualStrings("\"^4.0.0\"", value_body.value.object.get("value").?.string);
+}
+
+test "read_file refuses malformed JSON instead of serving a partial key tree" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "broken.json", .data = "{\"a\": }" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "broken.json", testing.allocator);
+    defer testing.allocator.free(path);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "InvalidJson");
+}
+
+test "read_file returns a Markdown heading tree by default, and one section with heading given" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var tree_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md" });
+    defer tree_reply.deinit();
+    try testing.expect(!tree_reply.is_error);
+    var tree_body = try tree_reply.payload();
+    defer tree_body.deinit();
+    const headings = tree_body.value.object.get("headings").?.array.items;
+    var found_setup = false;
+    for (headings) |h| {
+        if (std.mem.eql(u8, h.object.get("heading").?.string, "Setup")) {
+            try testing.expectEqual(@as(i64, 2), h.object.get("level").?.integer);
+            found_setup = true;
+        }
+    }
+    try testing.expect(found_setup);
+
+    var section_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .heading = "Setup" });
+    defer section_reply.deinit();
+    try testing.expect(!section_reply.is_error);
+    var section_body = try section_reply.payload();
+    defer section_body.deinit();
+    const section = section_body.value.object.get("section").?.string;
+    try testing.expect(std.mem.indexOf(u8, section, "## Setup") != null);
+    try testing.expect(std.mem.indexOf(u8, section, "### Install") != null);
+    try testing.expect(std.mem.indexOf(u8, section, "## Other") == null);
+}
+
+test "read_file on an unknown Markdown heading is a tool error" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .heading = "Nope" }, "HeadingNotFound");
+}
+
+test "read_file with raw skips the Markdown heading tree" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .raw = true });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"headings\"") == null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "# Title") != null);
+}
+
+test "read_file on an unknown JSON pointer is a tool error" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .pointer = "/nope" }, "PointerNotFound");
+}
+
+test "read_file with raw skips the JSON key tree" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .raw = true });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"keys\"") == null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "dependencies") != null);
+}
+
+test "read_file with a line range returns just that range and its hash" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "LICENSE", .line_start = 1, .line_end = 1 });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(body.value.object.get("hash") != null);
+    const content = body.value.object.get("content").?.string;
+    try testing.expect(std.mem.count(u8, content, "\n") <= 1);
 }
 
 test "read_file caps a large file and says it was truncated" {
@@ -84,7 +214,7 @@ test "read_file caps a large file and says it was truncated" {
     defer testing.allocator.free(whole);
     try testing.expect(whole.len > 16 * 1024);
 
-    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -121,8 +251,8 @@ test "skeleton refuses a file of no registered language instead of echoing it; r
     defer runtime.destroy() catch @panic("live snapshots");
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "NOTES.md", .data = "SECRET_LINE_77\n" });
-    const path = try tmp.dir.realPathFileAlloc(testing.io, "NOTES.md", testing.allocator);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "NOTES.txt", .data = "SECRET_LINE_77\n" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "NOTES.txt", testing.allocator);
     defer testing.allocator.free(path);
 
     for ([_][]const u8{ "emetgate_skeleton", "emetgate_symbols" }) |tool| {
@@ -148,6 +278,83 @@ test "read_file refuses a binary file" {
     const path = try tmp.dir.realPathFileAlloc(testing.io, "blob.bin", testing.allocator);
     defer testing.allocator.free(path);
     try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "BinaryFile");
+}
+
+test "with --mirror, read_file reports unchanged on a repeat and full content after force or a change" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.txt", .data = "hello\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "notes.txt", testing.allocator);
+    defer testing.allocator.free(file_abs);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = root_abs };
+
+    var first = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs }, policy);
+    defer first.deinit();
+    try testing.expect(!first.is_error);
+    try testing.expect(std.mem.indexOf(u8, first.text, "hello") != null);
+
+    var second = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs }, policy);
+    defer second.deinit();
+    var second_body = try second.payload();
+    defer second_body.deinit();
+    try testing.expectEqualStrings("unchanged", second_body.value.object.get("status").?.string);
+
+    var forced = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs, .force = true }, policy);
+    defer forced.deinit();
+    try testing.expect(std.mem.indexOf(u8, forced.text, "hello") != null);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.txt", .data = "goodbye\n" });
+    var changed = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs }, policy);
+    defer changed.deinit();
+    try testing.expect(std.mem.indexOf(u8, changed.text, "goodbye") != null);
+}
+
+test "with --mirror, a changed symbol body is reported again in full with its new hash" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function add(a: number): number {\n  return a;\n}\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "a.ts", testing.allocator);
+    defer testing.allocator.free(file_abs);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = root_abs };
+
+    var first = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer first.deinit();
+    try testing.expect(std.mem.indexOf(u8, first.text, "\"body\":\"") != null);
+
+    var unchanged = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer unchanged.deinit();
+    var unchanged_body = try unchanged.payload();
+    defer unchanged_body.deinit();
+    try testing.expectEqualStrings("unchanged", unchanged_body.value.object.get("status").?.string);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function add(a: number): number {\n  return a + 1;\n}\n" });
+
+    var changed = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer changed.deinit();
+    try testing.expect(std.mem.indexOf(u8, changed.text, "\"body\":\"") != null);
+    try testing.expect(std.mem.indexOf(u8, changed.text, "return a + 1") != null);
+
+    var settled = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer settled.deinit();
+    var settled_body = try settled.payload();
+    defer settled_body.deinit();
+    try testing.expectEqualStrings("unchanged", settled_body.value.object.get("status").?.string);
 }
 
 test "list returns only tracked files under the requested directory" {
@@ -283,6 +490,10 @@ test "internal workspace and git paths are refused, others pass" {
 }
 
 fn callToolServed(runtime: *Runtime, root: []const u8, tool: []const u8, args: anytype) !Reply {
+    return callToolServedPolicy(runtime, tool, args, .{ .root = root });
+}
+
+fn callToolServedPolicy(runtime: *Runtime, tool: []const u8, args: anytype, policy: server.Policy) !Reply {
     var line: std.Io.Writer.Allocating = .init(testing.allocator);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
@@ -290,7 +501,7 @@ fn callToolServed(runtime: *Runtime, root: []const u8, tool: []const u8, args: a
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
+    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, policy);
 
     const parsed = try std.json.parseFromSlice(Value, testing.allocator, out.written(), .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
@@ -358,7 +569,7 @@ test "read tools refuse .git internals in a git worktree, where .git is a file" 
 
     const served = try std.fmt.allocPrint(testing.allocator, "{s}/a.ts", .{wt_abs});
     defer testing.allocator.free(served);
-    var ok = try callToolServed(runtime, wt_abs, "emetgate_read_file", .{ .file = served });
+    var ok = try callToolServed(runtime, wt_abs, "emetgate_read_file", .{ .file = served, .raw = true });
     defer ok.deinit();
     try testing.expect(!ok.is_error);
 }

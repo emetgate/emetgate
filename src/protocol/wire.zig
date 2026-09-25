@@ -85,6 +85,104 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try writer.writeByte('\n');
 }
 
+pub fn writeUnchanged(writer: *Writer, file: []const u8, unit: ?[]const u8, hash: symbol.Hash) !void {
+    const hex = symbol.formatHash(hash);
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("unchanged");
+    try js.objectField("file");
+    try js.write(file);
+    if (unit) |u| {
+        try js.objectField("symbol");
+        try js.write(u);
+    }
+    try js.objectField("hash");
+    try js.write(hex[0..]);
+    try js.objectField("hint");
+    try js.write("already sent unchanged this session; pass force:true to get the full content again");
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub const SymbolEntry = struct {
+    ref: []const u8,
+    hash: symbol.Hash,
+    body: ?[]const u8,
+};
+
+pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const SymbolEntry) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("symbols");
+    try js.beginArray();
+    for (entries) |entry| {
+        const hex = symbol.formatHash(entry.hash);
+        try js.beginObject();
+        try js.objectField("symbol");
+        try js.write(entry.ref);
+        try js.objectField("hash");
+        try js.write(hex[0..]);
+        if (entry.body) |body| {
+            try js.objectField("body");
+            try js.write(body);
+        } else {
+            try js.objectField("status");
+            try js.write("unchanged");
+        }
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub const RangeEntry = struct {
+    ref: []const u8,
+    hash: symbol.Hash,
+    text: ?[]const u8,
+    start_line: u32,
+    end_line: u32,
+};
+
+pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32, requested_end: u32, entries: []const RangeEntry) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("requested_start_line");
+    try js.write(requested_start);
+    try js.objectField("requested_end_line");
+    try js.write(requested_end);
+    try js.objectField("symbols");
+    try js.beginArray();
+    for (entries) |entry| {
+        const hex = symbol.formatHash(entry.hash);
+        try js.beginObject();
+        try js.objectField("symbol");
+        try js.write(entry.ref);
+        try js.objectField("hash");
+        try js.write(hex[0..]);
+        try js.objectField("start_line");
+        try js.write(entry.start_line);
+        try js.objectField("end_line");
+        try js.write(entry.end_line);
+        if (entry.text) |text| {
+            try js.objectField("text");
+            try js.write(text);
+        } else {
+            try js.objectField("status");
+            try js.write("unchanged");
+        }
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash) !void {
     var old_buf: [symbol.hash_hex_len]u8 = undefined;
     const old_hex = old_hash.text(&old_buf);
@@ -478,7 +576,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.UntrustedRepoConfig => 15,
         error.UntrustedRepoMemory => 37,
         error.ModelSuppliedTestPolicy => 17,
-        error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern => 18,
+        error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern, error.UseSymbolToolsForSource, error.InvalidLineRange, error.LineOutOfRange, error.NoSymbolInRange, error.InvalidJson, error.PointerNotFound, error.HeadingNotFound => 18,
         error.WorkspaceBusy, error.WorkspaceLockFailed => 14,
         error.Conflict => 11,
         error.WrittenButUnverified => 12,

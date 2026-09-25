@@ -6,6 +6,7 @@ pub const traversal = src.traversal;
 pub const runtime = src.runtime;
 pub const loader = src.loader;
 pub const symbol = src.symbol;
+pub const line_range = src.line_range;
 pub const skeleton = src.skeleton;
 pub const cas = src.cas;
 pub const boundedness = src.boundedness;
@@ -37,6 +38,9 @@ pub const server = src.server;
 pub const telemetry = src.telemetry;
 pub const handlers = src.handlers;
 pub const read_tools = src.read_tools;
+pub const mirror = src.mirror;
+pub const json_pointer = src.json_pointer;
+pub const markdown_heading = src.markdown_heading;
 
 comptime {
     for (@typeInfo(src).@"struct".decls) |decl| {

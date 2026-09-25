@@ -659,7 +659,7 @@ fn gitOutput(arena: Allocator, io: std.Io, argv: []const []const u8) !?[]const u
 }
 
 fn changedMutations(arena: Allocator, io: std.Io, cwd: std.Io.Dir, ref: []const u8, spec: Spec) ![]const []const u8 {
-    const diff = try gitOutput(arena, io, &.{ "git", "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-renames", ref, "--" }) orelse {
+    const diff = try gitOutput(arena, io, &.{ "git", "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-renames", ref, "--", ".", ":(exclude)vendor" }) orelse {
         std.debug.print("git diff {s} failed; is {s} a commit?\n", .{ ref, ref });
         return error.BadRef;
     };

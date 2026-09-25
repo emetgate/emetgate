@@ -6,18 +6,19 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **724**
-- Mutations declared in `tests/mutations.json`: **452**
-  - killed: **435**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **769**
+- Mutations declared in `tests/mutations.json`: **462**
+  - killed: **445**
   - equivalent: **5**
   - defense in depth: **3**
   - open: **2**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-- Red-team suites: **4** files, **38** tests total
+- Red-team suites: **5** files, **43** tests total
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_ledger.zig`: 11
+  - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
   - `tests/redteam_sandbox.zig`: 4
 - Security findings recorded in README's Security History: **5**
@@ -484,7 +485,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-54 mutation(s).
+64 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -542,6 +543,16 @@ python tools/verification_page.py --check
 | `ZIG4-call-arguments-kind-wrong` | `src/engine/lang/zig/profile.zig` | `.arguments = "arguments", .optional_marker = null },` -> `.arguments = "argument_list", .optional_marker = null },` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
 | `TSX1-extension-dropped-from-registry` | `src/engine/lang/tsx/profile.zig` | `.extensions = &.{".tsx"},` -> `.extensions = &.{},` | every registered profile loads its grammar and alone claims its extensions in a... | killed |
 | `JSX1-extension-dropped-from-javascript` | `src/engine/lang/javascript/profile.zig` | `.extensions = &.{ ".js", ".mjs", ".cjs", ".jsx" },` -> `.extensions = &.{ ".js", ".mjs", ".cjs" },` | jsx: a .jsx path resolves to the javascript profile and a .tsx path to the tsx ... | killed |
+| `R1-mirror-hash-compare-skipped` | `src/protocol/mirror.zig` | `if (std.mem.eql(u8, &old, &hash)) return .unchanged;` -> `if (!std.mem.eql(u8, &old, &hash)) return .unchanged;` | an enabled mirror reports unchanged for a repeated identical hash; an enabled mirror repo... | killed |
+| `R2-mirror-force-ignored` | `src/protocol/mirror.zig` | `if (!force) {` -> `if (!force or force) {` | force always reports changed even for an identical hash, and keeps the mirror i...; with ... | killed |
+| `R3-mirror-disabled-remembers-anyway` | `src/protocol/mirror.zig` | `if (!self.enabled) return .changed;` -> `` | a disabled mirror always reports changed and remembers nothing | killed |
+| `R4-mirror-stale-hash-not-updated` | `src/protocol/mirror.zig` | `slot.* = hash;` -> `slot.* = slot.*;` | with --mirror, a changed symbol body is reported again in full with its new hash | killed |
+| `R5-mirror-reset-keeps-entries` | `src/protocol/mirror.zig` | `self.entries.clearRetainingCapacity();` -> `` | reset forgets every remembered hash so the next check reports changed | killed |
+| `R6-range-not-widened-to-symbol` | `src/engine/line_range.zig` | `if (overlaps(entry.declaration, range)) try out.append(gpa, ent...` -> `if (overlaps(range, range)) try out.append(gpa, entry);` | emetgate_read_symbol with a line range hitting no symbol is a tool error | killed |
+| `R9-markdown-heading-level-lost` | `src/engine/lang/markdown/heading.zig` | `if (atxLevel(child.kind())) \|level\| return level;` -> `if (atxLevel(child.kind())) \|_\| return 1;` | headingTree lists every heading with its level and line, nested sections includ... | killed |
+| `R10-markdown-section-excludes-subsections` | `src/engine/lang/markdown/heading.zig` | `.node = child,` -> `.node = heading,` | resolve returns a section's full text including its nested subsections | killed |
+| `R8-json-error-check-skipped` | `src/protocol/read_tools.zig` | `if (tree.root().hasError()) return error.InvalidJson;` -> `` | read_file refuses malformed JSON instead of serving a partial key tree | killed |
+| `R7-range-boundary-off-by-one` | `src/engine/line_range.zig` | `return a.start < b.end and b.start < a.end;` -> `return a.start <= b.end and b.start <= a.end;` | overlaps rejects two spans that only touch at a shared boundary point | killed |
 
 ## What this system does not prove
 

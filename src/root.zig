@@ -4,6 +4,7 @@ pub const traversal = @import("engine/traversal.zig");
 pub const runtime = @import("engine/runtime.zig");
 pub const loader = @import("engine/loader.zig");
 pub const symbol = @import("engine/symbol.zig");
+pub const line_range = @import("engine/line_range.zig");
 pub const skeleton = @import("engine/skeleton.zig");
 pub const cas = @import("engine/cas.zig");
 pub const boundedness = @import("engine/boundedness.zig");
@@ -35,6 +36,9 @@ pub const server = @import("protocol/server.zig");
 pub const telemetry = @import("protocol/telemetry.zig");
 pub const handlers = @import("protocol/handlers.zig");
 pub const read_tools = @import("protocol/read_tools.zig");
+pub const mirror = @import("protocol/mirror.zig");
+pub const json_pointer = @import("engine/lang/json/pointer.zig");
+pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

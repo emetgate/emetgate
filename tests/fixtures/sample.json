@@ -1,0 +1,8 @@
+{
+  "name": "emetgate",
+  "count": 3,
+  "dependencies": {
+    "express": "^4.0.0"
+  },
+  "tags": ["a", "b"]
+}

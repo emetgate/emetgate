@@ -4611,6 +4611,98 @@
       "kills": [
         "jsx: a .jsx path resolves to the javascript profile and a .tsx path to the tsx profile"
       ]
+    },
+    {
+      "id": "R1-mirror-hash-compare-skipped",
+      "file": "src/protocol/mirror.zig",
+      "from": "if (std.mem.eql(u8, &old, &hash)) return .unchanged;",
+      "to": "if (!std.mem.eql(u8, &old, &hash)) return .unchanged;",
+      "kills": [
+        "an enabled mirror reports unchanged for a repeated identical hash",
+        "an enabled mirror reports changed once the hash moves, and remembers the new one"
+      ]
+    },
+    {
+      "id": "R2-mirror-force-ignored",
+      "file": "src/protocol/mirror.zig",
+      "from": "if (!force) {",
+      "to": "if (!force or force) {",
+      "kills": [
+        "force always reports changed even for an identical hash, and keeps the mirror in sync",
+        "with --mirror, a repeated identical read_symbol comes back unchanged, and force overrides it"
+      ]
+    },
+    {
+      "id": "R3-mirror-disabled-remembers-anyway",
+      "file": "src/protocol/mirror.zig",
+      "from": "if (!self.enabled) return .changed;",
+      "to": "",
+      "kills": [
+        "a disabled mirror always reports changed and remembers nothing"
+      ]
+    },
+    {
+      "id": "R4-mirror-stale-hash-not-updated",
+      "file": "src/protocol/mirror.zig",
+      "from": "slot.* = hash;",
+      "to": "slot.* = slot.*;",
+      "kills": [
+        "with --mirror, a changed symbol body is reported again in full with its new hash"
+      ]
+    },
+    {
+      "id": "R5-mirror-reset-keeps-entries",
+      "file": "src/protocol/mirror.zig",
+      "from": "self.entries.clearRetainingCapacity();",
+      "to": "",
+      "kills": [
+        "reset forgets every remembered hash so the next check reports changed"
+      ]
+    },
+    {
+      "id": "R6-range-not-widened-to-symbol",
+      "file": "src/engine/line_range.zig",
+      "from": "if (overlaps(entry.declaration, range)) try out.append(gpa, entry);",
+      "to": "if (overlaps(range, range)) try out.append(gpa, entry);",
+      "kills": [
+        "emetgate_read_symbol with a line range hitting no symbol is a tool error"
+      ]
+    },
+    {
+      "id": "R9-markdown-heading-level-lost",
+      "file": "src/engine/lang/markdown/heading.zig",
+      "from": "if (atxLevel(child.kind())) |level| return level;",
+      "to": "if (atxLevel(child.kind())) |_| return 1;",
+      "kills": [
+        "headingTree lists every heading with its level and line, nested sections included"
+      ]
+    },
+    {
+      "id": "R10-markdown-section-excludes-subsections",
+      "file": "src/engine/lang/markdown/heading.zig",
+      "from": ".node = child,",
+      "to": ".node = heading,",
+      "kills": [
+        "resolve returns a section's full text including its nested subsections"
+      ]
+    },
+    {
+      "id": "R8-json-error-check-skipped",
+      "file": "src/protocol/read_tools.zig",
+      "from": "if (tree.root().hasError()) return error.InvalidJson;",
+      "to": "",
+      "kills": [
+        "read_file refuses malformed JSON instead of serving a partial key tree"
+      ]
+    },
+    {
+      "id": "R7-range-boundary-off-by-one",
+      "file": "src/engine/line_range.zig",
+      "from": "return a.start < b.end and b.start < a.end;",
+      "to": "return a.start <= b.end and b.start <= a.end;",
+      "kills": [
+        "overlaps rejects two spans that only touch at a shared boundary point"
+      ]
     }
   ]
 }

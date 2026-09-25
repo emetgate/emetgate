@@ -12,6 +12,8 @@ const grammars = [_]Grammar{
     .{ .root = "vendor/tree-sitter-typescript/tsx/src", .sources = &.{ "parser.c", "scanner.c" } },
     .{ .root = "vendor/tree-sitter-javascript/src", .sources = &.{ "parser.c", "scanner.c" } },
     .{ .root = "vendor/tree-sitter-zig/src", .sources = &.{"parser.c"} },
+    .{ .root = "vendor/tree-sitter-json/src", .sources = &.{"parser.c"} },
+    .{ .root = "vendor/tree-sitter-markdown/src", .sources = &.{ "parser.c", "scanner.c" } },
 };
 
 const c_flags: []const []const u8 = &.{"-std=c11"};

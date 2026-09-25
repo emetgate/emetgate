@@ -1,5 +1,6 @@
 const std = @import("std");
 const server = @import("emetgate").server;
+const mirror_mod = @import("emetgate").mirror;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -9,6 +10,14 @@ fn respond(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8) !?[]
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     const wrote = try server.handleMessage(gpa, io, runtime, line, &buffer.writer);
+    if (!wrote) return null;
+    return try gpa.dupe(u8, buffer.written());
+}
+
+fn respondWithPolicy(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8, policy: server.Policy) !?[]u8 {
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    const wrote = try server.handleMessageObserved(gpa, io, runtime, line, &buffer.writer, null, policy);
     if (!wrote) return null;
     return try gpa.dupe(u8, buffer.written());
 }
@@ -174,6 +183,91 @@ test "emetgate_read_symbol returns one body and its hash" {
     try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"add\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"hash\\\":\\\"35b462b8e42e39e0fe66ae0dae747ab7\\\"") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"body\\\":\\\"") != null);
+}
+
+test "emetgate_read_symbol with symbols reads several bodies at once" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbols":["add","square"]}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"add\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"square\\\"") != null);
+}
+
+test "emetgate_read_symbol with a line range widens to the symbol boundary" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","line_start":10,"line_end":10}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"symbol\\\":\\\"add\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"start_line\\\":9") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"end_line\\\":11") != null);
+}
+
+test "emetgate_read_symbol with a line range hitting no symbol is a tool error" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const response = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","line_start":1,"line_end":1}}}
+    )).?;
+    defer testing.allocator.free(response);
+
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"error\\\":\\\"NoSymbolInRange\\\"") != null);
+}
+
+test "with --mirror, a repeated identical read_symbol comes back unchanged, and force overrides it" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m };
+
+    const first = (try respondWithPolicy(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbol":"add"}}}
+    , policy)).?;
+    defer testing.allocator.free(first);
+    try testing.expect(std.mem.indexOf(u8, first, "\\\"body\\\":\\\"") != null);
+
+    const second = (try respondWithPolicy(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbol":"add"}}}
+    , policy)).?;
+    defer testing.allocator.free(second);
+    try testing.expect(std.mem.indexOf(u8, second, "\\\"status\\\":\\\"unchanged\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, second, "\\\"body\\\":\\\"") == null);
+
+    const forced = (try respondWithPolicy(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbol":"add","force":true}}}
+    , policy)).?;
+    defer testing.allocator.free(forced);
+    try testing.expect(std.mem.indexOf(u8, forced, "\\\"body\\\":\\\"") != null);
+}
+
+test "without --mirror, a repeated identical read_symbol always comes back in full" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const first = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbol":"add"}}}
+    )).?;
+    defer testing.allocator.free(first);
+    const second = (try respond(testing.allocator, testing.io, runtime,
+        \\{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"emetgate_read_symbol","arguments":{"file":"tests/fixtures/functions.ts","symbol":"add"}}}
+    )).?;
+    defer testing.allocator.free(second);
+    try testing.expect(std.mem.indexOf(u8, second, "\\\"body\\\":\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, second, "unchanged") == null);
 }
 
 test "emetgate_read_symbol on an unknown symbol is a tool error" {
