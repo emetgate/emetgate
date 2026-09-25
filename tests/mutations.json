@@ -4703,6 +4703,99 @@
       "kills": [
         "overlaps rejects two spans that only touch at a shared boundary point"
       ]
+    },
+    {
+      "id": "LT1-linked-dir-junctioned-again",
+      "file": "src/platform/shadow.zig",
+      "from": "try link_tree.build(io, target, link_path, &stats);",
+      "to": "_ = &stats; try createJunction(io, link_path, target);",
+      "kills": [
+        "prepare copies tracked files, rebuilds heavy directories as hardlink trees and skips missing links",
+        "redteam link tree: the sandbox reads a dependency through its hardlink"
+      ]
+    },
+    {
+      "id": "LT2-low-writable-file-linked",
+      "file": "src/platform/link_tree.zig",
+      "from": "if (try lowWriteBlocked(source_wide)) {",
+      "to": "if (true) {",
+      "kills": [
+        "a file whose label lets a low-integrity process write is copied, never linked",
+        "redteam link tree: writing, appending, truncating or changing attributes through a hardlink leaves the real file as it was"
+      ]
+    },
+    {
+      "id": "LT3-label-integrity-ignored",
+      "file": "src/platform/link_tree.zig",
+      "from": "return rid > low_integrity_rid and mask & no_write_up != 0;",
+      "to": "return rid >= 0 and mask & no_write_up != 0;",
+      "kills": [
+        "a mandatory label blocks low writes only at medium or above with no-write-up"
+      ]
+    },
+    {
+      "id": "LT4-reparse-point-followed",
+      "file": "src/platform/link_tree.zig",
+      "from": "                .directory => {",
+      "to": "                .directory, .sym_link => {",
+      "kills": [
+        "build hardlinks every file, recreates every directory and never follows a reparse point",
+        "redteam link tree: a junction inside a linked directory is not followed into the shadow"
+      ]
+    },
+    {
+      "id": "SR1-cleanup-follows-a-linked-workspace",
+      "file": "src/platform/shadow.zig",
+      "from": "    try ensureInsideWorkspace(base_abs, shadow_abs);\n    try ensureNoLinks(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
+      "to": "    try ensureInsideWorkspace(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
+      "kills": [
+        "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
+      ]
+    },
+    {
+      "id": "SR2-shadow-key-ignores-the-path",
+      "file": "src/platform/shadow_root.zig",
+      "from": "for (root_abs[0..end]) |byte| {",
+      "to": "for (root_abs[0..@min(end, 3)]) |byte| {",
+      "kills": [
+        "the shadow key folds case and separators, and two repositories never share one"
+      ]
+    },
+    {
+      "id": "SR3-model-picks-the-shadow-root",
+      "file": "src/protocol/policy.zig",
+      "from": " or tool_result.getField(a, \"shadow_root\") != null",
+      "to": "",
+      "kills": [
+        "purple C7: a shadow root supplied by the model is refused and nothing is created there"
+      ]
+    },
+    {
+      "id": "SR4-dot-segment-not-flagged",
+      "file": "src/platform/shadow_root.zig",
+      "from": "return hasDotSegment(self.shadow);",
+      "to": "return hasDotSegment(\"\");",
+      "kills": [
+        "redteam sandbox: the shadow lives under the operator's shadow root, outside the repository, flags a dot segment and is gone afterwards"
+      ]
+    },
+    {
+      "id": "SR5-sweep-removes-a-live-shadow",
+      "file": "src/platform/shadow_root.zig",
+      "from": "catch |err| return err == error.FileNotFound;\n    return false;",
+      "to": "catch |err| return err == error.FileNotFound;\n    return true;",
+      "kills": [
+        "sweep removes only stale shadows whose repository is gone, and never follows a junction"
+      ]
+    },
+    {
+      "id": "SR6-workspace-key-not-checked",
+      "file": "src/platform/shadow.zig",
+      "from": "    if (!shadow_root.isKey(first)) return error.ShadowOutsideWorkspace;\n",
+      "to": "",
+      "kills": [
+        "shadow paths outside <shadow root>\\<repo key>\\ are refused before anything is deleted"
+      ]
     }
   ]
 }
