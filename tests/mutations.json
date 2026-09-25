@@ -4669,6 +4669,24 @@
       ]
     },
     {
+      "id": "R9-markdown-heading-level-lost",
+      "file": "src/engine/lang/markdown/heading.zig",
+      "from": "if (atxLevel(child.kind())) |level| return level;",
+      "to": "if (atxLevel(child.kind())) |_| return 1;",
+      "kills": [
+        "headingTree lists every heading with its level and line, nested sections included"
+      ]
+    },
+    {
+      "id": "R10-markdown-section-excludes-subsections",
+      "file": "src/engine/lang/markdown/heading.zig",
+      "from": ".node = child,",
+      "to": ".node = heading,",
+      "kills": [
+        "resolve returns a section's full text including its nested subsections"
+      ]
+    },
+    {
       "id": "R8-json-error-check-skipped",
       "file": "src/protocol/read_tools.zig",
       "from": "if (tree.root().hasError()) return error.InvalidJson;",
