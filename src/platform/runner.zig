@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const boundedness = @import("../engine/boundedness.zig");
 const shadow = @import("shadow.zig");
+const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
@@ -44,6 +45,7 @@ pub const Options = struct {
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
+    shadow_root: ?[]const u8 = null,
     trace: ?*Trace = null,
 };
 
@@ -56,6 +58,10 @@ pub const Trace = struct {
     new_len: ?usize = null,
     old_body_len: ?usize = null,
     commit_attempted: bool = false,
+    shadow_dotted: bool = false,
+    linked_files: usize = 0,
+    copied_files: usize = 0,
+    skipped_links: usize = 0,
 };
 
 pub const Result = union(enum) {
@@ -131,8 +137,8 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
         .failed => |failure| return .{ .rule_check_failed = failure },
     }
 
-    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
-    defer gpa.free(shadow_abs);
+    const location = try shadow_root.locate(gpa, root, options.shadow_root);
+    defer location.deinit(gpa);
 
     var gate: Gate = .full;
     if (options.expected_hash == .present) {
@@ -162,7 +168,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer if (scoped_owned) |s| gpa.free(s);
     const command = scoped_owned orelse options.test_command;
 
-    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, applied.snapshot.source, options, command, &.{.{ .file = rel, .ref = ref }})) {
+    const report = switch (try runInShadow(gpa, io, root, location, rel, applied.snapshot.source, options, command, &.{.{ .file = rel, .ref = ref }})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |report| return .{ .rule_violation = report },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -189,11 +195,11 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
         .failed => |failure| return .{ .rule_check_failed = failure },
     }
 
-    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
-    defer gpa.free(shadow_abs);
+    const location = try shadow_root.locate(gpa, root, options.shadow_root);
+    defer location.deinit(gpa);
     if (options.trace) |t| t.* = .{ .gate = .full, .base_len = 0, .new_len = created.snapshot.source.len };
 
-    const report = switch (try runInShadow(gpa, io, root, shadow_abs, rel, created.snapshot.source, options, options.test_command, &.{.{ .file = rel, .ref = ref }})) {
+    const report = switch (try runInShadow(gpa, io, root, location, rel, created.snapshot.source, options, options.test_command, &.{.{ .file = rel, .ref = ref }})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |report| return .{ .rule_violation = report },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -216,23 +222,36 @@ fn fileExists(io: std.Io, path_abs: []const u8) !bool {
     return true;
 }
 
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, rel: []const u8, patched: []const u8, options: Options, command: []const u8, targets: []const rules.Target) !ShadowRun {
+fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, command: []const u8, targets: []const rules.Target) !ShadowRun {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try shadow.Shadow.prepare(io, .{
-        .root_abs = root,
-        .shadow_abs = shadow_abs,
-        .files = files,
-        .linked = options.linked,
-    });
+    var workspace = try prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
     defer {
         workspace.close();
-        shadow.remove(io, root, shadow_abs) catch {};
+        shadow.remove(io, location.base, location.shadow) catch {};
     }
     try workspace.writeFile(rel, patched);
 
-    if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
-    return runStages(gpa, io, shadow_abs, options.typecheck_command, command, options.limits);
+    if (try runCommandRules(gpa, io, root, location.shadow, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
+    return runStages(gpa, io, location.shadow, options.typecheck_command, command, options.limits);
+}
+
+pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, trace: ?*Trace) !shadow.Shadow {
+    _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
+    const workspace = try shadow.Shadow.prepare(io, .{
+        .root_abs = root,
+        .base_abs = location.base,
+        .shadow_abs = location.shadow,
+        .files = files,
+        .linked = linked,
+    });
+    if (trace) |t| {
+        t.shadow_dotted = location.dotted();
+        t.linked_files = workspace.link_stats.linked;
+        t.copied_files = workspace.link_stats.copied;
+        t.skipped_links = workspace.link_stats.skipped_links;
+    }
+    return workspace;
 }

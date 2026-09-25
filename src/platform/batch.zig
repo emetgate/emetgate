@@ -2,6 +2,7 @@ const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const shadow = @import("shadow.zig");
+const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
@@ -35,6 +36,7 @@ pub const BatchOptions = struct {
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
+    shadow_root: ?[]const u8 = null,
     trace: ?*Trace = null,
     commit_step: ?*const disk.Step = null,
 };
@@ -119,15 +121,15 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         }
     }
 
-    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root, shadow.workspace_dir });
-    defer gpa.free(shadow_abs);
+    const location = try shadow_root.locate(gpa, root, options.shadow_root);
+    defer location.deinit(gpa);
 
     if (options.trace) |t| {
         var new_total: usize = 0;
         for (prepared.items) |p| new_total += p.applied.snapshot.source.len;
         t.* = .{ .gate = .full, .new_len = new_total };
     }
-    const report = switch (try runBatchInShadow(gpa, io, root, shadow_abs, prepared.items, options)) {
+    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared.items, options)) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |violated| return .{ .rule_violation = violated },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -191,20 +193,15 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
     return committed;
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, prepared: []const Prepared, options: BatchOptions) !runner.ShadowRun {
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, options: BatchOptions) !runner.ShadowRun {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try shadow.Shadow.prepare(io, .{
-        .root_abs = root,
-        .shadow_abs = shadow_abs,
-        .files = files,
-        .linked = options.linked,
-    });
+    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
     defer {
         workspace.close();
-        shadow.remove(io, root, shadow_abs) catch {};
+        shadow.remove(io, location.base, location.shadow) catch {};
     }
     for (prepared) |p| try workspace.writeFile(p.rel, p.applied.snapshot.source);
 
@@ -216,7 +213,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []
         targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
         built += 1;
     }
-    if (try runner.runCommandRules(gpa, io, root, shadow_abs, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
+    if (try runner.runCommandRules(gpa, io, root, location.shadow, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
 
-    return runner.runStages(gpa, io, shadow_abs, options.typecheck_command, options.test_command, options.limits);
+    return runner.runStages(gpa, io, location.shadow, options.typecheck_command, options.test_command, options.limits);
 }

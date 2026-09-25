@@ -21,6 +21,7 @@ pub const test_util = src.test_util;
 pub const session = src.session;
 pub const shadow = src.shadow;
 pub const link_tree = src.link_tree;
+pub const shadow_root = src.shadow_root;
 pub const sandbox = src.sandbox;
 pub const disk = src.disk;
 pub const runner = src.runner;

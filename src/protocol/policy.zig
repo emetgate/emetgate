@@ -9,6 +9,7 @@ pub const Policy = struct {
     typecheck_command: ?[]const u8 = null,
     allow_repo_config: bool = false,
     allow_repo_memory: bool = false,
+    shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
     mirror_enabled: bool = false,
     mirror: ?*mirror_mod.Mirror = null,
@@ -40,6 +41,12 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.typecheck_command = command;
+        } else if (std.mem.eql(u8, arg, "--shadow-root")) {
+            if (policy.shadow_root != null or i + 1 >= args.len) return null;
+            i += 1;
+            const dir: []const u8 = args[i];
+            if (dir.len == 0) return null;
+            policy.shadow_root = dir;
         } else return null;
     }
     return policy;
@@ -47,7 +54,7 @@ pub fn parsePolicy(args: anytype) ?Policy {
 
 pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestPolicy}![]const u8 {
     if (args) |a| {
-        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null or tool_result.getField(a, "allow_repo_memory") != null) return error.ModelSuppliedTestPolicy;
+        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null or tool_result.getField(a, "allow_repo_memory") != null or tool_result.getField(a, "shadow_root") != null) return error.ModelSuppliedTestPolicy;
     }
     return policy.test_command orelse "";
 }

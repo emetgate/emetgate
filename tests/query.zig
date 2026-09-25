@@ -207,7 +207,7 @@ fn expectCheckFailed(result: runner.Result, detail: []const u8, text: []const u8
 
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try wire.writeRuleCheckFailed(&buffer.writer, result.rule_check_failed);
+    try wire.writeRuleCheckFailed(&buffer.writer, result.rule_check_failed, null);
     try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"reason\":\"rule_check_crashed\"") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.written(), "rule_violation") == null);
 }

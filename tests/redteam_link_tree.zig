@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const diagnostics = @import("diagnostics.zig");
 const shadow = @import("emetgate").shadow;
+const shadow_root = @import("emetgate").shadow_root;
 const sandbox = @import("emetgate").sandbox;
 
 const testing = std.testing;
@@ -16,6 +17,7 @@ const Victim = struct {
     tmp: testing.TmpDir,
     top_abs: [:0]u8,
     root_abs: []u8,
+    base_abs: []u8,
     shadow_abs: []u8,
     workspace: shadow.Shadow,
 
@@ -33,7 +35,10 @@ const Victim = struct {
         errdefer gpa.free(top_abs);
         const root_abs = try std.fmt.allocPrint(gpa, "{s}\\repo", .{top_abs});
         errdefer gpa.free(root_abs);
-        const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\.emetgate\\shadow", .{root_abs});
+        const base_abs = try std.fmt.allocPrint(gpa, "{s}\\shadows", .{top_abs});
+        errdefer gpa.free(base_abs);
+        const key = shadow_root.repoKey(root_abs);
+        const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ base_abs, &key });
         errdefer gpa.free(shadow_abs);
 
         var weak_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -44,17 +49,19 @@ const Victim = struct {
 
         const workspace = try shadow.Shadow.prepare(testing.io, .{
             .root_abs = root_abs,
+            .base_abs = base_abs,
             .shadow_abs = shadow_abs,
             .files = &.{"a.ts"},
             .linked = &.{"node_modules"},
         });
-        return .{ .tmp = tmp, .top_abs = top_abs, .root_abs = root_abs, .shadow_abs = shadow_abs, .workspace = workspace };
+        return .{ .tmp = tmp, .top_abs = top_abs, .root_abs = root_abs, .base_abs = base_abs, .shadow_abs = shadow_abs, .workspace = workspace };
     }
 
     fn deinit(self: *Victim) void {
         self.workspace.close();
-        shadow.remove(testing.io, self.root_abs, self.shadow_abs) catch {};
+        shadow.remove(testing.io, self.base_abs, self.shadow_abs) catch {};
         gpa.free(self.shadow_abs);
+        gpa.free(self.base_abs);
         gpa.free(self.root_abs);
         gpa.free(self.top_abs);
         self.tmp.cleanup();
@@ -152,7 +159,7 @@ test "redteam link tree: removing the shadow deletes only the links and keeps ev
     var victim = try Victim.init();
     defer victim.deinit();
 
-    try shadow.remove(testing.io, victim.root_abs, victim.shadow_abs);
+    try shadow.remove(testing.io, victim.base_abs, victim.shadow_abs);
     try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, victim.shadow_abs, .{}));
     try victim.expectRealUntouched();
     try victim.expectReal("repo/a.ts", "export const a = 1;\n");

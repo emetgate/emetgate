@@ -5,6 +5,7 @@ const sandbox = @import("../platform/sandbox.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
+const runner = @import("../platform/runner.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -183,7 +184,46 @@ pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32,
     try writer.writeByte('\n');
 }
 
-pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash) !void {
+pub const ShadowNote = struct {
+    root: []const u8,
+    dotted: bool,
+    linked_files: usize,
+    copied_files: usize,
+    skipped_links: usize,
+};
+
+pub const shadow_path_warning = "the shadow root has a path segment starting with a dot; tools that refuse dot directories (the send package behind express res.sendFile is one) fail there; start emetgate with --shadow-root <dir> on a path without one";
+
+pub fn shadowNote(root: []const u8, trace: runner.Trace) ShadowNote {
+    return .{
+        .root = root,
+        .dotted = trace.shadow_dotted,
+        .linked_files = trace.linked_files,
+        .copied_files = trace.copied_files,
+        .skipped_links = trace.skipped_links,
+    };
+}
+
+fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
+    const n = note orelse return;
+    try js.objectField("shadow");
+    try js.beginObject();
+    try js.objectField("root");
+    try js.write(n.root);
+    try js.objectField("linked_files");
+    try js.write(n.linked_files);
+    try js.objectField("copied_files");
+    try js.write(n.copied_files);
+    try js.objectField("skipped_links");
+    try js.write(n.skipped_links);
+    try js.endObject();
+    if (n.dotted) {
+        try js.objectField("shadow_path_warning");
+        try js.write(shadow_path_warning);
+    }
+}
+
+pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash, note: ?ShadowNote) !void {
     var old_buf: [symbol.hash_hex_len]u8 = undefined;
     const old_hex = old_hash.text(&old_buf);
     const new_hex = symbol.formatHash(new_hash);
@@ -197,6 +237,7 @@ pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expecte
     try js.write(old_hex[0..]);
     try js.objectField("new_hash");
     try js.write(new_hex[0..]);
+    try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -209,7 +250,7 @@ pub const BatchEdit = struct {
     evidence: ?symmetry.Evidence = null,
 };
 
-pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit) !void {
+pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?ShadowNote) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
@@ -233,6 +274,7 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit) !void {
         try js.endObject();
     }
     try js.endArray();
+    try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -273,12 +315,12 @@ pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Expected,
     try writer.writeByte('\n');
 }
 
-pub fn writeRejected(gpa: Allocator, writer: *Writer, test_cmd: []const u8, report: sandbox.Report) !void {
-    return writeStageRejected(gpa, writer, rejectionReason(report), "test_cmd", test_cmd, report);
+pub fn writeRejected(gpa: Allocator, writer: *Writer, test_cmd: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {
+    return writeStageRejected(gpa, writer, rejectionReason(report), "test_cmd", test_cmd, report, note);
 }
 
-pub fn writeTypecheckRejected(gpa: Allocator, writer: *Writer, typecheck_cmd: []const u8, report: sandbox.Report) !void {
-    return writeStageRejected(gpa, writer, typecheckReason(report), "typecheck_cmd", typecheck_cmd, report);
+pub fn writeTypecheckRejected(gpa: Allocator, writer: *Writer, typecheck_cmd: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {
+    return writeStageRejected(gpa, writer, typecheckReason(report), "typecheck_cmd", typecheck_cmd, report, note);
 }
 
 pub fn writeRuleViolation(writer: *Writer, report: rules.Report) !void {
@@ -298,7 +340,7 @@ pub fn writeRuleViolation(writer: *Writer, report: rules.Report) !void {
 
 pub const rule_check_crashed_reason = "rule_check_crashed";
 
-pub fn writeRuleCheckFailed(writer: *Writer, failure: rules.Failure) !void {
+pub fn writeRuleCheckFailed(writer: *Writer, failure: rules.Failure, note: ?ShadowNote) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
@@ -315,6 +357,7 @@ pub fn writeRuleCheckFailed(writer: *Writer, failure: rules.Failure) !void {
     try js.write(failure.detail);
     try js.objectField("output");
     try js.write(failure.text);
+    try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -464,7 +507,7 @@ pub fn writeErrorMessage(writer: *Writer, name: []const u8, exit_code: u8, messa
     try writer.writeByte('\n');
 }
 
-fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, command_field: []const u8, command: []const u8, report: sandbox.Report) !void {
+fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, command_field: []const u8, command: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {
     const from_out = try diagnostics.parse(gpa, report.stdout);
     defer gpa.free(from_out);
     const from_err = try diagnostics.parse(gpa, report.stderr);
@@ -497,6 +540,7 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
     try js.write(report.stdout);
     try js.objectField("stderr");
     try js.write(report.stderr);
+    try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -709,7 +753,7 @@ test "symbol body payload carries ref, hash and the escaped body" {
 test "committed payload names the symbol and both hashes" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"));
+    try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), null);
 
     try testing.expectEqualStrings(
         "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
@@ -748,7 +792,7 @@ test "rejected reason reflects the real outcome, not always tests_failed" {
             .truncated = false,
             .killed_leftovers = case.leftovers,
         };
-        try writeRejected(testing.allocator, &buffer.writer, "npm test", report);
+        try writeRejected(testing.allocator, &buffer.writer, "npm test", report, null);
         const json = buffer.written();
         errdefer std.debug.print("case {s}: {s}\n", .{ case.reason, json });
         try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"") != null);
@@ -771,7 +815,7 @@ test "rejected payload surfaces parsed diagnostics and escapes control bytes" {
         .truncated = false,
         .killed_leftovers = false,
     };
-    try writeRejected(testing.allocator, &buffer.writer, "npx tsc", report);
+    try writeRejected(testing.allocator, &buffer.writer, "npx tsc", report, null);
     const json = buffer.written();
 
     try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics\":[{\"file\":\"src/x.ts\",\"line\":3,\"col\":5,\"message\":") != null);
@@ -790,7 +834,7 @@ test "a typecheck rejection names its own reason and command, not the test comma
         .truncated = false,
         .killed_leftovers = false,
     };
-    try writeTypecheckRejected(testing.allocator, &buffer.writer, "npx tsc --noEmit", report);
+    try writeTypecheckRejected(testing.allocator, &buffer.writer, "npx tsc --noEmit", report, null);
     const json = buffer.written();
 
     try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"typecheck_failed\"") != null);
@@ -813,7 +857,7 @@ test "a crashed stage is reported as a crash with its hex code, never as a faile
 
     var tests_buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer tests_buffer.deinit();
-    try writeRejected(testing.allocator, &tests_buffer.writer, "npm test", report);
+    try writeRejected(testing.allocator, &tests_buffer.writer, "npm test", report, null);
     const tests_json = tests_buffer.written();
     try testing.expect(std.mem.indexOf(u8, tests_json, "\"reason\":\"test_crashed\"") != null);
     try testing.expect(std.mem.indexOf(u8, tests_json, "\"outcome\":\"crashed\"") != null);
@@ -821,7 +865,7 @@ test "a crashed stage is reported as a crash with its hex code, never as a faile
 
     var typecheck_buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer typecheck_buffer.deinit();
-    try writeTypecheckRejected(testing.allocator, &typecheck_buffer.writer, "npx tsc --noEmit", report);
+    try writeTypecheckRejected(testing.allocator, &typecheck_buffer.writer, "npx tsc --noEmit", report, null);
     const typecheck_json = typecheck_buffer.written();
     try testing.expect(std.mem.indexOf(u8, typecheck_json, "\"reason\":\"typecheck_crashed\"") != null);
     try testing.expect(std.mem.indexOf(u8, typecheck_json, "\"outcome\":\"crashed\"") != null);
@@ -859,4 +903,20 @@ test "error payload carries the name and exit code on one line" {
         "{\"status\":\"error\",\"error\":\"PlaceholderBody\",\"exit_code\":13}\n",
         buffer.written(),
     );
+}
+
+test "a result names the shadow root and its link counts, and warns when that root has a dot segment" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const plain: ShadowNote = .{ .root = "D:\\shadows", .dotted = false, .linked_files = 6634, .copied_files = 2, .skipped_links = 1 };
+    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), plain);
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"shadow\":{\"root\":\"D:\\\\shadows\",\"linked_files\":6634,\"copied_files\":2,\"skipped_links\":1}") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "shadow_path_warning") == null);
+
+    buffer.clearRetainingCapacity();
+    var dotted = plain;
+    dotted.root = "C:\\Users\\.me\\AppData\\Local\\emetgate\\shadow";
+    dotted.dotted = true;
+    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), dotted);
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"shadow_path_warning\":\"" ++ shadow_path_warning ++ "\"") != null);
 }

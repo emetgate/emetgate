@@ -11,6 +11,7 @@ const wire = emetgate.wire;
 const server = emetgate.server;
 const disk = emetgate.disk;
 const shadow = emetgate.shadow;
+const shadow_root = emetgate.shadow_root;
 const lockdown = emetgate.lockdown;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
@@ -22,14 +23,14 @@ const usage =
     \\       emetgate symbols <file.ts> [--json]
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
-    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-repo-config] [--allow-repo-memory]
+    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory] [--json]
+    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\       emetgate rule add <text> [--check <spec>] [--in <where>] [--enforce]
     \\       emetgate rule list [--all] [--json]
     \\       emetgate rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]
     \\       emetgate rule forget <id>
-    \\       emetgate recover
+    \\       emetgate recover [--shadow-root <dir>]
     \\       emetgate lockdown [<claude args>...]
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
@@ -117,8 +118,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         const request = rule_command.parse(args[2..]) orelse exitWithUsage();
         return ruleCmd(init, runtime, request, out);
     }
-    if (std.mem.eql(u8, command, "recover") and args.len == 2) {
-        return recoverCmd(init, runtime);
+    if (std.mem.eql(u8, command, "recover")) {
+        if (args.len == 2) return recoverCmd(init, runtime, null);
+        if (args.len == 4 and std.mem.eql(u8, args[2], "--shadow-root")) return recoverCmd(init, runtime, args[3]);
+        exitWithUsage();
     }
     if (std.mem.eql(u8, command, "lockdown")) {
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
@@ -173,7 +176,7 @@ const exitCodeFor = wire.exitCode;
 
 const rejected_exit_code: u8 = 10;
 
-const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test", "--typecheck" };
+const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test", "--typecheck", "--shadow-root" };
 
 const TryRequest = struct {
     path: []const u8,
@@ -182,6 +185,7 @@ const TryRequest = struct {
     body: union(enum) { inline_text: []const u8, file: []const u8 },
     test_command: []const u8,
     typecheck_command: []const u8,
+    shadow_root: ?[]const u8,
 
     fn parse(args: []const [:0]const u8) ?TryRequest {
         if (args.len == 0 or args.len % 2 == 0) return null;
@@ -204,6 +208,7 @@ const TryRequest = struct {
             .body = if (inline_body) |text| .{ .inline_text = text } else .{ .file = body_file.? },
             .test_command = values[4] orelse "",
             .typecheck_command = values[5] orelse "",
+            .shadow_root = values[6],
         };
     }
 };
@@ -228,6 +233,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, trust.repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
 
+    var trace: runner.Trace = .{};
     const result = runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
         .ref_text = request.symbol,
@@ -236,6 +242,8 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = trust.repo_memory,
+        .shadow_root = request.shadow_root,
+        .trace = &trace,
     }) catch |err| {
         if (err == error.WrittenButNotIndexed) std.debug.print("error: WrittenButNotIndexed: {s}: {s}\nrun: git add -- {s}\n", .{ request.path, wire.not_indexed_message, request.path });
         return err;
@@ -243,6 +251,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     defer result.deinit(gpa);
 
     _ = out;
+    printShadowNote(gpa, request.shadow_root, trace);
     switch (result) {
         .committed => |new_hash| {
             var old_buf: [symbol.hash_hex_len]u8 = undefined;
@@ -270,6 +279,15 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
             return rejected_exit_code;
         },
     }
+}
+
+fn printShadowNote(gpa: std.mem.Allocator, override: ?[]const u8, trace: runner.Trace) void {
+    const root = shadow_root.displayRoot(gpa, override) catch return;
+    defer gpa.free(root);
+    if (trace.linked_files + trace.copied_files + trace.skipped_links != 0) {
+        std.debug.print("shadow {s}: {d} linked file(s) hardlinked, {d} copied, {d} link(s) inside them skipped\\n", .{ root, trace.linked_files, trace.copied_files, trace.skipped_links });
+    }
+    if (trace.shadow_dotted) std.debug.print("warning: shadow_path_warning: {s}\\n", .{wire.shadow_path_warning});
 }
 
 fn printStageRejected(stage: []const u8, outcome: emetgate.sandbox.Outcome) void {
@@ -319,6 +337,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, trust.repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
 
+    var trace: runner.Trace = .{};
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
         .ref_text = request.symbol,
@@ -327,20 +346,25 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = trust.repo_memory,
+        .shadow_root = request.shadow_root,
+        .trace = &trace,
     });
     defer result.deinit(gpa);
+    const note_root = try shadow_root.displayRoot(gpa, request.shadow_root);
+    defer gpa.free(note_root);
+    const note = wire.shadowNote(note_root, trace);
 
     switch (result) {
         .committed => |new_hash| {
-            try wire.writeCommitted(out, request.symbol, expected, new_hash);
+            try wire.writeCommitted(out, request.symbol, expected, new_hash, note);
             return 0;
         },
         .rejected => |report| {
-            try wire.writeRejected(gpa, out, test_command, report);
+            try wire.writeRejected(gpa, out, test_command, report, note);
             return rejected_exit_code;
         },
         .typecheck_failed => |report| {
-            try wire.writeTypecheckRejected(gpa, out, typecheck_command.?, report);
+            try wire.writeTypecheckRejected(gpa, out, typecheck_command.?, report, note);
             return rejected_exit_code;
         },
         .rule_violation => |report| {
@@ -348,7 +372,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
             return rejected_exit_code;
         },
         .rule_check_failed => |crashed| {
-            try wire.writeRuleCheckFailed(out, crashed);
+            try wire.writeRuleCheckFailed(out, crashed, note);
             return rejected_exit_code;
         },
     }
@@ -418,7 +442,7 @@ fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Requ
     return 0;
 }
 
-fn recoverCmd(init: std.process.Init, runtime: *Runtime) !u8 {
+fn recoverCmd(init: std.process.Init, runtime: *Runtime, shadow_root_dir: ?[]const u8) !u8 {
     const gpa = runtime.gpa;
     const root = try runner.repoRoot(gpa, init.io);
     defer gpa.free(root);
@@ -427,7 +451,7 @@ fn recoverCmd(init: std.process.Init, runtime: *Runtime) !u8 {
 
     var buffer: [4096]u8 = undefined;
     var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
-    const code = try disk.recoverWorkspace(gpa, init.io, root, &stderr_writer.interface);
+    const code = try disk.recoverWorkspace(gpa, init.io, root, shadow_root_dir, &stderr_writer.interface);
     try stderr_writer.interface.flush();
     return code;
 }

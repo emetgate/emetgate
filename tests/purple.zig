@@ -6,6 +6,7 @@ const build_options = @import("build_options");
 const symbol = @import("emetgate").symbol;
 const disk = @import("emetgate").disk;
 const shadow = @import("emetgate").shadow;
+const shadow_root = @import("emetgate").shadow_root;
 const sandbox = @import("emetgate").sandbox;
 const runner = @import("emetgate").runner;
 const server = @import("emetgate").server;
@@ -72,12 +73,13 @@ const Repo = struct {
     }
 
     fn hasShadow(self: *Repo) bool {
-        self.tmp.dir.access(testing.io, "repo/.emetgate", .{}) catch return false;
+        const location = shadow_root.locate(testing.allocator, self.root_abs, null) catch return true;
+        defer location.deinit(testing.allocator);
+        std.Io.Dir.cwd().access(testing.io, location.workspace, .{}) catch {
+            self.tmp.dir.access(testing.io, "repo/.emetgate", .{}) catch return false;
+            return true;
+        };
         return true;
-    }
-
-    fn shadowPath(self: *Repo, buf: []u8) ![]const u8 {
-        return std.fmt.bufPrint(buf, "{s}\\{s}\\shadow", .{ self.root_abs, shadow.workspace_dir });
     }
 
     fn reportLeftoverShadow(self: *Repo) void {
@@ -100,12 +102,12 @@ const Repo = struct {
             }
         } else |err| std.debug.print("  open failed: {t}\n", .{err});
 
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
-        const shadow_abs = self.shadowPath(&buf) catch |err| {
+        const location = shadow_root.locate(testing.allocator, self.root_abs, null) catch |err| {
             std.debug.print("shadow path: {t}\n", .{err});
             return;
         };
-        if (shadow.remove(testing.io, self.root_abs, shadow_abs)) |_| {
+        defer location.deinit(testing.allocator);
+        if (shadow.remove(testing.io, location.base, location.shadow)) |_| {
             std.debug.print("shadow.remove: removed on retry\n", .{});
         } else |err| std.debug.print("shadow.remove: {t}\n", .{err});
     }
@@ -589,7 +591,7 @@ test "purple recover: a symlinked backup is refused (reparse guard, privilege-ga
 fn recoverWorkspace(root: []const u8, err_out: *std.Io.Writer.Allocating) !u8 {
     const lock = try shadow.Lock.acquire(testing.io, root);
     defer lock.release();
-    return disk.recoverWorkspace(testing.allocator, testing.io, root, &err_out.writer);
+    return disk.recoverWorkspace(testing.allocator, testing.io, root, null, &err_out.writer);
 }
 
 test "purple recover: a shadow that cannot be removed exits 16 and says so after the summary" {
@@ -598,10 +600,14 @@ test "purple recover: a shadow that cannot be removed exits 16 and says so after
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
-    try tmp.dir.createDirPath(testing.io, ".emetgate/shadow/src");
+    const location = try shadow_root.locate(testing.allocator, root, null);
+    defer location.deinit(testing.allocator);
+    var src_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try std.Io.Dir.cwd().createDirPath(testing.io, try std.fmt.bufPrint(&src_buf, "{s}\\src", .{location.shadow}));
     var held_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const held_path = try std.fmt.bufPrint(&held_buf, "{s}\\.emetgate\\shadow\\src\\held.ts", .{root});
+    const held_path = try std.fmt.bufPrint(&held_buf, "{s}\\src\\held.ts", .{location.shadow});
     const held = try shadow.FileLock.acquire(held_path);
+    defer shadow.remove(testing.io, location.base, location.shadow) catch {};
 
     var err_out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer err_out.deinit();
@@ -768,6 +774,34 @@ test "purple C7: a repo config opt-in supplied by the model is refused" {
             try testing.expect(std.mem.indexOf(u8, response, "ModelSuppliedTestPolicy") != null);
             try expectPristine(&repo);
         }
+    }
+}
+
+test "purple C7: a shadow root supplied by the model is refused and nothing is created there" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hex = symbol.formatHash(try hashOfAdd(testing.allocator, runtime, file));
+
+    const chosen = try std.fmt.allocPrint(testing.allocator, "{s}\\model-shadows", .{repo.root_abs});
+    defer testing.allocator.free(chosen);
+    const chosen_json = try jsonEscaped(chosen);
+    defer testing.allocator.free(chosen_json);
+    const extra = try std.fmt.allocPrint(testing.allocator, ",\"shadow_root\":\"{s}\"", .{chosen_json});
+    defer testing.allocator.free(extra);
+
+    for ([_][]const u8{ "emetgate_try", "emetgate_try_batch" }) |tool| {
+        const line = try toolCallLine(tool, file, hex[0..], extra);
+        defer testing.allocator.free(line);
+        const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0" });
+        defer testing.allocator.free(response);
+        try testing.expect(std.mem.indexOf(u8, response, "ModelSuppliedTestPolicy") != null);
+        try expectPristine(&repo);
+        try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, chosen, .{}));
     }
 }
 
