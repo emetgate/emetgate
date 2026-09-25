@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      llm_attack:
+        description: Also run the LLM-driven nightly attacker (needs the ANTHROPIC_API_KEY secret; costs tokens)
+        type: boolean
+        default: false
   schedule:
     - cron: "0 2 * * *"
 
@@ -134,3 +139,30 @@ jobs:
         run: |
           $slice = ([int]$env:SLICE % 10) + 1
           ./zig-out/bin/emetgate-mutate.exe --jobs=4 --skip-survivors --compare "--slice=$slice/10"
+
+  nightly-attacker:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig
+        shell: pwsh
+        run: |
+          $zip = "zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          $url = "https://ziglang.org/download/$env:ZIG_VERSION/$zip"
+          Invoke-WebRequest $url -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
+          Remove-Item $zip
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
+      - run: zig build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Script mode corpus (every night, no API key needed)
+        run: python tools/attack/run.py
+      - name: LLM mode (opt-in, needs the ANTHROPIC_API_KEY secret and an explicit dispatch input)
+        if: github.event_name == 'workflow_dispatch' && inputs.llm_attack == true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python tools/attack/llm_mode.py
