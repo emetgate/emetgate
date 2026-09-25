@@ -393,11 +393,12 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 |---|---|
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
 | `emetgate_skeleton` | Signatures and structure without bodies, plus every adopted rule that covers the file (read-only) |
-| `emetgate_read_symbol` | The source of one symbol |
+| `emetgate_read_symbol` | The source of one symbol, several symbols at once, or a line range widened to the symbols it overlaps |
 | `emetgate_mutate` | Verify a proposed body structurally and return the result without writing |
 | `emetgate_try` | Verify, gate and commit a proposed body |
 | `emetgate_try_batch` | Several proposals as one unit |
-| `emetgate_read_file`, `emetgate_list`, `emetgate_search` | Reads confined to the repository |
+| `emetgate_read_file` | A JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim; confined to the repository |
+| `emetgate_list`, `emetgate_search` | Reads confined to the repository |
 | `emetgate_scan` | Measure one check expression against the repository, optionally within a `where` scope; writes nothing |
 
 **New symbols and new files.** A proposal with `"hash": "absent"` adds one top-level declaration: to the end of an existing file, or as the only content of a file that does not exist yet. `emetgate_try` and `emetgate_try_batch` both accept it, and in a batch it commits or rolls back together with the other edits. A new file is journaled as a create intent, placed with a rename that never replaces an existing path, and added to the git index after the commit point; if another process puts a file at that path before the commit, the batch is refused with `Conflict` and that file is kept. Recovery deletes an uncommitted new file only while it still has the journaled hash, and indexes a committed one. For each such edit the batch result carries `class` (`symmetry` or `unclassified`) and the evidence behind it: the file parses, the new name is mentioned nowhere else in the batch or the tracked files, the declaration has no top-level effect (no call, `new`, assignment or decorator outside a function), and, for a new file or an exported symbol, no other file mentions the module. The test gate still runs for every batch, whatever the class. Limits: the parent directory must already exist, one batch creates a path at most once and cannot also edit it, and the reference check is a whole-word text match, so it errs toward `unclassified`. If `git add` fails after the commit, the files stay on disk and the result is `WrittenButNotIndexed`.
@@ -405,6 +406,65 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 `emetgate lockdown` starts Claude Code with only these tools available, so the model has no path to the disk other than the gate.
 
 The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, that audits a CLAUDE.md or AGENTS.md file: it sorts every instruction sentence into enforceable, waiting for a mechanism, unverifiable or belief, proposes a check and scope for the enforceable ones, measures each with `emetgate_scan` and reports, changing nothing. To use it in every project, copy the `md-audit` folder into `%USERPROFILE%\.claude\skills\` (`~/.claude/skills/` elsewhere).
+
+### Reader
+
+A 284-session measurement found that read tokens (`Read` plus shell `cat`/`sed`) were
+about 57% of all tool-result tokens, three quarters of them a whole file, with a median
+of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
+
+- **Three levels for a source file of a registered language (TypeScript, JavaScript):**
+  signatures (`emetgate_symbols`: ref, hash, line) → structure (`emetgate_skeleton`:
+  every signature, bodies elided) → body (`emetgate_read_symbol`: one symbol, several at
+  once, or a line range widened to the symbols it overlaps, each with its own hash). A
+  raw whole-file read of such a file is refused by `emetgate_read_file`
+  (`UseSymbolToolsForSource`) unless `raw:true` is passed explicitly.
+- **JSON**: `emetgate_read_file` defaults to a key tree (every JSON pointer, its value
+  type and content hash) instead of the raw text; `pointer` reads one subtree.
+- **Markdown**: `emetgate_read_file` defaults to a heading tree (heading, level, line,
+  hash); `heading` reads one section, including its nested subsections.
+- **Any other text file**: `line_start`/`line_end` reads just that line range with its
+  own hash, the `cat`/`sed -n` replacement; without them the file is returned whole, up
+  to 16 KiB.
+- **Session mirror (opt-in, `emetgate mcp --mirror`).** The server remembers, in
+  process memory only, the content hash of every unit (file, JSON pointer, Markdown
+  heading or symbol) it has already sent this session. A repeat request for an
+  unchanged unit gets back one line (`{"status":"unchanged", "hash": ...}`) instead of
+  the full content; a request for `force:true` always gets the full content again, and
+  every `unchanged` reply repeats that as a hint. Off by default: see Limits below for
+  why.
+
+Measured with `tests/bench/reader.py` (o200k_base tokens; reproduce with
+`python tests/bench/reader.py`, a built `emetgate` binary, and, for the two real-project
+rows, a local checkout of a second real repository — the exact numbers drift with both
+codebases, the ratios are the signal):
+
+| Scenario | Read | emetgate | ratio |
+|---|---:|---:|---:|
+| find + read a function in a 1.6k-line real file | 13313 | 2795 | 0.21x |
+| read one key in a 50 KB real `package-lock.json` | 19859 | 44195 | 2.23x |
+| read one section of this repo's own README.md | 12681 | 1377 | 0.11x |
+| read the same symbol a second time, `--mirror` on | 13313 | 84 | 0.01x |
+| reread the same symbol after it changed, `--mirror` on | 18 | 74 | 4.11x |
+| line range 10-15 of `build.zig` | 151 | 34 | 0.23x |
+
+Two rows are worse than a plain read, on purpose left in: a flat key tree over a huge,
+uniformly-shaped JSON file (every one of hundreds of packages contributes several keys)
+can cost more than the file itself, and a hash-carrying JSON reply on a genuinely tiny
+symbol costs more than the few bytes it wraps. Locating a symbol or a JSON/Markdown node
+is not free either; both locate and fetch steps are counted above, matching how
+`tests/bench/run4.py` counts a symbol edit's ingest side.
+
+**Limits.** Claude Code can summarize (compact) its own context; the mirror only knows
+what it sent, not whether the model still has it. An `unchanged` reply after compaction
+is telling the model "you already have this" when it may not — the wrong direction to
+get wrong, which is why `force:true` exists and every `unchanged` reply advertises it.
+This branch does not wire an automatic reset on compaction: `src/platform/lockdown.zig`
+only launches Claude Code with a fixed `--tools`/`--mcp-config` argv today and does not
+manage `.claude/settings.json` or hooks, and a `PreCompact` hook would need to reach a
+mirror that lives in a specific running MCP process's memory. Until that lands, the
+mirror stays **off by default**; a project that opts in with `--mirror` is accepting
+that a compaction mid-session can make one `unchanged` reply stale.
 
 ## How the kernel itself is verified
 
