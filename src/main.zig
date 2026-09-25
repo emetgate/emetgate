@@ -44,6 +44,12 @@ const usage =
     \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config).
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
+    \\For mutate/try with --hash <hex> (an existing symbol), --body/--body-file is
+    \\only the replacement body block (e.g. "{ return 2; }"), not the whole
+    \\declaration; a full "function f() { ... }" there is rejected as
+    \\MutationSyntaxInvalid. With --hash absent, --body/--body-file is the whole
+    \\new top-level declaration instead.
+    \\
 ;
 
 const max_body_len = std.math.maxInt(u32);
