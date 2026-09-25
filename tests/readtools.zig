@@ -67,7 +67,7 @@ test "read_file returns a small repo file whole" {
     const expected = try std.Io.Dir.cwd().readFileAlloc(testing.io, "src/protocol/tool_result.zig", testing.allocator, .unlimited);
     defer testing.allocator.free(expected);
 
-    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "src/protocol/tool_result.zig" });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "src/protocol/tool_result.zig", .raw = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -214,7 +214,7 @@ test "read_file caps a large file and says it was truncated" {
     defer testing.allocator.free(whole);
     try testing.expect(whole.len > 16 * 1024);
 
-    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
