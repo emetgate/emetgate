@@ -3,6 +3,7 @@ pub const alloc_bridge = @import("engine/alloc_bridge.zig");
 pub const traversal = @import("engine/traversal.zig");
 pub const runtime = @import("engine/runtime.zig");
 pub const loader = @import("engine/loader.zig");
+pub const tree_cache = @import("engine/tree_cache.zig");
 pub const symbol = @import("engine/symbol.zig");
 pub const line_range = @import("engine/line_range.zig");
 pub const skeleton = @import("engine/skeleton.zig");
