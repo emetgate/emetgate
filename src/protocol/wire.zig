@@ -576,7 +576,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.UntrustedRepoConfig => 15,
         error.UntrustedRepoMemory => 37,
         error.ModelSuppliedTestPolicy => 17,
-        error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern, error.UseSymbolToolsForSource, error.InvalidLineRange, error.LineOutOfRange, error.NoSymbolInRange, error.InvalidJson, error.PointerNotFound => 18,
+        error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern, error.UseSymbolToolsForSource, error.InvalidLineRange, error.LineOutOfRange, error.NoSymbolInRange, error.InvalidJson, error.PointerNotFound, error.HeadingNotFound => 18,
         error.WorkspaceBusy, error.WorkspaceLockFailed => 14,
         error.Conflict => 11,
         error.WrittenButUnverified => 12,

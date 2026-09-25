@@ -10,6 +10,7 @@ const wire = @import("wire.zig");
 const mirror_mod = @import("mirror.zig");
 const line_range = @import("../engine/line_range.zig");
 const json_pointer = @import("../engine/lang/json/pointer.zig");
+const markdown_heading = @import("../engine/lang/markdown/heading.zig");
 const ts = @import("../engine/tree_sitter.zig");
 
 const Allocator = std.mem.Allocator;
@@ -63,20 +64,21 @@ pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.
     const raw = if (args) |a| tool_result.getBool(a, "raw") orelse false else false;
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     const pointer = if (args) |a| tool_result.getString(a, "pointer") else null;
+    const heading = if (args) |a| tool_result.getString(a, "heading") else null;
     const line_start = if (args) |a| tool_result.getInt(a, "line_start") else null;
     const line_end = if (args) |a| tool_result.getInt(a, "line_end") else null;
     event.label = "read_file";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderReadFile(gpa, io, root, file, raw, force, pointer, line_start, line_end, mirror, &buffer.writer, event) catch |err| {
+    renderReadFile(gpa, io, root, file, raw, force, pointer, heading, line_start, line_end, mirror, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, raw: bool, force: bool, pointer: ?[]const u8, line_start: ?i64, line_end: ?i64, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, raw: bool, force: bool, pointer: ?[]const u8, heading: ?[]const u8, line_start: ?i64, line_end: ?i64, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
     const place = try repo.jail(gpa, io, root, file);
     defer place.deinit(gpa);
     if (!raw and lang_registry.forPath(file) != null) return error.UseSymbolToolsForSource;
@@ -86,6 +88,9 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
 
     if (!raw and hasExtension(file, ".json")) {
         return renderJson(gpa, file, bytes, pointer, force, mirror, w, event);
+    }
+    if (!raw and hasExtension(file, ".md")) {
+        return renderMarkdown(gpa, file, bytes, heading, force, mirror, w, event);
     }
     if (!raw and (line_start != null or line_end != null)) {
         return renderRange(gpa, file, bytes, line_start, line_end, force, mirror, w, event);
@@ -175,6 +180,71 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
         try js.write(entry.pointer);
         try js.objectField("type");
         try js.write(@tagName(entry.ty));
+        try js.objectField("hash");
+        try js.write(hex[0..]);
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.endObject();
+    try w.writeByte('\n');
+}
+
+fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+    if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
+    const parser = ts.Parser.create();
+    defer parser.deinit();
+    const tree = try parser.parseIn(markdown_heading.grammar(), bytes);
+    defer tree.deinit();
+
+    if (heading) |h| {
+        const entry = try markdown_heading.resolve(gpa, tree, h);
+        if (mirror) |m| {
+            const key = try std.fmt.allocPrint(gpa, "heading:{s}#{s}", .{ file, h });
+            defer gpa.free(key);
+            if (try m.check(key, entry.hash, force) == .unchanged) {
+                event.chars_emetgate = 0;
+                event.chars_fullfile = bytes.len;
+                return wire.writeUnchanged(w, file, h, entry.hash);
+            }
+        }
+        const text = tree.text(entry.node);
+        event.chars_emetgate = text.len;
+        event.chars_fullfile = bytes.len;
+        const hex = symbol.formatHash(entry.hash);
+        var js: std.json.Stringify = .{ .writer = w };
+        try js.beginObject();
+        try js.objectField("file");
+        try js.write(file);
+        try js.objectField("heading");
+        try js.write(h);
+        try js.objectField("hash");
+        try js.write(hex[0..]);
+        try js.objectField("section");
+        try js.write(text);
+        try js.endObject();
+        try w.writeByte('\n');
+        return;
+    }
+
+    const entries = try markdown_heading.headingTree(gpa, tree);
+    defer gpa.free(entries);
+    event.chars_emetgate = bytes.len;
+    event.chars_fullfile = bytes.len;
+    var js: std.json.Stringify = .{ .writer = w };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("headings");
+    try js.beginArray();
+    for (entries) |entry| {
+        const hex = symbol.formatHash(entry.hash);
+        try js.beginObject();
+        try js.objectField("heading");
+        try js.write(entry.heading);
+        try js.objectField("level");
+        try js.write(entry.level);
+        try js.objectField("line");
+        try js.write(entry.line);
         try js.objectField("hash");
         try js.write(hex[0..]);
         try js.endObject();
