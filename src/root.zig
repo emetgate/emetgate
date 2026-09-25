@@ -38,6 +38,7 @@ pub const handlers = @import("protocol/handlers.zig");
 pub const read_tools = @import("protocol/read_tools.zig");
 pub const mirror = @import("protocol/mirror.zig");
 pub const json_pointer = @import("engine/lang/json/pointer.zig");
+pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

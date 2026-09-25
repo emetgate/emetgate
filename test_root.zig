@@ -40,6 +40,7 @@ pub const handlers = src.handlers;
 pub const read_tools = src.read_tools;
 pub const mirror = src.mirror;
 pub const json_pointer = src.json_pointer;
+pub const markdown_heading = src.markdown_heading;
 
 comptime {
     for (@typeInfo(src).@"struct".decls) |decl| {
