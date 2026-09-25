@@ -161,9 +161,9 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         const file_abs = options.edits[i].file_abs;
         const source = p.applied.snapshot.source;
         pendings[i] = if (p.base_hash) |base|
-            try disk.prepare(gpa, io, file_abs, source, base, journal_dir, &batch)
+            try disk.prepare(gpa, io, file_abs, source, base)
         else
-            try disk.stageCreate(gpa, io, file_abs, source, journal_dir, &batch);
+            try disk.stageCreate(gpa, io, file_abs, source);
         count = i + 1;
     }
     commit_entered = true;

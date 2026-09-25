@@ -164,9 +164,17 @@ pub fn addToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
 }
 
 pub fn addAllToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
+    return runOnPaths(gpa, io, root_abs, &.{ "git", "add", "--" }, paths);
+}
+
+pub fn removeAllFromIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
+    return runOnPaths(gpa, io, root_abs, &.{ "git", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, paths);
+}
+
+fn runOnPaths(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const []const u8, paths: []const []const u8) !void {
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.appendSlice(gpa, &.{ "git", "add", "--" });
+    try argv.appendSlice(gpa, command);
     try argv.appendSlice(gpa, paths);
     var attempt: usize = 0;
     while (attempt < index_add_attempts) : (attempt += 1) {

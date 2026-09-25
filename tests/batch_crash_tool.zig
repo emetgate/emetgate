@@ -14,9 +14,9 @@ const testing = std.testing;
 const new_a = "export function add(a: number, b: number): number { return a - b; }\n";
 const new_b = "export function twice(x: number): number { return x * 2; }\n";
 
-const swap_steps = 4;
-const record_step = 5;
-const finalize_steps = [_]usize{ 6, 7, 8, 9 };
+const swap_steps = 7;
+const record_step = 8;
+const finalize_steps = [_]usize{ 9, 10, 11 };
 
 const StopAt = struct {
     target: usize,

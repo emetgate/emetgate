@@ -65,6 +65,7 @@ test {
     _ = @import("tests/batch_crash.zig");
     _ = @import("tests/batch_crash_tool.zig");
     _ = @import("tests/batch_create_crash.zig");
+    _ = @import("tests/batch_delete_crash.zig");
     _ = @import("tests/batch_create_tool.zig");
     _ = @import("tests/redteam_batch_create.zig");
     _ = @import("tests/query.zig");

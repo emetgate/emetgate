@@ -4400,8 +4400,8 @@
     {
       "id": "BC2-recover-roll-forward-skipped",
       "file": "src/platform/disk.zig",
-      "from": "    if (committed) {\n        const new_hash",
-      "to": "    if (false) {\n        const new_hash",
+      "from": "    if (committed) {\n        rollForward(",
+      "to": "    if (committed and false) {\n        rollForward(",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
@@ -4429,21 +4429,11 @@
     {
       "id": "BC5-recover-leaves-commit-record",
       "file": "src/platform/disk.zig",
-      "from": "    try commit_record.removeAll(gpa, io, journal_dir);",
+      "from": "    try commit_record.removeAll(gpa, io, journal_dir, kept.items);\n",
       "to": "",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
-      ]
-    },
-    {
-      "id": "TB1-try-batch-prepares-without-batch",
-      "file": "src/platform/batch.zig",
-      "from": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, &batch)",
-      "to": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, null)",
-      "kills": [
-        "batch crash through the tool: a crash right after the commit record recovers every file new",
-        "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
       ]
     },
     {
@@ -4470,8 +4460,8 @@
     {
       "id": "BCR1-create-rename-replaces",
       "file": "src/platform/disk.zig",
-      "from": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameTo(",
-      "to": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameReplacing(",
+      "from": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.?.renameTo(",
+      "to": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.?.renameReplacing(",
       "kills": [
         "batch create crash: a file that appears at a create target before commit is never overwritten and the batch rolls back",
         "batch create through the tool: a file that appears at the create target during commit is kept and the batch is refused with Conflict"
@@ -4488,9 +4478,9 @@
     },
     {
       "id": "BCR3-create-not-journaled",
-      "file": "src/platform/disk.zig",
-      "from": "const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .op = .create",
-      "to": "const journal: ?[]u8 = if (journal_dir == null) null else null;\n    _ = if (false) try writeJournal(gpa, io, \"\", &tag, .{ .op = .create",
+      "file": "src/platform/journal.zig",
+      "from": "    for (intents) |intent| try writeIntent(&js, intent);",
+      "to": "    for (intents) |intent| if (intent.op != .create) try writeIntent(&js, intent);",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
         "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
@@ -4500,8 +4490,8 @@
     {
       "id": "BCR4-rollback-keeps-created-file",
       "file": "src/platform/disk.zig",
-      "from": "    if (!deleteWithRetry(io, target_abs)) return error.CreatedNotRemoved;\n",
-      "to": "",
+      "from": "    switch (try deleteVerified(gpa, io, target_abs, new_hash, null)) {\n        .deleted => report.restored += 1,",
+      "to": "    switch (Verified.missing) {\n        .deleted => report.restored += 1,",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
         "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
@@ -4511,7 +4501,7 @@
     {
       "id": "BCR5-commit-skips-index",
       "file": "src/platform/disk.zig",
-      "from": "    try git_repo.addAllToIndex(b.gpa, b.io, root, created.items);",
+      "from": "    try syncIndex(b.gpa, b.io, root, added.items, removed.items);",
       "to": "    _ = root;",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
@@ -4523,8 +4513,8 @@
     {
       "id": "BCR6-roll-forward-skips-index",
       "file": "src/platform/disk.zig",
-      "from": "        git_repo.addAllToIndex(gpa, io, root_abs, paths) catch {\n            report.not_indexed += paths.len;\n        };",
-      "to": "        _ = paths;",
+      "from": "        syncIndex(self.gpa, io, root_abs, added, removed) catch {\n            report.not_indexed += self.len();\n        };",
+      "to": "        _ = .{ io, root_abs, added, removed, report };",
       "kills": [
         "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
         "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
