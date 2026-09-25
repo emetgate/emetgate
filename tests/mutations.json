@@ -1631,15 +1631,6 @@
       "note": "defense in depth for insertion: topLevelStatementsIn refuses any root child that straddles the slot, so every byte and root node before the slot is unchanged and no existing symbol can change its hash; kept so a future relaxation of the straddle rule cannot silently alter existing code"
     },
     {
-      "id": "NS17-batch-absent-refused-silently",
-      "file": "src/protocol/handlers.zig",
-      "from": ".absent => return error.AbsentInBatch,",
-      "to": ".absent => return error.InvalidHash,",
-      "kills": [
-        "purple: a batch item with hash absent is refused by name and the repository is untouched"
-      ]
-    },
-    {
       "id": "NS18-propose-absent-not-routed-to-insert",
       "file": "src/engine/cas.zig",
       "from": ".absent => insert(base, .{ .ref = ref, .new_body = new_body }),",
@@ -1661,7 +1652,7 @@
     },
     {
       "id": "NF2-create-ignored-path-accepted",
-      "file": "src/platform/runner.zig",
+      "file": "src/platform/create.zig",
       "from": "    if (try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;\n",
       "to": "    if (try repo.isIgnored(gpa, io, root, rel) and false) return error.IgnoredPath;\n",
       "kills": [
@@ -1670,7 +1661,7 @@
     },
     {
       "id": "NF3-create-unknown-language-defaulted",
-      "file": "src/platform/runner.zig",
+      "file": "src/platform/create.zig",
       "from": "const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;",
       "to": "const profile = registry.forPath(file_abs) orelse registry.forPath(\"x.ts\").?;",
       "kills": [
@@ -1772,8 +1763,8 @@
     {
       "id": "NF13-index-failure-silent",
       "file": "src/platform/repo.zig",
-      "from": "    return error.WrittenButNotIndexed;\n",
-      "to": "",
+      "from": "    return error.WrittenButNotIndexed;\n}\n\npub fn addAllToIndex",
+      "to": "}\n\npub fn addAllToIndex",
       "kills": [
         "new file: when git add fails the file stays on disk with the written body and the error is WrittenButNotIndexed"
       ]
@@ -4409,8 +4400,8 @@
     {
       "id": "BC2-recover-roll-forward-skipped",
       "file": "src/platform/disk.zig",
-      "from": "    if (batch.len != 0 and try commit_record.exists(gpa, io, journal_dir, batch)) {",
-      "to": "    if (false and try commit_record.exists(gpa, io, journal_dir, batch)) {",
+      "from": "    if (committed) {\n        const new_hash",
+      "to": "    if (false) {\n        const new_hash",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
@@ -4428,8 +4419,8 @@
     {
       "id": "BC4-batch-commit-record-removed-before-finalize",
       "file": "src/platform/disk.zig",
-      "from": "    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings, 0..) |*p, k| {",
-      "to": "    if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};\n    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings, 0..) |*p, k| {",
+      "from": "    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings) |*p| {\n        if (p.kind == .create) {",
+      "to": "    if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};\n    if (Step.stops(step)) return abandonAll(pendings);\n    for (pendings) |*p| {\n        if (p.kind == .create) {",
       "kills": [
         "batch crash: a crash after any step of a two-file commit recovers to all old or all new",
         "batch crash: a crash after any step of a three-file commit recovers to all old or all new"
@@ -4448,8 +4439,8 @@
     {
       "id": "TB1-try-batch-prepares-without-batch",
       "file": "src/platform/batch.zig",
-      "from": "p.base_hash, journal_dir, &batch);",
-      "to": "p.base_hash, journal_dir, null);",
+      "from": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, &batch)",
+      "to": "try disk.prepare(gpa, io, file_abs, source, base, journal_dir, null)",
       "kills": [
         "batch crash through the tool: a crash right after the commit record recovers every file new",
         "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
@@ -4474,6 +4465,88 @@
         "batch crash through the tool: a crash right after the commit record recovers every file new",
         "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new",
         "batch crash through the tool: a crash during the swaps recovers every file old"
+      ]
+    },
+    {
+      "id": "BCR1-create-rename-replaces",
+      "file": "src/platform/disk.zig",
+      "from": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameTo(",
+      "to": "    fn place(self: *Pending, in_gap: ?Hook) !void {\n        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.renameReplacing(",
+      "kills": [
+        "batch create crash: a file that appears at a create target before commit is never overwritten and the batch rolls back",
+        "batch create through the tool: a file that appears at the create target during commit is kept and the batch is refused with Conflict"
+      ]
+    },
+    {
+      "id": "BCR2-create-stages-over-existing-file",
+      "file": "src/platform/disk.zig",
+      "from": "    if (try pathExists(io, path_abs)) return error.FileExists;\n",
+      "to": "",
+      "kills": [
+        "batch create crash: staging a create over an existing file is refused before anything is written"
+      ]
+    },
+    {
+      "id": "BCR3-create-not-journaled",
+      "file": "src/platform/disk.zig",
+      "from": "const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .op = .create",
+      "to": "const journal: ?[]u8 = if (journal_dir == null) null else null;\n    _ = if (false) try writeJournal(gpa, io, \"\", &tag, .{ .op = .create",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a crash during the swaps recovers with the new file gone"
+      ]
+    },
+    {
+      "id": "BCR4-rollback-keeps-created-file",
+      "file": "src/platform/disk.zig",
+      "from": "    if (!deleteWithRetry(io, target_abs)) return error.CreatedNotRemoved;\n",
+      "to": "",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a crash during the swaps recovers with the new file gone"
+      ]
+    },
+    {
+      "id": "BCR5-commit-skips-index",
+      "file": "src/platform/disk.zig",
+      "from": "    try git_repo.addAllToIndex(b.gpa, b.io, root, created.items);",
+      "to": "    _ = root;",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a batch that modifies one file and creates another commits both and indexes the new file",
+        "batch create through the tool: when git add fails the batch stays committed on disk and the error is WrittenButNotIndexed"
+      ]
+    },
+    {
+      "id": "BCR6-roll-forward-skips-index",
+      "file": "src/platform/disk.zig",
+      "from": "        git_repo.addAllToIndex(gpa, io, root_abs, paths) catch {\n            report.not_indexed += paths.len;\n        };",
+      "to": "        _ = paths;",
+      "kills": [
+        "batch create crash: a crash after any step of a modify plus create commit recovers to all old or all new",
+        "batch create crash: a crash after any step of a three-file commit with two creates recovers to all old or all new",
+        "batch create through the tool: a crash after the commit record recovers with the new file present and indexed"
+      ]
+    },
+    {
+      "id": "BCR7-symmetry-skips-reference-check",
+      "file": "src/platform/create.zig",
+      "from": "        .unreferenced = !try mentionedAnywhere(gpa, io, root, sources, subject.index, subject.name, subject.slot),",
+      "to": "        .unreferenced = true,",
+      "kills": [
+        "batch create through the tool: a new symbol that another edit of the batch calls is not classed as symmetry"
+      ]
+    },
+    {
+      "id": "BCR8-symmetry-ignores-effects",
+      "file": "src/engine/symmetry.zig",
+      "from": "    if (isEffect(profile, node.kind())) return true;\n",
+      "to": "",
+      "kills": [
+        "symmetry: a call, a new or an assignment in a top-level initializer is an effect"
       ]
     }
   ]

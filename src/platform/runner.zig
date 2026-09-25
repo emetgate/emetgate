@@ -12,7 +12,7 @@ const batch = @import("batch.zig");
 const rules = @import("rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
-const registry = @import("../engine/lang/registry.zig");
+const create_mod = @import("create.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -29,6 +29,7 @@ pub const Edit = batch.Edit;
 pub const BatchOptions = batch.BatchOptions;
 pub const BatchResult = batch.BatchResult;
 pub const tryMutateBatch = batch.tryMutateBatch;
+pub const prepareCreate = create_mod.prepareCreate;
 const gitToplevel = repo.gitToplevel;
 const substituteFile = gate_mod.substituteFile;
 
@@ -175,12 +176,6 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     if (options.trace) |t| t.commit_attempted = true;
     try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir);
     return .{ .committed = applied.hash };
-}
-
-pub fn prepareCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, rel: []const u8, ref: symbol.Ref, new_body: []const u8) !cas.Applied {
-    const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;
-    if (try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;
-    return cas.create(runtime, profile, .{ .ref = ref, .new_body = new_body });
 }
 
 fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, root: []const u8, rel: []const u8) !Result {

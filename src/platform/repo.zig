@@ -114,6 +114,21 @@ pub fn isIgnored(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const 
     };
 }
 
+pub fn filesMentioning(gpa: Allocator, io: std.Io, root_abs: []const u8, word: []const u8) ![]u8 {
+    const result = std.process.run(gpa, io, .{
+        .argv = &.{ "git", "grep", "-z", "-l", "-w", "-F", "-e", word, "--" },
+        .cwd = .{ .path = root_abs },
+        .stdout_limit = .limited(max_git_output),
+    }) catch return error.GitFailed;
+    defer gpa.free(result.stderr);
+    errdefer gpa.free(result.stdout);
+    switch (result.term) {
+        .exited => |code| if (code != 0 and code != 1) return error.GitFailed,
+        else => return error.GitFailed,
+    }
+    return result.stdout;
+}
+
 pub fn trackedListing(gpa: Allocator, io: std.Io, root_abs: []const u8, pathspec: []const u8) ![]u8 {
     const result = std.process.run(gpa, io, .{
         .argv = &.{ "git", "ls-files", "-z", "--", pathspec },
@@ -135,6 +150,29 @@ pub fn addToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
         if (attempt != 0) io.sleep(.fromMilliseconds(index_retry_ms), .awake) catch {};
         const result = std.process.run(gpa, io, .{
             .argv = &.{ "git", "add", "--", rel },
+            .cwd = .{ .path = root_abs },
+            .stdout_limit = .limited(max_git_output),
+        }) catch continue;
+        gpa.free(result.stdout);
+        gpa.free(result.stderr);
+        switch (result.term) {
+            .exited => |code| if (code == 0) return,
+            else => {},
+        }
+    }
+    return error.WrittenButNotIndexed;
+}
+
+pub fn addAllToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.appendSlice(gpa, &.{ "git", "add", "--" });
+    try argv.appendSlice(gpa, paths);
+    var attempt: usize = 0;
+    while (attempt < index_add_attempts) : (attempt += 1) {
+        if (attempt != 0) io.sleep(.fromMilliseconds(index_retry_ms), .awake) catch {};
+        const result = std.process.run(gpa, io, .{
+            .argv = argv.items,
             .cwd = .{ .path = root_abs },
             .stdout_limit = .limited(max_git_output),
         }) catch continue;

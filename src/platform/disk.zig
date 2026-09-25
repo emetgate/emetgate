@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const commit_record = @import("commit_record.zig");
+const git_repo = @import("repo.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -103,6 +104,7 @@ pub const Batch = struct {
     io: std.Io,
     journal_dir: []const u8,
     tag: commit_record.Tag,
+    root: ?[]const u8 = null,
 
     pub fn init(gpa: Allocator, io: std.Io, journal_dir: []const u8) Batch {
         return .{ .gpa = gpa, .io = io, .journal_dir = journal_dir, .tag = commit_record.newTag(io) };
@@ -167,7 +169,8 @@ pub fn create(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8
 pub const Pending = struct {
     gpa: Allocator,
     io: std.Io,
-    guard: Guard,
+    kind: Kind = .modify,
+    guard: ?Guard,
     replacement: Guard,
     path: []u8,
     temp: []u8,
@@ -176,11 +179,16 @@ pub const Pending = struct {
     saved_attributes: windows.DWORD,
     data_hash: symbol.Hash,
     state: State = .staged,
+    replacement_open: bool = true,
+    guard_open: bool = true,
+    freed: bool = false,
 
+    pub const Kind = enum { modify, create };
     const State = enum { staged, backed_up, swapped };
 
     pub fn swap(self: *Pending, in_gap: ?Hook) !void {
-        try self.guard.renameTo(self.gpa, self.backup);
+        if (self.kind == .create) return self.place(in_gap);
+        try self.guard.?.renameTo(self.gpa, self.backup);
         self.state = .backed_up;
         if (in_gap) |hook| try hook.run(hook.context);
         self.replacement.renameTo(self.gpa, self.path) catch |err| switch (err) {
@@ -191,55 +199,103 @@ pub const Pending = struct {
         self.state = .swapped;
     }
 
+    fn place(self: *Pending, in_gap: ?Hook) !void {
+        if (in_gap) |hook| try hook.run(hook.context);
+        self.replacement.renameTo(self.gpa, self.path) catch |err| switch (err) {
+            error.PathAlreadyExists => return error.Conflict,
+            else => |e| return e,
+        };
+        self.state = .swapped;
+    }
+
     pub fn verify(self: *Pending) !void {
         const written = self.replacement.hash(self.gpa, self.io) catch return error.WrittenButUnverified;
         if (!std.mem.eql(u8, &written, &self.data_hash)) return error.WrittenButUnverified;
     }
 
     pub fn finalize(self: *Pending, leftover: ?*Leftover) void {
-        self.dropBackup(leftover);
+        if (self.kind == .modify) self.dropBackup(leftover);
+        self.closeHandles();
         self.dropJournal();
         self.freePaths();
     }
 
     pub fn abandon(self: *Pending) void {
-        self.replacement.close();
-        self.guard.close();
+        self.closeHandles();
         self.freePaths();
     }
 
-    fn dropBackup(self: *Pending, leftover: ?*Leftover) void {
+    fn closeReplacement(self: *Pending) void {
+        if (!self.replacement_open) return;
         self.replacement.close();
-        self.guard.close();
+        self.replacement_open = false;
+    }
+
+    fn closeGuard(self: *Pending) void {
+        if (!self.guard_open) return;
+        if (self.guard) |g| g.close();
+        self.guard_open = false;
+    }
+
+    fn closeHandles(self: *Pending) void {
+        self.closeReplacement();
+        self.closeGuard();
+    }
+
+    fn dropBackup(self: *Pending, leftover: ?*Leftover) void {
+        self.closeHandles();
         if (!deleteWithRetry(self.io, self.backup)) {
             if (leftover) |out| out.record(self.backup);
         }
     }
 
     fn dropJournal(self: *Pending) void {
+        if (self.freed) return;
         if (self.journal) |j| _ = deleteWithRetry(self.io, j);
     }
 
     pub fn discard(self: *Pending, leftover: ?*Leftover) void {
-        self.replacement.close();
-        switch (self.state) {
-            .staged => _ = deleteWithRetry(self.io, self.temp),
-            .backed_up => {
-                self.guard.renameTo(self.gpa, self.path) catch {
-                    if (leftover) |out| out.record(self.backup);
-                };
-                _ = deleteWithRetry(self.io, self.temp);
-            },
-            .swapped => self.guard.renameReplacing(self.gpa, self.path) catch {
-                if (leftover) |out| out.record(self.backup);
-            },
+        switch (self.kind) {
+            .modify => self.restoreBase(leftover),
+            .create => self.removeCreated(leftover),
         }
-        self.guard.close();
+        self.closeHandles();
         self.dropJournal();
         self.freePaths();
     }
 
+    fn restoreBase(self: *Pending, leftover: ?*Leftover) void {
+        self.closeReplacement();
+        const guard = self.guard.?;
+        switch (self.state) {
+            .staged => _ = deleteWithRetry(self.io, self.temp),
+            .backed_up => {
+                guard.renameTo(self.gpa, self.path) catch {
+                    if (leftover) |out| out.record(self.backup);
+                };
+                _ = deleteWithRetry(self.io, self.temp);
+            },
+            .swapped => guard.renameReplacing(self.gpa, self.path) catch {
+                if (leftover) |out| out.record(self.backup);
+            },
+        }
+    }
+
+    fn removeCreated(self: *Pending, leftover: ?*Leftover) void {
+        if (self.state == .swapped) {
+            self.replacement.renameTo(self.gpa, self.temp) catch {
+                if (leftover) |out| out.record(self.path);
+                self.closeReplacement();
+                return;
+            };
+        }
+        self.closeReplacement();
+        _ = deleteWithRetry(self.io, self.temp);
+    }
+
     fn freePaths(self: *Pending) void {
+        if (self.freed) return;
+        self.freed = true;
         if (self.journal) |j| self.gpa.free(j);
         self.gpa.free(self.path);
         self.gpa.free(self.temp);
@@ -267,7 +323,7 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
     const backup = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ path_abs, &tag });
     errdefer gpa.free(backup);
 
-    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .target = path_abs, .base_hash = expected_base, .new_hash = symbol.hashOf(data), .batch = if (batch) |b| &b.tag else null }) else null;
+    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .target = path_abs, .base_hash = expected_base, .new_hash = symbol.hashOf(data), .batch = batchTag(batch) }) else null;
     errdefer if (journal) |j| {
         _ = deleteWithRetry(io, j);
         gpa.free(j);
@@ -291,9 +347,66 @@ pub fn prepare(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u
     };
 }
 
+fn batchTag(batch: ?*const Batch) ?[]const u8 {
+    const b = batch orelse return null;
+    return &b.tag;
+}
+
+pub fn stageCreate(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, journal_dir: ?[]const u8, batch: ?*const Batch) !Pending {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
+    if (try pathExists(io, path_abs)) return error.FileExists;
+
+    var random: [8]u8 = undefined;
+    io.random(&random);
+    const tag = std.fmt.bytesToHex(random, .lower);
+    const path = try gpa.dupe(u8, path_abs);
+    errdefer gpa.free(path);
+    const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path_abs, &tag });
+    errdefer gpa.free(temp);
+    const backup = try gpa.dupe(u8, "");
+    errdefer gpa.free(backup);
+
+    const journal = if (journal_dir) |dir| try writeJournal(gpa, io, dir, &tag, .{ .op = .create, .target = path_abs, .new_hash = symbol.hashOf(data), .batch = batchTag(batch) }) else null;
+    errdefer if (journal) |j| {
+        _ = deleteWithRetry(io, j);
+        gpa.free(j);
+    };
+
+    try writeDurably(io, temp, data);
+    errdefer _ = deleteWithRetry(io, temp);
+    const replacement = try Guard.open(temp);
+
+    return .{
+        .gpa = gpa,
+        .io = io,
+        .kind = .create,
+        .guard = null,
+        .guard_open = false,
+        .replacement = replacement,
+        .path = path,
+        .temp = temp,
+        .backup = backup,
+        .journal = journal,
+        .saved_attributes = 0,
+        .data_hash = symbol.hashOf(data),
+    };
+}
+
+fn pathExists(io: std.Io, path_abs: []const u8) !bool {
+    std.Io.Dir.cwd().access(io, path_abs, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
+    return true;
+}
+
+const JournalOp = enum { modify, create };
+
 const JournalFields = struct {
+    op: JournalOp = .modify,
     target: []const u8,
-    base_hash: symbol.Hash,
+    base_hash: ?symbol.Hash = null,
     new_hash: symbol.Hash,
     batch: ?[]const u8 = null,
 };
@@ -303,16 +416,20 @@ fn writeJournal(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []cons
     const journal_path = try std.fmt.allocPrint(gpa, "{s}\\{s}.json", .{ journal_dir, tag });
     errdefer gpa.free(journal_path);
 
-    const base_hex = symbol.formatHash(fields.base_hash);
     const new_hex = symbol.formatHash(fields.new_hash);
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     var js: std.json.Stringify = .{ .writer = &buffer.writer };
     try js.beginObject();
+    try js.objectField("op");
+    try js.write(@tagName(fields.op));
     try js.objectField("target");
     try js.write(fields.target);
-    try js.objectField("base_hash");
-    try js.write(base_hex[0..]);
+    if (fields.base_hash) |base| {
+        const base_hex = symbol.formatHash(base);
+        try js.objectField("base_hash");
+        try js.write(base_hex[0..]);
+    }
     try js.objectField("new_hash");
     try js.write(new_hex[0..]);
     if (fields.batch) |b| {
@@ -364,17 +481,48 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
         return err;
     };
     if (Step.stops(step)) return abandonAll(pendings);
-    for (pendings, 0..) |*p, k| {
-        p.dropBackup(leftover);
-        if (Step.stops(step)) {
-            p.freePaths();
-            return abandonAll(pendings[k + 1 ..]);
+    for (pendings) |*p| {
+        if (p.kind == .create) {
+            p.closeHandles();
+            continue;
         }
+        p.dropBackup(leftover);
+        if (Step.stops(step)) return abandonAll(pendings);
         p.dropJournal();
         p.freePaths();
-        if (Step.stops(step)) return abandonAll(pendings[k + 1 ..]);
+        if (Step.stops(step)) return abandonAll(pendings);
+    }
+    const creates = countCreates(pendings);
+    const indexed = if (creates != 0) indexCreated(pendings, batch) else {};
+    if (creates != 0 and Step.stops(step)) return abandonAll(pendings);
+    for (pendings) |*p| {
+        if (p.kind != .create) continue;
+        p.dropJournal();
+        p.freePaths();
+        if (Step.stops(step)) return abandonAll(pendings);
     }
     if (batch) |b| commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
+    return indexed;
+}
+
+fn countCreates(pendings: []const Pending) usize {
+    var n: usize = 0;
+    for (pendings) |p| {
+        if (p.kind == .create) n += 1;
+    }
+    return n;
+}
+
+fn indexCreated(pendings: []Pending, batch: ?*const Batch) !void {
+    const b = batch orelse return;
+    const root = b.root orelse return;
+    var created: std.ArrayList([]const u8) = .empty;
+    defer created.deinit(b.gpa);
+    for (pendings) |*p| {
+        if (p.kind == .create) try created.append(b.gpa, p.path);
+    }
+    if (created.items.len == 0) return;
+    try git_repo.addAllToIndex(b.gpa, b.io, root, created.items);
 }
 
 pub const RecoverReport = struct {
@@ -383,9 +531,11 @@ pub const RecoverReport = struct {
     removed_temps: usize = 0,
     skipped: usize = 0,
     failed: usize = 0,
+    not_indexed: usize = 0,
 };
 
 const JournalEntry = struct {
+    op: []const u8 = "modify",
     target: []const u8 = "",
     base_hash: []const u8 = "",
     new_hash: []const u8 = "",
@@ -451,6 +601,28 @@ fn rollForward(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []co
     if (!deleteWithRetry(io, bak_abs)) return error.BackupNotRemoved;
 }
 
+fn hasHash(gpa: Allocator, io: std.Io, path_abs: []const u8, expected: symbol.Hash) bool {
+    const guard = Guard.open(path_abs) catch return false;
+    defer guard.close();
+    const actual = guard.hash(gpa, io) catch return false;
+    return std.mem.eql(u8, &actual, &expected);
+}
+
+fn recoverCreated(gpa: Allocator, io: std.Io, target_abs: []const u8, new_hash: symbol.Hash, committed: bool, index_targets: *std.ArrayList([]u8), report: *RecoverReport) !bool {
+    if (!hasHash(gpa, io, target_abs, new_hash)) {
+        report.skipped += 1;
+        return false;
+    }
+    if (committed) {
+        try index_targets.append(gpa, try gpa.dupe(u8, target_abs));
+        report.rolled_forward += 1;
+        return true;
+    }
+    if (!deleteWithRetry(io, target_abs)) return error.CreatedNotRemoved;
+    report.restored += 1;
+    return false;
+}
+
 fn restoreVerified(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, base_hash: symbol.Hash) !void {
     if (shadow.isReparsePoint(bak_abs) catch true) return error.BackupUnverified;
     const guard = try Guard.open(bak_abs);
@@ -476,12 +648,12 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, err_ou
     defer gpa.free(shadow_abs);
     const removal = shadow.remove(io, root_abs, shadow_abs);
 
-    try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed });
+    try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}, not indexed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed, report.not_indexed });
     if (removal) |_| {} else |err| {
         try err_out.print("could not remove shadow: {t}\n", .{err});
         return recover_failed_exit_code;
     }
-    return if (report.failed > 0) recover_failed_exit_code else 0;
+    return if (report.failed > 0 or report.not_indexed > 0) recover_failed_exit_code else 0;
 }
 
 fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *RecoverReport) !void {
@@ -505,78 +677,115 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
         try names.append(gpa, try gpa.dupe(u8, entry.name));
     }
 
+    var index_targets: std.ArrayList([]u8) = .empty;
+    defer {
+        for (index_targets.items) |t| gpa.free(t);
+        index_targets.deinit(gpa);
+    }
+    var index_journals: std.ArrayList([]u8) = .empty;
+    defer {
+        for (index_journals.items) |j| gpa.free(j);
+        index_journals.deinit(gpa);
+    }
     for (names.items) |name| {
         var jp_buf: [std.fs.max_path_bytes]u8 = undefined;
         const jp = std.fmt.bufPrint(&jp_buf, "{s}\\{s}", .{ journal_dir, name }) catch continue;
-        applyJournalEntry(gpa, io, root_abs, journal_dir, jp, name, report) catch {
+        const keep = applyJournalEntry(gpa, io, root_abs, journal_dir, jp, name, &index_targets, report) catch blk: {
             report.failed += 1;
+            break :blk false;
         };
-        _ = deleteWithRetry(io, jp);
+        if (keep) {
+            try index_journals.append(gpa, try gpa.dupe(u8, jp));
+        } else {
+            _ = deleteWithRetry(io, jp);
+        }
     }
+    if (index_targets.items.len != 0) {
+        const paths: []const []const u8 = index_targets.items;
+        git_repo.addAllToIndex(gpa, io, root_abs, paths) catch {
+            report.not_indexed += paths.len;
+        };
+    }
+    for (index_journals.items) |jp| _ = deleteWithRetry(io, jp);
     try commit_record.removeAll(gpa, io, journal_dir);
     std.Io.Dir.cwd().deleteDir(io, journal_dir) catch {};
 }
 
-fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, journal_path: []const u8, name: []const u8, report: *RecoverReport) !void {
+fn applyJournalEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, journal_path: []const u8, name: []const u8, index_targets: *std.ArrayList([]u8), report: *RecoverReport) !bool {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, journal_path, gpa, .limited(max_journal_bytes));
     defer gpa.free(bytes);
 
     const parsed = std.json.parseFromSlice(JournalEntry, gpa, bytes, .{ .ignore_unknown_fields = true }) catch {
         report.failed += 1;
-        return;
+        return false;
     };
     defer parsed.deinit();
+    const op = std.meta.stringToEnum(JournalOp, parsed.value.op) orelse {
+        report.failed += 1;
+        return false;
+    };
     const target = parsed.value.target;
     if (target.len == 0) {
         report.failed += 1;
-        return;
+        return false;
     }
-    const base_hash = symbol.parseHash(parsed.value.base_hash) catch {
-        report.failed += 1;
-        return;
-    };
     if (!isUnderRoot(root_abs, target) or try escapesViaReparse(root_abs, target)) {
         report.failed += 1;
-        return;
+        return false;
     }
 
     const tag = name[0 .. name.len - ".json".len];
     if (!isValidTag(tag)) {
         report.failed += 1;
-        return;
+        return false;
     }
-    const bak = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ target, tag });
-    defer gpa.free(bak);
-
     const batch = parsed.value.batch;
     if (batch.len != 0 and !isValidTag(batch)) {
         report.failed += 1;
-        return;
+        return false;
     }
-    if (batch.len != 0 and try commit_record.exists(gpa, io, journal_dir, batch)) {
+    const committed = batch.len != 0 and try commit_record.exists(gpa, io, journal_dir, batch);
+
+    if (op == .create) {
         const new_hash = symbol.parseHash(parsed.value.new_hash) catch {
             report.failed += 1;
-            return;
+            return false;
+        };
+        return recoverCreated(gpa, io, target, new_hash, committed, index_targets, report);
+    }
+
+    const base_hash = symbol.parseHash(parsed.value.base_hash) catch {
+        report.failed += 1;
+        return false;
+    };
+    const bak = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.bak", .{ target, tag });
+    defer gpa.free(bak);
+
+    if (committed) {
+        const new_hash = symbol.parseHash(parsed.value.new_hash) catch {
+            report.failed += 1;
+            return false;
         };
         rollForward(gpa, io, bak, target, new_hash) catch {
             report.failed += 1;
-            return;
+            return false;
         };
         report.rolled_forward += 1;
-        return;
+        return false;
     }
 
     restoreVerified(gpa, io, bak, target, base_hash) catch |err| switch (err) {
         error.BaseChanged, error.FileLocked => {
             report.skipped += 1;
-            return;
+            return false;
         },
         else => {
             report.failed += 1;
-            return;
+            return false;
         },
     };
     report.restored += 1;
+    return false;
 }
 
 fn clearOrphanTemps(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *RecoverReport) !void {

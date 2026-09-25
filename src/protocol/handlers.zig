@@ -312,10 +312,22 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
-        try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        if (err == error.WrittenButNotIndexed) {
+            try wire.writeNotIndexed(&buffer.writer, firstAbsentFile(edits_val.array.items));
+        } else {
+            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        }
         break :blk true;
     };
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn firstAbsentFile(items: []const Value) []const u8 {
+    for (items) |item| {
+        const expected = symbol.parseExpected(getString(item, "hash").?) catch continue;
+        if (expected == .absent) return getString(item, "file").?;
+    }
+    return getString(items[0], "file").?;
 }
 
 fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
@@ -327,16 +339,14 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     var built: usize = 0;
     defer for (places[0..built]) |place| place.deinit(gpa);
     for (items, 0..) |item, i| {
-        places[i] = try repo.jail(gpa, io, policy.root, getString(item, "file").?);
+        const expected = try symbol.parseExpected(getString(item, "hash").?);
+        places[i] = try repo.jailTarget(gpa, io, policy.root, getString(item, "file").?, expected == .absent);
         built = i + 1;
         edits[i] = .{
             .file_abs = places[i].abs,
             .ref_text = getString(item, "symbol").?,
             .new_body = getString(item, "body").?,
-            .expected_hash = switch (try symbol.parseExpected(getString(item, "hash").?)) {
-                .present => |hash| hash,
-                .absent => return error.AbsentInBatch,
-            },
+            .expected_hash = expected,
         };
     }
 
@@ -352,7 +362,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     event.chars_emetgate = sent;
     event.chars_fullfile = event.trace.new_len;
     switch (result) {
-        .committed => |hashes| {
+        .committed => |committed| {
             event.outcome = .committed;
             event.edits = items.len;
             const views = try gpa.alloc(wire.BatchEdit, items.len);
@@ -361,7 +371,8 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 .file = getString(item, "file").?,
                 .symbol = getString(item, "symbol").?,
                 .old_hash = edits[i].expected_hash,
-                .new_hash = hashes[i],
+                .new_hash = committed[i].hash,
+                .evidence = committed[i].evidence,
             };
             try wire.writeBatchCommitted(w, views);
             return false;
