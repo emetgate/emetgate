@@ -60,6 +60,7 @@ test {
     _ = @import("tests/redteam_ledger.zig");
     _ = @import("tests/redteam_sandbox.zig");
     _ = @import("tests/redteam_link_tree.zig");
+    _ = @import("tests/redteam_git.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_crash.zig");
     _ = @import("tests/batch_crash_tool.zig");
@@ -70,6 +71,7 @@ test {
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
     _ = @import("tests/readtools.zig");
+    _ = @import("tests/git_tools.zig");
     _ = @import("tests/server.zig");
     _ = @import("tests/lockdown.zig");
     _ = @import("tests/symbol.zig");

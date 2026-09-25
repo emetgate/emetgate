@@ -4795,6 +4795,53 @@
       "kills": [
         "shadow paths outside <shadow root>\\<repo key>\\ are refused before anything is deleted"
       ]
+    },
+    {
+      "id": "GT1-fsmonitor-override-removed",
+      "file": "src/protocol/git_tools.zig",
+      "from": "    \"core.fsmonitor=false\",\n",
+      "to": "",
+      "kills": [
+        "redteam git: hostile pager, external diff, fsmonitor, textconv and filter never run"
+      ]
+    },
+    {
+      "id": "GT2-commit-id-check-removed",
+      "file": "src/protocol/git_tools.zig",
+      "from": "if (!isValidCommit(commit)) return error.InvalidCommit;",
+      "to": "",
+      "kills": [
+        "git show returns one commit and refuses a malformed commit id",
+        "redteam git: argument injection through path or commit is refused, not run",
+        "redteam git: a malformed commit id and an unknown subcommand never reach git"
+      ]
+    },
+    {
+      "id": "GT3-jail-bypassed-for-cwd",
+      "file": "src/protocol/git_tools.zig",
+      "from": ".cwd = .{ .path = place.root },",
+      "to": ".cwd = .{ .path = path orelse \".\" },",
+      "kills": [
+        "git refuses an unknown subcommand and a path outside the repo",
+        "redteam git: argument injection through path or commit is refused, not run"
+      ]
+    },
+    {
+      "id": "GT4-output-byte-limit-removed",
+      "file": "src/protocol/git_tools.zig",
+      "from": ".stdout_limit = .limited(max_git_output_bytes),",
+      "to": ".stdout_limit = .unlimited,",
+      "expect": "survived",
+      "note": "open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git stdout) exists in this suite yet, so this mutant is not caught; the line limit (GT5) is covered by a cheaper test"
+    },
+    {
+      "id": "GT5-output-line-limit-removed",
+      "file": "src/protocol/git_tools.zig",
+      "from": "if (kept.items.len < max_output_lines) try kept.append(gpa, line);",
+      "to": "try kept.append(gpa, line);",
+      "kills": [
+        "git diff caps output at a line count and marks it truncated"
+      ]
     }
   ]
 }
