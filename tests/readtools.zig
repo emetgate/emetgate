@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const server = @import("emetgate").server;
 const read_tools = @import("emetgate").read_tools;
 const mirror_mod = @import("emetgate").mirror;
+const tree_cache_mod = @import("emetgate").tree_cache;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -355,6 +356,99 @@ test "with --mirror, a changed symbol body is reported again in full with its ne
     var settled_body = try settled.payload();
     defer settled_body.deinit();
     try testing.expectEqualStrings("unchanged", settled_body.value.object.get("status").?.string);
+}
+
+test "with a tree cache, a symbol table is not reparsed for an unchanged file" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function add(a: number): number {\n  return a;\n}\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "a.ts", testing.allocator);
+    defer testing.allocator.free(file_abs);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var cache: tree_cache_mod.TreeCache = .init(testing.allocator);
+    defer cache.deinit();
+    const policy: server.Policy = .{ .root = root_abs, .tree_cache = &cache };
+
+    var first = try callToolServedPolicy(runtime, "emetgate_symbols", .{ .file = file_abs }, policy);
+    defer first.deinit();
+    try testing.expect(!first.is_error);
+    try testing.expectEqual(@as(usize, 1), cache.count());
+
+    var second = try callToolServedPolicy(runtime, "emetgate_skeleton", .{ .file = file_abs }, policy);
+    defer second.deinit();
+    try testing.expect(!second.is_error);
+    try testing.expectEqual(@as(usize, 1), cache.count());
+}
+
+test "with a tree cache, read_symbol after a committed emetgate_try reflects the change, not a stale cached tree" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function add(a: number): number {\n  return a;\n}\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "a.ts", testing.allocator);
+    defer testing.allocator.free(file_abs);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var cache: tree_cache_mod.TreeCache = .init(testing.allocator);
+    defer cache.deinit();
+    const policy: server.Policy = .{ .root = root_abs, .tree_cache = &cache, .test_command = "cmd /c exit 0" };
+
+    var warm = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer warm.deinit();
+    try testing.expect(!warm.is_error);
+    var warm_body = try warm.payload();
+    defer warm_body.deinit();
+    const hash = warm_body.value.object.get("hash").?.string;
+
+    var tried = try callToolServedPolicy(runtime, "emetgate_try", .{ .file = file_abs, .symbol = "add", .hash = hash, .body = "{ return a + 1; }" }, policy);
+    defer tried.deinit();
+    try testing.expect(!tried.is_error);
+
+    var after = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer after.deinit();
+    try testing.expect(!after.is_error);
+    try testing.expect(std.mem.indexOf(u8, after.text, "return a + 1") != null);
+}
+
+test "with a tree cache, read_symbol after a committed emetgate_try_batch reflects the change" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function add(a: number): number {\n  return a;\n}\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "a.ts", testing.allocator);
+    defer testing.allocator.free(file_abs);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var cache: tree_cache_mod.TreeCache = .init(testing.allocator);
+    defer cache.deinit();
+    const policy: server.Policy = .{ .root = root_abs, .tree_cache = &cache, .test_command = "cmd /c exit 0" };
+
+    var warm = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer warm.deinit();
+    var warm_body = try warm.payload();
+    defer warm_body.deinit();
+    const hash = warm_body.value.object.get("hash").?.string;
+
+    var tried = try callToolServedPolicy(runtime, "emetgate_try_batch", .{
+        .edits = &.{.{ .file = file_abs, .symbol = "add", .hash = hash, .body = "{ return a + 1; }" }},
+    }, policy);
+    defer tried.deinit();
+    try testing.expect(!tried.is_error);
+
+    var after = try callToolServedPolicy(runtime, "emetgate_read_symbol", .{ .file = file_abs, .symbol = "add" }, policy);
+    defer after.deinit();
+    try testing.expect(std.mem.indexOf(u8, after.text, "return a + 1") != null);
 }
 
 test "list returns only tracked files under the requested directory" {
