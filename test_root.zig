@@ -46,6 +46,7 @@ pub const receipt = src.receipt;
 pub const checker = src.checker;
 pub const runner = src.runner;
 pub const run_command = src.run_command;
+pub const doc_writer = src.doc_writer;
 pub const rules = src.rules;
 pub const scan = src.scan;
 pub const stdio = src.stdio;
@@ -136,6 +137,7 @@ test {
     _ = @import("tests/lang/conformance.zig");
     _ = @import("tests/lang/jsx_compat.zig");
     _ = @import("tests/lang/zig/compat.zig");
+    _ = @import("tests/doc_writer.zig");
     _ = @import("tests/git_fixture_test.zig");
     _ = @import("tests/test_runner_harness.zig");
     _ = @import("tests/suites.zig");
