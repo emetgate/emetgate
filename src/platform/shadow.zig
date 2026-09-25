@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const link_tree = @import("link_tree.zig");
+const shadow_root = @import("shadow_root.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -119,6 +120,7 @@ pub const Shadow = struct {
 
     pub const Options = struct {
         root_abs: []const u8,
+        base_abs: []const u8,
         shadow_abs: []const u8,
         files: []const []const u8,
         linked: []const []const u8 = &.{},
@@ -127,12 +129,13 @@ pub const Shadow = struct {
     pub fn prepare(io: std.Io, options: Options) !Shadow {
         for (options.files) |file| try validateRelative(file);
         for (options.linked) |link| try validateRelative(link);
-        try remove(io, options.root_abs, options.shadow_abs);
+        try remove(io, options.base_abs, options.shadow_abs);
 
         var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
         defer root.close(io);
         try Dir.cwd().createDirPath(io, options.shadow_abs);
-        try ensureNoLinks(options.root_abs, options.shadow_abs);
+        try ensureNoLinks(options.base_abs, options.shadow_abs);
+        try writeRootMarker(io, options.shadow_abs, options.root_abs);
         try grantLowIntegrityWrite(options.shadow_abs);
         var dir = try Dir.openDirAbsolute(io, options.shadow_abs, .{});
         errdefer dir.close(io);
@@ -189,33 +192,42 @@ pub const Shadow = struct {
     }
 };
 
-pub fn remove(io: std.Io, root_abs: []const u8, shadow_abs: []const u8) !void {
-    try ensureInsideWorkspace(root_abs, shadow_abs);
-    try ensureNoLinks(root_abs, shadow_abs);
+pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
+    try ensureInsideWorkspace(base_abs, shadow_abs);
+    try ensureNoLinks(base_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
 
-    var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const workspace = std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ root_abs, workspace_dir }) catch return;
+    const workspace = std.fs.path.dirname(shadow_abs) orelse return;
+    var marker_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const marker = std.fmt.bufPrint(&marker_buf, "{s}\\{s}", .{ workspace, shadow_root.marker_name }) catch return;
+    Dir.cwd().deleteFile(io, marker) catch {};
     Dir.cwd().deleteDir(io, workspace) catch {};
 }
 
-pub fn ensureInsideWorkspace(root_abs: []const u8, shadow_abs: []const u8) error{ShadowOutsideWorkspace}!void {
-    if (!std.mem.startsWith(u8, shadow_abs, root_abs)) return error.ShadowOutsideWorkspace;
-    const rest = shadow_abs[root_abs.len..];
+fn writeRootMarker(io: std.Io, shadow_abs: []const u8, root_abs: []const u8) !void {
+    const workspace = std.fs.path.dirname(shadow_abs) orelse return error.ShadowOutsideWorkspace;
+    var marker_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const marker = try std.fmt.bufPrint(&marker_buf, "{s}\\{s}", .{ workspace, shadow_root.marker_name });
+    try Dir.cwd().writeFile(io, .{ .sub_path = marker, .data = root_abs });
+}
+
+pub fn ensureInsideWorkspace(base_abs: []const u8, shadow_abs: []const u8) error{ShadowOutsideWorkspace}!void {
+    if (base_abs.len < 3 or !std.ascii.startsWithIgnoreCase(shadow_abs, base_abs)) return error.ShadowOutsideWorkspace;
+    const rest = shadow_abs[base_abs.len..];
     if (rest.len < 2 or !isSeparator(rest[0])) return error.ShadowOutsideWorkspace;
     const inside = rest[1..];
     validateRelative(inside) catch return error.ShadowOutsideWorkspace;
     var segments = std.mem.tokenizeAny(u8, inside, "/\\");
     const first = segments.next() orelse return error.ShadowOutsideWorkspace;
-    if (!std.mem.eql(u8, first, workspace_dir)) return error.ShadowOutsideWorkspace;
+    if (!shadow_root.isKey(first)) return error.ShadowOutsideWorkspace;
     if (segments.next() == null) return error.ShadowOutsideWorkspace;
 }
 
 const reserved_devices = [_][]const u8{
-    "CON",    "PRN",  "AUX",  "NUL",  "CONIN$", "CONOUT$",
-    "COM1",   "COM2", "COM3", "COM4", "COM5",   "COM6",
-    "COM7",   "COM8", "COM9", "LPT1", "LPT2",   "LPT3",
-    "LPT4",   "LPT5", "LPT6", "LPT7", "LPT8",   "LPT9",
+    "CON",  "PRN",  "AUX",  "NUL",  "CONIN$", "CONOUT$",
+    "COM1", "COM2", "COM3", "COM4", "COM5",   "COM6",
+    "COM7", "COM8", "COM9", "LPT1", "LPT2",   "LPT3",
+    "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",   "LPT9",
 };
 
 pub fn validateRelative(path: []const u8) error{UnsafePath}!void {
@@ -242,9 +254,9 @@ fn isReservedDevice(segment: []const u8) bool {
     return false;
 }
 
-fn ensureNoLinks(root_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceIsLink, AttributeCheckFailed, NameTooLong, InvalidWtf8 }!void {
+fn ensureNoLinks(base_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceIsLink, AttributeCheckFailed, NameTooLong, InvalidWtf8 }!void {
     if (builtin.os.tag != .windows) return;
-    var index = root_abs.len + 1;
+    var index = base_abs.len;
     while (index <= shadow_abs.len) : (index += 1) {
         if (index != shadow_abs.len and !isSeparator(shadow_abs[index])) continue;
         if (try isReparsePoint(shadow_abs[0..index])) return error.WorkspaceIsLink;
@@ -431,6 +443,7 @@ const testing = std.testing;
 const Project = struct {
     tmp: testing.TmpDir,
     root_abs: [:0]u8,
+    base_abs: []u8,
     shadow_buf: [std.fs.max_path_bytes]u8 = undefined,
 
     fn init() !Project {
@@ -447,21 +460,28 @@ const Project = struct {
             try tmp.dir.writeFile(testing.io, .{ .sub_path = file.path, .data = file.data });
         }
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "project", testing.allocator);
-        return .{ .tmp = tmp, .root_abs = root_abs };
+        errdefer testing.allocator.free(root_abs);
+        const top_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+        defer testing.allocator.free(top_abs);
+        const base_abs = try std.fmt.allocPrint(testing.allocator, "{s}\\shadows", .{top_abs});
+        return .{ .tmp = tmp, .root_abs = root_abs, .base_abs = base_abs };
     }
 
     fn deinit(self: *Project) void {
+        testing.allocator.free(self.base_abs);
         testing.allocator.free(self.root_abs);
         self.tmp.cleanup();
     }
 
     fn shadowPath(self: *Project) ![]const u8 {
-        return std.fmt.bufPrint(&self.shadow_buf, "{s}\\.emetgate\\shadow", .{self.root_abs});
+        const key = shadow_root.repoKey(self.root_abs);
+        return std.fmt.bufPrint(&self.shadow_buf, "{s}\\{s}\\shadow", .{ self.base_abs, &key });
     }
 
     fn options(self: *Project) !Shadow.Options {
         return .{
             .root_abs = self.root_abs,
+            .base_abs = self.base_abs,
             .shadow_abs = try self.shadowPath(),
             .files = &.{ "a.ts", "src/b.ts", "node_modules/pkg/index.js" },
             .linked = &.{ "node_modules", "vendor_missing" },
@@ -534,7 +554,7 @@ test "removing the shadow deletes the hardlink tree, never the files it shares" 
     const options = try project.options();
     var shadow = try Shadow.prepare(testing.io, options);
     shadow.close();
-    try remove(testing.io, options.root_abs, options.shadow_abs);
+    try remove(testing.io, options.base_abs, options.shadow_abs);
 
     const survivor = try project.read("node_modules/pkg/index.js");
     defer testing.allocator.free(survivor);
@@ -571,7 +591,7 @@ test "prepare fails instead of carrying on when a stale shadow cannot be removed
     var held_buf: [std.fs.max_path_bytes]u8 = undefined;
     const held = try FileLock.acquire(try std.fmt.bufPrint(&held_buf, "{s}\\held.ts", .{options.shadow_abs}));
 
-    const direct = remove(testing.io, options.root_abs, options.shadow_abs);
+    const direct = remove(testing.io, options.base_abs, options.shadow_abs);
     const second = Shadow.prepare(testing.io, options);
     held.release();
     if (second) |prepared| {
@@ -584,50 +604,56 @@ test "prepare fails instead of carrying on when a stale shadow cannot be removed
     }
 }
 
-test "shadow paths outside <root>\\.emetgate\\ are refused before anything is deleted" {
-    const root = "C:\\work\\project";
+test "shadow paths outside <shadow root>\\<repo key>\\ are refused before anything is deleted" {
+    const base = "C:\\shadows";
+    const key = "0123456789abcdef0123456789abcdef";
     const refused = [_][]const u8{
-        "C:\\work\\project",
-        "C:\\work\\project\\",
-        "C:\\work\\project\\src",
-        "C:\\work\\project\\.emetgate",
-        "C:\\work\\project\\.emetgate\\",
-        "C:\\work\\project\\.emetgatex\\shadow",
-        "C:\\work\\project\\.emetgate\\..\\src",
-        "C:\\work\\other\\.emetgate\\shadow",
-        "C:\\work\\projectX\\.emetgate\\shadow",
+        "C:\\shadows",
+        "C:\\shadows\\",
+        "C:\\shadows\\" ++ key,
+        "C:\\shadows\\" ++ key ++ "\\",
+        "C:\\shadows\\src\\shadow",
+        "C:\\shadows\\0123456789ABCDEF0123456789ABCDEF\\shadow",
+        "C:\\shadows\\0123456789abcdef0123456789abcde\\shadow",
+        "C:\\shadows\\" ++ key ++ "\\..\\..\\work",
+        "C:\\shadowsX\\" ++ key ++ "\\shadow",
+        "C:\\work\\project\\.emetgate\\shadow",
         "D:\\",
-        "C:\\work\\project\\.emetgate\\.",
-        "C:\\work\\project\\.emetgate\\ .",
-        "C:\\work\\project\\.emetgate\\x::$INDEX_ALLOCATION",
-        "C:\\work\\project\\.emetgate\\C:\\x",
-        "C:\\work\\project\\.emetgate\\shadow.",
+        "C:\\shadows\\" ++ key ++ "\\.",
+        "C:\\shadows\\" ++ key ++ "\\ .",
+        "C:\\shadows\\" ++ key ++ "\\x::$INDEX_ALLOCATION",
+        "C:\\shadows\\" ++ key ++ "\\C:\\x",
+        "C:\\shadows\\" ++ key ++ "\\shadow.",
     };
     for (refused) |candidate| {
         errdefer std.debug.print("accepted shadow path: {s}\n", .{candidate});
-        try testing.expectError(error.ShadowOutsideWorkspace, ensureInsideWorkspace(root, candidate));
+        try testing.expectError(error.ShadowOutsideWorkspace, ensureInsideWorkspace(base, candidate));
     }
-    try ensureInsideWorkspace(root, "C:\\work\\project\\.emetgate\\shadow");
-    try ensureInsideWorkspace(root, "C:\\work\\project/.emetgate/shadow/run-1");
+    try ensureInsideWorkspace(base, "C:\\shadows\\" ++ key ++ "\\shadow");
+    try ensureInsideWorkspace(base, "c:\\SHADOWS/" ++ key ++ "/shadow/run-1");
 }
 
-test "a .emetgate that is a junction is refused and the directory it points to is untouched" {
+test "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var project = try Project.init();
-    defer project.deinit();
+    for ([_]bool{ true, false }) |whole_root| {
+        var project = try Project.init();
+        defer project.deinit();
 
-    try project.tmp.dir.createDirPath(testing.io, "victim/shadow");
-    try project.tmp.dir.writeFile(testing.io, .{ .sub_path = "victim/shadow/precious.txt", .data = "keep me\n" });
-    const victim_abs = try project.tmp.dir.realPathFileAlloc(testing.io, "victim", testing.allocator);
-    defer testing.allocator.free(victim_abs);
-    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
-    try createJunction(testing.io, try joinWindows(&link_buf, project.root_abs, workspace_dir), victim_abs);
+        try project.tmp.dir.createDirPath(testing.io, "victim/shadow");
+        try project.tmp.dir.writeFile(testing.io, .{ .sub_path = "victim/shadow/precious.txt", .data = "keep me\n" });
+        const victim_abs = try project.tmp.dir.realPathFileAlloc(testing.io, "victim", testing.allocator);
+        defer testing.allocator.free(victim_abs);
+        const shadow_abs = try project.shadowPath();
+        const link = if (whole_root) project.base_abs else std.fs.path.dirname(shadow_abs).?;
+        if (!whole_root) try Dir.cwd().createDirPath(testing.io, project.base_abs);
+        try createJunction(testing.io, link, victim_abs);
 
-    try testing.expectError(error.WorkspaceIsLink, Shadow.prepare(testing.io, try project.options()));
-    try testing.expectError(error.WorkspaceIsLink, remove(testing.io, project.root_abs, try project.shadowPath()));
+        try testing.expectError(error.WorkspaceIsLink, Shadow.prepare(testing.io, try project.options()));
+        try testing.expectError(error.WorkspaceIsLink, remove(testing.io, project.base_abs, try project.shadowPath()));
 
-    try expectFileContent(project.tmp.dir, "victim/shadow/precious.txt", "keep me\n");
-    try testing.expectError(error.FileNotFound, project.tmp.dir.access(testing.io, "victim/shadow/a.ts", .{}));
+        try expectFileContent(project.tmp.dir, "victim/shadow/precious.txt", "keep me\n");
+        try testing.expectError(error.FileNotFound, project.tmp.dir.access(testing.io, "victim/shadow/a.ts", .{}));
+    }
 }
 
 test "writeFile refuses paths that leave the shadow or go through a junction" {

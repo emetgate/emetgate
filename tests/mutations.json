@@ -2979,8 +2979,8 @@
     {
       "id": "RC1-recover-swallows-shadow-removal-error",
       "file": "src/platform/disk.zig",
-      "from": "const removal = shadow.remove(io, root_abs, shadow_abs);",
-      "to": "const removal: anyerror!void = {}; shadow.remove(io, root_abs, shadow_abs) catch {};",
+      "from": "const removal = shadow.remove(io, location.base, location.shadow);",
+      "to": "const removal: anyerror!void = {}; shadow.remove(io, location.base, location.shadow) catch {};",
       "kills": [
         "purple recover: a shadow that cannot be removed exits 16 and says so after the summary"
       ]
@@ -2997,8 +2997,8 @@
     {
       "id": "RC3-recover-treats-missing-shadow-as-failure",
       "file": "src/platform/disk.zig",
-      "from": "const removal = shadow.remove(io, root_abs, shadow_abs);",
-      "to": "const removal = std.Io.Dir.cwd().deleteDir(io, shadow_abs);",
+      "from": "const removal = shadow.remove(io, location.base, location.shadow);",
+      "to": "const removal = std.Io.Dir.cwd().deleteDir(io, location.shadow);",
       "kills": [
         "purple recover: no shadow at all is a clean recover with exit 0"
       ]
@@ -3006,8 +3006,8 @@
     {
       "id": "RC4-prepare-swallows-stale-shadow-removal-error",
       "file": "src/platform/shadow.zig",
-      "from": "try remove(io, options.root_abs, options.shadow_abs);",
-      "to": "remove(io, options.root_abs, options.shadow_abs) catch {};",
+      "from": "try remove(io, options.base_abs, options.shadow_abs);",
+      "to": "remove(io, options.base_abs, options.shadow_abs) catch {};",
       "kills": [
         "prepare fails instead of carrying on when a stale shadow cannot be removed"
       ]
@@ -3079,7 +3079,7 @@
     {
       "id": "CMD3-command-cwd-is-the-real-repo",
       "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRules(gpa, io, root, shadow_abs, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "from": "if (try runCommandRules(gpa, io, root, location.shadow, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
       "to": "if (try runCommandRules(gpa, io, root, root, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
@@ -3326,8 +3326,8 @@
     {
       "id": "RM15-mcp-batch-forces-trust",
       "file": "src/protocol/handlers.zig",
-      "from": ".allow_repo_memory = policy.allow_repo_memory, .trace",
-      "to": ".allow_repo_memory = true, .trace",
+      "from": ".allow_repo_memory = policy.allow_repo_memory, .shadow_root",
+      "to": ".allow_repo_memory = true, .shadow_root",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]
@@ -3335,8 +3335,8 @@
     {
       "id": "RM16-mcp-batch-drops-the-flag",
       "file": "src/protocol/handlers.zig",
-      "from": ".allow_repo_memory = policy.allow_repo_memory, .trace",
-      "to": ".allow_repo_memory = false, .trace",
+      "from": ".allow_repo_memory = policy.allow_repo_memory, .shadow_root",
+      "to": ".allow_repo_memory = false, .shadow_root",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]

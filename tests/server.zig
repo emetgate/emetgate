@@ -78,6 +78,15 @@ test "serve policy comes only from the command line emetgate was started with" {
     try testing.expect(server.parsePolicy(&[_][]const u8{"--bogus"}) == null);
 }
 
+test "policy: --shadow-root is parsed once, never empty, and absent by default" {
+    try testing.expect(server.parsePolicy(&[_][]const u8{}).?.shadow_root == null);
+    const given = server.parsePolicy(&[_][]const u8{ "--test", "npm test", "--shadow-root", "D:\\shadows" }).?;
+    try testing.expectEqualStrings("D:\\shadows", given.shadow_root.?);
+    try testing.expect(server.parsePolicy(&[_][]const u8{"--shadow-root"}) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--shadow-root", "" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--shadow-root", "D:\\a", "--shadow-root", "D:\\b" }) == null);
+}
+
 test "policy: --typecheck is parsed once, never empty, and absent by default" {
     try testing.expect(server.parsePolicy(&[_][]const u8{}).?.typecheck_command == null);
 

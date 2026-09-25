@@ -4,6 +4,7 @@ const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const commit_record = @import("commit_record.zig");
 const git_repo = @import("repo.zig");
+const shadow_root = @import("shadow_root.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -642,11 +643,11 @@ pub fn recover(gpa: Allocator, io: std.Io, root_abs: []const u8) !RecoverReport 
 
 pub const recover_failed_exit_code: u8 = 16;
 
-pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, err_out: *std.Io.Writer) !u8 {
+pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, shadow_root_dir: ?[]const u8, err_out: *std.Io.Writer) !u8 {
     const report = try recover(gpa, io, root_abs);
-    const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ root_abs, shadow.workspace_dir });
-    defer gpa.free(shadow_abs);
-    const removal = shadow.remove(io, root_abs, shadow_abs);
+    const location = try shadow_root.locate(gpa, root_abs, shadow_root_dir);
+    defer location.deinit(gpa);
+    const removal = shadow.remove(io, location.base, location.shadow);
 
     try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}, not indexed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed, report.not_indexed });
     if (removal) |_| {} else |err| {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const shadow_root = @import("emetgate").shadow_root;
 const git_fixture = @import("git_fixture.zig");
 const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
@@ -407,8 +408,9 @@ test "a failure after the commit began is reported as commit phase, never disk u
     const file = try repo.under("src\\math.ts");
     defer testing.allocator.free(file);
 
-    const shadow_abs = try repo.under(".emetgate\\shadow");
-    defer testing.allocator.free(shadow_abs);
+    const location = try shadow_root.locate(testing.allocator, repo.root_abs, null);
+    defer location.deinit(testing.allocator);
+    const shadow_abs = location.shadow;
     const racing_cmd = "echo.> started & (for /l %i in (1,1,3000) do @if exist raced (exit 0) else ping -n 1 127.0.0.1 >nul) & exit 1";
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);

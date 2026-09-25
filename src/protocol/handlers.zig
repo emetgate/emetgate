@@ -11,6 +11,7 @@ const read_tools = @import("read_tools.zig");
 const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
+const shadow_root = @import("../platform/shadow_root.zig");
 const repo = @import("../platform/repo.zig");
 const rules = @import("../platform/rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -384,9 +385,13 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
+        .shadow_root = policy.shadow_root,
         .trace = &event.trace,
     });
     defer result.deinit(gpa);
+    const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
+    defer gpa.free(note_root);
+    const note = wire.shadowNote(note_root, event.trace);
     event.chars_emetgate = sym.len + hash_hex.len + body.len;
     event.chars_fullfile = event.trace.new_len;
     event.chars_sr = if (event.trace.old_body_len) |old| old + body.len else null;
@@ -395,19 +400,19 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             event.outcome = .committed;
             event.edits = 1;
             event.hash = new_hash;
-            try wire.writeCommitted(w, sym, expected, new_hash);
+            try wire.writeCommitted(w, sym, expected, new_hash, note);
             return false;
         },
         .rejected => |report| {
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
-            try wire.writeRejected(gpa, w, test_command, report);
+            try wire.writeRejected(gpa, w, test_command, report, note);
             return true;
         },
         .typecheck_failed => |report| {
             event.outcome = .rejected;
             event.reason = wire.typecheckReason(report);
-            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report, note);
             return true;
         },
         .rule_violation => |report| {
@@ -419,7 +424,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .rule_check_failed => |crashed| {
             event.outcome = .rejected;
             event.reason = wire.rule_check_crashed_reason;
-            try wire.writeRuleCheckFailed(w, crashed);
+            try wire.writeRuleCheckFailed(w, crashed, note);
             return true;
         },
     }
@@ -485,8 +490,11 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer gpa.free(resolved);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, edits[0].file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
-    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .trace = &event.trace });
+    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace });
     defer result.deinit(gpa);
+    const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
+    defer gpa.free(note_root);
+    const note = wire.shadowNote(note_root, event.trace);
 
     var sent: usize = 0;
     for (items) |item| sent += getString(item, "symbol").?.len + getString(item, "hash").?.len + getString(item, "body").?.len;
@@ -505,19 +513,19 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 .new_hash = committed[i].hash,
                 .evidence = committed[i].evidence,
             };
-            try wire.writeBatchCommitted(w, views);
+            try wire.writeBatchCommitted(w, views, note);
             return false;
         },
         .rejected => |report| {
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
-            try wire.writeRejected(gpa, w, resolved, report);
+            try wire.writeRejected(gpa, w, resolved, report, note);
             return true;
         },
         .typecheck_failed => |report| {
             event.outcome = .rejected;
             event.reason = wire.typecheckReason(report);
-            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report, note);
             return true;
         },
         .rule_violation => |report| {
@@ -529,7 +537,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         .rule_check_failed => |crashed| {
             event.outcome = .rejected;
             event.reason = wire.rule_check_crashed_reason;
-            try wire.writeRuleCheckFailed(w, crashed);
+            try wire.writeRuleCheckFailed(w, crashed, note);
             return true;
         },
     }

@@ -4,6 +4,7 @@ const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
 const runner = @import("emetgate").runner;
 const shadow = @import("emetgate").shadow;
+const shadow_root = @import("emetgate").shadow_root;
 const sandbox = @import("emetgate").sandbox;
 const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
@@ -253,4 +254,41 @@ test "redteam sandbox: an unavailable sandbox rejects the proposal and leaves th
         .test_command = command,
     }));
     try expectOnlyTargetChanged(&victim, before, math_src);
+}
+
+test "redteam sandbox: the shadow lives under the operator's shadow root, outside the repository, flags a dot segment and is gone afterwards" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var victim = try Victim.init();
+    defer victim.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file = try std.fmt.allocPrint(gpa, "{s}\\src\\math.ts", .{victim.root_abs});
+    defer gpa.free(file);
+
+    for ([_]struct { dir: []const u8, dotted: bool }{ .{ .dir = "shadows", .dotted = false }, .{ .dir = ".dotted\\shadows", .dotted = true } }) |case| {
+        const base = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ victim.top_abs, case.dir });
+        defer gpa.free(base);
+        const location = try shadow_root.locate(gpa, victim.root_abs, base);
+        defer location.deinit(gpa);
+
+        var trace: runner.Trace = .{};
+        const result = try runner.tryMutate(gpa, testing.io, runtime, .{
+            .file_abs = file,
+            .ref_text = "add",
+            .expected_hash = .{ .present = try hashOfAdd(runtime, file) },
+            .new_body = "{\n  return a - b;\n}",
+            .test_command = "cd & exit 1",
+            .shadow_root = base,
+            .trace = &trace,
+        });
+        defer result.deinit(gpa);
+        try testing.expect(result == .rejected);
+        errdefer std.debug.print("stdout: {s}\n", .{result.rejected.stdout});
+        try testing.expect(std.ascii.indexOfIgnoreCase(result.rejected.stdout, location.shadow) != null);
+        try testing.expect(std.ascii.indexOfIgnoreCase(location.shadow, victim.root_abs) == null);
+        try testing.expectEqual(location.dotted(), trace.shadow_dotted);
+        if (case.dotted) try testing.expect(trace.shadow_dotted);
+        try testing.expectEqual(@as(usize, 1), trace.linked_files);
+        try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, location.workspace, .{}));
+    }
 }
