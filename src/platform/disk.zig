@@ -1237,9 +1237,9 @@ const ExternalWriter = struct {
         const self: *ExternalWriter = @ptrCast(@alignCast(context));
         self.seen += 1;
         if (self.seen != self.at) return false;
-        if (self.fixture.openRaw(win.generic_write, win.file_share_read | win.file_share_write | win.file_share_delete)) |handle| {
-            windows.CloseHandle(handle);
-        } else |_| self.refused = true;
+        self.fixture.tmp.dir.writeFile(testing.io, .{ .sub_path = "target.ts", .data = external_save }) catch {
+            self.refused = true;
+        };
         return false;
     }
 };

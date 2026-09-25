@@ -11,6 +11,7 @@ const testing = std.testing;
 const math = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
 const user = "import { add } from './math';\nexport function total(): number {\n  return add(1, 2);\n}\n";
 const spare = "export function unused(): number {\n  return 7;\n}\n";
+const local = "function helper(): number {\n  return 1;\n}\nexport function run(): number {\n  return helper();\n}\n";
 
 const Repo = struct {
     tmp: testing.TmpDir,
@@ -25,6 +26,7 @@ const Repo = struct {
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.ts", .data = math });
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/user.ts", .data = user });
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/spare.ts", .data = spare });
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/local.ts", .data = local });
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "outside/x.ts", .data = spare });
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
@@ -151,6 +153,21 @@ test "redteam batch delete: a symbol that another tracked file calls is refused 
     const on_disk = try repo.tmp.dir.readFileAlloc(testing.io, "repo/src/math.ts", testing.allocator, .unlimited);
     defer testing.allocator.free(on_disk);
     try testing.expectEqualStrings(math, on_disk);
+}
+
+test "redteam batch delete: a file-local symbol that its own file still calls is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const file = try repo.path("src\\local.ts");
+    defer testing.allocator.free(file);
+    const hash = try symbolHash(local, "helper");
+    const response = try call(&repo, &.{.{ .file = file, .symbol = "helper", .hash = &hash }});
+    defer testing.allocator.free(response);
+    try expectRefused(response, "SymbolReferenced");
+    const on_disk = try repo.tmp.dir.readFileAlloc(testing.io, "repo/src/local.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(on_disk);
+    try testing.expectEqualStrings(local, on_disk);
 }
 
 test "redteam batch delete: deleting a file outside the served repository is refused" {
