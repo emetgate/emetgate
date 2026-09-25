@@ -150,7 +150,7 @@ test "read_file with raw skips the JSON key tree" {
 test "read_file with a line range returns just that range and its hash" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "README.md", .line_start = 1, .line_end = 1 });
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "LICENSE", .line_start = 1, .line_end = 1 });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -205,8 +205,8 @@ test "skeleton refuses a file of no registered language instead of echoing it; r
     defer runtime.destroy() catch @panic("live snapshots");
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "NOTES.md", .data = "SECRET_LINE_77\n" });
-    const path = try tmp.dir.realPathFileAlloc(testing.io, "NOTES.md", testing.allocator);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "NOTES.txt", .data = "SECRET_LINE_77\n" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "NOTES.txt", testing.allocator);
     defer testing.allocator.free(path);
 
     for ([_][]const u8{ "emetgate_skeleton", "emetgate_symbols" }) |tool| {
@@ -237,11 +237,11 @@ test "read_file refuses a binary file" {
 test "with --mirror, read_file reports unchanged on a repeat and full content after force or a change" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.md", .data = "hello\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.txt", .data = "hello\n" });
     const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root_abs);
     try commitAll(root_abs);
-    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "notes.md", testing.allocator);
+    const file_abs = try tmp.dir.realPathFileAlloc(testing.io, "notes.txt", testing.allocator);
     defer testing.allocator.free(file_abs);
 
     const runtime = try Runtime.create(testing.allocator);
@@ -265,7 +265,7 @@ test "with --mirror, read_file reports unchanged on a repeat and full content af
     defer forced.deinit();
     try testing.expect(std.mem.indexOf(u8, forced.text, "hello") != null);
 
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.md", .data = "goodbye\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.txt", .data = "goodbye\n" });
     var changed = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = file_abs }, policy);
     defer changed.deinit();
     try testing.expect(std.mem.indexOf(u8, changed.text, "goodbye") != null);
