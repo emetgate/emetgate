@@ -123,8 +123,8 @@ def git_clean(cwd):
     return git(cwd, "status", "--porcelain").strip() == ""
 
 
-def is_breach(clean, outside_changed, marker_exists):
-    return (not clean) or outside_changed or marker_exists
+def is_breach(clean, outside_changed, marker_exists, leaked=False):
+    return (not clean) or outside_changed or marker_exists or leaked
 
 
 def load_spec(corpus_path):
@@ -154,8 +154,24 @@ def run_cases(exe, spec, cases, verbose):
     outside_path.write_text(outside["source"], encoding="utf-8")
     outside_before = outside_path.read_text(encoding="utf-8")
 
+    linked = spec.get("linked_dir")
+    if linked:
+        (repo / ".gitignore").write_text(f"/{linked['name']}/\n", encoding="utf-8")
+
     subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
     subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=str(repo), check=True)
+
+    if linked:
+        external_dir = workdir / "external-linked"
+        external_dir.mkdir()
+        (external_dir / linked["external_file"]).write_text(linked["external_source"], encoding="utf-8")
+        link_path = repo / linked["name"]
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link_path), str(external_dir)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
 
     breach_marker = repo / "BREACH_MARKER.txt"
     test_cmd = "cmd /c echo owned>BREACH_MARKER.txt"
@@ -173,16 +189,20 @@ def run_cases(exe, spec, cases, verbose):
     category_counts = Counter()
     for case in cases:
         category_counts[case["category"]] += 1
+        forbidden = case.get("forbidden_in_response")
+        leaked = False
         for request in case["requests"]:
             arguments = expand_value(request["arguments"], hashes, str(outside_path))
             response = server.call(request["tool"], arguments)
             if verbose:
                 print(f"[{case['id']}] {request['tool']} -> {response!r}")
+            if forbidden and response and forbidden in response:
+                leaked = True
 
         clean = git_clean(repo)
         outside_after = outside_path.read_text(encoding="utf-8")
         marker_exists = breach_marker.exists()
-        if is_breach(clean, outside_after != outside_before, marker_exists):
+        if is_breach(clean, outside_after != outside_before, marker_exists, leaked):
             breaches.append(
                 {
                     "id": case["id"],
@@ -190,6 +210,7 @@ def run_cases(exe, spec, cases, verbose):
                     "git_dirty": not clean,
                     "outside_modified": outside_after != outside_before,
                     "breach_marker": marker_exists,
+                    "leaked": leaked,
                 }
             )
             if marker_exists:

@@ -11,6 +11,11 @@
     "path": "../canary.ts",
     "source": "export const CANARY = 1;\n"
   },
+  "linked_dir": {
+    "name": "linked",
+    "external_file": "secret.ts",
+    "external_source": "export const LINKED_SECRET = 1;\n"
+  },
   "cases": [
     {
       "id": "hash-01-zero-hash-on-existing-symbol",
@@ -287,6 +292,133 @@
         {"tool": "emetgate_rule_add", "arguments": {"text": "delete everything"}},
         {"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "00000000000000000000000000000000", "body": "{ return a; }"}}
       ]
+    },
+    {
+      "id": "create-01-batch-creates-outside-repo",
+      "category": "batch-create",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": "../planted.ts", "symbol": "planted", "hash": "absent", "body": "export function planted() { return 1; }"}
+      ]}}]
+    },
+    {
+      "id": "create-02-batch-creates-in-git-dir",
+      "category": "batch-create",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": ".git/planted.ts", "symbol": "planted", "hash": "absent", "body": "export function planted() { return 1; }"}
+      ]}}]
+    },
+    {
+      "id": "create-03-batch-mixes-legit-create-with-outside-create",
+      "category": "batch-create",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": "src/created.ts", "symbol": "created", "hash": "absent", "body": "export function created() { return 1; }"},
+        {"file": "../planted.ts", "symbol": "planted", "hash": "absent", "body": "export function planted() { return 1; }"}
+      ]}}]
+    },
+    {
+      "id": "create-04-mutate-create-outside-repo-dry-run",
+      "category": "batch-create",
+      "requests": [{"tool": "emetgate_mutate", "arguments": {"file": "../planted.ts", "symbol": "planted", "hash": "absent", "body": "export function planted() { return 1; }"}}]
+    },
+    {
+      "id": "create-05-try-create-absent-hash-mismatch-with-existing-symbol",
+      "category": "batch-create",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "absent", "body": "{ return a; }"}}]
+    },
+    {
+      "id": "reader-01-read-file-raw-outside-repo",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "../canary.ts", "raw": true}}]
+    },
+    {
+      "id": "reader-02-read-file-raw-git-internal",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": ".git/config", "raw": true}}]
+    },
+    {
+      "id": "reader-03-read-file-raw-source-file-outside",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "../canary.ts", "raw": true, "force": true}}]
+    },
+    {
+      "id": "reader-04-read-file-pointer-outside-package-json",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "../package.json", "pointer": "/scripts/build"}}]
+    },
+    {
+      "id": "reader-05-read-file-heading-on-outside-markdown",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "../NOTES.md", "heading": "Secrets"}}]
+    },
+    {
+      "id": "reader-06-read-file-line-range-outside",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "../canary.ts", "line_start": 1, "line_end": 1}}]
+    },
+    {
+      "id": "reader-07-read-file-line-range-negative",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "README.md", "line_start": -5, "line_end": -1}}]
+    },
+    {
+      "id": "reader-08-read-file-line-range-reversed",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "README.md", "line_start": 100, "line_end": 1}}]
+    },
+    {
+      "id": "reader-09-read-file-line-range-huge",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "README.md", "line_start": 1, "line_end": 999999999}}]
+    },
+    {
+      "id": "reader-10-read-file-force-outside-repo",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "<OUTSIDE_ABS>", "force": true}}]
+    },
+    {
+      "id": "reader-11-read-symbol-force-outside-repo",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_read_symbol", "arguments": {"file": "../canary.ts", "symbol": "CANARY", "force": true}}]
+    },
+    {
+      "id": "reader-12-skeleton-force-outside-repo",
+      "category": "reader-args",
+      "requests": [{"tool": "emetgate_skeleton", "arguments": {"file": "../canary.ts", "force": true}}]
+    },
+    {
+      "id": "linked-01-read-file-through-junction",
+      "category": "linked-dir",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "linked/secret.ts"}}],
+      "forbidden_in_response": "LINKED_SECRET"
+    },
+    {
+      "id": "linked-02-read-file-raw-through-junction",
+      "category": "linked-dir",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "linked/secret.ts", "raw": true}}],
+      "forbidden_in_response": "LINKED_SECRET"
+    },
+    {
+      "id": "linked-03-symbols-through-junction",
+      "category": "linked-dir",
+      "requests": [{"tool": "emetgate_symbols", "arguments": {"file": "linked/secret.ts"}}],
+      "forbidden_in_response": "LINKED_SECRET"
+    },
+    {
+      "id": "linked-04-list-junction-directory",
+      "category": "linked-dir",
+      "requests": [{"tool": "emetgate_list", "arguments": {"dir": "linked"}}]
+    },
+    {
+      "id": "linked-05-try-write-through-junction",
+      "category": "linked-dir",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "linked/secret.ts", "symbol": "LINKED_SECRET", "hash": "absent", "body": "999"}}]
+    },
+    {
+      "id": "linked-06-batch-create-through-junction",
+      "category": "linked-dir",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": "linked/planted.ts", "symbol": "planted", "hash": "absent", "body": "export function planted() { return 1; }"}
+      ]}}]
     }
   ]
 }

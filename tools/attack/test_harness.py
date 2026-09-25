@@ -45,6 +45,8 @@ def main():
         mutant_ignore_breach_marker(True, False, True) is False,
         "the breach-marker-skipping mutant misses a sandbox escape",
     )
+    ok &= expect(is_breach(True, False, False, leaked=True) is True, "a leaked secret alone is a breach")
+    ok &= expect(is_breach(True, False, False, leaked=False) is False, "no leak and nothing else is not a breach")
 
     if not ok:
         print("test_harness: FAILED")
