@@ -6,3 +6,4 @@ docs/
 tests/bench/master/node_modules/
 tests/bench/work/
 tests/bench/work2/
+__pycache__/
