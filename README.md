@@ -581,21 +581,27 @@ Findings against the gate, oldest first.
 Every night, before a finding reaches this list by hand, an automated attacker tries to break the
 gate from the same MCP surface a model uses: write outside the served repository, escape the test
 sandbox, override the test/typecheck command or the repo-memory policy from a tool argument, read
-or write `.git`/`.emetgate` internals, and feed the `q:` query engine adversarial patterns. A
-success is never taken on the model's word: after each attempt the harness checks `git status` in
-the served repository, the content of a canary file kept outside it, and a marker the sandboxed
-test command would leave behind if it ran in the real tree. Only an observed change counts.
+or write `.git`/`.emetgate` internals, create a file through a batch edit outside the repo or
+inside `.git`, reach outside the repo through a junction pointed at an external directory, abuse
+the reader's `raw`, `pointer`, `heading`, `line_start`/`line_end` and `force` arguments, and feed
+the `q:` query engine adversarial patterns. A success is never taken on the model's word: after
+each attempt the harness checks `git status` in the served repository, the content of a canary
+file kept outside it and one behind a junction, a marker the sandboxed test command would leave
+behind if it ran in the real tree, and (for the junction cases) that the secret content never
+appears in a tool's response. Only an observed change or leak counts.
 
 Two modes, in `tools/attack/`:
 
 - **Script mode (default, free, runs every night).** `tools/attack/run.py` starts a temporary git
   repository, launches `emetgate mcp --test <a command that would leave a marker file if it
-  escaped the sandbox>`, and replays `tests/attack/corpus.json` over stdio: 50 attempts across
+  escaped the sandbox>`, and replays `tests/attack/corpus.json` over stdio: 73 attempts across
   stale/forged/absent hashes, body escapes, `test_cmd`/`typecheck_cmd`/`allow_repo_config`/
   `allow_repo_memory` injection through tool arguments, path traversal and absolute paths (plain
-  files and the unadvertised-but-callable `emetgate_try_batch`), `.git`/`.emetgate` internal
-  paths, adversarial `q:` queries, oversized bodies and symbol names, and mixed multi-step
-  attempts. Run it with `python tools/attack/run.py` after `zig build`.
+  files and `emetgate_try_batch`), `.git`/`.emetgate` internal paths, batch creation (hash
+  `absent`) outside the repo and inside `.git`, the reader's new arguments taken outside the repo
+  or onto internal paths, a `linked/` junction pointed at an external directory, adversarial `q:`
+  queries, oversized bodies and symbol names, and mixed multi-step attempts. Run it with
+  `python tools/attack/run.py` after `zig build`.
 - **LLM mode (opt-in, off by default).** `tools/attack/llm_mode.py` runs the identical harness
   against attempts a model writes instead of the fixed corpus, under `emetgate lockdown` with a
   turn budget. Without `ANTHROPIC_API_KEY` set (and without `--fixture`, used only to test the
@@ -612,8 +618,17 @@ runs on a schedule and never on a pull request.
 The harness's own guard is covered too: `tools/attack/test_harness.py` checks that dropping any one
 of the three observations (`git status`, the canary file, the sandbox marker) would hide a real
 breach, and a manual check confirms the harness end to end — with `cas.propose`'s hash comparison
-replaced by `if (false) return error.HashMismatch;`, the same 50-attempt corpus reports 5 breaches
-(the stale/forged-hash and mixed cases) instead of 0, and exits 1.
+replaced by `if (false) return error.HashMismatch;`, the same 73-attempt corpus reports 5 breaches
+(the stale/forged-hash, mixed and outside-repo batch-create cases) instead of 0, and exits 1.
+
+The MCP tool descriptions themselves are scanned too: `tools/redteam/scan_tools.py` runs
+`snyk-agent-scan inspect --dangerously-run-mcp-servers --json` against a config generated for the
+built `emetgate.exe` (`inspect` only lists what a server advertises; it makes no network call and
+needs no account, unlike `scan`'s hosted verification, which this repository does not run) and
+checks each tool and argument description for injection-style phrasing ("ignore previous
+instructions", "send this data to", a bare URL), zero-width or other invisible formatting
+characters, and oversized descriptions. Run it with `python tools/redteam/scan_tools.py` after
+`zig build`; it currently reports none of the ten served tools with a finding.
 
 ## Limits
 
