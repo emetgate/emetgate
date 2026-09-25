@@ -131,6 +131,52 @@ test "read_file refuses malformed JSON instead of serving a partial key tree" {
     try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "InvalidJson");
 }
 
+test "read_file returns a Markdown heading tree by default, and one section with heading given" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var tree_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md" });
+    defer tree_reply.deinit();
+    try testing.expect(!tree_reply.is_error);
+    var tree_body = try tree_reply.payload();
+    defer tree_body.deinit();
+    const headings = tree_body.value.object.get("headings").?.array.items;
+    var found_setup = false;
+    for (headings) |h| {
+        if (std.mem.eql(u8, h.object.get("heading").?.string, "Setup")) {
+            try testing.expectEqual(@as(i64, 2), h.object.get("level").?.integer);
+            found_setup = true;
+        }
+    }
+    try testing.expect(found_setup);
+
+    var section_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .heading = "Setup" });
+    defer section_reply.deinit();
+    try testing.expect(!section_reply.is_error);
+    var section_body = try section_reply.payload();
+    defer section_body.deinit();
+    const section = section_body.value.object.get("section").?.string;
+    try testing.expect(std.mem.indexOf(u8, section, "## Setup") != null);
+    try testing.expect(std.mem.indexOf(u8, section, "### Install") != null);
+    try testing.expect(std.mem.indexOf(u8, section, "## Other") == null);
+}
+
+test "read_file on an unknown Markdown heading is a tool error" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .heading = "Nope" }, "HeadingNotFound");
+}
+
+test "read_file with raw skips the Markdown heading tree" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .raw = true });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"headings\"") == null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "# Title") != null);
+}
+
 test "read_file on an unknown JSON pointer is a tool error" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
