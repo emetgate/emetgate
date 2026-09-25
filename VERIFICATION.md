@@ -6,22 +6,23 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **777**
-- Mutations declared in `tests/mutations.json`: **472**
-  - killed: **455**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **778**
+- Mutations declared in `tests/mutations.json`: **467**
+  - killed: **449**
   - equivalent: **5**
   - defense in depth: **3**
-  - open: **2**
+  - open: **3**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-- Red-team suites: **5** files, **44** tests total
+- Red-team suites: **6** files, **46** tests total
   - `tests/redteam_batch_create.zig`: 6
+  - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
-  - `tests/redteam_sandbox.zig`: 5
-- Security findings recorded in README's Security History: **6**
+  - `tests/redteam_sandbox.zig`: 4
+- Security findings recorded in README's Security History: **5**
 
 ## Reproducing this
 
@@ -157,7 +158,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-55 mutation(s).
+52 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -194,8 +195,8 @@ python tools/verification_page.py --check
 | `CR4-crash-passes` | `src/platform/sandbox.zig` | `.crashed, .timed_out, .output_limit => false,` -> `.crashed => true,             .timed_out, .output_limit => fals...` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR9-batch-swallows-test-crash` | `src/platform/batch.zig` | `if (!report.passed()) return .{ .rejected = report };` -> `if (!report.passed() and report.outcome != .crashed) return .{ ...` | crash: a test command that crashes rejects a whole batch as test_crashed and le... | killed |
 | `CR10-typecheck-stage-swallows-crash` | `src/platform/runner.zig` | `if (!checked.passed()) return .{ .typecheck = checked };` -> `if (!checked.passed() and checked.outcome != .crashed) return ....` | crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk un...; crash... | killed |
-| `RC4-prepare-swallows-stale-shadow-removal-error` | `src/platform/shadow.zig` | `try remove(io, options.base_abs, options.shadow_abs);` -> `remove(io, options.base_abs, options.shadow_abs) catch {};` | prepare fails instead of carrying on when a stale shadow cannot be removed | killed |
-| `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRules(gpa, io, root, location.shadow, targets...` -> `if (try runCommandRules(gpa, io, root, root, targets, options.l...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
+| `RC4-prepare-swallows-stale-shadow-removal-error` | `src/platform/shadow.zig` | `try remove(io, options.root_abs, options.shadow_abs);` -> `remove(io, options.root_abs, options.shadow_abs) catch {};` | prepare fails instead of carrying on when a stale shadow cannot be removed | killed |
+| `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRules(gpa, io, root, shadow_abs, targets, opt...` -> `if (try runCommandRules(gpa, io, root, root, targets, options.l...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
 | `CMD5-ntstatus-floor-broken` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | cmd rule: a crashing command is not a verdict, it is rule_check_crashed | killed |
 | `CMD7-spawned-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);` -> `` | cmd rule: a sandbox that cannot be built refuses the command instead of running...; redte... | killed |
 | `RM8-runner-forces-trust` | `src/platform/runner.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, true)) \|gated\|` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
@@ -213,9 +214,6 @@ python tools/verification_page.py --check
 | `TB1-try-batch-prepares-without-batch` | `src/platform/batch.zig` | `try disk.prepare(gpa, io, file_abs, source, base, journal_dir, ...` -> `try disk.prepare(gpa, io, file_abs, source, base, journal_dir, ...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
 | `TB2-try-batch-commits-without-record` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, null, options.commit...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
 | `TB3-try-batch-drops-commit-step` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, &batch, null);` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
-| `LT1-linked-dir-junctioned-again` | `src/platform/shadow.zig` | `try link_tree.build(io, target, link_path, &stats);` -> `_ = &stats; try createJunction(io, link_path, target);` | prepare copies tracked files, rebuilds heavy directories as hardlink trees and ... | killed |
-| `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
-| `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -233,9 +231,9 @@ python tools/verification_page.py --check
 | `NF7-disk-create-overwrites` | `src/platform/disk.zig` | `replacement.renameTo(gpa, path_abs) catch \|err\| switch (err) ...` -> `replacement.renameReplacing(gpa, path_abs) catch \|err\| switch...` | create never overwrites an existing file and cleans up its temp | killed |
 | `NF13-index-failure-silent` | `src/platform/repo.zig` | `return error.WrittenButNotIndexed; }  pub fn addAllToIndex` -> `}  pub fn addAllToIndex` | new file: when git add fails the file stays on disk with the written body and t... | killed |
 | `NF14-mcp-create-not-jailed-new` | `src/platform/repo.zig` | `error.FileNotFound => if (may_create) jailNew(gpa, io, root, pa...` -> `error.FileNotFound => if (may_create and false) jailNew(gpa, io...` | purple: hash absent on a missing file creates it through emetgate_try, and emet... | killed |
-| `RC1-recover-swallows-shadow-removal-error` | `src/platform/disk.zig` | `const removal = shadow.remove(io, location.base, location.shado...` -> `const removal: anyerror!void = {}; shadow.remove(io, location.b...` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
+| `RC1-recover-swallows-shadow-removal-error` | `src/platform/disk.zig` | `const removal = shadow.remove(io, root_abs, shadow_abs);` -> `const removal: anyerror!void = {}; shadow.remove(io, root_abs, ...` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
 | `RC2-recover-reports-shadow-error-but-exits-0` | `src/platform/disk.zig` | `return recover_failed_exit_code;` -> `return 0;` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
-| `RC3-recover-treats-missing-shadow-as-failure` | `src/platform/disk.zig` | `const removal = shadow.remove(io, location.base, location.shado...` -> `const removal = std.Io.Dir.cwd().deleteDir(io, location.shadow);` | purple recover: no shadow at all is a clean recover with exit 0 | killed |
+| `RC3-recover-treats-missing-shadow-as-failure` | `src/platform/disk.zig` | `const removal = shadow.remove(io, root_abs, shadow_abs);` -> `const removal = std.Io.Dir.cwd().deleteDir(io, shadow_abs);` | purple recover: no shadow at all is a clean recover with exit 0 | killed |
 | `F2-internal-path-checked-only-after-resolving` | `src/platform/repo.zig` | `try refuseInternalAsWritten(gpa, io, served, path);` -> `` | read tools refuse .git internals in a git worktree, where .git is a file | killed |
 | `BC1-batch-commit-record-not-written` | `src/platform/disk.zig` | `if (batch) \|b\| commit_record.write(b.gpa, b.io, b.journal_dir...` -> `if (@as(?*const Batch, null)) \|b\| commit_record.write(b.gpa, ...` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
 | `BC2-recover-roll-forward-skipped` | `src/platform/disk.zig` | `if (committed) {         const new_hash` -> `if (false) {         const new_hash` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
@@ -251,7 +249,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-97 mutation(s).
+96 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -351,7 +349,6 @@ python tools/verification_page.py --check
 | `QD6-pattern-depth-never-grows` | `src/engine/query.zig` | `deepest = @max(deepest, depth);` -> `deepest = @max(deepest, 1);` | q: a tree deeper than the depth product allows for the query fails before the c...; q: th... | killed |
 | `QD7-depth-detail-misnamed` | `src/platform/rules.zig` | `error.QueryDepthExceeded => "query_depth_exceeded",` -> `error.QueryDepthExceeded => "query_budget_exceeded",` | scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded; scan tool: a mod... | killed |
 | `QD8-depth-refusal-escapes-the-gate` | `src/platform/rules.zig` | `error.CallBudgetExceeded, error.QueryDepthExceeded => \|e\| ret...` -> `error.CallBudgetExceeded => \|e\| return failedGate(` | scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded; scan tool: a mod... | killed |
-| `SR3-model-picks-the-shadow-root` | `src/protocol/policy.zig` | `or tool_result.getField(a, "shadow_root") != null` -> `` | purple C7: a shadow root supplied by the model is refused and nothing is create... | killed |
 
 ### Scan
 
@@ -489,7 +486,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-70 mutation(s).
+69 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -535,8 +532,8 @@ python tools/verification_page.py --check
 | `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `try wire.writeSkeleton(w, file, text, adopted.items);` -> `try wire.writeSkeleton(w, file, text, &.{});` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
 | `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = true,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = false,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
-| `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = true, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
-| `RM16-mcp-batch-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = false, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .trace` -> `.allow_repo_memory = true, .trace` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM16-mcp-batch-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .trace` -> `.allow_repo_memory = false, .trace` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `CB2-mcp-scan-without-call-budget` | `src/protocol/handlers.zig` | `.call_operations = max_scan_operations,` -> `.call_operations = null,` | scan tool: one call has a total operation budget, and the files past it come ba... | killed |
 | `ZS6-a-test-file-left-out-of-the-binary` | `test_root.zig` | `_ = @import("tests/lockdown.zig");` -> `` | suites: every test file under tests/ is imported exactly once by test_root.zig | killed |
 | `BCR7-symmetry-skips-reference-check` | `src/platform/create.zig` | `.unreferenced = !try mentionedAnywhere(gpa, io, root, sources, ...` -> `.unreferenced = true,` | batch create through the tool: a new symbol that another edit of the batch call... | killed |
@@ -557,12 +554,11 @@ python tools/verification_page.py --check
 | `R10-markdown-section-excludes-subsections` | `src/engine/lang/markdown/heading.zig` | `.node = child,` -> `.node = heading,` | resolve returns a section's full text including its nested subsections | killed |
 | `R8-json-error-check-skipped` | `src/protocol/read_tools.zig` | `if (tree.root().hasError()) return error.InvalidJson;` -> `` | read_file refuses malformed JSON instead of serving a partial key tree | killed |
 | `R7-range-boundary-off-by-one` | `src/engine/line_range.zig` | `return a.start < b.end and b.start < a.end;` -> `return a.start <= b.end and b.start <= a.end;` | overlaps rejects two spans that only touch at a shared boundary point | killed |
-| `LT2-low-writable-file-linked` | `src/platform/link_tree.zig` | `if (try lowWriteBlocked(source_wide)) {` -> `if (true) {` | a file whose label lets a low-integrity process write is copied, never linked; redteam li... | killed |
-| `LT3-label-integrity-ignored` | `src/platform/link_tree.zig` | `return rid > low_integrity_rid and mask & no_write_up != 0;` -> `return rid >= 0 and mask & no_write_up != 0;` | a mandatory label blocks low writes only at medium or above with no-write-up | killed |
-| `LT4-reparse-point-followed` | `src/platform/link_tree.zig` | `.directory => {` -> `.directory, .sym_link => {` | build hardlinks every file, recreates every directory and never follows a repar...; redte... | killed |
-| `SR2-shadow-key-ignores-the-path` | `src/platform/shadow_root.zig` | `for (root_abs[0..end]) \|byte\| {` -> `for (root_abs[0..@min(end, 3)]) \|byte\| {` | the shadow key folds case and separators, and two repositories never share one | killed |
-| `SR4-dot-segment-not-flagged` | `src/platform/shadow_root.zig` | `return hasDotSegment(self.shadow);` -> `return hasDotSegment(self.shadow[0..0]);` | redteam sandbox: the shadow lives under the operator's shadow root, outside the... | killed |
-| `SR5-sweep-removes-a-live-shadow` | `src/platform/shadow_root.zig` | `catch \|err\| return err == error.FileNotFound;     return fals...` -> `catch \|err\| return err == error.FileNotFound;     return true;` | sweep removes only stale shadows whose repository is gone, and never follows a ... | killed |
+| `GT1-fsmonitor-override-removed` | `src/protocol/git_tools.zig` | `"core.fsmonitor=false",` -> `` | redteam git: hostile pager, external diff, fsmonitor, textconv and filter never... | killed |
+| `GT2-commit-id-check-removed` | `src/protocol/git_tools.zig` | `if (!isValidCommit(commit)) return error.InvalidCommit;` -> `` | git show returns one commit and refuses a malformed commit id; redteam git: argument inje... | killed |
+| `GT3-jail-bypassed-for-cwd` | `src/protocol/git_tools.zig` | `.cwd = .{ .path = place.root },` -> `.cwd = .{ .path = path orelse "." },` | git refuses an unknown subcommand and a path outside the repo; redteam git: argument inje... | killed |
+| `GT4-output-byte-limit-removed` | `src/protocol/git_tools.zig` | `.stdout_limit = .limited(max_git_output_bytes),` -> `.stdout_limit = .unlimited,` | open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git ... | open |
+| `GT5-output-line-limit-removed` | `src/protocol/git_tools.zig` | `if (kept.items.len < max_output_lines) try kept.append(gpa, lin...` -> `try kept.append(gpa, line);` | git diff caps output at a line count and marks it truncated | killed |
 
 ## What this system does not prove
 
