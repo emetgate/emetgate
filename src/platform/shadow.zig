@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const link_tree = @import("link_tree.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -114,6 +115,7 @@ pub const Shadow = struct {
     io: std.Io,
     dir: Dir,
     linked: []const []const u8,
+    link_stats: link_tree.Stats = .{},
 
     pub const Options = struct {
         root_abs: []const u8,
@@ -141,6 +143,7 @@ pub const Shadow = struct {
             try root.copyFile(file, dir, file, io, .{});
         }
 
+        var stats: link_tree.Stats = .{};
         var link_buf: [std.fs.max_path_bytes]u8 = undefined;
         var target_buf: [std.fs.max_path_bytes]u8 = undefined;
         for (options.linked) |link| {
@@ -150,9 +153,9 @@ pub const Shadow = struct {
             };
             const target = try joinWindows(&target_buf, options.root_abs, link);
             const link_path = try joinWindows(&link_buf, options.shadow_abs, link);
-            try createJunction(io, link_path, target);
+            try link_tree.build(io, target, link_path, &stats);
         }
-        return .{ .io = io, .dir = dir, .linked = options.linked };
+        return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats };
     }
 
     pub fn writeFile(self: Shadow, sub_path: []const u8, data: []const u8) !void {
@@ -478,7 +481,7 @@ fn expectFileContent(dir: Dir, sub_path: []const u8, expected: []const u8) !void
     try testing.expectEqualStrings(expected, actual);
 }
 
-test "prepare copies tracked files, links heavy directories by junction and skips missing links" {
+test "prepare copies tracked files, rebuilds heavy directories as hardlink trees and skips missing links" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var project = try Project.init();
     defer project.deinit();
@@ -495,14 +498,15 @@ test "prepare copies tracked files, links heavy directories by junction and skip
     var listing = try shadow.dir.openDir(testing.io, ".", .{ .iterate = true });
     defer listing.close(testing.io);
     var iterator = listing.iterate();
-    var saw_link = false;
+    var saw_tree = false;
     while (try iterator.next(testing.io)) |entry| {
         if (std.mem.eql(u8, entry.name, "node_modules")) {
-            try testing.expectEqual(std.Io.File.Kind.sym_link, entry.kind);
-            saw_link = true;
+            try testing.expectEqual(std.Io.File.Kind.directory, entry.kind);
+            saw_tree = true;
         }
     }
-    try testing.expect(saw_link);
+    try testing.expect(saw_tree);
+    try testing.expectEqual(link_tree.Stats{ .dirs = 2, .linked = 1 }, shadow.link_stats);
 }
 
 test "writing into the shadow never touches the project" {
@@ -522,7 +526,7 @@ test "writing into the shadow never touches the project" {
     try testing.expectError(error.FileNotFound, project.read("src/new/c.ts"));
 }
 
-test "removing the shadow deletes the junction, never the directory it points to" {
+test "removing the shadow deletes the hardlink tree, never the files it shares" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var project = try Project.init();
     defer project.deinit();
