@@ -106,6 +106,17 @@ pub const tool_defs = [_]Tool{
             .{ .name = "where", .desc = "scope: a file, a directory ending in /, or file#symbol; defaults to the whole repo", .optional = true },
         },
     },
+    .{
+        .name = "emetgate_git",
+        .description = "Read-only git: status, diff (working tree, or --cached with staged:true), log (most recent commits, newest first) or show (one commit). Runs git with a fixed argument list and safe overrides (no pager, no external diff or textconv, no fsmonitor, no optional index locks); nothing configured in the repository can run a program through this tool. Output is capped and reports truncated:true when cut.",
+        .props = &.{
+            .{ .name = "sub", .desc = "one of: status, diff, log, show" },
+            .{ .name = "path", .desc = "limit to this file or directory inside the repo", .optional = true },
+            .{ .name = "staged", .desc = "diff only: true for the staged (--cached) diff instead of the working tree", .optional = true, .ty = "boolean" },
+            .{ .name = "n", .desc = "log only: how many commits, newest first (default 20, at most 200)", .optional = true, .ty = "integer" },
+            .{ .name = "commit", .desc = "show only: a commit hash (4 to 40 hex characters) or HEAD, optionally with ~N or ^N", .optional = true },
+        },
+    },
 };
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {

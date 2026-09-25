@@ -8,6 +8,7 @@ const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const read_tools = @import("read_tools.zig");
+const git_tools = @import("git_tools.zig");
 const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
@@ -44,6 +45,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return read_tools.callSearch(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, args, event, policy.root);
     return error.UnknownTool;
 }
 

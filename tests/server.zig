@@ -332,6 +332,7 @@ const served_tools = [_][]const u8{
     "emetgate_list",
     "emetgate_search",
     "emetgate_scan",
+    "emetgate_git",
 };
 
 test "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed" {
