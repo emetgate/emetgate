@@ -15,6 +15,7 @@ GROUPS = [
         "src/engine/checks.zig", "src/engine/functions.zig", "src/engine/ref.zig",
         "src/engine/loader.zig", "src/engine/coverage.zig", "src/engine/regex.zig",
         "src/engine/test_util.zig", "tests/lang/cases.zig", "tests/zig_source.zig",
+        "src/engine/symmetry.zig", "src/engine/removal.zig",
     )),
     ("Sandbox and the test/typecheck gate", (
         "src/platform/sandbox.zig", "src/platform/runner.zig", "src/platform/lockdown.zig",
@@ -22,6 +23,8 @@ GROUPS = [
     )),
     ("Disk, repository boundary and atomic commit", (
         "src/platform/disk.zig", "src/platform/repo.zig", "src/platform/gate.zig",
+        "src/platform/journal.zig", "src/platform/commit_record.zig", "src/platform/create.zig",
+        "src/platform/batch_plan.zig",
     )),
     ("Rules and the q: query engine", (
         "src/platform/rules.zig", "src/platform/where.zig", "src/engine/query.zig",
