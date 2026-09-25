@@ -8,6 +8,7 @@ pub const loader = src.loader;
 pub const tree_cache = src.tree_cache;
 pub const symbol = src.symbol;
 pub const line_range = src.line_range;
+pub const docnode = src.docnode;
 pub const skeleton = src.skeleton;
 pub const cas = src.cas;
 pub const boundedness = src.boundedness;
