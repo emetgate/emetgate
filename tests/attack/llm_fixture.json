@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "id": "llm-fixture-01-guessed-zero-hash",
+      "category": "stale-hash",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "00000000000000000000000000000000", "body": "{ return a * 9; }"}}]
+    },
+    {
+      "id": "llm-fixture-02-policy-override-attempt",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a; }", "allow_repo_memory": true}}]
+    },
+    {
+      "id": "llm-fixture-03-jail-break-attempt",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "../canary.ts"}}]
+    }
+  ]
+}

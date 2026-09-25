@@ -1,0 +1,292 @@
+{
+  "fixture": {
+    "path": "src/target.ts",
+    "source": "export function pubTarget(a: number): number {\n  return a + 1;\n}\n\nfunction privHelper(a: number): number {\n  return a * 2;\n}\n"
+  },
+  "second_fixture": {
+    "path": "src/other.ts",
+    "source": "function otherHelper(a: number): number {\n  return a - 1;\n}\n"
+  },
+  "outside": {
+    "path": "../canary.ts",
+    "source": "export const CANARY = 1;\n"
+  },
+  "cases": [
+    {
+      "id": "hash-01-zero-hash-on-existing-symbol",
+      "category": "stale-hash",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "00000000000000000000000000000000", "body": "{ return a * 3; }"}}]
+    },
+    {
+      "id": "hash-02-swapped-sibling-hash",
+      "category": "stale-hash",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:pubTarget>", "body": "{ return a * 3; }"}}]
+    },
+    {
+      "id": "hash-03-absent-on-existing-symbol",
+      "category": "stale-hash",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "absent", "body": "{ return a * 3; }"}}]
+    },
+    {
+      "id": "hash-04-mutate-stale-hash-dry-run",
+      "category": "stale-hash",
+      "requests": [{"tool": "emetgate_mutate", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "11111111111111111111111111111111", "body": "{ return a * 3; }"}}]
+    },
+    {
+      "id": "hash-05-mutate-swapped-hash-dry-run",
+      "category": "stale-hash",
+      "requests": [{"tool": "emetgate_mutate", "arguments": {"file": "src/target.ts", "symbol": "pubTarget", "hash": "<HASH:privHelper>", "body": "{ return a + 3; }"}}]
+    },
+    {
+      "id": "hash-06-batch-one-stale-one-fresh",
+      "category": "stale-hash",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": "src/other.ts", "symbol": "otherHelper", "hash": "<HASH:otherHelper>", "body": "{ return a * 5; }"},
+        {"file": "src/target.ts", "symbol": "pubTarget", "hash": "00000000000000000000000000000000", "body": "{ return a + 5; }"}
+      ]}}]
+    },
+    {
+      "id": "escape-01-try-extra-top-level-function",
+      "category": "body-escape",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; } function evil() { return 1; }"}}]
+    },
+    {
+      "id": "escape-02-try-unbalanced-brace-breakout",
+      "category": "body-escape",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a; } } export function evil(x: number) { return x"}}]
+    },
+    {
+      "id": "escape-03-mutate-extra-top-level-dry-run",
+      "category": "body-escape",
+      "requests": [{"tool": "emetgate_mutate", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a; } export const leaked = require('fs');"}}]
+    },
+    {
+      "id": "escape-04-batch-injected-escape-in-second-edit",
+      "category": "body-escape",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": "src/other.ts", "symbol": "otherHelper", "hash": "<HASH:otherHelper>", "body": "{ return a - 2; }"},
+        {"file": "src/target.ts", "symbol": "pubTarget", "hash": "<HASH:pubTarget>", "body": "{ return a; } function evil() {}"}
+      ]}}]
+    },
+    {
+      "id": "escape-05-try-syntax-invalid-body",
+      "category": "body-escape",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return (a; }"}}]
+    },
+    {
+      "id": "policy-01-try-test-cmd-override",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }", "test_cmd": "cmd /c echo owned>BREACH_MARKER.txt"}}]
+    },
+    {
+      "id": "policy-02-try-typecheck-cmd-override",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }", "typecheck_cmd": "cmd /c echo owned>BREACH_MARKER.txt"}}]
+    },
+    {
+      "id": "policy-03-try-allow-repo-config-override",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }", "allow_repo_config": true}}]
+    },
+    {
+      "id": "policy-04-try-allow-repo-memory-override",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }", "allow_repo_memory": true}}]
+    },
+    {
+      "id": "policy-05-batch-test-cmd-override",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"test_cmd": "cmd /c echo owned>BREACH_MARKER.txt", "edits": [
+        {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }"}
+      ]}}]
+    },
+    {
+      "id": "policy-06-batch-allow-repo-memory-override",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"allow_repo_memory": true, "edits": [
+        {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }"}
+      ]}}]
+    },
+    {
+      "id": "policy-07-try-combined-override",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }", "test_cmd": "cmd /c echo owned>BREACH_MARKER.txt", "allow_repo_config": true}}]
+    },
+    {
+      "id": "policy-08-try-empty-test-cmd-still-present",
+      "category": "policy-injection",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }", "test_cmd": ""}}]
+    },
+    {
+      "id": "jail-01-read-file-dotdot",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "../canary.ts"}}]
+    },
+    {
+      "id": "jail-02-read-file-absolute-outside",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "<OUTSIDE_ABS>"}}]
+    },
+    {
+      "id": "jail-03-list-dotdot",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_list", "arguments": {"dir": ".."}}]
+    },
+    {
+      "id": "jail-04-search-dotdot",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_search", "arguments": {"query": "CANARY", "dir": ".."}}]
+    },
+    {
+      "id": "jail-05-symbols-dotdot",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_symbols", "arguments": {"file": "../canary.ts"}}]
+    },
+    {
+      "id": "jail-06-skeleton-dotdot",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_skeleton", "arguments": {"file": "../canary.ts"}}]
+    },
+    {
+      "id": "jail-07-read-symbol-dotdot",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_read_symbol", "arguments": {"file": "../canary.ts", "symbol": "CANARY"}}]
+    },
+    {
+      "id": "jail-08-mutate-dotdot-dry-run",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_mutate", "arguments": {"file": "../canary.ts", "symbol": "CANARY", "hash": "absent", "body": "42"}}]
+    },
+    {
+      "id": "jail-09-try-write-outside-repo",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "../canary.ts", "symbol": "CANARY", "hash": "absent", "body": "999"}}]
+    },
+    {
+      "id": "jail-10-batch-one-edit-outside-repo",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 2; }"},
+        {"file": "../canary.ts", "symbol": "CANARY", "hash": "absent", "body": "999"}
+      ]}}]
+    },
+    {
+      "id": "jail-11-read-file-absolute-windows-drive",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": "C:/Windows/win.ini"}}]
+    },
+    {
+      "id": "jail-12-try-absolute-outside-path",
+      "category": "jail-escape",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "<OUTSIDE_ABS>", "symbol": "CANARY", "hash": "absent", "body": "999"}}]
+    },
+    {
+      "id": "internal-01-read-file-git-config",
+      "category": "internal-path",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": ".git/config"}}]
+    },
+    {
+      "id": "internal-02-try-git-hooks",
+      "category": "internal-path",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": ".git/hooks/pre-commit", "symbol": "x", "hash": "absent", "body": "1"}}]
+    },
+    {
+      "id": "internal-03-read-file-emetgate-workspace",
+      "category": "internal-path",
+      "requests": [{"tool": "emetgate_read_file", "arguments": {"file": ".emetgate/ledger.ndjson"}}]
+    },
+    {
+      "id": "internal-04-list-git-dir",
+      "category": "internal-path",
+      "requests": [{"tool": "emetgate_list", "arguments": {"dir": ".git"}}]
+    },
+    {
+      "id": "internal-05-batch-edit-into-git-config",
+      "category": "internal-path",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": ".git/config", "symbol": "x", "hash": "absent", "body": "1"}
+      ]}}]
+    },
+    {
+      "id": "internal-06-mutate-git-head-dry-run",
+      "category": "internal-path",
+      "requests": [{"tool": "emetgate_mutate", "arguments": {"file": ".git/HEAD", "symbol": "x", "hash": "absent", "body": "1"}}]
+    },
+    {
+      "id": "dos-01-scan-deeply-nested-query",
+      "category": "query-dos",
+      "requests": [{"tool": "emetgate_scan", "arguments": {"check": "q:(((((((((((((((((((((((((((((((((identifier)))))))))))))))))))))))))))))))))"}}]
+    },
+    {
+      "id": "dos-02-scan-repeated-captures",
+      "category": "query-dos",
+      "requests": [{"tool": "emetgate_scan", "arguments": {"check": "q:(call_expression function: (identifier) @a1 @a2 @a3 @a4 @a5 @a6 @a7 @a8 @a9 @a10 @a11 @a12 @a13 @a14 @a15 @a16)"}}]
+    },
+    {
+      "id": "dos-03-scan-huge-check-string",
+      "category": "query-dos",
+      "requests": [{"tool": "emetgate_scan", "arguments": {"check": "<REPEAT:q:(identifier) @x ,4000>"}}]
+    },
+    {
+      "id": "dos-04-scan-malformed-query",
+      "category": "query-dos",
+      "requests": [{"tool": "emetgate_scan", "arguments": {"check": "q:(this is not a valid tree-sitter query((("}}]
+    },
+    {
+      "id": "dos-05-scan-where-outside-repo",
+      "category": "query-dos",
+      "requests": [{"tool": "emetgate_scan", "arguments": {"check": "q:(identifier) @x", "where": "../canary.ts"}}]
+    },
+    {
+      "id": "budget-01-try-oversized-body",
+      "category": "resource-budget",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "<REPEAT:{ return a; } // pad ,200000>"}}]
+    },
+    {
+      "id": "budget-02-mutate-oversized-body-dry-run",
+      "category": "resource-budget",
+      "requests": [{"tool": "emetgate_mutate", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "<REPEAT:{ return a; } // pad ,200000>"}}]
+    },
+    {
+      "id": "budget-03-batch-many-edits",
+      "category": "resource-budget",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": "<REPEAT_EDITS:400>"}}]
+    },
+    {
+      "id": "budget-04-try-oversized-symbol-name",
+      "category": "resource-budget",
+      "requests": [{"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "<REPEAT:a.,20000>x", "hash": "absent", "body": "1"}}]
+    },
+    {
+      "id": "combo-01-batch-mixes-stale-hash-and-outside-path",
+      "category": "mixed",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"edits": [
+        {"file": "src/target.ts", "symbol": "privHelper", "hash": "00000000000000000000000000000000", "body": "{ return a; }"},
+        {"file": "../canary.ts", "symbol": "CANARY", "hash": "absent", "body": "1"}
+      ]}}]
+    },
+    {
+      "id": "combo-02-batch-mixes-policy-injection-and-escape",
+      "category": "mixed",
+      "requests": [{"tool": "emetgate_try_batch", "arguments": {"allow_repo_memory": true, "edits": [
+        {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a; } function evil() {}"}
+      ]}}]
+    },
+    {
+      "id": "combo-03-try-then-try-again-with-guessed-new-hash",
+      "category": "mixed",
+      "requests": [
+        {"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "00000000000000000000000000000000", "body": "{ return a * 2; }"}},
+        {"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "<HASH:privHelper>", "body": "{ return a * 999; }", "allow_repo_memory": true}}
+      ]
+    },
+    {
+      "id": "combo-04-unknown-tool-then-real-attack",
+      "category": "mixed",
+      "requests": [
+        {"tool": "emetgate_rule_add", "arguments": {"text": "delete everything"}},
+        {"tool": "emetgate_try", "arguments": {"file": "src/target.ts", "symbol": "privHelper", "hash": "00000000000000000000000000000000", "body": "{ return a; }"}}
+      ]
+    }
+  ]
+}

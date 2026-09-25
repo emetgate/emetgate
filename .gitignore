@@ -7,3 +7,4 @@ tests/bench/master/node_modules/
 tests/bench/work/
 tests/bench/work2/
 __pycache__/
+tests/attack/llm-sessions/
