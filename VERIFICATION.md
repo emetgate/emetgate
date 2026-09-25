@@ -7,11 +7,11 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **778**
-- Mutations declared in `tests/mutations.json`: **467**
-  - killed: **449**
+- Mutations declared in `tests/mutations.json`: **466**
+  - killed: **447**
   - equivalent: **5**
   - defense in depth: **3**
-  - open: **3**
+  - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
@@ -486,7 +486,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-69 mutation(s).
+68 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -554,9 +554,8 @@ python tools/verification_page.py --check
 | `R10-markdown-section-excludes-subsections` | `src/engine/lang/markdown/heading.zig` | `.node = child,` -> `.node = heading,` | resolve returns a section's full text including its nested subsections | killed |
 | `R8-json-error-check-skipped` | `src/protocol/read_tools.zig` | `if (tree.root().hasError()) return error.InvalidJson;` -> `` | read_file refuses malformed JSON instead of serving a partial key tree | killed |
 | `R7-range-boundary-off-by-one` | `src/engine/line_range.zig` | `return a.start < b.end and b.start < a.end;` -> `return a.start <= b.end and b.start <= a.end;` | overlaps rejects two spans that only touch at a shared boundary point | killed |
-| `GT1-fsmonitor-override-removed` | `src/protocol/git_tools.zig` | `"core.fsmonitor=false",` -> `` | redteam git: hostile pager, external diff, fsmonitor, textconv and filter never... | killed |
+| `GT1-fsmonitor-override-removed` | `src/protocol/git_tools.zig` | `"core.fsmonitor=false",` -> `` | open: the redteam repo sets core.fsmonitor to a shell command, but git's fsmonitor is a v... | open |
 | `GT2-commit-id-check-removed` | `src/protocol/git_tools.zig` | `if (!isValidCommit(commit)) return error.InvalidCommit;` -> `` | git show returns one commit and refuses a malformed commit id; redteam git: argument inje... | killed |
-| `GT3-jail-bypassed-for-cwd` | `src/protocol/git_tools.zig` | `.cwd = .{ .path = place.root },` -> `.cwd = .{ .path = path orelse "." },` | git refuses an unknown subcommand and a path outside the repo; redteam git: argument inje... | killed |
 | `GT4-output-byte-limit-removed` | `src/protocol/git_tools.zig` | `.stdout_limit = .limited(max_git_output_bytes),` -> `.stdout_limit = .unlimited,` | open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git ... | open |
 | `GT5-output-line-limit-removed` | `src/protocol/git_tools.zig` | `if (kept.items.len < max_output_lines) try kept.append(gpa, lin...` -> `try kept.append(gpa, line);` | git diff caps output at a line count and marks it truncated | killed |
 

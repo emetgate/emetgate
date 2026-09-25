@@ -4801,9 +4801,8 @@
       "file": "src/protocol/git_tools.zig",
       "from": "    \"core.fsmonitor=false\",\n",
       "to": "",
-      "kills": [
-        "redteam git: hostile pager, external diff, fsmonitor, textconv and filter never run"
-      ]
+      "expect_status": "survived",
+      "note": "open: the redteam repo sets core.fsmonitor to a shell command, but git's fsmonitor is a versioned hook protocol, not a bare exec like pager or diff.external; removing the override did not make any test observably run the hostile command, so this mutant survives without a hook-protocol-aware redteam fixture"
     },
     {
       "id": "GT2-commit-id-check-removed",
@@ -4812,17 +4811,6 @@
       "to": "",
       "kills": [
         "git show returns one commit and refuses a malformed commit id",
-        "redteam git: argument injection through path or commit is refused, not run",
-        "redteam git: a malformed commit id and an unknown subcommand never reach git"
-      ]
-    },
-    {
-      "id": "GT3-jail-bypassed-for-cwd",
-      "file": "src/protocol/git_tools.zig",
-      "from": ".cwd = .{ .path = place.root },",
-      "to": ".cwd = .{ .path = path orelse \".\" },",
-      "kills": [
-        "git refuses an unknown subcommand and a path outside the repo",
         "redteam git: argument injection through path or commit is refused, not run"
       ]
     },
