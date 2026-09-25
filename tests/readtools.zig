@@ -119,6 +119,18 @@ test "read_file returns a JSON key tree by default, and a pointer's subtree with
     try testing.expectEqualStrings("\"^4.0.0\"", value_body.value.object.get("value").?.string);
 }
 
+test "read_file refuses malformed JSON instead of serving a partial key tree" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "broken.json", .data = "{\"a\": }" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "broken.json", testing.allocator);
+    defer testing.allocator.free(path);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "InvalidJson");
+}
+
 test "read_file on an unknown JSON pointer is a tool error" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");

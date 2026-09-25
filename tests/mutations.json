@@ -4669,6 +4669,15 @@
       ]
     },
     {
+      "id": "R8-json-error-check-skipped",
+      "file": "src/protocol/read_tools.zig",
+      "from": "if (tree.root().hasError()) return error.InvalidJson;",
+      "to": "",
+      "kills": [
+        "read_file refuses malformed JSON instead of serving a partial key tree"
+      ]
+    },
+    {
       "id": "R7-range-boundary-off-by-one",
       "file": "src/engine/line_range.zig",
       "from": "return a.start < b.end and b.start < a.end;",
