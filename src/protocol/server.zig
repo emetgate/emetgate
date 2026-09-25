@@ -7,6 +7,7 @@ const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
+const tree_cache_mod = @import("../engine/tree_cache.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -131,6 +132,9 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     var session_mirror: mirror_mod.Mirror = .init(gpa, policy.mirror_enabled);
     defer session_mirror.deinit();
     served.mirror = &session_mirror;
+    var session_tree_cache: tree_cache_mod.TreeCache = .init(gpa);
+    defer session_tree_cache.deinit();
+    served.tree_cache = &session_tree_cache;
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);

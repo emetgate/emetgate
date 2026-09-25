@@ -5,6 +5,7 @@ const symbol = @import("../engine/symbol.zig");
 const lang = @import("../engine/lang/registry.zig");
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 const Runtime = @import("../engine/runtime.zig").Runtime;
+const tree_cache_mod = @import("../engine/tree_cache.zig");
 const rules = @import("rules.zig");
 const shadow = @import("shadow.zig");
 const where_mod = @import("where.zig");
@@ -141,7 +142,25 @@ fn resolveScope(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io.Dir,
     _ = try symbolSpan(gpa, snapshot, ref_text);
 }
 
-pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, list: []const rules.Rule, call_operations: ?u64) !Result {
+const LoadedFile = struct {
+    snapshot: *Snapshot,
+    owned: bool,
+
+    fn deinit(self: LoadedFile) void {
+        if (self.owned) self.snapshot.destroy();
+    }
+};
+
+fn loadForScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io.Dir, root_abs: []const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache) !LoadedFile {
+    if (tree_cache) |cache| {
+        const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, file });
+        defer gpa.free(abs);
+        return .{ .snapshot = try cache.load(runtime, io, abs), .owned = false };
+    }
+    return .{ .snapshot = try Snapshot.load(runtime, io, root, file), .owned = true };
+}
+
+pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, list: []const rules.Rule, call_operations: ?u64, tree_cache: ?*tree_cache_mod.TreeCache) !Result {
     var pool: u64 = call_operations orelse 0;
     const limits: query.Limits = if (call_operations != null) .{ .pool = &pool } else .{};
     if (try firstMalformed(gpa, list)) |bad| return bad.reason;
@@ -183,7 +202,7 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
             unsupported += 1;
             continue;
         }
-        const snapshot = Snapshot.load(runtime, io, root, file) catch |err| switch (err) {
+        const loaded = loadForScan(gpa, io, runtime, root, root_abs, file, tree_cache) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
                 try unreadable.ensureUnusedCapacity(gpa, 1);
@@ -191,7 +210,8 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
                 continue;
             },
         };
-        defer snapshot.destroy();
+        defer loaded.deinit();
+        const snapshot = loaded.snapshot;
         scanned += 1;
         if (snapshot.tree.root().hasError()) {
             try parse_errors.ensureUnusedCapacity(gpa, 1);

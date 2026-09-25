@@ -468,7 +468,7 @@ test "scan: the scanner itself refuses a malformed rule even when no file would 
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
 
-    try testing.expectError(error.MissingCheckArgument, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid" }}, null));
+    try testing.expectError(error.MissingCheckArgument, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid" }}, null, null));
 }
 
 test "scan: usage accepts only --json and one --check with a value" {
@@ -699,7 +699,7 @@ test "scope: the scanner itself refuses an unresolved scope" {
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
-    try testing.expectError(error.ScopeUnresolved, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid:x", .where = "src/gone.js" }}, null));
+    try testing.expectError(error.ScopeUnresolved, scan.scan(testing.allocator, testing.io, runtime, repo.root_abs, &.{.{ .id = "r", .check = "forbid:x", .where = "src/gone.js" }}, null, null));
 }
 
 test "scope: a rule without where scans the whole repository as before" {
