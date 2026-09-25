@@ -170,3 +170,58 @@ test "invalidate forgets a path so the next load reparses from disk" {
     const second = try cache.load(runtime, testing.io, abs);
     try testing.expect(first != second);
 }
+
+fn elapsedNs(from: std.Io.Timestamp) u64 {
+    return @intCast(from.durationTo(std.Io.Timestamp.now(testing.io, .awake)).nanoseconds);
+}
+
+const bench_samples = 200;
+
+test "warm reads are faster than a cold parse, and every repeat is a cache hit" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source = try std.Io.Dir.cwd().readFileAlloc(testing.io, test_util.fixture_dir ++ "service.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(source);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "service.ts", .data = source });
+    const abs = try tmp.dir.realPathFileAlloc(testing.io, "service.ts", testing.allocator);
+    defer testing.allocator.free(abs);
+
+    var cold: [bench_samples]u64 = undefined;
+    for (&cold) |*sample| {
+        var one_shot: TreeCache = .init(testing.allocator);
+        defer one_shot.deinit();
+        const started = std.Io.Timestamp.now(testing.io, .awake);
+        _ = try one_shot.load(runtime, testing.io, abs);
+        sample.* = elapsedNs(started);
+    }
+    std.mem.sort(u64, &cold, {}, std.sort.asc(u64));
+
+    var cache: TreeCache = .init(testing.allocator);
+    defer cache.deinit();
+    _ = try cache.load(runtime, testing.io, abs);
+
+    var warm: [bench_samples]u64 = undefined;
+    var hits: usize = 0;
+    for (&warm) |*sample| {
+        const before = cache.count();
+        const started = std.Io.Timestamp.now(testing.io, .awake);
+        const snapshot = try cache.load(runtime, testing.io, abs);
+        sample.* = elapsedNs(started);
+        _ = snapshot;
+        if (cache.count() == before) hits += 1;
+    }
+    std.mem.sort(u64, &warm, {}, std.sort.asc(u64));
+
+    const cold_median = cold[cold.len / 2];
+    const warm_median = warm[warm.len / 2];
+    std.debug.print(
+        "\n[tree_cache:Debug] cold parse median {d} ns, p99 {d} ns | warm hit median {d} ns, p99 {d} ns | hit rate {d}/{d}\n",
+        .{ cold_median, cold[cold.len * 99 / 100], warm_median, warm[warm.len * 99 / 100], hits, warm.len },
+    );
+
+    try testing.expectEqual(bench_samples, hits);
+    try testing.expect(warm_median < cold_median);
+}
