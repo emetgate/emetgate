@@ -2566,7 +2566,7 @@
     {
       "id": "ST6-scan-tool-dispatch-removed",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (std.mem.eql(u8, name, \"emetgate_scan\")) return callScan(gpa, io, runtime, args, event, policy.root);\n",
+      "from": "    if (std.mem.eql(u8, name, \"emetgate_scan\")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);\n",
       "to": "",
       "kills": [
         "scan tool: a call without check or with a non-string where is a missing argument",
@@ -4656,6 +4656,33 @@
       "to": "if (overlaps(range, range)) try out.append(gpa, entry);",
       "kills": [
         "emetgate_read_symbol with a line range hitting no symbol is a tool error"
+      ]
+    },
+    {
+      "id": "R11-cache-stamp-check-skipped",
+      "file": "src/engine/tree_cache.zig",
+      "from": "if (sameStamp(entry.stamp, fs)) return entry.snapshot;",
+      "to": "return entry.snapshot;",
+      "kills": [
+        "load reparses when the file's mtime or size changed on disk"
+      ]
+    },
+    {
+      "id": "R12-cache-not-invalidated-after-try",
+      "file": "src/protocol/handlers.zig",
+      "from": "if (policy.tree_cache) |cache| cache.invalidate(file_abs);",
+      "to": "",
+      "kills": [
+        "with a tree cache, read_symbol after a committed emetgate_try reflects the change, not a stale cached tree"
+      ]
+    },
+    {
+      "id": "R13-cache-not-invalidated-after-try-batch",
+      "file": "src/protocol/handlers.zig",
+      "from": "if (policy.tree_cache) |cache| for (edits) |edit| cache.invalidate(edit.file_abs);",
+      "to": "",
+      "kills": [
+        "with a tree cache, read_symbol after a committed emetgate_try_batch reflects the change"
       ]
     },
     {
