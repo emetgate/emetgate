@@ -243,3 +243,25 @@ test "a file whose label lets a low-integrity process write is copied, never lin
     try tree.tmp.dir.writeFile(testing.io, .{ .sub_path = "source/a.txt", .data = "changed\n" });
     try tree.expectContent("dest/a.txt", "a\n");
 }
+
+test "bench: build a hardlink tree of the directory named by EMETGATE_LINK_TREE_SOURCE" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const source = testing.environ.getAlloc(testing.allocator, "EMETGATE_LINK_TREE_SOURCE") catch return error.SkipZigTest;
+    defer testing.allocator.free(source);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const dest = try std.fmt.allocPrint(testing.allocator, "{s}\\tree", .{top});
+    defer testing.allocator.free(dest);
+
+    var stats: Stats = .{};
+    const started = std.Io.Timestamp.now(testing.io, .awake);
+    try build(testing.io, source, dest, &stats);
+    const built = started.durationTo(std.Io.Timestamp.now(testing.io, .awake));
+    try std.Io.Dir.cwd().deleteTree(testing.io, dest);
+    const removed = started.durationTo(std.Io.Timestamp.now(testing.io, .awake));
+    std.debug.print("link tree {s}: {d} dirs, {d} linked, {d} copied, {d} links skipped; build {d} ms, build and remove {d} ms\n", .{
+        source, stats.dirs, stats.linked, stats.copied, stats.skipped_links, @divTrunc(built.nanoseconds, std.time.ns_per_ms), @divTrunc(removed.nanoseconds, std.time.ns_per_ms),
+    });
+}
