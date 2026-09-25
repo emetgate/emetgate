@@ -99,6 +99,19 @@ pub const Profile = struct {
     directives: []const []const u8,
     literal_values: LiteralValues,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
+    visibility_keywords: []const []const u8 = &.{},
+
+    pub fn hasVisibilityKeyword(self: *const Profile, node: ts.Node) bool {
+        if (self.visibility_keywords.len == 0) return false;
+        var i: u32 = 0;
+        while (node.child(i)) |child| : (i += 1) {
+            if (child.isNamed()) continue;
+            for (self.visibility_keywords) |keyword| {
+                if (std.mem.eql(u8, keyword, child.kind())) return true;
+            }
+        }
+        return false;
+    }
 
     pub fn handles(self: *const Profile, path: []const u8) bool {
         for (self.extensions) |extension| {

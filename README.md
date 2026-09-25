@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/status-early-E040FB?style=flat-square" alt="Status: early">
   <img src="https://img.shields.io/badge/zig-0.16.0-F7A41D?style=flat-square&logo=zig&logoColor=white" alt="Zig 0.16.0">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20tsx%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, TSX, JavaScript, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
@@ -424,10 +424,65 @@ Emetgate currently has a narrow scope.
 | MCP server and locked-down launch | Built |
 | Decision ledger (append-only, supersession, compaction, torn-tail recovery) | Built; readable by the model through `emetgate_skeleton`, writable only from the CLI |
 | Rule enforcement at the edit gate | Built, mutation-tested: AST checks, `q:` tree-sitter queries and `cmd:` command predicates |
-| Language support | TypeScript and JavaScript (`.js`, `.mjs`, `.cjs`); new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
+| Language support | see the table below; new languages are added as profiles under `src/engine/lang` and must pass the conformance suite in `tests/lang` |
 | Platform | Windows only (the sandbox relies on Job Objects) |
 
 On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, two of them real files), editing through symbol-level proposals uses a median of **1.80×** fewer tokens than search-and-replace editing, with a range of 1.15× to 3.77×. On the real files the gain is 1.15× to 1.17×.
+
+### Supported languages
+
+| Language | Extensions | Grammar | Notes |
+|---|---|---|---|
+| TypeScript | `.ts` | tree-sitter-typescript (typescript dialect) | full OOP conformance suite: classes, accessors, decorators |
+| TSX | `.tsx` | tree-sitter-typescript (tsx dialect) | same profile shape as TypeScript, plus JSX |
+| JavaScript | `.js`, `.mjs`, `.cjs`, `.jsx` | tree-sitter-javascript | JSX is parsed by the same grammar, no separate profile |
+| Zig | `.zig` | tree-sitter-zig | top-level `fn` only; see the limits below |
+
+Zig does not share the class/getter/setter shape the generic conformance suite in
+`tests/lang/conformance.zig` was built around, so it is exempt from that suite
+(`object_style_contract_exempt` in that file) and gets its own compatibility file,
+`tests/lang/zig/compat.zig`, covering the same guarantees (stale hash, placeholder,
+escaping body, untouched neighbour, boundedness escapes, a struct-nested function) in
+idiomatic Zig instead.
+
+Known Zig limits:
+
+- **`test` blocks are not CAS-addressable.** `functions.classify` requires a `body` field
+  on the node; tree-sitter-zig's `test_declaration` exposes its block positionally, with
+  no field. A test block is therefore invisible to `symbols`/`mutate`/skeleton compression,
+  but it also cannot corrupt a neighbouring function's hash or CAS span (covered by a test).
+- **Struct/enum/union bodies are transparent**, not named containers, for the same reason:
+  `const Foo = struct { ... }` exposes no `name` or `value` field on `variable_declaration`
+  for a binding-name lookup to use. A function nested in a struct is tracked under its bare
+  name; two same-named functions in different structs collide as an ambiguous symbol (a safe
+  refusal, not a wrong mutation).
+- **`pub`/`export` visibility needed one small engine change.** `boundedness.isExported`
+  used to walk only ancestor node kinds (an `export_statement` wrapper, TypeScript/JavaScript
+  style). Zig's `pub` and `export` are keyword tokens inside the declaration node itself, not
+  a wrapping node, so no combination of profile data could express them. `Profile` gained a
+  `visibility_keywords` list field (default `&.{}`, so TypeScript/JavaScript/TSX behaviour is
+  unchanged) and a `hasVisibilityKeyword` helper, and `boundedness.isExported` now checks it
+  first. Zig sets `visibility_keywords = &.{ "pub", "export" }` (`export fn` gives a symbol
+  C ABI/linker visibility, same escape as `pub`). This is the one line changed under
+  `src/engine` outside `src/engine/lang`.
+- **Taking a function's address is already unbounded, with no Zig-specific code.**
+  `&foo`, and `@export(&foo, .{...})`, put the `foo` identifier under a `unary_expression`
+  (address-of), never as the direct callee of a plain call or a bare call argument. The
+  engine's existing `classifyReference` fallback (any reference shape it does not
+  specifically recognise as a safe plain call) already returns `.unrecognized_reference`,
+  i.e. unbounded — the same fallback that already makes `obj[process]()` unbounded for
+  JavaScript. Covered by dedicated Zig tests, not by new engine code.
+- **Identifier-text matching has a pre-existing, language-independent limit**, not special
+  to Zig: a reference built from a runtime/comptime-computed string (Zig: iterating
+  `@typeInfo(@This()).@"struct".decls` and calling `@field(@This(), decl.name)`;
+  JavaScript: `obj["process".slice(0)]()`) never spells the target name as a literal
+  identifier or string anywhere in the file, so nothing in the engine's text-based scan has
+  a match to flag. This is a property of the whole kernel's reference-matching design, not
+  a Zig profile gap, and fixing it is out of this task's scope. `usingnamespace` was also
+  reviewed: it only pulls other namespaces' `pub` declarations into scope, it does not change
+  the exported visibility of this file's own declarations, so it needed no handling.
+  `extern fn` (no body) is simply invisible to `classify` (same as any bodyless declaration),
+  never mutated, so it cannot be wrongly marked BOUNDED.
 
 Each scenario counts the tokens both approaches spend on one symbol edit: ingest plus emit. Search-and-replace reads the whole file and sends the old and new block; the kernel reads a skeleton plus one symbol body and sends a symbol reference, a content hash and the new body. Search-and-replace is the baseline; a whole-file rewrite is the upper bound (2.88× on the same set). The tokenizer is a GPT-4o-family proxy, so the ratio matters more than the absolute count. The benchmark runs offline and can be reproduced with `python tests/bench/run4.py` after building the binary.
 
@@ -484,7 +539,7 @@ The binary is not code-signed, so Windows SmartScreen warns on first run: it fla
 
 ## Building
 
-Requires Zig 0.16.0. tree-sitter and the TypeScript grammar are vendored.
+Requires Zig 0.16.0. tree-sitter and the TypeScript, TSX, JavaScript and Zig grammars are vendored.
 
 ```sh
 zig build                   # zig-out/bin/emetgate

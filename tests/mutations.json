@@ -4548,6 +4548,69 @@
       "kills": [
         "symmetry: a call, a new or an assignment in a top-level initializer is an effect"
       ]
+    },
+    {
+      "id": "ZIG1-pub-check-inverted",
+      "file": "src/engine/lang/profile.zig",
+      "from": "if (std.mem.eql(u8, keyword, child.kind())) return true;",
+      "to": "if (std.mem.eql(u8, keyword, child.kind())) return false;",
+      "kills": [
+        "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
+      ]
+    },
+    {
+      "id": "ZIG2-visibility-hook-not-consulted",
+      "file": "src/engine/boundedness.zig",
+      "from": "if (profile.hasVisibilityKeyword(sym.node)) return true;\n    var current = sym.node.parent();",
+      "to": "var current = sym.node.parent();",
+      "kills": [
+        "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
+      ]
+    },
+    {
+      "id": "ZIG5-export-keyword-dropped",
+      "file": "src/engine/lang/zig/profile.zig",
+      "from": ".visibility_keywords = &.{ \"pub\", \"export\" },",
+      "to": ".visibility_keywords = &.{\"pub\"},",
+      "kills": [
+        "zig: an export fn is unbounded, matching pub"
+      ]
+    },
+    {
+      "id": "ZIG3-string-escape-list-emptied",
+      "file": "src/engine/lang/zig/profile.zig",
+      "from": ".strings = &.{\"string\"},",
+      "to": ".strings = &.{},",
+      "kills": [
+        "zig: a function named by string inside @hasDecl is unbounded (string-key escape)"
+      ]
+    },
+    {
+      "id": "ZIG4-call-arguments-kind-wrong",
+      "file": "src/engine/lang/zig/profile.zig",
+      "from": ".arguments = \"arguments\", .optional_marker = null },",
+      "to": ".arguments = \"argument_list\", .optional_marker = null },",
+      "kills": [
+        "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
+      ]
+    },
+    {
+      "id": "TSX1-extension-dropped-from-registry",
+      "file": "src/engine/lang/tsx/profile.zig",
+      "from": ".extensions = &.{\".tsx\"},",
+      "to": ".extensions = &.{},",
+      "kills": [
+        "every registered profile loads its grammar and alone claims its extensions in any case"
+      ]
+    },
+    {
+      "id": "JSX1-extension-dropped-from-javascript",
+      "file": "src/engine/lang/javascript/profile.zig",
+      "from": ".extensions = &.{ \".js\", \".mjs\", \".cjs\", \".jsx\" },",
+      "to": ".extensions = &.{ \".js\", \".mjs\", \".cjs\" },",
+      "kills": [
+        "jsx: a .jsx path resolves to the javascript profile and a .tsx path to the tsx profile"
+      ]
     }
   ]
 }

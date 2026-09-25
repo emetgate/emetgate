@@ -128,6 +128,7 @@ fn isWithin(node: ts.Node, span: symbol.Span) bool {
 }
 
 fn isExported(profile: *const Profile, sym: symbol.Symbol) bool {
+    if (profile.hasVisibilityKeyword(sym.node)) return true;
     var current = sym.node.parent();
     var hops: u8 = 0;
     while (current) |p| : (hops += 1) {
