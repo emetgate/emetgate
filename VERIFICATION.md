@@ -6,20 +6,21 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **679**
-- Mutations declared in `tests/mutations.json`: **428**
-  - killed: **411**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **724**
+- Mutations declared in `tests/mutations.json`: **452**
+  - killed: **435**
   - equivalent: **5**
   - defense in depth: **3**
   - open: **2**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-- Red-team suites: **3** files, **32** tests total
+- Red-team suites: **4** files, **38** tests total
+  - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_memory.zig`: 17
   - `tests/redteam_sandbox.zig`: 4
-- Security findings recorded in README's Security History: **4**
+- Security findings recorded in README's Security History: **5**
 
 ## Reproducing this
 
@@ -36,7 +37,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-111 mutation(s).
+112 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -151,10 +152,11 @@ python tools/verification_page.py --check
 | `ZS3-imports-not-followed` | `tests/zig_source.zig` | `try pending.append(arena, try std.fs.path.resolvePosix(arena, &...` -> `_ = try std.fs.path.resolvePosix(arena, &.{ base, target });` | harness: kill names come only from files a suite compiles, with escapes decoded...; harne... | killed |
 | `ZS4-every-file-declares-tests` | `tests/zig_source.zig` | `if (tree.nodeTag(@enumFromInt(i)) == .test_decl) return true;` -> `if (tree.nodeTag(@enumFromInt(i)) == .test_decl or true) return...` | suites: a test is found in any form and position, and a commented one is not; suites: eve... | killed |
 | `SL1-slow-marker-always-runs` | `src/engine/test_util.zig` | `if (@hasDecl(root, "emetgate_slow") and root.emetgate_slow) ret...` -> `_ = root;` | runner: a slow test is skipped unless --slow is given, and runs when it is | killed |
+| `ZIG2-visibility-hook-not-consulted` | `src/engine/boundedness.zig` | `if (profile.hasVisibilityKeyword(sym.node)) return true;     va...` -> `var current = sym.node.parent();` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
 
 ### Sandbox and the test/typecheck gate
 
-51 mutation(s).
+52 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -181,8 +183,6 @@ python tools/verification_page.py --check
 | `SB4-sandbox-restricted-token-not-created` | `src/platform/sandbox.zig` | `if (faulted(.restrict) or win.CreateRestrictedToken(process_tok...` -> `if (faulted(.restrict)) return error.SandboxUnavailable;       ...` | redteam sandbox: every failure to build the low-integrity token refuses to run ... | killed |
 | `SB5-shadow-low-integrity-write-not-granted` | `src/platform/shadow.zig` | `try grantLowIntegrityWrite(options.shadow_abs);` -> `` | redteam sandbox: a passing test command cannot write outside the shadow, and on... | killed |
 | `NF1-create-not-added-to-index` | `src/platform/runner.zig` | `try repo.addToIndex(gpa, io, root, rel);` -> `` | new file: a later proposal to another file runs in a shadow that contains the c...; new f... | killed |
-| `NF2-create-ignored-path-accepted` | `src/platform/runner.zig` | `if (try repo.isIgnored(gpa, io, root, rel)) return error.Ignore...` -> `if (try repo.isIgnored(gpa, io, root, rel) and false) return er...` | new file: a path ignored by .gitignore is refused before anything runs | killed |
-| `NF3-create-unknown-language-defaulted` | `src/platform/runner.zig` | `const profile = registry.forPath(file_abs) orelse return error....` -> `const profile = registry.forPath(file_abs) orelse registry.forP...` | new file: an extension with no language profile is refused | killed |
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
 | `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.gate(gpa, io, root, rel, ref, created.snapsho...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
 | `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     defer...` -> `defer report.deinit(gpa);      if (options.trace) \|t\| t.commi...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
@@ -209,10 +209,13 @@ python tools/verification_page.py --check
 | `LW4-slice-kills-without-grace` | `src/platform/sandbox.zig` | `drain_end = graceEnd(io, deadline);` -> `drain_end = std.Io.Clock.Timestamp.now(io, .awake);` | a worker that holds the pipe and ends within the grace is waited for, not repor... | killed |
 | `LW5-grace-past-deadline` | `src/platform/sandbox.zig` | `return if (end.compare(.lt, deadline)) end else deadline;` -> `return if (end.compare(.lt, deadline) or true) end else deadlin...` | the leftover wait ends at the command's deadline, not after the full grace | killed |
 | `LW6-stop-does-not-wait` | `src/platform/sandbox.zig` | `if (win.WaitForSingleObject(handle, left) == win.wait_object_0)...` -> `if (win.WaitForSingleObject(handle, left * 0) == win.wait_objec...` | a timed out run returns only after every process in its job has exited | killed |
+| `TB1-try-batch-prepares-without-batch` | `src/platform/batch.zig` | `try disk.prepare(gpa, io, file_abs, source, base, journal_dir, ...` -> `try disk.prepare(gpa, io, file_abs, source, base, journal_dir, ...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
+| `TB2-try-batch-commits-without-record` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, null, options.commit...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
+| `TB3-try-batch-drops-commit-step` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, &batch, null);` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
 
 ### Disk, repository boundary and atomic commit
 
-14 mutation(s).
+25 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -224,12 +227,23 @@ python tools/verification_page.py --check
 | `NF5-jail-new-unsafe-name-accepted` | `src/platform/repo.zig` | `shadow.validateRelative(name) catch return error.InvalidPath;` -> `` | new file: paths inside .git and .emetgate, or with an unsafe name, are refused | killed |
 | `NF6-jail-new-existing-file-accepted` | `src/platform/repo.zig` | `return error.FileExists; }  pub fn isIgnored` -> `return .{ .root = served, .abs = abs, .rel = rel, .creates = tr...` | new file: absent on a file that already exists appends instead of overwriting, ... | killed |
 | `NF7-disk-create-overwrites` | `src/platform/disk.zig` | `replacement.renameTo(gpa, path_abs) catch \|err\| switch (err) ...` -> `replacement.renameReplacing(gpa, path_abs) catch \|err\| switch...` | create never overwrites an existing file and cleans up its temp | killed |
-| `NF13-index-failure-silent` | `src/platform/repo.zig` | `return error.WrittenButNotIndexed;` -> `` | new file: when git add fails the file stays on disk with the written body and t... | killed |
+| `NF13-index-failure-silent` | `src/platform/repo.zig` | `return error.WrittenButNotIndexed; }  pub fn addAllToIndex` -> `}  pub fn addAllToIndex` | new file: when git add fails the file stays on disk with the written body and t... | killed |
 | `NF14-mcp-create-not-jailed-new` | `src/platform/repo.zig` | `error.FileNotFound => if (may_create) jailNew(gpa, io, root, pa...` -> `error.FileNotFound => if (may_create and false) jailNew(gpa, io...` | purple: hash absent on a missing file creates it through emetgate_try, and emet... | killed |
 | `RC1-recover-swallows-shadow-removal-error` | `src/platform/disk.zig` | `const removal = shadow.remove(io, root_abs, shadow_abs);` -> `const removal: anyerror!void = {}; shadow.remove(io, root_abs, ...` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
 | `RC2-recover-reports-shadow-error-but-exits-0` | `src/platform/disk.zig` | `return recover_failed_exit_code;` -> `return 0;` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
 | `RC3-recover-treats-missing-shadow-as-failure` | `src/platform/disk.zig` | `const removal = shadow.remove(io, root_abs, shadow_abs);` -> `const removal = std.Io.Dir.cwd().deleteDir(io, shadow_abs);` | purple recover: no shadow at all is a clean recover with exit 0 | killed |
 | `F2-internal-path-checked-only-after-resolving` | `src/platform/repo.zig` | `try refuseInternalAsWritten(gpa, io, served, path);` -> `` | read tools refuse .git internals in a git worktree, where .git is a file | killed |
+| `BC1-batch-commit-record-not-written` | `src/platform/disk.zig` | `if (batch) \|b\| commit_record.write(b.gpa, b.io, b.journal_dir...` -> `if (@as(?*const Batch, null)) \|b\| commit_record.write(b.gpa, ...` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
+| `BC2-recover-roll-forward-skipped` | `src/platform/disk.zig` | `if (committed) {         const new_hash` -> `if (false) {         const new_hash` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
+| `BC3-roll-forward-new-hash-unchecked` | `src/platform/disk.zig` | `if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &new_hash)) re...` -> `_ = gpa;     _ = new_hash;` | batch crash: recover never rolls forward a file whose content is not the journa... | killed |
+| `BC4-batch-commit-record-removed-before-finalize` | `src/platform/disk.zig` | `if (Step.stops(step)) return abandonAll(pendings);     for (pen...` -> `if (batch) \|b\| commit_record.remove(b.gpa, b.io, b.journal_di...` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
+| `BC5-recover-leaves-commit-record` | `src/platform/disk.zig` | `try commit_record.removeAll(gpa, io, journal_dir);` -> `` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
+| `BCR1-create-rename-replaces` | `src/platform/disk.zig` | `fn place(self: *Pending, in_gap: ?Hook) !void {         if (in_...` -> `fn place(self: *Pending, in_gap: ?Hook) !void {         if (in_...` | batch create crash: a file that appears at a create target before commit is nev...; batch... | killed |
+| `BCR2-create-stages-over-existing-file` | `src/platform/disk.zig` | `if (try pathExists(io, path_abs)) return error.FileExists;` -> `` | batch create crash: staging a create over an existing file is refused before an... | killed |
+| `BCR3-create-not-journaled` | `src/platform/disk.zig` | `const journal = if (journal_dir) \|dir\| try writeJournal(gpa, ...` -> `const journal: ?[]u8 = if (journal_dir == null) null else null;...` | batch create crash: a crash after any step of a modify plus create commit recov...; batch... | killed |
+| `BCR4-rollback-keeps-created-file` | `src/platform/disk.zig` | `if (!deleteWithRetry(io, target_abs)) return error.CreatedNotRe...` -> `` | batch create crash: a crash after any step of a modify plus create commit recov...; batch... | killed |
+| `BCR5-commit-skips-index` | `src/platform/disk.zig` | `try git_repo.addAllToIndex(b.gpa, b.io, root, created.items);` -> `_ = root;` | batch create crash: a crash after any step of a modify plus create commit recov...; batch... | killed |
+| `BCR6-roll-forward-skips-index` | `src/platform/disk.zig` | `git_repo.addAllToIndex(gpa, io, root_abs, paths) catch {       ...` -> `_ = paths;` | batch create crash: a crash after any step of a modify plus create commit recov...; batch... | killed |
 
 ### Rules and the q: query engine
 
@@ -423,7 +437,7 @@ python tools/verification_page.py --check
 
 ### Mutation testing tool itself
 
-38 mutation(s).
+40 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -455,6 +469,8 @@ python tools/verification_page.py --check
 | `SC6-signature-hit-accepted` | `tools/mutate/schema.zig` | `if (first_hit < body_open) return .{ .refused = .touches_signat...` -> `if (first_hit < body_open and false) return .{ .refused = .touc...` | schema: a mutation outside a function, in a test, across functions or in a sign... | killed |
 | `SC7-copy-error-drops-the-whole-function` | `tools/mutate/schema.zig` | `if (whole and out.items.len != before) return;` -> `if (whole and out.items.len != before and false) return;` | schema: a compile error in a copy drops that mutant, one in the original drops ... | killed |
 | `SC8-crash-not-named` | `tools/mutate/core.zig` | `found = if (done) null else line[space + 1 .. dots];` -> `found = if (done or true) null else line[space + 1 .. dots];` | schema: a crash names the test that was running when the process died | killed |
+| `SC14-active-mutant-setter-joins-schema` | `tools/mutate/schema.zig` | `if (std.mem.indexOf(u8, file.source[r[0]..r[1]], active_assignm...` -> `` | schema: the function that sets the active mutant runs on its own, the functions... | killed |
+| `SC15-active-mutant-comparison-refused` | `tools/mutate/schema.zig` | `const active_assignment = active_name ++ " = ";` -> `const active_assignment = active_name ++ " =";` | schema: the function that sets the active mutant runs on its own, the functions... | killed |
 | `RN13-skip-ignored` | `tools/test_runner.zig` | `if (std.mem.eql(u8, name.*, skip)) name.* = "";` -> `if (std.mem.eql(u8, name.*, skip)) name.* = name.*;` | runner: a skipped name leaves the selection and --jobs passes it to every shard | killed |
 | `RN14-skip-not-passed-to-shards` | `tools/test_runner.zig` | `for (options.skips) \|skip\| argv.appendSlice(gpa, &.{ "--skip"...` -> `` | runner: a skipped name leaves the selection and --jobs passes it to every shard | killed |
 | `CH1-diff-range-off-by-one` | `tools/mutate/changes.zig` | `.{ .first = start, .last = start + count - 1 });` -> `.{ .first = start, .last = start + count });` | changes: a unified=0 diff gives the changed lines of every file that still exis... | killed |
@@ -468,7 +484,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-45 mutation(s).
+54 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -486,7 +502,8 @@ python tools/verification_page.py --check
 | `ES12-sym-constructor-outside-class` | `src/engine/lang/ecma/common.zig` | `return std.mem.eql(u8, "class_body", parent.kind()) and std.mem...` -> `return std.mem.eql(u8, "constructor", tree.text(name)) and pare...` | a method named constructor in an object literal is a method, not a constructor | killed |
 | `R8-registry-extension-ignored` | `src/engine/lang/registry.zig` | `if (profile.handles(path)) return profile;` -> `if (profile.handles(path) or true) return profile;` | every registered profile loads its grammar and alone claims its extensions in a...; a fil... | killed |
 | `CJ1-javascript-field-name-shape-wrong` | `src/engine/lang/javascript/profile.zig` | `const field_shape: ecma.FieldShape = .{ .node = "field_definiti...` -> `const field_shape: ecma.FieldShape = .{ .node = "field_definiti...` | conformance: static members, constructors and accessors get their own refs and ... | killed |
-| `NS17-batch-absent-refused-silently` | `src/protocol/handlers.zig` | `.absent => return error.AbsentInBatch,` -> `.absent => return error.InvalidHash,` | purple: a batch item with hash absent is refused by name and the repository is ... | killed |
+| `NF2-create-ignored-path-accepted` | `src/platform/create.zig` | `if (try repo.isIgnored(gpa, io, root, rel)) return error.Ignore...` -> `if (try repo.isIgnored(gpa, io, root, rel) and false) return er...` | new file: a path ignored by .gitignore is refused before anything runs | killed |
+| `NF3-create-unknown-language-defaulted` | `src/platform/create.zig` | `const profile = registry.forPath(file_abs) orelse return error....` -> `const profile = registry.forPath(file_abs) orelse registry.forP...` | new file: an extension with no language profile is refused | killed |
 | `SC12-argument-errors-exit-generic` | `src/protocol/wire.zig` | `error.UnknownCheck, error.UnexpectedCheckArgument, error.Missin...` -> `error.UnknownCheck => 19,` | scan: every malformed --check spec exits with the malformed-check code | killed |
 | `SP28-where-errors-exit-generic` | `src/protocol/wire.zig` | `error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, erro...` -> `` | scope: an invalid --in is refused by name before anything is scanned | killed |
 | `SU5-scope-unresolved-exit-generic` | `src/protocol/wire.zig` | `error.ScopeUnresolved => 31,` -> `` | scope: a ledger rule whose where names a deleted file stops the scan with Scope...; scope... | killed |
@@ -517,6 +534,14 @@ python tools/verification_page.py --check
 | `RM16-mcp-batch-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .trace` -> `.allow_repo_memory = false, .trace` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `CB2-mcp-scan-without-call-budget` | `src/protocol/handlers.zig` | `.call_operations = max_scan_operations,` -> `.call_operations = null,` | scan tool: one call has a total operation budget, and the files past it come ba... | killed |
 | `ZS6-a-test-file-left-out-of-the-binary` | `test_root.zig` | `_ = @import("tests/lockdown.zig");` -> `` | suites: every test file under tests/ is imported exactly once by test_root.zig | killed |
+| `BCR7-symmetry-skips-reference-check` | `src/platform/create.zig` | `.unreferenced = !try mentionedAnywhere(gpa, io, root, sources, ...` -> `.unreferenced = true,` | batch create through the tool: a new symbol that another edit of the batch call... | killed |
+| `BCR8-symmetry-ignores-effects` | `src/engine/symmetry.zig` | `if (isEffect(profile, node.kind())) return true;` -> `` | symmetry: a call, a new or an assignment in a top-level initializer is an effect | killed |
+| `ZIG1-pub-check-inverted` | `src/engine/lang/profile.zig` | `if (std.mem.eql(u8, keyword, child.kind())) return true;` -> `if (std.mem.eql(u8, keyword, child.kind())) return false;` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
+| `ZIG5-export-keyword-dropped` | `src/engine/lang/zig/profile.zig` | `.visibility_keywords = &.{ "pub", "export" },` -> `.visibility_keywords = &.{"pub"},` | zig: an export fn is unbounded, matching pub | killed |
+| `ZIG3-string-escape-list-emptied` | `src/engine/lang/zig/profile.zig` | `.strings = &.{"string"},` -> `.strings = &.{},` | zig: a function named by string inside @hasDecl is unbounded (string-key escape) | killed |
+| `ZIG4-call-arguments-kind-wrong` | `src/engine/lang/zig/profile.zig` | `.arguments = "arguments", .optional_marker = null },` -> `.arguments = "argument_list", .optional_marker = null },` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
+| `TSX1-extension-dropped-from-registry` | `src/engine/lang/tsx/profile.zig` | `.extensions = &.{".tsx"},` -> `.extensions = &.{},` | every registered profile loads its grammar and alone claims its extensions in a... | killed |
+| `JSX1-extension-dropped-from-javascript` | `src/engine/lang/javascript/profile.zig` | `.extensions = &.{ ".js", ".mjs", ".cjs", ".jsx" },` -> `.extensions = &.{ ".js", ".mjs", ".cjs" },` | jsx: a .jsx path resolves to the javascript profile and a .tsx path to the tsx ... | killed |
 
 ## What this system does not prove
 
