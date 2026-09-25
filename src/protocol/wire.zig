@@ -624,6 +624,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.WorkspaceBusy, error.WorkspaceLockFailed => 14,
         error.Conflict => 11,
         error.WrittenButUnverified => 12,
+        error.UnknownGitSubcommand, error.MissingCommit, error.InvalidCommit, error.InvalidCount, error.GitCommandFailed => 39,
         else => 1,
     };
 }
