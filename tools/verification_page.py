@@ -1,11 +1,11 @@
 import argparse
-import json
 import os
 import re
 import sys
 
+import mutation_stats
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MUTATIONS_PATH = os.path.join(ROOT, "tests", "mutations.json")
 README_PATH = os.path.join(ROOT, "README.md")
 OUTPUT_PATH = os.path.join(ROOT, "VERIFICATION.md")
 
@@ -41,31 +41,8 @@ GROUPS = [
 
 OTHER_GROUP = "Protocol wiring and everything else"
 
-STATUS_KEYWORDS = [
-    ("control", "control"),
-    ("compile_error", "compile-error control"),
-    ("equivalent", "equivalent"),
-    ("defense in depth", "defense in depth"),
-    ("open:", "open"),
-    ("redundant", "defense in depth"),
-]
-
-
-def load_mutations():
-    with open(MUTATIONS_PATH, encoding="utf-8") as f:
-        return json.load(f)["mutations"]
-
-
-def classify(mutation):
-    if "expect" not in mutation:
-        return "killed"
-    if mutation.get("expect") == "e2e-lockdown":
-        return "verified end-to-end, not by the mutation harness"
-    note = (mutation.get("note") or "").lower()
-    for keyword, label in STATUS_KEYWORDS:
-        if keyword in note:
-            return label
-    return "survives (unclassified)"
+load_mutations = mutation_stats.load_mutations
+classify = mutation_stats.classify
 
 
 def group_for(file_path):
@@ -153,7 +130,8 @@ def render(mutations):
     lines.append(f"- Mutations declared in `tests/mutations.json`: **{total}**")
     known_statuses = (
         "killed", "equivalent", "defense in depth", "open", "control",
-        "compile-error control", "verified end-to-end, not by the mutation harness",
+        "compile-error control", "not caught by a test, documented as unbounded cost",
+        "verified end-to-end, not by the mutation harness",
     )
     for status in known_statuses:
         if status in by_status:

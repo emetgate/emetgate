@@ -32,6 +32,17 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
+      - name: Set up Python
+        if: matrix.optimize == 'Debug'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Verification page, README facts and forbidden words are up to date
+        if: matrix.optimize == 'Debug'
+        run: |
+          python tools/verification_page.py --check
+          python tools/readme_facts.py --check
+          python tools/forbidden_words.py --check
 
   nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

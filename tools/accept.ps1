@@ -48,6 +48,12 @@ Invoke-Stage "mutants changed since $Ref" {
 Invoke-Stage "verification page up to date" {
     python (Join-Path $root "tools/verification_page.py") --check
 }
+Invoke-Stage "readme facts up to date" {
+    python (Join-Path $root "tools/readme_facts.py") --check
+}
+Invoke-Stage "no forbidden marketing words" {
+    python (Join-Path $root "tools/forbidden_words.py") --check
+}
 if (Test-Path $report) {
     $outcomes = Get-Content $report -Raw | ConvertFrom-Json
     $schema = @($outcomes | Where-Object { $_.origin -eq 'schema' }).Count
