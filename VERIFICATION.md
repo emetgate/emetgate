@@ -6,18 +6,18 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **799**
-- Mutations declared in `tests/mutations.json`: **477**
-  - killed: **460**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **804**
+- Mutations declared in `tests/mutations.json`: **480**
+  - killed: **463**
   - equivalent: **5**
   - defense in depth: **3**
   - open: **2**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-- Red-team suites: **6** files, **51** tests total
+- Red-team suites: **6** files, **53** tests total
   - `tests/redteam_batch_create.zig`: 6
-  - `tests/redteam_batch_delete.zig`: 7
+  - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
@@ -220,7 +220,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-34 mutation(s).
+36 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -258,6 +258,8 @@ python tools/verification_page.py --check
 | `JV4-delete-before-commit-record` | `src/platform/disk.zig` | `.delete => {},         }     }      fn replace(` -> `.delete => try self.guard.?.deleteSelf(),         }     }      ...` | batch delete crash: a file deleted by a batch stays on disk until the commit re...; batch... | killed |
 | `JV5-delete-skips-reference-check` | `src/platform/batch_plan.zig` | `if (try create.mentionedAnywhere(gpa, io, root, sources, null, ...` -> `` | redteam batch delete: a file-local symbol that its own file still calls is refu... | killed |
 | `JV6-verified-delete-by-path` | `src/platform/disk.zig` | `try guard.deleteSelf();     return .deleted;` -> `_ = deleteWithRetry(io, path_abs);     return .deleted;` | a verified delete removes the file it hashed even when the path is taken over b... | killed |
+| `FH1-file-delete-without-hash-accepted` | `src/platform/batch_plan.zig` | `.absent => return error.MissingFileHash,` -> `.absent => current,` | batch delete through the tool: a file delete without the whole-file hash is ref...; redte... | killed |
+| `FH2-failed-delete-still-unindexed` | `src/platform/disk.zig` | `.delete => if (p.removed) try removed.append(b.gpa, p.path),` -> `.delete => try removed.append(b.gpa, p.path),` | batch delete crash: a delete that fails at finalize leaves the file in the git ... | killed |
 
 ### Rules and the q: query engine
 
@@ -499,7 +501,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-66 mutation(s).
+67 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -540,7 +542,7 @@ python tools/verification_page.py --check
 | `CR8-crash-code-not-hex` | `src/protocol/wire.zig` | `"0x{X:0>8}", .{code}` -> `"{d}", .{code}` | a crashed stage is reported as a crash with its hex code, never as a failed ver... | killed |
 | `RO1-a-new-tool-slips-into-the-surface` | `src/protocol/server.zig` | `.name = "emetgate_scan",` -> `.name = "emetgate_rule_add",` | red line: the served tool surface is exactly this list, so a new tool cannot sl...; scan ... | killed |
 | `RO2-a-rule-writing-tool-is-dispatched` | `src/protocol/handlers.zig` | `return error.UnknownTool; }` -> `if (std.mem.eql(u8, name, "emetgate_rule_add")) return callScan...` | red line: no tool on the model side can adopt, change or forget a rule | killed |
-| `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `try wire.writeSkeleton(w, file, text, adopted.items);` -> `try wire.writeSkeleton(w, file, text, &.{});` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
+| `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source...` -> `try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source...` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
 | `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = true,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = false,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = true, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
@@ -569,6 +571,7 @@ python tools/verification_page.py --check
 | `SR2-shadow-key-ignores-the-path` | `src/platform/shadow_root.zig` | `for (root_abs[0..end]) \|byte\| {` -> `for (root_abs[0..@min(end, 3)]) \|byte\| {` | the shadow key folds case and separators, and two repositories never share one | killed |
 | `SR4-dot-segment-not-flagged` | `src/platform/shadow_root.zig` | `return hasDotSegment(self.shadow);` -> `return hasDotSegment(self.shadow[0..0]);` | redteam sandbox: the shadow lives under the operator's shadow root, outside the... | killed |
 | `SR5-sweep-removes-a-live-shadow` | `src/platform/shadow_root.zig` | `catch \|err\| return err == error.FileNotFound;     return fals...` -> `catch \|err\| return err == error.FileNotFound;     return true;` | sweep removes only stale shadows whose repository is gone, and never follows a ... | killed |
+| `FH3-skeleton-without-file-hash` | `src/protocol/wire.zig` | `try js.write(file);     try writeFileHash(&js, file_hash);     ...` -> `try js.write(file);     _ = file_hash;     try js.objectField("...` | redteam batch delete: an unreferenced file is deleted through the tool and repo... | killed |
 
 ## What this system does not prove
 
