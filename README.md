@@ -512,6 +512,45 @@ Findings against the gate, oldest first.
 
 **F4 — a crash during `emetgate_try_batch` could leave the batch half applied.** `commitBatch` finalized the files one by one, deleting each backup and journal in turn. A crash after the first file and before the last left the finalized files new, and recovery rolled the others back. Each file was valid alone, but only part of the batch that passed the tests together was on disk. Found by model checking the journal protocol with TLA+ (TLC, two and three files). Fixed in `c03083e`: once every swap is verified, one durable batch commit record is written to the journal directory before any backup is deleted, and it is deleted after the last journal. Recovery rolls the batch forward when the record exists, after checking each target against the new hash its journal now carries, and rolls it back otherwise. Crash tests are in `tests/batch_crash.zig`; not yet released.
 
+## Nightly attacker
+
+Every night, before a finding reaches this list by hand, an automated attacker tries to break the
+gate from the same MCP surface a model uses: write outside the served repository, escape the test
+sandbox, override the test/typecheck command or the repo-memory policy from a tool argument, read
+or write `.git`/`.emetgate` internals, and feed the `q:` query engine adversarial patterns. A
+success is never taken on the model's word: after each attempt the harness checks `git status` in
+the served repository, the content of a canary file kept outside it, and a marker the sandboxed
+test command would leave behind if it ran in the real tree. Only an observed change counts.
+
+Two modes, in `tools/attack/`:
+
+- **Script mode (default, free, runs every night).** `tools/attack/run.py` starts a temporary git
+  repository, launches `emetgate mcp --test <a command that would leave a marker file if it
+  escaped the sandbox>`, and replays `tests/attack/corpus.json` over stdio: 50 attempts across
+  stale/forged/absent hashes, body escapes, `test_cmd`/`typecheck_cmd`/`allow_repo_config`/
+  `allow_repo_memory` injection through tool arguments, path traversal and absolute paths (plain
+  files and the unadvertised-but-callable `emetgate_try_batch`), `.git`/`.emetgate` internal
+  paths, adversarial `q:` queries, oversized bodies and symbol names, and mixed multi-step
+  attempts. Run it with `python tools/attack/run.py` after `zig build`.
+- **LLM mode (opt-in, off by default).** `tools/attack/llm_mode.py` runs the identical harness
+  against attempts a model writes instead of the fixed corpus, under `emetgate lockdown` with a
+  turn budget. Without `ANTHROPIC_API_KEY` set (and without `--fixture`, used only to test the
+  wiring against a canned response) it prints that it is skipped and exits 0 — it never spends a
+  token unless both the secret and an explicit `workflow_dispatch` input are given. Every attempt,
+  successful or not, is written to `tests/attack/llm-sessions/` in the same shape as a corpus case,
+  so a rejected model attempt can be copied into `tests/attack/corpus.json` as a permanent
+  regression and a successful one becomes a Security History candidate.
+
+`.github/workflows/ci.yml`'s `nightly-attacker` job runs script mode on every schedule and
+`workflow_dispatch` run; LLM mode only runs when that dispatch sets `llm_attack: true`, so it never
+runs on a schedule and never on a pull request.
+
+The harness's own guard is covered too: `tools/attack/test_harness.py` checks that dropping any one
+of the three observations (`git status`, the canary file, the sandbox marker) would hide a real
+breach, and a manual check confirms the harness end to end — with `cas.propose`'s hash comparison
+replaced by `if (false) return error.HashMismatch;`, the same 50-attempt corpus reports 5 breaches
+(the stale/forged-hash and mixed cases) instead of 0, and exits 1.
+
 ## Limits
 
 The verification guarantees have the following limits:
