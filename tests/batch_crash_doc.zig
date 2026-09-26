@@ -81,7 +81,7 @@ const Repo = struct {
     }
 };
 
-fn preparePendings(repo: *const Repo, pendings: *[2]disk.Pending) !void {
+fn preparePendings(repo: *const Repo, pendings: *[2]disk.Pending) !batch_plan.Prepared {
     var code_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const code_path = try std.fmt.bufPrint(&code_path_buf, "{s}\\a.ts", .{repo.root});
     var doc_path_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -96,8 +96,9 @@ fn preparePendings(repo: *const Repo, pendings: *[2]disk.Pending) !void {
         .new_text = "## Setup\n\nnew\n",
     };
     const doc_planned = try batch_plan.planDoc(gpa, testing.io, doc_edit, try gpa.dupe(u8, "notes.md"));
-    defer doc_planned.deinit(gpa);
+    errdefer doc_planned.deinit(gpa);
     pendings[1] = try disk.prepare(gpa, testing.io, doc_path, doc_planned.source(), doc_planned.base_hash.?);
+    return doc_planned;
 }
 
 test "mixed batch crash: a code edit and a doc edit commit atomically" {
@@ -106,7 +107,8 @@ test "mixed batch crash: a code edit and a doc edit commit atomically" {
     var repo = try Repo.init();
     defer repo.deinit();
     var pendings: [2]disk.Pending = undefined;
-    try preparePendings(&repo, &pendings);
+    const doc_planned = try preparePendings(&repo, &pendings);
+    defer doc_planned.deinit(gpa);
     const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
     try disk.commitBatch(&pendings, null, null, &batch, null);
 
@@ -125,7 +127,8 @@ test "mixed batch crash: a crash right after the journal is written recovers to 
     var repo = try Repo.init();
     defer repo.deinit();
     var pendings: [2]disk.Pending = undefined;
-    try preparePendings(&repo, &pendings);
+    const doc_planned = try preparePendings(&repo, &pendings);
+    defer doc_planned.deinit(gpa);
 
     const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
     var at: StopAt = .{ .target = 1 };
@@ -150,7 +153,8 @@ test "mixed batch crash: a crash after both files swap but before the commit rec
     var repo = try Repo.init();
     defer repo.deinit();
     var pendings: [2]disk.Pending = undefined;
-    try preparePendings(&repo, &pendings);
+    const doc_planned = try preparePendings(&repo, &pendings);
+    defer doc_planned.deinit(gpa);
 
     const swap_steps = 1 + 3 * 2;
     const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
@@ -162,4 +166,59 @@ test "mixed batch crash: a crash after both files swap but before the commit rec
     try testing.expectEqual(@as(usize, 0), report.failed);
     try repo.expectAllOldOrAllNew();
     try repo.expectNoDebris();
+}
+
+const windows = std.os.windows;
+
+extern "kernel32" fn GetCurrentProcess() callconv(.winapi) windows.HANDLE;
+extern "kernel32" fn GetProcessHandleCount(process: windows.HANDLE, count: *windows.DWORD) callconv(.winapi) windows.BOOL;
+
+fn currentHandleCount() u32 {
+    var count: windows.DWORD = 0;
+    _ = GetProcessHandleCount(GetCurrentProcess(), &count);
+    return count;
+}
+
+test "mixed batch crash: a crash after any step recovers to all old or all new, and the process handle count does not grow across iterations" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const steps = 1 + 3 * 2 + 1 + 2 + 1;
+    var first_handles: ?u32 = null;
+    var stop: usize = 1;
+    while (true) : (stop += 1) {
+        var repo = try Repo.init();
+        defer repo.deinit();
+
+        var pendings: [2]disk.Pending = undefined;
+        const doc_planned = try preparePendings(&repo, &pendings);
+        defer doc_planned.deinit(gpa);
+
+        const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
+        var at: StopAt = .{ .target = stop };
+        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+        disk.commitBatch(&pendings, null, null, &batch, &step) catch |err| {
+            errdefer std.debug.print("crash after step {d} of {d}\n", .{ stop, steps });
+            try testing.expectEqual(error.Crashed, err);
+            const report = try repo.recover();
+            try testing.expectEqual(@as(usize, 0), report.failed);
+            try repo.expectAllOldOrAllNew();
+            try repo.expectNoDebris();
+            const handles = currentHandleCount();
+            if (first_handles == null) {
+                first_handles = handles;
+            } else if (handles > first_handles.? + 20) {
+                std.debug.print("handle count grew from {d} to {d} by step {d}\n", .{ first_handles.?, handles, stop });
+                return error.HandleLeak;
+            }
+            continue;
+        };
+        try testing.expectEqual(steps + 1, stop);
+        const code = try repo.content("a.ts");
+        defer gpa.free(code);
+        const doc = try repo.content("notes.md");
+        defer gpa.free(doc);
+        try testing.expectEqualStrings(code_new, code);
+        try testing.expectEqualStrings(doc_new, doc);
+        try repo.expectNoDebris();
+        break;
+    }
 }
