@@ -4728,6 +4728,15 @@
       ]
     },
     {
+      "id": "R17-json-toplevel-child-count-dropped",
+      "file": "src/engine/lang/json/pointer.zig",
+      "from": ".child_count = directChildCount(value_node),",
+      "to": ".child_count = null,",
+      "kills": [
+        "topLevel lists only the root's direct children and does not recurse into nested keys"
+      ]
+    },
+    {
       "id": "R9-markdown-heading-level-lost",
       "file": "src/engine/lang/markdown/heading.zig",
       "from": "if (atxLevel(child.kind())) |level| return level;",

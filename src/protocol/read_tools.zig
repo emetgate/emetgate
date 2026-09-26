@@ -165,11 +165,11 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
         return;
     }
 
-    const entries = try json_pointer.keyTree(gpa, tree);
-    defer json_pointer.freeKeyTree(gpa, entries);
-    event.chars_emetgate = bytes.len;
-    event.chars_fullfile = bytes.len;
-    var js: std.json.Stringify = .{ .writer = w };
+    const entries = try json_pointer.topLevel(gpa, tree);
+    defer json_pointer.freeTopLevel(gpa, entries);
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var js: std.json.Stringify = .{ .writer = &out.writer };
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
@@ -185,10 +185,17 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
         try js.write(@tagName(entry.ty));
         try js.objectField("hash");
         try js.write(hex[0..]);
+        if (entry.child_count) |count| {
+            try js.objectField("children");
+            try js.write(count);
+        }
         try js.endObject();
     }
     try js.endArray();
     try js.endObject();
+    event.chars_emetgate = out.written().len;
+    event.chars_fullfile = bytes.len;
+    try w.writeAll(out.written());
     try w.writeByte('\n');
 }
 

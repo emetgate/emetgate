@@ -446,19 +446,27 @@ codebases, the ratios are the signal):
 
 | Scenario | Read | emetgate | ratio |
 |---|---:|---:|---:|
-| find + read a function in a 1.6k-line real file | 13313 | 2795 | 0.21x |
-| read one key in a 50 KB real `package-lock.json` | 19859 | 44195 | 2.23x |
-| read one section of this repo's own README.md | 12681 | 1377 | 0.11x |
+| find + read a function in a 1.6k-line real file | 13313 | 2819 | 0.21x |
+| read one key in a 50 KB real `package-lock.json` | 19859 | 319 | 0.02x |
+| read one section of this repo's own README.md | 15432 | 1541 | 0.10x |
 | read the same symbol a second time, `--mirror` on | 13313 | 84 | 0.01x |
 | reread the same symbol after it changed, `--mirror` on | 18 | 74 | 4.11x |
 | line range 10-15 of `build.zig` | 151 | 34 | 0.23x |
 
-Two rows are worse than a plain read, on purpose left in: a flat key tree over a huge,
-uniformly-shaped JSON file (every one of hundreds of packages contributes several keys)
-can cost more than the file itself, and a hash-carrying JSON reply on a genuinely tiny
-symbol costs more than the few bytes it wraps. Locating a symbol or a JSON/Markdown node
-is not free either; both locate and fetch steps are counted above, matching how
-`tests/bench/run4.py` counts a symbol edit's ingest side.
+The `package-lock.json` row used to cost 2.23x a plain read: the default key tree walked
+every nested key of every one of hundreds of packages. It now lists only the root's
+direct children, with a `children` count on any object or array instead of recursing
+into it; a pointer read (the second step counted above) still returns a full subtree
+when the model asks for one.
+
+One row is still worse than a plain read, left in on purpose: a hash-carrying JSON reply
+on a genuinely tiny symbol costs more than the few bytes it wraps (a fixed 32-hex-char
+hash plus the `file`/`symbol` JSON wrapper). Shrinking it further means accepting a
+short hash prefix in `emetgate_try`, which touches the CAS engine's hash-equality check
+on the write path; that change was judged too invasive to make safely in this pass, so
+the physical lower bound is reported instead of hidden. Locating a symbol or a
+JSON/Markdown node is not free either; both locate and fetch steps are counted above,
+matching how `tests/bench/run4.py` counts a symbol edit's ingest side.
 
 **Limits.** Claude Code can summarize (compact) its own context; the mirror only knows
 what it sent, not whether the model still has it. An `unchanged` reply after compaction

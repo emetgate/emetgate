@@ -506,7 +506,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-77 mutation(s).
+78 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -572,6 +572,7 @@ python tools/verification_page.py --check
 | `R14-cache-content-hash-skipped` | `src/engine/tree_cache.zig` | `if (self.unchangedContent(io, abs_path, entry.content_hash)) {` -> `if (true) {` | a racy mtime collision does not serve stale content, the content hash catches it | killed |
 | `R15-cache-key-not-normalized` | `src/engine/tree_cache.zig` | `if (byte.* == '/') byte.* = '\\';` -> `if (false) byte.* = '\\';` | normalizedKey folds slash direction and case so the same file has one entry | killed |
 | `R16-cache-budget-ignored` | `src/engine/tree_cache.zig` | `while (self.total_bytes > self.budget_bytes and self.entries.co...` -> `while (false and self.entries.count() > 1) {` | insert evicts the least recently touched entry once the byte budget is exceeded | killed |
+| `R17-json-toplevel-child-count-dropped` | `src/engine/lang/json/pointer.zig` | `.child_count = directChildCount(value_node),` -> `.child_count = null,` | topLevel lists only the root's direct children and does not recurse into nested... | killed |
 | `R9-markdown-heading-level-lost` | `src/engine/lang/markdown/heading.zig` | `if (atxLevel(child.kind())) \|level\| return level;` -> `if (atxLevel(child.kind())) \|_\| return 1;` | headingTree lists every heading with its level and line, nested sections includ... | killed |
 | `R10-markdown-section-excludes-subsections` | `src/engine/lang/markdown/heading.zig` | `.node = child,` -> `.node = heading,` | resolve returns a section's full text including its nested subsections | killed |
 | `R8-json-error-check-skipped` | `src/protocol/read_tools.zig` | `if (tree.root().hasError()) return error.InvalidJson;` -> `` | read_file refuses malformed JSON instead of serving a partial key tree | killed |
