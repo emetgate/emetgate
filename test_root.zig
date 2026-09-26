@@ -36,6 +36,8 @@ pub const move_batch = src.move_batch;
 pub const file_move = src.file_move;
 pub const module_paths = src.module_paths;
 pub const disk = src.disk;
+pub const receipts = src.receipts;
+pub const verify_run = src.verify_run;
 pub const jcs = src.jcs;
 pub const receipt = src.receipt;
 pub const checker = src.checker;
@@ -105,6 +107,7 @@ test {
     _ = @import("tests/file_move_crash.zig");
     _ = @import("tests/move_file_tool.zig");
     _ = @import("tests/move_file_crash.zig");
+    _ = @import("tests/verify_receipts.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
