@@ -36,6 +36,7 @@ pub const file_move = src.file_move;
 pub const module_paths = src.module_paths;
 pub const disk = src.disk;
 pub const runner = src.runner;
+pub const run_command = src.run_command;
 pub const rules = src.rules;
 pub const scan = src.scan;
 pub const stdio = src.stdio;

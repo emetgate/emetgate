@@ -34,6 +34,7 @@ pub const file_move = @import("platform/file_move.zig");
 pub const module_paths = @import("platform/module_paths.zig");
 pub const disk = @import("platform/disk.zig");
 pub const runner = @import("platform/runner.zig");
+pub const run_command = @import("platform/run_command.zig");
 pub const rules = @import("platform/rules.zig");
 pub const scan = @import("platform/scan.zig");
 pub const stdio = @import("platform/stdio.zig");
