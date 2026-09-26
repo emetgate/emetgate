@@ -5764,9 +5764,8 @@
       "file": "src/engine/docnode.zig",
       "from": "    if (source.len > max_bytes) return error.DocTooLarge;\n",
       "to": "",
-      "kills": [
-        "doc_writer: a file over 1 MiB is refused before any parse or sandbox run"
-      ]
+      "expect_status": "survived",
+      "note": "defense in depth: both callers (doc_writer.tryWriteDoc and batch_plan.planDoc) already read the file through readFileAlloc(.limited(max_bytes + 1)) and map the resulting error.StreamTooLong to DocTooLarge before checkReadable ever runs, so the length check inside checkReadable never gets to fire on the path that exists today; kept so a future caller that skips the capped read is still covered"
     },
     {
       "id": "DW3-doc-binary-check-removed",
@@ -5792,16 +5791,18 @@
       "from": "    if (!std.mem.eql(u8, reparsed.text(verify.node), new_value)) return error.DocSyntaxInvalid;\n",
       "to": "",
       "kills": [
-        "applyJsonPointer refuses a stale hash and refuses a value that is not valid json"
+        "applyJsonPointer refuses a stale hash and refuses a value that is not valid json",
+        "applyJsonPointer refuses a value that reparses to something other than exactly what was written"
       ]
     },
     {
       "id": "DW6-markdown-outer-region-check-removed",
       "file": "src/engine/docnode.zig",
-      "from": "    if (!found) return error.DocSyntaxInvalid;\n",
-      "to": "",
+      "from": "            found = candidate.node.endByte() == span.start + new_section.len;",
+      "to": "            found = true;",
       "kills": [
-        "applyMarkdownHeading refuses a replacement that does not start with a heading line"
+        "applyMarkdownHeading refuses a replacement whose unclosed code fence swallows the next heading",
+        "applyMarkdownHeading refuses a replacement whose unclosed html block swallows the next heading"
       ]
     },
     {
@@ -5822,9 +5823,8 @@
       "file": "src/protocol/handlers.zig",
       "from": "    const place = try repo.jailTarget(gpa, io, policy.root, file, false);",
       "to": "    const place = try repo.jailTarget(gpa, io, policy.root, file, true);",
-      "kills": [
-        "write_doc refuses a file that does not exist yet, it never creates one"
-      ]
+      "expect_status": "survived",
+      "note": "writeDocInto always reads the target file (for base_hash and the splice) before it writes anything; a file that does not exist yet fails at that read with error.FileNotFound whether jailTarget's may_create is false (fails immediately in jail) or true (jailNew succeeds, the later read still fails), so this flag has no observable effect through emetgate_write_doc today. Kept explicit as false, not true, to document intent and to fail loud if a future change reads conditionally on may_create"
     },
     {
       "id": "DW9-try-batch-drops-doc-edits",

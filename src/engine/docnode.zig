@@ -108,7 +108,7 @@ pub fn applyMarkdownHeading(gpa: Allocator, parser: ts.Parser, source: []const u
     var found = false;
     for (entries) |candidate| {
         if (candidate.node.startByte() == span.start) {
-            found = true;
+            found = candidate.node.endByte() == span.start + new_section.len;
             break;
         }
     }
@@ -171,6 +171,21 @@ test "applyJsonPointer refuses a stale hash and refuses a value that is not vali
     try testing.expectError(error.InvalidJson, applyJsonPointer(testing.allocator, parser, source, "/a", entry.hash, "{not json"));
 }
 
+test "applyJsonPointer refuses a value that reparses to something other than exactly what was written" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try test_util.parser();
+    defer parser.deinit();
+
+    const source = "{\"a\": 1}";
+    const tree = parser.parseIn(json_pointer.grammar(), source) catch unreachable;
+    defer tree.deinit();
+    const entry = try json_pointer.resolve(testing.allocator, tree, "/a");
+    defer testing.allocator.free(entry.pointer);
+
+    try testing.expectError(error.DocSyntaxInvalid, applyJsonPointer(testing.allocator, parser, source, "/a", entry.hash, "9 "));
+}
+
 test "applyMarkdownHeading replaces a section and keeps a sibling section untouched" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
@@ -200,6 +215,32 @@ test "applyMarkdownHeading refuses a replacement that does not start with a head
     defer tree.deinit();
     const entry = try markdown_heading.resolve(testing.allocator, tree, "Setup");
     try testing.expectError(error.DocSyntaxInvalid, applyMarkdownHeading(testing.allocator, parser, source, "Setup", entry.hash, "not a heading\n"));
+}
+
+test "applyMarkdownHeading refuses a replacement whose unclosed code fence swallows the next heading" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try test_util.parser();
+    defer parser.deinit();
+
+    const source = "# Title\n\n## Setup\n\nold\n\n## Other\n\nkeep\n";
+    const tree = try parser.parseIn(markdown_heading.grammar(), source);
+    defer tree.deinit();
+    const entry = try markdown_heading.resolve(testing.allocator, tree, "Setup");
+    try testing.expectError(error.DocSyntaxInvalid, applyMarkdownHeading(testing.allocator, parser, source, "Setup", entry.hash, "## Setup\n\n```js\nx = 1\n"));
+}
+
+test "applyMarkdownHeading refuses a replacement whose unclosed html block swallows the next heading" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try test_util.parser();
+    defer parser.deinit();
+
+    const source = "# Title\n\n## Setup\n\nold\n\n## Other\n\nkeep\n";
+    const tree = try parser.parseIn(markdown_heading.grammar(), source);
+    defer tree.deinit();
+    const entry = try markdown_heading.resolve(testing.allocator, tree, "Setup");
+    try testing.expectError(error.DocSyntaxInvalid, applyMarkdownHeading(testing.allocator, parser, source, "Setup", entry.hash, "## Setup\n\n<script>\n"));
 }
 
 test "applyLineRange replaces a byte-exact line span and refuses a stale hash" {
