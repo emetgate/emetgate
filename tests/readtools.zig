@@ -475,12 +475,12 @@ test "search finds a literal in tracked files under a directory and refuses an e
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
-    const matches = body.value.object.get("matches").?.array.items;
-    try testing.expect(matches.len >= 1);
+    const groups = body.value.object.get("groups").?.array.items;
+    try testing.expect(groups.len >= 1);
     var found = false;
-    for (matches) |m| {
-        try testing.expect(std.mem.startsWith(u8, m.object.get("file").?.string, "tests/fixtures/"));
-        if (std.mem.eql(u8, m.object.get("file").?.string, "tests/fixtures/functions.ts")) found = true;
+    for (groups) |g| {
+        try testing.expect(std.mem.startsWith(u8, g.object.get("file").?.string, "tests/fixtures/"));
+        if (std.mem.eql(u8, g.object.get("file").?.string, "tests/fixtures/functions.ts")) found = true;
     }
     try testing.expect(found);
 

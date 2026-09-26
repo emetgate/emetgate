@@ -130,10 +130,12 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_search",
-        .description = "Find a literal, case-sensitive substring in git-tracked text files under a directory of the repo; returns file, line and the trimmed line (at most 200 matches, truncated:true when cut). Files of 1 MiB or more are skipped (files under 1 MiB are read).",
+        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in git-tracked text files under a directory of the repo. Hits are grouped by file and, in a registered language, by the enclosing symbol (ref + content hash, ready for emetgate_read_symbol/emetgate_try); in a .json file by JSON pointer, in a .md file by heading, otherwise ungrouped. Each hit is tagged code/comment/string and, when it names a known symbol, definition/reference. Groups with a definition hit are listed first. A trigram file index under %LOCALAPPDATA%\\emetgate\\index narrows which files are read; a stale or missing index only widens the file set scanned, never narrows it below a full scan. At most 200 hits total, truncated:true when cut; files of 1 MiB or more are skipped.",
         .props = &.{
-            .{ .name = "pattern", .desc = "literal text to find" },
+            .{ .name = "pattern", .desc = "text or, with regex:true, a regular expression to find" },
             .{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true },
+            .{ .name = "regex", .desc = "treat pattern as a regular expression instead of a literal substring", .optional = true, .ty = "boolean" },
+            .{ .name = "kinds", .desc = "keep only hits of these kinds, e.g. [\"code\"] to skip comments and strings", .optional = true, .ty = "array" },
         },
     },
     .{
