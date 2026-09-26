@@ -10,6 +10,46 @@ extern "kernel32" fn CloseHandle(handle: windows.HANDLE) callconv(.winapi) windo
 const std_output_handle: windows.DWORD = @bitCast(@as(i32, -11));
 const std_error_handle: windows.DWORD = @bitCast(@as(i32, -12));
 
+const generic_read: windows.DWORD = 0x80000000;
+const generic_write: windows.DWORD = 0x40000000;
+const file_share_read: windows.DWORD = 0x1;
+const open_existing: windows.DWORD = 3;
+const create_always: windows.DWORD = 2;
+const invalid_handle_value: windows.HANDLE = @ptrFromInt(std.math.maxInt(usize));
+
+const af_inet: c_int = 2;
+const sock_stream: c_int = 1;
+const invalid_socket: usize = std.math.maxInt(usize);
+
+const WsaData = extern struct {
+    version: u16,
+    high_version: u16,
+    description: [257]u8,
+    system_status: [129]u8,
+    max_sockets: u16,
+    max_udp_dg: u16,
+    vendor_info: ?*u8,
+};
+
+const SockaddrIn = extern struct {
+    family: u16,
+    port: u16,
+    addr: u32,
+    zero: [8]u8,
+};
+
+const token_query: windows.DWORD = 0x0008;
+const token_is_app_container: c_int = 29;
+
+extern "kernel32" fn GetCurrentProcess() callconv(.winapi) windows.HANDLE;
+extern "advapi32" fn OpenProcessToken(process: windows.HANDLE, access: windows.DWORD, token: *windows.HANDLE) callconv(.winapi) windows.BOOL;
+extern "advapi32" fn GetTokenInformation(token: windows.HANDLE, class: c_int, info: *anyopaque, length: windows.DWORD, returned: *windows.DWORD) callconv(.winapi) windows.BOOL;
+extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: windows.DWORD, share: windows.DWORD, security: ?*anyopaque, disposition: windows.DWORD, flags: windows.DWORD, template: ?windows.HANDLE) callconv(.winapi) windows.HANDLE;
+extern "ws2_32" fn WSAStartup(version: u16, data: *WsaData) callconv(.winapi) c_int;
+extern "ws2_32" fn socket(family: c_int, kind: c_int, protocol: c_int) callconv(.winapi) usize;
+extern "ws2_32" fn connect(sock: usize, addr: *const anyopaque, len: c_int) callconv(.winapi) c_int;
+extern "ws2_32" fn closesocket(sock: usize) callconv(.winapi) c_int;
+
 const PROCESS_INFORMATION = extern struct {
     hProcess: windows.HANDLE,
     hThread: windows.HANDLE,
@@ -146,6 +186,49 @@ pub fn main(init: std.process.Init) !void {
         _ = CloseHandle(pi.hProcess);
         _ = CloseHandle(pi.hThread);
         ExitProcess(0);
+    }
+    if (std.mem.eql(u8, mode, "appcontainer")) {
+        var token: windows.HANDLE = undefined;
+        if (OpenProcessToken(GetCurrentProcess(), token_query, &token) == .FALSE) ExitProcess(2);
+        defer _ = CloseHandle(token);
+        var value: u32 = 0;
+        var returned: windows.DWORD = 0;
+        if (GetTokenInformation(token, token_is_app_container, &value, @sizeOf(u32), &returned) == .FALSE) ExitProcess(2);
+        ExitProcess(if (value != 0) 0 else 1);
+    }
+    if (std.mem.eql(u8, mode, "readfile")) {
+        var wide: [1024:0]u16 = undefined;
+        const n = try std.unicode.wtf8ToWtf16Le(&wide, args[2]);
+        wide[n] = 0;
+        const handle = CreateFileW(&wide, generic_read, file_share_read, null, open_existing, 0, null);
+        if (handle == invalid_handle_value) ExitProcess(1);
+        _ = CloseHandle(handle);
+        ExitProcess(0);
+    }
+    if (std.mem.eql(u8, mode, "writefile")) {
+        var wide: [1024:0]u16 = undefined;
+        const n = try std.unicode.wtf8ToWtf16Le(&wide, args[2]);
+        wide[n] = 0;
+        const handle = CreateFileW(&wide, generic_write, 0, null, create_always, 0, null);
+        if (handle == invalid_handle_value) ExitProcess(1);
+        _ = CloseHandle(handle);
+        ExitProcess(0);
+    }
+    if (std.mem.eql(u8, mode, "connect")) {
+        const port = try std.fmt.parseInt(u16, args[2], 10);
+        var data: WsaData = undefined;
+        if (WSAStartup(0x0202, &data) != 0) ExitProcess(2);
+        const sock = socket(af_inet, sock_stream, 0);
+        if (sock == invalid_socket) ExitProcess(2);
+        var addr: SockaddrIn = .{
+            .family = af_inet,
+            .port = std.mem.nativeToBig(u16, port),
+            .addr = 0x0100007f,
+            .zero = [_]u8{0} ** 8,
+        };
+        const rc = connect(sock, @ptrCast(&addr), @sizeOf(SockaddrIn));
+        _ = closesocket(sock);
+        ExitProcess(if (rc == 0) 0 else 1);
     }
     if (std.mem.eql(u8, mode, "grandchild")) {
         const child = try std.process.spawn(init.io, .{
