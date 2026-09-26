@@ -8,7 +8,9 @@ const Snapshot = loader.Snapshot;
 
 const max_hash_read_len = std.math.maxInt(u32);
 
-pub const default_budget_bytes: usize = 64 * 1024 * 1024;
+pub const measured_tree_to_source_ratio: usize = 30;
+
+pub const default_budget_bytes: usize = 8 * 1024 * 1024;
 
 const Stamp = struct {
     mtime_ns: i96,
