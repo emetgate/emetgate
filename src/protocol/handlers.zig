@@ -52,6 +52,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     if (std.mem.eql(u8, name, "emetgate_rename")) return rename_tool.callRename(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move_file")) return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror);
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return read_tools.callSearch(gpa, io, args, event, policy.root);
@@ -472,6 +473,94 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             event.outcome = .rejected;
             event.reason = wire.rule_check_crashed_reason;
             try wire.writeRuleCheckFailed(w, crashed, note);
+            return true;
+        },
+    }
+}
+
+const doc_writer = @import("../platform/doc_writer.zig");
+
+fn docSelector(args: Value) !struct { selector: doc_writer.Selector, label: []const u8 } {
+    if (getString(args, "pointer")) |pointer| return .{ .selector = .{ .pointer = pointer }, .label = pointer };
+    if (getString(args, "heading")) |heading| return .{ .selector = .{ .heading = heading }, .label = heading };
+    const start = getInt(args, "line_start") orelse return error.MissingArgument;
+    const end = getInt(args, "line_end") orelse return error.MissingArgument;
+    if (start < 1 or end < 1) return error.InvalidLineRange;
+    return .{ .selector = .{ .line_range = .{ .start = @intCast(start), .end = @intCast(end) } }, .label = "range" };
+}
+
+fn callWriteDoc(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    const file = try requireString(args, "file");
+    const hash_hex = try requireString(args, "hash");
+    const new_text = try requireString(args, "content");
+    event.label = "write_doc";
+    event.file = file;
+    event.mutating = true;
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    const is_error = writeDocInto(gpa, io, file, hash_hex, new_text, args, policy, &buffer.writer, event) catch |err| blk: {
+        if (err == error.OutOfMemory) return err;
+        event.fail(@errorName(err));
+        buffer.clearRetainingCapacity();
+        try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        break :blk true;
+    };
+    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const u8, new_text: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+    const given = try trustedTestCommand(args, policy);
+    const arguments = args orelse return error.MissingArgument;
+    const picked = try docSelector(arguments);
+    const expected_hash = try symbol.parseHash(hash_hex);
+    const place = try repo.jailTarget(gpa, io, policy.root, file, false);
+    defer place.deinit(gpa);
+    const test_command = try runner.resolveTestCommand(gpa, io, place.abs, given, policy.allow_repo_config);
+    defer gpa.free(test_command);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, place.abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
+    defer if (typecheck_command) |command| gpa.free(command);
+    const result = try doc_writer.tryWriteDoc(gpa, io, .{
+        .file_abs = place.abs,
+        .selector = picked.selector,
+        .expected_hash = expected_hash,
+        .new_text = new_text,
+        .test_command = test_command,
+        .typecheck_command = typecheck_command,
+        .allow_repo_memory = policy.allow_repo_memory,
+        .shadow_root = policy.shadow_root,
+    }, null);
+    defer result.deinit(gpa);
+    const expected: symbol.Expected = .{ .present = expected_hash };
+    switch (result) {
+        .committed => |new_hash| {
+            event.outcome = .committed;
+            event.edits = 1;
+            event.hash = new_hash;
+            try wire.writeCommitted(w, picked.label, expected, new_hash, null);
+            return false;
+        },
+        .rejected => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.rejectionReason(report);
+            try wire.writeRejected(gpa, w, test_command, report, null);
+            return true;
+        },
+        .typecheck_failed => |report| {
+            event.outcome = .rejected;
+            event.reason = wire.typecheckReason(report);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report, null);
+            return true;
+        },
+        .rule_violation => |report| {
+            event.outcome = .rejected;
+            event.reason = "rule_violation";
+            try wire.writeRuleViolation(w, report);
+            return true;
+        },
+        .rule_check_failed => |crashed| {
+            event.outcome = .rejected;
+            event.reason = wire.rule_check_crashed_reason;
+            try wire.writeRuleCheckFailed(w, crashed, null);
             return true;
         },
     }

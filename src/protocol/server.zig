@@ -160,6 +160,19 @@ pub const tool_defs = [_]Tool{
         .description = run_tool.description,
         .props = &.{.{ .name = "command", .desc = "one allowlist entry, byte for byte; omit to list the allowlist", .optional = true }},
     },
+    .{
+        .name = "emetgate_write_doc",
+        .description = "Atomic hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section (its heading line and everything nested under it) or a line range of a plain text file. Runs the project's trusted typecheck command (when configured) and then its test command in a sandbox, and writes to disk only if both pass; otherwise nothing is written. Exactly one of pointer, heading or the line_start/line_end pair selects the node. A replacement JSON value must itself be valid JSON; a replacement Markdown section must start with a heading line of some level. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.",
+        .props = &.{
+            .{ .name = "file", .desc = "path to a .json, .md or plain text file inside the repo" },
+            .{ .name = "hash", .desc = "content hash of the current node, from emetgate_read_file" },
+            .{ .name = "content", .desc = "replacement text for the selected node" },
+            .{ .name = "pointer", .desc = "JSON pointer selecting the node to replace, e.g. /dependencies/express", .optional = true },
+            .{ .name = "heading", .desc = "exact Markdown heading text selecting the section to replace", .optional = true },
+            .{ .name = "line_start", .desc = "1-based start line of a plain text range to replace", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "1-based end line of a plain text range to replace", .optional = true, .ty = "integer" },
+        },
+    },
 };
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
