@@ -48,6 +48,7 @@ jobs:
           python tools/verification_page.py --check
           python tools/readme_facts.py --check
           python tools/forbidden_words.py --check
+          python tools/vendor_manifest.py --check
 
   nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
