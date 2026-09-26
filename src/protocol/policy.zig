@@ -2,6 +2,7 @@ const std = @import("std");
 const tool_result = @import("tool_result.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
+const tsserver = @import("../platform/tsserver.zig");
 
 const Value = std.json.Value;
 
@@ -15,6 +16,7 @@ pub const Policy = struct {
     mirror_enabled: bool = false,
     mirror: ?*mirror_mod.Mirror = null,
     tree_cache: ?*tree_cache_mod.TreeCache = null,
+    language_service: ?*tsserver.Session = null,
 };
 
 pub fn parsePolicy(args: anytype) ?Policy {

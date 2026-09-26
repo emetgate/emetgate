@@ -5,6 +5,8 @@ const removal = @import("../engine/removal.zig");
 const symmetry = @import("../engine/symmetry.zig");
 const repo = @import("repo.zig");
 const create = @import("create.zig");
+const tsserver = @import("tsserver.zig");
+const rename = @import("../engine/rename.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -30,6 +32,8 @@ pub const Prepared = struct {
     snapshot: ?*Snapshot = null,
     body: symbol.Span = .{ .start = 0, .end = 0 },
     removed: ?symmetry.Local = null,
+    removed_span: symbol.Span = .{ .start = 0, .end = 0 },
+    name_offset: ?u32 = null,
 
     pub fn deinit(self: Prepared, gpa: Allocator) void {
         if (self.snapshot) |s| s.destroy();
@@ -98,6 +102,8 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const removed = try removal.remove(base, ref, expected);
+    errdefer removed.snapshot.destroy();
+    const declaration = (try (try base.symbols()).resolve(ref)).declaration;
     return .{
         .rel = rel,
         .action = .delete_symbol,
@@ -105,10 +111,22 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
         .hash = expected,
         .snapshot = removed.snapshot,
         .removed = symmetry.inspect(base, removed.cut),
+        .removed_span = declaration,
+        .name_offset = try nameOffset(gpa, base, ref.name, declaration),
     };
 }
 
-pub fn checkDeletions(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit) !void {
+pub fn nameOffset(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, declaration: symbol.Span) !?u32 {
+    if (!rename.supports(snapshot.profile)) return null;
+    const leaves = try rename.leavesNamed(gpa, snapshot, name);
+    defer gpa.free(leaves);
+    for (leaves) |leaf| {
+        if (leaf.span.start >= declaration.start and leaf.span.start < declaration.end) return leaf.span.start;
+    }
+    return null;
+}
+
+pub fn checkDeletions(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit, session: ?*tsserver.Session) !void {
     const sources = try gpa.alloc(create.Source, prepared.len);
     defer gpa.free(sources);
     for (prepared, sources) |p, *slot| slot.* = .{ .rel = p.rel, .text = p.source() };
@@ -117,7 +135,73 @@ pub fn checkDeletions(gpa: Allocator, io: std.Io, root: []const u8, prepared: []
         const ref = try symbol.Ref.parse(gpa, edit.ref_text);
         defer ref.deinit(gpa);
         if (!local.no_top_level_effect) return error.TopLevelEffect;
+        if (try serviceSaysReferenced(gpa, io, root, session, sources, i, edit.file_abs, p, ref.name)) |referenced| {
+            if (referenced) return error.SymbolReferenced;
+            continue;
+        }
         if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;
         if (local.exported and try create.mentionedAnywhere(gpa, io, root, sources, i, create.moduleStem(p.rel), null)) return error.SymbolReferenced;
     }
+}
+
+fn serviceSaysReferenced(gpa: Allocator, io: std.Io, root: []const u8, session: ?*tsserver.Session, sources: []const create.Source, own: usize, file_abs: []const u8, p: Prepared, name: []const u8) !?bool {
+    const s = session orelse return null;
+    const offset = p.name_offset orelse return null;
+    const client = s.get() catch |err| {
+        s.last_error = err;
+        return null;
+    };
+    const file = try gpa.dupe(u8, file_abs);
+    defer gpa.free(file);
+    std.mem.replaceScalar(u8, file, '\\', '/');
+    const answer = client.references(file, offset) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            s.last_error = err;
+            return null;
+        },
+    };
+    defer answer.deinit();
+    for (answer.value.references) |reference| {
+        if (tsserver.sameFile(reference.file, file_abs)) {
+            if (reference.start >= p.removed_span.start and reference.start < p.removed_span.end) continue;
+            return true;
+        }
+        if (inBatch(root, sources, reference.file)) continue;
+        return true;
+    }
+    for (sources, 0..) |source, i| {
+        if (i == own) continue;
+        if (symmetry.mentions(source.text, name, null)) return true;
+    }
+    if (try quotedAnywhere(gpa, io, root, name)) return true;
+    return false;
+}
+
+fn inBatch(root: []const u8, sources: []const create.Source, file: []const u8) bool {
+    for (sources) |source| {
+        if (file.len != root.len + 1 + source.rel.len) continue;
+        if (tsserver.sameFile(file[0..root.len], root) and tsserver.sameFile(file[root.len + 1 ..], source.rel)) return true;
+    }
+    return false;
+}
+
+pub fn quotedAnywhere(gpa: Allocator, io: std.Io, root: []const u8, name: []const u8) !bool {
+    const listing = try repo.filesMentioning(gpa, io, root, name);
+    defer gpa.free(listing);
+    var files = std.mem.tokenizeScalar(u8, listing, 0);
+    while (files.next()) |rel| {
+        const path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, rel });
+        defer gpa.free(path);
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(64 * 1024 * 1024)) catch continue;
+        defer gpa.free(bytes);
+        for ([_]u8{ '"', '\'', '`' }) |quote| {
+            var from: usize = 0;
+            while (std.mem.indexOfPos(u8, bytes, from, name)) |at| : (from = at + 1) {
+                const end = at + name.len;
+                if (at > 0 and end < bytes.len and bytes[at - 1] == quote and bytes[end] == quote) return true;
+            }
+        }
+    }
+    return false;
 }

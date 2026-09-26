@@ -76,6 +76,7 @@ test {
     _ = @import("tests/batch_delete_tool.zig");
     _ = @import("tests/redteam_batch_delete.zig");
     _ = @import("tests/tsserver.zig");
+    _ = @import("tests/delete_references.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
