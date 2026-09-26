@@ -6,11 +6,11 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **882**
-- Mutations declared in `tests/mutations.json`: **516**
-  - killed: **492**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **906**
+- Mutations declared in `tests/mutations.json`: **526**
+  - killed: **501**
   - equivalent: **5**
-  - defense in depth: **4**
+  - defense in depth: **5**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
@@ -42,7 +42,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-114 mutation(s).
+115 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -160,6 +160,7 @@ python tools/verification_page.py --check
 | `BCR8-symmetry-ignores-effects` | `src/engine/symmetry.zig` | `if (isEffect(profile, node.kind())) return true;` -> `` | symmetry: a call, a new or an assignment in a top-level initializer is an effect | killed |
 | `ZIG2-visibility-hook-not-consulted` | `src/engine/boundedness.zig` | `if (profile.hasVisibilityKeyword(sym.node)) return true;     va...` -> `var current = sym.node.parent();` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
 | `FUZZ1-cas-splice-tail-off-by-one` | `src/engine/cas.zig` | `base.source[cut.end..] });` -> `base.source[cut.end + 1 ..] });` | fuzz: cas.apply on a fixed base and hash either refuses or leaves everything ou... | killed |
+| `KD5-function-hash-takes-declaration-domain` | `src/engine/symbol.zig` | `var hasher = std.crypto.hash.Blake3.init(.{});         hasher.u...` -> `var hasher = std.crypto.hash.Blake3.init(.{});         hasher.u...` | declarations: the function and method hashes of the fixture are the ones main c... | killed |
 
 ### Sandbox and the test/typecheck gate
 
@@ -511,7 +512,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-96 mutation(s).
+105 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -552,7 +553,7 @@ python tools/verification_page.py --check
 | `CR8-crash-code-not-hex` | `src/protocol/wire.zig` | `"0x{X:0>8}", .{code}` -> `"{d}", .{code}` | a crashed stage is reported as a crash with its hex code, never as a failed ver... | killed |
 | `RO1-a-new-tool-slips-into-the-surface` | `src/protocol/server.zig` | `.name = "emetgate_scan",` -> `.name = "emetgate_rule_add",` | red line: the served tool surface is exactly this list, so a new tool cannot sl...; scan ... | killed |
 | `RO2-a-rule-writing-tool-is-dispatched` | `src/protocol/handlers.zig` | `return error.UnknownTool; }` -> `if (std.mem.eql(u8, name, "emetgate_rule_add")) return callScan...` | red line: no tool on the model side can adopt, change or forget a rule | killed |
-| `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source...` -> `try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source...` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
+| `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.s...` -> `try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.s...` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
 | `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = true,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = false,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = true, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
@@ -593,14 +594,14 @@ python tools/verification_page.py --check
 | `GT4-output-byte-limit-removed` | `src/protocol/git_tools.zig` | `.stdout_limit = .limited(max_git_output_bytes),` -> `.stdout_limit = .unlimited,` | open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git ... | open |
 | `GT5-output-line-limit-removed` | `src/protocol/git_tools.zig` | `if (kept.items.len < max_output_lines) try kept.append(gpa, lin...` -> `try kept.append(gpa, line);` | git diff caps output at a line count and marks it truncated | killed |
 | `FH3-skeleton-without-file-hash` | `src/protocol/wire.zig` | `try js.write(file);     try writeFileHash(&js, file_hash);     ...` -> `try js.write(file);     _ = file_hash;     try js.objectField("...` | redteam batch delete: an unreferenced file is deleted through the tool and repo... | killed |
-| `RN1-alpha-hash-check-skipped` | `src/engine/rename.zig` | `if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;` -> `if (a.len != b.len) return error.AlphaMismatch;` | rename: a wrong rename inside a top-level block that is no symbol is caught by ... | killed |
-| `RN2-symbol-alpha-check-skipped` | `src/engine/rename.zig` | `if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declar...` -> `if (b_hash.len != 0) matched = true;` | defense in depth: every symbol a rename touches lies inside a touched top-level statement... | defense in depth |
+| `RN1-alpha-hash-check-skipped` | `src/engine/rename.zig` | `if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;` -> `if (a.len != b.len) return error.AlphaMismatch;` | rename: renaming one of two same-named properties in a statement breaks its alp... | killed |
+| `RN2-symbol-alpha-check-skipped` | `src/engine/rename.zig` | `for (after.symbols) \|a\| {             if (!mapping.same(b.ref...` -> `for (after.symbols) \|a\| {             if (!mapping.same(b.ref...` | defense in depth: every symbol a rename touches lies inside a touched top-level statement... | defense in depth |
 | `RN3-export-approval-skipped` | `src/platform/rename_batch.zig` | `if (interface_change and !request.interface_change) return erro...` -> `` | rename: a rename that reaches other modules is refused without the interface_ch...; renam... | killed |
 | `RN4-text-path-accepts-exported` | `src/platform/rename_batch.zig` | `if (try rename.exportedName(gpa, base, old)) return error.Renam...` -> `` | rename: without the language service an exported symbol or a name another file ... | killed |
 | `RN5-text-path-ignores-other-files` | `src/platform/rename_batch.zig` | `if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnres...` -> `if (abs.len == 0) return error.RenameUnresolved;` | rename: without the language service an exported symbol or a name another file ... | killed |
 | `RN6-text-path-ignores-second-binder` | `src/platform/rename_batch.zig` | `if (try rename.binderCount(gpa, base, old) != 1) return error.R...` -> `` | rename: without the language service a local name with a second binder is unres... | killed |
 | `RN7-location-not-an-identifier-skipped` | `src/engine/rename.zig` | `const leaf = findLeaf(leaves, span) orelse return error.NotAnId...` -> `const leaf = findLeaf(leaves, span) orelse continue;         if...` | red team rename: a location inside a comment or a string is refused and both st...; renam... | killed |
-| `RN8-free-occurrence-check-skipped` | `src/engine/rename.zig` | `if (try freeOccurrence(gpa, next, old, false)) return error.Inc...` -> `_ = .{ gpa, next, old };` | rename: an occurrence left free in an untouched statement is refused as incompl...; red t... | killed |
+| `RN8-free-occurrence-check-skipped` | `src/engine/rename.zig` | `if (try freeOccurrence(gpa, next, old, false)) return error.Inc...` -> `_ = .{ gpa, next, old };` | defense in depth: the independent resolution before the rename (SC3) already refuses a pr... | defense in depth |
 | `RN9-untouched-file-not-checked` | `src/platform/rename_batch.zig` | `if (untouched and try rename.freeOccurrence(gpa, snapshot, old,...` -> `_ = .{ gpa, untouched };` | red team rename: a service that skips a whole file that still calls the old nam... | killed |
 | `RN10-location-not-jailed` | `src/platform/rename_batch.zig` | `const abs = try jailLocation(gpa, io, root, location.file);` -> `_ = .{ io, root };         const abs = try gpa.dupe(u8, locatio...` | red team rename: a location outside the repo or in an untracked file is refused | killed |
 | `RN11-dynamic-access-ignored` | `src/platform/rename_batch.zig` | `if (rename.dynamicAccess(snapshot, old, member) != null) return...` -> `_ = member;` | red team rename: a string key, eval or a computed require in a touched file is ... | killed |
@@ -611,6 +612,15 @@ python tools/verification_page.py --check
 | `TS3-typescript-check-skipped` | `src/platform/tsserver.zig` | `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return erro...` -> `std.Io.Dir.cwd().access(self.io, marker, .{}) catch {};` | tsserver: a repo without node_modules/typescript is an explicit error, not a gl... | killed |
 | `TS4-failed-answer-kills-service` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `errdefer self.stop();` | tsserver: a request the language service answers with an error leaves the proce... | killed |
 | `RN14-cache-not-invalidated-after-rename` | `src/protocol/rename_tool.zig` | `if (policy.tree_cache) \|cache\| for (outcome.plan.edits) \|edi...` -> `` | defense-in-depth: same as R12, the content hash on the next load catches the renamed file... | survives (unclassified) |
+| `SC1-merged-declaration-check-skipped` | `src/engine/rename.zig` | `return error.MergedDeclaration;` -> `continue;` | rename: renaming a class and only one of an interface merged with it is refused...; renam... | killed |
+| `SC2-use-resolving-elsewhere-accepted` | `src/engine/rename.zig` | `if (!renamed[index]) return error.ResolutionMismatch;` -> `_ = index;` | rename: a wrong rename inside a top-level block that is no symbol is caught by ...; renam... | killed |
+| `SC3-resolution-completeness-skipped` | `src/engine/rename.zig` | `if (renamed[index] and !containsSpan(spans, use.span)) return e...` -> `_ = index;` | rename: leaving one occurrence behind in a renamed statement is caught by the i... | killed |
+| `SC4-scope-namespace-ignored` | `src/engine/scope.zig` | `if (b.scope.eql(ancestor) and b.namespace.overlaps(namespace)) ...` -> `if (b.scope.eql(ancestor) and (b.namespace.overlaps(namespace) ...` | scope: types and values live in separate namespaces, a class is both | killed |
+| `KD1-type-positions-not-names` | `src/engine/lang/ecma/rename.zig` | `"type_identifier",         "shorthand_property_identifier",` -> `"shorthand_property_identifier",` | rename kinds: a class is renamed in its declaration, an import, extends, a retu... | killed |
+| `KD2-alpha-type-namespace-merged` | `src/engine/rename.zig` | `if (oneOf(kind, g.type_kinds)) 't' else` -> `if (oneOf(kind, g.type_kinds)) 'v' else` | rename: a type and a value of the same name are separate, renaming only the typ...; renam... | killed |
+| `KD3-exported-type-approval-skipped` | `src/platform/rename_batch.zig` | `const interface_change = locations.files.items.len > 1 or try r...` -> `const interface_change = locations.files.items.len > 1 or top_n...` | rename kinds: a class field is renamed with its this and obj accesses the servi...; renam... | killed |
+| `KD4-declaration-hash-without-domain` | `src/engine/declarations.zig` | `hasher.update(domain);     hasher.update(&.{0});     hasher.upd...` -> `_ = kind;` | declarations: a declaration hash is domain separated, so the same text never ha... | killed |
+| `KD6-function-values-listed-twice` | `src/engine/declarations.zig` | `if (self.isFunctionValue(child)) continue;             if (decl...` -> `if (declarators == 1) {` | declarations: a merged interface and class share a ref and are marked ambiguous... | killed |
 
 ## What this system does not prove
 

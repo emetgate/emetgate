@@ -38,11 +38,38 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
         try js.endObject();
     }
     try js.endArray();
+    try writeDeclarations(gpa, &js, table);
     try js.endObject();
     try writer.writeByte('\n');
 }
 
-pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, skeleton_text: []const u8, adopted: []const rules.Adopted) !void {
+pub fn writeDeclarations(gpa: Allocator, js: *std.json.Stringify, table: symbol.Table) !void {
+    try js.objectField("declarations");
+    try js.beginArray();
+    for (table.declarations) |entry| {
+        const point = entry.name.startPoint();
+        const hex = symbol.formatHash(entry.hash);
+        const ref = try std.fmt.allocPrint(gpa, "{f}", .{entry.ref});
+        defer gpa.free(ref);
+        try js.beginObject();
+        try js.objectField("hash");
+        try js.write(hex[0..]);
+        try js.objectField("kind");
+        try js.write(@tagName(entry.kind));
+        try js.objectField("ref");
+        try js.write(ref);
+        try js.objectField("line");
+        try js.write(point.row + 1);
+        try js.objectField("col");
+        try js.write(point.column + 1);
+        try js.objectField("ambiguous");
+        try js.write(entry.ambiguous);
+        try js.endObject();
+    }
+    try js.endArray();
+}
+
+pub fn writeSkeleton(gpa: Allocator, writer: *Writer, file: []const u8, file_hash: symbol.Hash, skeleton_text: []const u8, table: ?*const symbol.Table, adopted: []const rules.Adopted) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
@@ -50,6 +77,7 @@ pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, 
     try writeFileHash(&js, file_hash);
     try js.objectField("skeleton");
     try js.write(skeleton_text);
+    if (table) |t| try writeDeclarations(gpa, &js, t.*);
     try js.objectField("rules");
     try js.beginArray();
     for (adopted) |rule| {
@@ -802,7 +830,7 @@ test "file paths with backslashes and quotes are JSON-escaped" {
 test "skeleton payload embeds the outline as one JSON line" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(a: number, b: number): number;\n", &.{});
+    try writeSkeleton(testing.allocator, &buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(a: number, b: number): number;\n", null, &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
@@ -818,7 +846,7 @@ test "the skeleton payload carries every adopted rule as data, with no way to ch
         .{ .id = "m1", .text = "no console.log", .mode = "enforce", .check = "cmd:npx eslint", .where = "src/" },
         .{ .id = "m2", .text = "prefer Money", .mode = "advisory" },
     };
-    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(): void;\n", &adopted);
+    try writeSkeleton(testing.allocator, &buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(): void;\n", null, &adopted);
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));

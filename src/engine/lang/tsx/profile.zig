@@ -1,6 +1,7 @@
 const ts = @import("../../tree_sitter.zig");
 const ecma = @import("../ecma/common.zig");
 const profile_mod = @import("../profile.zig");
+const ecma_rename = @import("../ecma/rename.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -57,6 +58,8 @@ pub const profile: Profile = .{
     .directives = &ecma.directives,
     .literal_values = ecma.literal_values,
     .memberTraits = memberTraits,
+    .rename = &ecma_rename.grammar,
+    .declarations = ecma_rename.declarations(.{ .node = field_shape.node, .kind = .field, .name_field = field_shape.name_field }),
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {

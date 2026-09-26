@@ -165,7 +165,11 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     defer adopted.deinit();
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, adopted.items);
+    const table = snapshot.symbols() catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.SourceHasErrors => null,
+    };
+    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, adopted.items);
 }
 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
