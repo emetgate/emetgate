@@ -100,3 +100,20 @@ test "real typescript: a moved function's references agree with the kernel's use
     try case.expectFile("src/shapes.ts", mt.shapes_new);
     try case.expectFile("src/app.ts", mt.app_new);
 }
+
+test "real typescript: getEditsForFileRename and the kernel agree on every rewritten path of a file move" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const target = (try typescriptDir(arena_state.allocator())) orelse return error.SkipZigTest;
+    const mf = @import("move_file_tool.zig");
+    var case: Case = undefined;
+    try mf.initFiles(&case, &.{}, false);
+    defer case.deinit();
+    try linkTypeScript(&case, target);
+    const outcome = try mf.moveFile(&case, .{});
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try testing.expectEqual(@import("emetgate").file_move.Resolver.language_service, outcome.plan.resolver);
+    try mf.expectNew(&case);
+}

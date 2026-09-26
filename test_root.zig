@@ -32,6 +32,7 @@ pub const sandbox = src.sandbox;
 pub const tsserver = src.tsserver;
 pub const rename_batch = src.rename_batch;
 pub const move_batch = src.move_batch;
+pub const file_move = src.file_move;
 pub const module_paths = src.module_paths;
 pub const disk = src.disk;
 pub const runner = src.runner;
@@ -94,6 +95,8 @@ test {
     _ = @import("tests/redteam_move.zig");
     _ = @import("tests/move_crash.zig");
     _ = @import("tests/file_move_crash.zig");
+    _ = @import("tests/move_file_tool.zig");
+    _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");

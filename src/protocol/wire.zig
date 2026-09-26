@@ -409,6 +409,63 @@ pub const MoveSummary = struct {
     files: []const MovedFile,
 };
 
+pub const FileMoveSummary = struct {
+    from: []const u8,
+    to: []const u8,
+    resolver: []const u8,
+    fallback: ?[]const u8,
+    interface_change: bool,
+    created_dirs: usize,
+    users: usize,
+    rewritten: usize,
+    files: []const MovedFile,
+};
+
+pub fn writeFileMoveCommitted(writer: *Writer, summary: FileMoveSummary, note: ?ShadowNote) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("committed");
+    try js.objectField("class");
+    try js.write("symmetry");
+    try js.objectField("from");
+    try js.write(summary.from);
+    try js.objectField("to");
+    try js.write(summary.to);
+    try js.objectField("resolver");
+    try js.write(summary.resolver);
+    if (summary.fallback) |reason| {
+        try js.objectField("language_service_unavailable");
+        try js.write(reason);
+    }
+    try js.objectField("interface_change");
+    try js.write(summary.interface_change);
+    try js.objectField("created_dirs");
+    try js.write(summary.created_dirs);
+    try js.objectField("users");
+    try js.write(summary.users);
+    try js.objectField("imports_rewritten");
+    try js.write(summary.rewritten);
+    try js.objectField("files");
+    try js.beginArray();
+    for (summary.files) |file| {
+        try js.beginObject();
+        try js.objectField("file");
+        try js.write(file.file);
+        if (file.old_hash) |old| {
+            try js.objectField("old_hash");
+            try js.write(symbol.formatHash(old)[0..]);
+        }
+        try js.objectField("new_hash");
+        try js.write(symbol.formatHash(file.new_hash)[0..]);
+        try js.endObject();
+    }
+    try js.endArray();
+    try writeShadowNote(&js, note);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub fn writeMoveCommitted(writer: *Writer, summary: MoveSummary, note: ?ShadowNote) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -818,7 +875,9 @@ pub fn exitCode(err: anyerror) u8 {
         error.ImportCycle => 47,
         error.ModuleSideEffect, error.DeclaredSideEffect => 48,
         error.ReExported, error.NamespaceImportUse, error.UnhandledReference, error.MoveUnresolved => 49,
-        error.ContentHashMismatch, error.BodyChanged, error.IncompleteMove => 50,
+        error.ContentHashMismatch, error.BodyChanged, error.IncompleteMove, error.MovedImportBroken => 50,
+        error.NoClobber, error.CaseOnlyRename => 51,
+        error.DynamicPathUse, error.FileMoveUnresolved, error.ServiceMismatch => 52,
         else => 1,
     };
 }
