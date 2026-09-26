@@ -30,6 +30,7 @@ pub const shadow = src.shadow;
 pub const link_tree = src.link_tree;
 pub const shadow_root = src.shadow_root;
 pub const sandbox = src.sandbox;
+pub const appcontainer = src.appcontainer;
 pub const tsserver = src.tsserver;
 pub const rename_batch = src.rename_batch;
 pub const move_batch = src.move_batch;
@@ -80,6 +81,7 @@ test {
     _ = @import("tests/redteam_memory.zig");
     _ = @import("tests/redteam_ledger.zig");
     _ = @import("tests/redteam_sandbox.zig");
+    _ = @import("tests/redteam_appcontainer.zig");
     _ = @import("tests/redteam_link_tree.zig");
     _ = @import("tests/redteam_git.zig");
     _ = @import("tests/run_tool.zig");
