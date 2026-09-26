@@ -93,6 +93,7 @@ test {
     _ = @import("tests/create_kinds.zig");
     _ = @import("tests/redteam_move.zig");
     _ = @import("tests/move_crash.zig");
+    _ = @import("tests/file_move_crash.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
