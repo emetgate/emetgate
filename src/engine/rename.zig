@@ -2,7 +2,6 @@ const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const symbol = @import("symbol.zig");
 const traversal = @import("traversal.zig");
-const symmetry = @import("symmetry.zig");
 const grammar = @import("lang/ecma/rename.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 const Profile = @import("lang/profile.zig").Profile;
@@ -139,7 +138,7 @@ pub fn binderCount(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     return count;
 }
 
-pub const Dynamic = enum { string_mention, eval, computed_module, computed_member };
+pub const Dynamic = enum { string_key, eval, computed_module, computed_member };
 
 fn calleeName(snapshot: *const Snapshot, call: ts.Node) ?[]const u8 {
     const callee = call.childByField(snapshot.profile.call.function_field) orelse return null;
@@ -164,9 +163,9 @@ pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) 
             walker.skipChildren();
             continue;
         }
-        if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, "string_fragment")) {
+        if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, grammar.template_fragment)) {
             walker.skipChildren();
-            if (symmetry.mentions(text, name, null)) return .string_mention;
+            if (std.mem.eql(u8, std.mem.trim(u8, text, &grammar.quotes), name)) return .string_key;
             continue;
         }
         if (std.mem.eql(u8, kind, snapshot.profile.call.node)) {
@@ -329,9 +328,30 @@ fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []con
 }
 
 fn checkSurvivors(gpa: Allocator, next: *Snapshot, old: []const u8) Error!void {
-    const leaves = try leavesNamed(gpa, next, old);
+    if (try freeOccurrence(gpa, next, old, false)) return error.IncompleteRename;
+}
+
+fn topLevelDeclaration(snapshot: *const Snapshot, span: Span) bool {
+    const root = snapshot.tree.root();
+    const index = regionOf(root, span.start) orelse return false;
+    if (oneOf(root.child(index).?.kind(), &grammar.import_statements)) return false;
+    const node = leafAt(root, span) orelse return false;
+    var current = node.parent();
+    while (current) |ancestor| : (current = ancestor.parent()) {
+        if (oneOf(ancestor.kind(), &grammar.scope_kinds)) return false;
+    }
+    return true;
+}
+
+pub fn freeOccurrence(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, allow_declared: bool) !bool {
+    const leaves = try leavesNamed(gpa, snapshot, name);
     defer gpa.free(leaves);
-    const root = next.tree.root();
+    const root = snapshot.tree.root();
+    if (allow_declared) {
+        for (leaves) |leaf| {
+            if (leaf.binder and topLevelDeclaration(snapshot, leaf.span)) return false;
+        }
+    }
     for (leaves) |leaf| {
         if (!leaf.free or leaf.binder) continue;
         const region = regionOf(root, leaf.span.start);
@@ -339,8 +359,9 @@ fn checkSurvivors(gpa: Allocator, next: *Snapshot, old: []const u8) Error!void {
         for (leaves) |other| {
             if (other.binder and regionOf(root, other.span.start) == region) bound = true;
         }
-        if (!bound) return error.IncompleteRename;
+        if (!bound) return true;
     }
+    return false;
 }
 
 fn mapped(part: []const u8, old: []const u8, new: []const u8) []const u8 {
@@ -494,18 +515,19 @@ test "rename: a span that is not an occurrence, a taken name, a bad name, a dupl
     try testing.expectError(error.ShorthandReference, apply(testing.allocator, shorthand, "add", "sum", short_spans));
 }
 
-test "rename: string mentions, eval, computed requires and constructed keys are dynamic access" {
+test "rename: a string that is exactly the name, eval, computed requires and constructed keys are dynamic access" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const cases = [_]struct { source: []const u8, member: bool, expected: ?Dynamic }{
-        .{ .source = "function add() { return 1; }\nconst f = (globalThis as any)[\"add\"];\n", .member = false, .expected = .string_mention },
-        .{ .source = "function add() { return 1; }\nconst t = `call add`;\n", .member = false, .expected = .string_mention },
+        .{ .source = "function add() { return 1; }\nconst f = (globalThis as any)[\"add\"];\n", .member = false, .expected = .string_key },
+        .{ .source = "function add() { return 1; }\nconst k = 'add';\n", .member = false, .expected = .string_key },
+        .{ .source = "function add() { return 1; }\nconst t = `${1}add`;\n", .member = false, .expected = .string_key },
         .{ .source = "function add() { return 1; }\neval(\"1\");\n", .member = false, .expected = .eval },
         .{ .source = "function add() { return 1; }\nconst f = new Function(\"return 1\");\n", .member = false, .expected = .eval },
         .{ .source = "function add() { return 1; }\nconst m = require(\"./\" + \"x\");\n", .member = false, .expected = .computed_module },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst v = o[\"a\" + \"dd\"];\n", .member = false, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k];\n", .member = true, .expected = .computed_member },
-        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k] + o[0];\nconst m = require(\"./m\");\n// add in a comment\nconst t = `${add()}`;\n", .member = false, .expected = null },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k] + o[0];\nconst m = require(\"./m\");\n// add in a comment\nconst t = `${add()} and add`;\nconst e = \"add failed\";\n", .member = false, .expected = null },
     };
     for (cases) |case| {
         errdefer std.debug.print("case: {s}\n", .{case.source});

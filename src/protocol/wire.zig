@@ -293,6 +293,73 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
     try writer.writeByte('\n');
 }
 
+pub const RenamedFile = struct {
+    file: []const u8,
+    old_hash: symbol.Hash,
+    new_hash: symbol.Hash,
+};
+
+pub const RenameSummary = struct {
+    symbol: []const u8,
+    new_symbol: []const u8,
+    old_hash: symbol.Hash,
+    new_hash: symbol.Hash,
+    resolver: []const u8,
+    fallback: ?[]const u8,
+    interface_change: bool,
+    regions_checked: usize,
+    symbols_checked: usize,
+    files: []const RenamedFile,
+};
+
+pub fn writeRenameCommitted(writer: *Writer, summary: RenameSummary, note: ?ShadowNote) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("committed");
+    try js.objectField("class");
+    try js.write("symmetry");
+    try js.objectField("symbol");
+    try js.write(summary.symbol);
+    try js.objectField("new_symbol");
+    try js.write(summary.new_symbol);
+    try js.objectField("old_hash");
+    try js.write(symbol.formatHash(summary.old_hash)[0..]);
+    try js.objectField("new_hash");
+    try js.write(symbol.formatHash(summary.new_hash)[0..]);
+    try js.objectField("resolver");
+    try js.write(summary.resolver);
+    if (summary.fallback) |reason| {
+        try js.objectField("language_service_unavailable");
+        try js.write(reason);
+    }
+    try js.objectField("interface_change");
+    try js.write(summary.interface_change);
+    try js.objectField("evidence");
+    try js.beginObject();
+    try js.objectField("alpha_regions");
+    try js.write(summary.regions_checked);
+    try js.objectField("alpha_symbols");
+    try js.write(summary.symbols_checked);
+    try js.endObject();
+    try js.objectField("files");
+    try js.beginArray();
+    for (summary.files) |file| {
+        try js.beginObject();
+        try js.objectField("file");
+        try js.write(file.file);
+        try js.objectField("old_hash");
+        try js.write(symbol.formatHash(file.old_hash)[0..]);
+        try js.objectField("new_hash");
+        try js.write(symbol.formatHash(file.new_hash)[0..]);
+        try js.endObject();
+    }
+    try js.endArray();
+    try writeShadowNote(&js, note);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 fn writeEvidence(js: *std.json.Stringify, evidence: symmetry.Evidence) !void {
     try js.objectField("class");
     try js.write(if (evidence.symmetric()) "symmetry" else "unclassified");
@@ -639,6 +706,11 @@ pub fn exitCode(err: anyerror) u8 {
         error.Conflict => 11,
         error.WrittenButUnverified => 12,
         error.UnknownGitSubcommand, error.MissingCommit, error.InvalidCommit, error.InvalidCount, error.GitCommandFailed => 39,
+        error.RenameUnresolved, error.DynamicReference => 40,
+        error.InterfaceChangeNeedsApproval => 41,
+        error.AlphaMismatch, error.IncompleteRename, error.NotAnIdentifier, error.DuplicateLocation, error.ShorthandReference => 42,
+        error.NameTaken, error.InvalidName, error.RenameRefused => 43,
+        error.RenameOutsideRepo => 44,
         else => 1,
     };
 }

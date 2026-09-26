@@ -16,6 +16,8 @@ pub const shorthand_kinds = [_][]const u8{ "shorthand_property_identifier", "sho
 
 pub const export_specifiers = [_][]const u8{"export_specifier"};
 
+pub const import_statements = [_][]const u8{"import_statement"};
+
 pub const scope_kinds = [_][]const u8{ "statement_block", "class_body", "formal_parameters", "arrow_function", "function_expression", "object", "array", "arguments", "type_parameters", "object_pattern", "array_pattern" };
 
 pub const BinderSite = struct {
@@ -66,3 +68,5 @@ pub const constructor_callees = [_][]const u8{"Function"};
 pub const new_expression = "new_expression";
 pub const new_constructor_field = "constructor";
 pub const literal_argument = "string";
+pub const template_fragment = "string_fragment";
+pub const quotes = [_]u8{ '"', '\'', '`' };
