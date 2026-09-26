@@ -518,6 +518,23 @@ the physical lower bound is reported instead of hidden. Locating a symbol or a
 JSON/Markdown node is not free either; both locate and fetch steps are counted above,
 matching how `tests/bench/run4.py` counts a symbol edit's ingest side.
 
+The tiny-symbol reread row above uses a synthetic two-line file, which understates the
+wrapper's real cost relative to a plausible model action: a model that already has a real
+file open would re-read either the whole file or, at best, just the changed function's
+line range (if it somehow already knew that range without re-reading). Measured against
+the same edit in the real 1.6k-line `affiliate-scraper/src/index.js`:
+
+| Scenario | Read (full file) | Read (best-case line range) | emetgate |
+|---|---:|---:|---:|
+| reread a small changed symbol, `--mirror` on | 13323 | 218 | 328 |
+
+Against the full file this is still a 41x win (13323 vs 328). Against the best case a
+model cannot actually reach without having read the file first, emetgate costs 1.5x more
+(218 vs 328) — a fixed cost (32-hex-char hash plus the `file`/`symbol` JSON wrapper) on
+top of content that is already only a couple hundred tokens. This is the row's physical
+floor: shrinking the wrapper further would need a shorter hash than `emetgate_try` accepts
+today, which was judged out of scope for this pass (see the reader's remaining limits).
+
 **Limits.** Claude Code can summarize (compact) its own context; the mirror only knows
 what it sent, not whether the model still has it. An `unchanged` reply after compaction
 is telling the model "you already have this" when it may not — the wrong direction to

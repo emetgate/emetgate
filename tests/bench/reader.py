@@ -1,7 +1,9 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import tiktoken
 
@@ -180,6 +182,67 @@ def scenario_reread_after_edit(tmp_path):
     return "reread the SAME symbol after it changed, --mirror on (must not say unchanged)", baseline, emetgate, 3
 
 
+def scenario_reread_after_edit_real_file():
+    src_path = os.path.join(AFFILIATE_SCRAPER, "src", "index.js")
+    if not os.path.exists(src_path):
+        return None
+    content = read(src_path)
+    tmp_dir = tempfile.mkdtemp(prefix="emetgate-reader-bench-")
+    tmp_path = os.path.join(tmp_dir, "index.js")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_dir, check=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_dir, check=True)
+        subprocess.run(
+            ["git", "-c", "user.email=bench@example.com", "-c", "user.name=bench", "commit", "-q", "-m", "init"],
+            cwd=tmp_dir,
+            check=True,
+        )
+        session = McpSession(tmp_dir, mirror=True)
+        try:
+            session.call("emetgate_read_symbol", {"file": "index.js", "symbol": "loadPending"})
+            edited = content.replace(
+                "function loadPending() {",
+                "function loadPending() {\n  // emetgate reader bench edit marker",
+                1,
+            )
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(edited)
+            after_text, is_error = session.call("emetgate_read_symbol", {"file": "index.js", "symbol": "loadPending"})
+        finally:
+            session.close()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    if is_error:
+        raise RuntimeError(f"reread after edit (real file) failed: {after_text}")
+    if "unchanged" in after_text:
+        raise RuntimeError("mirror reported unchanged after a real edit on a real file; this would be the dangerous direction")
+
+    start_idx = edited.index("function loadPending()")
+    start_line = edited.count("\n", 0, start_idx) + 1
+    open_brace = edited.index("{", start_idx)
+    depth = 0
+    j = open_brace
+    while True:
+        if edited[j] == "{":
+            depth += 1
+        elif edited[j] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    end_line = edited.count("\n", 0, j) + 1
+    exact_range = "\n".join(edited.splitlines()[start_line - 1 : end_line])
+
+    return {
+        "name": "reread a small changed symbol in the real 1.6K-line affiliate-scraper/src/index.js, --mirror on",
+        "full_file": toks(edited),
+        "best_case_range": toks(exact_range),
+        "emetgate": toks(after_text),
+    }
+
+
 def scenario_line_range():
     path = os.path.join(ROOT, "build.zig")
     lines = read(path).splitlines(keepends=True)
@@ -222,6 +285,21 @@ def main():
         print("\nScenarios where emetgate used MORE tokens than a plain read (not hidden):")
         for name in worse:
             print(f"  - {name}")
+
+    real = scenario_reread_after_edit_real_file()
+    if real is not None:
+        print()
+        print("Real-file version of the mirror reread scenario above (synthetic vs a real 1.6K-line file):")
+        print("{:<90} {:>14} {:>16} {:>10}".format("scenario", "Read (full file)", "Read (best case range)", "emetgate"))
+        print("{:<90} {:>14} {:>16} {:>10}".format(
+            real["name"][:90], real["full_file"], real["best_case_range"], real["emetgate"]
+        ))
+        print(
+            "Even the best case (reading exactly the changed function's line range with sed -n, "
+            "which a model cannot know in advance without already having read the file) is "
+            f"{real['best_case_range']} tokens against emetgate's {real['emetgate']}; "
+            f"ratio {real['emetgate'] / real['best_case_range']:.2f}x."
+        )
 
 
 if __name__ == "__main__":
