@@ -4,6 +4,11 @@ const emetgate = @import("emetgate");
 const regex = emetgate.regex;
 const memory = emetgate.memory;
 const server = emetgate.server;
+const cas = emetgate.cas;
+const symbol = emetgate.symbol;
+const journal = emetgate.journal;
+const lang_registry = emetgate.lang_registry;
+const Snapshot = emetgate.loader.Snapshot;
 const Runtime = emetgate.runtime.Runtime;
 
 const regex_seeds = [_][]const u8{
@@ -14,6 +19,17 @@ const protocol_seeds = [_][]const u8{
     "{}",
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}",
     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"emetgate_git\",\"arguments\":{\"sub\":\"status\"}}}",
+};
+
+const cas_seeds = [_][]const u8{
+    "", "{ return 3; }", "{ return 1;", "{ } function evil() {}", "\x00",
+};
+const cas_base_source = "function f() { return 1; }\nfunction g() { return 2; }\n";
+
+const journal_seeds = [_][]const u8{
+    "{\"version\":2,\"batch\":\"0123456789abcdef\",\"intents\":[{\"op\":\"delete\",\"target\":\"a\",\"base_hash\":\"00\"}]}",
+    "{\"target\":\"a\",\"base_hash\":\"00\"}",
+    "{\"version\":3}",
 };
 
 const ledger_seeds = [_][]const u8{
@@ -91,6 +107,56 @@ fn runProtocol(random: std.Random, io: std.Io, deadline: std.Io.Timestamp, buf: 
     return iterations;
 }
 
+fn runCas(random: std.Random, io: std.Io, deadline: std.Io.Timestamp, buf: []u8, gpa: std.mem.Allocator) !usize {
+    var iterations: usize = 0;
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch {};
+    while (notDone(io, deadline)) : (iterations += 1) {
+        const seed = cas_seeds[random.uintLessThan(usize, cas_seeds.len)];
+        const input = mutate(random, seed, buf);
+        std.debug.print("\rcas last input: {any}          ", .{input});
+        const source = try gpa.dupe(u8, cas_base_source);
+        const base = Snapshot.fromSource(runtime, lang_registry.profiles[0], source) catch continue;
+        defer base.destroy();
+        const table = base.symbols() catch continue;
+        const ref: symbol.Ref = .{ .name = "f" };
+        const target = table.resolve(ref) catch continue;
+        const cut_start = target.body.startByte();
+        const cut_end = target.body.endByte();
+
+        const applied = cas.apply(base, .{ .ref = ref, .expected_hash = target.hash, .new_body = input }) catch continue;
+        defer applied.snapshot.destroy();
+        const out = applied.snapshot.source;
+        const tail_len = cas_base_source.len - cut_end;
+        if (!std.mem.eql(u8, cas_base_source[0..cut_start], out[0..cut_start]) or
+            !std.mem.eql(u8, cas_base_source[cut_end..], out[out.len - tail_len ..]))
+        {
+            std.debug.print("\nBUG: cas.apply touched bytes outside the slot on input {any}\n", .{input});
+            return error.InvariantViolated;
+        }
+    }
+    return iterations;
+}
+
+fn runJournal(random: std.Random, io: std.Io, deadline: std.Io.Timestamp, buf: []u8, gpa: std.mem.Allocator) !usize {
+    var iterations: usize = 0;
+    while (notDone(io, deadline)) : (iterations += 1) {
+        const seed = journal_seeds[random.uintLessThan(usize, journal_seeds.len)];
+        const input = mutate(random, seed, buf);
+        std.debug.print("\rjournal last input: {any}          ", .{input});
+        const parsed = journal.parse(gpa, input) catch continue;
+        defer parsed.deinit();
+        switch (parsed) {
+            .batch => |b| if (b.value.version != journal.version) {
+                std.debug.print("\nBUG: journal.parse returned .batch for version {d}\n", .{b.value.version});
+                return error.InvariantViolated;
+            },
+            .legacy => {},
+        }
+    }
+    return iterations;
+}
+
 fn runLedger(random: std.Random, io: std.Io, deadline: std.Io.Timestamp, buf: []u8, gpa: std.mem.Allocator) usize {
     var iterations: usize = 0;
     while (notDone(io, deadline)) : (iterations += 1) {
@@ -109,15 +175,16 @@ pub fn main(init: std.process.Init) !u8 {
     const io = init.io;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 2) {
-        std.debug.print("usage: emetgate-fuzz <regex|protocol|ledger> [seconds]\n", .{});
+        std.debug.print("usage: emetgate-fuzz <regex|protocol|ledger|cas|journal> [seconds]\n", .{});
         return 2;
     }
     const target = args[1];
     var seconds: i64 = 20;
     if (args.len > 2) seconds = std.fmt.parseInt(i64, args[2], 10) catch seconds;
 
-    const random = std.crypto.random;
     const now = std.Io.Timestamp.now(io, .awake);
+    var prng = std.Random.DefaultPrng.init(@truncate(@as(u96, @bitCast(now.nanoseconds))));
+    const random = prng.random();
     const deadline: std.Io.Timestamp = .{ .nanoseconds = now.nanoseconds + @as(i96, seconds) * std.time.ns_per_s };
     var buf: [max_mutated_len]u8 = undefined;
 
@@ -129,7 +196,11 @@ pub fn main(init: std.process.Init) !u8 {
         const runtime = try Runtime.create(gpa);
         defer runtime.destroy() catch {};
         break :blk runProtocol(random, io, deadline, &buf, gpa, runtime);
-    } else {
+    } else if (std.mem.eql(u8, target, "cas"))
+        try runCas(random, io, deadline, &buf, gpa)
+    else if (std.mem.eql(u8, target, "journal"))
+        try runJournal(random, io, deadline, &buf, gpa)
+    else {
         std.debug.print("unknown target: {s}\n", .{target});
         return 2;
     };
