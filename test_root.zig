@@ -84,6 +84,9 @@ test {
     _ = @import("tests/mutate_schema.zig");
     _ = @import("tests/mutate_changes.zig");
     _ = @import("tests/memory.zig");
+    _ = @import("tests/fuzz_regex.zig");
+    _ = @import("tests/fuzz_protocol.zig");
+    _ = @import("tests/fuzz_ledger.zig");
     _ = @import("tests/lang/conformance.zig");
     _ = @import("tests/lang/jsx_compat.zig");
     _ = @import("tests/lang/zig/compat.zig");

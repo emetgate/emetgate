@@ -353,6 +353,19 @@ fn lessNs(_: void, a: Result, b: Result) bool {
     return a.ns > b.ns;
 }
 
+pub fn fuzz(
+    context: anytype,
+    comptime testOne: fn (context: @TypeOf(context), smith: *testing.Smith) anyerror!void,
+    options: testing.FuzzInputOptions,
+) anyerror!void {
+    for (options.corpus) |input| {
+        var smith: testing.Smith = .{ .in = input };
+        try testOne(context, &smith);
+    }
+    var empty: testing.Smith = .{ .in = "" };
+    try testOne(context, &empty);
+}
+
 fn suiteOf(name: []const u8) []const u8 {
     if (std.mem.find(u8, name, ".test.")) |i| return name[0..i];
     if (std.mem.find(u8, name, ".decltest.")) |i| return name[0..i];

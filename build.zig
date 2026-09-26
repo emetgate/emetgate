@@ -113,6 +113,18 @@ pub fn build(b: *std.Build) void {
     const install_mutate = b.addInstallArtifact(mutate_tool, .{});
     b.step("mutate-tool", "Build the mutation harness into zig-out/bin/emetgate-mutate").dependOn(&install_mutate.step);
 
+    const fuzz_tool = b.addExecutable(.{
+        .name = "emetgate-fuzz",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/fuzz/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "emetgate", .module = emetgate }},
+        }),
+    });
+    const install_fuzz = b.addInstallArtifact(fuzz_tool, .{});
+    b.step("fuzz-tool", "Build the time-boxed random mutation fuzzer into zig-out/bin/emetgate-fuzz").dependOn(&install_fuzz.step);
+
     const lockdown_check = b.addExecutable(.{
         .name = "lockdown-check",
         .root_module = b.createModule(.{
