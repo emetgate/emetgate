@@ -644,9 +644,10 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
 
     var overrides: std.ArrayList(paths.Override) = .empty;
     for (outputs.items) |o| try overrides.append(arena, .{ .abs = o.abs, .source = o.text });
-    if (try paths.reaches(arena, runtime, w.existing, request.target_abs, request.target_abs, overrides.items)) return error.ImportCycle;
-    if (try paths.reaches(arena, runtime, w.existing, request.file_abs, request.file_abs, overrides.items) and
-        !try paths.reaches(arena, runtime, w.existing, request.file_abs, request.file_abs, &.{})) return error.ImportCycle;
+    const cycle = try paths.reaches(arena, runtime, w.existing, request.target_abs, request.target_abs, overrides.items) or
+        (try paths.reaches(arena, runtime, w.existing, request.file_abs, request.file_abs, overrides.items) and
+            !try paths.reaches(arena, runtime, w.existing, request.file_abs, request.file_abs, &.{}));
+    if (cycle) return error.ImportCycle;
 
     const result = try build(gpa, root, outputs.items, afters.items, .{
         .resolver = resolver,
