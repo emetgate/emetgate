@@ -1577,7 +1577,8 @@
       "to": "",
       "kills": [
         "insert refuses a body that declares more than one top-level symbol"
-      ]
+      ],
+      "all": true
     },
     {
       "id": "NS12-insert-nested-symbols-counted",
@@ -1585,9 +1586,10 @@
       "from": "candidate.declaration.start < slot.start or candidate.ref.container.len != 0",
       "to": "candidate.declaration.start < slot.start",
       "kills": [
-        "insert refuses a body that declares no top-level symbol",
-        "insert names the one top-level symbol the body declares, whatever its declaration form"
-      ]
+        "insert names the one top-level symbol the body declares, whatever its declaration form",
+        "insert and create accept a variable, class, interface, type alias or enum as the one new declaration"
+      ],
+      "all": true
     },
     {
       "id": "NS13-insert-existing-symbols-counted",
@@ -1596,7 +1598,8 @@
       "to": "(candidate.declaration.start < slot.start and false) or candidate.ref.container.len != 0",
       "kills": [
         "insert names the one top-level symbol the body declares, whatever its declaration form"
-      ]
+      ],
+      "all": true
     },
     {
       "id": "NS14-insert-name-mismatch-accepted",
@@ -1611,8 +1614,8 @@
     {
       "id": "NS15-insert-placeholder-accepted",
       "file": "src/engine/cas.zig",
-      "from": "    try rejectPlaceholder(profile, declared.body);\n",
-      "to": "    if (false) try rejectPlaceholder(profile, declared.body);\n",
+      "from": "    if (declared.body) |body| try rejectPlaceholder(profile, body);\n",
+      "to": "    if (declared.body) |body| if (false) try rejectPlaceholder(profile, body);\n",
       "kills": [
         "insert refuses a file without a trailing newline and a body that does not parse"
       ]
@@ -5298,6 +5301,105 @@
       "to": "            if (declarators == 1) {",
       "kills": [
         "declarations: a merged interface and class share a ref and are marked ambiguous, a destructuring and a function value are not declarations"
+      ]
+    },
+    {
+      "id": "MV1-content-hash-check-skipped",
+      "file": "src/platform/move_batch.zig",
+      "from": "        if (!std.mem.eql(u8, &found.hash, &expected)) return error.ContentHashMismatch;",
+      "to": "        if (found.hash.len == 0) return error.ContentHashMismatch;",
+      "kills": [
+        "red team move: the proof catches a moved text that changed, a user left without its import and another symbol that changed"
+      ]
+    },
+    {
+      "id": "MV2-cycle-check-skipped",
+      "file": "src/platform/move_batch.zig",
+      "from": "    if (cycle) return error.ImportCycle;",
+      "to": "    _ = cycle;",
+      "kills": [
+        "red team move: a move that makes the target and the source import each other is refused as a cycle"
+      ]
+    },
+    {
+      "id": "MV3-user-import-skipped",
+      "file": "src/platform/move_batch.zig",
+      "from": ".text = try std.mem.concat(arena, u8, &.{ replaced, added_text }) });",
+      "to": ".text = try std.mem.concat(arena, u8, &.{ replaced, added_text[0..0] }) });",
+      "kills": [
+        "move: a function goes to a new file with its import, and its user imports it from there"
+      ]
+    },
+    {
+      "id": "MV4-side-effect-check-skipped",
+      "file": "src/platform/move_batch.zig",
+      "from": "    if (needs_order and !request.order_change) return error.ModuleSideEffect;\n",
+      "to": "",
+      "kills": [
+        "red team move: a source with a module-level effect needs order_change and is then classed as spending"
+      ]
+    },
+    {
+      "id": "MV5-target-name-collision-accepted",
+      "file": "src/platform/move_batch.zig",
+      "from": "        if (t_resolution.binders.len != allowed or t_resolution.externals.len != 0) return error.TargetNameTaken;\n",
+      "to": "        if ((t_resolution.binders.len != allowed or t_resolution.externals.len != 0) and false) return error.TargetNameTaken;\n",
+      "kills": [
+        "red team move: a target that already binds the name is refused"
+      ]
+    },
+    {
+      "id": "MV6-resolution-proof-skipped",
+      "file": "src/platform/move_batch.zig",
+      "from": "        for (resolution.uses) |use| if (use.binder == null) return error.IncompleteMove;",
+      "to": "        _ = resolution;",
+      "kills": [
+        "red team move: the proof catches a moved text that changed, a user left without its import and another symbol that changed"
+      ]
+    },
+    {
+      "id": "MV7-unhandled-reference-accepted",
+      "file": "src/platform/move_batch.zig",
+      "from": "        if (!known) return error.UnhandledReference;\n",
+      "to": "",
+      "kills": [
+        "red team move: the language service naming a user the kernel cannot rewrite, or missing one it found, is refused"
+      ]
+    },
+    {
+      "id": "MV8-declared-side-effects-ignored",
+      "file": "src/platform/move_batch.zig",
+      "from": "    if (declared and !request.order_change) return error.DeclaredSideEffect;\n",
+      "to": "",
+      "kills": [
+        "red team move: a package.json sideEffects entry for the source is refused without order_change"
+      ]
+    },
+    {
+      "id": "MV9-capture-accepted",
+      "file": "src/platform/move_batch.zig",
+      "from": "                if (!try targetImportsSame(w, target_imports, request.target_abs, f.name, owner.name, resolved, spec)) return error.TargetCapture;",
+      "to": "                _ = try targetImportsSame(w, target_imports, request.target_abs, f.name, owner.name, resolved, spec);",
+      "expect_status": "survived",
+      "note": "defense in depth: the proof after the move resolves every free name of the moved code in the target and refuses one bound to a target declaration (TargetCapture), so the check before building the texts only refuses earlier"
+    },
+    {
+      "id": "CR1-create-ignores-declarations",
+      "file": "src/engine/cas.zig",
+      "from": "    for (table.declarations) |candidate| {\n        if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;\n        if (found != null) return error.MultipleTopLevelSymbols;\n        found = .{ .ref = candidate.ref, .hash = candidate.hash, .body = null };\n    }\n",
+      "to": "",
+      "kills": [
+        "insert and create accept a variable, class, interface, type alias or enum as the one new declaration",
+        "create kinds: a batch adds an exported const and a new file with an interface, both classified as symmetry"
+      ]
+    },
+    {
+      "id": "CR2-existing-declaration-overwritten",
+      "file": "src/engine/cas.zig",
+      "from": "    if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;\n",
+      "to": "",
+      "kills": [
+        "insert and create accept a variable, class, interface, type alias or enum as the one new declaration"
       ]
     }
   ]

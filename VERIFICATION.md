@@ -6,23 +6,24 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **906**
-- Mutations declared in `tests/mutations.json`: **526**
-  - killed: **501**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **930**
+- Mutations declared in `tests/mutations.json`: **537**
+  - killed: **511**
   - equivalent: **5**
-  - defense in depth: **5**
+  - defense in depth: **6**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
   - survives, not yet classified: **4** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename)
-- Red-team suites: **8** files, **66** tests total
+- Red-team suites: **9** files, **76** tests total
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
+  - `tests/redteam_move.zig`: 10
   - `tests/redteam_rename.zig`: 10
   - `tests/redteam_sandbox.zig`: 5
 - Security findings recorded in README's Security History: **7**
@@ -42,7 +43,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-115 mutation(s).
+117 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -121,10 +122,10 @@ python tools/verification_page.py --check
 | `NS9-insert-extra-top-level-code-accepted` | `src/engine/cas.zig` | `if (statements != 1) return error.ExtraTopLevelCode;` -> `if (statements != 1 and false) return error.ExtraTopLevelCode;` | insert refuses top-level code beside the one symbol | killed |
 | `NS10-insert-comment-counted-as-code` | `src/engine/cas.zig` | `if (!node.isNamed() or profile.isComment(node.kind())) continue;` -> `if (!node.isNamed() or (profile.isComment(node.kind()) and fals...` | insert refuses top-level code beside the one symbol | killed |
 | `NS11-insert-multiple-symbols-accepted` | `src/engine/cas.zig` | `if (found != null) return error.MultipleTopLevelSymbols;` -> `` | insert refuses a body that declares more than one top-level symbol | killed |
-| `NS12-insert-nested-symbols-counted` | `src/engine/cas.zig` | `candidate.declaration.start < slot.start or candidate.ref.conta...` -> `candidate.declaration.start < slot.start` | insert refuses a body that declares no top-level symbol; insert names the one top-level s... | killed |
+| `NS12-insert-nested-symbols-counted` | `src/engine/cas.zig` | `candidate.declaration.start < slot.start or candidate.ref.conta...` -> `candidate.declaration.start < slot.start` | insert names the one top-level symbol the body declares, whatever its declarati...; inser... | killed |
 | `NS13-insert-existing-symbols-counted` | `src/engine/cas.zig` | `candidate.declaration.start < slot.start or candidate.ref.conta...` -> `(candidate.declaration.start < slot.start and false) or candida...` | insert names the one top-level symbol the body declares, whatever its declarati... | killed |
 | `NS14-insert-name-mismatch-accepted` | `src/engine/cas.zig` | `if (!declared.ref.eql(ref)) return error.SymbolNameMismatch;` -> `if (!declared.ref.eql(ref) and false) return error.SymbolNameMi...` | insert refuses a name that differs from the one the body declares; absent: a proposed nam... | killed |
-| `NS15-insert-placeholder-accepted` | `src/engine/cas.zig` | `try rejectPlaceholder(profile, declared.body);` -> `if (false) try rejectPlaceholder(profile, declared.body);` | insert refuses a file without a trailing newline and a body that does not parse | killed |
+| `NS15-insert-placeholder-accepted` | `src/engine/cas.zig` | `if (declared.body) \|body\| try rejectPlaceholder(profile, body...` -> `if (declared.body) \|body\| if (false) try rejectPlaceholder(pr...` | insert refuses a file without a trailing newline and a body that does not parse | killed |
 | `NS16-insert-untouched-outside-call-removed` | `src/engine/cas.zig` | `try expectUntouchedOutside(before.*, after.*, end, slot);` -> `_ = end;` | defense in depth for insertion: topLevelStatementsIn refuses any root child that straddle... | defense in depth |
 | `NS18-propose-absent-not-routed-to-insert` | `src/engine/cas.zig` | `.absent => insert(base, .{ .ref = ref, .new_body = new_body }),` -> `.absent => error.SymbolNotFound,` | propose replaces a body for a hex hash and inserts a symbol for absent; absent: a new top... | killed |
 | `NF11-create-body-rules-skipped` | `src/engine/cas.zig` | `const declared = try expectSoleDeclaration(profile, next.tree.r...` -> `const declared = try soleTopLevelSymbol(after.*, slot);` | create applies the same body rules as insert | killed |
@@ -161,6 +162,8 @@ python tools/verification_page.py --check
 | `ZIG2-visibility-hook-not-consulted` | `src/engine/boundedness.zig` | `if (profile.hasVisibilityKeyword(sym.node)) return true;     va...` -> `var current = sym.node.parent();` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
 | `FUZZ1-cas-splice-tail-off-by-one` | `src/engine/cas.zig` | `base.source[cut.end..] });` -> `base.source[cut.end + 1 ..] });` | fuzz: cas.apply on a fixed base and hash either refuses or leaves everything ou... | killed |
 | `KD5-function-hash-takes-declaration-domain` | `src/engine/symbol.zig` | `var hasher = std.crypto.hash.Blake3.init(.{});         hasher.u...` -> `var hasher = std.crypto.hash.Blake3.init(.{});         hasher.u...` | declarations: the function and method hashes of the fixture are the ones main c... | killed |
+| `CR1-create-ignores-declarations` | `src/engine/cas.zig` | `for (table.declarations) \|candidate\| {         if (candidate....` -> `` | insert and create accept a variable, class, interface, type alias or enum as th...; creat... | killed |
+| `CR2-existing-declaration-overwritten` | `src/engine/cas.zig` | `if (before.hasDeclaration(insertion.ref)) return error.SymbolEx...` -> `` | insert and create accept a variable, class, interface, type alias or enum as th... | killed |
 
 ### Sandbox and the test/typecheck gate
 
@@ -512,7 +515,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-105 mutation(s).
+114 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -621,6 +624,15 @@ python tools/verification_page.py --check
 | `KD3-exported-type-approval-skipped` | `src/platform/rename_batch.zig` | `const interface_change = locations.files.items.len > 1 or try r...` -> `const interface_change = locations.files.items.len > 1 or top_n...` | rename kinds: a class field is renamed with its this and obj accesses the servi...; renam... | killed |
 | `KD4-declaration-hash-without-domain` | `src/engine/declarations.zig` | `hasher.update(domain);     hasher.update(&.{0});     hasher.upd...` -> `_ = kind;` | declarations: a declaration hash is domain separated, so the same text never ha... | killed |
 | `KD6-function-values-listed-twice` | `src/engine/declarations.zig` | `if (self.isFunctionValue(child)) continue;             if (decl...` -> `if (declarators == 1) {` | declarations: a merged interface and class share a ref and are marked ambiguous... | killed |
+| `MV1-content-hash-check-skipped` | `src/platform/move_batch.zig` | `if (!std.mem.eql(u8, &found.hash, &expected)) return error.Cont...` -> `if (found.hash.len == 0) return error.ContentHashMismatch;` | red team move: the proof catches a moved text that changed, a user left without... | killed |
+| `MV2-cycle-check-skipped` | `src/platform/move_batch.zig` | `if (cycle) return error.ImportCycle;` -> `_ = cycle;` | red team move: a move that makes the target and the source import each other is... | killed |
+| `MV3-user-import-skipped` | `src/platform/move_batch.zig` | `.text = try std.mem.concat(arena, u8, &.{ replaced, added_text ...` -> `.text = try std.mem.concat(arena, u8, &.{ replaced, added_text[...` | move: a function goes to a new file with its import, and its user imports it fr... | killed |
+| `MV4-side-effect-check-skipped` | `src/platform/move_batch.zig` | `if (needs_order and !request.order_change) return error.ModuleS...` -> `` | red team move: a source with a module-level effect needs order_change and is th... | killed |
+| `MV5-target-name-collision-accepted` | `src/platform/move_batch.zig` | `if (t_resolution.binders.len != allowed or t_resolution.externa...` -> `if ((t_resolution.binders.len != allowed or t_resolution.extern...` | red team move: a target that already binds the name is refused | killed |
+| `MV6-resolution-proof-skipped` | `src/platform/move_batch.zig` | `for (resolution.uses) \|use\| if (use.binder == null) return er...` -> `_ = resolution;` | red team move: the proof catches a moved text that changed, a user left without... | killed |
+| `MV7-unhandled-reference-accepted` | `src/platform/move_batch.zig` | `if (!known) return error.UnhandledReference;` -> `` | red team move: the language service naming a user the kernel cannot rewrite, or... | killed |
+| `MV8-declared-side-effects-ignored` | `src/platform/move_batch.zig` | `if (declared and !request.order_change) return error.DeclaredSi...` -> `` | red team move: a package.json sideEffects entry for the source is refused witho... | killed |
+| `MV9-capture-accepted` | `src/platform/move_batch.zig` | `if (!try targetImportsSame(w, target_imports, request.target_ab...` -> `_ = try targetImportsSame(w, target_imports, request.target_abs...` | defense in depth: the proof after the move resolves every free name of the moved code in ... | defense in depth |
 
 ## What this system does not prove
 

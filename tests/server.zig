@@ -328,6 +328,7 @@ const served_tools = [_][]const u8{
     "emetgate_read_symbol",
     "emetgate_try",
     "emetgate_rename",
+    "emetgate_move",
     "emetgate_mutate",
     "emetgate_read_file",
     "emetgate_list",

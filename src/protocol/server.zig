@@ -76,6 +76,18 @@ pub const tool_defs = [_]Tool{
         },
     },
     .{
+        .name = "emetgate_move",
+        .description = "Move a top-level function, class, interface, type, enum or variable to another file (existing or new) as one all-or-nothing batch; the model names the target and writes no import. The kernel derives every import: the moved declaration's free names are imported in the target from the same modules (paths rewritten), a remaining use in the source imports it from the target, and every file that imported it from the source now imports it from the target. The TypeScript language service's findReferences is checked against the kernel's own list of users; a user it reports that the kernel cannot rewrite is refused. The kernel proves that the moved declaration keeps its content hash, that every other symbol and declaration of every touched file keeps its hash, and that every name still resolves. Refused: export default, a namespace import or re-export of the moved name, a dependency the source does not export, a name already bound in the target, a new import cycle, and a source or target with module-level side effects (a call or expression at the top level, or a package.json sideEffects entry) unless order_change is true. Moving an exported symbol needs interface_change: true. The typecheck and test commands still run first.",
+        .props = &.{
+            .{ .name = "file", .desc = "path to the TypeScript or JavaScript file that declares the symbol" },
+            .{ .name = "symbol", .desc = "ref of a top-level symbol or declaration" },
+            .{ .name = "hash", .desc = "current 32-hex hash from emetgate_symbols (symbols or declarations)" },
+            .{ .name = "target_file", .desc = "path of the file to move it to; created if it does not exist (its directory must exist)" },
+            .{ .name = "interface_change", .desc = "true to allow a move that changes where other modules import the symbol from", .optional = true, .ty = "boolean" },
+            .{ .name = "order_change", .desc = "true to allow a move that can change module evaluation order", .optional = true, .ty = "boolean" },
+        },
+    },
+    .{
         .name = "emetgate_mutate",
         .description = "In-memory dry-run mutation: returns the transformed source and new hash without touching disk.",
         .props = &.{

@@ -85,6 +85,10 @@ fn hasEffect(profile: *const Profile, node: ts.Node) bool {
     return false;
 }
 
+pub fn statementHasEffect(profile: *const Profile, statement: ts.Node) bool {
+    return std.mem.eql(u8, statement.kind(), profile.expression_statement) or hasEffect(profile, statement);
+}
+
 pub fn mentions(source: []const u8, word: []const u8, skip: ?Span) bool {
     if (word.len == 0) return false;
     var from: usize = 0;

@@ -82,3 +82,21 @@ test "real typescript: a class used as a type, in extends and in new is renamed 
     try case.expectFile("src/shape.ts", kinds.shape_new);
     try case.expectFile("src/user.ts", kinds.user_new);
 }
+
+test "real typescript: a moved function's references agree with the kernel's users and the move commits" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const target = (try typescriptDir(arena_state.allocator())) orelse return error.SkipZigTest;
+    const mt = @import("move_tool.zig");
+    var case: Case = undefined;
+    try mt.initMath(&case, mt.math_src, mt.app_src, &.{}, false);
+    defer case.deinit();
+    try linkTypeScript(&case, target);
+    const outcome = try mt.move(&case, "src/math.ts", "area", "src/shapes.ts", .{});
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try testing.expectEqual(@import("emetgate").move_batch.Resolver.language_service, outcome.plan.resolver);
+    try case.expectFile("src/shapes.ts", mt.shapes_new);
+    try case.expectFile("src/app.ts", mt.app_new);
+}

@@ -36,6 +36,24 @@ const binder_sites = [_]BinderSite{
     .{ .parent = "namespace_import", .field = null, .namespace = .both, .scope = .program },
 };
 
+pub const modules: profile_mod.Modules = .{
+    .import_statement = "import_statement",
+    .export_statement = "export_statement",
+    .source_field = "source",
+    .declaration_field = "declaration",
+    .import_clause = "import_clause",
+    .named_imports = "named_imports",
+    .import_specifier = "import_specifier",
+    .namespace_import = "namespace_import",
+    .export_clause = "export_clause",
+    .export_specifier = "export_specifier",
+    .name_field = "name",
+    .alias_field = "alias",
+    .type_keywords = &.{ "type", "typeof" },
+    .default_keyword = "default",
+    .star_token = "*",
+};
+
 pub const grammar: Rename = .{
     .external_sites = &.{
         .{ .parent = "import_specifier", .field = "name", .when = "alias" },

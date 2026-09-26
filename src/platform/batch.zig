@@ -162,6 +162,7 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
     for (prepared, 0..) |p, i| {
         committed[i] = .{ .hash = p.hash, .deleted = !p.addsCode() };
         if (p.action != .insert and p.action != .create) continue;
+        if (edits[i].ref_text.len == 0) continue;
         const ref = try symbol.Ref.parse(gpa, edits[i].ref_text);
         defer ref.deinit(gpa);
         committed[i].evidence = try create.classify(gpa, io, root, sources, .{
