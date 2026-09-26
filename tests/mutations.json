@@ -5501,6 +5501,66 @@
       "kills": [
         "move file: a require or a computed import that reaches the file is refused"
       ]
+    },
+    {
+      "id": "RUN1-allowlist-check-skipped",
+      "file": "src/platform/run_command.zig",
+      "from": "    const entry = match(allowed, requested) orelse return .{ .refused = .not_allowed };\n",
+      "to": "    const entry = match(allowed, requested) orelse requested;\n",
+      "kills": [
+        "a request runs only the allowlist entry it equals byte for byte",
+        "run tool: a command the user did not allow is refused and the allowlist comes back",
+        "redteam run: shell injection around an allowed command is refused and nothing runs"
+      ]
+    },
+    {
+      "id": "RUN2-metacharacter-check-relaxed",
+      "file": "src/platform/run_command.zig",
+      "from": "pub const shell_metacharacters = \"&|<>^%!;`$()\\r\\n\\x00\";",
+      "to": "pub const shell_metacharacters = \"\\x00\";",
+      "kills": [
+        "an allowlist entry with a shell metacharacter is refused",
+        "run policy: an --allow-run entry with a shell metacharacter, an install or a commit is refused at startup with its reason",
+        "redteam run: an allowlist entry that carries a metacharacter or an install is refused at call time even if it reached the policy"
+      ]
+    },
+    {
+      "id": "RUN3-in-working-tree",
+      "file": "src/platform/run_command.zig",
+      "from": "runner.runStages(gpa, io, location.shadow, null, options.command, options.limits)",
+      "to": "runner.runStages(gpa, io, options.root_abs, null, options.command, options.limits)",
+      "kills": [
+        "redteam run: an allowed script cannot write outside the shadow, runs from the shadow and leaves no trace in the working tree"
+      ]
+    },
+    {
+      "id": "RUN4-output-cap-removed",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    const cut = run_command.tail(bytes, max_output_lines, max_output_bytes);\n",
+      "to": "    const cut = run_command.tail(bytes, std.math.maxInt(usize), std.math.maxInt(usize));\n",
+      "kills": [
+        "redteam run: a flood of output comes back cut to the last lines with a count of the rest"
+      ]
+    },
+    {
+      "id": "RUN5-model-policy-accepted",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    try policy_mod.refuseModelPolicy(args);\n",
+      "to": "    if (args == null) try policy_mod.refuseModelPolicy(args);\n",
+      "kills": [
+        "redteam run: a call that names any policy field is refused before anything runs"
+      ]
+    },
+    {
+      "id": "RUN6-out-of-scope-accepted",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (isOutOfScope(command)) return error.RunCommandOutOfScope;\n",
+      "to": "",
+      "kills": [
+        "installing dependencies and git commit or push are out of scope for the allowlist",
+        "run policy: an --allow-run entry with a shell metacharacter, an install or a commit is refused at startup with its reason",
+        "redteam run: an allowlist entry that carries a metacharacter or an install is refused at call time even if it reached the policy"
+      ]
     }
   ]
 }
