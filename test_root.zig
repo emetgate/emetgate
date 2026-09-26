@@ -76,6 +76,7 @@ test {
     _ = @import("tests/redteam_link_tree.zig");
     _ = @import("tests/redteam_git.zig");
     _ = @import("tests/run_tool.zig");
+    _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_crash.zig");
     _ = @import("tests/batch_crash_tool.zig");
