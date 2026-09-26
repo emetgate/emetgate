@@ -62,6 +62,15 @@ pub fn main(init: std.process.Init) !void {
             : .{ .memory = true });
         unreachable;
     }
+    if (std.mem.eql(u8, mode, "echo")) {
+        var in_buffer: [4096]u8 = undefined;
+        var stdin_reader: std.Io.File.Reader = .initStreaming(.stdin(), init.io, &in_buffer);
+        while (try stdin_reader.interface.takeDelimiter('\n')) |line| {
+            try out.print("echo {s}\n", .{std.mem.trimEnd(u8, line, "\r")});
+            try out.flush();
+        }
+        ExitProcess(0);
+    }
     if (std.mem.eql(u8, mode, "spin")) {
         var counter: u64 = 0;
         while (true) {

@@ -1367,8 +1367,8 @@
     {
       "id": "SB3-sandbox-child-integrity-check-removed",
       "file": "src/platform/sandbox.zig",
-      "from": "    try requireLowIntegrity(child.id.?);\n",
-      "to": "",
+      "from": "    try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
+      "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
       "kills": [
         "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all",
         "redteam sandbox: an unavailable sandbox rejects the proposal and leaves the repository untouched"
@@ -2236,8 +2236,8 @@
     {
       "id": "SP34-batch-gates-with-first-ref",
       "file": "src/platform/batch.zig",
-      "from": "|p, edit| {\n        if (!p.addsCode()) continue;\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
-      "to": "|p, edit| {\n        if (!p.addsCode()) continue;\n        _ = edit;\n        const ref = try symbol.Ref.parse(gpa, options.edits[0].ref_text);",
+      "from": "|p, edit| {\n        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
+      "to": "|p, edit| {\n        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edits[0].ref_text);",
       "kills": [
         "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
       ]
@@ -3125,8 +3125,8 @@
     {
       "id": "CMD7-spawned-integrity-not-verified",
       "file": "src/platform/sandbox.zig",
-      "from": "    try requireLowIntegrity(child.id.?);\n",
-      "to": "",
+      "from": "    try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
+      "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
       "kills": [
         "cmd rule: a sandbox that cannot be built refuses the command instead of running it unrestricted",
         "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all"
@@ -5001,6 +5001,211 @@
       "to": "    if (probe.value.version >= 1) {",
       "kills": [
         "fuzz: journal.parse on malformed v2 and legacy bytes never crashes or leaks, and its variant matches the declared version"
+      ]
+    },
+    {
+      "id": "RN1-alpha-hash-check-skipped",
+      "file": "src/engine/rename.zig",
+      "from": "        if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;",
+      "to": "        if (a.len != b.len) return error.AlphaMismatch;",
+      "kills": [
+        "rename: a wrong rename inside a top-level block that is no symbol is caught by the statement's alpha hash"
+      ]
+    },
+    {
+      "id": "RN2-symbol-alpha-check-skipped",
+      "file": "src/engine/rename.zig",
+      "from": "            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;",
+      "to": "            if (b_hash.len != 0) matched = true;",
+      "expect_status": "survived",
+      "note": "defense in depth: every symbol a rename touches lies inside a touched top-level statement, and equal name partitions over the statement imply equal ones over any part of it, so the per-symbol comparison only repeats the statement check; it is kept because it also checks that every symbol keeps its ref"
+    },
+    {
+      "id": "RN3-export-approval-skipped",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;\n",
+      "to": "",
+      "kills": [
+        "rename: a rename that reaches other modules is refused without the interface_change approval",
+        "rename: an exported symbol with no other user still needs the interface_change approval"
+      ]
+    },
+    {
+      "id": "RN4-text-path-accepts-exported",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (try rename.exportedName(gpa, base, old)) return error.RenameUnresolved;\n",
+      "to": "",
+      "kills": [
+        "rename: without the language service an exported symbol or a name another file mentions is unresolved"
+      ]
+    },
+    {
+      "id": "RN5-text-path-ignores-other-files",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnresolved;",
+      "to": "        if (abs.len == 0) return error.RenameUnresolved;",
+      "kills": [
+        "rename: without the language service an exported symbol or a name another file mentions is unresolved"
+      ]
+    },
+    {
+      "id": "RN6-text-path-ignores-second-binder",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (try rename.binderCount(gpa, base, old) != 1) return error.RenameUnresolved;\n",
+      "to": "",
+      "kills": [
+        "rename: without the language service a local name with a second binder is unresolved"
+      ]
+    },
+    {
+      "id": "RN7-location-not-an-identifier-skipped",
+      "file": "src/engine/rename.zig",
+      "from": "        const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;\n        if (leaf.shorthand) return error.ShorthandReference;",
+      "to": "        const leaf = findLeaf(leaves, span) orelse continue;\n        if (leaf.shorthand) return error.ShorthandReference;",
+      "kills": [
+        "red team rename: a location inside a comment or a string is refused and both stay unchanged",
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
+      ]
+    },
+    {
+      "id": "RN8-free-occurrence-check-skipped",
+      "file": "src/engine/rename.zig",
+      "from": "    if (try freeOccurrence(gpa, next, old, false)) return error.IncompleteRename;",
+      "to": "    _ = .{ gpa, next, old };",
+      "kills": [
+        "rename: an occurrence left free in an untouched statement is refused as incomplete",
+        "red team rename: a service that skips one call in a touched file is refused"
+      ]
+    },
+    {
+      "id": "RN9-untouched-file-not-checked",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (untouched and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;\n",
+      "to": "    _ = .{ gpa, untouched };\n",
+      "kills": [
+        "red team rename: a service that skips a whole file that still calls the old name is refused"
+      ]
+    },
+    {
+      "id": "RN10-location-not-jailed",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        const abs = try jailLocation(gpa, io, root, location.file);",
+      "to": "        _ = .{ io, root };\n        const abs = try gpa.dupe(u8, location.file);",
+      "kills": [
+        "red team rename: a location outside the repo or in an untracked file is refused"
+      ]
+    },
+    {
+      "id": "RN11-dynamic-access-ignored",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (rename.dynamicAccess(snapshot, old, member) != null) return error.DynamicReference;\n",
+      "to": "    _ = member;\n",
+      "kills": [
+        "red team rename: a string key, eval or a computed require in a touched file is unresolved dynamic access"
+      ]
+    },
+    {
+      "id": "RN12-taken-name-accepted",
+      "file": "src/engine/rename.zig",
+      "from": "    if (taken.len != 0) return error.NameTaken;\n",
+      "to": "",
+      "kills": [
+        "red team rename: a new name that another touched file already uses is refused",
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
+      ]
+    },
+    {
+      "id": "RN13-dropped-location",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    for (answer.value.locations) |location| {",
+      "to": "    for (answer.value.locations[0 .. answer.value.locations.len - 1]) |location| {",
+      "kills": [
+        "rename: the language service proposes, the kernel proves, and all three files change in one batch"
+      ],
+      "note": "a proposer that loses a location makes the proof refuse; the kernel never commits a partial rename"
+    },
+    {
+      "id": "TS1-plugins-passed-through",
+      "file": "src/platform/tsserver_host.js",
+      "from": "  delete options.plugins;\n",
+      "to": "",
+      "kills": [
+        "tsserver: tsconfig plugins never reach the language service",
+        "red team rename: a malicious tsconfig plugin is never loaded and the rename still goes through the service"
+      ]
+    },
+    {
+      "id": "TS2-hung-service-kept",
+      "file": "src/platform/tsserver.zig",
+      "from": "        errdefer |err| if (err != error.LanguageServiceFailed) self.stop();\n",
+      "to": "",
+      "kills": [
+        "tsserver: a hung language service is killed at the timeout and restarted by the next request"
+      ]
+    },
+    {
+      "id": "TS3-typescript-check-skipped",
+      "file": "src/platform/tsserver.zig",
+      "from": "        std.Io.Dir.cwd().access(self.io, marker, .{}) catch return error.TypeScriptNotInstalled;",
+      "to": "        std.Io.Dir.cwd().access(self.io, marker, .{}) catch {};",
+      "kills": [
+        "tsserver: a repo without node_modules/typescript is an explicit error, not a global fallback"
+      ]
+    },
+    {
+      "id": "DR1-service-reference-ignored",
+      "file": "src/platform/batch_plan.zig",
+      "from": "        if (inBatch(root, sources, reference.file)) continue;\n        return true;",
+      "to": "        if (inBatch(root, sources, reference.file)) continue;\n        continue;",
+      "kills": [
+        "delete references: a reference the language service reports in another file refuses the delete"
+      ]
+    },
+    {
+      "id": "DR2-quoted-name-ignored",
+      "file": "src/platform/batch_plan.zig",
+      "from": "    if (try quotedAnywhere(gpa, io, root, name)) return true;\n",
+      "to": "    _ = io;\n",
+      "kills": [
+        "delete references: a quoted name elsewhere is dynamic access and refuses the delete even with no reference found"
+      ]
+    },
+    {
+      "id": "DR3-service-answer-ignored",
+      "file": "src/platform/batch_plan.zig",
+      "from": "            if (referenced) return error.SymbolReferenced;\n            continue;",
+      "to": "            _ = referenced;",
+      "kills": [
+        "delete references: a name only a comment elsewhere mentions is deleted when the language service finds no reference"
+      ]
+    },
+    {
+      "id": "TS4-failed-answer-kills-service",
+      "file": "src/platform/tsserver.zig",
+      "from": "        errdefer |err| if (err != error.LanguageServiceFailed) self.stop();\n",
+      "to": "        errdefer self.stop();\n",
+      "kills": [
+        "tsserver: a request the language service answers with an error leaves the process running"
+      ]
+    },
+    {
+      "id": "RN14-cache-not-invalidated-after-rename",
+      "file": "src/protocol/rename_tool.zig",
+      "from": "            if (policy.tree_cache) |cache| for (outcome.plan.edits) |edit| cache.invalidate(edit.file_abs);\n",
+      "to": "",
+      "expect_status": "survived",
+      "note": "defense-in-depth: same as R12, the content hash on the next load catches the renamed files even without invalidation",
+      "filter": [
+        "rename: with a tree cache, read_symbol after a committed emetgate_rename sees the new name"
+      ]
+    },
+    {
+      "id": "SV1-service-integrity-not-verified",
+      "file": "src/platform/sandbox.zig",
+      "from": "    try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n    return .{",
+      "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n    return .{",
+      "kills": [
+        "a service whose token is not low integrity is refused before it runs"
       ]
     }
   ]

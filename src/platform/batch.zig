@@ -9,6 +9,7 @@ const runner = @import("runner.zig");
 const rules = @import("rules.zig");
 const create = @import("create.zig");
 const batch_plan = @import("batch_plan.zig");
+const tsserver = @import("tsserver.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -36,6 +37,7 @@ pub const BatchOptions = struct {
     shadow_root: ?[]const u8 = null,
     trace: ?*Trace = null,
     commit_step: ?*const disk.Step = null,
+    language_service: ?*tsserver.Session = null,
 };
 
 pub const BatchResult = union(enum) {
@@ -83,10 +85,14 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         errdefer planned.deinit(gpa);
         try prepared.append(gpa, planned);
     }
-    try batch_plan.checkDeletions(gpa, io, root, prepared.items, options.edits);
+    try batch_plan.checkDeletions(gpa, io, root, prepared.items, options.edits, options.language_service);
+    return commitPlanned(gpa, io, root, prepared.items, options.edits, options);
+}
 
-    for (prepared.items, options.edits[0..prepared.items.len]) |p, edit| {
-        if (!p.addsCode()) continue;
+pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit, options: BatchOptions) !BatchResult {
+    if (options.test_command.len == 0) return error.NoTestCommand;
+    for (prepared, edits[0..prepared.len]) |p, edit| {
+        if (!p.addsCode() or edit.ref_text.len == 0) continue;
         const ref = try symbol.Ref.parse(gpa, edit.ref_text);
         defer ref.deinit(gpa);
         const snapshot = p.snapshot.?;
@@ -102,10 +108,10 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
 
     if (options.trace) |t| {
         var new_total: usize = 0;
-        for (prepared.items) |p| new_total += p.source().len;
+        for (prepared) |p| new_total += p.source().len;
         t.* = .{ .gate = .full, .new_len = new_total };
     }
-    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared.items, options)) {
+    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, edits, options)) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |violated| return .{ .rule_violation = violated },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -114,10 +120,10 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     if (!report.passed()) return .{ .rejected = report };
     defer report.deinit(gpa);
 
-    const committed = try classifyAll(gpa, io, root, prepared.items, options.edits);
+    const committed = try classifyAll(gpa, io, root, prepared, edits);
     errdefer gpa.free(committed);
 
-    const pendings = try gpa.alloc(disk.Pending, prepared.items.len);
+    const pendings = try gpa.alloc(disk.Pending, prepared.len);
     defer gpa.free(pendings);
     var count: usize = 0;
     var commit_entered = false;
@@ -133,8 +139,8 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
     var batch = disk.Batch.init(gpa, io, journal_dir);
     batch.root = root;
     if (options.trace) |t| t.commit_attempted = true;
-    for (prepared.items, 0..) |p, i| {
-        const file_abs = options.edits[i].file_abs;
+    for (prepared, 0..) |p, i| {
+        const file_abs = edits[i].file_abs;
         pendings[i] = switch (p.action) {
             .write, .insert, .delete_symbol => try disk.prepare(gpa, io, file_abs, p.source(), p.base_hash.?),
             .create => try disk.stageCreate(gpa, io, file_abs, p.source()),
@@ -169,7 +175,7 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
     return committed;
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, options: BatchOptions) !runner.ShadowRun {
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, edits: []const Edit, options: BatchOptions) !runner.ShadowRun {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
@@ -187,8 +193,8 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
     defer gpa.free(targets);
     var built: usize = 0;
     defer for (targets[0..built]) |target| target.ref.deinit(gpa);
-    for (prepared, options.edits[0..prepared.len]) |p, edit| {
-        if (!p.addsCode()) continue;
+    for (prepared, edits[0..prepared.len]) |p, edit| {
+        if (!p.addsCode() or edit.ref_text.len == 0) continue;
         targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
         built += 1;
     }

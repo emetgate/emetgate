@@ -6,23 +6,24 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **829**
-- Mutations declared in `tests/mutations.json`: **493**
-  - killed: **471**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **882**
+- Mutations declared in `tests/mutations.json`: **516**
+  - killed: **492**
   - equivalent: **5**
-  - defense in depth: **3**
+  - defense in depth: **4**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-  - survives, not yet classified: **3** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch)
-- Red-team suites: **7** files, **56** tests total
+  - survives, not yet classified: **4** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename)
+- Red-team suites: **8** files, **66** tests total
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
+  - `tests/redteam_rename.zig`: 10
   - `tests/redteam_sandbox.zig`: 5
 - Security findings recorded in README's Security History: **7**
 
@@ -162,7 +163,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-55 mutation(s).
+56 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -185,14 +186,14 @@ python tools/verification_page.py --check
 | `G2-rules-gate-skipped-for-batch` | `src/platform/batch.zig` | `p.body, options.allow_repo_memory)) {             .ok => {},   ...` -> `p.body, options.allow_repo_memory)) {             .ok => {},   ...` | rules: one violating edit rejects the whole batch and leaves disk untouched | killed |
 | `SB1-sandbox-spawns-with-caller-token` | `src/platform/sandbox.zig` | `win.CreateProcessAsUserW(token.handle,` -> `win.CreateProcessAsUserW(if (false) token.handle else null,` | redteam sandbox: a passing test command cannot write outside the shadow, and on...; redte... | killed |
 | `SB2-sandbox-integrity-label-not-set` | `src/platform/sandbox.zig` | `if (faulted(.label) or win.SetTokenInformation(restricted, win....` -> `_ = &label;` | redteam sandbox: a passing test command cannot write outside the shadow, and on...; redte... | killed |
-| `SB3-sandbox-child-integrity-check-removed` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);` -> `` | redteam sandbox: every failure to build the low-integrity token refuses to run ...; redte... | killed |
+| `SB3-sandbox-child-integrity-check-removed` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | redteam sandbox: every failure to build the low-integrity token refuses to run ...; redte... | killed |
 | `SB4-sandbox-restricted-token-not-created` | `src/platform/sandbox.zig` | `if (faulted(.restrict) or win.CreateRestrictedToken(process_tok...` -> `if (faulted(.restrict)) return error.SandboxUnavailable;       ...` | redteam sandbox: every failure to build the low-integrity token refuses to run ... | killed |
 | `SB5-shadow-low-integrity-write-not-granted` | `src/platform/shadow.zig` | `try grantLowIntegrityWrite(options.shadow_abs);` -> `` | redteam sandbox: a passing test command cannot write outside the shadow, and on... | killed |
 | `NF1-create-not-added-to-index` | `src/platform/runner.zig` | `try repo.addToIndex(gpa, io, root, rel);` -> `` | new file: a later proposal to another file runs in a shadow that contains the c...; new f... | killed |
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
 | `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.gate(gpa, io, root, rel, ref, created.snapsho...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
 | `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     defer...` -> `defer report.deinit(gpa);      if (options.trace) \|t\| t.commi...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
-| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `\|p, edit\| {         if (!p.addsCode()) continue;         cons...` -> `\|p, edit\| {         if (!p.addsCode()) continue;         _ = ...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
+| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` -> `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
 | `CR1-crash-threshold-removed` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR2-crash-threshold-counts-own-kill` | `src/platform/sandbox.zig` | `const ntstatus_error_floor: u32 = 0xC0000000;` -> `const ntstatus_error_floor: u32 = 0xDEAD;` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
 | `CR3-crash-threshold-exclusive` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor)` -> `return if (code > ntstatus_error_floor)` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
@@ -203,7 +204,7 @@ python tools/verification_page.py --check
 | `RC4-prepare-swallows-stale-shadow-removal-error` | `src/platform/shadow.zig` | `try remove(io, options.base_abs, options.shadow_abs);` -> `remove(io, options.base_abs, options.shadow_abs) catch {};` | prepare fails instead of carrying on when a stale shadow cannot be removed | killed |
 | `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRules(gpa, io, root, location.shadow, targets...` -> `if (try runCommandRules(gpa, io, root, root, targets, options.l...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
 | `CMD5-ntstatus-floor-broken` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | cmd rule: a crashing command is not a verdict, it is rule_check_crashed | killed |
-| `CMD7-spawned-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);` -> `` | cmd rule: a sandbox that cannot be built refuses the command instead of running...; redte... | killed |
+| `CMD7-spawned-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | cmd rule: a sandbox that cannot be built refuses the command instead of running...; redte... | killed |
 | `RM8-runner-forces-trust` | `src/platform/runner.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, true)) \|gated\|` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
 | `RM9-runner-drops-the-flag` | `src/platform/runner.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, false)) \|gated\|` | redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run | killed |
 | `RM10-command-gate-forces-trust` | `src/platform/runner.zig` | `.allow_repo_memory = allow_repo_memory });` -> `.allow_repo_memory = allow_repo_memory or true });` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
@@ -221,10 +222,11 @@ python tools/verification_page.py --check
 | `LT1-linked-dir-junctioned-again` | `src/platform/shadow.zig` | `try link_tree.build(io, target, link_path, &stats);` -> `_ = &stats; try createJunction(io, link_path, target);` | prepare copies tracked files, rebuilds heavy directories as hardlink trees and ... | killed |
 | `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
+| `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
 
 ### Disk, repository boundary and atomic commit
 
-37 mutation(s).
+40 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -265,6 +267,9 @@ python tools/verification_page.py --check
 | `FH1-file-delete-without-hash-accepted` | `src/platform/batch_plan.zig` | `.absent => return error.MissingFileHash,` -> `.absent => current,` | batch delete through the tool: a file delete without the whole-file hash is ref...; redte... | killed |
 | `FH2-failed-delete-still-unindexed` | `src/platform/disk.zig` | `.delete => if (p.removed) try removed.append(b.gpa, p.path),` -> `.delete => try removed.append(b.gpa, p.path),` | batch delete crash: a delete that fails at finalize leaves the file in the git ... | killed |
 | `FUZZ2-journal-version-equality-loosened` | `src/platform/journal.zig` | `if (probe.value.version == version) {` -> `if (probe.value.version >= 1) {` | fuzz: journal.parse on malformed v2 and legacy bytes never crashes or leaks, an... | killed |
+| `DR1-service-reference-ignored` | `src/platform/batch_plan.zig` | `if (inBatch(root, sources, reference.file)) continue;         r...` -> `if (inBatch(root, sources, reference.file)) continue;         c...` | delete references: a reference the language service reports in another file ref... | killed |
+| `DR2-quoted-name-ignored` | `src/platform/batch_plan.zig` | `if (try quotedAnywhere(gpa, io, root, name)) return true;` -> `_ = io;` | delete references: a quoted name elsewhere is dynamic access and refuses the de... | killed |
+| `DR3-service-answer-ignored` | `src/platform/batch_plan.zig` | `if (referenced) return error.SymbolReferenced;             cont...` -> `_ = referenced;` | delete references: a name only a comment elsewhere mentions is deleted when the... | killed |
 
 ### Rules and the q: query engine
 
@@ -506,7 +511,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-78 mutation(s).
+96 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -588,6 +593,24 @@ python tools/verification_page.py --check
 | `GT4-output-byte-limit-removed` | `src/protocol/git_tools.zig` | `.stdout_limit = .limited(max_git_output_bytes),` -> `.stdout_limit = .unlimited,` | open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git ... | open |
 | `GT5-output-line-limit-removed` | `src/protocol/git_tools.zig` | `if (kept.items.len < max_output_lines) try kept.append(gpa, lin...` -> `try kept.append(gpa, line);` | git diff caps output at a line count and marks it truncated | killed |
 | `FH3-skeleton-without-file-hash` | `src/protocol/wire.zig` | `try js.write(file);     try writeFileHash(&js, file_hash);     ...` -> `try js.write(file);     _ = file_hash;     try js.objectField("...` | redteam batch delete: an unreferenced file is deleted through the tool and repo... | killed |
+| `RN1-alpha-hash-check-skipped` | `src/engine/rename.zig` | `if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;` -> `if (a.len != b.len) return error.AlphaMismatch;` | rename: a wrong rename inside a top-level block that is no symbol is caught by ... | killed |
+| `RN2-symbol-alpha-check-skipped` | `src/engine/rename.zig` | `if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declar...` -> `if (b_hash.len != 0) matched = true;` | defense in depth: every symbol a rename touches lies inside a touched top-level statement... | defense in depth |
+| `RN3-export-approval-skipped` | `src/platform/rename_batch.zig` | `if (interface_change and !request.interface_change) return erro...` -> `` | rename: a rename that reaches other modules is refused without the interface_ch...; renam... | killed |
+| `RN4-text-path-accepts-exported` | `src/platform/rename_batch.zig` | `if (try rename.exportedName(gpa, base, old)) return error.Renam...` -> `` | rename: without the language service an exported symbol or a name another file ... | killed |
+| `RN5-text-path-ignores-other-files` | `src/platform/rename_batch.zig` | `if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnres...` -> `if (abs.len == 0) return error.RenameUnresolved;` | rename: without the language service an exported symbol or a name another file ... | killed |
+| `RN6-text-path-ignores-second-binder` | `src/platform/rename_batch.zig` | `if (try rename.binderCount(gpa, base, old) != 1) return error.R...` -> `` | rename: without the language service a local name with a second binder is unres... | killed |
+| `RN7-location-not-an-identifier-skipped` | `src/engine/rename.zig` | `const leaf = findLeaf(leaves, span) orelse return error.NotAnId...` -> `const leaf = findLeaf(leaves, span) orelse continue;         if...` | red team rename: a location inside a comment or a string is refused and both st...; renam... | killed |
+| `RN8-free-occurrence-check-skipped` | `src/engine/rename.zig` | `if (try freeOccurrence(gpa, next, old, false)) return error.Inc...` -> `_ = .{ gpa, next, old };` | rename: an occurrence left free in an untouched statement is refused as incompl...; red t... | killed |
+| `RN9-untouched-file-not-checked` | `src/platform/rename_batch.zig` | `if (untouched and try rename.freeOccurrence(gpa, snapshot, old,...` -> `_ = .{ gpa, untouched };` | red team rename: a service that skips a whole file that still calls the old nam... | killed |
+| `RN10-location-not-jailed` | `src/platform/rename_batch.zig` | `const abs = try jailLocation(gpa, io, root, location.file);` -> `_ = .{ io, root };         const abs = try gpa.dupe(u8, locatio...` | red team rename: a location outside the repo or in an untracked file is refused | killed |
+| `RN11-dynamic-access-ignored` | `src/platform/rename_batch.zig` | `if (rename.dynamicAccess(snapshot, old, member) != null) return...` -> `_ = member;` | red team rename: a string key, eval or a computed require in a touched file is ... | killed |
+| `RN12-taken-name-accepted` | `src/engine/rename.zig` | `if (taken.len != 0) return error.NameTaken;` -> `` | red team rename: a new name that another touched file already uses is refused; rename: a ... | killed |
+| `RN13-dropped-location` | `src/platform/rename_batch.zig` | `for (answer.value.locations) \|location\| {` -> `for (answer.value.locations[0 .. answer.value.locations.len - 1...` | rename: the language service proposes, the kernel proves, and all three files c... | killed |
+| `TS1-plugins-passed-through` | `src/platform/tsserver_host.js` | `delete options.plugins;` -> `` | tsserver: tsconfig plugins never reach the language service; red team rename: a malicious... | killed |
+| `TS2-hung-service-kept` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `` | tsserver: a hung language service is killed at the timeout and restarted by the... | killed |
+| `TS3-typescript-check-skipped` | `src/platform/tsserver.zig` | `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return erro...` -> `std.Io.Dir.cwd().access(self.io, marker, .{}) catch {};` | tsserver: a repo without node_modules/typescript is an explicit error, not a gl... | killed |
+| `TS4-failed-answer-kills-service` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `errdefer self.stop();` | tsserver: a request the language service answers with an error leaves the proce... | killed |
+| `RN14-cache-not-invalidated-after-rename` | `src/protocol/rename_tool.zig` | `if (policy.tree_cache) \|cache\| for (outcome.plan.edits) \|edi...` -> `` | defense-in-depth: same as R12, the content hash on the next load catches the renamed file... | survives (unclassified) |
 
 ## What this system does not prove
 

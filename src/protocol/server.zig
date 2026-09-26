@@ -8,6 +8,7 @@ const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
+const tsserver = @import("../platform/tsserver.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -61,6 +62,17 @@ pub const tool_defs = [_]Tool{
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
             .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
             .{ .name = "body", .desc = "new function body including braces" },
+        },
+    },
+    .{
+        .name = "emetgate_rename",
+        .description = "Rename a function or method symbol and every reference to it across the repo as one all-or-nothing batch. The TypeScript language service of the repo (its own node_modules/typescript, run once per session in the sandbox, tsconfig plugins never loaded) proposes the locations; the kernel then proves the rename: every location is an identifier with the old name, no occurrence is left free, the new name is unused in each touched file, and every touched top-level statement and every symbol keeps its name-abstracted alpha hash. Without the language service only a local, unexported symbol whose name appears in no other tracked file is renamed; anything else is refused as RenameUnresolved. A name that is also a string literal, eval, a computed require or import, or a constructed property key in a touched file is refused as DynamicReference. A rename that touches another file or an exported symbol changes the module interface and is refused unless interface_change is true. The typecheck and test commands still run before anything is written.",
+        .props = &.{
+            .{ .name = "file", .desc = "path to the TypeScript or JavaScript file that declares the symbol" },
+            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
+            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
+            .{ .name = "new_name", .desc = "the new identifier" },
+            .{ .name = "interface_change", .desc = "true to allow a rename that changes what other modules import", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -135,6 +147,9 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     var session_tree_cache: tree_cache_mod.TreeCache = .init(gpa);
     defer session_tree_cache.deinit();
     served.tree_cache = &session_tree_cache;
+    var language_service: tsserver.Session = .{ .gpa = gpa, .io = io, .root = root };
+    defer language_service.deinit();
+    served.language_service = &language_service;
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);
