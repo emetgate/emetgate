@@ -37,7 +37,7 @@ test "red team rename: a service that renames the use of a shadowing parameter b
         .{ .rel = "src/a.ts", .needle = "return add;", .name = "add" },
         .{ .rel = "src/a.ts", .needle = "add(2)", .name = "add" },
     });
-    try testing.expectError(error.AlphaMismatch, case.rename("src/a.ts", "add", "sum", true, null));
+    try testing.expectError(error.ResolutionMismatch, case.rename("src/a.ts", "add", "sum", true, null));
     try case.expectFile("src/a.ts", shadow_src);
 }
 
@@ -82,7 +82,7 @@ test "red team rename: a service that skips one call in a touched file is refuse
     try case.initThree();
     defer case.deinit();
     try case.plan(tool.all_locations[0..5]);
-    try testing.expectError(error.AlphaMismatch, case.rename("src/a.ts", "add", "sum", true, null));
+    try testing.expectError(error.IncompleteRename, case.rename("src/a.ts", "add", "sum", true, null));
     try case.plan(&.{ tool.all_locations[0], tool.all_locations[1], tool.all_locations[3], tool.all_locations[4], tool.all_locations[5] });
     try testing.expectError(error.IncompleteRename, case.rename("src/a.ts", "add", "sum", true, null));
     try case.expectOld();

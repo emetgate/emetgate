@@ -2,14 +2,17 @@ const std = @import("std");
 const ts = @import("tree_sitter.zig");
 const symbol = @import("symbol.zig");
 const traversal = @import("traversal.zig");
-const grammar = @import("lang/ecma/rename.zig");
+const scope = @import("scope.zig");
+const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
-const Profile = @import("lang/profile.zig").Profile;
 const test_util = @import("test_util.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
 const Blake3 = std.crypto.hash.Blake3;
+const Profile = profile_mod.Profile;
+const Rename = profile_mod.Rename;
+const Namespace = profile_mod.Namespace;
 
 pub const Error = error{
     UnsupportedLanguage,
@@ -22,6 +25,8 @@ pub const Error = error{
     MutationSyntaxInvalid,
     AlphaMismatch,
     SourceHasErrors,
+    ResolutionMismatch,
+    MergedDeclaration,
 } || Allocator.Error || ts.Error;
 
 fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
@@ -32,7 +37,11 @@ fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
 }
 
 pub fn supports(profile: *const Profile) bool {
-    return oneOf(profile.name, &grammar.languages);
+    return profile.rename != null;
+}
+
+fn grammarOf(snapshot: *const Snapshot) *const Rename {
+    return snapshot.profile.rename.?;
 }
 
 pub fn validName(name: []const u8) bool {
@@ -49,22 +58,11 @@ pub const Leaf = struct {
     shorthand: bool,
     binder: bool,
     free: bool,
+    namespace: Namespace,
 };
 
-pub fn isBinder(node: ts.Node) bool {
-    const parent = node.parent() orelse return false;
-    const kind = parent.kind();
-    for (grammar.binder_sites) |site| {
-        if (!std.mem.eql(u8, site.parent, kind)) continue;
-        const field = site.field orelse return true;
-        if (site.unless) |unless| if (parent.childByField(unless) != null) continue;
-        const held = parent.childByField(field) orelse continue;
-        if (held.eql(node)) return true;
-    }
-    return false;
-}
-
 pub fn leavesNamed(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) ![]Leaf {
+    const g = grammarOf(snapshot);
     var out: std.ArrayList(Leaf) = .empty;
     errdefer out.deinit(gpa);
     var walker = traversal.Walker.init(snapshot.tree.root());
@@ -76,30 +74,32 @@ pub fn leavesNamed(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
             walker.skipChildren();
             continue;
         }
-        if (node.childCount() != 0 or !oneOf(kind, &grammar.name_kinds)) continue;
+        if (node.childCount() != 0 or !oneOf(kind, g.name_kinds)) continue;
         const span: Span = .{ .start = node.startByte(), .end = node.endByte() };
         if (!std.mem.eql(u8, snapshot.source[span.start..span.end], name)) continue;
+        const site = scope.siteOf(g, node);
         try out.append(gpa, .{
             .span = span,
-            .shorthand = oneOf(kind, &grammar.shorthand_kinds),
-            .binder = isBinder(node),
-            .free = oneOf(kind, &grammar.free_kinds),
+            .shorthand = oneOf(kind, g.shorthand_kinds),
+            .binder = site != null,
+            .free = oneOf(kind, g.free_kinds),
+            .namespace = if (site) |s| s.namespace else scope.useNamespace(g, kind),
         });
     }
     return out.toOwnedSlice(gpa);
 }
 
-fn exportedDeclaration(profile: *const Profile, node: ts.Node) bool {
+fn exportedDeclaration(profile: *const Profile, g: *const Rename, node: ts.Node) bool {
     var current = node.parent();
     while (current) |ancestor| : (current = ancestor.parent()) {
         const kind = ancestor.kind();
         if (oneOf(kind, profile.export_wrappers)) return true;
-        if (oneOf(kind, &grammar.scope_kinds)) return false;
+        if (oneOf(kind, g.export_scope_stops)) return false;
     }
     return false;
 }
 
-fn leafAt(root: ts.Node, span: Span) ?ts.Node {
+pub fn leafAt(root: ts.Node, span: Span) ?ts.Node {
     var node = root;
     outer: while (node.childCount() != 0) {
         var i: u32 = 0;
@@ -116,14 +116,15 @@ fn leafAt(root: ts.Node, span: Span) ?ts.Node {
 }
 
 pub fn exportedName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) !bool {
+    const g = grammarOf(snapshot);
     const leaves = try leavesNamed(gpa, snapshot, name);
     defer gpa.free(leaves);
     const root = snapshot.tree.root();
     for (leaves) |leaf| {
         const node = leafAt(root, leaf.span) orelse continue;
         const parent = node.parent() orelse continue;
-        if (oneOf(parent.kind(), &grammar.export_specifiers)) return true;
-        if (leaf.binder and exportedDeclaration(snapshot.profile, node)) return true;
+        if (oneOf(parent.kind(), g.export_specifiers)) return true;
+        if (leaf.binder and exportedDeclaration(snapshot.profile, g, node)) return true;
     }
     return false;
 }
@@ -145,14 +146,15 @@ fn calleeName(snapshot: *const Snapshot, call: ts.Node) ?[]const u8 {
     return snapshot.source[callee.startByte()..callee.endByte()];
 }
 
-fn literalArgument(snapshot: *const Snapshot, call: ts.Node) bool {
+fn literalArgument(snapshot: *const Snapshot, g: *const Rename, call: ts.Node) bool {
     const arguments = call.childByField(snapshot.profile.call.arguments_field) orelse return false;
     if (arguments.namedChildCount() != 1) return false;
     const first = arguments.namedChild(0) orelse return false;
-    return std.mem.eql(u8, first.kind(), grammar.literal_argument);
+    return std.mem.eql(u8, first.kind(), g.literal_argument);
 }
 
 pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) ?Dynamic {
+    const g = grammarOf(snapshot);
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
@@ -163,26 +165,26 @@ pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) 
             walker.skipChildren();
             continue;
         }
-        if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, grammar.template_fragment)) {
+        if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, g.template_fragment)) {
             walker.skipChildren();
-            if (std.mem.eql(u8, std.mem.trim(u8, text, &grammar.quotes), name)) return .string_key;
+            if (std.mem.eql(u8, std.mem.trim(u8, text, g.quotes), name)) return .string_key;
             continue;
         }
         if (std.mem.eql(u8, kind, snapshot.profile.call.node)) {
             const callee = calleeName(snapshot, node) orelse continue;
-            if (oneOf(callee, &grammar.eval_callees)) return .eval;
-            if (oneOf(callee, &grammar.module_callees) and !literalArgument(snapshot, node)) return .computed_module;
+            if (oneOf(callee, g.eval_callees)) return .eval;
+            if (oneOf(callee, g.module_callees) and !literalArgument(snapshot, g, node)) return .computed_module;
             continue;
         }
-        if (std.mem.eql(u8, kind, grammar.new_expression)) {
-            const constructor = node.childByField(grammar.new_constructor_field) orelse continue;
-            if (oneOf(snapshot.source[constructor.startByte()..constructor.endByte()], &grammar.constructor_callees)) return .eval;
+        if (std.mem.eql(u8, kind, g.new_expression)) {
+            const constructor = node.childByField(g.new_constructor_field) orelse continue;
+            if (oneOf(snapshot.source[constructor.startByte()..constructor.endByte()], g.constructor_callees)) return .eval;
             continue;
         }
-        if (std.mem.eql(u8, kind, grammar.subscript)) {
-            const index = node.childByField(grammar.subscript_index_field) orelse continue;
-            if (oneOf(index.kind(), &grammar.literal_index_kinds)) continue;
-            if (member or oneOf(index.kind(), &grammar.constructed_index_kinds)) return .computed_member;
+        if (std.mem.eql(u8, kind, g.subscript)) {
+            const index = node.childByField(g.subscript_index_field) orelse continue;
+            if (oneOf(index.kind(), g.literal_index_kinds)) continue;
+            if (member or oneOf(index.kind(), g.constructed_index_kinds)) return .computed_member;
         }
     }
     return null;
@@ -192,8 +194,26 @@ fn lessThan(_: void, a: Span, b: Span) bool {
     return a.start < b.start;
 }
 
+const NameKey = struct {
+    namespace: u8,
+    text: []const u8,
+};
+
+const NameContext = struct {
+    pub fn hash(_: NameContext, key: NameKey) u64 {
+        var h = std.hash.Wyhash.init(key.namespace);
+        h.update(key.text);
+        return h.final();
+    }
+
+    pub fn eql(_: NameContext, a: NameKey, b: NameKey) bool {
+        return a.namespace == b.namespace and std.mem.eql(u8, a.text, b.text);
+    }
+};
+
 pub fn alphaHash(gpa: Allocator, snapshot: *const Snapshot, region: Span) !symbol.Hash {
-    var names: std.StringHashMapUnmanaged(u32) = .empty;
+    const g = grammarOf(snapshot);
+    var names: std.HashMapUnmanaged(NameKey, u32, NameContext, std.hash_map.default_max_load_percentage) = .empty;
     defer names.deinit(gpa);
     var hasher = Blake3.init(.{});
     var walker = traversal.Walker.init(snapshot.tree.root());
@@ -209,12 +229,13 @@ pub fn alphaHash(gpa: Allocator, snapshot: *const Snapshot, region: Span) !symbo
         const text = snapshot.source[node.startByte()..node.endByte()];
         hasher.update(kind);
         hasher.update(&.{0});
-        if (oneOf(kind, &grammar.name_kinds)) {
-            const slot = try names.getOrPut(gpa, text);
+        if (oneOf(kind, g.name_kinds)) {
+            const key: NameKey = .{ .namespace = if (oneOf(kind, g.type_kinds)) 't' else if (oneOf(kind, g.property_kinds)) 'p' else 'v', .text = text };
+            const slot = try names.getOrPut(gpa, key);
             if (!slot.found_existing) slot.value_ptr.* = names.count() - 1;
             var index: [4]u8 = undefined;
             std.mem.writeInt(u32, &index, slot.value_ptr.*, .little);
-            hasher.update(&.{1});
+            hasher.update(&.{ 1, key.namespace });
             hasher.update(&index);
         } else {
             hasher.update(&.{2});
@@ -232,6 +253,7 @@ pub const Renamed = struct {
     spans: []Span,
     regions_checked: usize,
     symbols_checked: usize,
+    resolved_checked: usize,
 
     pub fn deinit(self: Renamed, gpa: Allocator) void {
         self.snapshot.destroy();
@@ -258,6 +280,13 @@ fn findLeaf(leaves: []const Leaf, span: Span) ?Leaf {
     return null;
 }
 
+fn containsSpan(spans: []const Span, wanted: Span) bool {
+    for (spans) |span| {
+        if (span.start == wanted.start and span.end == wanted.end) return true;
+    }
+    return false;
+}
+
 pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, proposed: []const Span) Error!Renamed {
     if (!supports(base.profile)) return error.UnsupportedLanguage;
     if (!validName(old) or !validName(new) or std.mem.eql(u8, old, new)) return error.InvalidName;
@@ -278,6 +307,7 @@ pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, 
     const taken = try leavesNamed(gpa, base, new);
     defer gpa.free(taken);
     if (taken.len != 0) return error.NameTaken;
+    const resolved = try crossCheck(gpa, base, old, spans);
 
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(gpa);
@@ -302,7 +332,40 @@ pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, 
     try checkSurvivors(gpa, next, old);
     const symbols_checked = try compareSymbols(gpa, base, next, old, new);
 
-    return .{ .snapshot = next, .spans = try gpa.dupe(Span, moved), .regions_checked = regions, .symbols_checked = symbols_checked };
+    return .{ .snapshot = next, .spans = try gpa.dupe(Span, moved), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
+}
+
+fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const Span) Error!usize {
+    const resolution = scope.resolveName(gpa, base, old) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedLanguage => return error.UnsupportedLanguage,
+    };
+    defer resolution.deinit(gpa);
+    const renamed = try gpa.alloc(bool, resolution.binders.len);
+    defer gpa.free(renamed);
+    @memset(renamed, false);
+    for (spans) |span| {
+        if (resolution.binderAt(span)) |index| renamed[index] = true;
+    }
+    for (resolution.binders, renamed) |a, a_renamed| {
+        if (!a_renamed) continue;
+        for (resolution.binders, renamed) |b, b_renamed| {
+            if (b_renamed or !a.scope.same(b.scope) or !a.namespace.overlaps(b.namespace)) continue;
+            return error.MergedDeclaration;
+        }
+    }
+    var checked: usize = 0;
+    for (spans) |span| {
+        const use = resolution.useAt(span) orelse continue;
+        const index = use.binder orelse return error.ResolutionMismatch;
+        if (!renamed[index]) return error.ResolutionMismatch;
+        checked += 1;
+    }
+    for (resolution.uses) |use| {
+        const index = use.binder orelse continue;
+        if (renamed[index] and !containsSpan(spans, use.span)) return error.IncompleteRename;
+    }
+    return checked;
 }
 
 fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []const Span) Error!usize {
@@ -331,35 +394,20 @@ fn checkSurvivors(gpa: Allocator, next: *Snapshot, old: []const u8) Error!void {
     if (try freeOccurrence(gpa, next, old, false)) return error.IncompleteRename;
 }
 
-fn topLevelDeclaration(snapshot: *const Snapshot, span: Span) bool {
-    const root = snapshot.tree.root();
-    const index = regionOf(root, span.start) orelse return false;
-    if (oneOf(root.child(index).?.kind(), &grammar.import_statements)) return false;
-    const node = leafAt(root, span) orelse return false;
-    var current = node.parent();
-    while (current) |ancestor| : (current = ancestor.parent()) {
-        if (oneOf(ancestor.kind(), &grammar.scope_kinds)) return false;
-    }
-    return true;
-}
-
-pub fn freeOccurrence(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, allow_declared: bool) !bool {
-    const leaves = try leavesNamed(gpa, snapshot, name);
-    defer gpa.free(leaves);
-    const root = snapshot.tree.root();
-    if (allow_declared) {
-        for (leaves) |leaf| {
-            if (leaf.binder and topLevelDeclaration(snapshot, leaf.span)) return false;
+pub fn freeOccurrence(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, untouched: bool) Error!bool {
+    const resolution = scope.resolveName(gpa, snapshot, name) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedLanguage => return error.UnsupportedLanguage,
+    };
+    defer resolution.deinit(gpa);
+    if (untouched) {
+        if (resolution.externals.len != 0) return true;
+        for (resolution.binders) |b| {
+            if (b.import) return true;
         }
     }
-    for (leaves) |leaf| {
-        if (!leaf.free or leaf.binder) continue;
-        const region = regionOf(root, leaf.span.start);
-        var bound = false;
-        for (leaves) |other| {
-            if (other.binder and regionOf(root, other.span.start) == region) bound = true;
-        }
-        if (!bound) return true;
+    for (resolution.uses) |use| {
+        if (use.binder == null) return true;
     }
     return false;
 }
@@ -453,14 +501,14 @@ test "rename: the alpha hash abstracts names but keeps which leaves share a name
     try testing.expect(!std.mem.eql(u8, &ha, &try alphaHash(testing.allocator, d, whole)));
 }
 
-test "rename: leaving one occurrence behind in a renamed statement breaks its alpha hash" {
+test "rename: leaving one occurrence behind in a renamed statement is caught by the independent resolution" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const source = "function add(a: number): number { return a; }\nfunction g(): number { return add(add(1)); }\n";
     const base = try test_util.snapshotOf(runtime, source);
     defer base.destroy();
     const partial = [_]Span{ spanOf(source, "function add", 0, "add"), spanOf(source, "add(add", 0, "add") };
-    try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "add", "plus", &partial));
+    try testing.expectError(error.IncompleteRename, apply(testing.allocator, base, "add", "plus", &partial));
 }
 
 test "rename: an occurrence left free in an untouched statement is refused as incomplete" {
@@ -495,18 +543,58 @@ test "rename: a shadowed inner name in the same statement as a renamed one is re
     try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "add", "plus", &outer));
 }
 
-test "rename: a wrong rename inside a top-level block that is no symbol is caught by the statement's alpha hash" {
+test "rename: a wrong rename inside a top-level block that is no symbol is caught by the independent resolution" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const source = "function add(a: number): number { return a; }\nlet total = add(1);\n{ const add = 2; total += add; }\n";
     const base = try test_util.snapshotOf(runtime, source);
     defer base.destroy();
     const wrong = [_]Span{ spanOf(source, "function add", 0, "add"), spanOf(source, "= add(1)", 0, "add"), spanOf(source, "+= add", 0, "add") };
-    try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "add", "plus", &wrong));
+    try testing.expectError(error.ResolutionMismatch, apply(testing.allocator, base, "add", "plus", &wrong));
     const right = [_]Span{ spanOf(source, "function add", 0, "add"), spanOf(source, "= add(1)", 0, "add") };
     const renamed = try apply(testing.allocator, base, "add", "plus", &right);
     defer renamed.deinit(testing.allocator);
     try testing.expectEqualStrings("function plus(a: number): number { return a; }\nlet total = plus(1);\n{ const add = 2; total += add; }\n", renamed.snapshot.source);
+}
+
+test "rename: renaming one of two same-named properties in a statement breaks its alpha hash" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "const o = { run: 1 };\nconst p = { run: 2 };\nconst r = o.run + p.run;\n";
+    const base = try test_util.snapshotOf(runtime, source);
+    defer base.destroy();
+    const one = [_]Span{ spanOf(source, "{ run", 0, "run"), spanOf(source, "o.run", 0, "run") };
+    try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "run", "go", &one));
+}
+
+test "rename: renaming a class and only one of an interface merged with it is refused, renaming both is accepted" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "interface Box { a: number }\nclass Box { b = 1 }\nexport function f(x: Box): Box { return new Box(); }\n";
+    const base = try test_util.snapshotOf(runtime, source);
+    defer base.destroy();
+    const class_only = [_]Span{ spanOf(source, "class Box", 0, "Box"), spanOf(source, "x: Box", 0, "Box"), spanOf(source, "): Box", 0, "Box"), spanOf(source, "new Box", 0, "Box") };
+    try testing.expectError(error.MergedDeclaration, apply(testing.allocator, base, "Box", "Crate", &class_only));
+    const both = class_only ++ [_]Span{spanOf(source, "interface Box", 0, "Box")};
+    const renamed = try apply(testing.allocator, base, "Box", "Crate", &both);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("interface Crate { a: number }\nclass Crate { b = 1 }\nexport function f(x: Crate): Crate { return new Crate(); }\n", renamed.snapshot.source);
+}
+
+test "rename: a type and a value of the same name are separate, renaming only the type keeps the value" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "type Foo = { a: number };\nconst Foo = { a: 1 };\nexport function f(x: Foo): number { return Foo.a + x.a; }\n";
+    const base = try test_util.snapshotOf(runtime, source);
+    defer base.destroy();
+    const type_only = [_]Span{ spanOf(source, "type Foo", 0, "Foo"), spanOf(source, "x: Foo", 0, "Foo") };
+    const renamed = try apply(testing.allocator, base, "Foo", "Shape", &type_only);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("type Shape = { a: number };\nconst Foo = { a: 1 };\nexport function f(x: Shape): number { return Foo.a + x.a; }\n", renamed.snapshot.source);
+    const missed_type = [_]Span{spanOf(source, "type Foo", 0, "Foo")};
+    try testing.expectError(error.IncompleteRename, apply(testing.allocator, base, "Foo", "Shape", &missed_type));
+    const value_use = [_]Span{ spanOf(source, "type Foo", 0, "Foo"), spanOf(source, "x: Foo", 0, "Foo"), spanOf(source, "Foo.a", 0, "Foo") };
+    try testing.expectError(error.ResolutionMismatch, apply(testing.allocator, base, "Foo", "Shape", &value_use));
 }
 
 test "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused" {

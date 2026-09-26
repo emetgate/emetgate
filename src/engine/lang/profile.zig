@@ -58,6 +58,80 @@ pub const LiteralValues = struct {
     substitution: []const u8,
 };
 
+pub const Namespace = enum {
+    value,
+    type,
+    both,
+
+    pub fn overlaps(self: Namespace, other: Namespace) bool {
+        return self == .both or other == .both or self == other;
+    }
+};
+
+pub const ScopeRule = enum { block, function, own, owner, pattern, declarator, program };
+
+pub const BinderSite = struct {
+    parent: []const u8,
+    field: ?[]const u8,
+    unless: ?[]const u8 = null,
+    namespace: Namespace = .value,
+    scope: ScopeRule = .block,
+};
+
+pub const ExternalSite = struct {
+    parent: []const u8,
+    field: []const u8,
+    when: ?[]const u8 = null,
+    statement_field: ?[]const u8 = null,
+};
+
+pub const Rename = struct {
+    external_sites: []const ExternalSite,
+    name_kinds: []const []const u8,
+    free_kinds: []const []const u8,
+    type_kinds: []const []const u8,
+    property_kinds: []const []const u8,
+    shorthand_kinds: []const []const u8,
+    export_specifiers: []const []const u8,
+    import_statements: []const []const u8,
+    import_binders: []const []const u8,
+    export_scope_stops: []const []const u8,
+    binder_sites: []const BinderSite,
+    block_scopes: []const []const u8,
+    function_scoped_statements: []const []const u8,
+    subscript: []const u8,
+    subscript_index_field: []const u8,
+    literal_index_kinds: []const []const u8,
+    constructed_index_kinds: []const []const u8,
+    eval_callees: []const []const u8,
+    module_callees: []const []const u8,
+    new_expression: []const u8,
+    new_constructor_field: []const u8,
+    constructor_callees: []const []const u8,
+    literal_argument: []const u8,
+    template_fragment: []const u8,
+    quotes: []const u8,
+};
+
+pub const DeclarationKind = enum { class, variable, interface, type_alias, enumeration, field, enum_member };
+
+pub const DeclarationShape = struct {
+    node: []const u8,
+    kind: DeclarationKind,
+    name_field: []const u8,
+};
+
+pub const Declarations = struct {
+    types: []const DeclarationShape = &.{},
+    variable_statements: []const []const u8 = &.{},
+    value_field: []const u8 = "value",
+    fields: []const DeclarationShape = &.{},
+    enum_body: ?[]const u8 = null,
+    enum_members: []const DeclarationShape = &.{},
+    enum_bare_member: ?[]const u8 = null,
+    destructuring: []const []const u8 = &.{},
+};
+
 pub const MemberTraits = struct {
     accessor: Accessor = .none,
     is_static: bool = false,
@@ -100,6 +174,8 @@ pub const Profile = struct {
     literal_values: LiteralValues,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
     visibility_keywords: []const []const u8 = &.{},
+    rename: ?*const Rename = null,
+    declarations: Declarations = .{},
 
     pub fn hasVisibilityKeyword(self: *const Profile, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;
