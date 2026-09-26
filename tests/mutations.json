@@ -3158,7 +3158,7 @@
       "id": "RO2-a-rule-writing-tool-is-dispatched",
       "file": "src/protocol/handlers.zig",
       "from": "    return error.UnknownTool;\n}",
-      "to": "    if (std.mem.eql(u8, name, \"emetgate_rule_add\")) return callScan(gpa, io, runtime, args, event, policy.root);\n    return error.UnknownTool;\n}",
+      "to": "    if (std.mem.eql(u8, name, \"emetgate_rule_add\")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);\n    return error.UnknownTool;\n}",
       "kills": [
         "red line: no tool on the model side can adopt, change or forget a rule"
       ]
