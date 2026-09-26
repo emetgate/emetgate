@@ -91,6 +91,7 @@ pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
         error.AmbiguousSymbol => return error.SymbolExists,
         error.SymbolNotFound => {},
     }
+    if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;
 
     const eol = try lineEnding(base.source);
     const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) "" else eol;
@@ -127,12 +128,18 @@ pub fn create(runtime: *Runtime, profile: *const Profile, insertion: Insertion) 
     return .{ .snapshot = next, .hash = declared.hash, .body = slot };
 }
 
-fn expectSoleDeclaration(profile: *const Profile, root: ts.Node, table: symbol.Table, slot: Span, ref: symbol.Ref) Error!*const symbol.Symbol {
+const Declared = struct {
+    ref: symbol.Ref,
+    hash: symbol.Hash,
+    body: ?ts.Node,
+};
+
+fn expectSoleDeclaration(profile: *const Profile, root: ts.Node, table: symbol.Table, slot: Span, ref: symbol.Ref) Error!Declared {
     const statements = try topLevelStatementsIn(profile, root, slot);
     const declared = try soleTopLevelSymbol(table, slot);
     if (statements != 1) return error.ExtraTopLevelCode;
     if (!declared.ref.eql(ref)) return error.SymbolNameMismatch;
-    try rejectPlaceholder(profile, declared.body);
+    if (declared.body) |body| try rejectPlaceholder(profile, body);
     return declared;
 }
 
@@ -154,12 +161,17 @@ fn topLevelStatementsIn(profile: *const Profile, root: ts.Node, slot: Span) erro
     return count;
 }
 
-fn soleTopLevelSymbol(table: symbol.Table, slot: Span) error{ NoTopLevelSymbol, MultipleTopLevelSymbols }!*const symbol.Symbol {
-    var found: ?*const symbol.Symbol = null;
-    for (table.symbols) |*candidate| {
+fn soleTopLevelSymbol(table: symbol.Table, slot: Span) error{ NoTopLevelSymbol, MultipleTopLevelSymbols }!Declared {
+    var found: ?Declared = null;
+    for (table.symbols) |candidate| {
         if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;
         if (found != null) return error.MultipleTopLevelSymbols;
-        found = candidate;
+        found = .{ .ref = candidate.ref, .hash = candidate.hash, .body = candidate.body };
+    }
+    for (table.declarations) |candidate| {
+        if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;
+        if (found != null) return error.MultipleTopLevelSymbols;
+        found = .{ .ref = candidate.ref, .hash = candidate.hash, .body = null };
     }
     return found orelse error.NoTopLevelSymbol;
 }
@@ -648,17 +660,45 @@ test "insert refuses a body that declares no top-level symbol" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const base = "function add() { return 1; }\n";
-    for ([_][]const u8{ "const x = 1;", "foo();", "class C {\n  m() { return 1; }\n}", "const o = { f() { return 1; } };" }) |body| {
+    for ([_][]const u8{ "foo();", "if (x) { y(); }" }) |body| {
         errdefer std.debug.print("accepted body: {s}\n", .{body});
         try testing.expectError(error.NoTopLevelSymbol, insertInto(runtime, base, "x", body));
     }
+}
+
+test "insert and create accept a variable, class, interface, type alias or enum as the one new declaration" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = "function add() { return 1; }\n";
+    const cases = [_]struct { ref: []const u8, body: []const u8 }{
+        .{ .ref = "b", .body = "export const b = 2;" },
+        .{ .ref = "C", .body = "class C {\n  m() { return 1; }\n}" },
+        .{ .ref = "o", .body = "const o = { f() { return 1; } };" },
+        .{ .ref = "Shape", .body = "export interface Shape {\n  area: number;\n}" },
+        .{ .ref = "Id", .body = "type Id = string;" },
+        .{ .ref = "Level", .body = "enum Level {\n  Low,\n}" },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("refused body: {s}\n", .{case.body});
+        const applied = try insertInto(runtime, base, case.ref, case.body);
+        defer applied.snapshot.destroy();
+        const table = try applied.snapshot.symbols();
+        const ref = try symbol.Ref.parse(testing.allocator, case.ref);
+        defer ref.deinit(testing.allocator);
+        try testing.expect(table.declarationMatching(ref, applied.hash) != null);
+        const created = try createWith(runtime, case.ref, case.body);
+        created.snapshot.destroy();
+    }
+    try testing.expectError(error.SymbolExists, insertInto(runtime, "const b = 1;\n", "b", "const b = 2;"));
+    try testing.expectError(error.MultipleTopLevelSymbols, insertInto(runtime, base, "a", "const a = 1, b = 2;"));
+    try testing.expectError(error.SymbolNameMismatch, insertInto(runtime, base, "x", "const y = 1;"));
 }
 
 test "insert refuses a body that declares more than one top-level symbol" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const base = "function add() { return 1; }\n";
-    for ([_][]const u8{ "function a() { return 1; }\nfunction b() { return 2; }", "const a = () => 1, b = () => 2;" }) |body| {
+    for ([_][]const u8{ "function a() { return 1; }\nfunction b() { return 2; }", "const a = () => 1, b = () => 2;", "const x = 1;\nfunction a() { return x; }" }) |body| {
         errdefer std.debug.print("accepted body: {s}\n", .{body});
         try testing.expectError(error.MultipleTopLevelSymbols, insertInto(runtime, base, "a", body));
     }
@@ -668,7 +708,7 @@ test "insert refuses top-level code beside the one symbol" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const base = "function add() { return 1; }\n";
-    for ([_][]const u8{ "function f() { return 1; }\nfoo();", "const x = 1;\nfunction f() { return x; }", "function f() { return 1; };" }) |body| {
+    for ([_][]const u8{ "function f() { return 1; }\nfoo();", "function f() { return 1; };" }) |body| {
         errdefer std.debug.print("accepted body: {s}\n", .{body});
         try testing.expectError(error.ExtraTopLevelCode, insertInto(runtime, base, "f", body));
     }
@@ -742,7 +782,7 @@ test "create builds a file of exactly one top-level symbol and one trailing newl
 test "create applies the same body rules as insert" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
-    try testing.expectError(error.NoTopLevelSymbol, createWith(runtime, "x", "const x = 1;"));
+    try testing.expectError(error.NoTopLevelSymbol, createWith(runtime, "x", "foo();"));
     try testing.expectError(error.MultipleTopLevelSymbols, createWith(runtime, "a", "function a() { return 1; }\nfunction b() { return 2; }"));
     try testing.expectError(error.ExtraTopLevelCode, createWith(runtime, "f", "function f() { return 1; }\nfoo();"));
     try testing.expectError(error.SymbolNameMismatch, createWith(runtime, "g", "function f() { return 1; }"));

@@ -90,6 +90,7 @@ test {
     _ = @import("tests/rename_typescript.zig");
     _ = @import("tests/rename_kinds.zig");
     _ = @import("tests/move_tool.zig");
+    _ = @import("tests/create_kinds.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
