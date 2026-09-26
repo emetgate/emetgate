@@ -267,7 +267,7 @@ test "a corrupted index file is rejected instead of trusted" {
     defer testing.allocator.free(original);
     const tampered = try testing.allocator.dupe(u8, original);
     defer testing.allocator.free(tampered);
-    tampered[10] = tampered[10] +% 1;
+    tampered[tampered.len / 2] = tampered[tampered.len / 2] +% 1;
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "idx", .data = tampered });
 
     const loaded = try load(testing.allocator, testing.io, path);

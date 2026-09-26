@@ -271,7 +271,7 @@ test "a corrupted on-disk index still returns correct results, not a false empty
     if (original.len > 20) {
         const tampered = try testing.allocator.dupe(u8, original);
         defer testing.allocator.free(tampered);
-        tampered[10] = tampered[10] +% 1;
+        tampered[tampered.len / 2] = tampered[tampered.len / 2] +% 1;
         try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = index_path, .data = tampered });
     }
 
