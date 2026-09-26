@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **823**
-- Mutations declared in `tests/mutations.json`: **490**
-  - killed: **468**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **828**
+- Mutations declared in `tests/mutations.json`: **492**
+  - killed: **470**
   - equivalent: **5**
   - defense in depth: **3**
   - open: **4**
@@ -41,7 +41,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-113 mutation(s).
+114 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -158,6 +158,7 @@ python tools/verification_page.py --check
 | `SL1-slow-marker-always-runs` | `src/engine/test_util.zig` | `if (@hasDecl(root, "emetgate_slow") and root.emetgate_slow) ret...` -> `_ = root;` | runner: a slow test is skipped unless --slow is given, and runs when it is | killed |
 | `BCR8-symmetry-ignores-effects` | `src/engine/symmetry.zig` | `if (isEffect(profile, node.kind())) return true;` -> `` | symmetry: a call, a new or an assignment in a top-level initializer is an effect | killed |
 | `ZIG2-visibility-hook-not-consulted` | `src/engine/boundedness.zig` | `if (profile.hasVisibilityKeyword(sym.node)) return true;     va...` -> `var current = sym.node.parent();` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
+| `FUZZ1-cas-splice-tail-off-by-one` | `src/engine/cas.zig` | `base.source[cut.end..] });` -> `base.source[cut.end + 1 ..] });` | fuzz: cas.apply on a fixed base and hash either refuses or leaves everything ou... | killed |
 
 ### Sandbox and the test/typecheck gate
 
@@ -222,7 +223,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-36 mutation(s).
+37 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -262,6 +263,7 @@ python tools/verification_page.py --check
 | `JV6-verified-delete-by-path` | `src/platform/disk.zig` | `try guard.deleteSelf();     return .deleted;` -> `_ = deleteWithRetry(io, path_abs);     return .deleted;` | a verified delete removes the file it hashed even when the path is taken over b... | killed |
 | `FH1-file-delete-without-hash-accepted` | `src/platform/batch_plan.zig` | `.absent => return error.MissingFileHash,` -> `.absent => current,` | batch delete through the tool: a file delete without the whole-file hash is ref...; redte... | killed |
 | `FH2-failed-delete-still-unindexed` | `src/platform/disk.zig` | `.delete => if (p.removed) try removed.append(b.gpa, p.path),` -> `.delete => try removed.append(b.gpa, p.path),` | batch delete crash: a delete that fails at finalize leaves the file in the git ... | killed |
+| `FUZZ2-journal-version-equality-loosened` | `src/platform/journal.zig` | `if (probe.value.version == version) {` -> `if (probe.value.version >= 1) {` | fuzz: journal.parse on malformed v2 and legacy bytes never crashes or leaks, an... | killed |
 
 ### Rules and the q: query engine
 
