@@ -71,6 +71,7 @@ fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, s
             event.outcome = .committed;
             event.edits = outcome.plan.prepared.len;
             event.hash = outcome.plan.new_hash;
+            if (policy.tree_cache) |cache| for (outcome.plan.edits) |edit| cache.invalidate(edit.file_abs);
             const files = try gpa.alloc(wire.RenamedFile, outcome.plan.prepared.len);
             defer gpa.free(files);
             for (outcome.plan.prepared, files) |p, *slot| slot.* = .{ .file = p.rel, .old_hash = p.base_hash.?, .new_hash = p.hash };

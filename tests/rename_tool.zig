@@ -7,6 +7,7 @@ const rename_batch = @import("emetgate").rename_batch;
 const symbol = @import("emetgate").symbol;
 const handlers = @import("emetgate").handlers;
 const telemetry = @import("emetgate").telemetry;
+const tree_cache_mod = @import("emetgate").tree_cache;
 const Runtime = @import("emetgate").runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
@@ -246,4 +247,43 @@ test "rename: the tool answers with the class, the resolver, the evidence and ev
     try testing.expectEqual(@as(usize, 3), body.get("files").?.array.items.len);
     try testing.expect(body.get("evidence").?.object.get("alpha_regions").?.integer >= 5);
     try case.expectNew();
+}
+
+test "rename: with a tree cache, read_symbol after a committed emetgate_rename sees the new name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{.{ .rel = "src/a.ts", .text = local_src }}, false);
+    defer case.deinit();
+    var cache: tree_cache_mod.TreeCache = .init(testing.allocator);
+    defer cache.deinit();
+    const file = try case.repo.abs(testing.allocator, "src/a.ts");
+    defer testing.allocator.free(file);
+    const policy: @import("emetgate").server.Policy = .{ .root = case.repo.root_abs, .test_command = "cmd /c exit 0", .tree_cache = &cache, .language_service = &case.session };
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var read_args: std.json.ObjectMap = .empty;
+    try read_args.put(arena, "file", .{ .string = file });
+    try read_args.put(arena, "symbol", .{ .string = "twice" });
+    var warm_event: telemetry.Event = .{ .tool = "emetgate_read_symbol" };
+    const warm = try handlers.callTool(testing.allocator, testing.io, case.runtime, "emetgate_read_symbol", .{ .object = read_args }, &warm_event, policy);
+    testing.allocator.free(warm.text);
+
+    const hash = symbol.formatHash(try support.hashOfRef(testing.allocator, testing.io, case.runtime, file, "add"));
+    var args: std.json.ObjectMap = .empty;
+    try args.put(arena, "file", .{ .string = file });
+    try args.put(arena, "symbol", .{ .string = "add" });
+    try args.put(arena, "hash", .{ .string = &hash });
+    try args.put(arena, "new_name", .{ .string = "inc" });
+    var event: telemetry.Event = .{ .tool = "emetgate_rename" };
+    const renamed = try handlers.callTool(testing.allocator, testing.io, case.runtime, "emetgate_rename", .{ .object = args }, &event, policy);
+    defer testing.allocator.free(renamed.text);
+    errdefer std.debug.print("{s}\n", .{renamed.text});
+    try testing.expect(!renamed.is_error);
+
+    var after_event: telemetry.Event = .{ .tool = "emetgate_read_symbol" };
+    const after = try handlers.callTool(testing.allocator, testing.io, case.runtime, "emetgate_read_symbol", .{ .object = read_args }, &after_event, policy);
+    defer testing.allocator.free(after.text);
+    try testing.expect(std.mem.indexOf(u8, after.text, "inc(inc(x))") != null);
 }
