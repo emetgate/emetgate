@@ -602,7 +602,7 @@ test "rename: a wrong rename inside a top-level block that is no symbol is caugh
 test "rename: renaming one of two same-named properties in a statement breaks its alpha hash" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
-    const source = "const o = { run: 1 };\nconst p = { run: 2 };\nconst r = o.run + p.run;\n";
+    const source = "const o = { run: 1 };\nconst p = { run: 2 };\nconsole.log(o.run + p.run);\n";
     const base = try test_util.snapshotOf(runtime, source);
     defer base.destroy();
     const one = [_]Span{ spanOf(source, "{ run", 0, "run"), spanOf(source, "o.run", 0, "run") };

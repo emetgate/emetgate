@@ -3163,8 +3163,8 @@
     {
       "id": "RO3-rules-dropped-from-the-skeleton",
       "file": "src/protocol/handlers.zig",
-      "from": "    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, adopted.items);",
-      "to": "    try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, &.{});",
+      "from": "    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, adopted.items);",
+      "to": "    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, &.{});",
       "kills": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
       ]
@@ -5009,14 +5009,14 @@
       "from": "        if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;",
       "to": "        if (a.len != b.len) return error.AlphaMismatch;",
       "kills": [
-        "rename: a wrong rename inside a top-level block that is no symbol is caught by the statement's alpha hash"
+        "rename: renaming one of two same-named properties in a statement breaks its alpha hash"
       ]
     },
     {
       "id": "RN2-symbol-alpha-check-skipped",
       "file": "src/engine/rename.zig",
-      "from": "            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;",
-      "to": "            if (b_hash.len != 0) matched = true;",
+      "from": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;",
+      "to": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (b_hash.len != 0) matched = true;",
       "expect_status": "survived",
       "note": "defense in depth: every symbol a rename touches lies inside a touched top-level statement, and equal name partitions over the statement imply equal ones over any part of it, so the per-symbol comparison only repeats the statement check; it is kept because it also checks that every symbol keeps its ref"
     },
@@ -5072,10 +5072,8 @@
       "file": "src/engine/rename.zig",
       "from": "    if (try freeOccurrence(gpa, next, old, false)) return error.IncompleteRename;",
       "to": "    _ = .{ gpa, next, old };",
-      "kills": [
-        "rename: an occurrence left free in an untouched statement is refused as incomplete",
-        "red team rename: a service that skips one call in a touched file is refused"
-      ]
+      "expect_status": "survived",
+      "note": "defense in depth: the independent resolution before the rename (SC3) already refuses a proposal that leaves a use of the renamed binder behind; this check repeats it on the renamed text"
     },
     {
       "id": "RN9-untouched-file-not-checked",
@@ -5206,6 +5204,100 @@
       "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n    return .{",
       "kills": [
         "a service whose token is not low integrity is refused before it runs"
+      ]
+    },
+    {
+      "id": "SC1-merged-declaration-check-skipped",
+      "file": "src/engine/rename.zig",
+      "from": "            return error.MergedDeclaration;",
+      "to": "            continue;",
+      "kills": [
+        "rename: renaming a class and only one of an interface merged with it is refused, renaming both is accepted",
+        "rename kinds: an interface merged with a class of the same name must be renamed with it"
+      ]
+    },
+    {
+      "id": "SC2-use-resolving-elsewhere-accepted",
+      "file": "src/engine/rename.zig",
+      "from": "        if (!renamed[index]) return error.ResolutionMismatch;\n",
+      "to": "        _ = index;\n",
+      "kills": [
+        "rename: a wrong rename inside a top-level block that is no symbol is caught by the independent resolution",
+        "rename kinds: a local type parameter that shadows the renamed type is left alone, renaming only its use is refused"
+      ]
+    },
+    {
+      "id": "SC3-resolution-completeness-skipped",
+      "file": "src/engine/rename.zig",
+      "from": "        if (renamed[index] and !containsSpan(spans, use.span)) return error.IncompleteRename;\n",
+      "to": "        _ = index;\n",
+      "kills": [
+        "rename: leaving one occurrence behind in a renamed statement is caught by the independent resolution"
+      ]
+    },
+    {
+      "id": "SC4-scope-namespace-ignored",
+      "file": "src/engine/scope.zig",
+      "from": "if (b.scope.eql(ancestor) and b.namespace.overlaps(namespace)) return i;",
+      "to": "if (b.scope.eql(ancestor) and (b.namespace.overlaps(namespace) or true)) return i;",
+      "kills": [
+        "scope: types and values live in separate namespaces, a class is both"
+      ]
+    },
+    {
+      "id": "KD1-type-positions-not-names",
+      "file": "src/engine/lang/ecma/rename.zig",
+      "from": "        \"type_identifier\",\n        \"shorthand_property_identifier\",",
+      "to": "        \"shorthand_property_identifier\",",
+      "kills": [
+        "rename kinds: a class is renamed in its declaration, an import, extends, a return type, a variable type and new"
+      ]
+    },
+    {
+      "id": "KD2-alpha-type-namespace-merged",
+      "file": "src/engine/rename.zig",
+      "from": "if (oneOf(kind, g.type_kinds)) 't' else",
+      "to": "if (oneOf(kind, g.type_kinds)) 'v' else",
+      "kills": [
+        "rename: a type and a value of the same name are separate, renaming only the type keeps the value",
+        "rename kinds: a type alias is renamed while a value of the same name stays"
+      ]
+    },
+    {
+      "id": "KD3-exported-type-approval-skipped",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name);",
+      "to": "    const interface_change = locations.files.items.len > 1 or top_name.len == 0;",
+      "kills": [
+        "rename kinds: a class field is renamed with its this and obj accesses the service reports",
+        "rename kinds: a local export alias keeps its public name and only the local name changes"
+      ]
+    },
+    {
+      "id": "KD4-declaration-hash-without-domain",
+      "file": "src/engine/declarations.zig",
+      "from": "    hasher.update(domain);\n    hasher.update(&.{0});\n    hasher.update(@tagName(kind));\n    hasher.update(&.{0});\n",
+      "to": "    _ = kind;\n",
+      "kills": [
+        "declarations: a declaration hash is domain separated, so the same text never hashes like a function"
+      ]
+    },
+    {
+      "id": "KD5-function-hash-takes-declaration-domain",
+      "file": "src/engine/symbol.zig",
+      "from": "        var hasher = std.crypto.hash.Blake3.init(.{});\n        hasher.update(source[self.prefix.start..self.prefix.end]);",
+      "to": "        var hasher = std.crypto.hash.Blake3.init(.{});\n        hasher.update(\"emetgate declaration v1\");\n        hasher.update(source[self.prefix.start..self.prefix.end]);",
+      "kills": [
+        "declarations: the function and method hashes of the fixture are the ones main computed before declarations joined the table"
+      ]
+    },
+    {
+      "id": "KD6-function-values-listed-twice",
+      "file": "src/engine/declarations.zig",
+      "from": "            if (self.isFunctionValue(child)) continue;\n            if (declarators == 1) {",
+      "to": "            if (declarators == 1) {",
+      "kills": [
+        "declarations: a merged interface and class share a ref and are marked ambiguous, a destructuring and a function value are not declarations"
       ]
     }
   ]
