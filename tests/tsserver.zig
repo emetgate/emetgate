@@ -153,3 +153,19 @@ test "tsserver: the program is every tracked TypeScript and JavaScript file and 
     try testing.expectEqual(@as(usize, 2), files.len);
     for (files) |f| try testing.expect(std.mem.indexOf(u8, f, "node_modules") == null);
 }
+
+test "tsserver: a request the language service answers with an error leaves the process running" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TsRepo.init(&.{.{ .rel = "src/a.ts", .text = source }});
+    defer repo.deinit();
+    try repo.installStub();
+    try repo.setPlan("{\"echo\":3}");
+    var s = session(&repo, 20_000);
+    defer s.deinit();
+    try testing.expectError(error.LanguageServiceFailed, askRename(&repo, &s, "src/missing.ts", 0));
+    const client = try s.get();
+    try testing.expect(client.running());
+    const answer = try askRename(&repo, &s, "src/a.ts", 16);
+    defer answer.deinit();
+    try testing.expectEqual(@as(usize, 1), client.starts);
+}

@@ -141,7 +141,7 @@ pub const Client = struct {
         self.next_id += 1;
         const line = try std.fmt.allocPrint(self.gpa, "{s},\"id\":{d}{s}\n", .{ head, id, tail });
         defer self.gpa.free(line);
-        errdefer self.stop();
+        errdefer |err| if (err != error.LanguageServiceFailed) self.stop();
         self.service.?.stdin.writeStreamingAll(self.io, line) catch return error.LanguageServiceExited;
         const response = try self.readLine();
         defer self.gpa.free(response);
