@@ -31,6 +31,8 @@ pub const shadow_root = src.shadow_root;
 pub const sandbox = src.sandbox;
 pub const tsserver = src.tsserver;
 pub const rename_batch = src.rename_batch;
+pub const move_batch = src.move_batch;
+pub const module_paths = src.module_paths;
 pub const disk = src.disk;
 pub const runner = src.runner;
 pub const rules = src.rules;
@@ -87,6 +89,7 @@ test {
     _ = @import("tests/rename_crash.zig");
     _ = @import("tests/rename_typescript.zig");
     _ = @import("tests/rename_kinds.zig");
+    _ = @import("tests/move_tool.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");

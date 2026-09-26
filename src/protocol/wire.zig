@@ -388,6 +388,79 @@ pub fn writeRenameCommitted(writer: *Writer, summary: RenameSummary, note: ?Shad
     try writer.writeByte('\n');
 }
 
+pub const MovedFile = struct {
+    file: []const u8,
+    old_hash: ?symbol.Hash,
+    new_hash: symbol.Hash,
+};
+
+pub const MoveSummary = struct {
+    symbol: []const u8,
+    source: []const u8,
+    target: []const u8,
+    hash: symbol.Hash,
+    class: []const u8,
+    resolver: []const u8,
+    fallback: ?[]const u8,
+    interface_change: bool,
+    created_target: bool,
+    users: usize,
+    imports_added: usize,
+    files: []const MovedFile,
+};
+
+pub fn writeMoveCommitted(writer: *Writer, summary: MoveSummary, note: ?ShadowNote) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("committed");
+    try js.objectField("class");
+    try js.write(summary.class);
+    try js.objectField("symbol");
+    try js.write(summary.symbol);
+    try js.objectField("source");
+    try js.write(summary.source);
+    try js.objectField("target");
+    try js.write(summary.target);
+    try js.objectField("hash");
+    try js.write(symbol.formatHash(summary.hash)[0..]);
+    try js.objectField("resolver");
+    try js.write(summary.resolver);
+    if (summary.fallback) |reason| {
+        try js.objectField("language_service_unavailable");
+        try js.write(reason);
+    }
+    try js.objectField("interface_change");
+    try js.write(summary.interface_change);
+    try js.objectField("created_target");
+    try js.write(summary.created_target);
+    try js.objectField("users");
+    try js.write(summary.users);
+    try js.objectField("imports_added");
+    try js.write(summary.imports_added);
+    try js.objectField("files");
+    try js.beginArray();
+    for (summary.files) |file| {
+        try js.beginObject();
+        try js.objectField("file");
+        try js.write(file.file);
+        if (file.old_hash) |old| {
+            try js.objectField("old_hash");
+            try js.write(symbol.formatHash(old)[0..]);
+        } else {
+            try js.objectField("created");
+            try js.write(true);
+        }
+        try js.objectField("new_hash");
+        try js.write(symbol.formatHash(file.new_hash)[0..]);
+        try js.endObject();
+    }
+    try js.endArray();
+    try writeShadowNote(&js, note);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 fn writeEvidence(js: *std.json.Stringify, evidence: symmetry.Evidence) !void {
     try js.objectField("class");
     try js.write(if (evidence.symmetric()) "symmetry" else "unclassified");
@@ -739,6 +812,13 @@ pub fn exitCode(err: anyerror) u8 {
         error.AlphaMismatch, error.IncompleteRename, error.NotAnIdentifier, error.DuplicateLocation, error.ShorthandReference => 42,
         error.NameTaken, error.InvalidName, error.RenameRefused => 43,
         error.RenameOutsideRepo => 44,
+        error.ResolutionMismatch, error.MergedDeclaration => 42,
+        error.SameFile, error.NotTopLevel, error.ExportDefault, error.SharedStatement, error.LocalExportClause, error.MoveNeedsExport, error.SourceDependencyNotExported, error.UnsupportedImport, error.UnresolvedImport => 45,
+        error.TargetNameTaken, error.TargetCapture, error.TargetAliasUse => 46,
+        error.ImportCycle => 47,
+        error.ModuleSideEffect, error.DeclaredSideEffect => 48,
+        error.ReExported, error.NamespaceImportUse, error.UnhandledReference, error.MoveUnresolved => 49,
+        error.ContentHashMismatch, error.BodyChanged, error.IncompleteMove => 50,
         else => 1,
     };
 }
