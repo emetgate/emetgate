@@ -36,12 +36,11 @@ jobs:
           Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
-      - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Set up Python
-        if: matrix.optimize == 'Debug'
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
         run: |
@@ -68,6 +67,10 @@ jobs:
           Remove-Item $zip
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
       - name: Require a clean working tree
         shell: pwsh
         run: |
