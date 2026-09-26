@@ -4,6 +4,7 @@ const cas = @import("../engine/cas.zig");
 const skeleton = @import("../engine/skeleton.zig");
 const line_range = @import("../engine/line_range.zig");
 const mirror_mod = @import("mirror.zig");
+const tree_cache_mod = @import("../engine/tree_cache.zig");
 const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
@@ -35,16 +36,16 @@ const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
-    if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root);
-    if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror);
-    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror);
+    if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
+    if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache);
+    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror);
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return read_tools.callSearch(gpa, io, args, event, policy.root);
-    if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, args, event, policy.root);
     return error.UnknownTool;
 }
@@ -53,7 +54,7 @@ pub const max_scan_violations = 100;
 
 pub const max_scan_operations: u64 = 100_000_000;
 
-fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
+fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
     const check = try requireString(args, "check");
     const where: ?[]const u8 = if (getField(args.?, "where")) |field| switch (field) {
         .string => |text| text,
@@ -64,7 +65,7 @@ fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: 
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     var refusal: ?[]const u8 = null;
-    renderScan(gpa, io, runtime, root, check, where, &buffer.writer, &refusal) catch |err| {
+    renderScan(gpa, io, runtime, root, check, where, tree_cache, &buffer.writer, &refusal) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -75,7 +76,7 @@ fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: 
     return success(gpa, &buffer);
 }
 
-fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, check: []const u8, where: ?[]const u8, w: *Writer, refusal: *?[]const u8) !void {
+fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, check: []const u8, where: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, refusal: *?[]const u8) !void {
     const root_abs = try repo.servedRoot(gpa, io, root);
     defer gpa.free(root_abs);
     var discard: std.Io.Writer.Discarding = .init(&.{});
@@ -85,54 +86,67 @@ fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
         .max_violations = max_scan_violations,
         .call_operations = max_scan_operations,
         .refusal = refusal,
+        .tree_cache = tree_cache,
     }, w, &discard.writer);
 }
 
-fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
+fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
     const file = try requireString(args, "file");
     event.label = "symbols";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSymbols(gpa, io, runtime, root, file, &buffer.writer) catch |err| {
+    renderSymbols(gpa, io, runtime, root, file, tree_cache, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8) !*Snapshot {
+const Loaded = struct {
+    place: repo.Jailed,
+    snapshot: *Snapshot,
+    owned: bool,
+
+    fn deinit(self: Loaded, gpa: Allocator) void {
+        if (self.owned) self.snapshot.destroy();
+        self.place.deinit(gpa);
+    }
+};
+
+fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache) !Loaded {
     const place = try repo.jail(gpa, io, root, file);
-    defer place.deinit(gpa);
-    return Snapshot.load(runtime, io, .cwd(), place.abs);
+    errdefer place.deinit(gpa);
+    if (tree_cache) |cache| return .{ .place = place, .snapshot = try cache.load(runtime, io, place.abs), .owned = false };
+    return .{ .place = place, .snapshot = try Snapshot.load(runtime, io, .cwd(), place.abs), .owned = true };
 }
 
-fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, w: *Writer) !void {
-    const snapshot = try loadJailed(gpa, io, runtime, root, file);
-    defer snapshot.destroy();
-    const table = try snapshot.symbols();
+fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer) !void {
+    const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
+    defer loaded.deinit(gpa);
+    const table = try loaded.snapshot.symbols();
     try wire.writeSymbols(gpa, w, file, table.*);
 }
 
-fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror) !ToolResult {
+fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
     const file = try requireString(args, "file");
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     event.label = "skeleton";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSkeleton(gpa, io, runtime, root, file, force, mirror, &buffer.writer, event) catch |err| {
+    renderSkeleton(gpa, io, runtime, root, file, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
-    const place = try repo.jail(gpa, io, root, file);
-    defer place.deinit(gpa);
-    const snapshot = try Snapshot.load(runtime, io, .cwd(), place.abs);
-    defer snapshot.destroy();
+fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+    const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
+    defer loaded.deinit(gpa);
+    const place = loaded.place;
+    const snapshot = loaded.snapshot;
     const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.profile, snapshot.tree);
     defer gpa.free(text);
     const hash = symbol.hashOf(text);
@@ -152,7 +166,7 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     try wire.writeSkeleton(w, file, symbol.fileHash(snapshot.source), text, adopted.items);
 }
 
-fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror) !ToolResult {
+fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
     const file = try requireString(args, "file");
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     event.label = "read_symbol";
@@ -164,14 +178,14 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     const line_end = getInt(arguments, "line_end");
     const symbols = getStringArray(arguments, "symbols");
     if (line_start != null or line_end != null) {
-        renderSymbolRange(gpa, io, runtime, root, file, line_start, line_end, force, mirror, &buffer.writer, event) catch |err| {
+        renderSymbolRange(gpa, io, runtime, root, file, line_start, line_end, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return failure(gpa, &buffer, err, event);
         };
         return success(gpa, &buffer);
     }
     if (symbols) |list| {
-        renderSymbolBodies(gpa, io, runtime, root, file, list, force, mirror, &buffer.writer, event) catch |err| {
+        renderSymbolBodies(gpa, io, runtime, root, file, list, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return failure(gpa, &buffer, err, event);
         };
@@ -179,7 +193,7 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     }
     const sym = try requireString(args, "symbol");
     event.symbol = sym;
-    renderSymbolBody(gpa, io, runtime, root, file, sym, force, mirror, &buffer.writer, event) catch |err| {
+    renderSymbolBody(gpa, io, runtime, root, file, sym, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -190,9 +204,10 @@ fn mirrorKey(gpa: Allocator, file: []const u8, sym: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa, "symbol:{s}#{s}", .{ file, sym });
 }
 
-fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
-    const snapshot = try loadJailed(gpa, io, runtime, root, file);
-    defer snapshot.destroy();
+fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+    const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
+    defer loaded.deinit(gpa);
+    const snapshot = loaded.snapshot;
     const table = try snapshot.symbols();
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
@@ -213,10 +228,11 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
 }
 
-fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     if (symbols.len == 0) return error.MissingArgument;
-    const snapshot = try loadJailed(gpa, io, runtime, root, file);
-    defer snapshot.destroy();
+    const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
+    defer loaded.deinit(gpa);
+    const snapshot = loaded.snapshot;
     const table = try snapshot.symbols();
     const entries = try gpa.alloc(wire.SymbolEntry, symbols.len);
     defer gpa.free(entries);
@@ -248,12 +264,13 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     try wire.writeSymbolBodies(w, file, entries);
 }
 
-fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     const start = line_start orelse return error.MissingArgument;
     const end = line_end orelse return error.MissingArgument;
     if (start < 1 or end < 1) return error.InvalidLineRange;
-    const snapshot = try loadJailed(gpa, io, runtime, root, file);
-    defer snapshot.destroy();
+    const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
+    defer loaded.deinit(gpa);
+    const snapshot = loaded.snapshot;
     const table = try snapshot.symbols();
     const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
     const matched = try line_range.symbolsOverlapping(gpa, table.*, requested);
@@ -402,6 +419,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             event.outcome = .committed;
             event.edits = 1;
             event.hash = new_hash;
+            if (policy.tree_cache) |cache| cache.invalidate(file_abs);
             try wire.writeCommitted(w, sym, expected, new_hash, note);
             return false;
         },
@@ -520,6 +538,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         .committed => |committed| {
             event.outcome = .committed;
             event.edits = items.len;
+            if (policy.tree_cache) |cache| for (edits) |edit| cache.invalidate(edit.file_abs);
             const views = try gpa.alloc(wire.BatchEdit, items.len);
             defer gpa.free(views);
             for (items, 0..) |item, i| views[i] = .{
