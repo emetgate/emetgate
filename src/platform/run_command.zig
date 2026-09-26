@@ -3,6 +3,7 @@ const runner = @import("runner.zig");
 const shadow = @import("shadow.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
+const test_command = @import("test_command.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -104,6 +105,33 @@ pub fn check(allowed: []const []const u8, requested: []const u8) Checked {
         error.RunCommandEmpty, error.RunCommandTooLong => .invalid_entry,
     } };
     return .{ .allowed = entry };
+}
+
+const RepoConfig = struct { run: []const []const u8 = &.{} };
+
+pub const RepoRuns = struct {
+    parsed: ?std.json.Parsed(RepoConfig),
+
+    pub fn entries(self: RepoRuns) []const []const u8 {
+        const parsed = self.parsed orelse return &.{};
+        return parsed.value.run;
+    }
+
+    pub fn deinit(self: RepoRuns) void {
+        if (self.parsed) |parsed| parsed.deinit();
+    }
+};
+
+pub fn repoConfigRuns(gpa: Allocator, io: std.Io, root_abs: []const u8) !RepoRuns {
+    const path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, test_command.config_file });
+    defer gpa.free(path);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(64 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return .{ .parsed = null },
+        else => return err,
+    };
+    defer gpa.free(bytes);
+    const parsed = std.json.parseFromSlice(RepoConfig, gpa, bytes, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch return error.InvalidConfig;
+    return .{ .parsed = parsed };
 }
 
 pub const Options = struct {

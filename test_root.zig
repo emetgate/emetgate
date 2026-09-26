@@ -51,6 +51,7 @@ pub const diagnostics = src.diagnostics;
 pub const server = src.server;
 pub const telemetry = src.telemetry;
 pub const handlers = src.handlers;
+pub const run_tool = src.run_tool;
 pub const read_tools = src.read_tools;
 pub const mirror = src.mirror;
 pub const json_pointer = src.json_pointer;
@@ -74,6 +75,7 @@ test {
     _ = @import("tests/redteam_sandbox.zig");
     _ = @import("tests/redteam_link_tree.zig");
     _ = @import("tests/redteam_git.zig");
+    _ = @import("tests/run_tool.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_crash.zig");
     _ = @import("tests/batch_crash_tool.zig");
