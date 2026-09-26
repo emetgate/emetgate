@@ -83,6 +83,16 @@ function handle(request) {
   load();
   if (request.op === 'ping') return { version: String(ts.version) };
   if (Array.isArray(request.files)) files = request.files;
+  if (request.op === 'fileRename') {
+    const changes = [];
+    for (const f of service.getEditsForFileRename(request.file, request.target, {}, {}) || []) {
+      const text = sourceOf(f.fileName).text;
+      for (const c of f.textChanges) {
+        changes.push({ file: f.fileName, start: toBytes(text, c.span.start), end: toBytes(text, c.span.start + c.span.length), text: c.newText });
+      }
+    }
+    return { changes: changes };
+  }
   const position = toUnits(sourceOf(request.file).text, request.offset);
   if (request.op === 'rename') {
     const info = service.getRenameInfo(request.file, position, { allowRenameOfImportPath: false });

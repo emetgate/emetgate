@@ -38,6 +38,7 @@ pub const BatchOptions = struct {
     trace: ?*Trace = null,
     commit_step: ?*const disk.Step = null,
     language_service: ?*tsserver.Session = null,
+    created_dirs: []const []const u8 = &.{},
 };
 
 pub const BatchResult = union(enum) {
@@ -138,6 +139,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     defer gpa.free(journal_dir);
     var batch = disk.Batch.init(gpa, io, journal_dir);
     batch.root = root;
+    batch.created_dirs = options.created_dirs;
     if (options.trace) |t| t.commit_attempted = true;
     for (prepared, 0..) |p, i| {
         const file_abs = edits[i].file_abs;
@@ -145,6 +147,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
             .write, .insert, .delete_symbol => try disk.prepare(gpa, io, file_abs, p.source(), p.base_hash.?),
             .create => try disk.stageCreate(gpa, io, file_abs, p.source()),
             .delete_file => try disk.stageDelete(gpa, io, file_abs, p.base_hash.?),
+            .move_file => try disk.stageRename(gpa, io, edits[i].move_source.?, file_abs, p.source(), p.base_hash.?),
         };
         count = i + 1;
     }
@@ -187,6 +190,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         shadow.remove(io, location.base, location.shadow) catch {};
     }
     for (prepared) |p| {
+        if (p.source_rel) |from| try workspace.deleteFile(from);
         if (p.action == .delete_file) try workspace.deleteFile(p.rel) else try workspace.writeFile(p.rel, p.source());
     }
 

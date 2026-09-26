@@ -172,11 +172,11 @@ pub fn addToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
 }
 
 pub fn addAllToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
-    return runOnPaths(gpa, io, root_abs, &.{ "git", "add", "--" }, paths);
+    return runOnPaths(gpa, io, root_abs, &.{ "git", "-c", "core.longpaths=true", "add", "--" }, paths);
 }
 
 pub fn removeAllFromIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
-    return runOnPaths(gpa, io, root_abs, &.{ "git", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, paths);
+    return runOnPaths(gpa, io, root_abs, &.{ "git", "-c", "core.longpaths=true", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, paths);
 }
 
 fn runOnPaths(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const []const u8, paths: []const []const u8) !void {

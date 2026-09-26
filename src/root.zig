@@ -30,6 +30,7 @@ pub const sandbox = @import("platform/sandbox.zig");
 pub const tsserver = @import("platform/tsserver.zig");
 pub const rename_batch = @import("platform/rename_batch.zig");
 pub const move_batch = @import("platform/move_batch.zig");
+pub const file_move = @import("platform/file_move.zig");
 pub const module_paths = @import("platform/module_paths.zig");
 pub const disk = @import("platform/disk.zig");
 pub const runner = @import("platform/runner.zig");

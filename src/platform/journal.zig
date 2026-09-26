@@ -8,17 +8,18 @@ const Allocator = std.mem.Allocator;
 pub const version: u32 = 2;
 pub const max_bytes = 1024 * 1024;
 
-pub const Op = enum { modify, create, delete };
+pub const Op = enum { modify, create, delete, rename };
 
 pub const Intent = struct {
     op: Op,
     target: []const u8,
+    source: []const u8 = "",
     tag: []const u8 = "",
     base_hash: ?symbol.Hash = null,
     new_hash: ?symbol.Hash = null,
 };
 
-pub fn write(gpa: Allocator, io: std.Io, journal_dir: []const u8, batch: []const u8, intents: []const Intent) ![]u8 {
+pub fn write(gpa: Allocator, io: std.Io, journal_dir: []const u8, batch: []const u8, created_dirs: []const []const u8, intents: []const Intent) ![]u8 {
     std.Io.Dir.cwd().createDirPath(io, journal_dir) catch {};
     const final = try std.fmt.allocPrint(gpa, "{s}\\{s}.json", .{ journal_dir, batch });
     errdefer gpa.free(final);
@@ -33,6 +34,8 @@ pub fn write(gpa: Allocator, io: std.Io, journal_dir: []const u8, batch: []const
     try js.write(version);
     try js.objectField("batch");
     try js.write(batch);
+    try js.objectField("created_dirs");
+    try js.write(created_dirs);
     try js.objectField("intents");
     try js.beginArray();
     for (intents) |intent| try writeIntent(&js, intent);
@@ -52,6 +55,10 @@ fn writeIntent(js: *std.json.Stringify, intent: Intent) !void {
     try js.write(@tagName(intent.op));
     try js.objectField("target");
     try js.write(intent.target);
+    if (intent.source.len != 0) {
+        try js.objectField("source");
+        try js.write(intent.source);
+    }
     if (intent.tag.len != 0) {
         try js.objectField("tag");
         try js.write(intent.tag);
@@ -72,6 +79,7 @@ fn writeIntent(js: *std.json.Stringify, intent: Intent) !void {
 pub const RawIntent = struct {
     op: []const u8 = "",
     target: []const u8 = "",
+    source: []const u8 = "",
     tag: []const u8 = "",
     base_hash: []const u8 = "",
     new_hash: []const u8 = "",
@@ -80,6 +88,7 @@ pub const RawIntent = struct {
 pub const Batch = struct {
     version: u32 = 0,
     batch: []const u8 = "",
+    created_dirs: []const []const u8 = &.{},
     intents: []const RawIntent = &.{},
 };
 

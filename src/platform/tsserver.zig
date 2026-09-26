@@ -29,6 +29,13 @@ pub const Location = struct {
     definition: bool = false,
 };
 
+pub const Change = struct {
+    file: []const u8,
+    start: u32,
+    end: u32,
+    text: []const u8,
+};
+
 pub const Answer = struct {
     id: u64 = 0,
     ok: bool = false,
@@ -38,6 +45,7 @@ pub const Answer = struct {
     reason: []const u8 = "",
     locations: []Location = &.{},
     references: []Location = &.{},
+    changes: []Change = &.{},
 };
 
 pub const Parsed = std.json.Parsed(Answer);
@@ -115,6 +123,25 @@ pub const Client = struct {
 
     pub fn references(self: *Client, file: []const u8, offset: u32) !Parsed {
         return self.ask("references", file, offset);
+    }
+
+    pub fn fileRename(self: *Client, file: []const u8, target: []const u8) !Parsed {
+        try self.ensure();
+        const files = try programFiles(self.gpa, self.io, self.root);
+        defer freeFiles(self.gpa, files);
+        var head: std.Io.Writer.Allocating = .init(self.gpa);
+        defer head.deinit();
+        var js: std.json.Stringify = .{ .writer = &head.writer };
+        try js.beginObject();
+        try js.objectField("op");
+        try js.write("fileRename");
+        try js.objectField("file");
+        try js.write(file);
+        try js.objectField("target");
+        try js.write(target);
+        try js.objectField("files");
+        try js.write(files);
+        return self.exchange(head.written(), "}");
     }
 
     fn ask(self: *Client, op: []const u8, file: []const u8, offset: u32) !Parsed {

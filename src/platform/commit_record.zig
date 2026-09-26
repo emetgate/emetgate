@@ -107,10 +107,21 @@ pub fn flushDir(dir_abs: []const u8) !void {
     if (win.FlushFileBuffers(handle) == .FALSE) return error.FlushFailed;
 }
 
-fn toWide(buffer: *WidePath, path: []const u8) ![*:0]const u16 {
-    const len = std.unicode.wtf8ToWtf16Le(buffer, path) catch return error.InvalidWtf8;
-    if (len >= buffer.len) return error.NameTooLong;
-    buffer[len] = 0;
+pub const long_path_threshold = 240;
+
+pub fn toWide(buffer: *WidePath, path: []const u8) ![*:0]const u16 {
+    const prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\");
+    const long = path.len >= long_path_threshold and path.len > 2 and std.ascii.isAlphabetic(path[0]) and path[1] == ':' and (path[2] == '\\' or path[2] == '/');
+    const offset: usize = if (long) prefix.len else 0;
+    if (long) @memcpy(buffer[0..prefix.len], prefix);
+    const len = std.unicode.wtf8ToWtf16Le(buffer[offset..], path) catch return error.InvalidWtf8;
+    if (offset + len >= buffer.len) return error.NameTooLong;
+    if (long) {
+        for (buffer[offset .. offset + len]) |*unit| {
+            if (unit.* == '/') unit.* = '\\';
+        }
+    }
+    buffer[offset + len] = 0;
     return buffer;
 }
 

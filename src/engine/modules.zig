@@ -123,6 +123,32 @@ pub fn imports(arena: Allocator, snapshot: *const Snapshot) ![]Import {
     return out.items;
 }
 
+pub const DynamicSpec = struct {
+    literal: ?[]const u8,
+};
+
+pub fn dynamicSpecs(arena: Allocator, snapshot: *const Snapshot) ![]DynamicSpec {
+    const g = snapshot.profile.rename orelse return error.UnsupportedLanguage;
+    var out: std.ArrayList(DynamicSpec) = .empty;
+    var stack: std.ArrayList(ts.Node) = .empty;
+    try stack.append(arena, snapshot.tree.root());
+    while (stack.pop()) |node| {
+        if (std.mem.eql(u8, node.kind(), snapshot.profile.call.node)) {
+            if (node.childByField(snapshot.profile.call.function_field)) |callee| {
+                if (oneOf(snapshot.tree.text(callee), g.module_callees)) {
+                    const arguments = node.childByField(snapshot.profile.call.arguments_field);
+                    const first = if (arguments) |a| a.namedChild(0) else null;
+                    const literal = if (first) |f| (if (std.mem.eql(u8, f.kind(), g.literal_argument) and arguments.?.namedChildCount() == 1) unquoted(snapshot.tree.text(f)) else null) else null;
+                    try out.append(arena, .{ .literal = literal });
+                }
+            }
+        }
+        var i: u32 = 0;
+        while (node.child(i)) |child| : (i += 1) try stack.append(arena, child);
+    }
+    return out.items;
+}
+
 pub fn hasModuleEffects(snapshot: *const Snapshot) bool {
     const root = snapshot.tree.root();
     var i: u32 = 0;

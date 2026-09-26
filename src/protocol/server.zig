@@ -88,6 +88,16 @@ pub const tool_defs = [_]Tool{
         },
     },
     .{
+        .name = "emetgate_move_file",
+        .description = "Move or rename a TypeScript or JavaScript file and rewrite every relative import that reaches it, and the file's own relative imports, as one all-or-nothing batch. The target path must not exist; missing directories are created and removed again if the batch rolls back. The source stays in place until the commit record and is then deleted through the handle that verified its hash. The kernel derives every rewritten path and the TypeScript language service's getEditsForFileRename must propose exactly the same edits (ServiceMismatch otherwise); without the language service only a file nothing imports is moved. Every symbol and declaration of every touched file keeps its hash. Refused: an existing target (NoClobber), a rename that only changes letter case (CaseOnlyRename), a require or dynamic import that reaches the file (DynamicPathUse), and a file named by package.json or tsconfig paths unless interface_change is true. The typecheck and test commands still run first.",
+        .props = &.{
+            .{ .name = "from", .desc = "path of the file to move" },
+            .{ .name = "to", .desc = "new path inside the repo; must not exist" },
+            .{ .name = "from_hash", .desc = "whole-file hash (file_hash from emetgate_read_file or emetgate_skeleton)" },
+            .{ .name = "interface_change", .desc = "true to allow moving a file that package.json or tsconfig paths name", .optional = true, .ty = "boolean" },
+        },
+    },
+    .{
         .name = "emetgate_mutate",
         .description = "In-memory dry-run mutation: returns the transformed source and new hash without touching disk.",
         .props = &.{

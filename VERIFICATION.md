@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **930**
-- Mutations declared in `tests/mutations.json`: **537**
-  - killed: **511**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **944**
+- Mutations declared in `tests/mutations.json`: **548**
+  - killed: **522**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -230,7 +230,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-40 mutation(s).
+45 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -274,6 +274,11 @@ python tools/verification_page.py --check
 | `DR1-service-reference-ignored` | `src/platform/batch_plan.zig` | `if (inBatch(root, sources, reference.file)) continue;         r...` -> `if (inBatch(root, sources, reference.file)) continue;         c...` | delete references: a reference the language service reports in another file ref... | killed |
 | `DR2-quoted-name-ignored` | `src/platform/batch_plan.zig` | `if (try quotedAnywhere(gpa, io, root, name)) return true;` -> `_ = io;` | delete references: a quoted name elsewhere is dynamic access and refuses the de... | killed |
 | `DR3-service-answer-ignored` | `src/platform/batch_plan.zig` | `if (referenced) return error.SymbolReferenced;             cont...` -> `_ = referenced;` | delete references: a name only a comment elsewhere mentions is deleted when the... | killed |
+| `FM1-source-deleted-before-commit-record` | `src/platform/disk.zig` | `.create, .rename => try self.place(in_gap),` -> `.create => try self.place(in_gap),             .rename => {    ...` | file move crash: a move into two new directories with two users cut after every... | killed |
+| `FM2-placement-replaces-the-target` | `src/platform/disk.zig` | `self.replacement.?.renameTo(self.gpa, self.path) catch \|err\| ...` -> `self.replacement.?.renameReplacing(self.gpa, self.path) catch \...` | file move crash: a file another process puts at the target before the placement... | killed |
+| `FM3-created-dirs-not-journaled` | `src/platform/disk.zig` | `return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, b.crea...` -> `return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, &.{}, ...` | file move crash: a move into two new directories with two users cut after every... | killed |
+| `FM5-moved-file-not-indexed` | `src/platform/disk.zig` | `try added.append(b.gpa, p.path);             if (p.removed) try...` -> `if (p.removed) try removed.append(b.gpa, p.source);` | move file: a file moves into two new directories and every import to and from i...; file ... | killed |
+| `FM7-disk-case-only-rename-accepted` | `src/platform/disk.zig` | `if (std.ascii.eqlIgnoreCase(source_abs, target_abs)) return err...` -> `` | file move crash: the disk layer refuses a rename that only changes letter case | killed |
 
 ### Rules and the q: query engine
 
@@ -515,7 +520,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-114 mutation(s).
+120 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -633,6 +638,12 @@ python tools/verification_page.py --check
 | `MV7-unhandled-reference-accepted` | `src/platform/move_batch.zig` | `if (!known) return error.UnhandledReference;` -> `` | red team move: the language service naming a user the kernel cannot rewrite, or... | killed |
 | `MV8-declared-side-effects-ignored` | `src/platform/move_batch.zig` | `if (declared and !request.order_change) return error.DeclaredSi...` -> `` | red team move: a package.json sideEffects entry for the source is refused witho... | killed |
 | `MV9-capture-accepted` | `src/platform/move_batch.zig` | `if (!try targetImportsSame(w, target_imports, request.target_ab...` -> `_ = try targetImportsSame(w, target_imports, request.target_abs...` | defense in depth: the proof after the move resolves every free name of the moved code in ... | defense in depth |
+| `FM4-user-import-skipped` | `src/platform/file_move.zig` | `try files.append(arena, edits);` -> `_ = &edits;` | move file: a file moves into two new directories and every import to and from i... | killed |
+| `FM6-case-only-rename-in-one-step` | `src/platform/file_move.zig` | `if (tsserver.sameFile(request.from_abs, request.to_abs)) return...` -> `` | move file: an existing target, a case-only rename, a stale hash and a target ou... | killed |
+| `FM8-stale-import-proof-skipped` | `src/platform/file_move.zig` | `try proveNoStaleImport(w, after, request, files.items, texts.it...` -> `` | move file: the proof catches a user left behind and an own import left unrewrit... | killed |
+| `FM9-own-import-proof-skipped` | `src/platform/file_move.zig` | `try proveOwnImports(w, before, after, request, moved, afters.it...` -> `` | move file: the proof catches a user left behind and an own import left unrewrit... | killed |
+| `FM10-service-edit-mismatch-accepted` | `src/platform/file_move.zig` | `if (!found) return error.ServiceMismatch;` -> `if (!found and false) return error.ServiceMismatch;` | move file: the language service proposing a different edit set is refused | killed |
+| `FM11-literal-require-accepted` | `src/platform/file_move.zig` | `if (tsserver.sameFile(target, request.from_abs)) return error.D...` -> `_ = target;` | move file: a require or a computed import that reaches the file is refused | killed |
 
 ## What this system does not prove
 

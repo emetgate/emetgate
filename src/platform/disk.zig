@@ -123,6 +123,7 @@ pub const Batch = struct {
     journal_dir: []const u8,
     tag: commit_record.Tag,
     root: ?[]const u8 = null,
+    created_dirs: []const []const u8 = &.{},
 
     pub fn init(gpa: Allocator, io: std.Io, journal_dir: []const u8) Batch {
         return .{ .gpa = gpa, .io = io, .journal_dir = journal_dir, .tag = commit_record.newTag(io) };
@@ -191,6 +192,7 @@ pub const Pending = struct {
     guard: ?Guard,
     replacement: ?Guard = null,
     path: []u8,
+    source: []u8 = &.{},
     temp: []u8,
     backup: []u8,
     tag: [16]u8,
@@ -202,7 +204,7 @@ pub const Pending = struct {
     freed: bool = false,
     removed: bool = false,
 
-    pub const Kind = enum { modify, create, delete };
+    pub const Kind = enum { modify, create, delete, rename };
     const State = enum { planned, staged, backed_up, swapped };
 
     fn intent(self: *const Pending) journal.Intent {
@@ -210,6 +212,7 @@ pub const Pending = struct {
             .modify => .{ .op = .modify, .target = self.path, .tag = &self.tag, .base_hash = self.base_hash, .new_hash = self.data_hash },
             .create => .{ .op = .create, .target = self.path, .tag = &self.tag, .new_hash = self.data_hash },
             .delete => .{ .op = .delete, .target = self.path, .base_hash = self.base_hash },
+            .rename => .{ .op = .rename, .target = self.path, .source = self.source, .tag = &self.tag, .base_hash = self.base_hash, .new_hash = self.data_hash },
         };
     }
 
@@ -226,7 +229,7 @@ pub const Pending = struct {
     pub fn swap(self: *Pending, in_gap: ?Hook) !void {
         switch (self.kind) {
             .modify => try self.replace(in_gap),
-            .create => try self.place(in_gap),
+            .create, .rename => try self.place(in_gap),
             .delete => {},
         }
     }
@@ -242,6 +245,8 @@ pub const Pending = struct {
         try self.replacement.?.renameReplacing(self.gpa, self.path);
         applyAttributes(self.path, self.saved_attributes) catch {};
         self.state = .swapped;
+        if (crashAfterRename()) return error.Crashed;
+        try flushParent(self.path);
     }
 
     fn place(self: *Pending, in_gap: ?Hook) !void {
@@ -251,9 +256,15 @@ pub const Pending = struct {
             else => |e| return e,
         };
         self.state = .swapped;
+        if (crashAfterRename()) return error.Crashed;
+        try flushParent(self.path);
     }
 
     pub fn verify(self: *Pending) !void {
+        if (self.kind == .rename) {
+            const source = self.guard.?.hash(self.gpa, self.io) catch return error.WrittenButUnverified;
+            if (!std.mem.eql(u8, &source, &self.base_hash.?)) return error.WrittenButUnverified;
+        }
         const handle = if (self.kind == .delete) self.guard.? else self.replacement.?;
         const expected = if (self.kind == .delete) self.base_hash.? else self.data_hash;
         const written = handle.hash(self.gpa, self.io) catch return error.WrittenButUnverified;
@@ -272,6 +283,14 @@ pub const Pending = struct {
                 defer self.closeHandles();
                 try self.guard.?.deleteSelf();
                 self.removed = true;
+                flushParent(self.path) catch {};
+            },
+            .rename => {
+                defer self.closeHandles();
+                self.closeReplacement();
+                try self.guard.?.deleteSelf();
+                self.removed = true;
+                flushParent(self.source) catch {};
             },
             .create => self.closeHandles(),
         }
@@ -303,7 +322,7 @@ pub const Pending = struct {
     pub fn discard(self: *Pending, leftover: ?*Leftover) void {
         switch (self.kind) {
             .modify => self.restoreBase(leftover),
-            .create => self.removeCreated(leftover),
+            .create, .rename => self.removeCreated(leftover),
             .delete => {},
         }
         self.closeHandles();
@@ -350,8 +369,39 @@ pub const Pending = struct {
         self.gpa.free(self.path);
         self.gpa.free(self.temp);
         self.gpa.free(self.backup);
+        if (self.kind == .rename) self.gpa.free(self.source);
     }
 };
+
+pub var crash_after_rename: ?usize = null;
+var renames_seen: usize = 0;
+
+fn crashAfterRename() bool {
+    if (!builtin.is_test) return false;
+    const target = crash_after_rename orelse return false;
+    renames_seen += 1;
+    if (renames_seen != target) return false;
+    renames_seen = 0;
+    crash_after_rename = null;
+    return true;
+}
+
+pub fn resetRenameCount() void {
+    renames_seen = 0;
+}
+
+pub var crash_in_recovery: bool = false;
+
+fn recoverCrash() bool {
+    if (!builtin.is_test or !crash_in_recovery) return false;
+    crash_in_recovery = false;
+    return true;
+}
+
+fn flushParent(path_abs: []const u8) !void {
+    const parent = std.fs.path.dirname(path_abs) orelse return;
+    try commit_record.flushDir(parent);
+}
 
 fn plan(gpa: Allocator, io: std.Io, kind: Pending.Kind, path_abs: []const u8, data: []const u8, guard: ?Guard, base_hash: ?symbol.Hash, saved_attributes: windows.DWORD) !Pending {
     var random: [8]u8 = undefined;
@@ -402,6 +452,20 @@ pub fn stageCreate(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []con
     return plan(gpa, io, .create, path_abs, data, null, null, 0);
 }
 
+pub fn stageRename(gpa: Allocator, io: std.Io, source_abs: []const u8, target_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !Pending {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    if (target_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
+    if (std.ascii.eqlIgnoreCase(source_abs, target_abs)) return error.CaseOnlyRename;
+    if (try pathExists(io, target_abs)) return error.FileExists;
+    if (shadow.isReparsePoint(source_abs) catch true) return error.ReparsePoint;
+    const base = try openBase(gpa, io, source_abs, expected_base);
+    errdefer base.guard.close();
+    var pending = try plan(gpa, io, .rename, target_abs, data, base.guard, expected_base, base.attributes);
+    errdefer pending.freePaths();
+    pending.source = try gpa.dupe(u8, source_abs);
+    return pending;
+}
+
 pub fn stageDelete(gpa: Allocator, io: std.Io, path_abs: []const u8, expected_base: symbol.Hash) !Pending {
     if (shadow.isReparsePoint(path_abs) catch true) return error.ReparsePoint;
     const base = try openBase(gpa, io, path_abs, expected_base);
@@ -421,7 +485,37 @@ fn writeBatchJournal(b: *const Batch, pendings: []const Pending) ![]u8 {
     const intents = try b.gpa.alloc(journal.Intent, pendings.len);
     defer b.gpa.free(intents);
     for (pendings, intents) |*p, *slot| slot.* = p.intent();
-    return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, intents);
+    return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, b.created_dirs, intents);
+}
+
+fn makeDirs(b: *const Batch) !void {
+    for (b.created_dirs) |dir| {
+        std.Io.Dir.cwd().createDir(b.io, dir, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
+        try flushParent(dir);
+    }
+}
+
+fn removeEmptyDirs(io: std.Io, dirs: []const []const u8) void {
+    var k = dirs.len;
+    while (k > 0) {
+        k -= 1;
+        clearSidecarTemps(io, dirs[k]);
+        std.Io.Dir.cwd().deleteDir(io, dirs[k]) catch continue;
+        flushParent(dirs[k]) catch {};
+    }
+}
+
+fn clearSidecarTemps(io: std.Io, dir_abs: []const u8) void {
+    var dir = std.Io.Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (it.next(io) catch return) |entry| {
+        if (entry.kind != .file or sidecarKind(entry.name) != .tmp) continue;
+        dir.deleteFile(io, entry.name) catch {};
+    }
 }
 
 fn abort(pendings: []Pending, leftover: ?*Leftover, batch: ?*const Batch, journal_path: ?[]const u8) void {
@@ -431,6 +525,7 @@ fn abort(pendings: []Pending, leftover: ?*Leftover, batch: ?*const Batch, journa
         pendings[k].discard(leftover);
     }
     const b = batch orelse return;
+    removeEmptyDirs(b.io, b.created_dirs);
     if (journal_path) |jp| _ = deleteWithRetry(b.io, jp);
 }
 
@@ -448,6 +543,13 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
             return err;
         };
         if (Step.stops(step)) return abandonAll(pendings);
+        if (b.created_dirs.len != 0) {
+            makeDirs(b) catch |err| {
+                abort(pendings, leftover, batch, journal_path);
+                return err;
+            };
+            if (Step.stops(step)) return abandonAll(pendings);
+        }
     }
     for (pendings) |*p| {
         if (p.kind == .delete) continue;
@@ -519,6 +621,10 @@ fn syncBatchIndex(pendings: []const Pending, batch: ?*const Batch) !void {
     for (pendings) |p| switch (p.kind) {
         .create => try added.append(b.gpa, p.path),
         .delete => if (p.removed) try removed.append(b.gpa, p.path),
+        .rename => {
+            try added.append(b.gpa, p.path);
+            if (p.removed) try removed.append(b.gpa, p.source);
+        },
         .modify => {},
     };
     try syncIndex(b.gpa, b.io, root, added.items, removed.items);
@@ -700,6 +806,24 @@ fn recoverCreated(gpa: Allocator, io: std.Io, target_abs: []const u8, new_hash: 
     }
 }
 
+fn recoverRenamed(gpa: Allocator, io: std.Io, intent: CheckedIntent, committed: bool, index: *IndexQueue, report: *RecoverReport) !void {
+    if (!committed) {
+        switch (try deleteVerified(gpa, io, intent.target, intent.new_hash.?, null)) {
+            .deleted => report.restored += 1,
+            .missing, .mismatch => report.skipped += 1,
+        }
+        return;
+    }
+    if (hasHash(gpa, io, intent.target, intent.new_hash.?)) {
+        try index.add(intent.target);
+        report.rolled_forward += 1;
+    } else report.skipped += 1;
+    switch (try deleteVerified(gpa, io, intent.source, intent.base_hash.?, null)) {
+        .deleted, .missing => try index.remove(intent.source),
+        .mismatch => report.skipped += 1,
+    }
+}
+
 fn recoverDeleted(gpa: Allocator, io: std.Io, target_abs: []const u8, base_hash: symbol.Hash, index: *IndexQueue, report: *RecoverReport) !void {
     switch (try deleteVerified(gpa, io, target_abs, base_hash, null)) {
         .deleted, .missing => {
@@ -768,7 +892,8 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
         var jp_buf: [std.fs.max_path_bytes]u8 = undefined;
         const jp = std.fmt.bufPrint(&jp_buf, "{s}\\{s}", .{ journal_dir, name }) catch continue;
         const tag = name[0 .. name.len - ".json".len];
-        const outcome = applyJournal(gpa, io, root_abs, journal_dir, jp, tag, &index, report) catch blk: {
+        const outcome = applyJournal(gpa, io, root_abs, journal_dir, jp, tag, &index, report) catch |err| blk: {
+            if (err == error.Crashed) return err;
             report.failed += 1;
             break :blk .delete;
         };
@@ -803,6 +928,7 @@ fn applyJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: [
 const CheckedIntent = struct {
     op: journal.Op,
     target: []const u8,
+    source: []const u8,
     tag: []const u8,
     base_hash: ?symbol.Hash,
     new_hash: ?symbol.Hash,
@@ -818,8 +944,13 @@ fn checkIntent(root_abs: []const u8, raw: journal.RawIntent) !CheckedIntent {
         .modify => if (!isValidTag(raw.tag) or base_hash == null or new_hash == null) return error.CorruptJournal,
         .create => if (!isValidTag(raw.tag) or new_hash == null) return error.CorruptJournal,
         .delete => if (base_hash == null) return error.CorruptJournal,
+        .rename => {
+            if (!isValidTag(raw.tag) or base_hash == null or new_hash == null) return error.CorruptJournal;
+            if (raw.source.len == 0 or !isUnderRoot(root_abs, raw.source)) return error.CorruptJournal;
+            if (try escapesViaReparse(root_abs, raw.source)) return error.CorruptJournal;
+        },
     }
-    return .{ .op = op, .target = raw.target, .tag = raw.tag, .base_hash = base_hash, .new_hash = new_hash };
+    return .{ .op = op, .target = raw.target, .source = raw.source, .tag = raw.tag, .base_hash = base_hash, .new_hash = new_hash };
 }
 
 fn applyBatchJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_dir: []const u8, tag: []const u8, batch: journal.Batch, index: *IndexQueue, report: *RecoverReport) !JournalOutcome {
@@ -835,12 +966,21 @@ fn applyBatchJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_d
             return .keep;
         };
     }
+    for (batch.created_dirs) |dir| {
+        if (!isUnderRoot(root_abs, dir) or try escapesViaReparse(root_abs, dir)) {
+            report.failed += 1;
+            return .keep;
+        }
+    }
     const committed = try commit_record.exists(gpa, io, journal_dir, batch.batch);
+    defer if (!committed) removeEmptyDirs(io, batch.created_dirs);
     for (checked) |intent| switch (intent.op) {
         .modify => try recoverModified(gpa, io, intent.target, intent.tag, intent.base_hash.?, intent.new_hash, committed, report),
         .create => try recoverCreated(gpa, io, intent.target, intent.new_hash.?, committed, index, report),
         .delete => if (committed) try recoverDeleted(gpa, io, intent.target, intent.base_hash.?, index, report),
+        .rename => try recoverRenamed(gpa, io, intent, committed, index, report),
     };
+    if (recoverCrash()) return error.Crashed;
     return if (committed) .after_index else .delete;
 }
 
@@ -995,10 +1135,7 @@ fn deleteWithRetry(io: std.Io, path: []const u8) bool {
 }
 
 fn toWide(buffer: *WidePath, path: []const u8) ![*:0]const u16 {
-    const len = std.unicode.wtf8ToWtf16Le(buffer, path) catch return error.InvalidWtf8;
-    if (len >= buffer.len) return error.NameTooLong;
-    buffer[len] = 0;
-    return buffer;
+    return commit_record.toWide(buffer, path);
 }
 
 const win = struct {
