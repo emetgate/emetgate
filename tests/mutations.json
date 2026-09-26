@@ -5401,6 +5401,106 @@
       "kills": [
         "insert and create accept a variable, class, interface, type alias or enum as the one new declaration"
       ]
+    },
+    {
+      "id": "FM1-source-deleted-before-commit-record",
+      "file": "src/platform/disk.zig",
+      "from": "            .create, .rename => try self.place(in_gap),",
+      "to": "            .create => try self.place(in_gap),\n            .rename => {\n                try self.place(in_gap);\n                try self.guard.?.deleteSelf();\n            },",
+      "kills": [
+        "file move crash: a move into two new directories with two users cut after every step recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "FM2-placement-replaces-the-target",
+      "file": "src/platform/disk.zig",
+      "from": "        self.replacement.?.renameTo(self.gpa, self.path) catch |err| switch (err) {",
+      "to": "        self.replacement.?.renameReplacing(self.gpa, self.path) catch |err| switch (err) {",
+      "kills": [
+        "file move crash: a file another process puts at the target before the placement is never replaced"
+      ]
+    },
+    {
+      "id": "FM3-created-dirs-not-journaled",
+      "file": "src/platform/disk.zig",
+      "from": "    return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, b.created_dirs, intents);",
+      "to": "    return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, &.{}, intents);",
+      "kills": [
+        "file move crash: a move into two new directories with two users cut after every step recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "FM4-user-import-skipped",
+      "file": "src/platform/file_move.zig",
+      "from": "        try files.append(arena, edits);",
+      "to": "        _ = &edits;",
+      "kills": [
+        "move file: a file moves into two new directories and every import to and from it is rewritten"
+      ]
+    },
+    {
+      "id": "FM5-moved-file-not-indexed",
+      "file": "src/platform/disk.zig",
+      "from": "            try added.append(b.gpa, p.path);\n            if (p.removed) try removed.append(b.gpa, p.source);",
+      "to": "            if (p.removed) try removed.append(b.gpa, p.source);",
+      "kills": [
+        "move file: a file moves into two new directories and every import to and from it is rewritten",
+        "file move crash: a move into two new directories with two users cut after every step recovers to all old or all new"
+      ]
+    },
+    {
+      "id": "FM6-case-only-rename-in-one-step",
+      "file": "src/platform/file_move.zig",
+      "from": "    if (tsserver.sameFile(request.from_abs, request.to_abs)) return error.CaseOnlyRename;\n",
+      "to": "",
+      "kills": [
+        "move file: an existing target, a case-only rename, a stale hash and a target outside the repo are refused"
+      ]
+    },
+    {
+      "id": "FM7-disk-case-only-rename-accepted",
+      "file": "src/platform/disk.zig",
+      "from": "    if (std.ascii.eqlIgnoreCase(source_abs, target_abs)) return error.CaseOnlyRename;\n",
+      "to": "",
+      "kills": [
+        "file move crash: the disk layer refuses a rename that only changes letter case"
+      ]
+    },
+    {
+      "id": "FM8-stale-import-proof-skipped",
+      "file": "src/platform/file_move.zig",
+      "from": "    try proveNoStaleImport(w, after, request, files.items, texts.items);\n",
+      "to": "",
+      "kills": [
+        "move file: the proof catches a user left behind and an own import left unrewritten"
+      ]
+    },
+    {
+      "id": "FM9-own-import-proof-skipped",
+      "file": "src/platform/file_move.zig",
+      "from": "    try proveOwnImports(w, before, after, request, moved, afters.items[0]);\n",
+      "to": "",
+      "kills": [
+        "move file: the proof catches a user left behind and an own import left unrewritten"
+      ]
+    },
+    {
+      "id": "FM10-service-edit-mismatch-accepted",
+      "file": "src/platform/file_move.zig",
+      "from": "        if (!found) return error.ServiceMismatch;",
+      "to": "        if (!found and false) return error.ServiceMismatch;",
+      "kills": [
+        "move file: the language service proposing a different edit set is refused"
+      ]
+    },
+    {
+      "id": "FM11-literal-require-accepted",
+      "file": "src/platform/file_move.zig",
+      "from": "                if (tsserver.sameFile(target, request.from_abs)) return error.DynamicPathUse;",
+      "to": "                _ = target;",
+      "kills": [
+        "move file: a require or a computed import that reaches the file is refused"
+      ]
     }
   ]
 }
