@@ -115,6 +115,82 @@ pub fn freeKeyTree(gpa: Allocator, entries: []Entry) void {
     gpa.free(entries);
 }
 
+pub const TopEntry = struct {
+    pointer: []const u8,
+    ty: ValueType,
+    hash: symbol.Hash,
+    child_count: ?usize,
+};
+
+fn directChildCount(node: ts.Node) ?usize {
+    const ty = valueTypeOf(node) orelse return null;
+    switch (ty) {
+        .object => {
+            var count: usize = 0;
+            var i: u32 = 0;
+            while (node.namedChild(i)) |pair| : (i += 1) {
+                if (std.mem.eql(u8, pair.kind(), "pair")) count += 1;
+            }
+            return count;
+        },
+        .array => {
+            var count: usize = 0;
+            var i: u32 = 0;
+            while (node.namedChild(i)) |_| : (i += 1) count += 1;
+            return count;
+        },
+        else => return null,
+    }
+}
+
+pub fn topLevel(gpa: Allocator, tree: ts.Tree) Error![]TopEntry {
+    var out: std.ArrayList(TopEntry) = .empty;
+    errdefer out.deinit(gpa);
+    const root_value = try rootValue(tree);
+    const ty = valueTypeOf(root_value) orelse return error.InvalidJson;
+    switch (ty) {
+        .object => {
+            var i: u32 = 0;
+            while (root_value.namedChild(i)) |pair| : (i += 1) {
+                if (!std.mem.eql(u8, pair.kind(), "pair")) continue;
+                const key_node = pair.childByField("key") orelse continue;
+                const value_node = pair.childByField("value") orelse continue;
+                const raw_key = stringContent(tree, key_node);
+                const escaped = try escapeSegment(gpa, raw_key);
+                defer gpa.free(escaped);
+                const child_pointer = try std.fmt.allocPrint(gpa, "/{s}", .{escaped});
+                try out.append(gpa, .{
+                    .pointer = child_pointer,
+                    .ty = valueTypeOf(value_node) orelse return error.InvalidJson,
+                    .hash = hashOfNode(tree, value_node),
+                    .child_count = directChildCount(value_node),
+                });
+            }
+        },
+        .array => {
+            var i: u32 = 0;
+            var index: usize = 0;
+            while (root_value.namedChild(i)) |child| : (i += 1) {
+                const child_pointer = try std.fmt.allocPrint(gpa, "/{d}", .{index});
+                try out.append(gpa, .{
+                    .pointer = child_pointer,
+                    .ty = valueTypeOf(child) orelse return error.InvalidJson,
+                    .hash = hashOfNode(tree, child),
+                    .child_count = directChildCount(child),
+                });
+                index += 1;
+            }
+        },
+        else => {},
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+pub fn freeTopLevel(gpa: Allocator, entries: []TopEntry) void {
+    for (entries) |entry| gpa.free(entry.pointer);
+    gpa.free(entries);
+}
+
 pub fn resolve(gpa: Allocator, tree: ts.Tree, pointer: []const u8) Error!Entry {
     if (pointer.len == 0) {
         const root_value = try rootValue(tree);
@@ -137,6 +213,32 @@ const alloc_bridge = @import("../../alloc_bridge.zig");
 
 fn parseJson(parser: ts.Parser, source: []const u8) !ts.Tree {
     return parser.parseIn(grammar(), source);
+}
+
+test "topLevel lists only the root's direct children and does not recurse into nested keys" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try test_util.parser();
+    defer parser.deinit();
+
+    const source = "{\"name\": \"emetgate\", \"nested\": {\"a\": 1, \"b\": 2, \"c\": 3}}";
+    const tree = try parseJson(parser, source);
+    defer tree.deinit();
+
+    const entries = try topLevel(testing.allocator, tree);
+    defer freeTopLevel(testing.allocator, entries);
+
+    try testing.expectEqual(@as(usize, 2), entries.len);
+    for (entries) |entry| {
+        try testing.expect(!std.mem.eql(u8, entry.pointer, "/nested/a"));
+        if (std.mem.eql(u8, entry.pointer, "/nested")) {
+            try testing.expectEqual(ValueType.object, entry.ty);
+            try testing.expectEqual(@as(?usize, 3), entry.child_count);
+        }
+        if (std.mem.eql(u8, entry.pointer, "/name")) {
+            try testing.expectEqual(@as(?usize, null), entry.child_count);
+        }
+    }
 }
 
 test "keyTree lists every pointer with its value type, and the root is excluded" {

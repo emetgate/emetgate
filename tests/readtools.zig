@@ -103,14 +103,16 @@ test "read_file returns a JSON key tree by default, and a pointer's subtree with
     var tree_body = try tree_reply.payload();
     defer tree_body.deinit();
     const keys = tree_body.value.object.get("keys").?.array.items;
-    var found_express = false;
+    var found_dependencies = false;
     for (keys) |k| {
-        if (std.mem.eql(u8, k.object.get("pointer").?.string, "/dependencies/express")) {
-            try testing.expectEqualStrings("string", k.object.get("type").?.string);
-            found_express = true;
+        try testing.expect(!std.mem.eql(u8, k.object.get("pointer").?.string, "/dependencies/express"));
+        if (std.mem.eql(u8, k.object.get("pointer").?.string, "/dependencies")) {
+            try testing.expectEqualStrings("object", k.object.get("type").?.string);
+            try testing.expect(k.object.get("children").?.integer >= 1);
+            found_dependencies = true;
         }
     }
-    try testing.expect(found_express);
+    try testing.expect(found_dependencies);
 
     var value_reply = try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .pointer = "/dependencies/express" });
     defer value_reply.deinit();
