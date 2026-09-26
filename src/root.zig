@@ -24,6 +24,7 @@ pub const shadow = @import("platform/shadow.zig");
 pub const link_tree = @import("platform/link_tree.zig");
 pub const shadow_root = @import("platform/shadow_root.zig");
 pub const sandbox = @import("platform/sandbox.zig");
+pub const tsserver = @import("platform/tsserver.zig");
 pub const disk = @import("platform/disk.zig");
 pub const runner = @import("platform/runner.zig");
 pub const rules = @import("platform/rules.zig");

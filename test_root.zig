@@ -26,6 +26,7 @@ pub const shadow = src.shadow;
 pub const link_tree = src.link_tree;
 pub const shadow_root = src.shadow_root;
 pub const sandbox = src.sandbox;
+pub const tsserver = src.tsserver;
 pub const disk = src.disk;
 pub const runner = src.runner;
 pub const rules = src.rules;
@@ -74,6 +75,7 @@ test {
     _ = @import("tests/redteam_batch_create.zig");
     _ = @import("tests/batch_delete_tool.zig");
     _ = @import("tests/redteam_batch_delete.zig");
+    _ = @import("tests/tsserver.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
