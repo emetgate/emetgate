@@ -4661,10 +4661,55 @@
     {
       "id": "R11-cache-stamp-check-skipped",
       "file": "src/engine/tree_cache.zig",
-      "from": "if (sameStamp(entry.stamp, fs)) return entry.snapshot;",
-      "to": "if (fs.size == fs.size) return entry.snapshot;",
+      "from": "if (sameStamp(entry.stamp, fs)) {",
+      "to": "if (fs.size == fs.size) {",
       "kills": [
         "load reparses when the file's mtime or size changed on disk"
+      ]
+    },
+    {
+      "id": "R12-cache-not-invalidated-after-try",
+      "file": "src/protocol/handlers.zig",
+      "from": "if (policy.tree_cache) |cache| cache.invalidate(file_abs);",
+      "to": "",
+      "kills": [
+        "with a tree cache, read_symbol after a committed emetgate_try reflects the change, not a stale cached tree"
+      ]
+    },
+    {
+      "id": "R13-cache-not-invalidated-after-try-batch",
+      "file": "src/protocol/handlers.zig",
+      "from": "if (policy.tree_cache) |cache| for (edits) |edit| cache.invalidate(edit.file_abs);",
+      "to": "",
+      "kills": [
+        "with a tree cache, read_symbol after a committed emetgate_try_batch reflects the change"
+      ]
+    },
+    {
+      "id": "R14-cache-content-hash-skipped",
+      "file": "src/engine/tree_cache.zig",
+      "from": "if (self.unchangedContent(io, abs_path, entry.content_hash)) {",
+      "to": "if (true) {",
+      "kills": [
+        "a racy mtime collision does not serve stale content, the content hash catches it"
+      ]
+    },
+    {
+      "id": "R15-cache-key-not-normalized",
+      "file": "src/engine/tree_cache.zig",
+      "from": "if (byte.* == '/') byte.* = '\\\\';",
+      "to": "if (false) byte.* = '\\\\';",
+      "kills": [
+        "normalizedKey folds slash direction and case so the same file has one entry"
+      ]
+    },
+    {
+      "id": "R16-cache-budget-ignored",
+      "file": "src/engine/tree_cache.zig",
+      "from": "while (self.total_bytes > self.budget_bytes and self.entries.count() > 1) {",
+      "to": "while (false and self.entries.count() > 1) {",
+      "kills": [
+        "insert evicts the least recently touched entry once the byte budget is exceeded"
       ]
     },
     {
