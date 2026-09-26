@@ -269,7 +269,7 @@ test "emetgate_try_batch commits a code edit and a doc edit together" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
     var reply = try callToolServed(runtime, repo.root_abs, "emetgate_try_batch", .{ .edits = .{
-        .{ .file = code_file, .symbol = "b", .hash = symbol.absent_text, .body = "export const b = 2;" },
+        .{ .file = code_file, .symbol = "b", .hash = symbol.absent_text, .body = "export function b(): number { return 2; }" },
         .{ .file = doc_file, .kind = "doc", .hash = doc_hash[0..], .content = "## Setup\n\nnew\n", .heading = "Setup" },
     } });
     defer reply.deinit();
