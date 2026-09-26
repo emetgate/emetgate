@@ -30,6 +30,7 @@ pub const scan = @import("platform/scan.zig");
 pub const stdio = @import("platform/stdio.zig");
 pub const lockdown = @import("platform/lockdown.zig");
 pub const memory = @import("platform/memory.zig");
+pub const journal = @import("platform/journal.zig");
 pub const where = @import("platform/where.zig");
 pub const wire = @import("protocol/wire.zig");
 pub const scan_command = @import("protocol/scan_command.zig");

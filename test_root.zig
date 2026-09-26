@@ -32,6 +32,7 @@ pub const scan = src.scan;
 pub const stdio = src.stdio;
 pub const lockdown = src.lockdown;
 pub const memory = src.memory;
+pub const journal = src.journal;
 pub const where = src.where;
 pub const wire = src.wire;
 pub const scan_command = src.scan_command;
@@ -87,6 +88,8 @@ test {
     _ = @import("tests/fuzz_regex.zig");
     _ = @import("tests/fuzz_protocol.zig");
     _ = @import("tests/fuzz_ledger.zig");
+    _ = @import("tests/fuzz_cas.zig");
+    _ = @import("tests/fuzz_journal.zig");
     _ = @import("tests/lang/conformance.zig");
     _ = @import("tests/lang/jsx_compat.zig");
     _ = @import("tests/lang/zig/compat.zig");
