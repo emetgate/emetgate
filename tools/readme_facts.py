@@ -103,7 +103,41 @@ def fact_engine_mutant_summary():
     return f"{total} mutants today: " + ", ".join(parts)
 
 
+VERIFIER_ROOT = "src/verify/checker.zig"
+IMPORT = re.compile(r'@import\("([^"]+\.zig)"\)')
+
+
+def verifier_files():
+    seen = set()
+    stack = [VERIFIER_ROOT]
+    while stack:
+        path = stack.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        for match in IMPORT.finditer(read(os.path.join(ROOT, path))):
+            joined = os.path.normpath(os.path.join(os.path.dirname(path), match.group(1)))
+            stack.append(joined.replace(os.sep, "/"))
+    return sorted(seen)
+
+
+def production_lines(path):
+    text = read(os.path.join(ROOT, path))
+    cut = text.find("const testing = std.testing;")
+    body = text[:cut] if cut >= 0 else text
+    return len([line for line in body.splitlines() if line.strip()])
+
+
+def fact_verifier_tcb():
+    files = verifier_files()
+    own = [f for f in files if f.startswith("src/verify/")]
+    total = sum(production_lines(f) for f in files)
+    mine = sum(production_lines(f) for f in own)
+    return f"{total:,} non-blank lines of Zig in {len(files)} files, {mine:,} of them in the {len(own)} files of `src/verify/`"
+
+
 FACTS = {
+    "verifier-tcb": fact_verifier_tcb,
     "max_query_bytes": fact_max_query_bytes,
     "max_captures_per_pattern": fact_max_captures_per_pattern,
     "query_operations": fact_query_operations,
