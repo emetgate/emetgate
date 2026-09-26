@@ -6,16 +6,16 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **880**
-- Mutations declared in `tests/mutations.json`: **514**
-  - killed: **491**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **882**
+- Mutations declared in `tests/mutations.json`: **516**
+  - killed: **492**
   - equivalent: **5**
   - defense in depth: **4**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-  - survives, not yet classified: **3** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch)
+  - survives, not yet classified: **4** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename)
 - Red-team suites: **8** files, **66** tests total
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
@@ -163,7 +163,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-55 mutation(s).
+56 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -222,6 +222,7 @@ python tools/verification_page.py --check
 | `LT1-linked-dir-junctioned-again` | `src/platform/shadow.zig` | `try link_tree.build(io, target, link_path, &stats);` -> `_ = &stats; try createJunction(io, link_path, target);` | prepare copies tracked files, rebuilds heavy directories as hardlink trees and ... | killed |
 | `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
+| `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -510,7 +511,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-95 mutation(s).
+96 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -609,6 +610,7 @@ python tools/verification_page.py --check
 | `TS2-hung-service-kept` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `` | tsserver: a hung language service is killed at the timeout and restarted by the... | killed |
 | `TS3-typescript-check-skipped` | `src/platform/tsserver.zig` | `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return erro...` -> `std.Io.Dir.cwd().access(self.io, marker, .{}) catch {};` | tsserver: a repo without node_modules/typescript is an explicit error, not a gl... | killed |
 | `TS4-failed-answer-kills-service` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `errdefer self.stop();` | tsserver: a request the language service answers with an error leaves the proce... | killed |
+| `RN14-cache-not-invalidated-after-rename` | `src/protocol/rename_tool.zig` | `if (policy.tree_cache) \|cache\| for (outcome.plan.edits) \|edi...` -> `` | defense-in-depth: same as R12, the content hash on the next load catches the renamed file... | survives (unclassified) |
 
 ## What this system does not prove
 

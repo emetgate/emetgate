@@ -1067,3 +1067,14 @@ test "a service keeps running, answers each line on its stdin and dies with its 
     stopped = true;
     try testing.expect(processIsGone(pid));
 }
+
+test "a service whose token is not low integrity is refused before it runs" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    defer injected_fault = null;
+    inline for (std.meta.fields(TokenStep)) |field| {
+        const step: TokenStep = @enumFromInt(field.value);
+        errdefer std.debug.print("fault at {t} did not fail closed\n", .{step});
+        injected_fault = step;
+        try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, "."));
+    }
+}
