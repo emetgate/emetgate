@@ -15,11 +15,7 @@ const Allocator = std.mem.Allocator;
 const gitToplevel = repo.gitToplevel;
 const relativeUnder = repo.relativeUnder;
 
-pub const Selector = union(enum) {
-    pointer: []const u8,
-    heading: []const u8,
-    line_range: struct { start: u32, end: u32 },
-};
+pub const Selector = docnode.Selector;
 
 pub const Options = struct {
     file_abs: []const u8,
@@ -32,9 +28,8 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    commit_step: ?*const disk.Step = null,
 };
-
-const max_doc_bytes = 1024 * 1024;
 
 pub const Trace = struct {
     base_len: usize = 0,
@@ -59,11 +54,7 @@ pub const Result = union(enum) {
 };
 
 fn applyDoc(gpa: Allocator, parser: ts.Parser, source: []const u8, options: Options) docnode.Error!docnode.Applied {
-    return switch (options.selector) {
-        .pointer => |p| docnode.applyJsonPointer(gpa, parser, source, p, options.expected_hash, options.new_text),
-        .heading => |h| docnode.applyMarkdownHeading(gpa, parser, source, h, options.expected_hash, options.new_text),
-        .line_range => |r| docnode.applyLineRange(gpa, source, r.start, r.end, options.expected_hash, options.new_text),
-    };
+    return docnode.apply(gpa, parser, source, options.selector, options.expected_hash, options.new_text);
 }
 
 pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace) !Result {
@@ -76,13 +67,12 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
 
-    const source = std.Io.Dir.cwd().readFileAlloc(io, options.file_abs, gpa, .limited(max_doc_bytes + 1)) catch |err| switch (err) {
+    const source = std.Io.Dir.cwd().readFileAlloc(io, options.file_abs, gpa, .limited(docnode.max_bytes + 1)) catch |err| switch (err) {
         error.StreamTooLong => return error.DocTooLarge,
         else => |e| return e,
     };
     defer gpa.free(source);
-    if (source.len > max_doc_bytes) return error.DocTooLarge;
-    if (docnode.looksBinary(source)) return error.BinaryFile;
+    try docnode.checkReadable(source);
     const base_hash = symbol.hashOf(source);
 
     const parser = ts.Parser.create();
@@ -123,7 +113,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
             defer report.deinit(gpa);
             const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
             defer gpa.free(journal_dir);
-            try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir);
+            try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir, options.commit_step);
             return .{ .committed = applied.hash };
         },
     }

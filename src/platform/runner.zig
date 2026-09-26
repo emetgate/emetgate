@@ -28,6 +28,7 @@ pub const Gate = gate_mod.Gate;
 pub const chooseGate = gate_mod.chooseGate;
 pub const Edit = batch.Edit;
 pub const EditOp = batch.EditOp;
+pub const DocEdit = batch.DocEdit;
 pub const BatchOptions = batch.BatchOptions;
 pub const BatchResult = batch.BatchResult;
 pub const tryMutateBatch = batch.tryMutateBatch;
@@ -183,7 +184,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
     if (options.trace) |t| t.commit_attempted = true;
-    try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir);
+    try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir, null);
     return .{ .committed = applied.hash };
 }
 

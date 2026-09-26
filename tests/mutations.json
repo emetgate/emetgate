@@ -5780,10 +5780,10 @@
     {
       "id": "DW4-doc-write-skips-journal",
       "file": "src/platform/doc_writer.zig",
-      "from": "try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir);",
-      "to": "try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, null);",
+      "from": "try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir, options.commit_step);",
+      "to": "try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, null, options.commit_step);",
       "kills": [
-        "doc_writer: a committed write leaves a journal entry for the previous content"
+        "doc_writer: a crash right after the journal is written leaves a journal entry, and recover restores the old content"
       ]
     },
     {
@@ -5802,6 +5802,37 @@
       "to": "",
       "kills": [
         "applyMarkdownHeading refuses a replacement that does not start with a heading line"
+      ]
+    },
+    {
+      "id": "DW7-write-doc-jail-dropped",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const place = try repo.jailTarget(gpa, io, policy.root, file, false);\n    defer place.deinit(gpa);\n    const test_command = try runner.resolveTestCommand(gpa, io, place.abs, given, policy.allow_repo_config);",
+      "to": "    const place = repo.Jailed{ .root = try gpa.dupe(u8, policy.root orelse \".\"), .abs = try gpa.dupeZ(u8, file), .rel = try gpa.dupe(u8, file) };\n    defer place.deinit(gpa);\n    const test_command = try runner.resolveTestCommand(gpa, io, place.abs, given, policy.allow_repo_config);",
+      "kills": [
+        "write_doc refuses a path outside the repo, leaves the target untouched",
+        "write_doc refuses a path that escapes the repo with ..",
+        "write_doc refuses .git/config",
+        "write_doc refuses a path under .emetgate/",
+        "write_doc refuses a path that only reaches .git through a junction"
+      ]
+    },
+    {
+      "id": "DW8-write-doc-allows-create",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const place = try repo.jailTarget(gpa, io, policy.root, file, false);",
+      "to": "    const place = try repo.jailTarget(gpa, io, policy.root, file, true);",
+      "kills": [
+        "write_doc refuses a file that does not exist yet, it never creates one"
+      ]
+    },
+    {
+      "id": "DW9-try-batch-drops-doc-edits",
+      "file": "src/protocol/handlers.zig",
+      "from": ".{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved,",
+      "to": ".{ .edits = edits, .test_command = resolved,",
+      "kills": [
+        "emetgate_try_batch commits a code edit and a doc edit together"
       ]
     }
   ]

@@ -19,6 +19,7 @@ const relativeUnder = repo.relativeUnder;
 
 pub const Edit = batch_plan.Edit;
 pub const EditOp = batch_plan.Op;
+pub const DocEdit = batch_plan.DocEdit;
 const Prepared = batch_plan.Prepared;
 
 pub const Committed = struct {
@@ -28,7 +29,8 @@ pub const Committed = struct {
 };
 
 pub const BatchOptions = struct {
-    edits: []const Edit,
+    edits: []const Edit = &.{},
+    doc_edits: []const DocEdit = &.{},
     test_command: []const u8,
     typecheck_command: ?[]const u8 = null,
     linked: []const []const u8 = &.{"node_modules"},
@@ -60,9 +62,10 @@ pub const BatchResult = union(enum) {
 
 pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !BatchResult {
     if (options.test_command.len == 0) return error.NoTestCommand;
-    if (options.edits.len == 0) return error.EmptyBatch;
+    if (options.edits.len == 0 and options.doc_edits.len == 0) return error.EmptyBatch;
 
-    const dir0 = std.fs.path.dirname(options.edits[0].file_abs) orelse return error.InvalidPath;
+    const first_file = if (options.edits.len != 0) options.edits[0].file_abs else options.doc_edits[0].file_abs;
+    const dir0 = std.fs.path.dirname(first_file) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir0);
     defer gpa.free(root);
     const lock = try shadow.Lock.acquire(io, root);
@@ -104,15 +107,37 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         }
     }
 
+    var doc_prepared: std.ArrayList(Prepared) = .empty;
+    defer {
+        for (doc_prepared.items) |p| p.deinit(gpa);
+        doc_prepared.deinit(gpa);
+    }
+    for (options.doc_edits) |edit| {
+        const rel = try relativeUnder(gpa, root, edit.file_abs);
+        var keep_rel = false;
+        errdefer if (!keep_rel) gpa.free(rel);
+        for (prepared) |p| {
+            if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;
+        }
+        for (doc_prepared.items) |p| {
+            if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;
+        }
+        const planned = try batch_plan.planDoc(gpa, io, edit, rel);
+        keep_rel = true;
+        errdefer planned.deinit(gpa);
+        try doc_prepared.append(gpa, planned);
+    }
+
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
     defer location.deinit(gpa);
 
     if (options.trace) |t| {
         var new_total: usize = 0;
         for (prepared) |p| new_total += p.source().len;
+        for (doc_prepared.items) |p| new_total += p.source().len;
         t.* = .{ .gate = .full, .new_len = new_total };
     }
-    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, edits, options)) {
+    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, edits, options)) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |violated| return .{ .rule_violation = violated },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -122,10 +147,11 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
     defer report.deinit(gpa);
 
-    const committed = try classifyAll(gpa, io, root, prepared, edits);
+    const committed = try classifyAll(gpa, io, root, prepared, edits, doc_prepared.items);
     errdefer gpa.free(committed);
 
-    const pendings = try gpa.alloc(disk.Pending, prepared.len);
+    const total = prepared.len + doc_prepared.items.len;
+    const pendings = try gpa.alloc(disk.Pending, total);
     defer gpa.free(pendings);
     var count: usize = 0;
     var commit_entered = false;
@@ -149,22 +175,28 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
             .create => try disk.stageCreate(gpa, io, file_abs, p.source()),
             .delete_file => try disk.stageDelete(gpa, io, file_abs, p.base_hash.?),
             .move_file => try disk.stageRename(gpa, io, edits[i].move_source.?, file_abs, p.source(), p.base_hash.?),
+            .write_doc => unreachable,
         };
         count = i + 1;
+    }
+    for (doc_prepared.items, 0..) |p, i| {
+        const file_abs = options.doc_edits[i].file_abs;
+        pendings[prepared.len + i] = try disk.prepare(gpa, io, file_abs, p.source(), p.base_hash.?);
+        count = prepared.len + i + 1;
     }
     commit_entered = true;
     try disk.commitBatch(pendings, null, null, &batch, options.commit_step);
     return .{ .committed = committed };
 }
 
-fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit) ![]Committed {
+fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit, doc_prepared: []const Prepared) ![]Committed {
     const sources = try gpa.alloc(create.Source, prepared.len);
     defer gpa.free(sources);
     for (prepared, 0..) |p, i| sources[i] = .{ .rel = p.rel, .text = p.source() };
-    const committed = try gpa.alloc(Committed, prepared.len);
+    const committed = try gpa.alloc(Committed, prepared.len + doc_prepared.len);
     errdefer gpa.free(committed);
     for (prepared, 0..) |p, i| {
-        committed[i] = .{ .hash = p.hash, .deleted = !p.addsCode() };
+        committed[i] = .{ .hash = p.hash, .deleted = p.isDeletion() };
         if (p.action != .insert and p.action != .create) continue;
         if (edits[i].ref_text.len == 0) continue;
         const ref = try symbol.Ref.parse(gpa, edits[i].ref_text);
@@ -177,10 +209,13 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
             .creates = p.action == .create,
         });
     }
+    for (doc_prepared, 0..) |p, i| {
+        committed[prepared.len + i] = .{ .hash = p.hash, .deleted = false };
+    }
     return committed;
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, edits: []const Edit, options: BatchOptions) !runner.ShadowRun {
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, edits: []const Edit, options: BatchOptions) !runner.ShadowRun {
     const files = try shadow.trackedFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
@@ -194,6 +229,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         if (p.source_rel) |from| try workspace.deleteFile(from);
         if (p.action == .delete_file) try workspace.deleteFile(p.rel) else try workspace.writeFile(p.rel, p.source());
     }
+    for (doc_prepared) |p| try workspace.writeFile(p.rel, p.source());
 
     const targets = try gpa.alloc(rules.Target, prepared.len);
     defer gpa.free(targets);

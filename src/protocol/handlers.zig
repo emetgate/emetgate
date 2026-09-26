@@ -566,16 +566,34 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
     }
 }
 
+const ItemKind = enum { code, doc };
+
+fn itemKind(item: Value) !ItemKind {
+    const text = getString(item, "kind") orelse return .code;
+    if (std.mem.eql(u8, text, "code")) return .code;
+    if (std.mem.eql(u8, text, "doc")) return .doc;
+    return error.InvalidOp;
+}
+
 fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     const arguments = args orelse return error.MissingArgument;
     const edits_val = getField(arguments, "edits") orelse return error.MissingArgument;
     if (edits_val != .array or edits_val.array.items.len == 0) return error.MissingArgument;
     for (edits_val.array.items) |item| {
         _ = getString(item, "file") orelse return error.MissingArgument;
-        if (try itemOp(item) == .delete) continue;
-        _ = getString(item, "symbol") orelse return error.MissingArgument;
-        _ = getString(item, "hash") orelse return error.MissingArgument;
-        _ = getString(item, "body") orelse return error.MissingArgument;
+        switch (try itemKind(item)) {
+            .doc => {
+                _ = getString(item, "hash") orelse return error.MissingArgument;
+                _ = getString(item, "content") orelse return error.MissingArgument;
+                _ = try docSelector(item);
+            },
+            .code => {
+                if (try itemOp(item) == .delete) continue;
+                _ = getString(item, "symbol") orelse return error.MissingArgument;
+                _ = getString(item, "hash") orelse return error.MissingArgument;
+                _ = getString(item, "body") orelse return error.MissingArgument;
+            },
+        }
     }
     event.mutating = true;
 
@@ -645,36 +663,74 @@ fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: [
 
 fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    const edits = try gpa.alloc(runner.Edit, items.len);
+
+    var code_count: usize = 0;
+    var doc_count: usize = 0;
+    for (items) |item| switch (try itemKind(item)) {
+        .code => code_count += 1,
+        .doc => doc_count += 1,
+    };
+
+    const edits = try gpa.alloc(runner.Edit, code_count);
     defer gpa.free(edits);
+    const doc_edits = try gpa.alloc(runner.DocEdit, doc_count);
+    defer gpa.free(doc_edits);
+    const order = try gpa.alloc(usize, items.len);
+    defer gpa.free(order);
+    const doc_expected = try gpa.alloc(symbol.Hash, doc_count);
+    defer gpa.free(doc_expected);
     const places = try gpa.alloc(repo.Jailed, items.len);
     defer gpa.free(places);
     var built: usize = 0;
     defer for (places[0..built]) |place| place.deinit(gpa);
+
+    var ci: usize = 0;
+    var di: usize = 0;
     for (items, 0..) |item, i| {
-        const op = try itemOp(item);
         const file = getString(item, "file").?;
-        const expected: symbol.Expected = if (getString(item, "hash")) |hash| try symbol.parseExpected(hash) else .absent;
-        places[i] = try repo.jailTarget(gpa, io, policy.root, file, op == .write and expected == .absent);
-        built = i + 1;
-        if (op == .delete) try repo.refuseLinkAsWritten(gpa, io, file);
-        edits[i] = .{
-            .file_abs = places[i].abs,
-            .ref_text = getString(item, "symbol") orelse "",
-            .new_body = getString(item, "body") orelse "",
-            .expected_hash = expected,
-            .op = op,
-        };
+        switch (try itemKind(item)) {
+            .code => {
+                const op = try itemOp(item);
+                const expected: symbol.Expected = if (getString(item, "hash")) |hash| try symbol.parseExpected(hash) else .absent;
+                places[i] = try repo.jailTarget(gpa, io, policy.root, file, op == .write and expected == .absent);
+                built = i + 1;
+                if (op == .delete) try repo.refuseLinkAsWritten(gpa, io, file);
+                edits[ci] = .{
+                    .file_abs = places[i].abs,
+                    .ref_text = getString(item, "symbol") orelse "",
+                    .new_body = getString(item, "body") orelse "",
+                    .expected_hash = expected,
+                    .op = op,
+                };
+                order[i] = ci;
+                ci += 1;
+            },
+            .doc => {
+                places[i] = try repo.jailTarget(gpa, io, policy.root, file, false);
+                built = i + 1;
+                const picked = try docSelector(item);
+                const expected_hash = try symbol.parseHash(getString(item, "hash").?);
+                doc_expected[di] = expected_hash;
+                doc_edits[di] = .{
+                    .file_abs = places[i].abs,
+                    .selector = picked.selector,
+                    .expected_hash = expected_hash,
+                    .new_text = getString(item, "content").?,
+                };
+                order[i] = code_count + di;
+                di += 1;
+            },
+        }
     }
 
-    const resolved = try runner.resolveTestCommand(gpa, io, edits[0].file_abs, given, policy.allow_repo_config);
+    const resolved = try runner.resolveTestCommand(gpa, io, places[0].abs, given, policy.allow_repo_config);
     defer gpa.free(resolved);
-    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, edits[0].file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, places[0].abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
     const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
     defer gpa.free(before_hashes);
     for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service });
+    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service });
     defer result.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
     defer gpa.free(note_root);
@@ -682,7 +738,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
 
     var sent: usize = 0;
     for (items) |item| {
-        inline for (.{ "symbol", "hash", "body" }) |field| {
+        inline for (.{ "symbol", "hash", "body", "content" }) |field| {
             if (getString(item, field)) |text| sent += text.len;
         }
     }
@@ -695,16 +751,38 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             if (policy.tree_cache) |cache| for (edits) |edit| cache.invalidate(edit.file_abs);
             const views = try gpa.alloc(wire.BatchEdit, items.len);
             defer gpa.free(views);
-            for (items, 0..) |item, i| views[i] = .{
-                .file = getString(item, "file").?,
-                .symbol = getString(item, "symbol") orelse "",
-                .old_hash = if (committed[i].deleted) .{ .present = committed[i].hash } else edits[i].expected_hash,
-                .new_hash = committed[i].hash,
-                .evidence = committed[i].evidence,
-                .deleted = committed[i].deleted,
-            };
+            for (items, 0..) |item, i| {
+                const slot = order[i];
+                views[i] = switch (try itemKind(item)) {
+                    .code => .{
+                        .file = getString(item, "file").?,
+                        .symbol = getString(item, "symbol") orelse "",
+                        .old_hash = if (committed[slot].deleted) .{ .present = committed[slot].hash } else edits[slot].expected_hash,
+                        .new_hash = committed[slot].hash,
+                        .evidence = committed[slot].evidence,
+                        .deleted = committed[slot].deleted,
+                    },
+                    .doc => .{
+                        .file = getString(item, "file").?,
+                        .symbol = (docSelector(item) catch unreachable).label,
+                        .old_hash = .{ .present = doc_expected[slot - code_count] },
+                        .new_hash = committed[slot].hash,
+                        .evidence = null,
+                        .deleted = false,
+                    },
+                };
+            }
             try wire.writeBatchCommitted(w, views, note);
-            try recordBatch(gpa, io, places, edits, before_hashes, committed, resolved, typecheck_command, event.trace.test_ms, w);
+            const code_places = try gpa.alloc(repo.Jailed, edits.len);
+            defer gpa.free(code_places);
+            const code_committed = try gpa.alloc(@import("../platform/batch.zig").Committed, edits.len);
+            defer gpa.free(code_committed);
+            for (items, 0..) |item, i| {
+                if (itemKind(item) catch unreachable != .code) continue;
+                code_places[order[i]] = places[i];
+                code_committed[order[i]] = committed[order[i]];
+            }
+            try recordBatch(gpa, io, code_places, edits, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w);
             return false;
         },
         .rejected => |report| {

@@ -3,6 +3,7 @@ const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
 const doc_writer = @import("emetgate").doc_writer;
 const symbol = @import("emetgate").symbol;
+const disk = @import("emetgate").disk;
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -172,29 +173,52 @@ test "doc_writer: a binary file is refused before any parse or sandbox run" {
     try testing.expect(!exists(&fx, "breach.txt"));
 }
 
-test "doc_writer: a committed write leaves a journal entry for the previous content" {
+const StopAt = struct {
+    target: usize,
+    seen: usize = 0,
+
+    fn reached(context: *anyopaque) bool {
+        const self: *StopAt = @ptrCast(@alignCast(context));
+        self.seen += 1;
+        return self.seen == self.target;
+    }
+};
+
+test "doc_writer: a crash right after the journal is written leaves a journal entry, and recover restores the old content" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fx = try Fixture.init();
     defer fx.deinit();
 
     const path = try fx.file("notes.txt");
     defer gpa.free(path);
-    const result = try doc_writer.tryWriteDoc(gpa, testing.io, .{
+
+    var at: StopAt = .{ .target = 1 };
+    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    const err = doc_writer.tryWriteDoc(gpa, testing.io, .{
         .file_abs = path,
         .selector = .{ .line_range = .{ .start = 2, .end = 2 } },
         .expected_hash = symbol.hashOf("line two\n"),
         .new_text = "line replaced\n",
         .test_command = "cmd /c exit 0",
+        .commit_step = &step,
     }, null);
-    defer result.deinit(gpa);
-    try testing.expect(result == .committed);
+    try testing.expectError(error.Crashed, err);
 
     var journal_dir = try fx.tmp.dir.openDir(testing.io, "repo\\.emetgate\\journal", .{ .iterate = true });
-    defer journal_dir.close(testing.io);
     var it = journal_dir.iterate();
     var count: usize = 0;
     while (try it.next(testing.io)) |_| count += 1;
+    journal_dir.close(testing.io);
     try testing.expect(count > 0);
+
+    const root_abs = try fx.tmp.dir.realPathFileAlloc(testing.io, "repo", gpa);
+    defer gpa.free(root_abs);
+    const report = try disk.recover(gpa, testing.io, root_abs);
+    try testing.expectEqual(@as(usize, 0), report.failed);
+
+    const after = try fx.read("notes.txt");
+    defer gpa.free(after);
+    try testing.expectEqualStrings(notes_txt, after);
 }
 
 test "doc_writer: a line range write commits and leaves the other lines byte-identical" {

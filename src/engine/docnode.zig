@@ -17,6 +17,8 @@ pub const Error = error{
     InvalidJson,
     DocSyntaxInvalid,
     NotUtf8,
+    DocTooLarge,
+    BinaryFile,
 } || Allocator.Error || ts.Error || line_range.Error;
 
 pub const Applied = struct {
@@ -24,10 +26,23 @@ pub const Applied = struct {
     hash: symbol.Hash,
 };
 
+pub const Selector = union(enum) {
+    pointer: []const u8,
+    heading: []const u8,
+    line_range: struct { start: u32, end: u32 },
+};
+
+pub const max_bytes = 1024 * 1024;
+
 const binary_probe_bytes = 8000;
 
 pub fn looksBinary(bytes: []const u8) bool {
     return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_probe_bytes)], 0) != null;
+}
+
+pub fn checkReadable(source: []const u8) Error!void {
+    if (source.len > max_bytes) return error.DocTooLarge;
+    if (looksBinary(source)) return error.BinaryFile;
 }
 
 fn splice(gpa: Allocator, source: []const u8, span: Span, actual_hash: symbol.Hash, expected_hash: symbol.Hash, new_text: []const u8) Error![]u8 {
@@ -108,6 +123,14 @@ pub fn applyLineRange(gpa: Allocator, source: []const u8, line_start: u32, line_
     const actual_hash = symbol.hashOf(source[span.start..span.end]);
     const spliced = try splice(gpa, source, span, actual_hash, expected_hash, new_content);
     return .{ .source = spliced, .hash = symbol.hashOf(new_content) };
+}
+
+pub fn apply(gpa: Allocator, parser: ts.Parser, source: []const u8, selector: Selector, expected_hash: symbol.Hash, new_text: []const u8) Error!Applied {
+    return switch (selector) {
+        .pointer => |p| applyJsonPointer(gpa, parser, source, p, expected_hash, new_text),
+        .heading => |h| applyMarkdownHeading(gpa, parser, source, h, expected_hash, new_text),
+        .line_range => |r| applyLineRange(gpa, source, r.start, r.end, expected_hash, new_text),
+    };
 }
 
 const testing = std.testing;
