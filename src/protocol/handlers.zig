@@ -14,6 +14,9 @@ const rename_tool = @import("rename_tool.zig");
 const move_tool = @import("move_tool.zig");
 const move_file_tool = @import("move_file_tool.zig");
 const run_tool = @import("run_tool.zig");
+const receipt_note = @import("receipt_note.zig");
+const receipts = @import("../platform/receipts.zig");
+const disk = @import("../platform/disk.zig");
 const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
@@ -408,6 +411,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
     defer gpa.free(test_command);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
+    const before_hash: ?symbol.Hash = disk.hashFile(gpa, io, file_abs) catch null;
     const result = try runner.tryMutate(gpa, io, runtime, .{
         .file_abs = file_abs,
         .ref_text = sym,
@@ -433,6 +437,17 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             event.hash = new_hash;
             if (policy.tree_cache) |cache| cache.invalidate(file_abs);
             try wire.writeCommitted(w, sym, expected, new_hash, note);
+            try receipt_note.record(gpa, io, place.root, .{
+                .operation = .@"try",
+                .class = .spending,
+                .evidence = "test",
+                .files = &.{.{ .rel = place.rel, .before = before_hash, .after_abs = file_abs }},
+                .symbols = &.{.{ .path = place.rel, .ref = sym, .before = if (expected == .present) expected.present else null, .after = new_hash }},
+                .test_command = test_command,
+                .typecheck_command = typecheck_command,
+                .test_ms = event.trace.test_ms,
+                .version = receipt_note.version,
+            }, w);
             return false;
         },
         .rejected => |report| {
@@ -504,6 +519,41 @@ fn firstAbsentFile(items: []const Value) []const u8 {
     return getString(items[0], "file").?;
 }
 
+fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, before_hashes: []const ?symbol.Hash, committed: []const @import("../platform/batch.zig").Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var files: std.ArrayList(receipts.FileChange) = .empty;
+    var symbols: std.ArrayList(@import("../verify/receipt.zig").SymbolEntry) = .empty;
+    var symmetric = true;
+    for (places, edits, before_hashes, committed) |place, edit, before, c| {
+        const removes_file = c.deleted and edit.ref_text.len == 0;
+        try files.append(arena, .{ .rel = place.rel, .before = before, .after_abs = if (removes_file) null else place.abs });
+        if (c.deleted) {
+            if (edit.ref_text.len != 0) try symbols.append(arena, .{ .path = place.rel, .ref = edit.ref_text, .before = c.hash, .after = null });
+            continue;
+        }
+        const created = edit.expected_hash == .absent;
+        try symbols.append(arena, .{ .path = place.rel, .ref = edit.ref_text, .before = if (created) null else edit.expected_hash.present, .after = c.hash });
+        const evidence = c.evidence orelse {
+            symmetric = false;
+            continue;
+        };
+        if (!created or !evidence.symmetric()) symmetric = false;
+    }
+    try receipt_note.record(gpa, io, places[0].root, .{
+        .operation = .try_batch,
+        .class = if (symmetric) .symmetry else .spending,
+        .evidence = if (symmetric) "unreferenced" else "test",
+        .files = files.items,
+        .symbols = symbols.items,
+        .test_command = test_command,
+        .typecheck_command = typecheck_command,
+        .test_ms = test_ms,
+        .version = receipt_note.version,
+    }, w);
+}
+
 fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
     const edits = try gpa.alloc(runner.Edit, items.len);
@@ -532,6 +582,9 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer gpa.free(resolved);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, edits[0].file_abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
+    const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
+    defer gpa.free(before_hashes);
+    for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
     const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service });
     defer result.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
@@ -562,6 +615,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 .deleted = committed[i].deleted,
             };
             try wire.writeBatchCommitted(w, views, note);
+            try recordBatch(gpa, io, places, edits, before_hashes, committed, resolved, typecheck_command, event.trace.test_ms, w);
             return false;
         },
         .rejected => |report| {

@@ -8,6 +8,8 @@ const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const rename_batch = @import("../platform/rename_batch.zig");
+const receipts = @import("../platform/receipts.zig");
+const receipt_note = @import("receipt_note.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -40,6 +42,26 @@ pub fn callRename(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
         break :blk true;
     };
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn recordRename(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, sym: []const u8, hash: symbol.Hash, plan: rename_batch.Plan, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var files: std.ArrayList(receipts.FileChange) = .empty;
+    for (plan.prepared) |p| try files.append(arena, .{ .rel = p.rel, .before = p.base_hash, .after_abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, p.rel }) });
+    try receipt_note.record(gpa, io, root, .{
+        .operation = .rename,
+        .class = .symmetry,
+        .evidence = "alpha_hash",
+        .resolver = @tagName(plan.resolver),
+        .files = files.items,
+        .symbols = &.{ .{ .path = rel, .ref = sym, .before = hash, .after = null }, .{ .path = rel, .ref = plan.new_ref, .before = null, .after = plan.new_hash } },
+        .test_command = test_command,
+        .typecheck_command = typecheck_command,
+        .test_ms = test_ms,
+        .version = receipt_note.version,
+    }, w);
 }
 
 fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, new_name: []const u8, interface_change: bool, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
@@ -87,6 +109,7 @@ fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, s
                 .symbols_checked = outcome.plan.symbols_checked,
                 .files = files,
             }, note);
+            try recordRename(gpa, io, place.root, place.rel, sym, hash, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w);
             return false;
         },
         .rejected => |report| {

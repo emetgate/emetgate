@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **963**
-- Mutations declared in `tests/mutations.json`: **554**
-  - killed: **528**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **979**
+- Mutations declared in `tests/mutations.json`: **562**
+  - killed: **536**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -197,7 +197,7 @@ python tools/verification_page.py --check
 | `NF1-create-not-added-to-index` | `src/platform/runner.zig` | `try repo.addToIndex(gpa, io, root, rel);` -> `` | new file: a later proposal to another file runs in a shadow that contains the c...; new f... | killed |
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
 | `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.gate(gpa, io, root, rel, ref, created.snapsho...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
-| `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     defer...` -> `defer report.deinit(gpa);      if (options.trace) \|t\| t.commi...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
+| `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     if (o...` -> `if (options.trace) \|t\| t.test_ms = report.duration_ns / std.t...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
 | `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` -> `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
 | `CR1-crash-threshold-removed` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR2-crash-threshold-counts-own-kill` | `src/platform/sandbox.zig` | `const ntstatus_error_floor: u32 = 0xC0000000;` -> `const ntstatus_error_floor: u32 = 0xDEAD;` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
@@ -521,7 +521,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-126 mutation(s).
+134 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -626,7 +626,7 @@ python tools/verification_page.py --check
 | `SC3-resolution-completeness-skipped` | `src/engine/rename.zig` | `if (renamed[index] and !containsSpan(spans, use.span)) return e...` -> `_ = index;` | rename: leaving one occurrence behind in a renamed statement is caught by the i... | killed |
 | `SC4-scope-namespace-ignored` | `src/engine/scope.zig` | `if (b.scope.eql(ancestor) and b.namespace.overlaps(namespace)) ...` -> `if (b.scope.eql(ancestor) and (b.namespace.overlaps(namespace) ...` | scope: types and values live in separate namespaces, a class is both | killed |
 | `KD1-type-positions-not-names` | `src/engine/lang/ecma/rename.zig` | `"type_identifier",         "shorthand_property_identifier",` -> `"shorthand_property_identifier",` | rename kinds: a class is renamed in its declaration, an import, extends, a retu... | killed |
-| `KD2-alpha-type-namespace-merged` | `src/engine/rename.zig` | `if (oneOf(kind, g.type_kinds)) 't' else` -> `if (oneOf(kind, g.type_kinds)) 'v' else` | rename: a type and a value of the same name are separate, renaming only the typ...; renam... | killed |
+| `KD2-alpha-type-namespace-merged` | `src/engine/alpha.zig` | `if (oneOf(kind, g.type_kinds)) 't' else` -> `if (oneOf(kind, g.type_kinds)) 'v' else` | rename: a type and a value of the same name are separate, renaming only the typ...; renam... | killed |
 | `KD3-exported-type-approval-skipped` | `src/platform/rename_batch.zig` | `const interface_change = locations.files.items.len > 1 or try r...` -> `const interface_change = locations.files.items.len > 1 or top_n...` | rename kinds: a class field is renamed with its this and obj accesses the servi...; renam... | killed |
 | `KD4-declaration-hash-without-domain` | `src/engine/declarations.zig` | `hasher.update(domain);     hasher.update(&.{0});     hasher.upd...` -> `_ = kind;` | declarations: a declaration hash is domain separated, so the same text never ha... | killed |
 | `KD6-function-values-listed-twice` | `src/engine/declarations.zig` | `if (self.isFunctionValue(child)) continue;             if (decl...` -> `if (declarators == 1) {` | declarations: a merged interface and class share a ref and are marked ambiguous... | killed |
@@ -651,6 +651,14 @@ python tools/verification_page.py --check
 | `RUN4-output-cap-removed` | `src/protocol/run_tool.zig` | `const cut = run_command.tail(bytes, max_output_lines, max_outpu...` -> `const cut = run_command.tail(bytes, std.math.maxInt(usize), std...` | redteam run: a flood of output comes back cut to the last lines with a count of... | killed |
 | `RUN5-model-policy-accepted` | `src/protocol/run_tool.zig` | `try policy_mod.refuseModelPolicy(args);` -> `if (args == null) try policy_mod.refuseModelPolicy(args);` | redteam run: a call that names any policy field is refused before anything runs | killed |
 | `RUN6-out-of-scope-accepted` | `src/platform/run_command.zig` | `if (isOutOfScope(command)) return error.RunCommandOutOfScope;` -> `` | installing dependencies and git commit or push are out of scope for the allowli...; run p... | killed |
+| `VR1-before-digest-not-chained` | `src/verify/checker.zig` | `if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch,...` -> `` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
+| `VR2-non-canonical-note-accepted` | `src/verify/checker.zig` | `if (parsed.value != .array or canonical == null or !std.mem.eql...` -> `if (parsed.value != .array or canonical == null) {` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
+| `VR3-tests-not-rerun` | `src/platform/verify_run.zig` | `slot.* = self.rerun(trusted) catch null;` -> `slot.* = if (trusted.len != 0) true else null;` | verify: a spending receipt whose tests are red at the commit is a mismatch | killed |
+| `VR4-unreceipted-change-green` | `src/verify/checker.zig` | `if (last.get(path) == null) try c.files.raise(path, .unverified...` -> `if (last.get(path) == null and false) try c.files.raise(path, ....` | verify: a change without a receipt is unverified and never green | killed |
+| `VR5-trusted-command-not-matched` | `src/platform/verify_run.zig` | `if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest)) return...` -> `if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest) and fal...` | verify: a receipt's command never runs, only the trusted one, and a different c... | killed |
+| `VR6-rule-digest-not-compared` | `src/verify/checker.zig` | `if (!std.mem.eql(u8, &now, &rule.digest)) outcome.raise(.mismat...` -> `_ = now;` | verify: a rule the receipt names with a changed digest is a mismatch | killed |
+| `VR7-symmetry-alpha-not-checked` | `src/verify/checker.zig` | `if (!try c.alphaEqual(k.path, before, after)) outcome.raise(.mi...` -> `_ = try c.alphaEqual(k.path, before, after);` | verify: a spending change relabelled as a symmetric rename fails the alpha hash | killed |
+| `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 
 ## What this system does not prove
 

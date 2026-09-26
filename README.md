@@ -529,6 +529,36 @@ mirror that lives in a specific running MCP process's memory. Until that lands, 
 mirror stays **off by default**; a project that opts in with `--mirror` is accepting
 that a compaction mid-session can make one `unchanged` reply stale.
 
+## Receipts and `emetgate verify`
+
+Every commit the gate makes (`emetgate_try`, `emetgate_try_batch` including creations and deletions, `emetgate_rename`, `emetgate_move`, `emetgate_move_file`) leaves a receipt, so the change can be checked later without trusting Emetgate, the model or the log. A receipt is an [in-toto](https://in-toto.io) Statement v1: `subject` lists every file the commit wrote with its `blake3-128` and `sha256` digests, `predicateType` is `https://emetgate.dev/receipt/v1`, and the predicate records:
+
+| Field | Content |
+|---|---|
+| `operation`, `class`, `evidence` | the tool, `symmetry` or `spending`, and what proves it (`test`, `alpha_hash`, `content_hash`, `unreferenced`) |
+| `files` | every touched path with its whole-file digest before and after (`null` for absent) |
+| `symbols` | every symbol or declaration the operation changed, created or removed, with its hash before and after |
+| `checks` | the typecheck and test commands that passed, their `blake3-128` digest, exit code and duration |
+| `rules` | the id and digest of every adopted rule that covers a touched file |
+| `sandbox`, `emetgate` | the sandbox limits and the Emetgate version |
+
+The JSON is canonical ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785), keys sorted by UTF-16 code units, integers only), so its `sha256` is the receipt's id and the same receipt always has the same bytes. Receipts are not signed yet; the format is the one Sigstore/cosign sign and a transparency log such as Rekor records, so signing adds a signature over these bytes and changes none of them.
+
+**Storage.** Emetgate does not commit. A receipt is written to `.emetgate/receipts/` when the gate commits the files; after the user commits, `emetgate receipts attach [<commit>]` puts every pending receipt whose files that commit changed into a git note on it (`refs/notes/emetgate`, one canonical JSON array), in the order the gate wrote them. Notes were chosen over a trailer or a working-tree key: they attach to the commit without changing its hash, survive a rebase only when the user carries them, and are not fetched by a plain clone, so a cloned repository brings no receipts unless someone fetches `refs/notes/emetgate` on purpose. `.emetgate/` is outside every tool's reach (`InternalPath`), so the model cannot write a receipt. A receipt is still only a claim: `verify` recomputes every digest and never runs anything a receipt names (the PR #31 lesson: a command from the repository is untrusted); it reruns only the test and typecheck commands the person running `verify` passes, and only when their digest equals the one in the receipt.
+
+**`emetgate verify <commit> [--test <cmd>] [--typecheck <cmd>] [--skip-tests] [--json]`** reads the commit, its first parent and the note, and replays the receipts in order over the parent's files:
+
+- every receipt's `before` digests must match the parent or the previous receipt, its `after` digests its subjects, and the last receipt for a file the commit's content; a note that is not canonical JSON, an added or reordered receipt and an edited digest are all `mismatch`;
+- every listed symbol hash is recomputed from the file content before and after;
+- a `spending` receipt is `verified` only when the trusted test command, rerun in the sandbox on a worktree of the commit, passes (`mismatch` when it fails, `unverified` when it was not rerun or was a different command);
+- a `symmetry` receipt is checked without running anything: a rename by the alpha hash of every top-level statement, a move or file move by the multiset of symbol and declaration hashes of the touched files, a creation or deletion by the other symbols keeping their hashes and the name appearing in no other file of the commit;
+- a rule whose digest changed is `mismatch`, one that left the ledger is `unverified`;
+- a file the commit changed that no receipt covers, or that was edited by hand after the gate, is `unverified`.
+
+Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the exit code is 0 only when everything is verified (53 for unverified, 54 for mismatch), so "not measured" is never reported green. In CI, `emetgate verify HEAD --test "<the project's test command>"` after `git fetch origin refs/notes/emetgate:refs/notes/emetgate` can run as a status check; that step is documented here, not shipped.
+
+**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,502 non-blank lines of Zig in 22 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second, independent checker in Python is planned (N-version: both must reach the same verdict on every receipt); the format above and `src/verify/receipt.zig` are its specification. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
+
 ## How the kernel itself is verified
 
 Numbers in this README that can be read out of the source or the mutation corpus are

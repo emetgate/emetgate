@@ -25,7 +25,7 @@ pub const RunRefusal = policy_mod.RunRefusal;
 
 const default_protocol_version = "2025-06-18";
 const server_name = "emetgate";
-const server_version = "0.1.0";
+pub const server_version = "0.1.0";
 const max_message_bytes = 4 * 1024 * 1024;
 
 pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string" };

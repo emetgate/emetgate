@@ -4,6 +4,9 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const MultiReader = std.Io.File.MultiReader;
 
+pub const job_memory_bytes: usize = win.job_memory_cap;
+pub const active_process_limit: u32 = win.active_process_cap;
+
 pub const Limits = struct {
     timeout_ms: u64 = 60_000,
     max_output_bytes: usize = 1024 * 1024,
