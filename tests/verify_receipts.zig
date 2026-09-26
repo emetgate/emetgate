@@ -247,3 +247,19 @@ test "verify: a rename's symmetry receipt verifies by alpha hash without running
     try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
     try testing.expectEqualStrings("rename", result.report.receipts[0].operation);
 }
+
+test "verify: a spending change relabelled as a symmetric rename fails the alpha hash" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    _ = try case.tryBody("{\n  return b + a;\n}", green);
+    try case.commit("one");
+    _ = try case.attach();
+    const original = try case.note();
+    var relabelled = try std.mem.replaceOwned(u8, case.arena(), original, "\"class\":\"spending\"", "\"class\":\"symmetry\"");
+    relabelled = try std.mem.replaceOwned(u8, case.arena(), relabelled, "\"operation\":\"try\"", "\"operation\":\"rename\"");
+    try case.replaceNote(relabelled);
+    const result = try case.verify(.{ .commit = "HEAD", .skip_tests = true });
+    try testing.expectEqual(checker.Verdict.mismatch, result.report.verdict);
+}
