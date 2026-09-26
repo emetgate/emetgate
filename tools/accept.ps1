@@ -54,6 +54,9 @@ Invoke-Stage "readme facts up to date" {
 Invoke-Stage "no forbidden marketing words" {
     python (Join-Path $root "tools/forbidden_words.py") --check
 }
+Invoke-Stage "vendor manifest matches vendor/" {
+    python (Join-Path $root "tools/vendor_manifest.py") --check
+}
 if (Test-Path $report) {
     $outcomes = Get-Content $report -Raw | ConvertFrom-Json
     $schema = @($outcomes | Where-Object { $_.origin -eq 'schema' }).Count

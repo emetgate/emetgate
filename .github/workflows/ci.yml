@@ -48,6 +48,7 @@ jobs:
           python tools/verification_page.py --check
           python tools/readme_facts.py --check
           python tools/forbidden_words.py --check
+          python tools/vendor_manifest.py --check
 
   nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -139,6 +140,15 @@ jobs:
         run: |
           $slice = ([int]$env:SLICE % 10) + 1
           ./zig-out/bin/emetgate-mutate.exe --jobs=4 --skip-survivors --compare "--slice=$slice/10"
+      - run: zig build fuzz-tool
+      - name: Time-boxed random fuzzing, a few minutes per target
+        shell: pwsh
+        run: |
+          foreach ($target in "regex", "protocol", "ledger", "cas", "journal") {
+            Write-Output "fuzzing $target"
+            ./zig-out/bin/emetgate-fuzz.exe $target 180
+            if ($LASTEXITCODE -ne 0) { Write-Output "::error::fuzz target $target failed"; exit 1 }
+          }
 
   nightly-attacker:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
