@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **828**
-- Mutations declared in `tests/mutations.json`: **492**
-  - killed: **470**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **829**
+- Mutations declared in `tests/mutations.json`: **493**
+  - killed: **471**
   - equivalent: **5**
   - defense in depth: **3**
   - open: **4**
@@ -162,7 +162,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-54 mutation(s).
+55 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -199,6 +199,7 @@ python tools/verification_page.py --check
 | `CR4-crash-passes` | `src/platform/sandbox.zig` | `.crashed, .timed_out, .output_limit => false,` -> `.crashed => true,             .timed_out, .output_limit => fals...` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR9-batch-swallows-test-crash` | `src/platform/batch.zig` | `if (!report.passed()) return .{ .rejected = report };` -> `if (!report.passed() and report.outcome != .crashed) return .{ ...` | crash: a test command that crashes rejects a whole batch as test_crashed and le... | killed |
 | `CR10-typecheck-stage-swallows-crash` | `src/platform/runner.zig` | `if (!checked.passed()) return .{ .typecheck = checked };` -> `if (!checked.passed() and checked.outcome != .crashed) return ....` | crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk un...; crash... | killed |
+| `CR11-fail-fast-read-as-exit` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return if (code >= ntstatus_error_floor and code != 0xC0000409)...` | a fail-fast in the command is a crash with its own code, reported at once, with... | killed |
 | `RC4-prepare-swallows-stale-shadow-removal-error` | `src/platform/shadow.zig` | `try remove(io, options.base_abs, options.shadow_abs);` -> `remove(io, options.base_abs, options.shadow_abs) catch {};` | prepare fails instead of carrying on when a stale shadow cannot be removed | killed |
 | `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRules(gpa, io, root, location.shadow, targets...` -> `if (try runCommandRules(gpa, io, root, root, targets, options.l...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
 | `CMD5-ntstatus-floor-broken` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | cmd rule: a crashing command is not a verdict, it is rule_check_crashed | killed |

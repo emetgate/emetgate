@@ -800,6 +800,19 @@ test "an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay 
     }
 }
 
+test "a fail-fast in the command is a crash with its own code, reported at once, with the output written before it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const report = try probe(&.{"failfast"}, .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer printReport(report);
+
+    try testing.expectEqual(Outcome{ .crashed = 0xC0000409 }, report.outcome);
+    try testing.expect(!report.passed());
+    try testing.expect(!report.killed_leftovers);
+    try testing.expectEqualStrings("before the fail-fast\n", report.stdout);
+    try testing.expect(report.duration_ns < 10 * std.time.ns_per_s);
+}
+
 test "an infinite loop is killed at the deadline" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try probe(&.{"spin"}, .{ .timeout_ms = 300 });

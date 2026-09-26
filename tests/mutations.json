@@ -2977,6 +2977,15 @@
       ]
     },
     {
+      "id": "CR11-fail-fast-read-as-exit",
+      "file": "src/platform/sandbox.zig",
+      "from": "return if (code >= ntstatus_error_floor) .{ .crashed = code } else .{ .exited = code };",
+      "to": "return if (code >= ntstatus_error_floor and code != 0xC0000409) .{ .crashed = code } else .{ .exited = code };",
+      "kills": [
+        "a fail-fast in the command is a crash with its own code, reported at once, with the output written before it"
+      ]
+    },
+    {
       "id": "RC1-recover-swallows-shadow-removal-error",
       "file": "src/platform/disk.zig",
       "from": "const removal = shadow.remove(io, location.base, location.shadow);",
