@@ -13,6 +13,7 @@ pub const cas = src.cas;
 pub const boundedness = src.boundedness;
 pub const symmetry = src.symmetry;
 pub const removal = src.removal;
+pub const rename = src.rename;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;

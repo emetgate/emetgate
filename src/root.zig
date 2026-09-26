@@ -11,6 +11,7 @@ pub const cas = @import("engine/cas.zig");
 pub const boundedness = @import("engine/boundedness.zig");
 pub const symmetry = @import("engine/symmetry.zig");
 pub const removal = @import("engine/removal.zig");
+pub const rename = @import("engine/rename.zig");
 pub const coverage = @import("engine/coverage.zig");
 pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");
