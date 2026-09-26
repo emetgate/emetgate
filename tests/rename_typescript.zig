@@ -64,3 +64,21 @@ test "real typescript: a shadowing parameter stays and a tsconfig plugin that wo
     try testing.expectEqual(rename_batch.Resolver.language_service, outcome.plan.resolver);
     try case.expectFile("src/a.ts", expected);
 }
+
+test "real typescript: a class used as a type, in extends and in new is renamed across two files" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const target = (try typescriptDir(arena_state.allocator())) orelse return error.SkipZigTest;
+    const kinds = @import("rename_kinds.zig");
+    var case: Case = undefined;
+    try case.init(&.{ .{ .rel = "src/shape.ts", .text = kinds.shape_src }, .{ .rel = "src/user.ts", .text = kinds.user_src } }, false);
+    defer case.deinit();
+    try linkTypeScript(&case, target);
+    const outcome = try kinds.renameDeclaration(&case, "src/shape.ts", "Shape", "Figure", true);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try testing.expectEqual(rename_batch.Resolver.language_service, outcome.plan.resolver);
+    try case.expectFile("src/shape.ts", kinds.shape_new);
+    try case.expectFile("src/user.ts", kinds.user_new);
+}

@@ -330,7 +330,7 @@ pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, 
 
     const regions = try compareRegions(gpa, base, next, spans);
     try checkSurvivors(gpa, next, old);
-    const symbols_checked = try compareSymbols(gpa, base, next, old, new);
+    const symbols_checked = try compareSymbols(gpa, base, next, old, new, spans);
 
     return .{ .snapshot = next, .spans = try gpa.dupe(Span, moved), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
 }
@@ -412,36 +412,78 @@ pub fn freeOccurrence(gpa: Allocator, snapshot: *const Snapshot, name: []const u
     return false;
 }
 
-fn mapped(part: []const u8, old: []const u8, new: []const u8) []const u8 {
-    return if (std.mem.eql(u8, part, old)) new else part;
-}
+const Mapping = struct {
+    old: []const u8,
+    new: []const u8,
+    spans: []const Span,
+    containers: bool,
 
-fn sameRef(before: symbol.Ref, after: symbol.Ref, old: []const u8, new: []const u8) bool {
-    if (!std.mem.eql(u8, mapped(before.name, old, new), after.name)) return false;
-    if (before.container.len != after.container.len) return false;
-    for (before.container, after.container) |a, b| {
-        if (!std.mem.eql(u8, mapped(a, old, new), b)) return false;
+    fn name(self: Mapping, part: []const u8, renamed: bool) []const u8 {
+        return if (renamed and std.mem.eql(u8, part, self.old)) self.new else part;
     }
-    return before.accessor == after.accessor and before.is_static == after.is_static;
+
+    fn same(self: Mapping, before: symbol.Ref, after: symbol.Ref, renamed: bool) bool {
+        if (!std.mem.eql(u8, self.name(before.name, renamed), after.name)) return false;
+        if (before.container.len != after.container.len) return false;
+        for (before.container, after.container) |a, b| {
+            if (!std.mem.eql(u8, self.name(a, self.containers), b)) return false;
+        }
+        return before.accessor == after.accessor and before.is_static == after.is_static;
+    }
+};
+
+fn startsWithin(spans: []const Span, start: u32) bool {
+    for (spans) |span| {
+        if (span.start == start) return true;
+    }
+    return false;
 }
 
-fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const u8, new: []const u8) Error!usize {
+fn functionNameRenamed(gpa: Allocator, snapshot: *const Snapshot, found: symbol.Symbol, spans: []const Span) !bool {
+    const leaves = try leavesNamed(gpa, snapshot, found.ref.name);
+    defer gpa.free(leaves);
+    for (leaves) |leaf| {
+        if (leaf.span.start >= found.declaration.start and leaf.span.start < found.declaration.end) return startsWithin(spans, leaf.span.start);
+    }
+    return false;
+}
+
+fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const u8, new: []const u8, spans: []const Span) Error!usize {
     const before = try base.symbols();
     const after = next.symbols() catch |err| switch (err) {
         error.SourceHasErrors => return error.MutationSyntaxInvalid,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    var mapping: Mapping = .{ .old = old, .new = new, .spans = spans, .containers = false };
+    for (before.declarations) |d| {
+        if (d.ref.container.len == 0 and startsWithin(spans, d.name.startByte())) mapping.containers = true;
+    }
+    for (before.symbols) |f| {
+        if (f.ref.container.len == 0 and try functionNameRenamed(gpa, base, f, spans)) mapping.containers = true;
+    }
     if (before.symbols.len != after.symbols.len) return error.AlphaMismatch;
     for (before.symbols) |b| {
         const b_hash = try alphaHash(gpa, base, b.declaration);
+        const renamed = try functionNameRenamed(gpa, base, b, spans);
         var matched = false;
         for (after.symbols) |a| {
-            if (!sameRef(b.ref, a.ref, old, new)) continue;
+            if (!mapping.same(b.ref, a.ref, renamed)) continue;
             if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;
         }
         if (!matched) return error.AlphaMismatch;
     }
-    return before.symbols.len;
+    if (before.declarations.len != after.declarations.len) return error.AlphaMismatch;
+    for (before.declarations) |b| {
+        const b_hash = try alphaHash(gpa, base, b.declaration);
+        const renamed = startsWithin(spans, b.name.startByte());
+        var matched = false;
+        for (after.declarations) |a| {
+            if (a.kind != b.kind or !mapping.same(b.ref, a.ref, renamed)) continue;
+            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;
+        }
+        if (!matched) return error.AlphaMismatch;
+    }
+    return before.symbols.len + before.declarations.len;
 }
 
 const testing = std.testing;

@@ -89,6 +89,7 @@ pub const Symbol = struct {
 };
 
 pub const Declaration = declarations_mod.Declaration;
+pub const DeclarationKind = profile_mod.DeclarationKind;
 
 pub const Table = struct {
     arena: *std.heap.ArenaAllocator,

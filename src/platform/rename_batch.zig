@@ -106,11 +106,10 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const ref = try symbol.Ref.parse(gpa, request.ref_text);
     defer ref.deinit(gpa);
-    const target = try (try base.symbols()).resolve(ref);
-    if (!std.mem.eql(u8, &target.hash, &request.expected_hash)) return error.HashMismatch;
+    const target = try targetOf(gpa, base, ref, request.expected_hash);
     const old = ref.name;
     if (!rename.validName(request.new_name) or std.mem.eql(u8, old, request.new_name)) return error.InvalidName;
-    const offset = (try batch_plan.nameOffset(gpa, base, old, target.declaration)) orelse return error.SymbolNotFound;
+    const offset = target.offset;
     const member = ref.container.len != 0;
 
     var locations: Locations = .{};
@@ -167,9 +166,15 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         symbols += renamed.symbols_checked;
         var body: Span = .{ .start = 0, .end = 0 };
         if (declaring) {
-            const found = try (try renamed.snapshot.symbols()).resolve(new_ref);
-            body = .{ .start = found.body.startByte(), .end = found.body.endByte() };
-            new_hash = found.hash;
+            const table = try renamed.snapshot.symbols();
+            if (target.function) {
+                const found = try table.resolve(new_ref);
+                body = .{ .start = found.body.startByte(), .end = found.body.endByte() };
+                new_hash = found.hash;
+            } else {
+                const found = declarationOf(table.*, new_ref, target.kind.?) orelse return error.IncompleteRename;
+                new_hash = found.hash;
+            }
         }
         const rel = try repo.relativeUnder(gpa, root, located.abs);
         errdefer gpa.free(rel);
@@ -201,6 +206,35 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         .new_ref = new_ref_text,
         .new_hash = new_hash orelse return error.IncompleteRename,
     };
+}
+
+const Target = struct {
+    offset: u32,
+    function: bool,
+    kind: ?symbol.DeclarationKind = null,
+};
+
+fn targetOf(gpa: Allocator, base: *Snapshot, ref: symbol.Ref, expected: symbol.Hash) !Target {
+    const table = try base.symbols();
+    if (table.resolve(ref)) |found| {
+        if (!std.mem.eql(u8, &found.hash, &expected)) return error.HashMismatch;
+        const offset = (try batch_plan.nameOffset(gpa, base, ref.name, found.declaration)) orelse return error.SymbolNotFound;
+        return .{ .offset = offset, .function = true };
+    } else |err| switch (err) {
+        error.SymbolNotFound => {},
+        else => |e| return e,
+    }
+    const found = table.declarationMatching(ref, expected) orelse {
+        return if (table.hasDeclaration(ref)) error.HashMismatch else error.SymbolNotFound;
+    };
+    return .{ .offset = found.name.startByte(), .function = false, .kind = found.kind };
+}
+
+fn declarationOf(table: symbol.Table, ref: symbol.Ref, kind: symbol.DeclarationKind) ?*const symbol.Declaration {
+    for (table.declarations) |*declaration| {
+        if (declaration.kind == kind and declaration.ref.eql(ref)) return declaration;
+    }
+    return null;
 }
 
 fn startsAt(spans: []const Span, offset: u32) bool {
