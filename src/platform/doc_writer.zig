@@ -34,6 +34,8 @@ pub const Options = struct {
     shadow_root: ?[]const u8 = null,
 };
 
+const max_doc_bytes = 1024 * 1024;
+
 pub const Trace = struct {
     base_len: usize = 0,
     new_len: usize = 0,
@@ -74,8 +76,13 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
 
-    const source = try std.Io.Dir.cwd().readFileAlloc(io, options.file_abs, gpa, .limited(64 * 1024 * 1024));
+    const source = std.Io.Dir.cwd().readFileAlloc(io, options.file_abs, gpa, .limited(max_doc_bytes + 1)) catch |err| switch (err) {
+        error.StreamTooLong => return error.DocTooLarge,
+        else => |e| return e,
+    };
     defer gpa.free(source);
+    if (source.len > max_doc_bytes) return error.DocTooLarge;
+    if (docnode.looksBinary(source)) return error.BinaryFile;
     const base_hash = symbol.hashOf(source);
 
     const parser = ts.Parser.create();

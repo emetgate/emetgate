@@ -24,6 +24,12 @@ pub const Applied = struct {
     hash: symbol.Hash,
 };
 
+const binary_probe_bytes = 8000;
+
+pub fn looksBinary(bytes: []const u8) bool {
+    return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_probe_bytes)], 0) != null;
+}
+
 fn splice(gpa: Allocator, source: []const u8, span: Span, actual_hash: symbol.Hash, expected_hash: symbol.Hash, new_text: []const u8) Error![]u8 {
     if (!std.mem.eql(u8, &actual_hash, &expected_hash)) return error.HashMismatch;
     return std.mem.concat(gpa, u8, &.{ source[0..span.start], new_text, source[span.end..] });

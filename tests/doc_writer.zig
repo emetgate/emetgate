@@ -125,6 +125,53 @@ test "doc_writer: a stale hash on a line range write is refused before any sandb
     try testing.expectEqualStrings(notes_txt, after);
 }
 
+test "doc_writer: a file over 1 MiB is refused before any parse or sandbox run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fx = try Fixture.init();
+    defer fx.deinit();
+
+    const big = try gpa.alloc(u8, 1024 * 1024 + 1);
+    defer gpa.free(big);
+    @memset(big, 'a');
+    try fx.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/big.txt", .data = big });
+
+    const path = try fx.file("big.txt");
+    defer gpa.free(path);
+    try testing.expectError(error.DocTooLarge, doc_writer.tryWriteDoc(gpa, testing.io, .{
+        .file_abs = path,
+        .selector = .{ .line_range = .{ .start = 1, .end = 1 } },
+        .expected_hash = symbol.hashOf("stale"),
+        .new_text = "x",
+        .test_command = "cmd /c echo BREACH>breach.txt & exit 0",
+    }, null));
+    try testing.expect(!exists(&fx, "breach.txt"));
+}
+
+fn exists(fx: *Fixture, sub_path: []const u8) bool {
+    fx.tmp.dir.access(testing.io, sub_path, .{}) catch return false;
+    return true;
+}
+
+test "doc_writer: a binary file is refused before any parse or sandbox run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fx = try Fixture.init();
+    defer fx.deinit();
+
+    const binary = "line one\x00\x01\x02binary";
+    try fx.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/blob.bin", .data = binary });
+
+    const path = try fx.file("blob.bin");
+    defer gpa.free(path);
+    try testing.expectError(error.BinaryFile, doc_writer.tryWriteDoc(gpa, testing.io, .{
+        .file_abs = path,
+        .selector = .{ .line_range = .{ .start = 1, .end = 1 } },
+        .expected_hash = symbol.hashOf("stale"),
+        .new_text = "x",
+        .test_command = "cmd /c echo BREACH>breach.txt & exit 0",
+    }, null));
+    try testing.expect(!exists(&fx, "breach.txt"));
+}
+
 test "doc_writer: a line range write commits and leaves the other lines byte-identical" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fx = try Fixture.init();
