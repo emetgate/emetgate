@@ -5258,7 +5258,7 @@
     },
     {
       "id": "KD2-alpha-type-namespace-merged",
-      "file": "src/engine/rename.zig",
+      "file": "src/engine/alpha.zig",
       "from": "if (oneOf(kind, g.type_kinds)) 't' else",
       "to": "if (oneOf(kind, g.type_kinds)) 'v' else",
       "kills": [

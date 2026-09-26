@@ -15,6 +15,7 @@ pub const symmetry = src.symmetry;
 pub const removal = src.removal;
 pub const rename = src.rename;
 pub const scope = src.scope;
+pub const alpha = src.alpha;
 pub const declarations = src.declarations;
 pub const modules = src.modules;
 pub const coverage = src.coverage;
