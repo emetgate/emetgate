@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **944**
-- Mutations declared in `tests/mutations.json`: **548**
-  - killed: **522**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **963**
+- Mutations declared in `tests/mutations.json`: **554**
+  - killed: **528**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -16,7 +16,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
   - survives, not yet classified: **4** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename)
-- Red-team suites: **9** files, **76** tests total
+- Red-team suites: **10** files, **83** tests total
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_git.zig`: 3
@@ -25,6 +25,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_memory.zig`: 17
   - `tests/redteam_move.zig`: 10
   - `tests/redteam_rename.zig`: 10
+  - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
 - Security findings recorded in README's Security History: **7**
 
@@ -520,7 +521,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-120 mutation(s).
+126 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -644,6 +645,12 @@ python tools/verification_page.py --check
 | `FM9-own-import-proof-skipped` | `src/platform/file_move.zig` | `try proveOwnImports(w, before, after, request, moved, afters.it...` -> `` | move file: the proof catches a user left behind and an own import left unrewrit... | killed |
 | `FM10-service-edit-mismatch-accepted` | `src/platform/file_move.zig` | `if (!found) return error.ServiceMismatch;` -> `if (!found and false) return error.ServiceMismatch;` | move file: the language service proposing a different edit set is refused | killed |
 | `FM11-literal-require-accepted` | `src/platform/file_move.zig` | `if (tsserver.sameFile(target, request.from_abs)) return error.D...` -> `_ = target;` | move file: a require or a computed import that reaches the file is refused | killed |
+| `RUN1-allowlist-check-skipped` | `src/platform/run_command.zig` | `const entry = match(allowed, requested) orelse return .{ .refus...` -> `const entry = match(allowed, requested) orelse requested;` | a request runs only the allowlist entry it equals byte for byte; run tool: a command the ... | killed |
+| `RUN2-metacharacter-check-relaxed` | `src/platform/run_command.zig` | `pub const shell_metacharacters = "&\|<>^%!;'$()\r\n\x00";` -> `pub const shell_metacharacters = "\x00";` | an allowlist entry with a shell metacharacter is refused; run policy: an --allow-run entr... | killed |
+| `RUN3-in-working-tree` | `src/platform/run_command.zig` | `runner.runStages(gpa, io, location.shadow, null, options.comman...` -> `runner.runStages(gpa, io, options.root_abs, null, options.comma...` | redteam run: an allowed script cannot write outside the shadow, runs from the s... | killed |
+| `RUN4-output-cap-removed` | `src/protocol/run_tool.zig` | `const cut = run_command.tail(bytes, max_output_lines, max_outpu...` -> `const cut = run_command.tail(bytes, std.math.maxInt(usize), std...` | redteam run: a flood of output comes back cut to the last lines with a count of... | killed |
+| `RUN5-model-policy-accepted` | `src/protocol/run_tool.zig` | `try policy_mod.refuseModelPolicy(args);` -> `if (args == null) try policy_mod.refuseModelPolicy(args);` | redteam run: a call that names any policy field is refused before anything runs | killed |
+| `RUN6-out-of-scope-accepted` | `src/platform/run_command.zig` | `if (isOutOfScope(command)) return error.RunCommandOutOfScope;` -> `` | installing dependencies and git commit or push are out of scope for the allowli...; run p... | killed |
 
 ## What this system does not prove
 

@@ -24,7 +24,7 @@ const usage =
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory]
+    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\       emetgate rule add <text> [--check <spec>] [--in <where>] [--enforce]
     \\       emetgate rule list [--all] [--json]
@@ -106,6 +106,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return tryRun(init, runtime, request, out, trust);
     }
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
+        if (server.refusedRunEntry(args[2..])) |refused| exitWithRunRefusal(refused);
         const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
         try server.serve(runtime.gpa, init.io, runtime, out, policy);
         return 0;
@@ -165,6 +166,17 @@ fn extractFlags(init: std.process.Init, args: []const [:0]const u8) Extracted {
 fn fail(err: anyerror) u8 {
     std.debug.print("error: {t}\n", .{err});
     return exitCodeFor(err);
+}
+
+fn exitWithRunRefusal(refused: server.RunRefusal) noreturn {
+    const why = switch (refused.reason) {
+        error.RunCommandEmpty => "the command is empty",
+        error.RunCommandTooLong => "the command is longer than 512 bytes",
+        error.RunCommandShellMetacharacter => "the command has a shell metacharacter (& | < > ^ % ! ; ` $ ( ) or a line break); allow each command on its own",
+        error.RunCommandOutOfScope => "installing dependencies and git commit or push are out of scope: an install fetches packages, runs their install scripts and rewrites the linked node_modules, and a commit or push changes history",
+    };
+    std.debug.print("refused --allow-run \"{s}\": {s}\n", .{ refused.entry, why });
+    std.process.exit(2);
 }
 
 fn exitWithUsage() noreturn {

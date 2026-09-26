@@ -3,6 +3,7 @@ const telemetry = @import("telemetry.zig");
 const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
+const run_tool = @import("run_tool.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
@@ -19,6 +20,8 @@ const getString = tool_result.getString;
 
 pub const Policy = policy_mod.Policy;
 pub const parsePolicy = policy_mod.parsePolicy;
+pub const refusedRunEntry = policy_mod.refusedRunEntry;
+pub const RunRefusal = policy_mod.RunRefusal;
 
 const default_protocol_version = "2025-06-18";
 const server_name = "emetgate";
@@ -151,6 +154,11 @@ pub const tool_defs = [_]Tool{
             .{ .name = "n", .desc = "log only: how many commits, newest first (default 20, at most 200)", .optional = true, .ty = "integer" },
             .{ .name = "commit", .desc = "show only: a commit hash (4 to 40 hex characters) or HEAD, optionally with ~N or ^N", .optional = true },
         },
+    },
+    .{
+        .name = "emetgate_run",
+        .description = run_tool.description,
+        .props = &.{.{ .name = "command", .desc = "one allowlist entry, byte for byte; omit to list the allowlist", .optional = true }},
     },
 };
 

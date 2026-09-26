@@ -3,6 +3,7 @@ const tool_result = @import("tool_result.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
+const run_command = @import("../platform/run_command.zig");
 
 const Value = std.json.Value;
 
@@ -17,7 +18,27 @@ pub const Policy = struct {
     mirror: ?*mirror_mod.Mirror = null,
     tree_cache: ?*tree_cache_mod.TreeCache = null,
     language_service: ?*tsserver.Session = null,
+    allow_run: [run_command.max_entries][]const u8 = undefined,
+    allow_run_len: usize = 0,
+
+    pub fn allowedRuns(self: *const Policy) []const []const u8 {
+        return self.allow_run[0..self.allow_run_len];
+    }
 };
+
+pub const RunRefusal = struct { entry: []const u8, reason: run_command.EntryError };
+
+pub fn refusedRunEntry(args: anytype) ?RunRefusal {
+    var i: usize = 0;
+    while (i + 1 < args.len) : (i += 1) {
+        const arg: []const u8 = args[i];
+        if (!std.mem.eql(u8, arg, "--allow-run")) continue;
+        const entry: []const u8 = args[i + 1];
+        run_command.validateEntry(entry) catch |err| return .{ .entry = entry, .reason = err };
+        i += 1;
+    }
+    return null;
+}
 
 pub fn parsePolicy(args: anytype) ?Policy {
     var policy: Policy = .{};
@@ -36,6 +57,15 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.test_command = command;
+        } else if (std.mem.eql(u8, arg, "--allow-run")) {
+            if (i + 1 >= args.len or policy.allow_run_len == run_command.max_entries) return null;
+            i += 1;
+            const command: []const u8 = args[i];
+            run_command.validateEntry(command) catch return null;
+            if (run_command.match(policy.allowedRuns(), command) == null) {
+                policy.allow_run[policy.allow_run_len] = command;
+                policy.allow_run_len += 1;
+            }
         } else if (std.mem.eql(u8, arg, "--mirror")) {
             if (policy.mirror_enabled) return null;
             policy.mirror_enabled = true;
@@ -54,6 +84,15 @@ pub fn parsePolicy(args: anytype) ?Policy {
         } else return null;
     }
     return policy;
+}
+
+pub const model_policy_fields = [_][]const u8{ "test_cmd", "typecheck_cmd", "allow_repo_config", "allow_repo_memory", "shadow_root", "allow_run" };
+
+pub fn refuseModelPolicy(args: ?Value) error{ModelSuppliedTestPolicy}!void {
+    const a = args orelse return;
+    for (model_policy_fields) |field| {
+        if (tool_result.getField(a, field) != null) return error.ModelSuppliedTestPolicy;
+    }
 }
 
 pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestPolicy}![]const u8 {
