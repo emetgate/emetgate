@@ -20,9 +20,10 @@ pub const Edit = struct {
     expected_hash: symbol.Expected,
     new_body: []const u8 = "",
     op: Op = .write,
+    move_source: ?[]const u8 = null,
 };
 
-pub const Action = enum { write, insert, create, delete_symbol, delete_file };
+pub const Action = enum { write, insert, create, delete_symbol, delete_file, move_file };
 
 pub const Prepared = struct {
     rel: []u8,
@@ -32,10 +33,12 @@ pub const Prepared = struct {
     snapshot: ?*Snapshot = null,
     body: symbol.Span = .{ .start = 0, .end = 0 },
     removed: ?symmetry.Local = null,
+    source_rel: ?[]u8 = null,
     removed_span: symbol.Span = .{ .start = 0, .end = 0 },
     name_offset: ?u32 = null,
 
     pub fn deinit(self: Prepared, gpa: Allocator) void {
+        if (self.source_rel) |s| gpa.free(s);
         if (self.snapshot) |s| s.destroy();
         gpa.free(self.rel);
     }
@@ -47,7 +50,7 @@ pub const Prepared = struct {
 
     pub fn addsCode(self: Prepared) bool {
         return switch (self.action) {
-            .write, .insert, .create => true,
+            .write, .insert, .create, .move_file => true,
             .delete_symbol, .delete_file => false,
         };
     }

@@ -75,6 +75,11 @@ module.exports = {
         if (p.echo) return [location({ file: file, start: position, end: position + p.echo })];
         return (p.rename || []).map(location);
       },
+      getEditsForFileRename(oldPath, newPath) {
+        const p = plan();
+        act(p);
+        return (p.fileRename || []).map((e) => ({ fileName: e.file, textChanges: [{ span: { start: e.start, length: e.end - e.start }, newText: e.text }] }));
+      },
       findReferences(file, position) {
         const p = plan();
         act(p);
