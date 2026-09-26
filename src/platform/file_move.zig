@@ -273,7 +273,9 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
 
     const before: paths.Existing = .{ .io = io };
-    const after: paths.Existing = .{ .io = io, .virtual = &.{request.to_abs}, .removed = &.{request.from_abs} };
+    const virtual = [_][]const u8{request.to_abs};
+    const removed = [_][]const u8{request.from_abs};
+    const after: paths.Existing = .{ .io = io, .virtual = &virtual, .removed = &removed };
     var files: std.ArrayList(FileEdits) = .empty;
     try files.append(arena, .{ .abs = request.from_abs, .snapshot = moved });
     const own_style_source = moved.source;
