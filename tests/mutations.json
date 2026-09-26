@@ -3320,8 +3320,8 @@
     {
       "id": "RM13-mcp-try-forces-trust",
       "file": "src/protocol/handlers.zig",
-      "from": ".allow_repo_memory = policy.allow_repo_memory,\n",
-      "to": ".allow_repo_memory = true,\n",
+      "from": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = policy.allow_repo_memory,\n",
+      "to": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = true,\n",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]
@@ -3329,8 +3329,8 @@
     {
       "id": "RM14-mcp-try-drops-the-flag",
       "file": "src/protocol/handlers.zig",
-      "from": ".allow_repo_memory = policy.allow_repo_memory,\n",
-      "to": ".allow_repo_memory = false,\n",
+      "from": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = policy.allow_repo_memory,\n",
+      "to": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = false,\n",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]
