@@ -8,13 +8,14 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **823**
 - Mutations declared in `tests/mutations.json`: **490**
-  - killed: **471**
+  - killed: **468**
   - equivalent: **5**
   - defense in depth: **3**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
+  - survives, not yet classified: **3** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch)
 - Red-team suites: **7** files, **56** tests total
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
@@ -562,9 +563,9 @@ python tools/verification_page.py --check
 | `R4-mirror-stale-hash-not-updated` | `src/protocol/mirror.zig` | `slot.* = hash;` -> `slot.* = slot.*;` | with --mirror, a changed symbol body is reported again in full with its new hash | killed |
 | `R5-mirror-reset-keeps-entries` | `src/protocol/mirror.zig` | `self.entries.clearRetainingCapacity();` -> `` | reset forgets every remembered hash so the next check reports changed | killed |
 | `R6-range-not-widened-to-symbol` | `src/engine/line_range.zig` | `if (overlaps(entry.declaration, range)) try out.append(gpa, ent...` -> `if (overlaps(range, range)) try out.append(gpa, entry);` | emetgate_read_symbol with a line range hitting no symbol is a tool error | killed |
-| `R11-cache-stamp-check-skipped` | `src/engine/tree_cache.zig` | `if (sameStamp(entry.stamp, fs)) {` -> `if (fs.size == fs.size) {` | load reparses when the file's mtime or size changed on disk | killed |
-| `R12-cache-not-invalidated-after-try` | `src/protocol/handlers.zig` | `if (policy.tree_cache) \|cache\| cache.invalidate(file_abs);` -> `` | with a tree cache, read_symbol after a committed emetgate_try reflects the chan... | killed |
-| `R13-cache-not-invalidated-after-try-batch` | `src/protocol/handlers.zig` | `if (policy.tree_cache) \|cache\| for (edits) \|edit\| cache.inv...` -> `` | with a tree cache, read_symbol after a committed emetgate_try_batch reflects th... | killed |
+| `R11-cache-stamp-check-skipped` | `src/engine/tree_cache.zig` | `if (sameStamp(entry.stamp, fs)) {` -> `if (fs.size == fs.size) {` | defense-in-depth: unchangedContent still hashes the file and reparses on a mismatch, so a... | survives (unclassified) |
+| `R12-cache-not-invalidated-after-try` | `src/protocol/handlers.zig` | `if (policy.tree_cache) \|cache\| cache.invalidate(file_abs);` -> `` | defense-in-depth: the next load hashes the file regardless of invalidation and reparses b... | survives (unclassified) |
+| `R13-cache-not-invalidated-after-try-batch` | `src/protocol/handlers.zig` | `if (policy.tree_cache) \|cache\| for (edits) \|edit\| cache.inv...` -> `` | defense-in-depth: same as R12, the content hash on the next load catches the batch edit e... | survives (unclassified) |
 | `R14-cache-content-hash-skipped` | `src/engine/tree_cache.zig` | `if (self.unchangedContent(io, abs_path, entry.content_hash)) {` -> `if (true) {` | a racy mtime collision does not serve stale content, the content hash catches it | killed |
 | `R15-cache-key-not-normalized` | `src/engine/tree_cache.zig` | `if (byte.* == '/') byte.* = '\\';` -> `if (false) byte.* = '\\';` | normalizedKey folds slash direction and case so the same file has one entry | killed |
 | `R16-cache-budget-ignored` | `src/engine/tree_cache.zig` | `while (self.total_bytes > self.budget_bytes and self.entries.co...` -> `while (false and self.entries.count() > 1) {` | insert evicts the least recently touched entry once the byte budget is exceeded | killed |
