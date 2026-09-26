@@ -5691,11 +5691,20 @@
     {
       "id": "SR1-index-stale-entry-trusted",
       "file": "src/platform/search_index.zig",
-      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size) {",
+      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {",
       "to": "if (true) {",
       "kills": [
         "refresh reuses unchanged entries and recomputes a file that changed",
         "a stale index does not hide a match added to a file after the index was built"
+      ]
+    },
+    {
+      "id": "SR6-racy-stamp-not-checked",
+      "file": "src/platform/search_index.zig",
+      "from": "and !p.isRacy(stamp)) {",
+      "to": ") {",
+      "kills": [
+        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set"
       ]
     },
     {

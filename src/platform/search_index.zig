@@ -1,13 +1,18 @@
 const std = @import("std");
+const windows = std.os.windows;
 const sandbox = @import("sandbox.zig");
 const shadow_root = @import("shadow_root.zig");
+const disk = @import("disk.zig");
 const symbol = @import("../engine/symbol.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
+const WidePath = [std.fs.max_path_bytes:0]u16;
 
 pub const max_indexed_file_bytes: usize = 1 * 1024 * 1024;
 const max_index_file_bytes: usize = 64 * 1024 * 1024;
+
+pub const racy_window_ns: i96 = 3 * std.time.ns_per_s;
 
 pub const Stamp = struct {
     mtime_ns: i96,
@@ -23,6 +28,7 @@ pub const Entry = struct {
 pub const Index = struct {
     arena: *std.heap.ArenaAllocator,
     entries: []Entry,
+    written_ns: ?i96 = null,
 
     pub fn deinit(self: Index) void {
         const gpa = self.arena.child_allocator;
@@ -35,6 +41,12 @@ pub const Index = struct {
             if (std.mem.eql(u8, entry.path, path)) return entry;
         }
         return null;
+    }
+
+    fn isRacy(self: Index, stamp: Stamp) bool {
+        const written = self.written_ns orelse return false;
+        const delta = stamp.mtime_ns - written;
+        return delta > -racy_window_ns and delta < racy_window_ns;
     }
 };
 
@@ -122,7 +134,7 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
 
         if (previous) |p| {
             if (p.find(rel)) |old| {
-                if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size) {
+                if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {
                     try entries.append(a, .{
                         .path = try a.dupe(u8, rel),
                         .stamp = stamp,
@@ -147,13 +159,12 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
     return .{ .arena = arena, .entries = try entries.toOwnedSlice(a) };
 }
 
-pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index) !void {
-    if (std.fs.path.dirname(path)) |dir| try Dir.cwd().createDirPath(io, dir);
-
+fn renderBody(gpa: Allocator, index: Index, written_ns: i96) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     const w = &out.writer;
     try w.writeAll("emetgate-search-index v1\n");
+    try w.print("W {x}\n", .{written_ns});
     for (index.entries) |entry| {
         try w.print("F {x} {d} ", .{ entry.stamp.mtime_ns, entry.stamp.size });
         for (entry.trigrams, 0..) |t, i| {
@@ -164,9 +175,58 @@ pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index) !void {
     }
     const hash = symbol.hashOf(out.written());
     try w.print("C {s}\n", .{&symbol.formatHash(hash)});
-
-    try Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.written() });
+    return out.toOwnedSlice();
 }
+
+pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index) !void {
+    if (std.fs.path.dirname(path)) |dir| try Dir.cwd().createDirPath(io, dir);
+
+    var random: [8]u8 = undefined;
+    io.random(&random);
+    const tag = std.fmt.bytesToHex(random, .lower);
+    const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path, &tag });
+    defer gpa.free(temp);
+
+    const first_pass = try renderBody(gpa, index, 0);
+    defer gpa.free(first_pass);
+    try disk.writeDurably(io, temp, first_pass);
+
+    const stat = Dir.cwd().statFile(io, temp, .{}) catch {
+        _ = Dir.deleteFileAbsolute(io, temp) catch {};
+        return error.SearchIndexWriteFailed;
+    };
+    Dir.deleteFileAbsolute(io, temp) catch {};
+    const final_body = try renderBody(gpa, index, stat.mtime.nanoseconds);
+    defer gpa.free(final_body);
+    try disk.writeDurably(io, temp, final_body);
+
+    moveDurablyReplacing(temp, path) catch |err| {
+        _ = Dir.deleteFileAbsolute(io, temp) catch {};
+        return err;
+    };
+}
+
+fn moveDurablyReplacing(from: []const u8, to: []const u8) !void {
+    var from_wide: WidePath = undefined;
+    var to_wide: WidePath = undefined;
+    const from_ptr = try toWide(&from_wide, from);
+    const to_ptr = try toWide(&to_wide, to);
+    if (win.MoveFileExW(from_ptr, to_ptr, win.movefile_replace_existing | win.movefile_write_through) == .FALSE) return error.RenameFailed;
+}
+
+fn toWide(buffer: *WidePath, path: []const u8) ![*:0]const u16 {
+    const len = std.unicode.wtf8ToWtf16Le(buffer, path) catch return error.InvalidWtf8;
+    if (len >= buffer.len) return error.NameTooLong;
+    buffer[len] = 0;
+    return buffer;
+}
+
+const win = struct {
+    const movefile_replace_existing: windows.DWORD = 0x00000001;
+    const movefile_write_through: windows.DWORD = 0x00000008;
+
+    extern "kernel32" fn MoveFileExW(from: [*:0]const u16, to: [*:0]const u16, flags: windows.DWORD) callconv(.winapi) windows.BOOL;
+};
 
 pub fn load(gpa: Allocator, io: std.Io, path: []const u8) !?Index {
     const bytes = Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_index_file_bytes)) catch return null;
@@ -186,6 +246,9 @@ fn parse(gpa: Allocator, bytes: []const u8) !?Index {
     var lines = std.mem.splitScalar(u8, body, '\n');
     const header = lines.next() orelse return null;
     if (!std.mem.eql(u8, header, "emetgate-search-index v1")) return null;
+    const written_line = lines.next() orelse return null;
+    if (written_line.len < 2 or written_line[0] != 'W') return null;
+    const written_ns = std.fmt.parseInt(i96, written_line[2..], 16) catch return null;
 
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
@@ -221,7 +284,7 @@ fn parse(gpa: Allocator, bytes: []const u8) !?Index {
             .trigrams = try trigrams.toOwnedSlice(a),
         });
     }
-    return Index{ .arena = arena, .entries = try entries.toOwnedSlice(a) };
+    return Index{ .arena = arena, .entries = try entries.toOwnedSlice(a), .written_ns = written_ns };
 }
 
 const testing = std.testing;
@@ -311,4 +374,40 @@ test "refresh reuses unchanged entries and recomputes a file that changed" {
     const b_entry = second.find("b.ts").?;
     try testing.expect(!std.mem.eql(u24, a_entry.trigrams, first.find("a.ts").?.trigrams));
     try testing.expectEqualSlices(u24, first.find("b.ts").?.trigrams, b_entry.trigrams);
+}
+
+test "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export const value = 1;\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{root_abs});
+    defer testing.allocator.free(abs);
+
+    const stale_trigrams = try trigramsOfAlloc(testing.allocator, "export const value = 1;\n");
+    defer testing.allocator.free(stale_trigrams);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export const zzzneedle = 2;\n" });
+    const current_stamp = statOf(testing.io, abs).?;
+
+    var fake_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var fake_entries = [_]Entry{.{
+        .path = "a.ts",
+        .stamp = current_stamp,
+        .trigrams = stale_trigrams,
+    }};
+    const fake_previous = Index{
+        .arena = &fake_arena,
+        .entries = fake_entries[0..],
+        .written_ns = current_stamp.mtime_ns,
+    };
+    defer fake_arena.deinit();
+
+    const refreshed = try refresh(testing.allocator, testing.io, root_abs, &.{"a.ts"}, fake_previous);
+    defer refreshed.deinit();
+
+    const fresh_trigrams = try trigramsOfAlloc(testing.allocator, "export const zzzneedle = 2;\n");
+    defer testing.allocator.free(fresh_trigrams);
+    try testing.expectEqualSlices(u24, fresh_trigrams, refreshed.find("a.ts").?.trigrams);
 }
