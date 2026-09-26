@@ -16,6 +16,7 @@ pub const removal = src.removal;
 pub const rename = src.rename;
 pub const scope = src.scope;
 pub const declarations = src.declarations;
+pub const modules = src.modules;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;

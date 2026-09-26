@@ -113,6 +113,24 @@ pub const Rename = struct {
     quotes: []const u8,
 };
 
+pub const Modules = struct {
+    import_statement: []const u8,
+    export_statement: []const u8,
+    source_field: []const u8,
+    declaration_field: []const u8,
+    import_clause: []const u8,
+    named_imports: []const u8,
+    import_specifier: []const u8,
+    namespace_import: []const u8,
+    export_clause: []const u8,
+    export_specifier: []const u8,
+    name_field: []const u8,
+    alias_field: []const u8,
+    type_keywords: []const []const u8,
+    default_keyword: []const u8,
+    star_token: []const u8,
+};
+
 pub const DeclarationKind = enum { class, variable, interface, type_alias, enumeration, field, enum_member };
 
 pub const DeclarationShape = struct {
@@ -176,6 +194,7 @@ pub const Profile = struct {
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
     visibility_keywords: []const []const u8 = &.{},
     rename: ?*const Rename = null,
+    modules: ?*const Modules = null,
     declarations: Declarations = .{},
 
     pub fn hasVisibilityKeyword(self: *const Profile, node: ts.Node) bool {

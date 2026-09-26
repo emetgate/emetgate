@@ -14,6 +14,7 @@ pub const removal = @import("engine/removal.zig");
 pub const rename = @import("engine/rename.zig");
 pub const scope = @import("engine/scope.zig");
 pub const declarations = @import("engine/declarations.zig");
+pub const modules = @import("engine/modules.zig");
 pub const coverage = @import("engine/coverage.zig");
 pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");
