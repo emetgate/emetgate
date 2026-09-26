@@ -52,6 +52,16 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("to stderr\n", .{});
         ExitProcess(0);
     }
+    if (std.mem.eql(u8, mode, "failfast")) {
+        try out.writeAll("before the fail-fast\n");
+        try out.flush();
+        const fast_fail_stack_cookie_check_failure: usize = 2;
+        asm volatile ("int $0x29"
+            :
+            : [code] "{rcx}" (fast_fail_stack_cookie_check_failure),
+            : .{ .memory = true });
+        unreachable;
+    }
     if (std.mem.eql(u8, mode, "spin")) {
         var counter: u64 = 0;
         while (true) {
