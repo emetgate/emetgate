@@ -67,7 +67,7 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
     defer token.close();
 
     const started = std.Io.Timestamp.now(io, .awake);
-    var child = try spawnRestricted(gpa, token, command);
+    var child = try spawnRestricted(gpa, token, command, .command);
     defer child.kill(io);
     try requireLowIntegrity(child.id.?);
     try job.assign(child.id.?);
@@ -255,6 +255,12 @@ const Pipe = struct {
     var serial: std.atomic.Value(u32) = .init(0);
 
     fn create() !Pipe {
+        return open(.inbound);
+    }
+
+    const Direction = enum { inbound, outbound };
+
+    fn open(direction: Direction) !Pipe {
         var name_buf: [96]u8 = undefined;
         const name = try std.fmt.bufPrint(&name_buf, "\\\\.\\pipe\\emetgate-sandbox-{d}-{d}-{d}", .{
             win.GetCurrentProcessId(),
@@ -265,23 +271,34 @@ const Pipe = struct {
         const len = try std.unicode.wtf8ToWtf16Le(&name_w, name);
         name_w[len] = 0;
 
-        const read = win.CreateNamedPipeW(
+        const server_access = switch (direction) {
+            .inbound => win.pipe_access_inbound | win.file_flag_overlapped,
+            .outbound => win.pipe_access_outbound,
+        };
+        const server = win.CreateNamedPipeW(
             &name_w,
-            win.pipe_access_inbound | win.file_flag_overlapped | win.file_flag_first_pipe_instance,
+            server_access | win.file_flag_first_pipe_instance,
             win.pipe_type_byte | win.pipe_wait | win.pipe_reject_remote_clients,
             1,
-            0,
+            64 * 1024,
             64 * 1024,
             0,
             null,
         );
-        if (read == std.os.windows.INVALID_HANDLE_VALUE) return error.PipeCreationFailed;
-        errdefer std.os.windows.CloseHandle(read);
+        if (server == std.os.windows.INVALID_HANDLE_VALUE) return error.PipeCreationFailed;
+        errdefer std.os.windows.CloseHandle(server);
 
         var inherit: win.SecurityAttributes = .{ .length = @sizeOf(win.SecurityAttributes), .descriptor = null, .inherit = .TRUE };
-        const write = win.CreateFileW(&name_w, win.generic_write | win.file_read_attributes, 0, &inherit, win.open_existing, 0, null);
-        if (write == std.os.windows.INVALID_HANDLE_VALUE) return error.PipeCreationFailed;
-        return .{ .read = read, .write = write };
+        const client_access = switch (direction) {
+            .inbound => win.generic_write | win.file_read_attributes,
+            .outbound => win.generic_read | win.file_write_attributes,
+        };
+        const client = win.CreateFileW(&name_w, client_access, 0, &inherit, win.open_existing, 0, null);
+        if (client == std.os.windows.INVALID_HANDLE_VALUE) return error.PipeCreationFailed;
+        return switch (direction) {
+            .inbound => .{ .read = server, .write = client },
+            .outbound => .{ .read = client, .write = server },
+        };
     }
 };
 
@@ -293,7 +310,9 @@ fn openNul() !std.os.windows.HANDLE {
     return handle;
 }
 
-fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command) !std.process.Child {
+const Stdio = enum { command, service };
+
+fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command, stdio: Stdio) !std.process.Child {
     if (command.argv.len == 0) return error.FileNotFound;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -308,11 +327,16 @@ fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command) !std.proce
     const stdout_pipe = try Pipe.create();
     errdefer std.os.windows.CloseHandle(stdout_pipe.read);
     defer std.os.windows.CloseHandle(stdout_pipe.write);
-    const stderr_pipe = try Pipe.create();
-    errdefer std.os.windows.CloseHandle(stderr_pipe.read);
-    defer std.os.windows.CloseHandle(stderr_pipe.write);
+    const stderr_pipe: ?Pipe = if (stdio == .command) try Pipe.create() else null;
+    errdefer if (stderr_pipe) |pipe| std.os.windows.CloseHandle(pipe.read);
+    defer if (stderr_pipe) |pipe| std.os.windows.CloseHandle(pipe.write);
+    const stdin_pipe: ?Pipe = if (stdio == .service) try Pipe.open(.outbound) else null;
+    errdefer if (stdin_pipe) |pipe| std.os.windows.CloseHandle(pipe.write);
+    defer if (stdin_pipe) |pipe| std.os.windows.CloseHandle(pipe.read);
 
-    var inherited = [_]std.os.windows.HANDLE{ nul, stdout_pipe.write, stderr_pipe.write };
+    const child_stdin = if (stdin_pipe) |pipe| pipe.read else nul;
+    const child_stderr = if (stderr_pipe) |pipe| pipe.write else nul;
+    var inherited = [_]std.os.windows.HANDLE{ nul, stdout_pipe.write, if (stdio == .service) child_stdin else child_stderr };
     var list_size: usize = 0;
     _ = win.InitializeProcThreadAttributeList(null, 1, 0, &list_size);
     const list = try arena.alignedAlloc(u8, .of(usize), list_size);
@@ -326,9 +350,9 @@ fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command) !std.proce
     };
     startup.info.cb = @sizeOf(win.StartupInfoEx);
     startup.info.dwFlags = std.os.windows.STARTF_USESTDHANDLES;
-    startup.info.hStdInput = nul;
+    startup.info.hStdInput = child_stdin;
     startup.info.hStdOutput = stdout_pipe.write;
-    startup.info.hStdError = stderr_pipe.write;
+    startup.info.hStdError = child_stderr;
 
     var info: std.os.windows.PROCESS.INFORMATION = undefined;
     const flags = win.create_suspended | win.create_unicode_environment | win.create_no_window | win.extended_startupinfo_present;
@@ -344,11 +368,51 @@ fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command) !std.proce
     return .{
         .id = info.hProcess,
         .thread_handle = info.hThread,
-        .stdin = null,
+        .stdin = if (stdin_pipe) |pipe| .{ .handle = pipe.write, .flags = .{ .nonblocking = false } } else null,
         .stdout = .{ .handle = stdout_pipe.read, .flags = .{ .nonblocking = true } },
-        .stderr = .{ .handle = stderr_pipe.read, .flags = .{ .nonblocking = true } },
+        .stderr = if (stderr_pipe) |pipe| .{ .handle = pipe.read, .flags = .{ .nonblocking = true } } else null,
         .request_resource_usage_statistics = false,
     };
+}
+
+pub const Service = struct {
+    job: Job,
+    process: std.os.windows.HANDLE,
+    stdin: std.Io.File,
+    stdout: std.Io.File,
+
+    pub fn running(self: *const Service) bool {
+        return !hasExited(self.process);
+    }
+
+    pub fn stop(self: *Service) void {
+        self.job.stop();
+        std.os.windows.CloseHandle(self.stdin.handle);
+        std.os.windows.CloseHandle(self.stdout.handle);
+        std.os.windows.CloseHandle(self.process);
+        self.job.close();
+        self.* = undefined;
+    }
+};
+
+pub fn spawnService(gpa: Allocator, argv: []const []const u8, cwd: []const u8) !Service {
+    if (builtin.os.tag != .windows) return error.SandboxUnsupported;
+    const job = try Job.create();
+    errdefer job.close();
+    const token = try LowToken.create();
+    defer token.close();
+    const child = try spawnRestricted(gpa, token, .{ .argv = argv, .cwd = cwd }, .service);
+    errdefer {
+        _ = win.TerminateProcess(child.id.?, win.terminated_exit_code);
+        std.os.windows.CloseHandle(child.stdin.?.handle);
+        std.os.windows.CloseHandle(child.stdout.?.handle);
+        std.os.windows.CloseHandle(child.id.?);
+    }
+    defer std.os.windows.CloseHandle(child.thread_handle);
+    try requireLowIntegrity(child.id.?);
+    try job.assign(child.id.?);
+    try resumeMainThread(child.thread_handle);
+    return .{ .job = job, .process = child.id.?, .stdin = child.stdin.?, .stdout = child.stdout.? };
 }
 
 pub fn environmentValue(arena: Allocator, name: [:0]const u16) !?[]u8 {
@@ -449,6 +513,7 @@ const win = struct {
     const token_integrity_level: c_int = 25;
     const se_group_integrity: windows.DWORD = 0x00000020;
     const pipe_access_inbound: windows.DWORD = 0x00000001;
+    const pipe_access_outbound: windows.DWORD = 0x00000002;
     const file_flag_overlapped: windows.DWORD = 0x40000000;
     const file_flag_first_pipe_instance: windows.DWORD = 0x00080000;
     const pipe_type_byte: windows.DWORD = 0;
@@ -457,6 +522,7 @@ const win = struct {
     const generic_read: windows.DWORD = 0x80000000;
     const generic_write: windows.DWORD = 0x40000000;
     const file_read_attributes: windows.DWORD = 0x0080;
+    const file_write_attributes: windows.DWORD = 0x0100;
     const file_share_read: windows.DWORD = 0x1;
     const file_share_write: windows.DWORD = 0x2;
     const open_existing: windows.DWORD = 3;
@@ -586,6 +652,7 @@ const win = struct {
     extern "kernel32" fn SetInformationJobObject(job: windows.HANDLE, class: c_int, info: *const anyopaque, length: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn QueryInformationJobObject(job: windows.HANDLE, class: c_int, info: *anyopaque, length: windows.DWORD, returned: ?*windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn AssignProcessToJobObject(job: windows.HANDLE, process: windows.HANDLE) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn TerminateProcess(process: windows.HANDLE, exit_code: windows.UINT) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn TerminateJobObject(job: windows.HANDLE, exit_code: windows.UINT) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetExitCodeProcess(process: windows.HANDLE, code: *windows.DWORD) callconv(.winapi) windows.BOOL;
@@ -967,4 +1034,36 @@ test "a program that does not exist is an error, not a hang" {
         .cwd = ".",
         .limits = .{ .timeout_ms = 1000 },
     }));
+}
+
+test "a service keeps running, answers each line on its stdin and dies with its job" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
+    var stopped = false;
+    defer if (!stopped) service.stop();
+    try requireLowIntegrity(service.process);
+
+    var streams: MultiReader.Buffer(1) = undefined;
+    var reader: MultiReader = undefined;
+    reader.init(testing.allocator, testing.io, streams.toStreams(), &.{service.stdout});
+    var reading = true;
+    defer if (reading) reader.deinit();
+    const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = 10 * std.time.ns_per_s }, .clock = .awake } };
+    const deadline = timeout.toDeadline(testing.io).deadline;
+
+    for ([_][]const u8{ "first\n", "second\n" }, [_][]const u8{ "echo first\n", "echo second\n" }) |line, expected| {
+        try service.stdin.writeStreamingAll(testing.io, line);
+        const r = reader.reader(0);
+        while (std.mem.indexOfScalar(u8, r.buffered(), '\n') == null) try reader.fill(64, .{ .deadline = deadline });
+        const at = std.mem.indexOfScalar(u8, r.buffered(), '\n').?;
+        try testing.expectEqualStrings(expected, r.buffered()[0 .. at + 1]);
+        r.toss(at + 1);
+    }
+    try testing.expect(service.running());
+    const pid = win.GetProcessId(service.process);
+    reader.deinit();
+    reading = false;
+    service.stop();
+    stopped = true;
+    try testing.expect(processIsGone(pid));
 }
