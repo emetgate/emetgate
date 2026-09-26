@@ -253,11 +253,8 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const w: Work = .{ .gpa = gpa, .arena = arena, .io = io, .runtime = runtime, .root = root };
-    if (tsserver.sameFile(request.from_abs, request.to_abs)) {
-        if (std.mem.eql(u8, request.from_abs, request.to_abs)) return error.SameFile;
-        return error.CaseOnlyRename;
-    }
-    if (std.ascii.eqlIgnoreCase(request.from_abs, request.to_abs)) return error.CaseOnlyRename;
+    if (std.mem.eql(u8, request.from_abs, request.to_abs)) return error.SameFile;
+    if (tsserver.sameFile(request.from_abs, request.to_abs)) return error.CaseOnlyRename;
     if (blk: {
         std.Io.Dir.cwd().access(io, request.to_abs, .{}) catch break :blk false;
         break :blk true;

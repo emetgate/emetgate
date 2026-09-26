@@ -218,3 +218,38 @@ test "file move crash: a target path longer than MAX_PATH is created, placed, ve
     try testing.expectEqualStrings(a_new, text);
     try testing.expect(!try setup.tracked("src/a.ts"));
 }
+
+const Intruder = struct {
+    setup: *Setup,
+    placed: bool = false,
+
+    fn reached(context: *anyopaque) bool {
+        const self: *Intruder = @ptrCast(@alignCast(context));
+        if (self.placed or !self.setup.repo.exists("src/lib/deep") or self.setup.repo.exists("src/lib/deep/a.ts")) return false;
+        self.setup.repo.write("src/lib/deep/a.ts", "intruder\n") catch return false;
+        self.placed = true;
+        return false;
+    }
+};
+
+test "file move crash: a file another process puts at the target before the placement is never replaced" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var setup = try Setup.init();
+    defer setup.deinit();
+    var intruder: Intruder = .{ .setup = &setup };
+    const step: disk.Step = .{ .context = &intruder, .reached = Intruder.reached };
+    try testing.expectError(error.Conflict, setup.run(&step));
+    try testing.expect(intruder.placed);
+    try testing.expect(try setup.file("src/lib/deep/a.ts", "intruder\n"));
+    try testing.expect(try setup.file("src/a.ts", a_old));
+    try testing.expect(try setup.file("src/u1.ts", u1_old));
+}
+
+test "file move crash: the disk layer refuses a rename that only changes letter case" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var setup = try Setup.init();
+    defer setup.deinit();
+    const upper = try setup.repo.abs(testing.allocator, "src/A.ts");
+    defer testing.allocator.free(upper);
+    try testing.expectError(error.CaseOnlyRename, disk.stageRename(testing.allocator, testing.io, setup.source, upper, a_old, symbol.fileHash(a_old)));
+}
