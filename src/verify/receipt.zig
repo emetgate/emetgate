@@ -317,7 +317,7 @@ pub fn encode(arena: Allocator, r: Receipt) ![]u8 {
 
 const testing = std.testing;
 
-pub fn sample() Receipt {
+fn sample(arena: Allocator) !Receipt {
     return .{
         .batch = "0123456789abcdef",
         .operation = .@"try",
@@ -325,10 +325,10 @@ pub fn sample() Receipt {
         .evidence = "test",
         .resolver = null,
         .subjects = &.{},
-        .files = &.{.{ .path = "src/a.ts", .before = blake3("a"), .after = blake3("b") }},
-        .symbols = &.{.{ .path = "src/a.ts", .ref = "add", .before = blake3("x"), .after = blake3("y") }},
-        .checks = &.{.{ .kind = .@"test", .command = "npm test", .command_digest = blake3("npm test"), .exit_code = 0, .duration_ms = 12 }},
-        .rules = &.{.{ .id = "R1", .digest = blake3("rule") }},
+        .files = try arena.dupe(FileEntry, &.{.{ .path = "src/a.ts", .before = blake3("a"), .after = blake3("b") }}),
+        .symbols = try arena.dupe(SymbolEntry, &.{.{ .path = "src/a.ts", .ref = "add", .before = blake3("x"), .after = blake3("y") }}),
+        .checks = try arena.dupe(Check, &.{.{ .kind = .@"test", .command = "npm test", .command_digest = blake3("npm test"), .exit_code = 0, .duration_ms = 12 }}),
+        .rules = try arena.dupe(Rule, &.{.{ .id = "R1", .digest = blake3("rule") }}),
         .sandbox = .{ .integrity = "low", .job_memory_bytes = 1, .active_process_limit = 2, .timeout_ms = 3, .output_limit_bytes = 4 },
         .version = "0.1.0",
     };
@@ -338,7 +338,7 @@ test "receipt: a receipt encodes to canonical JSON and decodes back to the same 
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const bytes = try encode(arena, sample());
+    const bytes = try encode(arena, try sample(arena));
     try testing.expect(std.mem.startsWith(u8, bytes, "{\"_type\":\"https://in-toto.io/Statement/v1\",\"predicate\":{\"batch\""));
     const parsed = try jcs.parse(arena, bytes);
     const again = try jcs.canonicalize(arena, parsed.value);
@@ -354,7 +354,7 @@ test "receipt: an unknown field, a missing field, an escaping path and a bad dig
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const good = try encode(arena, sample());
+    const good = try encode(arena, try sample(arena));
     const cases = [_]struct { from: []const u8, to: []const u8 }{
         .{ .from = "\"batch\":", .to = "\"extra\":1,\"batch\":" },
         .{ .from = "\"evidence\":\"test\",", .to = "" },
