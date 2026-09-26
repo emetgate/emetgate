@@ -94,5 +94,6 @@ pub fn declarations(field: DeclarationShape) Declarations {
         .enum_members = &.{.{ .node = "enum_assignment", .kind = .enum_member, .name_field = "name" }},
         .enum_bare_member = "property_identifier",
         .destructuring = &.{ "object_pattern", "array_pattern" },
+        .static_keyword = "static",
     };
 }

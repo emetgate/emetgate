@@ -4,6 +4,7 @@ const traversal = @import("traversal.zig");
 const functions_mod = @import("functions.zig");
 const ref_mod = @import("ref.zig");
 const profile_mod = @import("lang/profile.zig");
+const declarations_mod = @import("declarations.zig");
 
 const Allocator = std.mem.Allocator;
 const Profile = profile_mod.Profile;
@@ -87,9 +88,12 @@ pub const Symbol = struct {
     ambiguous: bool = false,
 };
 
+pub const Declaration = declarations_mod.Declaration;
+
 pub const Table = struct {
     arena: *std.heap.ArenaAllocator,
     symbols: []Symbol,
+    declarations: []Declaration = &.{},
 
     pub const BuildError = error{SourceHasErrors} || Allocator.Error;
     pub const ResolveError = error{ SymbolNotFound, AmbiguousSymbol };
@@ -111,7 +115,8 @@ pub const Table = struct {
             try symbols.append(arena.allocator(), symbol);
         }
         markAmbiguous(symbols.items);
-        return .{ .arena = arena, .symbols = symbols.items };
+        const declarations = try declarations_mod.collect(arena.allocator(), profile, tree);
+        return .{ .arena = arena, .symbols = symbols.items, .declarations = declarations };
     }
 
     pub fn deinit(self: Table) void {
@@ -128,6 +133,20 @@ pub const Table = struct {
             found = symbol;
         }
         return found orelse error.SymbolNotFound;
+    }
+
+    pub fn declarationMatching(self: Table, ref: Ref, hash: Hash) ?*const Declaration {
+        for (self.declarations) |*declaration| {
+            if (declaration.ref.eql(ref) and std.mem.eql(u8, &declaration.hash, &hash)) return declaration;
+        }
+        return null;
+    }
+
+    pub fn hasDeclaration(self: Table, ref: Ref) bool {
+        for (self.declarations) |declaration| {
+            if (declaration.ref.eql(ref)) return true;
+        }
+        return false;
     }
 };
 
@@ -213,11 +232,11 @@ fn containerPath(arena: Allocator, profile: *const Profile, tree: ts.Tree, node:
     return reversed.items;
 }
 
-const Declaration = struct {
+const Extent = struct {
     span: Span,
     prefix: Span = .{ .start = 0, .end = 0 },
 
-    fn hash(self: Declaration, source: []const u8) Hash {
+    fn hash(self: Extent, source: []const u8) Hash {
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update(source[self.prefix.start..self.prefix.end]);
         hasher.update(source[self.span.start..self.span.end]);
@@ -227,7 +246,7 @@ const Declaration = struct {
     }
 };
 
-fn declarationOf(profile: *const Profile, function: Function) Declaration {
+fn declarationOf(profile: *const Profile, function: Function) Extent {
     const site = bindingSite(profile, function.node);
     const own = site orelse function.node;
     var statement: ?ts.Node = null;

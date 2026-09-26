@@ -15,6 +15,7 @@ pub const symmetry = src.symmetry;
 pub const removal = src.removal;
 pub const rename = src.rename;
 pub const scope = src.scope;
+pub const declarations = src.declarations;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
@@ -78,6 +79,7 @@ test {
     _ = @import("tests/batch_delete_tool.zig");
     _ = @import("tests/redteam_batch_delete.zig");
     _ = @import("tests/tsserver.zig");
+    _ = @import("tests/declarations.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");
