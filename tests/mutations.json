@@ -5687,6 +5687,52 @@
       "kills": [
         "verify: a gated edit gets a receipt that verifies at the user's commit, tests rerun in the sandbox"
       ]
+    },
+    {
+      "id": "SR1-index-stale-entry-trusted",
+      "file": "src/platform/search_index.zig",
+      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size) {",
+      "to": "if (true) {",
+      "kills": [
+        "refresh reuses unchanged entries and recomputes a file that changed",
+        "a stale index does not hide a match added to a file after the index was built"
+      ]
+    },
+    {
+      "id": "SR2-index-checksum-not-verified",
+      "file": "src/platform/search_index.zig",
+      "from": "if (!std.mem.eql(u8, &actual, &claimed)) return null;",
+      "to": "_ = actual;\n    _ = claimed;",
+      "kills": [
+        "a corrupted index file is rejected instead of trusted"
+      ]
+    },
+    {
+      "id": "SR3-comment-kind-reversed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (profile.isComment(n.kind())) return .comment;",
+      "to": "if (profile.isComment(n.kind())) return .code;",
+      "kills": [
+        "a hit inside a function is grouped by its enclosing symbol with a hash and a definition role"
+      ]
+    },
+    {
+      "id": "SR4-hit-cap-ignored",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (total_hits >= max_matches) {",
+      "to": "if (false) {",
+      "kills": [
+        "the total hit count is capped and truncated is reported"
+      ]
+    },
+    {
+      "id": "SR5-directory-scope-not-enforced",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (!read_tools.inDirectory(f, place.rel)) continue;",
+      "to": "_ = place.rel;",
+      "kills": [
+        "a search scoped to a subdirectory does not return hits from outside it"
+      ]
     }
   ]
 }

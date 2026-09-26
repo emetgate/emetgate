@@ -576,6 +576,121 @@ Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the
 
 **The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,502 non-blank lines of Zig in 22 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->383 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, plus one more verdict, `consistent` (exit code 55). It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
 
+### Search
+
+`emetgate_search` (`src/protocol/search_v1.zig`) finds a literal substring or, with
+`regex:true`, a regular expression (`src/engine/regex.zig`) in git-tracked text files.
+Unlike a flat grep, hits are grouped so a result can go straight into `emetgate_try` or
+`emetgate_read_symbol` without a second lookup:
+
+- In a registered language, hits are grouped by their **enclosing symbol** (ref + content
+  hash), and each hit is tagged **code** / **comment** / **string** from the tree-sitter
+  node at the match (`profile.isComment`, `profile.strings` — data-driven per language,
+  the engine itself names no language). A hit that names a known symbol is further tagged
+  **definition** (inside the symbol's own signature, matching its name) or **reference**
+  (the callee of a call expression, per `profile.call`, or a generic identifier-reference
+  node kind). Groups with a definition hit sort first, so "where is X defined" resolves in
+  the same reply as "where is X used."
+- In a `.json` file, hits are grouped by the JSON pointer of the value they fall in
+  (`json_pointer.pointerAt`); in a `.md` file, by the innermost heading whose section
+  contains them (`markdown_heading.sectionAt`). Any other tracked text file is ungrouped
+  (line only).
+- `kinds:["code"]` (etc.) filters the kind tag before the hit cap is applied. At most 200
+  hits total, `truncated:true` when cut, matching `emetgate_scan`'s cap style.
+
+Example reply shape:
+
+```json
+{"pattern":"loadPending","regex":false,"files_total":42,"files_scanned":3,
+ "groups":[{"file":"src/index.js","symbol":"loadPending","hash":"…",
+            "hits":[{"line":93,"kind":"code","role":"definition","text":"function loadPending() {"},
+                     {"line":112,"kind":"code","role":"reference","text":"loadPending();"}]}],
+ "truncated":false}
+```
+
+**Candidate file index.** A trigram (n=3) index of git-tracked files lives outside the
+repo at `%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\index.v1` (the same hashed-path
+convention as the shadow root, `shadow_root.repoKey`, so a repo is never written into and
+a poisoned clone cannot carry a poisoned index). Each entry is a file's mtime+size stamp
+and its sorted, deduplicated set of 3-byte grams (`search_index.zig`). Before every search
+the index is **refreshed**: a file whose stamp matches its entry reuses the stored grams at
+no I/O cost; a changed, new, or removed file is recomputed from its current content, so the
+on-disk index is always caught up with the filesystem by the time it is used, then saved
+back. A file is a candidate only when its indexed grams are a superset of the query's
+grams; a file with no entry (too large, binary, or new since the last refresh completed)
+is always a candidate — filtering only ever narrows toward files that provably cannot
+match, never away from ones that might. On-disk corruption is caught by a trailing
+checksum line (`blake3` over everything before it); a checksum mismatch, a missing file,
+or any parse error makes `load` return "no index," which the caller treats exactly like an
+empty index — every file becomes a candidate, i.e. a full scan. The index can only ever
+make a search slower to skip work; it can never make it wrong.
+
+**Sparse gram size — measured, not assumed.** GitHub's Blackbird search
+(https://github.blog/2023-02-06-the-technology-behind-githubs-new-code-search/) uses
+variable-length sparse grams, chosen by a trained weighting model, instead of fixed
+trigrams; Zoekt (https://github.com/sourcegraph/zoekt) uses positional trigrams. This
+project does not have Blackbird's trained model, so `tests/bench/gram_compare.py` compares
+the plain, measurable alternative — n=3 vs n=4 fixed grams — on `eval/express-test` (215
+files) and `eval/eslint-test` (2362 files), five representative queries:
+
+| repo | n | distinct grams | candidates for 5 queries (of total files) |
+|---|---:|---:|---|
+| express-test | 3 | 20445 | 0, 15, 140, 133, 32 (of 213) |
+| express-test | 4 | 47934 | 0, 15, 140, 133, 31 (of 213) |
+| eslint-test | 3 | 68882 | 0, 44, 978, 733, 159 (of 2319) |
+| eslint-test | 4 | 243210 | 0, 44, 978, 729, 159 (of 2319) |
+
+n=4 costs 2.3-3.5x more distinct grams (bigger index) for candidate counts that are
+identical or within one file of n=3 on every query measured. n=3 (trigram, Zoekt's choice)
+is kept; n=4 bought nothing here. This is a measurement on two repos and five queries, not
+a proof it never helps — the reproduction command is in the script's docstring-equivalent
+header if a larger comparison is ever needed.
+
+**Regex candidates.** Russ Cox's trigram-index regex matching
+(https://swtch.com/~rsc/regexp/regexp4.html) derives the full set of trigrams every match
+of a regex must contain, including through alternation, by an algebra over the regex AST.
+This project's regex engine (`src/engine/regex.zig`) compiles straight to an NFA and does
+not expose that AST, so implementing Cox's algebra was out of scope for this pass.
+`regex_hint.longestLiteralChunk` (`src/engine/regex_hint.zig`) instead extracts the single
+longest metacharacter-free run in the pattern text (an escaped metacharacter breaks the
+run at the same point a real one would, so the extracted text is never a false literal)
+and uses its grams to narrow candidates when it is at least 3 bytes; a pattern with no such
+run (`.*`, `[a-z]+`) always gets a full scan. This is strictly weaker than Cox's algebra —
+it cannot combine an alternation's branches into a joint constraint — but it is sound (it
+narrows only using text that must literally appear) and it is what makes the regex
+benchmark row below faster than a full scan in the common case of a mostly-literal pattern
+with a few metacharacters.
+
+Measured with `tests/bench/search.py` against `rg` (ripgrep, what the built-in Grep tool
+uses) on `eval/express-test` and `eval/eslint-test`:
+
+| Scenario | rg tokens | emetgate tokens | ratio | rg turns | emetgate turns |
+|---|---:|---:|---:|---:|---:|
+| function name usages (+edit) | 127 | 135 | 1.06x | 2 | 1 |
+| an error message string | 315999 | 267 | 0.00x | 1 | 1 |
+| a term only in comments | 29371 | 7668 | 0.26x | 1 | 1 |
+| a JSON key value | 375981 | 6060 | 0.02x | 1 | 1 |
+| a common short word | 414187 | 6088 | 0.01x | 1 | 1 |
+| a regex pattern | 352283 | 3171 | 0.01x | 1 | 1 |
+
+One scenario is at parity rather than 3x better, reported rather than hidden: for a
+low-frequency symbol name that is already unique enough for a plain grep to return a
+handful of lines, ripgrep's raw output is already close to the minimum size, and the
+"+edit" bookkeeping charges both sides for the follow-up read needed to get an editable
+hash — emetgate pays a fixed grouping/hash JSON wrapper on top of content that was already
+small, the same physical floor the reader section's tiny-symbol row hits. Every other
+measured scenario clears the 3x bar, several by two orders of magnitude, because the
+result cap and grouping matter most exactly when a plain grep would return hundreds of
+lines the model does not need to see individually.
+
+**Limits:** no automatic index eviction (an index for a repo that is deleted or moved
+stays on disk under its old path hash; harmless, since a rebuilt repo gets a fresh hash,
+but it is never cleaned up); the regex engine's own feature set (no backreferences,
+lookaround, or counted `{n,m}` repetition, see `src/engine/regex.zig`) bounds what
+`regex:true` can express; definition/reference tagging is a heuristic over available
+profile data (declaration span, call-site field), not a full tags.scm implementation, and
+can miss less direct reference shapes (e.g. an identifier passed as a callback rather than
+called directly stays untagged, not mistagged).
 ## How the kernel itself is verified
 
 Numbers in this README that can be read out of the source or the mutation corpus are

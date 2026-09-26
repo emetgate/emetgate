@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **986**
-- Mutations declared in `tests/mutations.json`: **568**
-  - killed: **542**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1010**
+- Mutations declared in `tests/mutations.json`: **573**
+  - killed: **547**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -526,7 +526,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-135 mutation(s).
+140 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -665,6 +665,11 @@ python tools/verification_page.py --check
 | `VR7-symmetry-alpha-not-checked` | `src/verify/checker.zig` | `if (!try c.alphaEqual(k.path, before, after)) outcome.raise(.mi...` -> `_ = try c.alphaEqual(k.path, before, after);` | verify: a spending change relabelled as a symmetric rename fails the alpha hash | killed |
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
+| `SR1-index-stale-entry-trusted` | `src/platform/search_index.zig` | `if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == ...` -> `if (true) {` | refresh reuses unchanged entries and recomputes a file that changed; a stale index does n... | killed |
+| `SR2-index-checksum-not-verified` | `src/platform/search_index.zig` | `if (!std.mem.eql(u8, &actual, &claimed)) return null;` -> `_ = actual;     _ = claimed;` | a corrupted index file is rejected instead of trusted | killed |
+| `SR3-comment-kind-reversed` | `src/protocol/search_v1.zig` | `if (profile.isComment(n.kind())) return .comment;` -> `if (profile.isComment(n.kind())) return .code;` | a hit inside a function is grouped by its enclosing symbol with a hash and a de... | killed |
+| `SR4-hit-cap-ignored` | `src/protocol/search_v1.zig` | `if (total_hits >= max_matches) {` -> `if (false) {` | the total hit count is capped and truncated is reported | killed |
+| `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `if (!read_tools.inDirectory(f, place.rel)) continue;` -> `_ = place.rel;` | a search scoped to a subdirectory does not return hits from outside it | killed |
 
 ## What this system does not prove
 

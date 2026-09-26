@@ -34,6 +34,7 @@ class McpSession:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
             bufsize=1,
         )
         self._id = 0
@@ -74,7 +75,7 @@ def rg(repo, pattern, extra=None):
         args.extend(extra)
     args.append(pattern)
     started = time.perf_counter()
-    result = subprocess.run(args, cwd=repo, capture_output=True, text=True)
+    result = subprocess.run(args, cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace")
     elapsed_ms = (time.perf_counter() - started) * 1000
     return result.stdout, elapsed_ms
 
@@ -143,7 +144,7 @@ def scenario(name, repo, pattern, group, extra_rg=None, edit_symbol=None, edit_f
 def main():
     print(HEADER)
     scenarios = [
-        scenario("function name usages (+edit)", EXPRESS, "loadPending", "code", edit_symbol="loadPending", edit_file="src/index.js"),
+        scenario("function name usages (+edit)", EXPRESS, "tryRender", "code", edit_symbol="tryRender", edit_file="lib/application.js"),
         scenario("an error message string", EXPRESS, "not found", "string"),
         scenario("a term only in comments", ESLINT, "eslint-disable", "comment"),
         scenario("a JSON key value", EXPRESS, "express", "json"),
