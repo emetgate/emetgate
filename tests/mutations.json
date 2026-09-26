@@ -4966,6 +4966,24 @@
       "kills": [
         "redteam batch delete: an unreferenced file is deleted through the tool and reported as deleted"
       ]
+    },
+    {
+      "id": "FUZZ1-cas-splice-tail-off-by-one",
+      "file": "src/engine/cas.zig",
+      "from": "base.source[cut.end..] });",
+      "to": "base.source[cut.end + 1 ..] });",
+      "kills": [
+        "fuzz: cas.apply on a fixed base and hash either refuses or leaves everything outside the slot byte-identical"
+      ]
+    },
+    {
+      "id": "FUZZ2-journal-version-equality-loosened",
+      "file": "src/platform/journal.zig",
+      "from": "    if (probe.value.version == version) {",
+      "to": "    if (probe.value.version >= 1) {",
+      "kills": [
+        "fuzz: journal.parse on malformed v2 and legacy bytes never crashes or leaks, and its variant matches the declared version"
+      ]
     }
   ]
 }
