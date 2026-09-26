@@ -119,6 +119,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         .tests => |tests| tests,
     };
     if (!report.passed()) return .{ .rejected = report };
+    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
     defer report.deinit(gpa);
 
     const committed = try classifyAll(gpa, io, root, prepared, edits);

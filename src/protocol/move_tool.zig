@@ -8,6 +8,8 @@ const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const move_batch = @import("../platform/move_batch.zig");
+const receipts = @import("../platform/receipts.zig");
+const receipt_note = @import("receipt_note.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -52,6 +54,26 @@ pub fn callMove(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
         break :blk true;
     };
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn recordMove(gpa: Allocator, io: std.Io, root: []const u8, source_rel: []const u8, target_rel: []const u8, sym: []const u8, hash: symbol.Hash, plan: move_batch.Plan, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var files: std.ArrayList(receipts.FileChange) = .empty;
+    for (plan.prepared) |p| try files.append(arena, .{ .rel = p.rel, .before = p.base_hash, .after_abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, p.rel }) });
+    try receipt_note.record(gpa, io, root, .{
+        .operation = .move,
+        .class = if (plan.order_change) .spending else .symmetry,
+        .evidence = "content_hash",
+        .resolver = @tagName(plan.resolver),
+        .files = files.items,
+        .symbols = &.{ .{ .path = source_rel, .ref = sym, .before = hash, .after = null }, .{ .path = target_rel, .ref = sym, .before = null, .after = plan.moved_hash } },
+        .test_command = test_command,
+        .typecheck_command = typecheck_command,
+        .test_ms = test_ms,
+        .version = receipt_note.version,
+    }, w);
 }
 
 fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
@@ -104,6 +126,7 @@ fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?
                 .imports_added = outcome.plan.imports_added,
                 .files = files,
             }, note);
+            try recordMove(gpa, io, place.root, place.rel, target.rel, a.symbol, hash, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w);
             return false;
         },
         .rejected => |report| {

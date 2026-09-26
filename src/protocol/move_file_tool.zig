@@ -8,6 +8,8 @@ const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const file_move = @import("../platform/file_move.zig");
+const receipts = @import("../platform/receipts.zig");
+const receipt_note = @import("receipt_note.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -47,6 +49,26 @@ pub fn callMoveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value,
         break :blk true;
     };
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn recordMoveFile(gpa: Allocator, io: std.Io, root: []const u8, source_rel: []const u8, plan: file_move.Plan, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var files: std.ArrayList(receipts.FileChange) = .empty;
+    try files.append(arena, .{ .rel = source_rel, .before = plan.prepared[0].base_hash, .after_abs = null });
+    for (plan.prepared, 0..) |p, i| try files.append(arena, .{ .rel = p.rel, .before = if (i == 0) null else p.base_hash, .after_abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, p.rel }) });
+    try receipt_note.record(gpa, io, root, .{
+        .operation = .move_file,
+        .class = .symmetry,
+        .evidence = "content_hash",
+        .resolver = @tagName(plan.resolver),
+        .files = files.items,
+        .test_command = test_command,
+        .typecheck_command = typecheck_command,
+        .test_ms = test_ms,
+        .version = receipt_note.version,
+    }, w);
 }
 
 fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
@@ -100,6 +122,7 @@ fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?
                 .rewritten = outcome.plan.rewritten,
                 .files = files,
             }, note);
+            try recordMoveFile(gpa, io, place.root, place.rel, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w);
             return false;
         },
         .rejected => |report| {

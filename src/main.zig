@@ -15,6 +15,8 @@ const shadow_root = emetgate.shadow_root;
 const lockdown = emetgate.lockdown;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
+const receipts = emetgate.receipts;
+const verify_run = emetgate.verify_run;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
 
@@ -31,6 +33,8 @@ const usage =
     \\       emetgate rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]
     \\       emetgate rule forget <id>
     \\       emetgate recover [--shadow-root <dir>]
+    \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
+    \\       emetgate receipts attach [<commit>]
     \\       emetgate lockdown [<claude args>...]
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
@@ -122,6 +126,13 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         if (args.len == 2) return recoverCmd(init, runtime, null);
         if (args.len == 4 and std.mem.eql(u8, args[2], "--shadow-root")) return recoverCmd(init, runtime, args[3]);
         exitWithUsage();
+    }
+    if (std.mem.eql(u8, command, "verify")) {
+        const options = parseVerify(args[2..]) orelse exitWithUsage();
+        return verifyCmd(init, runtime, options.options, options.json, out);
+    }
+    if (std.mem.eql(u8, command, "receipts") and args.len >= 3 and std.mem.eql(u8, args[2], "attach") and args.len <= 4) {
+        return attachCmd(init, runtime, if (args.len == 4) args[3] else "HEAD", out);
     }
     if (std.mem.eql(u8, command, "lockdown")) {
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
@@ -439,6 +450,49 @@ fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Requ
     var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
     defer stderr_writer.interface.flush() catch {};
     try rule_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
+    return 0;
+}
+
+const VerifyArgs = struct { options: verify_run.Options, json: bool };
+
+fn parseVerify(args: []const [:0]const u8) ?VerifyArgs {
+    var parsed: VerifyArgs = .{ .options = .{ .commit = "" }, .json = false };
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg: []const u8 = args[i];
+        if (std.mem.eql(u8, arg, "--json")) {
+            parsed.json = true;
+        } else if (std.mem.eql(u8, arg, "--skip-tests")) {
+            parsed.options.skip_tests = true;
+        } else if (std.mem.eql(u8, arg, "--test") or std.mem.eql(u8, arg, "--typecheck")) {
+            if (i + 1 >= args.len) return null;
+            i += 1;
+            if (arg[2] == 't' and arg[3] == 'e') parsed.options.test_command = args[i] else parsed.options.typecheck_command = args[i];
+        } else if (parsed.options.commit.len == 0 and arg.len != 0 and arg[0] != '-') {
+            parsed.options.commit = arg;
+        } else return null;
+    }
+    if (parsed.options.commit.len == 0) return null;
+    return parsed;
+}
+
+fn verifyCmd(init: std.process.Init, runtime: *Runtime, options: verify_run.Options, json: bool, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = try runner.repoRoot(gpa, init.io);
+    defer gpa.free(root);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const result = try verify_run.run(gpa, arena_state.allocator(), init.io, runtime, root, options);
+    if (json) try verify_run.writeJson(out, result) else try verify_run.writeText(out, result);
+    return verify_run.exitCode(result.report.verdict);
+}
+
+fn attachCmd(init: std.process.Init, runtime: *Runtime, commit: []const u8, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = try runner.repoRoot(gpa, init.io);
+    defer gpa.free(root);
+    const attached = try receipts.attach(gpa, init.io, root, commit);
+    try out.print("attached {d} receipt(s) to {s} under refs/notes/{s}\n", .{ attached.count, commit, receipts.notes_ref });
     return 0;
 }
 

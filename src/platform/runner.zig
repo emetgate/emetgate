@@ -63,6 +63,7 @@ pub const Trace = struct {
     linked_files: usize = 0,
     copied_files: usize = 0,
     skipped_links: usize = 0,
+    test_ms: ?u64 = null,
 };
 
 pub const Result = union(enum) {
@@ -107,7 +108,7 @@ pub fn runStages(gpa: Allocator, io: std.Io, cwd: []const u8, typecheck_command:
     return .{ .tests = try runCommand(gpa, io, cwd, test_command, limits) };
 }
 
-fn runCommand(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
+pub fn runCommand(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
     const argv = [_][]const u8{ "cmd.exe", "/d", "/c", command };
     return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits });
 }
@@ -177,6 +178,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     };
 
     if (!report.passed()) return .{ .rejected = report };
+    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
     defer report.deinit(gpa);
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
@@ -207,6 +209,7 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
         .tests => |tests| tests,
     };
     if (!report.passed()) return .{ .rejected = report };
+    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
     defer report.deinit(gpa);
 
     if (options.trace) |t| t.commit_attempted = true;
