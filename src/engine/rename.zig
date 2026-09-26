@@ -495,6 +495,20 @@ test "rename: a shadowed inner name in the same statement as a renamed one is re
     try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "add", "plus", &outer));
 }
 
+test "rename: a wrong rename inside a top-level block that is no symbol is caught by the statement's alpha hash" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "function add(a: number): number { return a; }\nlet total = add(1);\n{ const add = 2; total += add; }\n";
+    const base = try test_util.snapshotOf(runtime, source);
+    defer base.destroy();
+    const wrong = [_]Span{ spanOf(source, "function add", 0, "add"), spanOf(source, "= add(1)", 0, "add"), spanOf(source, "+= add", 0, "add") };
+    try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "add", "plus", &wrong));
+    const right = [_]Span{ spanOf(source, "function add", 0, "add"), spanOf(source, "= add(1)", 0, "add") };
+    const renamed = try apply(testing.allocator, base, "add", "plus", &right);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("function plus(a: number): number { return a; }\nlet total = plus(1);\n{ const add = 2; total += add; }\n", renamed.snapshot.source);
+}
+
 test "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);

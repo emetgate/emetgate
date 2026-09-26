@@ -181,6 +181,13 @@ test "rename: without the language service a local unexported symbol is renamed 
 test "rename: without the language service an exported symbol or a name another file mentions is unresolved" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     {
+        var alone: Case = undefined;
+        try alone.init(&.{.{ .rel = "src/a.ts", .text = a_src }}, false);
+        defer alone.deinit();
+        try testing.expectError(error.RenameUnresolved, alone.rename("src/a.ts", "add", "sum", true, null));
+        try alone.expectFile("src/a.ts", a_src);
+    }
+    {
         var exported: Case = undefined;
         try exported.initThree();
         defer exported.deinit();
