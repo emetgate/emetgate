@@ -629,9 +629,12 @@ make a search slower to skip work; it can never make it wrong.
 (https://github.blog/2023-02-06-the-technology-behind-githubs-new-code-search/) uses
 variable-length sparse grams, chosen by a trained weighting model, instead of fixed
 trigrams; Zoekt (https://github.com/sourcegraph/zoekt) uses positional trigrams. This
-project does not have Blackbird's trained model, so `tests/bench/gram_compare.py` compares
-the plain, measurable alternative — n=3 vs n=4 fixed grams — on `eval/express-test` (215
-files) and `eval/eslint-test` (2362 files), five representative queries:
+project does not have Blackbird's trained model, so `tests/bench/gram_compare.py` measures
+two real alternatives against trigram (n=3) on `eval/express-test` (215 files) and
+`eval/eslint-test` (2362 files), five representative queries.
+
+First, a fixed but longer gram (n=4, not itself a sparse scheme, just a cheap sanity check
+on gram length):
 
 | repo | n | distinct grams | candidates for 5 queries (of total files) |
 |---|---:|---:|---|
@@ -640,11 +643,29 @@ files) and `eval/eslint-test` (2362 files), five representative queries:
 | eslint-test | 3 | 68882 | 0, 44, 978, 733, 159 (of 2319) |
 | eslint-test | 4 | 243210 | 0, 44, 978, 729, 159 (of 2319) |
 
-n=4 costs 2.3-3.5x more distinct grams (bigger index) for candidate counts that are
-identical or within one file of n=3 on every query measured. n=3 (trigram, Zoekt's choice)
-is kept; n=4 bought nothing here. This is a measurement on two repos and five queries, not
-a proof it never helps — the reproduction command is in the script's docstring-equivalent
-header if a larger comparison is ever needed.
+n=4 costs 2.3-3.5x more distinct grams for candidate counts identical or within one file
+of n=3. Second, a real sparse scheme: classical **winnowing**
+(Schleimer, Wilkerson, Aiken, "Winnowing: Local Algorithms for Document Fingerprinting,"
+2003) — hash every 5-byte k-gram, keep only the minimum-hash fingerprint in each window of
+4 consecutive k-grams. Unlike a rarity-weighted selection (which cannot guarantee two
+occurrences of the same string pick a shared fingerprint, and would silently break the
+fail-closed contract), winnowing has a proven guarantee: any two occurrences of the same
+string of at least `k+w-1` = 8 bytes select at least one common fingerprint, so it cannot
+wrongly exclude a real match at or above that length; below it, this repo's index and this
+script both fall back to a full scan, same as a query too short to trigram:
+
+| repo | fingerprints (winnowing) | candidates for 5 queries: trigram vs winnowing (of total files) |
+|---|---:|---|
+| express-test | 35677 (vs 20445 trigram) | 0/0, 15/15, 140/140, 133/136, 32/31 |
+| eslint-test | 264837 (vs 68882 trigram) | 0/0, 44/44, 978/1015, 733/914, 159/159 |
+
+Winnowing's index is 1.7-3.8x bigger and 2-3x slower to build than trigram, and it never
+narrows the candidate set further — on the two lowest-selectivity queries this benchmark
+was chosen to stress (`function`: 978/2319, `require(`: 733/2319 with trigram) it is
+strictly worse (1015 and 914). **Trigram is kept**; neither alternative measured here beat
+it. This is a measurement on two repos and five queries with one specific winnowing
+parameterization, not a proof that no sparse scheme could ever help — the reproduction
+command is in the script if a different parameterization or corpus is worth checking.
 
 **Regex candidates.** Russ Cox's trigram-index regex matching
 (https://swtch.com/~rsc/regexp/regexp4.html) derives the full set of trigrams every match
