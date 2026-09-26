@@ -191,6 +191,47 @@ pub fn freeTopLevel(gpa: Allocator, entries: []TopEntry) void {
     gpa.free(entries);
 }
 
+pub fn pointerAt(gpa: Allocator, tree: ts.Tree, offset: u32) Error!?[]u8 {
+    const root_value = try rootValue(tree);
+    return pointerAtNode(gpa, tree, root_value, "", offset);
+}
+
+fn pointerAtNode(gpa: Allocator, tree: ts.Tree, node: ts.Node, own_pointer: []const u8, offset: u32) Error!?[]u8 {
+    const ty = valueTypeOf(node) orelse return null;
+    switch (ty) {
+        .object => {
+            var i: u32 = 0;
+            while (node.namedChild(i)) |pair| : (i += 1) {
+                if (!std.mem.eql(u8, pair.kind(), "pair")) continue;
+                const key_node = pair.childByField("key") orelse continue;
+                const value_node = pair.childByField("value") orelse continue;
+                if (offset < value_node.startByte() or offset >= value_node.endByte()) continue;
+                const raw_key = stringContent(tree, key_node);
+                const escaped = try escapeSegment(gpa, raw_key);
+                defer gpa.free(escaped);
+                const child_pointer = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ own_pointer, escaped });
+                defer gpa.free(child_pointer);
+                return pointerAtNode(gpa, tree, value_node, child_pointer, offset);
+            }
+            return if (own_pointer.len == 0) null else try gpa.dupe(u8, own_pointer);
+        },
+        .array => {
+            var i: u32 = 0;
+            var index: usize = 0;
+            while (node.namedChild(i)) |child| : (i += 1) {
+                if (offset >= child.startByte() and offset < child.endByte()) {
+                    const child_pointer = try std.fmt.allocPrint(gpa, "{s}/{d}", .{ own_pointer, index });
+                    defer gpa.free(child_pointer);
+                    return pointerAtNode(gpa, tree, child, child_pointer, offset);
+                }
+                index += 1;
+            }
+            return if (own_pointer.len == 0) null else try gpa.dupe(u8, own_pointer);
+        },
+        else => return if (own_pointer.len == 0) null else try gpa.dupe(u8, own_pointer),
+    }
+}
+
 pub fn resolve(gpa: Allocator, tree: ts.Tree, pointer: []const u8) Error!Entry {
     if (pointer.len == 0) {
         const root_value = try rootValue(tree);
@@ -322,4 +363,32 @@ test "a key containing a slash or a tilde round-trips through RFC 6901 escaping"
     }
     try testing.expect(found_slash);
     try testing.expect(found_tilde);
+}
+
+test "pointerAt finds the pointer of the leaf value containing a byte offset" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try test_util.parser();
+    defer parser.deinit();
+
+    const source = "{\"dependencies\": {\"express\": \"^4.0.0\"}}";
+    const tree = try parseJson(parser, source);
+    defer tree.deinit();
+
+    const offset: u32 = @intCast(std.mem.indexOf(u8, source, "4.0.0").?);
+    const found = (try pointerAt(testing.allocator, tree, offset)) orelse return error.TestUnexpectedResult;
+    defer testing.allocator.free(found);
+    try testing.expectEqualStrings("/dependencies/express", found);
+}
+
+test "pointerAt returns null for an offset in the root scalar with no container" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try test_util.parser();
+    defer parser.deinit();
+
+    const tree = try parseJson(parser, "42");
+    defer tree.deinit();
+    const found = try pointerAt(testing.allocator, tree, 0);
+    try testing.expect(found == null);
 }
