@@ -136,7 +136,15 @@ def fact_verifier_tcb():
     return f"{total:,} non-blank lines of Zig in {len(files)} files, {mine:,} of them in the {len(own)} files of `src/verify/`"
 
 
+def fact_python_checker_size():
+    names = ["tools/verify_py/emetgate_verify.py", "tools/verify_py/jcs.py"]
+    own = sum(len([l for l in read(os.path.join(ROOT, n)).splitlines() if l.strip()]) for n in names)
+    blake = len([l for l in read(os.path.join(ROOT, "vendor/pure_python_blake3/pure_blake3.py")).splitlines() if l.strip()])
+    return f"{own:,} non-blank lines of Python, plus {blake:,} in the vendored BLAKE3"
+
+
 FACTS = {
+    "python-checker-size": fact_python_checker_size,
     "verifier-tcb": fact_verifier_tcb,
     "max_query_bytes": fact_max_query_bytes,
     "max_captures_per_pattern": fact_max_captures_per_pattern,
