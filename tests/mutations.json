@@ -1738,8 +1738,8 @@
     {
       "id": "NF10-create-failed-tests-committed",
       "file": "src/platform/runner.zig",
-      "from": "    if (!report.passed()) return .{ .rejected = report };\n    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
-      "to": "    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
       "kills": [
         "new file: a creation whose tests fail leaves no file on disk and nothing in the index"
       ]
@@ -5500,6 +5500,78 @@
       "to": "                _ = target;",
       "kills": [
         "move file: a require or a computed import that reaches the file is refused"
+      ]
+    },
+    {
+      "id": "VR1-before-digest-not-chained",
+      "file": "src/verify/checker.zig",
+      "from": "        if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch, \"the before digest does not match the parent commit or the previous receipt\");\n",
+      "to": "",
+      "kills": [
+        "verify: a forged digest, a non-canonical note, an added and a removed receipt are caught"
+      ]
+    },
+    {
+      "id": "VR2-non-canonical-note-accepted",
+      "file": "src/verify/checker.zig",
+      "from": "if (parsed.value != .array or canonical == null or !std.mem.eql(u8, canonical.?, bytes)) {",
+      "to": "if (parsed.value != .array or canonical == null) {",
+      "kills": [
+        "verify: a forged digest, a non-canonical note, an added and a removed receipt are caught"
+      ]
+    },
+    {
+      "id": "VR3-tests-not-rerun",
+      "file": "src/platform/verify_run.zig",
+      "from": "            slot.* = self.rerun(trusted) catch null;",
+      "to": "            slot.* = if (trusted.len != 0) true else null;",
+      "kills": [
+        "verify: a spending receipt whose tests are red at the commit is a mismatch"
+      ]
+    },
+    {
+      "id": "VR4-unreceipted-change-green",
+      "file": "src/verify/checker.zig",
+      "from": "        if (last.get(path) == null) try c.files.raise(path, .unverified, \"no receipt covers this change\");\n",
+      "to": "        if (last.get(path) == null and false) try c.files.raise(path, .unverified, \"no receipt covers this change\");\n",
+      "kills": [
+        "verify: a change without a receipt is unverified and never green"
+      ]
+    },
+    {
+      "id": "VR5-trusted-command-not-matched",
+      "file": "src/platform/verify_run.zig",
+      "from": "        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest)) return null;\n",
+      "to": "        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest) and false) return null;\n",
+      "kills": [
+        "verify: a receipt's command never runs, only the trusted one, and a different command leaves the change unverified"
+      ]
+    },
+    {
+      "id": "VR6-rule-digest-not-compared",
+      "file": "src/verify/checker.zig",
+      "from": "        if (!std.mem.eql(u8, &now, &rule.digest)) outcome.raise(.mismatch, \"a rule the receipt names has changed\");\n",
+      "to": "        _ = now;\n",
+      "kills": [
+        "verify: a rule the receipt names with a changed digest is a mismatch"
+      ]
+    },
+    {
+      "id": "VR7-symmetry-alpha-not-checked",
+      "file": "src/verify/checker.zig",
+      "from": "                if (!try c.alphaEqual(k.path, before, after)) outcome.raise(.mismatch, \"a statement's alpha hash changed\");",
+      "to": "                _ = try c.alphaEqual(k.path, before, after);",
+      "kills": [
+        "verify: a spending change relabelled as a symmetric rename fails the alpha hash"
+      ]
+    },
+    {
+      "id": "VR8-subject-not-bound-to-files",
+      "file": "src/verify/checker.zig",
+      "from": "        if (!found) outcome.raise(.mismatch, \"a subject does not match the files of the predicate\");",
+      "to": "        if (!found and false) outcome.raise(.mismatch, \"a subject does not match the files of the predicate\");",
+      "kills": [
+        "verify: a forged digest, a non-canonical note, an added and a removed receipt are caught"
       ]
     }
   ]
