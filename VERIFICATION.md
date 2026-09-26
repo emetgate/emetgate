@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **821**
-- Mutations declared in `tests/mutations.json`: **485**
-  - killed: **466**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **823**
+- Mutations declared in `tests/mutations.json`: **490**
+  - killed: **471**
   - equivalent: **5**
   - defense in depth: **3**
   - open: **4**
@@ -502,7 +502,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-72 mutation(s).
+77 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -562,7 +562,12 @@ python tools/verification_page.py --check
 | `R4-mirror-stale-hash-not-updated` | `src/protocol/mirror.zig` | `slot.* = hash;` -> `slot.* = slot.*;` | with --mirror, a changed symbol body is reported again in full with its new hash | killed |
 | `R5-mirror-reset-keeps-entries` | `src/protocol/mirror.zig` | `self.entries.clearRetainingCapacity();` -> `` | reset forgets every remembered hash so the next check reports changed | killed |
 | `R6-range-not-widened-to-symbol` | `src/engine/line_range.zig` | `if (overlaps(entry.declaration, range)) try out.append(gpa, ent...` -> `if (overlaps(range, range)) try out.append(gpa, entry);` | emetgate_read_symbol with a line range hitting no symbol is a tool error | killed |
-| `R11-cache-stamp-check-skipped` | `src/engine/tree_cache.zig` | `if (sameStamp(entry.stamp, fs)) return entry.snapshot;` -> `if (fs.size == fs.size) return entry.snapshot;` | load reparses when the file's mtime or size changed on disk | killed |
+| `R11-cache-stamp-check-skipped` | `src/engine/tree_cache.zig` | `if (sameStamp(entry.stamp, fs)) {` -> `if (fs.size == fs.size) {` | load reparses when the file's mtime or size changed on disk | killed |
+| `R12-cache-not-invalidated-after-try` | `src/protocol/handlers.zig` | `if (policy.tree_cache) \|cache\| cache.invalidate(file_abs);` -> `` | with a tree cache, read_symbol after a committed emetgate_try reflects the chan... | killed |
+| `R13-cache-not-invalidated-after-try-batch` | `src/protocol/handlers.zig` | `if (policy.tree_cache) \|cache\| for (edits) \|edit\| cache.inv...` -> `` | with a tree cache, read_symbol after a committed emetgate_try_batch reflects th... | killed |
+| `R14-cache-content-hash-skipped` | `src/engine/tree_cache.zig` | `if (self.unchangedContent(io, abs_path, entry.content_hash)) {` -> `if (true) {` | a racy mtime collision does not serve stale content, the content hash catches it | killed |
+| `R15-cache-key-not-normalized` | `src/engine/tree_cache.zig` | `if (byte.* == '/') byte.* = '\\';` -> `if (false) byte.* = '\\';` | normalizedKey folds slash direction and case so the same file has one entry | killed |
+| `R16-cache-budget-ignored` | `src/engine/tree_cache.zig` | `while (self.total_bytes > self.budget_bytes and self.entries.co...` -> `while (false and self.entries.count() > 1) {` | insert evicts the least recently touched entry once the byte budget is exceeded | killed |
 | `R9-markdown-heading-level-lost` | `src/engine/lang/markdown/heading.zig` | `if (atxLevel(child.kind())) \|level\| return level;` -> `if (atxLevel(child.kind())) \|_\| return 1;` | headingTree lists every heading with its level and line, nested sections includ... | killed |
 | `R10-markdown-section-excludes-subsections` | `src/engine/lang/markdown/heading.zig` | `.node = child,` -> `.node = heading,` | resolve returns a section's full text including its nested subsections | killed |
 | `R8-json-error-check-skipped` | `src/protocol/read_tools.zig` | `if (tree.root().hasError()) return error.InvalidJson;` -> `` | read_file refuses malformed JSON instead of serving a partial key tree | killed |
