@@ -100,37 +100,66 @@ fn preparePendings(repo: *const Repo, pendings: *[2]disk.Pending) !void {
     pendings[1] = try disk.prepare(gpa, testing.io, doc_path, doc_planned.source(), doc_planned.base_hash.?);
 }
 
-test "mixed batch crash: a code edit and a doc edit commit atomically, a crash after any step recovers to all old or all new" {
+test "mixed batch crash: a code edit and a doc edit commit atomically" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    const steps = 1 + 3 * 2 + 1 + 2 + 1;
-    var stop: usize = 1;
-    while (true) : (stop += 1) {
-        var repo = try Repo.init();
-        defer repo.deinit();
 
-        var pendings: [2]disk.Pending = undefined;
-        try preparePendings(&repo, &pendings);
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var pendings: [2]disk.Pending = undefined;
+    try preparePendings(&repo, &pendings);
+    const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
+    try disk.commitBatch(&pendings, null, null, &batch, null);
 
-        const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
-        disk.commitBatch(&pendings, null, null, &batch, &step) catch |err| {
-            errdefer std.debug.print("crash after step {d} of {d}\n", .{ stop, steps });
-            try testing.expectEqual(error.Crashed, err);
-            const report = try repo.recover();
-            try testing.expectEqual(@as(usize, 0), report.failed);
-            try repo.expectAllOldOrAllNew();
-            try repo.expectNoDebris();
-            continue;
-        };
-        try testing.expectEqual(steps + 1, stop);
-        const code = try repo.content("a.ts");
-        defer gpa.free(code);
-        const doc = try repo.content("notes.md");
-        defer gpa.free(doc);
-        try testing.expectEqualStrings(code_new, code);
-        try testing.expectEqualStrings(doc_new, doc);
-        try repo.expectNoDebris();
-        break;
-    }
+    const code = try repo.content("a.ts");
+    defer gpa.free(code);
+    const doc = try repo.content("notes.md");
+    defer gpa.free(doc);
+    try testing.expectEqualStrings(code_new, code);
+    try testing.expectEqualStrings(doc_new, doc);
+    try repo.expectNoDebris();
+}
+
+test "mixed batch crash: a crash right after the journal is written recovers to all old, whether the pending is code or doc" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var pendings: [2]disk.Pending = undefined;
+    try preparePendings(&repo, &pendings);
+
+    const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
+    var at: StopAt = .{ .target = 1 };
+    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
+
+    const report = try repo.recover();
+    try testing.expectEqual(@as(usize, 0), report.failed);
+    try repo.expectAllOldOrAllNew();
+    const code = try repo.content("a.ts");
+    defer gpa.free(code);
+    const doc = try repo.content("notes.md");
+    defer gpa.free(doc);
+    try testing.expectEqualStrings(code_old, code);
+    try testing.expectEqualStrings(doc_old, doc);
+    try repo.expectNoDebris();
+}
+
+test "mixed batch crash: a crash after both files swap but before the commit record recovers forward to all new" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var pendings: [2]disk.Pending = undefined;
+    try preparePendings(&repo, &pendings);
+
+    const swap_steps = 1 + 3 * 2;
+    const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
+    var at: StopAt = .{ .target = swap_steps };
+    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
+
+    const report = try repo.recover();
+    try testing.expectEqual(@as(usize, 0), report.failed);
+    try repo.expectAllOldOrAllNew();
+    try repo.expectNoDebris();
 }

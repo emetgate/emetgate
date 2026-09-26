@@ -166,8 +166,8 @@
     {
       "id": "MR2-batch-duplicate-file-allowed",
       "file": "src/platform/batch.zig",
-      "from": "if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;",
-      "to": "_ = p;",
+      "from": "for (prepared.items) |p| {\n            if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;\n        }\n        const planned = try batch_plan.plan(gpa, io, runtime, root, edit, rel);",
+      "to": "for (prepared.items) |p| {\n            _ = p;\n        }\n        const planned = try batch_plan.plan(gpa, io, runtime, root, edit, rel);",
       "kills": [
         "a batch cannot edit the same file twice"
       ]
@@ -186,8 +186,8 @@
     {
       "id": "SELF-a-compile-error-is-not-a-kill",
       "file": "src/platform/batch.zig",
-      "from": "if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;",
-      "to": "",
+      "from": "for (prepared.items) |p| {\n            if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.DuplicateBatchFile;\n        }\n        const planned = try batch_plan.plan(gpa, io, runtime, root, edit, rel);",
+      "to": "for (prepared.items) |p| {\n        }\n        const planned = try batch_plan.plan(gpa, io, runtime, root, edit, rel);",
       "expect_status": "compile_error",
       "filter": [
         "a batch cannot edit the same file twice"
@@ -5761,8 +5761,8 @@
     },
     {
       "id": "DW2-doc-size-cap-removed",
-      "file": "src/platform/doc_writer.zig",
-      "from": "    if (source.len > max_doc_bytes) return error.DocTooLarge;\n",
+      "file": "src/engine/docnode.zig",
+      "from": "    if (source.len > max_bytes) return error.DocTooLarge;\n",
       "to": "",
       "kills": [
         "doc_writer: a file over 1 MiB is refused before any parse or sandbox run"
@@ -5770,8 +5770,8 @@
     },
     {
       "id": "DW3-doc-binary-check-removed",
-      "file": "src/platform/doc_writer.zig",
-      "from": "    if (docnode.looksBinary(source)) return error.BinaryFile;\n",
+      "file": "src/engine/docnode.zig",
+      "from": "    if (looksBinary(source)) return error.BinaryFile;\n",
       "to": "",
       "kills": [
         "doc_writer: a binary file is refused before any parse or sandbox run"

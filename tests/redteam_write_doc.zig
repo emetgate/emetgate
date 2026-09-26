@@ -59,8 +59,8 @@ fn git(root_abs: []const u8, args: []const []const u8) !void {
 
 const Repo = struct {
     tmp: testing.TmpDir,
-    root_abs: []u8,
-    outside_abs: []u8,
+    root_abs: [:0]u8,
+    outside_abs: [:0]u8,
 
     fn init() !Repo {
         var tmp = testing.tmpDir(.{ .iterate = true });
@@ -269,7 +269,7 @@ test "emetgate_try_batch commits a code edit and a doc edit together" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
     var reply = try callToolServed(runtime, repo.root_abs, "emetgate_try_batch", .{ .edits = .{
-        .{ .file = code_file, .symbol = "b", .hash = symbol.absent_text, .body = "2" },
+        .{ .file = code_file, .symbol = "b", .hash = symbol.absent_text, .body = "export const b = 2;" },
         .{ .file = doc_file, .kind = "doc", .hash = doc_hash[0..], .content = "## Setup\n\nnew\n", .heading = "Setup" },
     } });
     defer reply.deinit();
