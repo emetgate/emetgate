@@ -9,6 +9,7 @@ const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
+const search_session_mod = @import("../platform/search_session.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -134,10 +135,12 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_search",
-        .description = "Find a literal, case-sensitive substring in git-tracked text files under a directory of the repo; returns file, line and the trimmed line (at most 200 matches, truncated:true when cut). Files of 1 MiB or more are skipped (files under 1 MiB are read).",
+        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in git-tracked text files under a directory of the repo. Hits are grouped by file and, in a registered language, by the enclosing symbol (ref + content hash, ready for emetgate_read_symbol/emetgate_try); in a .json file by JSON pointer, in a .md file by heading, otherwise ungrouped. Each hit is tagged code/comment/string and, when it names a known symbol, definition/reference. Groups with a definition hit are listed first. A trigram file index under %LOCALAPPDATA%\\emetgate\\index narrows which files are read; a stale or missing index only widens the file set scanned, never narrows it below a full scan. At most 200 hits total, truncated:true when cut; files of 1 MiB or more are skipped.",
         .props = &.{
-            .{ .name = "pattern", .desc = "literal text to find" },
+            .{ .name = "pattern", .desc = "text or, with regex:true, a regular expression to find" },
             .{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true },
+            .{ .name = "regex", .desc = "treat pattern as a regular expression instead of a literal substring", .optional = true, .ty = "boolean" },
+            .{ .name = "kinds", .desc = "keep only hits of these kinds, e.g. [\"code\"] to skip comments and strings", .optional = true, .ty = "array" },
         },
     },
     .{
@@ -194,6 +197,9 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     var session_tree_cache: tree_cache_mod.TreeCache = .init(gpa);
     defer session_tree_cache.deinit();
     served.tree_cache = &session_tree_cache;
+    var session_search = search_session_mod.Session.init(gpa, io, root, .{});
+    defer session_search.deinit();
+    served.search_session = &session_search;
     var language_service: tsserver.Session = .{ .gpa = gpa, .io = io, .root = root };
     defer language_service.deinit();
     served.language_service = &language_service;

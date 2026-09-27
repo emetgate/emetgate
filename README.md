@@ -98,6 +98,8 @@ Tokens for whole edits, against Claude Code's `Read` then `Edit` (o200k_base, bo
 
 The last row is worse. With the file already in context, `Edit` sends the changed line and gets one line back; emetgate's reply carries the new hashes and a receipt, and its arguments alone would still allow at most 1.9x. Emetgate also runs the tests on every edit, which is most of its 200 to 420 ms per edit. Rule, query and full write measurements are in [REFERENCE.md](REFERENCE.md).
 
+Search against `rg` and `git grep` (`python tests/bench/search.py`, ReleaseFast): <!-- generated:search-summary -->a new session's first search 4.6 to 22.0 ms and later searches 1.4 to 9.3 ms, against rg 21.3 to 53.2 ms and git grep 21.6 to 46.0 ms; building the index the first time, once per repository, took 98 to 1,322 ms (2026-09-27, scan bandwidth 3.00 GB/s)<!-- /generated -->. Every search first waits on a change watch barrier, so a write closed or flushed before the call is in the result, and a new session loads the saved index and re-reads only the files whose stamps changed; the full table and the one case that barrier misses (a writer that keeps its file open) are in [REFERENCE.md](REFERENCE.md#search).
+
 ## How the gate itself is tested
 
 - **Mutation testing.** Guards are mutated and at least one test must fail for each. For the engine: <!-- generated:engine-mutant-summary -->64 mutants today: 57 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. Every recorded mutant and the test that kills it: [VERIFICATION.md](VERIFICATION.md).

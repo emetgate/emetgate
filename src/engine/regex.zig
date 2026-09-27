@@ -48,10 +48,19 @@ pub const Regex = struct {
         gpa.free(self.ranges);
     }
 
+    pub fn scratchLen(self: Regex) usize {
+        return self.insts.len * 6 + 2;
+    }
+
     pub fn isMatch(self: Regex, gpa: Allocator, text: []const u8, budget: *u64) (Allocator.Error || error{BudgetExceeded})!bool {
-        const n = self.insts.len;
-        const buffer = try gpa.alloc(u32, n * 6 + 2);
+        const buffer = try gpa.alloc(u32, self.scratchLen());
         defer gpa.free(buffer);
+        return self.isMatchIn(buffer, text, budget);
+    }
+
+    pub fn isMatchIn(self: Regex, buffer: []u32, text: []const u8, budget: *u64) error{BudgetExceeded}!bool {
+        std.debug.assert(buffer.len >= self.scratchLen());
+        const n = self.insts.len;
         var current = StateSet.init(buffer[0 .. 2 * n]);
         var next = StateSet.init(buffer[2 * n .. 4 * n]);
         const stack = buffer[4 * n ..];

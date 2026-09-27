@@ -7,7 +7,10 @@ from verification_page import ROOT, README_PATH
 
 import os
 
+import json
+
 QUERY_ZIG = os.path.join(ROOT, "src", "engine", "query.zig")
+SEARCH_RESULTS = os.path.join(ROOT, "tests", "bench", "search_results.json")
 HANDLERS_ZIG = os.path.join(ROOT, "src", "protocol", "handlers.zig")
 
 ENGINE_FILES = {
@@ -143,7 +146,44 @@ def fact_python_checker_size():
     return f"{own:,} non-blank lines of Python, plus {blake:,} in the vendored BLAKE3"
 
 
+def search_results():
+    with open(SEARCH_RESULTS, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def fact_search_table():
+    data = search_results()
+    lines = [
+        "",
+        "",
+        "| Scenario | rg ms | git grep ms | emetgate cold ms | emetgate warm ms | floor ms | startup ms | index build ms (one time) | rg tokens | emetgate tokens | turns rg/emetgate |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in data["rows"]:
+        lines.append("| {} | {:.1f} | {:.1f} | {:.1f} | {:.1f} | {:.2f} | {:.1f} | {:.1f} | {:,} | {:,} | {}/{} |".format(
+            row["name"], row["rg_ms"], row["git_ms"], row["cold_ms"], row["warm_ms"], row["floor_ms"],
+            row["startup_ms"], row["build_ms"], row["rg_tokens"], row["emetgate_tokens"], row["rg_turns"], row["emetgate_turns"],
+        ))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def fact_search_summary():
+    data = search_results()
+    rows = data["rows"]
+    warm = [r["warm_ms"] for r in rows]
+    rg = [r["rg_ms"] for r in rows]
+    git = [r["git_ms"] for r in rows]
+    cold = [r["cold_ms"] for r in rows]
+    build = [r["build_ms"] for r in rows]
+    return "a new session's first search {:.1f} to {:.1f} ms and later searches {:.1f} to {:.1f} ms, against rg {:.1f} to {:.1f} ms and git grep {:.1f} to {:.1f} ms; building the index the first time, once per repository, took {:.0f} to {:,.0f} ms ({}, scan bandwidth {:.2f} GB/s)".format(
+        min(cold), max(cold), min(warm), max(warm), min(rg), max(rg), min(git), max(git), min(build), max(build), data["date"], data["scan_gb_per_s"],
+    )
+
+
 FACTS = {
+    "search-table": fact_search_table,
+    "search-summary": fact_search_summary,
     "python-checker-size": fact_python_checker_size,
     "verifier-tcb": fact_verifier_tcb,
     "max_query_bytes": fact_max_query_bytes,

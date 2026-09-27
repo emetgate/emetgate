@@ -511,6 +511,23 @@ the physical lower bound is reported instead of hidden. Locating a symbol or a
 JSON/Markdown node is not free either; both locate and fetch steps are counted above,
 matching how `tests/bench/run4.py` counts a symbol edit's ingest side.
 
+The tiny-symbol reread row above uses a synthetic two-line file, which understates the
+wrapper's real cost relative to a plausible model action: a model that already has a real
+file open would re-read either the whole file or, at best, just the changed function's
+line range (if it somehow already knew that range without re-reading). Measured against
+the same edit in the real 1.6k-line `affiliate-scraper/src/index.js`:
+
+| Scenario | Read (full file) | Read (best-case line range) | emetgate |
+|---|---:|---:|---:|
+| reread a small changed symbol, `--mirror` on | 13323 | 218 | 328 |
+
+Against the full file this is still a 41x win (13323 vs 328). Against the best case a
+model cannot actually reach without having read the file first, emetgate costs 1.5x more
+(218 vs 328) — a fixed cost (32-hex-char hash plus the `file`/`symbol` JSON wrapper) on
+top of content that is already only a couple hundred tokens. This is the row's physical
+floor: shrinking the wrapper further would need a shorter hash than `emetgate_try` accepts
+today, which was judged out of scope for this pass (see the reader's remaining limits).
+
 **Limits.** Claude Code can summarize (compact) its own context; the mirror only knows
 what it sent, not whether the model still has it. An `unchanged` reply after compaction
 is telling the model "you already have this" when it may not — the wrong direction to
@@ -582,6 +599,211 @@ Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the
 
 **The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,502 non-blank lines of Zig in 22 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->383 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, plus one more verdict, `consistent` (exit code 55). It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
 
+### Search
+
+`emetgate_search` (`src/protocol/search_v1.zig`) finds a literal substring or, with
+`regex:true`, a regular expression (`src/engine/regex.zig`) in git-tracked text files.
+Unlike a flat grep, hits are grouped so a result can go straight into `emetgate_try` or
+`emetgate_read_symbol` without a second lookup:
+
+- In a registered language, hits are grouped by their **enclosing symbol** (ref + content
+  hash), and each hit is tagged **code** / **comment** / **string** from the tree-sitter
+  node at the match (`profile.isComment`, `profile.strings` — data-driven per language,
+  the engine itself names no language). A hit that names a known symbol is further tagged
+  **definition** (inside the symbol's own signature, matching its name) or **reference**
+  (the callee of a call expression, per `profile.call`, or a generic identifier-reference
+  node kind). Groups with a definition hit sort first, so "where is X defined" resolves in
+  the same reply as "where is X used."
+- In a `.json` file, hits are grouped by the JSON pointer of the value they fall in
+  (`json_pointer.pointerAt`); in a `.md` file, by the innermost heading whose section
+  contains them (`markdown_heading.sectionAt`). Any other tracked text file is ungrouped
+  (line only).
+- `kinds:["code"]` (etc.) filters the kind tag before the hit cap is applied. At most 200
+  hits total, `truncated:true` when cut, matching `emetgate_scan`'s cap style.
+
+Example reply shape:
+
+```json
+{"pattern":"loadPending","regex":false,"files_total":42,"files_scanned":3,
+ "groups":[{"file":"src/index.js","symbol":"loadPending","hash":"…",
+            "hits":[{"line":93,"kind":"code","role":"definition","text":"function loadPending() {"},
+                     {"line":112,"kind":"code","role":"reference","text":"loadPending();"}]}],
+ "truncated":false}
+```
+
+**Candidate file index.** Each tracked file has an entry: its mtime and size stamp, its
+sorted set of 3-byte grams, its content hash, and the spans a hit is classified from (for a
+registered language the symbols, comment and string ranges and reference ranges from
+`kind_spans`; for `.json` every value's pointer and range, for `.md` every section's
+heading and range, from `doc_spans`). A file is a candidate only when its grams are a
+superset of the query's grams; a file with no entry is always a candidate, so the index can
+only skip files that cannot match. A candidate is read from disk, and its stored spans are
+used only when the content hash of the bytes just read equals the entry's; otherwise the
+file is parsed live, so a stale entry can cost time but never a wrong kind, symbol, pointer
+or heading.
+
+**On disk.** The index is saved at
+`%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\index.v2` (the same hashed-path
+convention as the shadow root, so a repository is never written into and a poisoned clone
+cannot carry a poisoned index) in a versioned, length-prefixed binary format
+(`search_index_file.zig`): the `git ls-files` list with the git index file's stamp, then
+every entry with its stamp, content hash, grams and spans, and a BLAKE3 checksum of all of
+it at the end. A file with another magic or version, a bad checksum or a cut tail is
+ignored and the index is built again; text in it is never escaped, only counted. It is
+written when a session first builds it and when a session that changed it ends.
+
+**Freshness.** Inside `emetgate mcp` the index, the file list, a change watcher
+(`src/platform/change_watch.zig`) and a thread pool live for the session
+(`search_session.zig`). The watcher starts with the session, before the saved index is
+loaded. The first search of a session then checks every tracked file against the loaded
+index: it lists each directory once (`FindFirstFileExW`, no file is opened), and re-reads
+a file whose last-write time or size differs, or whose time falls within 3 s of when the
+index was saved (the racy rule, since a write in the same instant as the save can keep its
+stamp); every other entry is used as loaded. The file list is reused when the git index
+file has the saved stamp and that stamp is more than 2 s old. Every search first calls
+the watcher's barrier (`sync`, 250 ms budget): it creates a cookie file under
+`.emetgate/cookies/` and waits until the watcher reports it; NTFS reports changes to one
+directory handle in order, so every change that finished before the call is in the dirty
+set by then. Only the dirty files are read and re-indexed. The file list is listed
+again when the git index file's stamp changes. If the barrier overflows, times out or the watcher has stopped, the search falls
+back to a full refresh that stats every tracked file and re-reads each one whose stamp
+changed; nothing is reported clean on a failure. Outside a session (the CLI, tests without
+one) every search lists the files and does that full refresh against the saved index. The
+contract: a write whose handle was closed or flushed
+before the search starts is in the result. **Limit:** a program that keeps a file open and
+writes to it without closing or flushing is not reported by `ReadDirectoryChangesW` until it
+does, and a stat can miss it too (NTFS updates the last-write time once per handle), so
+such a write can be missing from a result until the writer closes the file. Editors, git,
+package managers and emetgate itself close what they write.
+
+**Sparse gram size — measured, not assumed.** GitHub's Blackbird search
+(https://github.blog/2023-02-06-the-technology-behind-githubs-new-code-search/) uses
+variable-length sparse grams, chosen by a trained weighting model, instead of fixed
+trigrams; Zoekt (https://github.com/sourcegraph/zoekt) uses positional trigrams. This
+project does not have Blackbird's trained model, so `tests/bench/gram_compare.py` measures
+two real alternatives against trigram (n=3) on `eval/express-test` (215 files) and
+`eval/eslint-test` (2362 files), five representative queries.
+
+First, a fixed but longer gram (n=4, not itself a sparse scheme, just a cheap sanity check
+on gram length):
+
+| repo | n | distinct grams | candidates for 5 queries (of total files) |
+|---|---:|---:|---|
+| express-test | 3 | 20445 | 0, 15, 140, 133, 32 (of 213) |
+| express-test | 4 | 47934 | 0, 15, 140, 133, 31 (of 213) |
+| eslint-test | 3 | 68882 | 0, 44, 978, 733, 159 (of 2319) |
+| eslint-test | 4 | 243210 | 0, 44, 978, 729, 159 (of 2319) |
+
+n=4 costs 2.3-3.5x more distinct grams for candidate counts identical or within one file
+of n=3. Second, a real sparse scheme: classical **winnowing**
+(Schleimer, Wilkerson, Aiken, "Winnowing: Local Algorithms for Document Fingerprinting,"
+2003) — hash every 5-byte k-gram, keep only the minimum-hash fingerprint in each window of
+4 consecutive k-grams. Unlike a rarity-weighted selection (which cannot guarantee two
+occurrences of the same string pick a shared fingerprint, and would silently break the
+fail-closed contract), winnowing has a proven guarantee: any two occurrences of the same
+string of at least `k+w-1` = 8 bytes select at least one common fingerprint, so it cannot
+wrongly exclude a real match at or above that length; below it, this repo's index and this
+script both fall back to a full scan, same as a query too short to trigram:
+
+| repo | fingerprints (winnowing) | candidates for 5 queries: trigram vs winnowing (of total files) |
+|---|---:|---|
+| express-test | 35677 (vs 20445 trigram) | 0/0, 15/15, 140/140, 133/136, 32/31 |
+| eslint-test | 264837 (vs 68882 trigram) | 0/0, 44/44, 978/1015, 733/914, 159/159 |
+
+Winnowing's index is 1.7-3.8x bigger and 2-3x slower to build than trigram, and it never
+narrows the candidate set further — on the two lowest-selectivity queries this benchmark
+was chosen to stress (`function`: 978/2319, `require(`: 733/2319 with trigram) it is
+strictly worse (1015 and 914). Winnowing is measured here as a documented alternative, not
+as a stand-in for Blackbird: it is a *fingerprint-selection* scheme (which fixed-length
+k-grams to keep), not the *variable-length sparse gram* Blackbird's post describes.
+
+Third, that actual construction: Blackbird's post derives variable-length "features" from
+byte-pair boundary weights, trained on real code. Without that trained model,
+`gram_compare.py` reproduces the same boundary mechanism with an untrained proxy weight
+(a hash of each byte pair): a substring `data[i:j]` (length 4-12) is indexed only when the
+weight of both of its boundary byte-pairs exceeds the weight of every byte-pair strictly
+between them, so boundaries fall on locally "rare" (high-hash) pairs the same way Blackbird's
+trained rarity score would place them, just without the training. A query is checked against
+the smallest set of its own sparse grams that covers it end to end (greedy interval cover),
+matching the "cover the query, not just take one gram" approach the post describes:
+
+| repo | distinct grams (sparse) | candidates for 5 queries: trigram vs sparse gram (of total files) |
+|---|---:|---|
+| express-test | 147131 (vs 20445 trigram) | 0/0, 15/15, 140/140, 133/133, 32/31 |
+| eslint-test | 1254929 (vs 68882 trigram) | 0/0, 44/44, 978/979, 733/727, 159/159 |
+
+This is the closer reproduction of Blackbird's actual mechanism, and it is roughly at parity
+with trigram on 4 of 5 queries and marginally *better* on the one it was meant to help
+(`require(`: 727 vs 733) — but its index is 7.2-18.2x bigger and 5.9-6.5x slower to build
+than trigram's, because it stores a variable window of overlapping spans per position
+instead of one fixed 3-byte gram, and the untrained hash-based weight does not concentrate
+boundaries the way a trained rarity score would. **Trigram is kept**: neither winnowing nor this
+boundary-weighted sparse gram won convincingly enough here to justify the larger, slower
+index. This is a measurement on two repos, five queries, and one untrained weight function
+— not a claim that a trained Blackbird-style model would not help; only that reproducing its
+*mechanism* without its *training* did not, on this corpus. The reproduction command is in
+the script if a different weight function or corpus is worth checking.
+
+**Regex candidates.** Russ Cox's trigram-index regex matching
+(https://swtch.com/~rsc/regexp/regexp4.html) derives the trigrams every match must contain,
+alternation included, from the regex AST. This regex engine compiles straight to an NFA and
+does not expose that AST, so `regex_hint.longestLiteralChunk` takes the longest literal run
+that every match must contain: text outside any group, with the character before `?`, `*`
+or `{` left out, and nothing at all when the pattern has a `|` outside a group
+(`foo|bar`, `colou?r` and `(ab)?cd` give no hint, `colo` and `cd`). Its grams narrow the
+candidate files when it is at least 3 bytes, and the same text screens lines before the
+regex runs on them. An earlier version took any literal run, so `foo|bar` skipped files
+that only held `bar`; a test and two mutations hold the rule now.
+
+Measured with `tests/bench/search.py` (ReleaseFast build, 10-run medians, run alone under
+the lock script) against `rg` and `git grep` on `eval/express-test` and
+`eval/eslint-test`: <!-- generated:search-summary -->a new session's first search 4.6 to 22.0 ms and later searches 1.4 to 9.3 ms, against rg 21.3 to 53.2 ms and git grep 21.6 to 46.0 ms; building the index the first time, once per repository, took 98 to 1,322 ms (2026-09-27, scan bandwidth 3.00 GB/s)<!-- /generated -->.
+rg and git grep are timed as the process a tool call starts, since Claude Code's Grep starts
+rg for every call; emetgate is timed as the MCP round trip of one call to a running server.
+Cold is the first search of a new server with the index on disk, warm the second; both
+include the barrier. Startup is that server's spawn and initialize round trip, which
+includes starting the watcher and loading the index; it is paid once per session, when
+Claude Code starts the server, not per search. Index build is the first search in a
+repository with no saved index, once per repository. The floor is what a warm
+search cannot avoid, measured in the same session: an MCP ping round trip, the barrier, the
+candidate filter and one pass over the candidate bytes at the scan bandwidth `bytes.find`
+reaches in memory. The `+edit` rows charge the built-in path for the `Read` Claude Code
+requires before an `Edit`, in two versions: the whole file, and only the changed function's
+lines (a best case the model cannot know without having read the file).
+<!-- generated:search-table -->
+
+| Scenario | rg ms | git grep ms | emetgate cold ms | emetgate warm ms | floor ms | startup ms | index build ms (one time) | rg tokens | emetgate tokens | turns rg/emetgate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| an error message string | 21.3 | 21.6 | 5.0 | 2.3 | 0.64 | 39.1 | 98.3 | 315,999 | 267 | 1/1 |
+| a term only in comments | 53.2 | 46.0 | 22.0 | 9.3 | 3.72 | 62.0 | 1322.5 | 29,371 | 7,668 | 1/1 |
+| a JSON key value | 27.6 | 26.3 | 7.4 | 4.3 | 0.73 | 48.4 | 118.2 | 375,981 | 6,060 | 1/1 |
+| a common short word | 29.2 | 32.4 | 8.5 | 5.2 | 0.66 | 48.5 | 118.7 | 414,187 | 6,088 | 1/1 |
+| a regex pattern | 24.8 | 24.6 | 8.8 | 5.0 | 0.87 | 48.6 | 121.8 | 352,283 | 3,313 | 1/1 |
+| tryRender usages (rg+Read full file) | 24.6 | 24.3 | 4.6 | 1.4 | 0.47 | 48.7 | 115.1 | 3,586 | 135 | 2/1 |
+| tryRender usages (rg+Read best-case range) | 24.6 | 24.3 | 4.6 | 1.4 | 0.47 | 48.7 | 115.1 | 65 | 135 | 2/1 |
+| logerror usages (rg+Read full file) | 23.4 | 24.4 | 4.8 | 1.8 | 0.54 | 48.4 | 117.9 | 3,647 | 130 | 2/1 |
+| logerror usages (rg+Read best-case range) | 23.4 | 24.4 | 4.8 | 1.8 | 0.54 | 48.4 | 117.9 | 123 | 130 | 2/1 |
+<!-- /generated -->
+
+Cold and warm search are faster than both rg and git grep in every scenario. Building
+the index the first time is not: it reads, grams and parses every tracked file on up to 8
+threads, about 0.1 s for express's 215 files and 1.3 s for eslint's 2362, once per
+repository. Between warm and floor are the grouping and the JSON reply; on eslint the cold
+search also re-reads the 43 files the index leaves out (binary or over 1 MiB) to see
+whether they changed. Two `+edit` rows are at token
+parity against the best-case range a model cannot reach without reading the file first:
+ripgrep's output for a rare name is already near the minimum, and emetgate adds a fixed
+grouping and hash wrapper. Against the whole-file `Read` both clear 3x by two orders of
+magnitude.
+
+**Limits:** no automatic index eviction (an index for a repo that is deleted or moved
+stays on disk under its old path hash; harmless, since a rebuilt repo gets a fresh hash,
+but it is never cleaned up); the regex engine's own feature set (no backreferences,
+lookaround, or counted `{n,m}` repetition, see `src/engine/regex.zig`) bounds what
+`regex:true` can express; definition/reference tagging is a heuristic over available
+profile data (declaration span, call-site field), not a full tags.scm implementation, and
+can miss less direct reference shapes (e.g. an identifier passed as a callback rather than
+called directly stays untagged, not mistagged).
 ## How the kernel itself is verified
 
 Numbers in this README that can be read out of the source or the mutation corpus are

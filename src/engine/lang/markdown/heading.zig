@@ -86,6 +86,21 @@ fn walk(gpa: Allocator, tree: ts.Tree, node: ts.Node, out: *std.ArrayList(Entry)
     }
 }
 
+fn spanLen(node: ts.Node) u32 {
+    return node.endByte() - node.startByte();
+}
+
+pub fn sectionAt(gpa: Allocator, tree: ts.Tree, offset: u32) Allocator.Error!?[]const u8 {
+    const entries = try headingTree(gpa, tree);
+    defer gpa.free(entries);
+    var best: ?Entry = null;
+    for (entries) |entry| {
+        if (offset < entry.node.startByte() or offset >= entry.node.endByte()) continue;
+        if (best == null or spanLen(entry.node) < spanLen(best.?.node)) best = entry;
+    }
+    return if (best) |b| b.heading else null;
+}
+
 pub fn resolve(gpa: Allocator, tree: ts.Tree, heading: []const u8) Error!Entry {
     const entries = try headingTree(gpa, tree);
     defer gpa.free(entries);
@@ -167,4 +182,23 @@ test "a setext heading is recognized with its underline level" {
     try testing.expectEqual(@as(usize, 1), entries.len);
     try testing.expectEqualStrings("Title", entries[0].heading);
     try testing.expectEqual(@as(u8, 1), entries[0].level);
+}
+
+test "sectionAt finds the innermost heading whose section contains a byte offset" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try test_util.parser();
+    defer parser.deinit();
+
+    const source = "# Title\n\nintro\n\n## Setup\n\ndetails\n\n### Install\n\nsteps\n";
+    const tree = try parseMarkdown(parser, source);
+    defer tree.deinit();
+
+    const offset: u32 = @intCast(std.mem.indexOf(u8, source, "steps").?);
+    const found = (try sectionAt(testing.allocator, tree, offset)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("Install", found);
+
+    const intro_offset: u32 = @intCast(std.mem.indexOf(u8, source, "intro").?);
+    const intro_found = (try sectionAt(testing.allocator, tree, intro_offset)) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("Title", intro_found);
 }

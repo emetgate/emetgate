@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1063**
-- Mutations declared in `tests/mutations.json`: **602**
-  - killed: **572**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1109**
+- Mutations declared in `tests/mutations.json`: **619**
+  - killed: **589**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-166 mutation(s).
+183 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -671,6 +671,13 @@ python tools/verification_page.py --check
 | `VR7-symmetry-alpha-not-checked` | `src/verify/checker.zig` | `if (!try c.alphaEqual(k.path, before, after)) outcome.raise(.mi...` -> `_ = try c.alphaEqual(k.path, before, after);` | verify: a spending change relabelled as a symmetric rename fails the alpha hash | killed |
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
+| `SR1-index-stale-entry-trusted` | `src/platform/search_index.zig` | `if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == ...` -> `if (true) {` | search on disk: a new session loads the saved index after its watcher started a...; refre... | killed |
+| `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !p.isRacy(stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o... | killed |
+| `SR2-index-checksum-not-verified` | `src/platform/search_index_file.zig` | `if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;` -> `_ = actual;     _ = claimed;` | a corrupted index file is rejected instead of trusted; a flipped byte, a cut tail, anothe... | killed |
+| `SR3-comment-kind-reversed` | `src/protocol/search_v1.zig` | `if (profile.isComment(n.kind())) return .comment;` -> `if (profile.isComment(n.kind())) return .code;` | a hash-matching index entry with no persisted spans still classifies comments a... | killed |
+| `SR4-hit-cap-ignored` | `src/protocol/search_v1.zig` | `if (total_hits >= max_matches) {` -> `if (false) {` | the total hit count is capped and truncated is reported | killed |
+| `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `if (!read_tools.inDirectory(f, place.rel)) continue;` -> `_ = place.rel;` | a search scoped to a subdirectory does not return hits from outside it | killed |
+| `SK1-stale-symbol-table-trusted` | `src/protocol/search_v1.zig` | `if (std.mem.eql(u8, &ch, &live)) {` -> `if (std.mem.eql(u8, &ch, &live) or true) {` | a resident index entry whose stored hash does not match the file's live bytes i... | killed |
 | `AC2-app-container-gains-a-capability` | `src/platform/appcontainer.zig` | `.capabilities = null, .capability_count = 0, .reserved = 0 };` -> `.capabilities = null, .capability_count = 1, .reserved = 0 };` | a fresh profile carries no capabilities and points its security struct at its o...; redte... | killed |
 | `AC3-app-container-grant-not-applied` | `src/platform/appcontainer.zig` | `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FA...` -> `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, dacl, .FALS...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
 | `AC4-lpac-opt-out-dropped` | `src/platform/appcontainer.zig` | `pub const all_application_packages_opt_out: u32 = 0x1;` -> `pub const all_application_packages_opt_out: u32 = 0x0;` | redteam appcontainer: an lpac profile opts out of the all-packages group, a reg... | killed |
@@ -702,6 +709,16 @@ python tools/verification_page.py --check
 | `CW6-cookie-dir-junction-followed` | `src/platform/change_watch.zig` | `if (attributes & win.file_attribute_reparse_point != 0) return ...` -> `` | redteam change watch: a cookie directory that is a file or a junction is refuse... | killed |
 | `CW7-parent-path-event-accepted` | `src/platform/change_watch.zig` | `if (std.mem.eql(u8, part, "..") or std.mem.eql(u8, part, ".")) ...` -> `` | classify drops the repository's own directories and refuses names that leave th... | killed |
 | `CW8-directory-rename-new-end-not-a-subtree` | `src/platform/change_watch.zig` | `if (self.isDirectoryOrGone(rel)) try addKey(self.gpa, &self.sub...` -> `` | change watch: rename marks both ends, delete, directory rename and a nested cre...; chang... | killed |
+| `SW1-search-skips-the-barrier` | `src/platform/search_session.zig` | `dirty = w.sync(sync_timeout_ms) catch \|err\| switch (err) {` -> `dirty = (if (false) w.sync(sync_timeout_ms) else @as(change_wat...` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
+| `SW2-watch-overflow-read-as-clean` | `src/platform/search_session.zig` | `reason = "overflow";` -> `reason = "";` | search freshness: a burst that overflows the watch buffer falls back to a full ... | killed |
+| `SW3-git-index-change-ignored` | `src/platform/search_session.zig` | `if (self.files != null and self.list_trusted and stamp != null ...` -> `if (self.files != null) {             if (true) return false;` | search freshness: a git add that changes the tracked set is picked up without w... | killed |
+| `SW4-dirty-file-not-reindexed` | `src/platform/search_session.zig` | `try search_index.updateEntry(self.gpa, self.io, index, root, re...` -> `_ = .{ index, root };` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
+| `RH1-hint-ignores-top-level-alternation` | `src/engine/regex_hint.zig` | `if (hasTopLevelAlternation(pattern)) return pattern[0..0];` -> `` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
+| `RH2-hint-keeps-an-optional-character` | `src/engine/regex_hint.zig` | `if (i > r) best.close(run, i - 1);` -> `if (i > r) best.close(run, i);` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
+| `SW5-index-loaded-before-the-watcher-starts` | `src/platform/search_session.zig` | `self.watcher = change_watch.Watcher.start(self.gpa, self.io, ro...` -> `self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catc...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
+| `SW6-loaded-index-trusted-without-a-restat` | `src/platform/search_session.zig` | `self.reconcile = true;` -> `self.reconcile = false;` | search on disk: a new session loads the saved index after its watcher started a... | killed |
+| `IF1-index-file-version-not-checked` | `src/platform/search_index_file.zig` | `if (try r.int(u32) != version) return error.Corrupt;` -> `_ = try r.int(u32);` | a flipped byte, a cut tail, another version or another magic is refused | killed |
+| `PF1-directory-stamp-reads-the-creation-time` | `src/platform/search_index.zig` | `const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32...` -> `const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) ...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 
 ## What this system does not prove
 

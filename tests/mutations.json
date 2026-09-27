@@ -3158,7 +3158,7 @@
       "id": "RO2-a-rule-writing-tool-is-dispatched",
       "file": "src/protocol/handlers.zig",
       "from": "    return error.UnknownTool;\n}",
-      "to": "    if (std.mem.eql(u8, name, \"emetgate_rule_add\")) return callScan(gpa, io, runtime, args, event, policy.root);\n    return error.UnknownTool;\n}",
+      "to": "    if (std.mem.eql(u8, name, \"emetgate_rule_add\")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);\n    return error.UnknownTool;\n}",
       "kills": [
         "red line: no tool on the model side can adopt, change or forget a rule"
       ]
@@ -5689,6 +5689,72 @@
       ]
     },
     {
+      "id": "SR1-index-stale-entry-trusted",
+      "file": "src/platform/search_index.zig",
+      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {",
+      "to": "if (true) {",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
+        "refresh reuses unchanged entries and recomputes a file that changed",
+        "a stale index does not hide a match added to a file after the index was built"
+      ]
+    },
+    {
+      "id": "SR6-racy-stamp-not-checked",
+      "file": "src/platform/search_index.zig",
+      "from": "and !p.isRacy(stamp)) {",
+      "to": ") {",
+      "kills": [
+        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set"
+      ]
+    },
+    {
+      "id": "SR2-index-checksum-not-verified",
+      "file": "src/platform/search_index_file.zig",
+      "from": "if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;",
+      "to": "_ = actual;\n    _ = claimed;",
+      "kills": [
+        "a corrupted index file is rejected instead of trusted",
+        "a flipped byte, a cut tail, another version or another magic is refused"
+      ]
+    },
+    {
+      "id": "SR3-comment-kind-reversed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (profile.isComment(n.kind())) return .comment;",
+      "to": "if (profile.isComment(n.kind())) return .code;",
+      "kills": [
+        "a hash-matching index entry with no persisted spans still classifies comments and definitions via a live parse"
+      ]
+    },
+    {
+      "id": "SR4-hit-cap-ignored",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (total_hits >= max_matches) {",
+      "to": "if (false) {",
+      "kills": [
+        "the total hit count is capped and truncated is reported"
+      ]
+    },
+    {
+      "id": "SR5-directory-scope-not-enforced",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (!read_tools.inDirectory(f, place.rel)) continue;",
+      "to": "_ = place.rel;",
+      "kills": [
+        "a search scoped to a subdirectory does not return hits from outside it"
+      ]
+    },
+    {
+      "id": "SK1-stale-symbol-table-trusted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (std.mem.eql(u8, &ch, &live)) {",
+      "to": "if (std.mem.eql(u8, &ch, &live) or true) {",
+      "kills": [
+        "a resident index entry whose stored hash does not match the file's live bytes is never trusted for symbol grouping"
+      ]
+    },
+    {
       "id": "AC1-app-container-falls-back-to-low-integrity",
       "file": "src/platform/sandbox.zig",
       "from": "        .app_container => |profile| .{ .app = profile },",
@@ -6007,6 +6073,100 @@
       "kills": [
         "change watch: rename marks both ends, delete, directory rename and a nested create are seen",
         "change watch: a directory moved in from outside the tree marks its whole subtree"
+      ]
+    },
+    {
+      "id": "SW1-search-skips-the-barrier",
+      "file": "src/platform/search_session.zig",
+      "from": "            dirty = w.sync(sync_timeout_ms) catch |err| switch (err) {",
+      "to": "            dirty = (if (false) w.sync(sync_timeout_ms) else @as(change_watch.SyncError!change_watch.Dirty, .{ .files = @constCast(&[_][]u8{}), .subtrees = @constCast(&[_][]u8{}) })) catch |err| switch (err) {",
+      "kills": [
+        "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
+        "search freshness: every write is found while another thread keeps rewriting other tracked files"
+      ]
+    },
+    {
+      "id": "SW2-watch-overflow-read-as-clean",
+      "file": "src/platform/search_session.zig",
+      "from": "                    reason = \"overflow\";",
+      "to": "                    reason = \"\";",
+      "kills": [
+        "search freshness: a burst that overflows the watch buffer falls back to a full stat refresh and misses nothing"
+      ]
+    },
+    {
+      "id": "SW3-git-index-change-ignored",
+      "file": "src/platform/search_session.zig",
+      "from": "        if (self.files != null and self.list_trusted and stamp != null and self.git_stamp != null) {",
+      "to": "        if (self.files != null) {\n            if (true) return false;",
+      "kills": [
+        "search freshness: a git add that changes the tracked set is picked up without waiting"
+      ]
+    },
+    {
+      "id": "SW4-dirty-file-not-reindexed",
+      "file": "src/platform/search_session.zig",
+      "from": "            try search_index.updateEntry(self.gpa, self.io, index, root, rel);\n",
+      "to": "            _ = .{ index, root };\n",
+      "kills": [
+        "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
+        "search freshness: every write is found while another thread keeps rewriting other tracked files"
+      ]
+    },
+    {
+      "id": "RH1-hint-ignores-top-level-alternation",
+      "file": "src/engine/regex_hint.zig",
+      "from": "    if (hasTopLevelAlternation(pattern)) return pattern[0..0];\n",
+      "to": "",
+      "kills": [
+        "longestLiteralChunk never returns text a match can do without",
+        "a regex whose literal parts are optional or alternatives still finds every file that matches"
+      ]
+    },
+    {
+      "id": "RH2-hint-keeps-an-optional-character",
+      "file": "src/engine/regex_hint.zig",
+      "from": "                    if (i > r) best.close(run, i - 1);",
+      "to": "                    if (i > r) best.close(run, i);",
+      "kills": [
+        "longestLiteralChunk never returns text a match can do without",
+        "a regex whose literal parts are optional or alternatives still finds every file that matches"
+      ]
+    },
+    {
+      "id": "SW5-index-loaded-before-the-watcher-starts",
+      "file": "src/platform/search_session.zig",
+      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+      ]
+    },
+    {
+      "id": "SW6-loaded-index-trusted-without-a-restat",
+      "file": "src/platform/search_session.zig",
+      "from": "        self.reconcile = true;\n",
+      "to": "        self.reconcile = false;\n",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+      ]
+    },
+    {
+      "id": "IF1-index-file-version-not-checked",
+      "file": "src/platform/search_index_file.zig",
+      "from": "    if (try r.int(u32) != version) return error.Corrupt;",
+      "to": "    _ = try r.int(u32);",
+      "kills": [
+        "a flipped byte, a cut tail, another version or another magic is refused"
+      ]
+    },
+    {
+      "id": "PF1-directory-stamp-reads-the-creation-time",
+      "file": "src/platform/search_index.zig",
+      "from": "const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32) | data.last_write.low);",
+      "to": "const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) | data.creation.low);",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
     }
   ]
