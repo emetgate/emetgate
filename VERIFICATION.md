@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1110**
-- Mutations declared in `tests/mutations.json`: **622**
-  - killed: **592**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1116**
+- Mutations declared in `tests/mutations.json`: **627**
+  - killed: **597**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-186 mutation(s).
+191 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -711,7 +711,7 @@ python tools/verification_page.py --check
 | `CW8-directory-rename-new-end-not-a-subtree` | `src/platform/change_watch.zig` | `if (self.isDirectoryOrGone(rel)) try addKey(self.gpa, &self.sub...` -> `` | change watch: rename marks both ends, delete, directory rename and a nested cre...; chang... | killed |
 | `SW1-search-skips-the-barrier` | `src/platform/search_session.zig` | `dirty = w.sync(sync_timeout_ms) catch \|err\| switch (err) {` -> `dirty = (if (false) w.sync(sync_timeout_ms) else @as(change_wat...` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
 | `SW2-watch-overflow-read-as-clean` | `src/platform/search_session.zig` | `reason = "overflow";` -> `reason = "";` | search freshness: a burst that overflows the watch buffer falls back to a full ... | killed |
-| `SW3-git-index-change-ignored` | `src/platform/search_session.zig` | `if (self.files != null and self.list_trusted and stamp != null ...` -> `if (self.files != null) {             if (true) return false;` | search freshness: a git add that changes the tracked set is picked up without w... | killed |
+| `SW3-git-index-change-ignored` | `src/platform/search_session.zig` | `if (sameGitStamp(stamp, saved)) return false;` -> `if (true or sameGitStamp(stamp, saved)) return false;` | search freshness: a git add that changes the tracked set is picked up without w... | killed |
 | `SW4-dirty-file-not-reindexed` | `src/platform/search_session.zig` | `try search_index.updateEntry(self.gpa, self.io, index, root, re...` -> `_ = .{ index, root };` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
 | `RH1-hint-ignores-top-level-alternation` | `src/engine/regex_hint.zig` | `if (hasTopLevelAlternation(pattern)) return pattern[0..0];` -> `` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
 | `RH2-hint-keeps-an-optional-character` | `src/engine/regex_hint.zig` | `if (i > r) best.close(run, i - 1);` -> `if (i > r) best.close(run, i);` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
@@ -722,6 +722,11 @@ python tools/verification_page.py --check
 | `WR1-compact-reply-drops-new-hash` | `src/protocol/wire.zig` | `try js.objectField("new_hash");     try js.write(new_hex[0..]);...` -> `if (full) {         try js.objectField("new_hash");         try...` | compact committed payload drops the old hash and the shadow note | killed |
 | `WR2-detail-full-ignored` | `src/protocol/wire.zig` | `if (full) {         try js.objectField("old_hash");         try...` -> `if (false) {         try js.objectField("old_hash");         tr...` | committed payload names the symbol and both hashes | killed |
 | `WR3-receipt-note-always-full` | `src/protocol/receipt_note.zig` | `const written = receipts.write(gpa, io, root, rec);     if (!fu...` -> `const written = receipts.write(gpa, io, root, rec);     if (ful...` | node edit: read_symbol with nodes gives hash\\|code lines and a node try commits... | killed |
+| `SW7-file-list-change-forces-a-full-refresh` | `src/platform/search_session.zig` | `if (listed and reason.len == 0 and dirty == null) reason = "fil...` -> `if (listed and reason.len == 0) reason = "file_list_changed";` | search freshness: after a committed write and a git commit the file list is lis... | killed |
+| `SW8-git-index-stamp-never-trusted` | `src/platform/search_session.zig` | `return c.mtime_ns == saved.mtime_ns and c.size == saved.size an...` -> `return false and c.mtime_ns == saved.mtime_ns and c.size == sav...` | search freshness: after a committed write and a git commit the file list is lis... | killed |
+| `GI1-git-index-checksum-not-verified` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;` -> `_ = &sha1;         return 20;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
+| `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, signature, "link") or std.mem.eql(u8, signa...` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
+| `GI3-v4-prefix-not-stripped` | `src/platform/git_index.zig` | `previous.shrinkRetainingCapacity(previous.items.len - strip);` -> `previous.shrinkRetainingCapacity(0);` | git index reader: version 4 prefix compression and an intent-to-add entry read ... | killed |
 
 ## What this system does not prove
 

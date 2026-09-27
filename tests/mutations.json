@@ -6213,6 +6213,33 @@
       "kills": [
         "search freshness: after a committed write and a git commit the file list is listed once and then reused"
       ]
+    },
+    {
+      "id": "GI1-git-index-checksum-not-verified",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;",
+      "to": "        _ = &sha1;\n        return 20;",
+      "kills": [
+        "git index reader: a split index, a flipped byte or a cut file is not read"
+      ]
+    },
+    {
+      "id": "GI2-split-git-index-read-as-complete",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (std.mem.eql(u8, signature, \"link\") or std.mem.eql(u8, signature, \"sdir\")) return null;",
+      "to": "        if (std.mem.eql(u8, signature, \"sdir\")) return null;",
+      "kills": [
+        "git index reader: a split index, a flipped byte or a cut file is not read"
+      ]
+    },
+    {
+      "id": "GI3-v4-prefix-not-stripped",
+      "file": "src/platform/git_index.zig",
+      "from": "            previous.shrinkRetainingCapacity(previous.items.len - strip);",
+      "to": "            previous.shrinkRetainingCapacity(0);",
+      "kills": [
+        "git index reader: version 4 prefix compression and an intent-to-add entry read the same as git ls-files"
+      ]
     }
   ]
 }
