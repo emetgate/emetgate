@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import tiktoken
 
@@ -13,7 +14,9 @@ ROOT = os.path.dirname(os.path.dirname(BENCH))
 _exe = "emetgate.exe" if os.name == "nt" else "emetgate"
 SYN = os.environ.get("EMETGATE_BIN") or os.path.join(ROOT, "zig-out", "bin", _exe)
 EXPRESS = os.environ.get("EMETGATE_EXPRESS") or os.path.join(ROOT, "..", "eval", "express-test")
-DISPLAY_ROOT = "C:\\Users\\dev\\project\\"
+AFFILIATE = os.environ.get("AFFILIATE_SCRAPER") or r"C:\Users\ugur\Desktop\Freelance\affiliate-scraper"
+TOOL_ID = "toolu_01A09q90qw90lq917835lq9"
+DISPLAY_ROOT ="C:\\Users\\dev\\project\\"
 ENC = tiktoken.get_encoding("o200k_base")
 TEST_COMMAND = "exit 0"
 
@@ -26,16 +29,31 @@ def call_cost(name, arguments):
     return toks(name) + toks(json.dumps(arguments, ensure_ascii=False))
 
 
+def use_block(name, arguments):
+    return toks(json.dumps({"type": "tool_use", "id": TOOL_ID, "name": name, "input": arguments}, ensure_ascii=False))
+
+
+def result_block(text, failed):
+    block = {"type": "tool_result", "tool_use_id": TOOL_ID, "content": text}
+    if failed:
+        block["is_error"] = True
+    return toks(json.dumps(block, ensure_ascii=False))
+
+
 class Flow:
     def __init__(self):
         self.sent = 0
         self.received = 0
         self.turns = 0
         self.failed = 0
+        self.enveloped = 0
+        self.ms = 0.0
 
-    def call(self, name, arguments, result, failed=False):
+    def call(self, name, arguments, result, failed=False, ms=0.0):
         self.sent += call_cost(name, arguments)
         self.received += toks(result)
+        self.enveloped += use_block(name, arguments) + result_block(result, failed)
+        self.ms += ms
         self.turns += 1
         if failed:
             self.failed += 1
@@ -111,7 +129,23 @@ def changed_lines(old, new):
     return start, old_end, new_end
 
 
-def builtin_edit(flow, path, old, new):
+def timed_read(disk_path):
+    started = time.perf_counter()
+    cat_n(read(disk_path))
+    return (time.perf_counter() - started) * 1000
+
+
+def timed_edit(disk_path, old_string, new_string):
+    started = time.perf_counter()
+    content = read(disk_path)
+    matches = content.count(old_string)
+    if matches == 1:
+        with open(disk_path, "w", encoding="utf-8", newline="") as f:
+            f.write(content.replace(old_string, new_string, 1))
+    return matches, (time.perf_counter() - started) * 1000
+
+
+def builtin_edit(flow, disk_path, path, old, new):
     display = DISPLAY_ROOT + path.replace("/", "\\")
     start, old_end, new_end = changed_lines(old, new)
     tail = len(old) - old_end
@@ -119,11 +153,11 @@ def builtin_edit(flow, path, old, new):
         old_string = old[start:old_end]
         new_string = new[start:len(new) - tail]
         arguments = {"file_path": display, "old_string": old_string, "new_string": new_string}
-        matches = old.count(old_string)
+        matches, ms = timed_edit(disk_path, old_string, new_string)
         if matches == 1:
-            flow.call("Edit", arguments, f"The file {display} has been updated successfully.")
+            flow.call("Edit", arguments, f"The file {display} has been updated successfully.", ms=ms)
             return
-        flow.call("Edit", arguments, f"Found {matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: {old_string}", failed=True)
+        flow.call("Edit", arguments, f"Found {matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: {old_string}", failed=True, ms=ms)
         grown_start = old.rfind("\n", 0, max(start - 1, 0)) + 1 if start > 0 else 0
         grown_end = old.find("\n", old_end + 1)
         grown_end = len(old) if grown_end == -1 else grown_end
@@ -131,15 +165,22 @@ def builtin_edit(flow, path, old, new):
         start, old_end = grown_start, grown_end
 
 
-def builtin_flow(path, old, steps, already_read):
+def builtin_flow(source_root, path, old, steps, already_read):
     flow = Flow()
     display = DISPLAY_ROOT + path.replace("/", "\\")
-    if not already_read:
-        flow.call("Read", {"file_path": display}, cat_n(old))
-    current = old
-    for after in steps:
-        builtin_edit(flow, path, current, after)
-        current = after
+    work = copy_project(source_root, [path], git=False)
+    disk_path = os.path.join(work, path)
+    try:
+        if not already_read:
+            flow.call("Read", {"file_path": display}, cat_n(old), ms=timed_read(disk_path))
+        current = old
+        for after in steps:
+            builtin_edit(flow, disk_path, path, current, after)
+            current = after
+        if read(disk_path) != steps[-1]:
+            raise RuntimeError(f"{path}: the built-in flow wrote something other than the intended edit")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     return flow
 
 
@@ -169,12 +210,14 @@ class Scenario:
         self.note = note
 
 
-def copy_project(source_root, files):
+def copy_project(source_root, files, git=True):
     work = tempfile.mkdtemp(prefix="emetgate-write-")
     for rel in files:
         target = os.path.join(work, rel)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         shutil.copyfile(os.path.join(source_root, rel), target)
+    if not git:
+        return work
     subprocess.run(["git", "init", "-q"], cwd=work, check=True)
     subprocess.run(["git", "add", "-A"], cwd=work, check=True)
     subprocess.run(["git", "-c", "user.name=bench", "-c", "user.email=bench@example.invalid", "commit", "-q", "-m", "base"], cwd=work, check=True)
@@ -187,16 +230,19 @@ def emetgate_flow(source_root, scenario):
     session = McpSession(work)
     try:
         read_args = {"file": scenario.path, "symbol": scenario.symbol, "nodes": True}
+        started = time.perf_counter()
         text, is_error = session.call("emetgate_read_symbol", read_args)
+        read_ms = (time.perf_counter() - started) * 1000
         if is_error:
             raise RuntimeError(text)
-        annotated = json.loads(text)["nodes"]
+        annotated = json.loads(text.split("\n", 1)[0])["nodes"]
         if not scenario.already_read:
-            flow.call("emetgate_read_symbol", read_args, text)
+            flow.call("emetgate_read_symbol", read_args, text, ms=read_ms)
         items = [{"node": address_of(annotated, line), "text": new} for line, _old, new in scenario.edits]
         arguments = {"file": scenario.path, **(items[0] if len(items) == 1 else {"nodes": items})}
+        started = time.perf_counter()
         result, is_error = session.call("emetgate_try", arguments)
-        flow.call("emetgate_try", arguments, result, failed=is_error)
+        flow.call("emetgate_try", arguments, result, failed=is_error, ms=(time.perf_counter() - started) * 1000)
         if is_error:
             raise RuntimeError(f"{scenario.name}: {result}")
         after = read(os.path.join(work, scenario.path))
@@ -275,25 +321,87 @@ EXPRESS_SCENARIOS = [
 ]
 
 
+AFFILIATE_SCENARIOS = [
+    Scenario(
+        "one line in a large function",
+        "src/index.js", "applyEdit",
+        [("data.link = value;",
+          "data.link = value;",
+          "data.link = value.trim();")],
+    ),
+    Scenario(
+        "replace an if block",
+        "src/index.js", "applyEdit",
+        [("if (!Number.isFinite(num) || num < 1 || num > 99) {",
+          "if (!Number.isFinite(num) || num < 1 || num > 99) {\n        await ctx.reply(ui.invalidDiscount);\n        return;\n      }",
+          "if (!Number.isFinite(num) || num < 1 || num > 95) {\n        await ctx.reply(ui.invalidDiscount);\n        await clearEditPrompt(ctx, info);\n        return;\n      }")],
+    ),
+    Scenario(
+        "replace a small function whole",
+        "src/index.js", "shortNote",
+        [("function shortNote(text, max = 40) {",
+          "function shortNote(text, max = 40) {\n  const one = String(text).replace(/\\s+/g, \" \").trim();\n  return one.length > max ? `${one.slice(0, max - 1)}…` : one;\n}",
+          "function shortNote(text, max = 40) {\n  const one = String(text ?? \"\").replace(/\\s+/g, \" \").trim();\n  if (one.length <= max) return one;\n  return `${one.slice(0, max - 1).trimEnd()}…`;\n}")],
+    ),
+    Scenario(
+        "delete a function",
+        "src/index.js", "restorePreviewKeyboard",
+        [("async function restorePreviewKeyboard(ctx, data, token) {",
+          "async function restorePreviewKeyboard(ctx, data, token) {\n  await ctx.telegram\n    .editMessageReplyMarkup(\n      data.previewChatId,\n      data.previewMessageId,\n      undefined,\n      previewKeyboard(token, data)\n    )\n    .catch(() => {});\n}",
+          "")],
+    ),
+    Scenario(
+        "two edits in one file",
+        "src/index.js", "applyEdit",
+        [("await ctx.reply(ui.invalidPrice);",
+          "await ctx.reply(ui.invalidPrice);",
+          "await ctx.reply(ui.invalidPrice, { reply_to_message_id: ctx.message.message_id });"),
+         ("await ctx.reply(ui.invalidDiscount);",
+          "await ctx.reply(ui.invalidDiscount);",
+          "await ctx.reply(ui.invalidDiscount, { reply_to_message_id: ctx.message.message_id });")],
+    ),
+    Scenario(
+        "one line, file already read (Read costs 0)",
+        "src/index.js", "applyEdit",
+        [("data.link = value;",
+          "data.link = value;",
+          "data.link = value.trim();")],
+        already_read=True,
+    ),
+]
+
+
 HEADER = """\
 Emetgate write benchmark: the built-in Read + Edit flow vs emetgate node edits
 Methodology (read before quoting a number):
 - Tokenizer: o200k_base (GPT-4o-family proxy; NOT Claude's tokenizer). Absolute counts
   are approximate; the RATIO between the flows is the signal.
-- A flow is every tool call a model makes for the edit: the call (tool name + JSON
-  arguments) and the text the tool returns, summed. Tool schemas are left out on both sides.
+- A flow is every tool call a model makes for the edit. Both sides are counted at the
+  same layer, in two ways:
+  bare: tool name + JSON arguments of the call, plus the text the tool returns.
+  block: the Messages API content blocks the model context actually holds, a tool_use
+  block {type, id, name, input} and a tool_result block {type, tool_use_id, content,
+  is_error when failed}, serialized as JSON. The same envelope wraps both sides; the
+  MCP JSON-RPC frame is transport and reaches neither side's context, so it is left out.
+  Tool schemas are left out on both sides.
 - Built-in flow, Claude Code's rules: Edit needs a prior Read of the file (cat -n
   output, whole file, the default); old_string is the changed lines, and when they occur
   more than once the call fails and is retried with one more line of context on each side
-  (the failed call and its error message count). Edit returns one success line. The
-  built-in flow runs no test; emetgate's does (the test command here is a no-op).
+  (the failed call and its error message count). Edit returns one success line.
 - emetgate flow: emetgate_read_symbol with nodes:true, then one emetgate_try with the node
   hash of the line that starts the edited node and that node's new text; both are real
   MCP calls against a git copy of the file, and the file on disk is checked afterwards.
 - "file already read": the Read (and the emetgate read) cost 0; only the edit call counts.
+- floor: emetgate's arguments alone (a reply of zero tokens); builtin/floor is the best
+  ratio any reply format could reach.
+- ms: wall clock of the tool calls. emetgate: the MCP round trip, which includes the
+  shadow workspace and the test command (a no-op here). built-in: the same file work done
+  in-process in Python (read + cat -n; read, count, replace, write), a lower bound for
+  Claude Code's own tools, which run no test.
 - Other formats: the model's emitted edit alone in Aider's formats (whole file, udiff with
   3 context lines, SEARCH/REPLACE), without the Read that each still needs.
-- Fixtures: express (eval/express-test, MIT), copied into a temporary git repo per scenario.
+- Fixtures: express (eval/express-test, MIT) and affiliate-scraper/src/index.js (a
+  1.6k-line real file, read-only), each copied into a temporary directory per scenario.
 - Reproduce: `python tests/bench/write_flow.py` (needs a built emetgate binary)."""
 
 
@@ -301,8 +409,10 @@ def run(source_root, scenarios, label):
     rows = []
     for scenario in scenarios:
         original = read(os.path.join(source_root, scenario.path))
+        if "\r\n" in original:
+            scenario.edits = [tuple(text.replace("\n", "\r\n") for text in edit) for edit in scenario.edits]
         steps = expected_steps(original, scenario.edits)
-        builtin = builtin_flow(scenario.path, original, steps, scenario.already_read)
+        builtin = builtin_flow(source_root, scenario.path, original, steps, scenario.already_read)
         emetgate, after = emetgate_flow(source_root, scenario)
         if after != steps[-1]:
             raise RuntimeError(f"{scenario.name}: emetgate wrote something other than the intended edit")
@@ -316,28 +426,30 @@ def main():
         raise SystemExit(f"emetgate binary not found at {SYN}; run `zig build` or set EMETGATE_BIN")
     print(HEADER)
     rows = []
-    if os.path.isdir(EXPRESS):
-        rows += run(EXPRESS, EXPRESS_SCENARIOS, "express")
-    else:
-        print(f"\nexpress copy not found at {EXPRESS}; set EMETGATE_EXPRESS")
-    print("\n{:<44} {:>9} {:>9} {:>7} {:>11} {:>7}   {}".format("scenario", "built-in", "emetgate", "ratio", "turns b/e", "failed", "emitted edit alone: whole-file / udiff / S-R / emetgate"))
+    for label, root, scenarios in (("express", EXPRESS, EXPRESS_SCENARIOS), ("affiliate", AFFILIATE, AFFILIATE_SCENARIOS)):
+        if os.path.isdir(root):
+            rows += run(root, scenarios, label)
+        else:
+            print(f"\n{label} copy not found at {root}; skipped")
+    print("\n| fixture | scenario | built-in bare | emetgate bare | ratio | built-in block | emetgate block | ratio | floor ratio | turns b/e | failed b/e | ms b/e | whole-file / udiff / S-R / emetgate |")
+    print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     below = []
     for label, scenario, builtin, emetgate, formats in rows:
-        ratio = builtin.total / emetgate.total
-        print("{:<44} {:>9} {:>9} {:>6.2f}x {:>5}/{:<5} {:>3}/{:<3}   {} / {} / {} / {}".format(
-            scenario.name[:44], builtin.total, emetgate.total, ratio, builtin.turns, emetgate.turns, builtin.failed, emetgate.failed,
-            formats["whole-file"], formats["udiff"], formats["search/replace"], emetgate.sent))
-        if ratio < 3:
-            below.append((scenario, ratio, builtin, emetgate))
+        bare = builtin.total / emetgate.total
+        block = builtin.enveloped / emetgate.enveloped
+        floor = builtin.total / emetgate.sent
+        print(f"| {label} | {scenario.name} | {builtin.total} | {emetgate.total} | {bare:.2f}x | {builtin.enveloped} | {emetgate.enveloped} | {block:.2f}x | {floor:.2f}x | {builtin.turns}/{emetgate.turns} | {builtin.failed}/{emetgate.failed} | {builtin.ms:.1f}/{emetgate.ms:.1f} | {formats['whole-file']} / {formats['udiff']} / {formats['search/replace']} / {emetgate.sent} |")
+        if min(bare, block) < 3:
+            below.append((label, scenario, bare, block, floor, builtin, emetgate))
     for label, scenario, builtin, emetgate, _formats in rows:
         if scenario.note:
-            print(f"\nnote, {scenario.name}: {scenario.note}")
+            print(f"\nnote, {label} / {scenario.name}: {scenario.note}")
     if below:
         print("\nScenarios under 3x (not hidden):")
-        for scenario, ratio, builtin, emetgate in below:
-            print(f"  - {scenario.name}: {ratio:.2f}x; built-in sent {builtin.sent} and received {builtin.received}, emetgate sent {emetgate.sent} and received {emetgate.received}")
+        for label, scenario, bare, block, floor, builtin, emetgate in below:
+            print(f"  - {label} / {scenario.name}: {bare:.2f}x bare, {block:.2f}x block, floor {floor:.2f}x; built-in sent {builtin.sent} and received {builtin.received}, emetgate sent {emetgate.sent} and received {emetgate.received}")
     if "--json" in sys.argv:
-        print(json.dumps([{"scenario": s.name, "builtin": b.total, "emetgate": e.total, "builtin_turns": b.turns, "emetgate_turns": e.turns, "builtin_failed": b.failed, "emetgate_failed": e.failed} for _l, s, b, e, _f in rows]))
+        print(json.dumps([{"fixture": l, "scenario": s.name, "builtin": b.total, "emetgate": e.total, "builtin_block": b.enveloped, "emetgate_block": e.enveloped, "builtin_turns": b.turns, "emetgate_turns": e.turns, "builtin_failed": b.failed, "emetgate_failed": e.failed, "builtin_ms": round(b.ms, 1), "emetgate_ms": round(e.ms, 1)} for l, s, b, e, _f in rows]))
 
 
 if __name__ == "__main__":
