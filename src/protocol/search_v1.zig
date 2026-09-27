@@ -342,16 +342,16 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         var parse_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
         if (profile) |p| {
             snapshot = if (tree_cache) |cache|
-                cache.load(runtime, io, abs) catch |err| blk2: {
+                cache.loadWithSource(runtime, io, abs, bytes) catch |err| blk2: {
                     if (err == error.OutOfMemory) return err;
                     break :blk2 null;
                 }
             else blk: {
                 owned_snapshot = true;
-                break :blk Loader.Snapshot.load(runtime, io, .cwd(), abs) catch null;
+                const owned_source = gpa.dupe(u8, bytes) catch |err| break :blk (if (err == error.OutOfMemory) return err else null);
+                break :blk Loader.Snapshot.fromSource(runtime, p, owned_source) catch null;
             };
             if (snapshot) |snap| table = snap.symbols() catch null;
-            _ = p;
         }
 
         var json_tree: ?ts.Tree = null;

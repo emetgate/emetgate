@@ -1,6 +1,7 @@
 const std = @import("std");
 const loader = @import("loader.zig");
 const symbol = @import("symbol.zig");
+const registry = @import("lang/registry.zig");
 const Runtime = @import("runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -90,6 +91,32 @@ pub const TreeCache = struct {
         }
         const fresh = try Snapshot.load(runtime, io, .cwd(), abs_path);
         const fresh_hash = symbol.fileHash(fresh.source);
+        self.insert(key, fresh, fresh_stamp, fresh_hash) catch |err| {
+            fresh.destroy();
+            return err;
+        };
+        return fresh;
+    }
+
+    pub fn loadWithSource(self: *TreeCache, runtime: *Runtime, io: std.Io, abs_path: []const u8, source: []const u8) (Snapshot.LoadError || Allocator.Error)!*Snapshot {
+        const key = try normalizedKey(self.gpa, abs_path);
+        defer self.gpa.free(key);
+        const fresh_stamp = stampOf(io, abs_path);
+        const fresh_hash = symbol.fileHash(source);
+        if (fresh_stamp) |fs| {
+            if (self.entries.getPtr(key)) |entry| {
+                if (sameStamp(entry.stamp, fs) and std.mem.eql(u8, &entry.content_hash, &fresh_hash)) {
+                    entry.tick = self.nextTick();
+                    return entry.snapshot;
+                }
+            }
+        }
+        const profile = registry.forPath(abs_path) orelse return error.UnsupportedLanguage;
+        const owned_source = try runtime.gpa.dupe(u8, source);
+        const fresh = Snapshot.fromSource(runtime, profile, owned_source) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => |e| return e,
+        };
         self.insert(key, fresh, fresh_stamp, fresh_hash) catch |err| {
             fresh.destroy();
             return err;
