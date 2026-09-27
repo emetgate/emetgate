@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1116**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1117**
 - Mutations declared in `tests/mutations.json`: **627**
   - killed: **597**
   - equivalent: **7**
@@ -725,7 +725,7 @@ python tools/verification_page.py --check
 | `SW7-file-list-change-forces-a-full-refresh` | `src/platform/search_session.zig` | `if (listed and reason.len == 0 and dirty == null) reason = "fil...` -> `if (listed and reason.len == 0) reason = "file_list_changed";` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `SW8-git-index-stamp-never-trusted` | `src/platform/search_session.zig` | `return c.mtime_ns == saved.mtime_ns and c.size == saved.size an...` -> `return false and c.mtime_ns == saved.mtime_ns and c.size == sav...` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `GI1-git-index-checksum-not-verified` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;` -> `_ = &sha1;         return 20;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
-| `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, signature, "link") or std.mem.eql(u8, signa...` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
+| `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, signature, "link") or std.mem.eql(u8, signa...` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | an index whose entries live partly in a shared index is not read as the whole l...; git i... | killed |
 | `GI3-v4-prefix-not-stripped` | `src/platform/git_index.zig` | `previous.shrinkRetainingCapacity(previous.items.len - strip);` -> `previous.shrinkRetainingCapacity(0);` | git index reader: version 4 prefix compression and an intent-to-add entry read ... | killed |
 
 ## What this system does not prove

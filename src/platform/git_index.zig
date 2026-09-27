@@ -103,3 +103,46 @@ pub fn freeList(gpa: Allocator, names: [][]u8) void {
     for (names) |n| gpa.free(n);
     gpa.free(names);
 }
+
+const testing = std.testing;
+
+fn buildIndex(gpa: Allocator, name: []const u8, extension: ?[]const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, "DIRC");
+    try out.appendSlice(gpa, &.{ 0, 0, 0, 2, 0, 0, 0, 1 });
+    const start = out.items.len;
+    try out.appendNTimes(gpa, 0, 40 + 20);
+    try out.appendSlice(gpa, &.{ 0, @intCast(name.len) });
+    try out.appendSlice(gpa, name);
+    const entry_len = (out.items.len - start + 8) & ~@as(usize, 7);
+    try out.appendNTimes(gpa, 0, start + entry_len - out.items.len);
+    if (extension) |sig| {
+        try out.appendSlice(gpa, sig);
+        try out.appendSlice(gpa, &.{ 0, 0, 0, 20 });
+        try out.appendNTimes(gpa, 0, 20);
+    }
+    var sum: [20]u8 = undefined;
+    std.crypto.hash.Sha1.hash(out.items, &sum, .{});
+    try out.appendSlice(gpa, &sum);
+    return out.toOwnedSlice(gpa);
+}
+
+test "an index whose entries live partly in a shared index is not read as the whole list" {
+    const plain = try buildIndex(testing.allocator, "a.ts", null);
+    defer testing.allocator.free(plain);
+    const names = (try parse(testing.allocator, plain)) orelse return error.NotRead;
+    defer freeList(testing.allocator, names);
+    try testing.expectEqualStrings("a.ts", names[0]);
+
+    for ([_][]const u8{ "link", "sdir" }) |sig| {
+        const split = try buildIndex(testing.allocator, "a.ts", sig);
+        defer testing.allocator.free(split);
+        try testing.expect((try parse(testing.allocator, split)) == null);
+    }
+    const other = try buildIndex(testing.allocator, "a.ts", "TREE");
+    defer testing.allocator.free(other);
+    const kept = (try parse(testing.allocator, other)) orelse return error.NotRead;
+    defer freeList(testing.allocator, kept);
+    try testing.expectEqual(@as(usize, 1), kept.len);
+}
