@@ -642,20 +642,34 @@ used only when the content hash of the bytes just read equals the entry's; other
 file is parsed live, so a stale entry can cost time but never a wrong kind, symbol, pointer
 or heading.
 
-**Freshness.** Inside `emetgate mcp` the index, the `git ls-files` list and a change
-watcher (`src/platform/change_watch.zig`) live for the session (`search_session.zig`). The
-watcher starts with the session, before the index is first built. Every search first calls
+**On disk.** The index is saved at
+`%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\index.v2` (the same hashed-path
+convention as the shadow root, so a repository is never written into and a poisoned clone
+cannot carry a poisoned index) in a versioned, length-prefixed binary format
+(`search_index_file.zig`): the `git ls-files` list with the git index file's stamp, then
+every entry with its stamp, content hash, grams and spans, and a BLAKE3 checksum of all of
+it at the end. A file with another magic or version, a bad checksum or a cut tail is
+ignored and the index is built again; text in it is never escaped, only counted. It is
+written when a session first builds it and when a session that changed it ends.
+
+**Freshness.** Inside `emetgate mcp` the index, the file list, a change watcher
+(`src/platform/change_watch.zig`) and a thread pool live for the session
+(`search_session.zig`). The watcher starts with the session, before the saved index is
+loaded. The first search of a session then checks every tracked file against the loaded
+index: it lists each directory once (`FindFirstFileExW`, no file is opened), and re-reads
+a file whose last-write time or size differs, or whose time falls within 3 s of when the
+index was saved (the racy rule, since a write in the same instant as the save can keep its
+stamp); every other entry is used as loaded. The file list is reused when the git index
+file has the saved stamp and that stamp is more than 2 s old. Every search first calls
 the watcher's barrier (`sync`, 250 ms budget): it creates a cookie file under
 `.emetgate/cookies/` and waits until the watcher reports it; NTFS reports changes to one
 directory handle in order, so every change that finished before the call is in the dirty
-set by then. Only the dirty files are read and re-indexed. The file list is reused while
-the git index file keeps its stamp and that stamp is more than 2 s old, and listed again
-otherwise. If the barrier overflows, times out or the watcher has stopped, the search falls
+set by then. Only the dirty files are read and re-indexed. The file list is listed
+again when the git index file's stamp changes. If the barrier overflows, times out or the watcher has stopped, the search falls
 back to a full refresh that stats every tracked file and re-reads each one whose stamp
 changed; nothing is reported clean on a failure. Outside a session (the CLI, tests without
-one) every search lists the files and does that full refresh, with the grams kept on disk
-at `%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\index.v1` (checksummed; a bad
-checksum is treated as no index). The contract: a write whose handle was closed or flushed
+one) every search lists the files and does that full refresh against the saved index. The
+contract: a write whose handle was closed or flushed
 before the search starts is in the result. **Limit:** a program that keeps a file open and
 writes to it without closing or flushing is not reported by `ReadDirectoryChangesW` until it
 does, and a stat can miss it too (NTFS updates the last-write time once per handle), so
@@ -743,10 +757,14 @@ that only held `bar`; a test and two mutations hold the rule now.
 
 Measured with `tests/bench/search.py` (ReleaseFast build, 10-run medians, run alone under
 the lock script) against `rg` and `git grep` on `eval/express-test` and
-`eval/eslint-test`: <!-- generated:search-summary -->warm 1.7 to 9.5 ms against rg 22.2 to 52.0 ms and git grep 23.6 to 44.6 ms; a new session's first search, which builds the index, took 98 to 1,007 ms (2026-09-27, scan bandwidth 3.40 GB/s)<!-- /generated -->.
+`eval/eslint-test`: <!-- generated:search-summary -->a new session's first search 4.6 to 22.0 ms and later searches 1.4 to 9.3 ms, against rg 21.3 to 53.2 ms and git grep 21.6 to 46.0 ms; building the index the first time, once per repository, took 98 to 1,322 ms (2026-09-27, scan bandwidth 3.00 GB/s)<!-- /generated -->.
 rg and git grep are timed as the process a tool call starts, since Claude Code's Grep starts
 rg for every call; emetgate is timed as the MCP round trip of one call to a running server.
-Warm is the second search in a session and includes the barrier. The floor is what a warm
+Cold is the first search of a new server with the index on disk, warm the second; both
+include the barrier. Startup is that server's spawn and initialize round trip, which
+includes starting the watcher and loading the index; it is paid once per session, when
+Claude Code starts the server, not per search. Index build is the first search in a
+repository with no saved index, once per repository. The floor is what a warm
 search cannot avoid, measured in the same session: an MCP ping round trip, the barrier, the
 candidate filter and one pass over the candidate bytes at the scan bandwidth `bytes.find`
 reaches in memory. The `+edit` rows charge the built-in path for the `Read` Claude Code
@@ -754,26 +772,25 @@ requires before an `Edit`, in two versions: the whole file, and only the changed
 lines (a best case the model cannot know without having read the file).
 <!-- generated:search-table -->
 
-| Scenario | rg ms | git grep ms | emetgate warm ms | floor ms | emetgate cold ms | rg tokens | emetgate tokens | turns rg/emetgate |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| an error message string | 22.2 | 23.6 | 2.5 | 0.62 | 97.8 | 315,999 | 267 | 1/1 |
-| a term only in comments | 52.0 | 44.6 | 9.5 | 3.70 | 1007.2 | 29,371 | 7,668 | 1/1 |
-| a JSON key value | 29.3 | 26.9 | 5.8 | 0.81 | 120.5 | 375,981 | 6,060 | 1/1 |
-| a common short word | 29.7 | 30.3 | 6.8 | 0.75 | 127.4 | 414,187 | 6,088 | 1/1 |
-| a regex pattern | 26.1 | 25.6 | 6.2 | 0.89 | 118.6 | 352,283 | 3,313 | 1/1 |
-| tryRender usages (rg+Read full file) | 25.0 | 25.7 | 1.7 | 0.61 | 119.8 | 3,586 | 135 | 2/1 |
-| tryRender usages (rg+Read best-case range) | 25.0 | 25.7 | 1.7 | 0.61 | 119.8 | 65 | 135 | 2/1 |
-| logerror usages (rg+Read full file) | 23.8 | 25.9 | 2.1 | 0.72 | 122.9 | 3,647 | 130 | 2/1 |
-| logerror usages (rg+Read best-case range) | 23.8 | 25.9 | 2.1 | 0.72 | 122.9 | 123 | 130 | 2/1 |
+| Scenario | rg ms | git grep ms | emetgate cold ms | emetgate warm ms | floor ms | startup ms | index build ms (one time) | rg tokens | emetgate tokens | turns rg/emetgate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| an error message string | 21.3 | 21.6 | 5.0 | 2.3 | 0.64 | 39.1 | 98.3 | 315,999 | 267 | 1/1 |
+| a term only in comments | 53.2 | 46.0 | 22.0 | 9.3 | 3.72 | 62.0 | 1322.5 | 29,371 | 7,668 | 1/1 |
+| a JSON key value | 27.6 | 26.3 | 7.4 | 4.3 | 0.73 | 48.4 | 118.2 | 375,981 | 6,060 | 1/1 |
+| a common short word | 29.2 | 32.4 | 8.5 | 5.2 | 0.66 | 48.5 | 118.7 | 414,187 | 6,088 | 1/1 |
+| a regex pattern | 24.8 | 24.6 | 8.8 | 5.0 | 0.87 | 48.6 | 121.8 | 352,283 | 3,313 | 1/1 |
+| tryRender usages (rg+Read full file) | 24.6 | 24.3 | 4.6 | 1.4 | 0.47 | 48.7 | 115.1 | 3,586 | 135 | 2/1 |
+| tryRender usages (rg+Read best-case range) | 24.6 | 24.3 | 4.6 | 1.4 | 0.47 | 48.7 | 115.1 | 65 | 135 | 2/1 |
+| logerror usages (rg+Read full file) | 23.4 | 24.4 | 4.8 | 1.8 | 0.54 | 48.4 | 117.9 | 3,647 | 130 | 2/1 |
+| logerror usages (rg+Read best-case range) | 23.4 | 24.4 | 4.8 | 1.8 | 0.54 | 48.4 | 117.9 | 123 | 130 | 2/1 |
 <!-- /generated -->
 
-Warm search is faster than both rg and git grep in every scenario. The cold column is not:
-the first search of a session reads, grams and parses every tracked file on up to 8 threads
-before it can answer, 98 ms on express's 215 files and about 1 s on eslint's 2362. The next
-lever is to keep the content hashes and spans on disk with the grams, so a new session loads
-the index and re-reads only the files whose stamps changed. Between warm and floor are the
-worker threads started for each search, the grouping and the JSON reply (1 to 6 ms); a
-thread pool kept for the session is the next lever there. Two `+edit` rows are at token
+Cold and warm search are faster than both rg and git grep in every scenario. Building
+the index the first time is not: it reads, grams and parses every tracked file on up to 8
+threads, about 0.1 s for express's 215 files and 1.3 s for eslint's 2362, once per
+repository. Between warm and floor are the grouping and the JSON reply; on eslint the cold
+search also re-reads the 43 files the index leaves out (binary or over 1 MiB) to see
+whether they changed. Two `+edit` rows are at token
 parity against the best-case range a model cannot reach without reading the file first:
 ripgrep's output for a rare name is already near the minimum, and emetgate adds a fixed
 grouping and hash wrapper. Against the whole-file `Read` both clear 3x by two orders of
