@@ -7,8 +7,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **1109**
-- Mutations declared in `tests/mutations.json`: **618**
-  - killed: **588**
+- Mutations declared in `tests/mutations.json`: **619**
+  - killed: **589**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-182 mutation(s).
+183 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -718,6 +718,7 @@ python tools/verification_page.py --check
 | `SW5-index-loaded-before-the-watcher-starts` | `src/platform/search_session.zig` | `self.watcher = change_watch.Watcher.start(self.gpa, self.io, ro...` -> `self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catc...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `SW6-loaded-index-trusted-without-a-restat` | `src/platform/search_session.zig` | `self.reconcile = true;` -> `self.reconcile = false;` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `IF1-index-file-version-not-checked` | `src/platform/search_index_file.zig` | `if (try r.int(u32) != version) return error.Corrupt;` -> `_ = try r.int(u32);` | a flipped byte, a cut tail, another version or another magic is refused | killed |
+| `PF1-directory-stamp-reads-the-creation-time` | `src/platform/search_index.zig` | `const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32...` -> `const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) ...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 
 ## What this system does not prove
 

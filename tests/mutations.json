@@ -6159,6 +6159,15 @@
       "kills": [
         "a flipped byte, a cut tail, another version or another magic is refused"
       ]
+    },
+    {
+      "id": "PF1-directory-stamp-reads-the-creation-time",
+      "file": "src/platform/search_index.zig",
+      "from": "const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32) | data.last_write.low);",
+      "to": "const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) | data.creation.low);",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+      ]
     }
   ]
 }
