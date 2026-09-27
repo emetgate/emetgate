@@ -186,6 +186,16 @@ pub fn checkDeletions(gpa: Allocator, io: std.Io, root: []const u8, prepared: []
     const sources = try gpa.alloc(create.Source, prepared.len);
     defer gpa.free(sources);
     for (prepared, sources) |p, *slot| slot.* = .{ .rel = p.rel, .text = p.source() };
+    for (prepared) |p| {
+        const applied = p.nodes orelse continue;
+        for (applied.units) |unit| {
+            if (unit.ref.len == 0 or unit.after != null) continue;
+            const ref = try symbol.Ref.parse(gpa, unit.ref);
+            defer ref.deinit(gpa);
+            if (ref.container.len != 0) continue;
+            if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;
+        }
+    }
     for (prepared, edits[0..prepared.len], 0..) |p, edit, i| {
         const local = p.removed orelse continue;
         const ref = try symbol.Ref.parse(gpa, edit.ref_text);
