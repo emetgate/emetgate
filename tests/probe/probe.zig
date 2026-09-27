@@ -214,6 +214,10 @@ pub fn main(init: std.process.Init) !void {
         _ = CloseHandle(handle);
         ExitProcess(0);
     }
+    if (std.mem.eql(u8, mode, "wsa")) {
+        var data: WsaData = undefined;
+        ExitProcess(if (WSAStartup(0x0202, &data) == 0) 0 else 1);
+    }
     if (std.mem.eql(u8, mode, "connect")) {
         const port = try std.fmt.parseInt(u16, args[2], 10);
         var data: WsaData = undefined;

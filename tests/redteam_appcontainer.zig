@@ -137,6 +137,25 @@ test "redteam appcontainer: the sandboxed process runs inside an app container, 
     try testing.expectEqual(sandbox.Outcome{ .exited = 1 }, low.outcome);
 }
 
+test "redteam appcontainer: an lpac profile opts out of the all-packages group, a regular one does not" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var regular = try Fixture.init(false);
+    defer regular.deinit();
+    const open = try regular.run(&.{"wsa"});
+    defer open.deinit(gpa);
+    errdefer std.debug.print("regular wsa outcome {any}\n", .{open.outcome});
+    try testing.expectEqual(sandbox.Outcome{ .exited = 0 }, open.outcome);
+
+    var lpac = try Fixture.init(true);
+    defer lpac.deinit();
+    const inside = try lpac.run(&.{"appcontainer"});
+    defer inside.deinit(gpa);
+    try testing.expectEqual(sandbox.Outcome{ .exited = 0 }, inside.outcome);
+    const closed = try lpac.run(&.{"wsa"});
+    defer closed.deinit(gpa);
+    try testing.expectEqual(sandbox.Outcome{ .exited = 1 }, closed.outcome);
+}
+
 test "redteam appcontainer: a loopback connection is refused inside the container but reachable from a low-integrity run" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fx = try Fixture.init(false);
