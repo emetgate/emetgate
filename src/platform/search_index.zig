@@ -21,6 +21,7 @@ const max_index_file_bytes: usize = 64 * 1024 * 1024;
 pub const racy_window_ns: i96 = 3 * std.time.ns_per_s;
 
 pub const Stamp = index_file.Stamp;
+pub const GitStamp = index_file.GitStamp;
 
 pub const Entry = struct {
     path: []const u8,
@@ -69,7 +70,7 @@ pub const Index = struct {
     written_ns: ?i96 = null,
     lookup: std.StringHashMapUnmanaged(u32) = .empty,
     files: []const []const u8 = &.{},
-    git_stamp: ?Stamp = null,
+    git_stamp: ?GitStamp = null,
 
     fn finish(arena: *std.heap.ArenaAllocator, entries: []Entry, written_ns: ?i96) !Index {
         var lookup: std.StringHashMapUnmanaged(u32) = .empty;
@@ -107,7 +108,7 @@ pub fn indexPath(gpa: Allocator, root_abs: []const u8) ![]u8 {
     defer arena_state.deinit();
     const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
     const key = shadow_root.repoKey(root_abs);
-    return std.fmt.allocPrint(gpa, "{s}\\emetgate\\index\\{s}\\index.v2", .{ local, &key });
+    return std.fmt.allocPrint(gpa, "{s}\\emetgate\\index\\{s}\\index.v3", .{ local, &key });
 }
 
 fn statOf(io: std.Io, abs_path: []const u8) ?Stamp {
@@ -224,6 +225,20 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
 }
 
 pub fn refreshInPlace(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, index: *Index, pool: ?*worker_pool.Pool) !?RefreshResult {
+    return reconcile(gpa, io, root_abs, files, index, pool, true);
+}
+
+pub fn addMissing(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, index: *Index, pool: ?*worker_pool.Pool) !RefreshResult {
+    var missing: std.ArrayList([]const u8) = .empty;
+    defer missing.deinit(gpa);
+    for (files) |rel| {
+        if (index.lookup.get(rel) == null) try missing.append(gpa, rel);
+    }
+    if (missing.items.len == 0) return .{ .index = index.*, .changed = false, .reused = 0, .recomputed = 0 };
+    return (try reconcile(gpa, io, root_abs, missing.items, index, pool, false)).?;
+}
+
+fn reconcile(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, index: *Index, pool: ?*worker_pool.Pool, prune: bool) !?RefreshResult {
     const slots = try gpa.alloc(Pending, files.len);
     defer gpa.free(slots);
     for (slots, files) |*slot, rel| slot.* = .{ .rel = rel };
@@ -277,7 +292,7 @@ pub fn refreshInPlace(gpa: Allocator, io: std.Io, root_abs: []const u8, files: [
         for (grown[index.entries.len..], index.entries.len..) |e, i| try index.lookup.put(a, e.path, @intCast(i));
         index.entries = grown;
     }
-    if (index.lookup.count() > files.len) {
+    if (prune and index.lookup.count() > files.len) {
         var tracked: std.StringHashMapUnmanaged(void) = .empty;
         defer tracked.deinit(gpa);
         for (files) |rel| try tracked.put(gpa, rel, {});
@@ -522,7 +537,7 @@ const Worker = struct {
     }
 };
 
-pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index, files: []const []const u8, git_stamp: ?Stamp) !void {
+pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index, files: []const []const u8, git_stamp: ?GitStamp) !void {
     if (std.fs.path.dirname(path)) |dir| try Dir.cwd().createDirPath(io, dir);
     const entries = try gpa.alloc(index_file.Entry, index.lookup.count());
     defer gpa.free(entries);
