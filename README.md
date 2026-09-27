@@ -89,14 +89,14 @@ Tokens for whole edits, against Claude Code's `Read` then `Edit` (o200k_base, bo
 
 | Task | Read + Edit | Emetgate |
 |---|---:|---:|
-| Change one line in a large function | 24,646 | 2,241 |
-| Replace an `if` block | 24,703 | 2,284 |
-| Replace a small function whole | 24,734 | 597 |
-| Delete a function and its one call site | 24,934 | 908 |
-| Two edits in one file | 24,813 | 2,312 |
-| Change one line in a file already read | 139 | 287 |
+| Change one line in a large function | 24,646 | 2,145 |
+| Replace an `if` block | 24,703 | 2,191 |
+| Replace a small function whole | 24,734 | 502 |
+| Delete a function and its one call site | 24,934 | 810 |
+| Two edits in one file | 24,813 | 2,213 |
+| Change one line in a file already read | 139 | 191 |
 
-The last row is worse. With the file already in context, `Edit` sends the changed line and gets one line back; emetgate's reply carries the new hashes and a receipt, and its arguments alone would still allow at most 1.9x. Emetgate also runs the tests on every edit, which is most of its 200 to 420 ms per edit. Rule, query and full write measurements are in [REFERENCE.md](REFERENCE.md).
+The last row is worse. With the file already in context, `Edit` sends the changed line and gets one line back; emetgate's default reply on success is now just the status and the new hashes (the shadow copy note, receipt ids and old hash need `detail:"full"`), and its arguments alone would still allow at most 1.9x. Emetgate also runs the tests on every edit, which is most of its 200 to 420 ms per edit. Rule, query and full write measurements are in [REFERENCE.md](REFERENCE.md).
 
 Search against `rg` and `git grep` (`python tests/bench/search.py`, ReleaseFast): <!-- generated:search-summary -->a new session's first search 4.6 to 22.0 ms and later searches 1.4 to 9.3 ms, against rg 21.3 to 53.2 ms and git grep 21.6 to 46.0 ms; building the index the first time, once per repository, took 98 to 1,322 ms (2026-09-27, scan bandwidth 3.00 GB/s)<!-- /generated -->. Every search first waits on a change watch barrier, so a write closed or flushed before the call is in the result, and a new session loads the saved index and re-reads only the files whose stamps changed; the full table and the one case that barrier misses (a writer that keeps its file open) are in [REFERENCE.md](REFERENCE.md#search).
 

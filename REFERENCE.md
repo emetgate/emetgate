@@ -543,27 +543,34 @@ that a compaction mid-session can make one `unchanged` reply stale.
 
 `tests/bench/write_flow.py` compares whole edit flows. The built-in side follows Claude Code's rules: `Edit` needs a prior `Read` of the file (whole file, `cat -n` form), `old_string` is the changed lines, and when they occur more than once the call fails and is retried with one more line of context on each side, the failed call and its error included. The emetgate side is real MCP calls against a git copy of the file: `emetgate_read_symbol` with `nodes:true`, then one `emetgate_try` with node hashes and new texts; the file on disk is compared with the intended result after both flows. Tokens are o200k_base, counted two ways on both sides: bare (tool name, JSON arguments, returned text) and block (the `tool_use` and `tool_result` content blocks serialized as the Messages API holds them). The MCP JSON-RPC frame is transport and reaches neither context, so it is left out on both sides, as are tool schemas. ms is the wall clock of the calls: for emetgate the MCP round trip, which includes the shadow copy, the sandboxed test command (a no-op here) and the journal; for the built-in side the same file work done in-process in Python, a lower bound for Claude Code's tools, which run no test. "floor" is built-in tokens over emetgate's arguments alone, the best any reply format could reach.
 
-Fixtures: express (`eval/express-test`, MIT) and a 1.6k-line file of a second real project (`affiliate-scraper/src/index.js`, read-only, copied per scenario). Run on 2026-09-27 with a ReleaseSafe build:
+Fixtures: express (`eval/express-test`, MIT) and a 1.6k-line file of a second real project (`affiliate-scraper/src/index.js`, read-only, copied per scenario). Run on 2026-09-27 with a ReleaseFast build, after `feat/compact-write-reply` shrank the default `emetgate_try`/`emetgate_try_batch`/`emetgate_write_doc` success reply to status plus the new hashes:
 
 | Fixture | Scenario | Built-in bare | Emetgate bare | Ratio | Built-in block | Emetgate block | Ratio | Floor | Turns b/e | Failed b/e | ms b/e |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| express | one line in a large function | 10419 | 1339 | 7.78x | 13340 | 1645 | 8.11x | 128.63x | 2/2 | 0/0 | 24/284 |
-| express | one line whose text occurs three times | 10505 | 1351 | 7.78x | 13506 | 1657 | 8.15x | 114.18x | 3/2 | 1/0 | 29/372 |
-| express | replace an if block | 2518 | 812 | 3.10x | 3348 | 1019 | 3.29x | 22.28x | 2/2 | 0/0 | 25/239 |
-| express | replace a small function whole | 2476 | 397 | 6.24x | 3306 | 557 | 5.94x | 23.81x | 2/2 | 0/0 | 3/209 |
-| express | delete a function and its one call site | 5981 | 456 | 13.12x | 7818 | 690 | 11.33x | 58.07x | 3/3 | 0/0 | 57/387 |
-| express | two edits in one file | 10479 | 1400 | 7.49x | 13473 | 1710 | 7.88x | 102.74x | 3/2 | 0/0 | 80/284 |
-| express | one line, file already read | 101 | 258 | 0.39x | 174 | 341 | 0.51x | 1.80x | 1/1 | 0/0 | 39/217 |
-| affiliate | one line in a large function | 19359 | 1848 | 10.48x | 24646 | 2241 | 11.00x | 333.78x | 2/2 | 0/0 | 39/362 |
-| affiliate | replace an if block | 19416 | 1891 | 10.27x | 24703 | 2284 | 10.82x | 188.50x | 2/2 | 0/0 | 37/362 |
-| affiliate | replace a small function whole | 19447 | 436 | 44.60x | 24734 | 597 | 41.43x | 156.83x | 2/2 | 0/0 | 36/343 |
-| affiliate | delete a function and its one call site | 19574 | 698 | 28.04x | 24934 | 908 | 27.46x | 244.68x | 3/2 | 0/0 | 72/421 |
-| affiliate | two edits in one file | 19453 | 1917 | 10.15x | 24813 | 2312 | 10.73x | 170.64x | 3/2 | 0/0 | 83/388 |
-| affiliate | one line, file already read | 66 | 206 | 0.32x | 139 | 287 | 0.48x | 1.94x | 1/1 | 0/0 | 26/258 |
+| express | one line in a large function | 10419 | 1248 | 8.35x | 13340 | 1551 | 8.60x | 128.63x | 2/2 | 0/0 | 31/235 |
+| express | one line whose text occurs three times | 10505 | 1260 | 8.34x | 13506 | 1563 | 8.64x | 114.18x | 3/2 | 1/0 | 21/236 |
+| express | replace an if block | 2518 | 720 | 3.50x | 3348 | 924 | 3.62x | 22.28x | 2/2 | 0/0 | 20/182 |
+| express | replace a small function whole | 2476 | 306 | 8.09x | 3306 | 463 | 7.14x | 23.81x | 2/2 | 0/0 | 2/189 |
+| express | delete a function and its one call site | 5981 | 358 | 16.71x | 7818 | 589 | 13.27x | 58.07x | 3/3 | 0/0 | 37/280 |
+| express | two edits in one file | 10479 | 1311 | 7.99x | 13473 | 1618 | 8.33x | 102.74x | 3/2 | 0/0 | 46/246 |
+| express | one line, file already read | 101 | 165 | 0.61x | 174 | 245 | 0.71x | 1.80x | 1/1 | 0/0 | 19/171 |
+| affiliate | one line in a large function | 19359 | 1755 | 11.03x | 24646 | 2145 | 11.49x | 333.78x | 2/2 | 0/0 | 24/292 |
+| affiliate | replace an if block | 19416 | 1801 | 10.78x | 24703 | 2191 | 11.27x | 188.50x | 2/2 | 0/0 | 20/257 |
+| affiliate | replace a small function whole | 19447 | 344 | 56.53x | 24734 | 502 | 49.27x | 156.83x | 2/2 | 0/0 | 20/279 |
+| affiliate | delete a function and its one call site | 19574 | 603 | 32.46x | 24934 | 810 | 30.78x | 244.68x | 3/2 | 0/0 | 40/315 |
+| affiliate | two edits in one file | 19453 | 1821 | 10.68x | 24813 | 2213 | 11.21x | 170.64x | 3/2 | 0/0 | 49/278 |
+| affiliate | one line, file already read | 66 | 113 | 0.58x | 139 | 191 | 0.73x | 1.94x | 1/1 | 0/0 | 20/205 |
+
+Before/after for the two rows the compact reply targets, same fixtures and floor (built-in unchanged):
+
+| Fixture | Scenario | Emetgate bare before | Emetgate bare after | Ratio before | Ratio after |
+|---|---|---:|---:|---:|---:|
+| express | one line, file already read | 258 | 165 | 0.39x | 0.61x |
+| affiliate | one line, file already read | 206 | 113 | 0.32x | 0.58x |
 
 What the numbers do not show, and where emetgate is behind:
 
-- **File already read.** Both rows are under 1x. `Edit` then sends the changed line and gets one line back (19 tokens); emetgate's reply is 172 to 202 tokens: the new node hash, each changed symbol's new hash, the shadow copy summary, the receipt ids and a status line. Even a reply of zero tokens would leave 1.8x and 1.9x, because emetgate's arguments alone (56 and 34 tokens) are more than a third of the whole built-in call (101 and 66). The first measurable lever is a shorter reply; a 3x flow for this case would need the edit to go out with no address at all.
+- **File already read.** Both rows are still under 1x. `Edit` then sends the changed line and gets one line back (19 tokens); a compact `emetgate_try` reply is now `{"status":"committed","file":...,"nodes":[[...]],"symbols":[{"symbol":...,"new_hash":...}]}`, the new node hash plus the changed symbol's new hash and nothing else — the shadow copy summary, receipt ids and old hash moved behind `detail:"full"`. That reply is 79 to 109 tokens where it used to carry the always-on shadow note and receipt fields at 172 to 202 tokens. Even a reply of zero tokens would leave 1.8x and 1.9x, because emetgate's arguments alone (56 and 34 tokens) are more than a third of the whole built-in call (101 and 66); the two "already read" rows sit at that acknowledged ceiling, not at 3x.
 - **Turns.** Each flow is one read and one write on both sides, so turns are equal except where `Edit` has to retry or makes one call per place; emetgate then saves one turn. A 3x turn ratio is not reachable with a read-then-write flow.
 - **Time.** An emetgate edit takes 200 to 420 ms, a `read_symbol` about 60 ms of it; the rest is the gate: the shadow copy, starting the test command under the low-integrity token and job, and the journaled commit. The built-in edit runs no test. Measured against a flow that also runs the tests, the gate would be compared with the test run itself.
 - **Delete.** Every function in both fixtures is called somewhere, and emetgate refuses to delete a function whose name is still mentioned, so the delete scenario removes the call site in the same call. In express the call site sits in `app.handle = function ...`, which is not a symbol, so emetgate reads those two lines by range.
