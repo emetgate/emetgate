@@ -25,6 +25,10 @@ const math_src =
     \\  const doubled = x * 2;
     \\  return x / 2;
     \\}
+    \\export function logged(x: number): number {
+    \\  note(x); /* first */
+    \\  return x + 0; /* second */
+    \\}
     \\
 ;
 const use_src = "import { twice } from \"./math\";\nexport const four = twice(2);\n";
@@ -169,6 +173,9 @@ test "redteam node: text for one node cannot reshape the neighbour next to it" {
         defer testing.allocator.free(on_disk);
         try testing.expectEqualStrings(math_src, on_disk);
     }
+
+    const noted = try case.address("src/math.ts", "logged", "note(x); /* first */");
+    try case.expectRefused(try case.tryNode("src/math.ts", noted, "note(x); /*"), "BodyEscape", "src/math.ts", math_src);
 
     var items = std.json.Array.init(case.arena());
     const inner = try case.address("src/math.ts", "clamp", "return 10;");
