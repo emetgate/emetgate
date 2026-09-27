@@ -28,6 +28,7 @@ pub const shadow = @import("platform/shadow.zig");
 pub const link_tree = @import("platform/link_tree.zig");
 pub const shadow_root = @import("platform/shadow_root.zig");
 pub const sandbox = @import("platform/sandbox.zig");
+pub const appcontainer = @import("platform/appcontainer.zig");
 pub const tsserver = @import("platform/tsserver.zig");
 pub const rename_batch = @import("platform/rename_batch.zig");
 pub const move_batch = @import("platform/move_batch.zig");

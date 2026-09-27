@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **986**
-- Mutations declared in `tests/mutations.json`: **568**
-  - killed: **542**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **999**
+- Mutations declared in `tests/mutations.json`: **574**
+  - killed: **548**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -16,7 +16,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
   - survives, not yet classified: **4** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename)
-- Red-team suites: **10** files, **83** tests total
+- Red-team suites: **11** files, **88** tests total
+  - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_git.zig`: 3
@@ -168,7 +169,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-56 mutation(s).
+57 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -228,6 +229,7 @@ python tools/verification_page.py --check
 | `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
 | `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
+| `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -526,7 +528,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-135 mutation(s).
+140 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -665,6 +667,11 @@ python tools/verification_page.py --check
 | `VR7-symmetry-alpha-not-checked` | `src/verify/checker.zig` | `if (!try c.alphaEqual(k.path, before, after)) outcome.raise(.mi...` -> `_ = try c.alphaEqual(k.path, before, after);` | verify: a spending change relabelled as a symmetric rename fails the alpha hash | killed |
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
+| `AC2-app-container-gains-a-capability` | `src/platform/appcontainer.zig` | `.capabilities = null, .capability_count = 0, .reserved = 0 };` -> `.capabilities = null, .capability_count = 1, .reserved = 0 };` | a fresh profile carries no capabilities and points its security struct at its o...; redte... | killed |
+| `AC3-app-container-grant-not-applied` | `src/platform/appcontainer.zig` | `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FA...` -> `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, dacl, .FALS...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
+| `AC4-lpac-opt-out-dropped` | `src/platform/appcontainer.zig` | `pub const all_application_packages_opt_out: u32 = 0x1;` -> `pub const all_application_packages_opt_out: u32 = 0x0;` | redteam appcontainer: an lpac profile opts out of the all-packages group, a reg... | killed |
+| `AC5-app-container-grant-covers-the-parent` | `src/platform/appcontainer.zig` | `const wide = try toWide(&path_w, path_abs);` -> `const wide = try toWide(&path_w, std.fs.path.dirname(path_abs) ...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
+| `AC6-app-container-grant-propagates-to-existing-files` | `src/platform/appcontainer.zig` | `if (win.SetFileSecurityW(wide, win.dacl_security_information, &...` -> `if (win.SetNamedSecurityInfoW(wide, win.se_file_object, win.dac...` | a grant on a tree holding a hardlink leaves the linked file's acl untouched and... | killed |
 
 ## What this system does not prove
 

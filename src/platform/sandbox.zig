@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const appcontainer = @import("appcontainer.zig");
 
 const Allocator = std.mem.Allocator;
 const MultiReader = std.Io.File.MultiReader;
@@ -40,10 +41,16 @@ pub const Report = struct {
     }
 };
 
+pub const Backend = union(enum) {
+    low_integrity,
+    app_container: *const appcontainer.Profile,
+};
+
 pub const Command = struct {
     argv: []const []const u8,
     cwd: []const u8,
     limits: Limits = .{},
+    backend: Backend = .low_integrity,
 };
 
 const ntstatus_error_floor: u32 = 0xC0000000;
@@ -66,11 +73,18 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
     const job = try Job.create();
     defer job.close();
 
-    const token = try LowToken.create();
-    defer token.close();
+    const token: ?LowToken = switch (command.backend) {
+        .low_integrity => try LowToken.create(),
+        .app_container => null,
+    };
+    defer if (token) |t| t.close();
+    const spawn_backend: SpawnBackend = switch (command.backend) {
+        .low_integrity => .{ .low = token.? },
+        .app_container => |profile| .{ .app = profile },
+    };
 
     const started = std.Io.Timestamp.now(io, .awake);
-    var child = try spawnRestricted(gpa, token, command, .command);
+    var child = try spawnRestricted(gpa, spawn_backend, command, .command);
     defer child.kill(io);
     try requireLowIntegrity(child.id.?);
     try job.assign(child.id.?);
@@ -315,7 +329,19 @@ fn openNul() !std.os.windows.HANDLE {
 
 const Stdio = enum { command, service };
 
-fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command, stdio: Stdio) !std.process.Child {
+const SpawnBackend = union(enum) {
+    low: LowToken,
+    app: *const appcontainer.Profile,
+
+    fn attributeCount(self: SpawnBackend) std.os.windows.DWORD {
+        return switch (self) {
+            .low => 1,
+            .app => |profile| if (profile.lpac) 3 else 2,
+        };
+    }
+};
+
+fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdio: Stdio) !std.process.Child {
     if (command.argv.len == 0) return error.FileNotFound;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -340,12 +366,24 @@ fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command, stdio: Std
     const child_stdin = if (stdin_pipe) |pipe| pipe.read else nul;
     const child_stderr = if (stderr_pipe) |pipe| pipe.write else nul;
     var inherited = [_]std.os.windows.HANDLE{ nul, stdout_pipe.write, if (stdio == .service) child_stdin else child_stderr };
+    const attribute_count = backend.attributeCount();
     var list_size: usize = 0;
-    _ = win.InitializeProcThreadAttributeList(null, 1, 0, &list_size);
+    _ = win.InitializeProcThreadAttributeList(null, attribute_count, 0, &list_size);
     const list = try arena.alignedAlloc(u8, .of(usize), list_size);
-    if (win.InitializeProcThreadAttributeList(list.ptr, 1, 0, &list_size) == .FALSE) return error.SandboxUnavailable;
+    if (win.InitializeProcThreadAttributeList(list.ptr, attribute_count, 0, &list_size) == .FALSE) return error.SandboxUnavailable;
     defer win.DeleteProcThreadAttributeList(list.ptr);
     if (win.UpdateProcThreadAttribute(list.ptr, 0, win.proc_thread_attribute_handle_list, &inherited, @sizeOf(@TypeOf(inherited)), null, null) == .FALSE) return error.SandboxUnavailable;
+
+    var capabilities: appcontainer.SecurityCapabilities = undefined;
+    var lpac_policy: u32 = appcontainer.all_application_packages_opt_out;
+    switch (backend) {
+        .low => {},
+        .app => |profile| {
+            capabilities = profile.securityCapabilities();
+            if (win.UpdateProcThreadAttribute(list.ptr, 0, appcontainer.proc_thread_attribute_security_capabilities, &capabilities, @sizeOf(appcontainer.SecurityCapabilities), null, null) == .FALSE) return error.SandboxUnavailable;
+            if (profile.lpac and win.UpdateProcThreadAttribute(list.ptr, 0, appcontainer.proc_thread_attribute_all_application_packages_policy, &lpac_policy, @sizeOf(u32), null, null) == .FALSE) return error.SandboxUnavailable;
+        },
+    }
 
     var startup: win.StartupInfoEx = .{
         .info = std.mem.zeroes(std.os.windows.STARTUPINFOW),
@@ -359,7 +397,11 @@ fn spawnRestricted(gpa: Allocator, token: LowToken, command: Command, stdio: Std
 
     var info: std.os.windows.PROCESS.INFORMATION = undefined;
     const flags = win.create_suspended | win.create_unicode_environment | win.create_no_window | win.extended_startupinfo_present;
-    if (faulted(.spawn_as_user) or win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info) == .FALSE) {
+    const spawned: std.os.windows.BOOL = switch (backend) {
+        .low => |token| win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
+        .app => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
+    };
+    if (faulted(.spawn_as_user) or spawned == .FALSE) {
         if (faulted(.spawn_as_user)) return error.SandboxUnavailable;
         return switch (win.GetLastError()) {
             win.error_file_not_found, win.error_path_not_found, win.error_directory => error.FileNotFound,
@@ -404,7 +446,7 @@ pub fn spawnService(gpa: Allocator, argv: []const []const u8, cwd: []const u8) !
     errdefer job.close();
     const token = try LowToken.create();
     defer token.close();
-    const child = try spawnRestricted(gpa, token, .{ .argv = argv, .cwd = cwd }, .service);
+    const child = try spawnRestricted(gpa, .{ .low = token }, .{ .argv = argv, .cwd = cwd }, .service);
     errdefer {
         _ = win.TerminateProcess(child.id.?, win.terminated_exit_code);
         std.os.windows.CloseHandle(child.stdin.?.handle);
@@ -593,6 +635,7 @@ const win = struct {
     extern "advapi32" fn GetSidSubAuthorityCount(sid: *anyopaque) callconv(.winapi) *u8;
     extern "advapi32" fn GetSidSubAuthority(sid: *anyopaque, index: windows.DWORD) callconv(.winapi) *u32;
     extern "advapi32" fn CreateProcessAsUserW(token: ?windows.HANDLE, application: ?[*:0]const u16, command_line: ?[*:0]u16, process_attributes: ?*anyopaque, thread_attributes: ?*anyopaque, inherit_handles: windows.BOOL, flags: windows.DWORD, environment: ?*anyopaque, cwd: ?[*:0]const u16, startup: *StartupInfoEx, info: *windows.PROCESS.INFORMATION) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn CreateProcessW(application: ?[*:0]const u16, command_line: ?[*:0]u16, process_attributes: ?*anyopaque, thread_attributes: ?*anyopaque, inherit_handles: windows.BOOL, flags: windows.DWORD, environment: ?*anyopaque, cwd: ?[*:0]const u16, startup: *StartupInfoEx, info: *windows.PROCESS.INFORMATION) callconv(.winapi) windows.BOOL;
 
     const job_object_basic_process_id_list: c_int = 3;
     const job_object_extended_limit_information: c_int = 9;
