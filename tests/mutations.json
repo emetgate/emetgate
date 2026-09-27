@@ -5935,6 +5935,79 @@
       "kills": [
         "redteam node: a mirrored body read never hides node hashes, and symbols with nodes annotates each declaration"
       ]
+    },
+    {
+      "id": "CW1-barrier-returns-without-waiting",
+      "file": "src/platform/change_watch.zig",
+      "from": "        while (!self.cookie_seen) {",
+      "to": "        while (false and !self.cookie_seen) {",
+      "expect_status": "survived",
+      "note": "equivalent on a local NTFS volume today: NTFS reports a change inside the writer's own call, before that call returns, so the drain after the loop already collects every write that finished before sync began; the 200-write and parallel-writer tests pass without the wait. The cookie wait is kept for paths that report later than the call (filter drivers, other file systems), where draining what is queued would not be a barrier"
+    },
+    {
+      "id": "CW2-overflow-flag-ignored",
+      "file": "src/platform/change_watch.zig",
+      "from": "if (self.overflowed) return self.fail(error.Overflow);",
+      "to": "if (false) return self.fail(error.Overflow);",
+      "all": true,
+      "kills": [
+        "change watch: a buffer too small for the burst reports Overflow and the next sync is trustworthy again"
+      ]
+    },
+    {
+      "id": "CW3-timeout-hands-out-a-clean-set",
+      "file": "src/platform/change_watch.zig",
+      "from": "            if (now >= deadline) return self.fail(error.Timeout);",
+      "to": "            if (now >= deadline) return self.take();",
+      "kills": [
+        "change watch: a sync that runs out of time says Timeout and never hands out a clean set"
+      ]
+    },
+    {
+      "id": "CW4-rename-old-end-dropped",
+      "file": "src/platform/change_watch.zig",
+      "from": "        if (action == win.file_action_renamed_old_name) {\n            try addKey(self.gpa, &self.subtrees, rel);\n            return;\n        }",
+      "to": "        if (action == win.file_action_renamed_old_name) {\n            return;\n        }",
+      "kills": [
+        "change watch: rename marks both ends, delete, directory rename and a nested create are seen"
+      ]
+    },
+    {
+      "id": "CW5-dirty-set-not-reset-after-take",
+      "file": "src/platform/change_watch.zig",
+      "from": "        const subtrees = try keys(self.gpa, &self.subtrees);\n        self.clearSets();\n",
+      "to": "        const subtrees = try keys(self.gpa, &self.subtrees);\n",
+      "kills": [
+        "change watch: a sync hands the dirty set over once and starts a new one"
+      ]
+    },
+    {
+      "id": "CW6-cookie-dir-junction-followed",
+      "file": "src/platform/change_watch.zig",
+      "from": "            if (attributes & win.file_attribute_reparse_point != 0) return error.NotWatching;",
+      "to": "",
+      "kills": [
+        "redteam change watch: a cookie directory that is a file or a junction is refused, never reported clean"
+      ]
+    },
+    {
+      "id": "CW7-parent-path-event-accepted",
+      "file": "src/platform/change_watch.zig",
+      "from": "        if (std.mem.eql(u8, part, \"..\") or std.mem.eql(u8, part, \".\")) return .unsafe;",
+      "to": "",
+      "kills": [
+        "classify drops the repository's own directories and refuses names that leave the root"
+      ]
+    },
+    {
+      "id": "CW8-directory-rename-new-end-not-a-subtree",
+      "file": "src/platform/change_watch.zig",
+      "from": "                if (self.isDirectoryOrGone(rel)) try addKey(self.gpa, &self.subtrees, rel);",
+      "to": "",
+      "kills": [
+        "change watch: rename marks both ends, delete, directory rename and a nested create are seen",
+        "change watch: a directory moved in from outside the tree marks its whole subtree"
+      ]
     }
   ]
 }
