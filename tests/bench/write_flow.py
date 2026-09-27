@@ -201,10 +201,11 @@ def address_of(annotated, line_text):
 
 
 class Scenario:
-    def __init__(self, name, path, symbol, edits, already_read=False, note=""):
+    def __init__(self, name, path, symbol, edits, already_read=False, note="", reads=None):
         self.name = name
         self.path = path
         self.symbol = symbol
+        self.reads = reads or [{"symbol": symbol}]
         self.edits = edits
         self.already_read = already_read
         self.note = note
@@ -229,15 +230,21 @@ def emetgate_flow(source_root, scenario):
     flow = Flow()
     session = McpSession(work)
     try:
-        read_args = {"file": scenario.path, "symbol": scenario.symbol, "nodes": True}
-        started = time.perf_counter()
-        text, is_error = session.call("emetgate_read_symbol", read_args)
-        read_ms = (time.perf_counter() - started) * 1000
-        if is_error:
-            raise RuntimeError(text)
-        annotated = json.loads(text.split("\n", 1)[0])["nodes"]
-        if not scenario.already_read:
-            flow.call("emetgate_read_symbol", read_args, text, ms=read_ms)
+        annotated = ""
+        for read_spec in scenario.reads:
+            read_args = {"file": scenario.path, **read_spec, "nodes": True}
+            started = time.perf_counter()
+            text, is_error = session.call("emetgate_read_symbol", read_args)
+            read_ms = (time.perf_counter() - started) * 1000
+            if is_error:
+                raise RuntimeError(text)
+            payload = json.loads(text.split("\n", 1)[0])
+            if "symbols" in payload:
+                annotated += "\n".join(entry["nodes"] for entry in payload["symbols"]) + "\n"
+            else:
+                annotated += payload["nodes"] + "\n"
+            if not scenario.already_read:
+                flow.call("emetgate_read_symbol", read_args, text, ms=read_ms)
         items = [{"node": address_of(annotated, line), "text": new} for line, _old, new in scenario.edits]
         arguments = {"file": scenario.path, **(items[0] if len(items) == 1 else {"nodes": items})}
         started = time.perf_counter()
@@ -250,6 +257,12 @@ def emetgate_flow(source_root, scenario):
         session.close()
         shutil.rmtree(work, ignore_errors=True)
     return flow, after
+
+
+def whole_declaration(source, first_line):
+    start = source.index(first_line)
+    end = source.index("\n}", start) + 2
+    return source[start:end]
 
 
 def expected_steps(original, edits):
@@ -294,11 +307,16 @@ EXPRESS_SCENARIOS = [
           "function parseExtendedQueryString(str) {\n  return qs.parse(str, {\n    allowPrototypes: true,\n    depth: 10,\n    arrayLimit: 100\n  });\n}")],
     ),
     Scenario(
-        "delete a function",
+        "delete a function and its one call site",
         "lib/application.js", "logerror",
-        [("function logerror(err) {",
-          "function logerror(err) {\n  /* istanbul ignore next */\n  if (this.get('env') !== 'test') console.error(err);\n}",
+        [("onerror: logerror.bind(this)",
+          "onerror: logerror.bind(this)",
+          ""),
+         ("function logerror(err) {",
+          None,
           "")],
+        reads=[{"symbol": "logerror"}, {"line_start": 155, "line_end": 156}],
+        note="the call site sits in app.handle = function ..., which is not a symbol, so emetgate reads those two lines by range; both flows leave the trailing comma of the previous property",
     ),
     Scenario(
         "two edits in one file",
@@ -344,11 +362,15 @@ AFFILIATE_SCENARIOS = [
           "function shortNote(text, max = 40) {\n  const one = String(text ?? \"\").replace(/\\s+/g, \" \").trim();\n  if (one.length <= max) return one;\n  return `${one.slice(0, max - 1).trimEnd()}…`;\n}")],
     ),
     Scenario(
-        "delete a function",
-        "src/index.js", "restorePreviewKeyboard",
-        [("async function restorePreviewKeyboard(ctx, data, token) {",
-          "async function restorePreviewKeyboard(ctx, data, token) {\n  await ctx.telegram\n    .editMessageReplyMarkup(\n      data.previewChatId,\n      data.previewMessageId,\n      undefined,\n      previewKeyboard(token, data)\n    )\n    .catch(() => {});\n}",
+        "delete a function and its one call site",
+        "src/index.js", "rerenderPreviewPhoto",
+        [("await rerenderPreviewPhoto(ctx, data, info.token);",
+          "await rerenderPreviewPhoto(ctx, data, info.token);",
+          ""),
+         ("async function rerenderPreviewPhoto(ctx, data, token) {",
+          None,
           "")],
+        reads=[{"symbols": ["rerenderPreviewPhoto", "applyImageEdit"]}],
     ),
     Scenario(
         "two edits in one file",
@@ -392,6 +414,10 @@ Methodology (read before quoting a number):
   hash of the line that starts the edited node and that node's new text; both are real
   MCP calls against a git copy of the file, and the file on disk is checked afterwards.
 - "file already read": the Read (and the emetgate read) cost 0; only the edit call counts.
+- "delete a function and its one call site": emetgate refuses to delete a top-level
+  function that is still named anywhere in the repo, so the flow removes the call site
+  in the same call; the built-in flow needs one Edit for each place. Every function in
+  both fixtures is called somewhere, so a plain deletion is not a realistic scenario.
 - floor: emetgate's arguments alone (a reply of zero tokens); builtin/floor is the best
   ratio any reply format could reach.
 - ms: wall clock of the tool calls. emetgate: the MCP round trip, which includes the
@@ -410,7 +436,8 @@ def run(source_root, scenarios, label):
     for scenario in scenarios:
         original = read(os.path.join(source_root, scenario.path))
         if "\r\n" in original:
-            scenario.edits = [tuple(text.replace("\n", "\r\n") for text in edit) for edit in scenario.edits]
+            scenario.edits = [tuple(None if text is None else text.replace("\n", "\r\n") for text in edit) for edit in scenario.edits]
+        scenario.edits = [(line, whole_declaration(original, line) if old is None else old, new) for line, old, new in scenario.edits]
         steps = expected_steps(original, scenario.edits)
         builtin = builtin_flow(source_root, scenario.path, original, steps, scenario.already_read)
         emetgate, after = emetgate_flow(source_root, scenario)
