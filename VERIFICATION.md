@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1101**
-- Mutations declared in `tests/mutations.json`: **613**
-  - killed: **583**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1104**
+- Mutations declared in `tests/mutations.json`: **615**
+  - killed: **585**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-177 mutation(s).
+179 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -713,6 +713,8 @@ python tools/verification_page.py --check
 | `SW2-watch-overflow-read-as-clean` | `src/platform/search_session.zig` | `reason = "overflow";` -> `reason = "";` | search freshness: a burst that overflows the watch buffer falls back to a full ... | killed |
 | `SW3-git-index-change-ignored` | `src/platform/search_session.zig` | `if (self.files != null and self.list_trusted and stamp != null ...` -> `if (self.files != null) {             if (true) return false;` | search freshness: a git add that changes the tracked set is picked up without w... | killed |
 | `SW4-dirty-file-not-reindexed` | `src/platform/search_session.zig` | `try search_index.updateEntry(self.gpa, self.io, index, root, re...` -> `_ = .{ index, root };` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
+| `RH1-hint-ignores-top-level-alternation` | `src/engine/regex_hint.zig` | `if (hasTopLevelAlternation(pattern)) return pattern[0..0];` -> `` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
+| `RH2-hint-keeps-an-optional-character` | `src/engine/regex_hint.zig` | `if (i > r) best.close(run, i - 1);` -> `if (i > r) best.close(run, i);` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
 
 ## What this system does not prove
 

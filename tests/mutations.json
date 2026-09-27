@@ -6110,6 +6110,26 @@
         "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
         "search freshness: every write is found while another thread keeps rewriting other tracked files"
       ]
+    },
+    {
+      "id": "RH1-hint-ignores-top-level-alternation",
+      "file": "src/engine/regex_hint.zig",
+      "from": "    if (hasTopLevelAlternation(pattern)) return pattern[0..0];\n",
+      "to": "",
+      "kills": [
+        "longestLiteralChunk never returns text a match can do without",
+        "a regex whose literal parts are optional or alternatives still finds every file that matches"
+      ]
+    },
+    {
+      "id": "RH2-hint-keeps-an-optional-character",
+      "file": "src/engine/regex_hint.zig",
+      "from": "                    if (i > r) best.close(run, i - 1);",
+      "to": "                    if (i > r) best.close(run, i);",
+      "kills": [
+        "longestLiteralChunk never returns text a match can do without",
+        "a regex whose literal parts are optional or alternatives still finds every file that matches"
+      ]
     }
   ]
 }
