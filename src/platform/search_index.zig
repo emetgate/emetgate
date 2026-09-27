@@ -7,6 +7,7 @@ const symbol = @import("../engine/symbol.zig");
 const ts = @import("../engine/tree_sitter.zig");
 const registry = @import("../engine/lang/registry.zig");
 pub const kind_spans = @import("../engine/kind_spans.zig");
+pub const doc_spans = @import("../engine/doc_spans.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -28,6 +29,7 @@ pub const Entry = struct {
     trigrams: []const u24,
     content_hash: ?symbol.Hash = null,
     spans: ?kind_spans.FileSpans = null,
+    doc: ?doc_spans.DocSpans = null,
 };
 
 fn dupeSpans(a: Allocator, spans: ?kind_spans.FileSpans) !?kind_spans.FileSpans {
@@ -66,6 +68,14 @@ pub const Index = struct {
     arena: *std.heap.ArenaAllocator,
     entries: []Entry,
     written_ns: ?i96 = null,
+    lookup: std.StringHashMapUnmanaged(u32) = .empty,
+
+    fn finish(arena: *std.heap.ArenaAllocator, entries: []Entry, written_ns: ?i96) !Index {
+        var lookup: std.StringHashMapUnmanaged(u32) = .empty;
+        try lookup.ensureTotalCapacity(arena.allocator(), @intCast(entries.len));
+        for (entries, 0..) |entry, i| lookup.putAssumeCapacity(entry.path, @intCast(i));
+        return .{ .arena = arena, .entries = entries, .written_ns = written_ns, .lookup = lookup };
+    }
 
     pub fn deinit(self: Index) void {
         const gpa = self.arena.child_allocator;
@@ -74,6 +84,10 @@ pub const Index = struct {
     }
 
     pub fn find(self: Index, path: []const u8) ?*const Entry {
+        if (self.lookup.count() != 0 or self.entries.len == 0) {
+            const at = self.lookup.get(path) orelse return null;
+            return &self.entries[at];
+        }
         for (self.entries) |*entry| {
             if (std.mem.eql(u8, entry.path, path)) return entry;
         }
@@ -161,9 +175,10 @@ pub fn build(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
             .trigrams = try a.dupe(u24, trigrams),
             .content_hash = symbol.fileHash(bytes),
             .spans = spansFor(a, rel, bytes),
+            .doc = doc_spans.build(a, rel, bytes),
         });
     }
-    return .{ .arena = arena, .entries = try entries.toOwnedSlice(a) };
+    return Index.finish(arena, try entries.toOwnedSlice(a), null);
 }
 
 pub const RefreshResult = struct {
@@ -198,6 +213,7 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
                         .trigrams = try a.dupe(u24, old.trigrams),
                         .content_hash = old.content_hash,
                         .spans = try dupeSpans(a, old.spans),
+                        .doc = try doc_spans.dupe(a, old.doc),
                     });
                     reused += 1;
                     continue;
@@ -216,12 +232,13 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
             .trigrams = try a.dupe(u24, trigrams),
             .content_hash = symbol.fileHash(bytes),
             .spans = spansFor(a, rel, bytes),
+            .doc = doc_spans.build(a, rel, bytes),
         });
         recomputed += 1;
     }
     const changed = recomputed != 0 or entries.items.len != if (previous) |p| p.entries.len else 0;
     return .{
-        .index = .{ .arena = arena, .entries = try entries.toOwnedSlice(a) },
+        .index = try Index.finish(arena, try entries.toOwnedSlice(a), null),
         .changed = changed,
         .reused = reused,
         .recomputed = recomputed,
@@ -353,7 +370,7 @@ fn parse(gpa: Allocator, bytes: []const u8) !?Index {
             .trigrams = try trigrams.toOwnedSlice(a),
         });
     }
-    return Index{ .arena = arena, .entries = try entries.toOwnedSlice(a), .written_ns = written_ns };
+    return try Index.finish(arena, try entries.toOwnedSlice(a), written_ns);
 }
 
 const testing = std.testing;

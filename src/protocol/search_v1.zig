@@ -386,18 +386,20 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         defer if (owned_snapshot) snapshot.?.destroy();
         var table: ?*const symbol.Table = null;
         var fast_spans: ?*const search_index.kind_spans.FileSpans = null;
+        var fast_doc: ?search_index.doc_spans.DocSpans = null;
         var parse_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
-        if (profile) |p| {
-            if (fresh_index) |idx| {
-                if (idx.find(f)) |entry| {
-                    if (entry.content_hash) |ch| {
-                        const live_hash = symbol.fileHash(bytes);
-                        if (std.mem.eql(u8, &ch, &live_hash)) {
-                            if (entry.spans) |*spans_ptr| fast_spans = spans_ptr;
-                        }
+        if (fresh_index) |idx| {
+            if (idx.find(f)) |entry| {
+                if (entry.content_hash) |ch| {
+                    const live_hash = symbol.fileHash(bytes);
+                    if (std.mem.eql(u8, &ch, &live_hash)) {
+                        if (entry.spans) |*spans_ptr| fast_spans = spans_ptr;
+                        fast_doc = entry.doc;
                     }
                 }
             }
+        }
+        if (profile) |p| {
             if (fast_spans == null) {
                 snapshot = if (tree_cache) |cache|
                     cache.loadWithSource(runtime, io, abs, bytes) catch |err| blk2: {
@@ -417,7 +419,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         defer if (json_tree) |t| t.deinit();
         var md_tree: ?ts.Tree = null;
         defer if (md_tree) |t| t.deinit();
-        if (profile == null and std.ascii.endsWithIgnoreCase(f, ".json")) {
+        if (fast_doc != null) {} else if (profile == null and std.ascii.endsWithIgnoreCase(f, ".json")) {
             const parser = ts.Parser.create();
             defer parser.deinit();
             json_tree = parser.parseIn(json_pointer.grammar(), bytes) catch null;
@@ -432,7 +434,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         }
         if (parse_timer) |*t| if (stats_sink) |s| {
             s.parse_ns += t.lap();
-            if (fast_spans == null) s.files_parsed += 1 else s.files_fast_classified += 1;
+            if (fast_spans != null or fast_doc != null) s.files_fast_classified += 1 else s.files_parsed += 1;
         };
 
         var offset: u32 = 0;
@@ -476,6 +478,11 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
                         role = roleOf(p, snap.tree.root(), match_at, if (is_regex) "" else pattern, enclosing);
                     }
                 }
+            } else if (fast_doc) |doc| {
+                if (search_index.doc_spans.at(doc, match_at)) |label| switch (doc.kind) {
+                    .json => group_pointer = try gpa.dupe(u8, label),
+                    .markdown => group_heading = label,
+                };
             } else if (json_tree) |t| {
                 group_pointer = json_pointer.pointerAt(gpa, t, match_at) catch null;
             } else if (md_tree) |t| {
