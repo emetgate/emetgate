@@ -40,9 +40,11 @@ pub const Stats = struct {
     index_refresh_ns: u64 = 0,
     index_save_ns: u64 = 0,
     read_ns: u64 = 0,
+    probe_ns: u64 = 0,
     parse_ns: u64 = 0,
     classify_ns: u64 = 0,
     json_ns: u64 = 0,
+    files_candidates: usize = 0,
     files_read: usize = 0,
     files_parsed: usize = 0,
     files_index_reused: usize = 0,
@@ -50,6 +52,17 @@ pub const Stats = struct {
 };
 
 pub threadlocal var stats_sink: ?*Stats = null;
+
+fn nsToMs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
+}
+
+fn currentPid() u32 {
+    return switch (@import("builtin").os.tag) {
+        .windows => std.os.windows.GetCurrentProcessId(),
+        else => 0,
+    };
+}
 
 const StageTimer = struct {
     io: std.Io,
@@ -197,10 +210,16 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     const is_regex = if (args) |a| getBool(a, "regex") orelse false else false;
     const kinds = if (args) |a| getStringArray(a, "kinds") else null;
+    const want_stats = if (args) |a| getBool(a, "stats") orelse false else false;
     event.label = "search";
     event.file = dir;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
+    var stats: Stats = .{};
+    if (want_stats) stats_sink = &stats;
+    defer if (want_stats) {
+        stats_sink = null;
+    };
     renderSearch(gpa, io, runtime, root, tree_cache, pattern, dir, is_regex, kinds, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
@@ -285,6 +304,8 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             }
         }
 
+        if (stats_sink) |s| s.files_candidates += 1;
+
         var read_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_file_bytes)) catch continue;
         defer gpa.free(bytes);
@@ -294,6 +315,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         };
         if (std.mem.indexOfScalar(u8, bytes, 0) != null) continue;
 
+        var probe_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
         var has_any_match = false;
         {
             var probe_offset: u32 = 0;
@@ -306,6 +328,9 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
                 }
             }
         }
+        if (probe_timer) |*t| if (stats_sink) |s| {
+            s.probe_ns += t.lap();
+        };
         if (!has_any_match) continue;
         files_scanned += 1;
 
@@ -495,6 +520,41 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     try js.endArray();
     try js.objectField("truncated");
     try js.write(truncated);
+    if (stats_sink) |s| {
+        try js.objectField("stats");
+        try js.beginObject();
+        try js.objectField("pid");
+        try js.write(currentPid());
+        try js.objectField("tracked_files");
+        try js.write(files.len);
+        try js.objectField("files_candidates");
+        try js.write(s.files_candidates);
+        try js.objectField("files_read");
+        try js.write(s.files_read);
+        try js.objectField("files_parsed");
+        try js.write(s.files_parsed);
+        try js.objectField("index_reused");
+        try js.write(s.files_index_reused);
+        try js.objectField("index_recomputed");
+        try js.write(s.files_index_recomputed);
+        try js.objectField("index_load_ms");
+        try js.write(nsToMs(s.index_load_ns));
+        try js.objectField("index_refresh_ms");
+        try js.write(nsToMs(s.index_refresh_ns));
+        try js.objectField("index_save_ms");
+        try js.write(nsToMs(s.index_save_ns));
+        try js.objectField("read_ms");
+        try js.write(nsToMs(s.read_ns));
+        try js.objectField("probe_ms");
+        try js.write(nsToMs(s.probe_ns));
+        try js.objectField("parse_ms");
+        try js.write(nsToMs(s.parse_ns));
+        try js.objectField("classify_ms");
+        try js.write(nsToMs(s.classify_ns));
+        try js.objectField("json_ms");
+        try js.write(nsToMs(s.json_ns));
+        try js.endObject();
+    }
     try js.endObject();
     try w.writeByte('\n');
 
