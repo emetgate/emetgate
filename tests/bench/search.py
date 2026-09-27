@@ -39,9 +39,9 @@ def clear_index():
 
 
 class McpSession:
-    def __init__(self, cwd):
+    def __init__(self, cwd, extra=None):
         self.proc = subprocess.Popen(
-            [SYN, "mcp"],
+            [SYN, "mcp", *(extra or [])],
             cwd=cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -99,7 +99,7 @@ def rg(repo, pattern, extra=None):
         args.extend(extra)
     args.append(pattern)
     started = time.perf_counter()
-    result = subprocess.run(args, cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    result = subprocess.run(args, cwd=repo, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace")
     elapsed_ms = (time.perf_counter() - started) * 1000
     return result.stdout, elapsed_ms
 
@@ -114,7 +114,7 @@ def git_grep_ms_median(repo, pattern, regex, samples=MS_SAMPLES):
     values = []
     for _ in range(samples):
         started = time.perf_counter()
-        subprocess.run(args, cwd=repo, capture_output=True)
+        subprocess.run(args, cwd=repo, stdin=subprocess.DEVNULL, capture_output=True)
         values.append((time.perf_counter() - started) * 1000)
     return statistics.median(values)
 
@@ -238,6 +238,11 @@ Methodology (read before quoting a number):
   changed. "startup" is that server's spawn and initialize round trip, which includes the
   load. "warm" is the second search of the same server; it first syncs with the watch barrier,
   so a write that finished before the call is seen.
+- "search right after a committed write": a writable copy of express in one server started
+  with a test command. Each round commits an emetgate_try to lib/utils.js, runs git add -A
+  and git commit (which rewrites the git index), then searches for the text just written;
+  cold is that first search after the write, warm the search after it. rg, git grep and
+  the floor are measured on the same copy.
 - floor: the parts a warm search cannot avoid, measured in the same session: an MCP ping
   round trip, the watch barrier, the trigram candidate filter, and reading the candidate
   bytes once at the scan bandwidth bytes.find reaches over 64 MB already in memory.
@@ -327,6 +332,89 @@ def scenario_edit(name, repo, pattern, group, symbol_name, file_rel, extra_rg=No
     return rows
 
 
+def writable_copy(source):
+    import tempfile
+    work = tempfile.mkdtemp(prefix="emetgate-search-write-")
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=source, check=True, capture_output=True).stdout
+    for rel in [f for f in listed.decode("utf-8").split("\0") if f]:
+        dest = os.path.join(work, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copyfile(os.path.join(source, rel), dest)
+    git_commit(work, "base", add_all=True, init=True)
+    return work
+
+
+def git_commit(work, message, add_all=True, init=False):
+    who = ["-c", "user.name=bench", "-c", "user.email=bench@example.invalid"]
+    if init:
+        subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    if add_all:
+        subprocess.run(["git", *who, "add", "-A"], cwd=work, check=True)
+    subprocess.run(["git", *who, "commit", "-q", "-m", message], cwd=work, check=True)
+
+
+WRITE_FILE = "lib/utils.js"
+WRITE_SYMBOL = "parseExtendedQueryString"
+
+
+def scenario_after_write(name, repo, samples=MS_SAMPLES):
+    if not os.path.isdir(repo):
+        return None
+    work = writable_copy(repo)
+    try:
+        session = McpSession(work, ["--test", "cmd /c exit 0"])
+        try:
+            startup_ms = session.startup_ms
+            _, _, build_ms = session.call("emetgate_search", {"pattern": "not found"})
+            first = []
+            second = []
+            text = None
+            for i in range(samples):
+                token = f"parameterLimit: {1000 + i}"
+                read, is_error, _ = session.call("emetgate_read_symbol", {"file": WRITE_FILE, "symbol": WRITE_SYMBOL})
+                if is_error:
+                    raise RuntimeError(read)
+                current = json.loads(read.splitlines()[0])["hash"]
+                body = "{\n  return qs.parse(str, {\n    allowPrototypes: true,\n    " + token + "\n  });\n}"
+                reply, is_error, _ = session.call("emetgate_try", {"file": WRITE_FILE, "symbol": WRITE_SYMBOL, "hash": current, "body": body})
+                if is_error or "committed" not in reply:
+                    raise RuntimeError(f"emetgate_try did not commit: {reply}")
+                git_commit(work, f"write {i}")
+                text, is_error, ms1 = session.call("emetgate_search", {"pattern": token})
+                if is_error or WRITE_FILE not in text:
+                    raise RuntimeError(f"search after the write missed {token}: {text}")
+                first.append(ms1)
+                _, _, ms2 = session.call("emetgate_search", {"pattern": token})
+                second.append(ms2)
+        finally:
+            session.close()
+        pattern = f"parameterLimit: {1000 + samples - 1}"
+        rg_text, _ = rg(work, pattern)
+        rg_ms = rg_ms_median(work, pattern)
+        git_ms = git_grep_ms_median(work, pattern, False)
+        parts = floor_parts(work, pattern, False)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    rg_tokens = toks(rg_text)
+    emetgate_tokens = toks(text)
+    return {
+        "name": name,
+        "group": "code",
+        "rg_tokens": rg_tokens,
+        "emetgate_tokens": emetgate_tokens,
+        "ratio": emetgate_tokens / rg_tokens if rg_tokens else float("nan"),
+        "rg_turns": 1,
+        "emetgate_turns": 1,
+        "rg_ms": rg_ms,
+        "git_ms": git_ms,
+        "build_ms": build_ms,
+        "startup_ms": startup_ms,
+        "cold_ms": statistics.median(first),
+        "warm_ms": statistics.median(second),
+        "floor": parts,
+    }
+
+
 def main():
     print(HEADER)
     rows = []
@@ -345,6 +433,9 @@ def main():
     ]:
         if edit is not None:
             rows.extend(edit)
+    after = scenario_after_write("search right after a committed write and a git commit", EXPRESS)
+    if after is not None:
+        rows.append(after)
 
     bandwidth = scan_bandwidth_bytes_per_ms()
     print(f"\nmeasured scan bandwidth (bytes.find over 64 MB in memory): {bandwidth / 1e6:.2f} GB/s")
