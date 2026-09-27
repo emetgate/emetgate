@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1094**
-- Mutations declared in `tests/mutations.json`: **609**
-  - killed: **579**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1101**
+- Mutations declared in `tests/mutations.json`: **613**
+  - killed: **583**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-173 mutation(s).
+177 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -709,6 +709,10 @@ python tools/verification_page.py --check
 | `CW6-cookie-dir-junction-followed` | `src/platform/change_watch.zig` | `if (attributes & win.file_attribute_reparse_point != 0) return ...` -> `` | redteam change watch: a cookie directory that is a file or a junction is refuse... | killed |
 | `CW7-parent-path-event-accepted` | `src/platform/change_watch.zig` | `if (std.mem.eql(u8, part, "..") or std.mem.eql(u8, part, ".")) ...` -> `` | classify drops the repository's own directories and refuses names that leave th... | killed |
 | `CW8-directory-rename-new-end-not-a-subtree` | `src/platform/change_watch.zig` | `if (self.isDirectoryOrGone(rel)) try addKey(self.gpa, &self.sub...` -> `` | change watch: rename marks both ends, delete, directory rename and a nested cre...; chang... | killed |
+| `SW1-search-skips-the-barrier` | `src/platform/search_session.zig` | `dirty = w.sync(sync_timeout_ms) catch \|err\| switch (err) {` -> `dirty = (if (false) w.sync(sync_timeout_ms) else @as(change_wat...` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
+| `SW2-watch-overflow-read-as-clean` | `src/platform/search_session.zig` | `reason = "overflow";` -> `reason = "";` | search freshness: a burst that overflows the watch buffer falls back to a full ... | killed |
+| `SW3-git-index-change-ignored` | `src/platform/search_session.zig` | `if (self.files != null and self.list_trusted and stamp != null ...` -> `if (self.files != null) {             if (true) return false;` | search freshness: a git add that changes the tracked set is picked up without w... | killed |
+| `SW4-dirty-file-not-reindexed` | `src/platform/search_session.zig` | `try search_index.updateEntry(self.gpa, self.io, index, root, re...` -> `_ = .{ index, root };` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
 
 ## What this system does not prove
 

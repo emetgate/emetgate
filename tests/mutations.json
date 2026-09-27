@@ -6072,6 +6072,44 @@
         "change watch: rename marks both ends, delete, directory rename and a nested create are seen",
         "change watch: a directory moved in from outside the tree marks its whole subtree"
       ]
+    },
+    {
+      "id": "SW1-search-skips-the-barrier",
+      "file": "src/platform/search_session.zig",
+      "from": "            dirty = w.sync(sync_timeout_ms) catch |err| switch (err) {",
+      "to": "            dirty = (if (false) w.sync(sync_timeout_ms) else @as(change_watch.SyncError!change_watch.Dirty, .{ .files = @constCast(&[_][]u8{}), .subtrees = @constCast(&[_][]u8{}) })) catch |err| switch (err) {",
+      "kills": [
+        "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
+        "search freshness: every write is found while another thread keeps rewriting other tracked files"
+      ]
+    },
+    {
+      "id": "SW2-watch-overflow-read-as-clean",
+      "file": "src/platform/search_session.zig",
+      "from": "                    reason = \"overflow\";",
+      "to": "                    reason = \"\";",
+      "kills": [
+        "search freshness: a burst that overflows the watch buffer falls back to a full stat refresh and misses nothing"
+      ]
+    },
+    {
+      "id": "SW3-git-index-change-ignored",
+      "file": "src/platform/search_session.zig",
+      "from": "        if (self.files != null and self.list_trusted and stamp != null and self.git_stamp != null) {",
+      "to": "        if (self.files != null) {\n            if (true) return false;",
+      "kills": [
+        "search freshness: a git add that changes the tracked set is picked up without waiting"
+      ]
+    },
+    {
+      "id": "SW4-dirty-file-not-reindexed",
+      "file": "src/platform/search_session.zig",
+      "from": "            try search_index.updateEntry(self.gpa, self.io, index, root, rel);\n",
+      "to": "            _ = .{ index, root };\n",
+      "kills": [
+        "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
+        "search freshness: every write is found while another thread keeps rewriting other tracked files"
+      ]
     }
   ]
 }
