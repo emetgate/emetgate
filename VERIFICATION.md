@@ -6,10 +6,10 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1048**
-- Mutations declared in `tests/mutations.json`: **594**
-  - killed: **565**
-  - equivalent: **6**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1063**
+- Mutations declared in `tests/mutations.json`: **602**
+  - killed: **572**
+  - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
   - control: **2**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-158 mutation(s).
+166 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -694,6 +694,14 @@ python tools/verification_page.py --check
 | `NC7-node-short-address-accepted` | `src/engine/node_cas.zig` | `if (text.len < min_address_len or text.len > symbol.hash_hex_le...` -> `if (text.len > symbol.hash_hex_len) return error.InvalidHash;` | a stale, unknown or malformed address is refused before anything is spliced; node edit: a... | killed |
 | `NC10-node-mixed-form-accepted` | `src/protocol/node_tool.zig` | `inline for (.{ "symbol", "hash", "body", "op" }) \|field\| {` -> `inline for (.{ "body", "op" }) \|field\| {` | node edit: a failing test, a stale hash, an ambiguous or mixed request leave th... | killed |
 | `NC11-nodes-read-shortened-by-mirror` | `src/protocol/handlers.zig` | `if (!nodes) if (mirror) \|m\| {` -> `if (true) if (mirror) \|m\| {` | redteam node: a mirrored body read never hides node hashes, and symbols with no... | killed |
+| `CW1-barrier-returns-without-waiting` | `src/platform/change_watch.zig` | `while (!self.cookie_seen) {` -> `while (false and !self.cookie_seen) {` | equivalent on a local NTFS volume today: NTFS reports a change inside the writer's own ca... | equivalent |
+| `CW2-overflow-flag-ignored` | `src/platform/change_watch.zig` | `if (self.overflowed) return self.fail(error.Overflow);` -> `if (false) return self.fail(error.Overflow);` | change watch: a buffer too small for the burst reports Overflow and the next sy... | killed |
+| `CW3-timeout-hands-out-a-clean-set` | `src/platform/change_watch.zig` | `if (now >= deadline) return self.fail(error.Timeout);` -> `if (now >= deadline) return self.take();` | change watch: a sync that runs out of time says Timeout and never hands out a c... | killed |
+| `CW4-rename-old-end-dropped` | `src/platform/change_watch.zig` | `if (action == win.file_action_renamed_old_name) {             t...` -> `if (action == win.file_action_renamed_old_name) {             r...` | change watch: rename marks both ends, delete, directory rename and a nested cre... | killed |
+| `CW5-dirty-set-not-reset-after-take` | `src/platform/change_watch.zig` | `const subtrees = try keys(self.gpa, &self.subtrees);         se...` -> `const subtrees = try keys(self.gpa, &self.subtrees);` | change watch: a sync hands the dirty set over once and starts a new one | killed |
+| `CW6-cookie-dir-junction-followed` | `src/platform/change_watch.zig` | `if (attributes & win.file_attribute_reparse_point != 0) return ...` -> `` | redteam change watch: a cookie directory that is a file or a junction is refuse... | killed |
+| `CW7-parent-path-event-accepted` | `src/platform/change_watch.zig` | `if (std.mem.eql(u8, part, "..") or std.mem.eql(u8, part, ".")) ...` -> `` | classify drops the repository's own directories and refuses names that leave th... | killed |
+| `CW8-directory-rename-new-end-not-a-subtree` | `src/platform/change_watch.zig` | `if (self.isDirectoryOrGone(rel)) try addKey(self.gpa, &self.sub...` -> `` | change watch: rename marks both ends, delete, directory rename and a nested cre...; chang... | killed |
 
 ## What this system does not prove
 
