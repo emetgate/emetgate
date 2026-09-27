@@ -110,6 +110,7 @@ test {
     _ = @import("tests/rename_kinds.zig");
     _ = @import("tests/move_tool.zig");
     _ = @import("tests/node_tool.zig");
+    _ = @import("tests/redteam_node.zig");
     _ = @import("tests/create_kinds.zig");
     _ = @import("tests/redteam_move.zig");
     _ = @import("tests/move_crash.zig");
