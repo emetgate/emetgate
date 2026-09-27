@@ -24,7 +24,9 @@ const Fixture = struct {
         try tmp.dir.createDirPath(testing.io, "secret/fake-profile");
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "secret/fake-profile/secret.txt", .data = marker });
 
-        const probe_abs = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, build_options.probe_path, gpa);
+        try tmp.dir.createDirPath(testing.io, "bin");
+        try std.Io.Dir.cwd().copyFile(build_options.probe_path, tmp.dir, "bin/sandbox-probe.exe", testing.io, .{});
+        const probe_abs = try tmp.dir.realPathFileAlloc(testing.io, "bin/sandbox-probe.exe", gpa);
         errdefer gpa.free(probe_abs);
         const shadow_abs = try tmp.dir.realPathFileAlloc(testing.io, "shadow", gpa);
         errdefer gpa.free(shadow_abs);
