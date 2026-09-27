@@ -3,6 +3,7 @@ const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
 const search_index = @import("../platform/search_index.zig");
 const search_session = @import("../platform/search_session.zig");
+const worker_pool = @import("../platform/worker_pool.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const symbol = @import("../engine/symbol.zig");
 const registry = @import("../engine/lang/registry.zig");
@@ -297,8 +298,16 @@ fn workerCount(files: usize) usize {
     return @max(1, @min(@min(cpus, max_workers), files / min_files_per_worker));
 }
 
-fn runWorkers(shared: *Shared) !void {
+fn workerTask(ctx: *anyopaque) void {
+    workerLoop(@ptrCast(@alignCast(ctx)));
+}
+
+fn runWorkers(shared: *Shared, pool: ?*worker_pool.Pool) !void {
     const count = workerCount(shared.work.len);
+    if (pool) |p| {
+        p.run(count - 1, workerTask, shared);
+        return;
+    }
     var threads: [max_workers]std.Thread = undefined;
     var spawned: usize = 0;
     defer for (threads[0..spawned]) |t| t.join();
@@ -729,7 +738,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         .io = io,
         .timed = stats_sink != null,
     };
-    try runWorkers(&shared);
+    try runWorkers(&shared, if (session) |sess| if (sess.pool.helpers() != 0) &sess.pool else null else null);
     if (shared.failure) |err| return err;
 
     outer: for (work.items) |*item| {

@@ -9,6 +9,7 @@ const registry = @import("../engine/lang/registry.zig");
 pub const kind_spans = @import("../engine/kind_spans.zig");
 pub const doc_spans = @import("../engine/doc_spans.zig");
 const index_file = @import("search_index_file.zig");
+const worker_pool = @import("worker_pool.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -217,24 +218,30 @@ pub const RefreshResult = struct {
 };
 
 pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, previous: ?Index) !RefreshResult {
+    return refreshWith(gpa, io, root_abs, files, previous, null);
+}
+
+pub fn refreshWith(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, previous: ?Index, pool: ?*worker_pool.Pool) !RefreshResult {
     const slots = try gpa.alloc(Pending, files.len);
     defer gpa.free(slots);
     for (slots, files) |*slot, rel| slot.* = .{ .rel = rel };
 
-    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = previous, .slots = slots };
     const count = workerCount(files.len);
     const workers = try gpa.alloc(Worker, count);
     defer gpa.free(workers);
+    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = previous, .slots = slots, .workers = workers };
     for (workers) |*w| w.* = .{ .job = &job, .arena = .init(gpa) };
     defer for (workers) |*w| w.arena.deinit();
-    var threads: [max_workers]std.Thread = undefined;
-    var spawned: usize = 0;
-    {
+    if (pool) |p| {
+        p.run(count - 1, Job.runOne, &job);
+    } else {
+        var threads: [max_workers]std.Thread = undefined;
+        var spawned: usize = 0;
         defer for (threads[0..spawned]) |t| t.join();
         while (spawned + 1 < count) : (spawned += 1) {
-            threads[spawned] = std.Thread.spawn(.{}, Worker.run, .{&workers[spawned + 1]}) catch break;
+            threads[spawned] = std.Thread.spawn(.{}, Job.runOne, .{@as(*anyopaque, &job)}) catch break;
         }
-        workers[0].run();
+        Job.runOne(&job);
     }
     if (job.failure) |err| return err;
 
@@ -300,9 +307,18 @@ const Job = struct {
     root: []const u8,
     previous: ?Index,
     slots: []Pending,
+    workers: []Worker,
     next: std.atomic.Value(usize) = .init(0),
+    next_worker: std.atomic.Value(usize) = .init(0),
     failure: ?anyerror = null,
     failed: std.atomic.Value(bool) = .init(false),
+
+    fn runOne(ctx: *anyopaque) void {
+        const self: *Job = @ptrCast(@alignCast(ctx));
+        const i = self.next_worker.fetchAdd(1, .monotonic);
+        if (i >= self.workers.len) return;
+        self.workers[i].run();
+    }
 
     fn fail(self: *Job, err: anyerror) void {
         if (self.failed.swap(true, .acq_rel)) return;

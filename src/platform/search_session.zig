@@ -2,6 +2,7 @@ const std = @import("std");
 const shadow = @import("shadow.zig");
 const search_index = @import("search_index.zig");
 const change_watch = @import("change_watch.zig");
+const worker_pool = @import("worker_pool.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -23,9 +24,10 @@ pub const Report = struct {
     reused: usize = 0,
     recomputed: usize = 0,
     changed: bool = false,
+    loaded_from_disk: bool = false,
 };
 
-const Stamp = struct { mtime_ns: i96, size: u64 };
+const Stamp = search_index.Stamp;
 
 pub const Session = struct {
     gpa: Allocator,
@@ -38,7 +40,13 @@ pub const Session = struct {
     git_stamp: ?Stamp = null,
     list_trusted: bool = false,
     index: ?search_index.Index = null,
+    index_path: ?[]u8 = null,
+    reconcile: bool = false,
+    unsaved: bool = false,
     updates_since_full: usize = 0,
+    watch_started_ns: i96 = 0,
+    loaded_ns: i96 = 0,
+    pool: worker_pool.Pool = .{},
     last: Report = .{},
 
     pub fn init(gpa: Allocator, io: std.Io, root_abs: ?[]const u8, options: change_watch.Options) Session {
@@ -47,8 +55,23 @@ pub const Session = struct {
         return self;
     }
 
+    pub fn startPool(self: *Session) void {
+        if (self.pool.helpers() == 0) self.pool.start(worker_pool.max_threads);
+    }
+
     pub fn deinit(self: *Session) void {
+        self.saveIfNeeded();
         self.reset();
+        self.pool.deinit();
+    }
+
+    pub fn saveIfNeeded(self: *Session) void {
+        if (!self.unsaved) return;
+        const path = self.index_path orelse return;
+        const index = self.index orelse return;
+        const files = self.files orelse return;
+        search_index.save(self.gpa, self.io, path, index, files, self.git_stamp) catch return;
+        self.unsaved = false;
     }
 
     fn reset(self: *Session) void {
@@ -63,6 +86,10 @@ pub const Session = struct {
         self.index = null;
         if (self.git_index) |g| self.gpa.free(g);
         self.git_index = null;
+        if (self.index_path) |i| self.gpa.free(i);
+        self.index_path = null;
+        self.reconcile = false;
+        self.unsaved = false;
         self.git_stamp = null;
         self.list_trusted = false;
         if (self.root) |r| self.gpa.free(r);
@@ -71,10 +98,35 @@ pub const Session = struct {
     }
 
     fn adopt(self: *Session, root_abs: []const u8) !void {
+        self.saveIfNeeded();
         self.reset();
         self.root = try self.gpa.dupe(u8, root_abs);
         self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;
+        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;
         self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;
+        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;
+        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;
+        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;
+        const index = loaded orelse return;
+        self.index = index;
+        self.reconcile = true;
+        const current = if (self.git_index) |g| statOf(self.io, g) else null;
+        const saved = index.git_stamp orelse return;
+        const now = std.Io.Clock.real.now(self.io).nanoseconds;
+        if (current == null or current.?.mtime_ns != saved.mtime_ns or current.?.size != saved.size or now - saved.mtime_ns <= racy_list_ns) return;
+        const files = try self.gpa.alloc([]u8, index.files.len);
+        var made: usize = 0;
+        errdefer {
+            for (files[0..made]) |f| self.gpa.free(f);
+            self.gpa.free(files);
+        }
+        for (index.files, files) |src, *dst| {
+            dst.* = try self.gpa.dupe(u8, src);
+            made += 1;
+        }
+        self.files = files;
+        self.git_stamp = saved;
+        self.list_trusted = true;
     }
 
     pub fn owns(self: *const Session, root_abs: []const u8) bool {
@@ -84,6 +136,7 @@ pub const Session = struct {
 
     pub fn prepare(self: *Session, root_abs: []const u8) !void {
         if (!self.owns(root_abs)) try self.adopt(root_abs);
+        self.startPool();
         const root = self.root.?;
         self.last = .{};
 
@@ -115,8 +168,9 @@ pub const Session = struct {
         const listed = try self.refreshList(root);
         self.last.list_ns = timer.lap();
         self.last.list_reused = !listed;
-        if (listed and reason.len == 0) reason = "file_list_changed";
         if (self.index == null and reason.len == 0) reason = "first_build";
+        if (self.reconcile and reason.len == 0) reason = "loaded_from_disk";
+        if (listed and reason.len == 0) reason = "file_list_changed";
         if (self.updates_since_full >= compact_after_updates and reason.len == 0) reason = "compact";
 
         if (reason.len == 0) {
@@ -143,19 +197,26 @@ pub const Session = struct {
         for (files) |rel| {
             if (!dirty.contains(rel)) continue;
             try search_index.updateEntry(self.gpa, self.io, index, root, rel);
+            self.unsaved = true;
             self.last.updated += 1;
             self.updates_since_full += 1;
         }
     }
 
     fn fullRefresh(self: *Session, root: []const u8) !void {
-        const refreshed = try search_index.refresh(self.gpa, self.io, root, self.files.?, self.index);
+        const first_build = self.index == null;
+        const pool: ?*worker_pool.Pool = if (self.pool.helpers() != 0) &self.pool else null;
+        const refreshed = try search_index.refreshWith(self.gpa, self.io, root, self.files.?, self.index, pool);
+        self.last.loaded_from_disk = self.reconcile;
         if (self.index) |old| old.deinit();
         self.index = refreshed.index;
+        self.reconcile = false;
         self.last.reused = refreshed.reused;
         self.last.recomputed = refreshed.recomputed;
         self.last.changed = refreshed.changed;
         self.updates_since_full = 0;
+        if (refreshed.changed or first_build) self.unsaved = true;
+        if (first_build) self.saveIfNeeded();
     }
 
     fn refreshList(self: *Session, root: []const u8) !bool {
@@ -197,19 +258,21 @@ fn statOf(io: std.Io, abs: []const u8) ?Stamp {
 }
 
 fn gitIndexPath(gpa: Allocator, io: std.Io, root_abs: []const u8) ![]u8 {
-    const result = try std.process.run(gpa, io, .{
-        .argv = &.{ "git", "rev-parse", "--path-format=absolute", "--git-path", "index" },
-        .cwd = .{ .path = root_abs },
-    });
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-    switch (result.term) {
-        .exited => |code| if (code != 0) return error.GitFailed,
-        else => return error.GitFailed,
-    }
-    const trimmed = std.mem.trim(u8, result.stdout, " \r\n");
-    if (trimmed.len == 0) return error.GitFailed;
-    const out = try gpa.dupe(u8, trimmed);
+    const dot_git = try std.fmt.allocPrint(gpa, "{s}\\.git", .{root_abs});
+    defer gpa.free(dot_git);
+    const stat = try std.Io.Dir.cwd().statFile(io, dot_git, .{});
+    if (stat.kind == .directory) return std.fmt.allocPrint(gpa, "{s}\\index", .{dot_git});
+    const text = try std.Io.Dir.cwd().readFileAlloc(io, dot_git, gpa, .limited(4096));
+    defer gpa.free(text);
+    const prefix = "gitdir:";
+    const line = std.mem.trim(u8, text, " \r\n");
+    if (!std.mem.startsWith(u8, line, prefix)) return error.GitFailed;
+    const target = std.mem.trim(u8, line[prefix.len..], " ");
+    const absolute = std.fs.path.isAbsolute(target);
+    const out = if (absolute)
+        try std.fmt.allocPrint(gpa, "{s}\\index", .{target})
+    else
+        try std.fmt.allocPrint(gpa, "{s}\\{s}\\index", .{ root_abs, target });
     std.mem.replaceScalar(u8, out, '/', '\\');
     return out;
 }
