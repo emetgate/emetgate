@@ -10,6 +10,8 @@
 
 # Emetgate
 
+**Nothing the model writes reaches disk unverified.**
+
 A verification gate between a coding model and your source tree. The model proposes a change; Emetgate checks it and writes it only if the checks pass.
 
 <p align="center">
@@ -96,9 +98,24 @@ Tokens for whole edits, against Claude Code's `Read` then `Edit` (o200k_base, bo
 | Two edits in one file | 24,813 | 2,213 |
 | Change one line in a file already read | 139 | 191 |
 
-The last row is worse. With the file already in context, `Edit` sends the changed line and gets one line back; emetgate's default reply on success is now just the status and the new hashes (the shadow copy note, receipt ids and old hash need `detail:"full"`), and its arguments alone would still allow at most 1.9x. Emetgate also runs the tests on every edit, which is most of its 200 to 420 ms per edit. Rule, query and full write measurements are in [REFERENCE.md](REFERENCE.md).
+The last row is worse. With the file already in context, `Edit` sends the changed line and gets one line back; emetgate's default reply on success is the status and the new hashes (the shadow copy note, receipt ids and old hash need `detail:"full"`), and its arguments alone would still allow at most 1.9x. Emetgate also runs the tests on every edit, which is most of its 200 to 420 ms per edit. Rule, query and full write measurements are in [REFERENCE.md](REFERENCE.md).
 
 Search against `rg` and `git grep` (`python tests/bench/search.py`, ReleaseFast): <!-- generated:search-summary -->a new session's first search 4.6 to 22.0 ms and later searches 1.4 to 9.3 ms, against rg 21.3 to 53.2 ms and git grep 21.6 to 46.0 ms; building the index the first time, once per repository, took 98 to 1,322 ms (2026-09-27, scan bandwidth 3.00 GB/s)<!-- /generated -->. Every search first waits on a change watch barrier, so a write closed or flushed before the call is in the result, and a new session loads the saved index and re-reads only the files whose stamps changed; the full table and the one case that barrier misses (a writer that keeps its file open) are in [REFERENCE.md](REFERENCE.md#search).
+
+<!-- generated:search-table-short -->
+
+| Search | rg | git grep | Emetgate, first in a session | Emetgate, later |
+|---|---:|---:|---:|---:|
+| an error message string | 21.3 ms | 21.6 ms | 5.0 ms | 2.3 ms |
+| a term only in comments | 53.2 ms | 46.0 ms | 22.0 ms | 9.3 ms |
+| a JSON key value | 27.6 ms | 26.3 ms | 7.4 ms | 4.3 ms |
+| a common short word | 29.2 ms | 32.4 ms | 8.5 ms | 5.2 ms |
+| a regex pattern | 24.8 ms | 24.6 ms | 8.8 ms | 5.0 ms |
+| tryRender usages | 24.6 ms | 24.3 ms | 4.6 ms | 1.4 ms |
+| logerror usages | 23.4 ms | 24.4 ms | 4.8 ms | 1.8 ms |
+<!-- /generated -->
+
+rg and git grep are timed as the process a tool call starts, since Claude Code's Grep starts rg for every call; Emetgate is timed as one call to its running server. Starting the server once per session and building the index once per repository are not in the table; both are in REFERENCE.md.
 
 ## How the gate itself is tested
 

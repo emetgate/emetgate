@@ -168,6 +168,25 @@ def fact_search_table():
     return "\n".join(lines)
 
 
+def fact_search_table_short():
+    data = search_results()
+    lines = [
+        "",
+        "",
+        "| Search | rg | git grep | Emetgate, first in a session | Emetgate, later |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for row in data["rows"]:
+        if "best-case" in row["name"]:
+            continue
+        name = row["name"].split(" (")[0]
+        lines.append("| {} | {:.1f} ms | {:.1f} ms | {:.1f} ms | {:.1f} ms |".format(
+            name, row["rg_ms"], row["git_ms"], row["cold_ms"], row["warm_ms"],
+        ))
+    lines.append("")
+    return "\n".join(lines)
+
+
 def fact_search_summary():
     data = search_results()
     rows = data["rows"]
@@ -183,6 +202,7 @@ def fact_search_summary():
 
 FACTS = {
     "search-table": fact_search_table,
+    "search-table-short": fact_search_table_short,
     "search-summary": fact_search_summary,
     "python-checker-size": fact_python_checker_size,
     "verifier-tcb": fact_verifier_tcb,
