@@ -50,6 +50,15 @@ pub const Index = struct {
     }
 };
 
+pub const Slot = struct {
+    index: ?Index = null,
+
+    pub fn deinit(self: *Slot) void {
+        if (self.index) |idx| idx.deinit();
+        self.* = undefined;
+    }
+};
+
 pub fn indexPath(gpa: Allocator, root_abs: []const u8) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();

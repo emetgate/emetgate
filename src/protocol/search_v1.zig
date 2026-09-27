@@ -205,7 +205,7 @@ const Matcher = union(enum) {
     }
 };
 
-pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
+pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, index_slot: ?*search_index.Slot) !ToolResult {
     const pattern = try requireString(args, "pattern");
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     const is_regex = if (args) |a| getBool(a, "regex") orelse false else false;
@@ -220,14 +220,14 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     defer if (want_stats) {
         stats_sink = null;
     };
-    renderSearch(gpa, io, runtime, root, tree_cache, pattern, dir, is_regex, kinds, &buffer.writer) catch |err| {
+    renderSearch(gpa, io, runtime, root, tree_cache, index_slot, pattern, dir, is_regex, kinds, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, pattern: []const u8, dir: []const u8, is_regex: bool, kinds: ?[]const Value, w: *Writer) !void {
+fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, index_slot: ?*search_index.Slot, pattern: []const u8, dir: []const u8, is_regex: bool, kinds: ?[]const Value, w: *Writer) !void {
     if (pattern.len == 0) return error.EmptyPattern;
     const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
@@ -239,14 +239,35 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     const index_path = search_index.indexPath(gpa, place.root) catch null;
     defer if (index_path) |p| gpa.free(p);
     var timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
-    const previous_index: ?search_index.Index = if (index_path) |p| (search_index.load(gpa, io, p) catch null) else null;
-    defer if (previous_index) |idx| idx.deinit();
+    var previous_from_slot: ?search_index.Index = null;
+    const previous_index: ?search_index.Index = blk: {
+        if (index_slot) |slot| {
+            if (slot.index) |idx| {
+                previous_from_slot = idx;
+                break :blk idx;
+            }
+        }
+        break :blk if (index_path) |p| (search_index.load(gpa, io, p) catch null) else null;
+    };
+    defer if (previous_from_slot == null) {
+        if (previous_index) |idx| idx.deinit();
+    };
     if (timer) |*t| if (stats_sink) |s| {
         s.index_load_ns += t.lap();
     };
     const refreshed: ?search_index.RefreshResult = search_index.refresh(gpa, io, place.root, files, previous_index) catch null;
     const fresh_index: ?search_index.Index = if (refreshed) |r| r.index else null;
-    defer if (fresh_index) |idx| idx.deinit();
+    var fresh_owned_locally = true;
+    if (index_slot) |slot| {
+        if (fresh_index) |idx| {
+            if (previous_from_slot) |old_idx| old_idx.deinit();
+            slot.index = idx;
+            fresh_owned_locally = false;
+        }
+    }
+    defer if (fresh_owned_locally) {
+        if (fresh_index) |idx| idx.deinit();
+    };
     if (timer) |*t| if (stats_sink) |s| {
         s.index_refresh_ns += t.lap();
         if (refreshed) |r| {

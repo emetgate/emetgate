@@ -4,6 +4,7 @@ const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
+const search_index = @import("../platform/search_index.zig");
 
 const Value = std.json.Value;
 
@@ -17,6 +18,7 @@ pub const Policy = struct {
     mirror_enabled: bool = false,
     mirror: ?*mirror_mod.Mirror = null,
     tree_cache: ?*tree_cache_mod.TreeCache = null,
+    search_index_slot: ?*search_index.Slot = null,
     language_service: ?*tsserver.Session = null,
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
