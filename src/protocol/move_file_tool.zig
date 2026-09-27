@@ -68,7 +68,7 @@ fn recordMoveFile(gpa: Allocator, io: std.Io, root: []const u8, source_rel: []co
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w);
+    }, w, true);
 }
 
 fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {

@@ -379,7 +379,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
 
     switch (result) {
         .committed => |new_hash| {
-            try wire.writeCommitted(out, request.symbol, expected, new_hash, note);
+            try wire.writeCommitted(out, request.symbol, expected, new_hash, note, true);
             return 0;
         },
         .rejected => |report| {

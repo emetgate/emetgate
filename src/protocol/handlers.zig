@@ -461,13 +461,14 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
     event.chars_emetgate = sym.len + hash_hex.len + body.len;
     event.chars_fullfile = event.trace.new_len;
     event.chars_sr = if (event.trace.old_body_len) |old| old + body.len else null;
+    const full = tool_result.wantsFull(args);
     switch (result) {
         .committed => |new_hash| {
             event.outcome = .committed;
             event.edits = 1;
             event.hash = new_hash;
             if (policy.tree_cache) |cache| cache.invalidate(file_abs);
-            try wire.writeCommitted(w, sym, expected, new_hash, note);
+            try wire.writeCommitted(w, sym, expected, new_hash, note, full);
             try receipt_note.record(gpa, io, place.root, .{
                 .operation = .@"try",
                 .class = .spending,
@@ -478,7 +479,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
                 .typecheck_command = typecheck_command,
                 .test_ms = event.trace.test_ms,
                 .version = receipt_note.version,
-            }, w);
+            }, w, full);
             return false;
         },
         .rejected => |report| {
@@ -561,12 +562,13 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
     }, null);
     defer result.deinit(gpa);
     const expected: symbol.Expected = .{ .present = expected_hash };
+    const full = tool_result.wantsFull(args);
     switch (result) {
         .committed => |new_hash| {
             event.outcome = .committed;
             event.edits = 1;
             event.hash = new_hash;
-            try wire.writeCommitted(w, picked.label, expected, new_hash, null);
+            try wire.writeCommitted(w, picked.label, expected, new_hash, null, full);
             return false;
         },
         .rejected => |report| {
@@ -658,7 +660,7 @@ fn firstAbsentFile(items: []const Value) []const u8 {
     return getString(items[0], "file").?;
 }
 
-fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -696,7 +698,7 @@ fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: [
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w);
+    }, w, full);
 }
 
 fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
@@ -796,6 +798,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     }
     event.chars_emetgate = sent;
     event.chars_fullfile = event.trace.new_len;
+    const full = tool_result.wantsFull(args);
     switch (result) {
         .committed => |committed| {
             event.outcome = .committed;
@@ -825,7 +828,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                     },
                 };
             }
-            try wire.writeBatchCommitted(w, views, note);
+            try wire.writeBatchCommitted(w, views, note, full);
             const code_places = try gpa.alloc(repo.Jailed, edits.len);
             defer gpa.free(code_places);
             const code_committed = try gpa.alloc(@import("../platform/batch.zig").Committed, edits.len);
@@ -835,7 +838,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 code_places[order[i]] = places[i];
                 code_committed[order[i]] = committed[order[i]];
             }
-            try recordBatch(gpa, io, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w);
+            try recordBatch(gpa, io, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full);
             return false;
         },
         .rejected => |report| {

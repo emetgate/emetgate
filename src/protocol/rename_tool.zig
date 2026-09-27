@@ -61,7 +61,7 @@ fn recordRename(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, s
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w);
+    }, w, true);
 }
 
 fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, new_name: []const u8, interface_change: bool, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {

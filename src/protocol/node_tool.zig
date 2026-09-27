@@ -125,8 +125,9 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args
             event.outcome = .committed;
             event.edits = node_edits.len;
             if (policy.tree_cache) |cache| cache.invalidate(place.abs);
-            try wire.writeNodesCommitted(w, file, applied, note);
-            try record(gpa, io, place.root, place.rel, place.abs, before_hash, applied, test_command, typecheck_command, event.trace.test_ms, w);
+            const full = tool_result.wantsFull(args);
+            try wire.writeNodesCommitted(w, file, applied, note, full);
+            try record(gpa, io, place.root, place.rel, place.abs, before_hash, applied, test_command, typecheck_command, event.trace.test_ms, w, full);
             return false;
         },
         .rejected => |report| {
@@ -156,7 +157,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args
     }
 }
 
-fn record(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, abs: []const u8, before: ?symbol.Hash, applied: node_cas.Applied, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+fn record(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, abs: []const u8, before: ?symbol.Hash, applied: node_cas.Applied, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -172,5 +173,5 @@ fn record(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, abs: []
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w);
+    }, w, full);
 }
