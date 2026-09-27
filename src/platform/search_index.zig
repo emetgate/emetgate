@@ -107,7 +107,7 @@ pub fn indexPath(gpa: Allocator, root_abs: []const u8) ![]u8 {
     defer arena_state.deinit();
     const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
     const key = shadow_root.repoKey(root_abs);
-    return std.fmt.allocPrint(gpa, "{s}\\emetgate\\index\\{s}\\index.v1", .{ local, &key });
+    return std.fmt.allocPrint(gpa, "{s}\\emetgate\\index\\{s}\\index.v2", .{ local, &key });
 }
 
 fn statOf(io: std.Io, abs_path: []const u8) ?Stamp {
