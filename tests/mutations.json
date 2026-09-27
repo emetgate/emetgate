@@ -5694,6 +5694,7 @@
       "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {",
       "to": "if (true) {",
       "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
         "refresh reuses unchanged entries and recomputes a file that changed",
         "a stale index does not hide a match added to a file after the index was built"
       ]
@@ -5709,11 +5710,12 @@
     },
     {
       "id": "SR2-index-checksum-not-verified",
-      "file": "src/platform/search_index.zig",
-      "from": "if (!std.mem.eql(u8, &actual, &claimed)) return null;",
+      "file": "src/platform/search_index_file.zig",
+      "from": "if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;",
       "to": "_ = actual;\n    _ = claimed;",
       "kills": [
-        "a corrupted index file is rejected instead of trusted"
+        "a corrupted index file is rejected instead of trusted",
+        "a flipped byte, a cut tail, another version or another magic is refused"
       ]
     },
     {
@@ -6129,6 +6131,33 @@
       "kills": [
         "longestLiteralChunk never returns text a match can do without",
         "a regex whose literal parts are optional or alternatives still finds every file that matches"
+      ]
+    },
+    {
+      "id": "SW5-index-loaded-before-the-watcher-starts",
+      "file": "src/platform/search_session.zig",
+      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+      ]
+    },
+    {
+      "id": "SW6-loaded-index-trusted-without-a-restat",
+      "file": "src/platform/search_session.zig",
+      "from": "        self.reconcile = true;\n",
+      "to": "        self.reconcile = false;\n",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+      ]
+    },
+    {
+      "id": "IF1-index-file-version-not-checked",
+      "file": "src/platform/search_index_file.zig",
+      "from": "    if (try r.int(u32) != version) return error.Corrupt;",
+      "to": "    _ = try r.int(u32);",
+      "kills": [
+        "a flipped byte, a cut tail, another version or another magic is refused"
       ]
     }
   ]
