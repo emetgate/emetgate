@@ -34,6 +34,7 @@ pub const move_batch = @import("platform/move_batch.zig");
 pub const file_move = @import("platform/file_move.zig");
 pub const module_paths = @import("platform/module_paths.zig");
 pub const disk = @import("platform/disk.zig");
+pub const durability_log = @import("platform/durability_log.zig");
 pub const receipts = @import("platform/receipts.zig");
 pub const verify_run = @import("platform/verify_run.zig");
 pub const jcs = @import("verify/jcs.zig");

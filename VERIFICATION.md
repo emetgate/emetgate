@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **979**
-- Mutations declared in `tests/mutations.json`: **562**
-  - killed: **536**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **985**
+- Mutations declared in `tests/mutations.json`: **567**
+  - killed: **541**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -27,7 +27,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_rename.zig`: 10
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
-- Security findings recorded in README's Security History: **7**
+- Security findings recorded in README's Security History: **8**
 
 ## Reproducing this
 
@@ -231,7 +231,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-45 mutation(s).
+50 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -280,6 +280,11 @@ python tools/verification_page.py --check
 | `FM3-created-dirs-not-journaled` | `src/platform/disk.zig` | `return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, b.crea...` -> `return journal.write(b.gpa, b.io, b.journal_dir, &b.tag, &.{}, ...` | file move crash: a move into two new directories with two users cut after every... | killed |
 | `FM5-moved-file-not-indexed` | `src/platform/disk.zig` | `try added.append(b.gpa, p.path);             if (p.removed) try...` -> `if (p.removed) try removed.append(b.gpa, p.source);` | move file: a file moves into two new directories and every import to and from i...; file ... | killed |
 | `FM7-disk-case-only-rename-accepted` | `src/platform/disk.zig` | `if (std.ascii.eqlIgnoreCase(source_abs, target_abs)) return err...` -> `` | file move crash: the disk layer refuses a rename that only changes letter case | killed |
+| `DF1-backup-dir-flush-dropped` | `src/platform/disk.zig` | `self.state = .backed_up;         try flushParent(self.backup);` -> `self.state = .backed_up;` | dir flush bak: a backup whose directory entry was lost with the swapped target ... | killed |
+| `DF2-backup-delete-flush-dropped` | `src/platform/disk.zig` | `} else flushParent(self.backup) catch {                     if ...` -> `}` | dir flush fin: a power loss after a finished batch does not bring a deleted bac... | killed |
+| `DF3-journal-delete-flush-dropped` | `src/platform/disk.zig` | `const journal_gone = if (commit_record.flushDir(b.journal_dir))...` -> `const journal_gone = true;` | dir flush dropJ: a journal whose deletion was lost after its commit record was ... | killed |
+| `DF4-recovery-dir-flush-dropped` | `src/platform/disk.zig` | `fn flushTouched(path_abs: []const u8) bool {     flushParent(pa...` -> `fn flushTouched(path_abs: []const u8) bool {     _ = path_abs;` | dir flush rec: a restore made by recovery is durable before the journal that as... | killed |
+| `DF5-recovery-journal-delete-flush-dropped` | `src/platform/disk.zig` | `commit_record.flushDir(journal_dir) catch return;` -> `` | dir flush dropJ: recovery that loses a journal deletion after removing the comm... | killed |
 
 ### Rules and the q: query engine
 

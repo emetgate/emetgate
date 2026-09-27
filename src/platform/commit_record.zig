@@ -1,5 +1,6 @@
 const std = @import("std");
 const disk = @import("disk.zig");
+const durability_log = @import("durability_log.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -44,10 +45,12 @@ pub fn exists(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const 
 pub fn remove(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const u8) !void {
     const final = try recordPath(gpa, journal_dir, tag);
     defer gpa.free(final);
+    const saved = durability_log.beforeRemove(final);
     std.Io.Dir.deleteFileAbsolute(io, final) catch |err| switch (err) {
         error.FileNotFound => {},
         else => |e| return e,
     };
+    durability_log.removed(final, saved);
     flushDir(journal_dir) catch {};
 }
 
@@ -70,7 +73,12 @@ pub fn removeAll(gpa: Allocator, io: std.Io, journal_dir: []const u8, keep: []co
         if (kept(entry.name, keep)) continue;
         try names.append(gpa, try gpa.dupe(u8, entry.name));
     }
-    for (names.items) |name| dir.deleteFile(io, name) catch {};
+    for (names.items) |name| {
+        const path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ journal_dir, name });
+        defer gpa.free(path);
+        const saved = durability_log.beforeRemove(path);
+        if (dir.deleteFile(io, name)) |_| durability_log.removed(path, saved) else |_| durability_log.discard(saved);
+    }
     flushDir(journal_dir) catch {};
 }
 
@@ -92,6 +100,7 @@ pub fn moveDurably(from: []const u8, to: []const u8) !void {
 }
 
 pub fn flushDir(dir_abs: []const u8) !void {
+    if (!durability_log.flushing(dir_abs)) return;
     var wide: WidePath = undefined;
     const handle = win.CreateFileW(
         try toWide(&wide, dir_abs),
@@ -102,7 +111,10 @@ pub fn flushDir(dir_abs: []const u8) !void {
         win.file_flag_backup_semantics,
         null,
     );
-    if (handle == windows.INVALID_HANDLE_VALUE) return error.OpenFailed;
+    if (handle == windows.INVALID_HANDLE_VALUE) return switch (win.GetLastError()) {
+        win.error_file_not_found, win.error_path_not_found => error.DirMissing,
+        else => error.OpenFailed,
+    };
     defer windows.CloseHandle(handle);
     if (win.FlushFileBuffers(handle) == .FALSE) return error.FlushFailed;
 }
@@ -133,6 +145,10 @@ const win = struct {
     const open_existing: windows.DWORD = 3;
     const file_flag_backup_semantics: windows.DWORD = 0x02000000;
     const movefile_write_through: windows.DWORD = 0x00000008;
+    const error_file_not_found: windows.DWORD = 2;
+    const error_path_not_found: windows.DWORD = 3;
+
+    extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
 
     extern "kernel32" fn CreateFileW(
         name: [*:0]const u16,

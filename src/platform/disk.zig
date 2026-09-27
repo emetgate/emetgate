@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const commit_record = @import("commit_record.zig");
+const durability_log = @import("durability_log.zig");
 const journal = @import("journal.zig");
 const git_repo = @import("repo.zig");
 const shadow_root = @import("shadow_root.zig");
@@ -65,7 +66,10 @@ pub const Guard = struct {
 
     fn deleteSelf(self: Guard) !void {
         var info: win.FILE_DISPOSITION_INFO_EX = .{ .flags = win.file_disposition_flag_delete | win.file_disposition_flag_posix_semantics };
-        if (win.SetFileInformationByHandle(self.handle, win.file_disposition_info_ex, &info, @sizeOf(win.FILE_DISPOSITION_INFO_EX)) != .FALSE) return;
+        const removal = durability_log.beforeHandleRemove(self.handle);
+        const ok = win.SetFileInformationByHandle(self.handle, win.file_disposition_info_ex, &info, @sizeOf(win.FILE_DISPOSITION_INFO_EX)) != .FALSE;
+        durability_log.handleRemoved(removal, ok);
+        if (ok) return;
         return switch (win.GetLastError()) {
             win.error_sharing_violation, win.error_lock_violation => error.FileLocked,
             win.error_access_denied => error.AccessDenied,
@@ -241,6 +245,7 @@ pub const Pending = struct {
         if (!std.mem.eql(u8, &symbol.hashOf(bytes), &self.base_hash.?)) return error.BaseChanged;
         try writeDurably(self.io, self.backup, bytes);
         self.state = .backed_up;
+        try flushParent(self.backup);
         if (in_gap) |hook| try hook.run(hook.context);
         try self.replacement.?.renameReplacing(self.gpa, self.path);
         applyAttributes(self.path, self.saved_attributes) catch {};
@@ -277,7 +282,9 @@ pub const Pending = struct {
                 self.closeHandles();
                 if (!deleteWithRetry(self.io, self.backup)) {
                     if (leftover) |out| out.record(self.backup);
-                }
+                } else flushParent(self.backup) catch {
+                    if (leftover) |out| out.record(self.backup);
+                };
             },
             .delete => {
                 defer self.closeHandles();
@@ -398,6 +405,11 @@ fn recoverCrash() bool {
     return true;
 }
 
+fn flushTouched(path_abs: []const u8) bool {
+    flushParent(path_abs) catch |err| return err == error.DirMissing;
+    return true;
+}
+
 fn flushParent(path_abs: []const u8) !void {
     const parent = std.fs.path.dirname(path_abs) orelse return;
     try commit_record.flushDir(parent);
@@ -490,10 +502,10 @@ fn writeBatchJournal(b: *const Batch, pendings: []const Pending) ![]u8 {
 
 fn makeDirs(b: *const Batch) !void {
     for (b.created_dirs) |dir| {
-        std.Io.Dir.cwd().createDir(b.io, dir, .default_dir) catch |err| switch (err) {
+        if (std.Io.Dir.cwd().createDir(b.io, dir, .default_dir)) |_| durability_log.madeDir(dir) else |err| switch (err) {
             error.PathAlreadyExists => {},
             else => |e| return e,
-        };
+        }
         try flushParent(dir);
     }
 }
@@ -504,6 +516,7 @@ fn removeEmptyDirs(io: std.Io, dirs: []const []const u8) void {
         k -= 1;
         clearSidecarTemps(io, dirs[k]);
         std.Io.Dir.cwd().deleteDir(io, dirs[k]) catch continue;
+        durability_log.removedDir(dirs[k]);
         flushParent(dirs[k]) catch {};
     }
 }
@@ -597,8 +610,9 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
     for (pendings) |*p| p.freePaths();
     if (batch) |b| {
         if (journal_path) |jp| _ = deleteWithRetry(b.io, jp);
+        const journal_gone = if (commit_record.flushDir(b.journal_dir)) |_| true else |_| false;
         if (Step.stops(step)) return error.Crashed;
-        commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
+        if (journal_gone) commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
     }
     return indexed;
 }
@@ -905,8 +919,9 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
     }
     index.flush(io, root_abs, report);
     for (index_journals.items) |jp| _ = deleteWithRetry(io, jp);
+    commit_record.flushDir(journal_dir) catch return;
     try commit_record.removeAll(gpa, io, journal_dir, kept.items);
-    std.Io.Dir.cwd().deleteDir(io, journal_dir) catch {};
+    if (std.Io.Dir.cwd().deleteDir(io, journal_dir)) |_| durability_log.removedDir(journal_dir) else |_| {}
 }
 
 const JournalOutcome = enum { delete, after_index, keep };
@@ -980,6 +995,12 @@ fn applyBatchJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_d
         .delete => if (committed) try recoverDeleted(gpa, io, intent.target, intent.base_hash.?, index, report),
         .rename => try recoverRenamed(gpa, io, intent, committed, index, report),
     };
+    for (checked) |intent| {
+        if (!flushTouched(intent.target) or (intent.op == .rename and !flushTouched(intent.source))) {
+            report.failed += 1;
+            return .keep;
+        }
+    }
     if (recoverCrash()) return error.Crashed;
     return if (committed) .after_index else .delete;
 }
@@ -1015,6 +1036,10 @@ fn applyLegacyJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_
             return .delete;
         };
         try recoverCreated(gpa, io, target, new_hash, committed, index, report);
+        if (!flushTouched(target)) {
+            report.failed += 1;
+            return .keep;
+        }
         return if (committed) .after_index else .delete;
     }
 
@@ -1028,6 +1053,10 @@ fn applyLegacyJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_
         return .delete;
     }
     try recoverModified(gpa, io, target, tag, base_hash, new_hash, committed, report);
+    if (!flushTouched(target)) {
+        report.failed += 1;
+        return .keep;
+    }
     return .delete;
 }
 
@@ -1073,7 +1102,10 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     info.file_name_length = @intCast(name_bytes);
     @memcpy(buffer[header..][0..name_bytes], std.mem.sliceAsBytes(std.mem.sliceTo(name, 0)));
 
-    if (win.SetFileInformationByHandle(handle, win.file_rename_info_ex, buffer.ptr, @intCast(buffer.len)) != .FALSE) return;
+    const pending = durability_log.beforeRename(handle, target_abs, replace_existing);
+    const ok = win.SetFileInformationByHandle(handle, win.file_rename_info_ex, buffer.ptr, @intCast(buffer.len)) != .FALSE;
+    durability_log.renamed(pending, target_abs, ok);
+    if (ok) return;
     return switch (win.GetLastError()) {
         win.error_already_exists, win.error_file_exists => error.PathAlreadyExists,
         win.error_sharing_violation, win.error_lock_violation => error.FileLocked,
@@ -1108,6 +1140,7 @@ pub fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
     defer file.close(io);
     try file.writeStreamingAll(io, data);
     try file.sync(io);
+    durability_log.created(path);
 }
 
 fn applyAttributes(path_abs: []const u8, attributes: windows.DWORD) !void {
@@ -1120,6 +1153,13 @@ const delete_retries = 5;
 const delete_retry_ms: windows.DWORD = 40;
 
 fn deleteWithRetry(io: std.Io, path: []const u8) bool {
+    const saved = durability_log.beforeRemove(path);
+    const deleted = deleteAttempts(io, path);
+    if (deleted) durability_log.removed(path, saved) else durability_log.discard(saved);
+    return deleted;
+}
+
+fn deleteAttempts(io: std.Io, path: []const u8) bool {
     var attempt: usize = 0;
     while (true) : (attempt += 1) {
         std.Io.Dir.deleteFileAbsolute(io, path) catch |err| switch (err) {
