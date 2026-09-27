@@ -111,7 +111,10 @@ pub fn flushDir(dir_abs: []const u8) !void {
         win.file_flag_backup_semantics,
         null,
     );
-    if (handle == windows.INVALID_HANDLE_VALUE) return error.OpenFailed;
+    if (handle == windows.INVALID_HANDLE_VALUE) return switch (win.GetLastError()) {
+        win.error_file_not_found, win.error_path_not_found => error.DirMissing,
+        else => error.OpenFailed,
+    };
     defer windows.CloseHandle(handle);
     if (win.FlushFileBuffers(handle) == .FALSE) return error.FlushFailed;
 }
@@ -142,6 +145,10 @@ const win = struct {
     const open_existing: windows.DWORD = 3;
     const file_flag_backup_semantics: windows.DWORD = 0x02000000;
     const movefile_write_through: windows.DWORD = 0x00000008;
+    const error_file_not_found: windows.DWORD = 2;
+    const error_path_not_found: windows.DWORD = 3;
+
+    extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
 
     extern "kernel32" fn CreateFileW(
         name: [*:0]const u16,

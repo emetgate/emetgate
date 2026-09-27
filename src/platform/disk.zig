@@ -405,6 +405,11 @@ fn recoverCrash() bool {
     return true;
 }
 
+fn flushTouched(path_abs: []const u8) bool {
+    flushParent(path_abs) catch |err| return err == error.DirMissing;
+    return true;
+}
+
 fn flushParent(path_abs: []const u8) !void {
     const parent = std.fs.path.dirname(path_abs) orelse return;
     try commit_record.flushDir(parent);
@@ -990,6 +995,12 @@ fn applyBatchJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_d
         .delete => if (committed) try recoverDeleted(gpa, io, intent.target, intent.base_hash.?, index, report),
         .rename => try recoverRenamed(gpa, io, intent, committed, index, report),
     };
+    for (checked) |intent| {
+        if (!flushTouched(intent.target) or (intent.op == .rename and !flushTouched(intent.source))) {
+            report.failed += 1;
+            return .keep;
+        }
+    }
     if (recoverCrash()) return error.Crashed;
     return if (committed) .after_index else .delete;
 }
@@ -1025,6 +1036,10 @@ fn applyLegacyJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_
             return .delete;
         };
         try recoverCreated(gpa, io, target, new_hash, committed, index, report);
+        if (!flushTouched(target)) {
+            report.failed += 1;
+            return .keep;
+        }
         return if (committed) .after_index else .delete;
     }
 
@@ -1038,6 +1053,10 @@ fn applyLegacyJournal(gpa: Allocator, io: std.Io, root_abs: []const u8, journal_
         return .delete;
     }
     try recoverModified(gpa, io, target, tag, base_hash, new_hash, committed, report);
+    if (!flushTouched(target)) {
+        report.failed += 1;
+        return .keep;
+    }
     return .delete;
 }
 

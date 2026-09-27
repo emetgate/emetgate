@@ -210,6 +210,22 @@ test "dir flush dropJ: recovery that loses a journal deletion after removing the
     try setup.noDebris();
 }
 
+const after_first_swap = 5;
+
+test "dir flush rec: a restore made by recovery is durable before the journal that asked for it is gone" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const setup = try Setup.init(.modify_two);
+    defer setup.deinit();
+    var at: StopAt = .{ .target = after_first_swap };
+    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    try testing.expectError(error.Crashed, setup.run(&step));
+    try testing.expect(try setup.has("src/a.ts", a_new));
+    try setup.recover();
+    setup.log.powerLoss(outsideJournal);
+    try setup.recover();
+    try testing.expectEqual(.old, try setup.state());
+    try setup.noDebris();
+}
 
 test "dir flush log: a power loss undoes an unflushed creation and keeps one whose directory was flushed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
