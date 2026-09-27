@@ -6168,6 +6168,33 @@
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
+    },
+    {
+      "id": "WR1-compact-reply-drops-new-hash",
+      "file": "src/protocol/wire.zig",
+      "from": "    try js.objectField(\"new_hash\");\n    try js.write(new_hex[0..]);\n    if (full) try writeShadowNote(&js, note);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
+      "to": "    if (full) {\n        try js.objectField(\"new_hash\");\n        try js.write(new_hex[0..]);\n    }\n    if (full) try writeShadowNote(&js, note);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
+      "kills": [
+        "compact committed payload drops the old hash and the shadow note"
+      ]
+    },
+    {
+      "id": "WR2-detail-full-ignored",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (full) {\n        try js.objectField(\"old_hash\");\n        try js.write(old_hex[0..]);\n    }",
+      "to": "    if (false) {\n        try js.objectField(\"old_hash\");\n        try js.write(old_hex[0..]);\n    }",
+      "kills": [
+        "committed payload names the symbol and both hashes"
+      ]
+    },
+    {
+      "id": "WR3-receipt-note-always-full",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "    const written = receipts.write(gpa, io, root, rec);\n    if (!full) {",
+      "to": "    const written = receipts.write(gpa, io, root, rec);\n    if (false) {",
+      "kills": [
+        "node edit: read_symbol with nodes gives hash|code lines and a node try commits exactly that node with a receipt that verifies"
+      ]
     }
   ]
 }
