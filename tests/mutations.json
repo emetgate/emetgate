@@ -5791,7 +5791,6 @@
       "from": "    if (!std.mem.eql(u8, reparsed.text(verify.node), new_value)) return error.DocSyntaxInvalid;\n",
       "to": "",
       "kills": [
-        "applyJsonPointer refuses a stale hash and refuses a value that is not valid json",
         "applyJsonPointer refuses a value that reparses to something other than exactly what was written"
       ]
     },
