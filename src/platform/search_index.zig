@@ -225,6 +225,7 @@ pub fn refreshWith(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []co
     const slots = try gpa.alloc(Pending, files.len);
     defer gpa.free(slots);
     for (slots, files) |*slot, rel| slot.* = .{ .rel = rel };
+    if (previous != null) try prefillStamps(gpa, root_abs, slots, pool);
 
     const count = workerCount(files.len);
     const workers = try gpa.alloc(Worker, count);
@@ -293,9 +294,81 @@ fn workerCount(files: usize) usize {
     return @max(1, @min(@min(cpus, max_workers), files / min_files_per_worker));
 }
 
+const DirGroup = struct {
+    dir: []const u8,
+    slots: std.ArrayList(u32) = .empty,
+};
+
+const StampJob = struct {
+    gpa: Allocator,
+    root: []const u8,
+    slots: []Pending,
+    groups: []DirGroup,
+    next: std.atomic.Value(usize) = .init(0),
+
+    fn run(ctx: *anyopaque) void {
+        const self: *StampJob = @ptrCast(@alignCast(ctx));
+        while (true) {
+            const i = self.next.fetchAdd(1, .monotonic);
+            if (i >= self.groups.len) return;
+            self.enumerate(&self.groups[i]) catch continue;
+        }
+    }
+
+    fn enumerate(self: *StampJob, group: *DirGroup) !void {
+        var names: std.StringHashMapUnmanaged(u32) = .empty;
+        defer names.deinit(self.gpa);
+        for (group.slots.items) |at| try names.put(self.gpa, std.fs.path.basenamePosix(self.slots[at].rel), at);
+        var pattern_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const pattern = if (group.dir.len == 0)
+            try std.fmt.bufPrint(&pattern_buf, "{s}\\*", .{self.root})
+        else
+            try std.fmt.bufPrint(&pattern_buf, "{s}\\{s}\\*", .{ self.root, group.dir });
+        std.mem.replaceScalar(u8, pattern, '/', '\\');
+        var wide: WidePath = undefined;
+        const w = try toWide(&wide, pattern);
+        var data: win.FindData = undefined;
+        const handle = win.FindFirstFileExW(w, win.find_ex_info_basic, &data, 0, null, win.find_first_ex_large_fetch);
+        if (handle == windows.INVALID_HANDLE_VALUE) return;
+        defer _ = win.FindClose(handle);
+        var name_buf: [1024]u8 = undefined;
+        while (true) {
+            const skip = data.attributes & (win.file_attribute_directory | win.file_attribute_reparse_point) != 0;
+            if (!skip) {
+                const len = std.mem.indexOfScalar(u16, &data.name, 0) orelse data.name.len;
+                const n = std.unicode.wtf16LeToWtf8(&name_buf, data.name[0..len]);
+                if (names.get(name_buf[0..n])) |at| {
+                    const slot = &self.slots[at];
+                    const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32) | data.last_write.low);
+                    slot.stamp = .{ .mtime_ns = windows.fromSysTime(hns).nanoseconds, .size = (@as(u64, data.size_high) << 32) | data.size_low };
+                    slot.prestat = true;
+                }
+            }
+            if (win.FindNextFileW(handle, &data) == .FALSE) return;
+        }
+    }
+};
+
+fn prefillStamps(gpa: Allocator, root_abs: []const u8, slots: []Pending, pool: ?*worker_pool.Pool) !void {
+    var by_dir: std.StringArrayHashMapUnmanaged(DirGroup) = .empty;
+    defer {
+        for (by_dir.values()) |*g| g.slots.deinit(gpa);
+        by_dir.deinit(gpa);
+    }
+    for (slots, 0..) |slot, i| {
+        const dir = std.fs.path.dirnamePosix(slot.rel) orelse "";
+        const got = try by_dir.getOrPut(gpa, dir);
+        if (!got.found_existing) got.value_ptr.* = .{ .dir = dir };
+        try got.value_ptr.slots.append(gpa, @intCast(i));
+    }
+    var job: StampJob = .{ .gpa = gpa, .root = root_abs, .slots = slots, .groups = by_dir.values() };
+    if (pool) |p| p.run(workerCount(slots.len) - 1, StampJob.run, &job) else StampJob.run(&job);
+}
+
 const Pending = struct {
     rel: []const u8,
     state: enum { skip, reuse, fresh } = .skip,
+    prestat: bool = false,
     stamp: Stamp = .{ .mtime_ns = 0, .size = 0 },
     reuse: ?*const Entry = null,
     fresh: Entry = undefined,
@@ -347,7 +420,7 @@ const Worker = struct {
         const gpa = job.gpa;
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ job.root, slot.rel });
         defer gpa.free(abs);
-        const stamp = statOf(job.io, abs) orelse return;
+        const stamp = if (slot.prestat) slot.stamp else statOf(job.io, abs) orelse return;
         if (stamp.size > max_indexed_file_bytes) return;
         slot.stamp = stamp;
         if (job.previous) |p| {
@@ -423,6 +496,26 @@ fn toWide(buffer: *WidePath, path: []const u8) ![*:0]const u16 {
 }
 
 const win = struct {
+    const FileTime = extern struct { low: u32, high: u32 };
+    const FindData = extern struct {
+        attributes: u32,
+        creation: FileTime,
+        last_access: FileTime,
+        last_write: FileTime,
+        size_high: u32,
+        size_low: u32,
+        reserved0: u32,
+        reserved1: u32,
+        name: [260]u16,
+        alternate: [14]u16,
+    };
+    const find_ex_info_basic: c_int = 1;
+    const find_first_ex_large_fetch: windows.DWORD = 2;
+    const file_attribute_directory: u32 = 0x10;
+    const file_attribute_reparse_point: u32 = 0x400;
+    extern "kernel32" fn FindFirstFileExW(name: [*:0]const u16, level: c_int, data: *FindData, search: c_int, filter: ?*anyopaque, flags: windows.DWORD) callconv(.winapi) windows.HANDLE;
+    extern "kernel32" fn FindNextFileW(handle: windows.HANDLE, data: *FindData) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn FindClose(handle: windows.HANDLE) callconv(.winapi) windows.BOOL;
     const movefile_replace_existing: windows.DWORD = 0x00000001;
     const movefile_write_through: windows.DWORD = 0x00000008;
 
