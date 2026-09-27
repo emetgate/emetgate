@@ -51,6 +51,7 @@ pub const batch_plan = src.batch_plan;
 pub const doc_writer = src.doc_writer;
 pub const rules = src.rules;
 pub const scan = src.scan;
+pub const change_watch = src.change_watch;
 pub const stdio = src.stdio;
 pub const lockdown = src.lockdown;
 pub const memory = src.memory;
@@ -81,6 +82,7 @@ test {
     _ = @import("tests/runner.zig");
     _ = @import("tests/runner_rules.zig");
     _ = @import("tests/scan.zig");
+    _ = @import("tests/change_watch.zig");
     _ = @import("tests/scan_tool.zig");
     _ = @import("tests/redteam_memory.zig");
     _ = @import("tests/redteam_ledger.zig");

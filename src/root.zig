@@ -49,6 +49,7 @@ pub const batch_plan = @import("platform/batch_plan.zig");
 pub const doc_writer = @import("platform/doc_writer.zig");
 pub const rules = @import("platform/rules.zig");
 pub const scan = @import("platform/scan.zig");
+pub const change_watch = @import("platform/change_watch.zig");
 pub const stdio = @import("platform/stdio.zig");
 pub const lockdown = @import("platform/lockdown.zig");
 pub const memory = @import("platform/memory.zig");
