@@ -662,10 +662,36 @@ script both fall back to a full scan, same as a query too short to trigram:
 Winnowing's index is 1.7-3.8x bigger and 2-3x slower to build than trigram, and it never
 narrows the candidate set further — on the two lowest-selectivity queries this benchmark
 was chosen to stress (`function`: 978/2319, `require(`: 733/2319 with trigram) it is
-strictly worse (1015 and 914). **Trigram is kept**; neither alternative measured here beat
-it. This is a measurement on two repos and five queries with one specific winnowing
-parameterization, not a proof that no sparse scheme could ever help — the reproduction
-command is in the script if a different parameterization or corpus is worth checking.
+strictly worse (1015 and 914). Winnowing is measured here as a documented alternative, not
+as a stand-in for Blackbird: it is a *fingerprint-selection* scheme (which fixed-length
+k-grams to keep), not the *variable-length sparse gram* Blackbird's post describes.
+
+Third, that actual construction: Blackbird's post derives variable-length "features" from
+byte-pair boundary weights, trained on real code. Without that trained model,
+`gram_compare.py` reproduces the same boundary mechanism with an untrained proxy weight
+(a hash of each byte pair): a substring `data[i:j]` (length 4-12) is indexed only when the
+weight of both of its boundary byte-pairs exceeds the weight of every byte-pair strictly
+between them, so boundaries fall on locally "rare" (high-hash) pairs the same way Blackbird's
+trained rarity score would place them, just without the training. A query is checked against
+the smallest set of its own sparse grams that covers it end to end (greedy interval cover),
+matching the "cover the query, not just take one gram" approach the post describes:
+
+| repo | distinct grams (sparse) | candidates for 5 queries: trigram vs sparse gram (of total files) |
+|---|---:|---|
+| express-test | 147131 (vs 20445 trigram) | 0/0, 15/15, 140/140, 133/133, 32/31 |
+| eslint-test | 1254929 (vs 68882 trigram) | 0/0, 44/44, 978/979, 733/727, 159/159 |
+
+This is the closer reproduction of Blackbird's actual mechanism, and it is roughly at parity
+with trigram on 4 of 5 queries and marginally *better* on the one it was meant to help
+(`require(`: 727 vs 733) — but its index is 7.2-18.2x bigger and 5.9-6.5x slower to build
+than trigram's, because it stores a variable window of overlapping spans per position
+instead of one fixed 3-byte gram, and the untrained hash-based weight does not concentrate
+boundaries the way a trained rarity score would. **Trigram is kept**: neither winnowing nor this
+boundary-weighted sparse gram won convincingly enough here to justify the larger, slower
+index. This is a measurement on two repos, five queries, and one untrained weight function
+— not a claim that a trained Blackbird-style model would not help; only that reproducing its
+*mechanism* without its *training* did not, on this corpus. The reproduction command is in
+the script if a different weight function or corpus is worth checking.
 
 **Regex candidates.** Russ Cox's trigram-index regex matching
 (https://swtch.com/~rsc/regexp/regexp4.html) derives the full set of trigrams every match
