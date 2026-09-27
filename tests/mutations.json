@@ -5722,7 +5722,7 @@
       "from": "if (profile.isComment(n.kind())) return .comment;",
       "to": "if (profile.isComment(n.kind())) return .code;",
       "kills": [
-        "a hit inside a function is grouped by its enclosing symbol with a hash and a definition role"
+        "a hash-matching index entry with no persisted spans still classifies comments and definitions via a live parse"
       ]
     },
     {
@@ -5741,6 +5741,15 @@
       "to": "_ = place.rel;",
       "kills": [
         "a search scoped to a subdirectory does not return hits from outside it"
+      ]
+    },
+    {
+      "id": "SK1-stale-symbol-table-trusted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (std.mem.eql(u8, &ch, &live_hash)) {",
+      "to": "if (std.mem.eql(u8, &ch, &live_hash) or true) {",
+      "kills": [
+        "a resident index entry whose stored hash does not match the file's live bytes is never trusted for symbol grouping"
       ]
     }
   ]

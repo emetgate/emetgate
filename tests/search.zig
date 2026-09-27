@@ -467,6 +467,57 @@ test "a resident index entry whose stored hash does not match the file's live by
     try testing.expect(findGroupBySymbol(groupsOf(body.value), "wrongName") == null);
 }
 
+test "a hash-matching index entry with no persisted spans still classifies comments and definitions via a live parse" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const real_bytes = "export function loadPending(): number {\n  // loadPending starts here\n  return 1;\n}\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = real_bytes });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{root});
+    defer testing.allocator.free(abs);
+
+    const real_stat = try std.Io.Dir.cwd().statFile(testing.io, abs, .{});
+    const stamp: search_index.Stamp = .{ .mtime_ns = real_stat.mtime.nanoseconds, .size = real_stat.size };
+    const trigrams = try search_index.trigramsOfAlloc(testing.allocator, real_bytes);
+    defer testing.allocator.free(trigrams);
+
+    const fake_arena = try testing.allocator.create(std.heap.ArenaAllocator);
+    fake_arena.* = std.heap.ArenaAllocator.init(testing.allocator);
+
+    var fake_entries = [_]search_index.Entry{.{
+        .path = "a.ts",
+        .stamp = stamp,
+        .trigrams = trigrams,
+        .content_hash = symbol.fileHash(real_bytes),
+        .spans = null,
+    }};
+    var slot: search_index.Slot = .{ .index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null } };
+    defer if (slot.index) |idx| idx.deinit();
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "loadPending", .dir = root }, .{ .root = root, .search_index_slot = &slot });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+
+    const group = findGroupBySymbol(groupsOf(body.value), "loadPending") orelse return error.TestUnexpectedResult;
+    var saw_definition = false;
+    var saw_comment = false;
+    for (hitKinds(group)) |h| {
+        if (h.object.get("role")) |role| {
+            if (std.mem.eql(u8, role.string, "definition")) saw_definition = true;
+        }
+        if (std.mem.eql(u8, h.object.get("kind").?.string, "comment")) saw_comment = true;
+    }
+    try testing.expect(saw_definition);
+    try testing.expect(saw_comment);
+}
+
 test "a symbol's byte offsets are recomputed, not reused stale, after the file grows by a leading comment" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
