@@ -709,26 +709,46 @@ benchmark row below faster than a full scan in the common case of a mostly-liter
 with a few metacharacters.
 
 Measured with `tests/bench/search.py` against `rg` (ripgrep, what the built-in Grep tool
-uses) on `eval/express-test` and `eval/eslint-test`:
+uses) on `eval/express-test` and `eval/eslint-test`. Every `+edit` scenario charges the
+built-in path for the `Read` Claude Code requires before an `Edit`, in two columns: reading
+the whole file, and reading only the exact changed function's line range (the best case a
+model could reach, which it cannot know without already having read the file). `ms` is the
+median of 10 runs, wall time for the tool call(s) only; rg gets one `ms` column, emetgate
+gets separate cold (index directory deleted first) and warm (second call, same session)
+columns, since a query's first and later runs pay a different index cost:
 
-| Scenario | rg tokens | emetgate tokens | ratio | rg turns | emetgate turns |
-|---|---:|---:|---:|---:|---:|
-| function name usages (+edit) | 127 | 135 | 1.06x | 2 | 1 |
-| an error message string | 315999 | 267 | 0.00x | 1 | 1 |
-| a term only in comments | 29371 | 7668 | 0.26x | 1 | 1 |
-| a JSON key value | 375981 | 6060 | 0.02x | 1 | 1 |
-| a common short word | 414187 | 6088 | 0.01x | 1 | 1 |
-| a regex pattern | 352283 | 3171 | 0.01x | 1 | 1 |
+| Scenario | rg tokens | emetgate tokens | ratio | rg turns | emetgate turns | rg ms | emetgate cold ms | emetgate warm ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| function usages (+edit, full-file Read) | 3586 | 135 | 0.04x | 2 | 1 | 19.4 | 362.4 | 141.6 |
+| function usages (+edit, best-case-range Read) | 65 | 135 | 2.08x | 2 | 1 | 19.4 | 362.4 | 141.6 |
+| function usages, another symbol (+edit, full-file Read) | 3647 | 130 | 0.04x | 2 | 1 | 19.7 | 592.1 | 323.2 |
+| function usages, another symbol (+edit, best-case-range Read) | 123 | 130 | 1.06x | 2 | 1 | 19.7 | 592.1 | 323.2 |
+| an error message string | 315999 | 267 | 0.00x | 1 | 1 | 22.1 | 1503.2 | 1117.5 |
+| a term only in comments | 29371 | 7668 | 0.26x | 1 | 1 | 73.4 | 8914.1 | 3244.5 |
+| a JSON key value | 375981 | 6060 | 0.02x | 1 | 1 | 24.4 | 1365.5 | 1083.5 |
+| a common short word | 414187 | 6088 | 0.01x | 1 | 1 | 25.1 | 1211.8 | 847.4 |
+| a regex pattern | 352283 | 3171 | 0.01x | 1 | 1 | 23.8 | 1811.4 | 1167.9 |
 
-One scenario is at parity rather than 3x better, reported rather than hidden: for a
-low-frequency symbol name that is already unique enough for a plain grep to return a
-handful of lines, ripgrep's raw output is already close to the minimum size, and the
-"+edit" bookkeeping charges both sides for the follow-up read needed to get an editable
-hash — emetgate pays a fixed grouping/hash JSON wrapper on top of content that was already
-small, the same physical floor the reader section's tiny-symbol row hits. Every other
-measured scenario clears the 3x bar, several by two orders of magnitude, because the
-result cap and grouping matter most exactly when a plain grep would return hundreds of
-lines the model does not need to see individually.
+Two scenarios are at parity rather than 3x better on tokens, reported rather than hidden:
+against the best-case range a model cannot actually reach without having read the file
+first, ripgrep's raw output for a low-frequency symbol name is already close to the minimum
+size, and the "+edit" bookkeeping charges both sides for the follow-up read needed to get an
+editable hash — emetgate pays a fixed grouping/hash JSON wrapper on top of content that was
+already small, the same physical floor the reader section's tiny-symbol row hits. Against
+the full-file Read a model actually has to make without foreknowledge, both `+edit`
+scenarios clear 3x by two orders of magnitude, same as every non-edit scenario.
+
+**On `ms`, emetgate does not beat `rg` in any scenario measured, and that is not hidden.**
+rg is a single, already-optimized native process per call; emetgate's index path costs a
+full MCP round trip (process spawn, JSON-RPC, tree-sitter reparse on a cold index) that rg's
+raw grep does not pay. Cold is always slower than warm (the index is rebuilt), and warm is
+still 6-45x slower in wall time than rg's raw scan on every measured query, worst on "a term
+only in comments" (rg 73.4 ms vs emetgate warm 3244.5 ms). The token-count win is real and
+is what a model pays for in context, but it does not come with a wall-clock win; a caller
+that is latency-sensitive rather than context-sensitive should not read this section as
+"emetgate is faster." Reproduce with `python tests/bench/search.py`; run it alone (e.g. under
+`agir-is.ps1` on an otherwise idle machine) since these are wall-clock numbers and a busy
+machine inflates every column, especially the cold ones.
 
 **Limits:** no automatic index eviction (an index for a repo that is deleted or moved
 stays on disk under its old path hash; harmless, since a rebuilt repo gets a fresh hash,
