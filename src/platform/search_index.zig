@@ -215,10 +215,79 @@ pub const RefreshResult = struct {
     changed: bool,
     reused: usize,
     recomputed: usize,
+    stamp_ns: u64 = 0,
+    work_ns: u64 = 0,
 };
 
 pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, previous: ?Index) !RefreshResult {
     return refreshWith(gpa, io, root_abs, files, previous, null);
+}
+
+pub fn refreshInPlace(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, index: *Index, pool: ?*worker_pool.Pool) !?RefreshResult {
+    const slots = try gpa.alloc(Pending, files.len);
+    defer gpa.free(slots);
+    for (slots, files) |*slot, rel| slot.* = .{ .rel = rel };
+    const t0 = std.Io.Clock.awake.now(io).nanoseconds;
+    try prefillStamps(gpa, root_abs, slots, pool);
+    const t1 = std.Io.Clock.awake.now(io).nanoseconds;
+
+    const count = workerCount(files.len);
+    const workers = try gpa.alloc(Worker, count);
+    defer gpa.free(workers);
+    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = index.*, .slots = slots, .workers = workers };
+    for (workers) |*w| w.* = .{ .job = &job, .arena = .init(gpa) };
+    defer for (workers) |*w| w.arena.deinit();
+    if (pool) |p| p.run(count - 1, Job.runOne, &job) else Job.runOne(&job);
+    if (job.failure) |err| return err;
+    const t2 = std.Io.Clock.awake.now(io).nanoseconds;
+
+    const a = index.arena.allocator();
+    var reused: usize = 0;
+    var recomputed: usize = 0;
+    var removed: usize = 0;
+    var added: std.ArrayList(Entry) = .empty;
+    defer added.deinit(gpa);
+    for (slots) |slot| {
+        const at = index.lookup.get(slot.rel);
+        switch (slot.state) {
+            .reuse => reused += 1,
+            .skip => if (at != null) {
+                _ = index.lookup.remove(slot.rel);
+                removed += 1;
+            },
+            .fresh => {
+                recomputed += 1;
+                const e = slot.fresh;
+                const entry: Entry = .{
+                    .path = if (at) |i| index.entries[i].path else try a.dupe(u8, slot.rel),
+                    .stamp = slot.stamp,
+                    .trigrams = try a.dupe(u24, e.trigrams),
+                    .content_hash = e.content_hash,
+                    .spans = try dupeSpans(a, e.spans),
+                    .doc = try doc_spans.dupe(a, e.doc),
+                };
+                if (at) |i| index.entries[i] = entry else try added.append(gpa, entry);
+            },
+        }
+    }
+    if (added.items.len != 0) {
+        const grown = try a.alloc(Entry, index.entries.len + added.items.len);
+        @memcpy(grown[0..index.entries.len], index.entries);
+        @memcpy(grown[index.entries.len..], added.items);
+        for (grown[index.entries.len..], index.entries.len..) |e, i| try index.lookup.put(a, e.path, @intCast(i));
+        index.entries = grown;
+    }
+    if (index.lookup.count() > files.len) {
+        var tracked: std.StringHashMapUnmanaged(void) = .empty;
+        defer tracked.deinit(gpa);
+        for (files) |rel| try tracked.put(gpa, rel, {});
+        for (index.entries) |e| {
+            if (!tracked.contains(e.path)) {
+                if (index.lookup.remove(e.path)) removed += 1;
+            }
+        }
+    }
+    return .{ .index = index.*, .changed = recomputed != 0 or removed != 0 or added.items.len != 0, .reused = reused, .recomputed = recomputed, .stamp_ns = @intCast(t1 - t0), .work_ns = @intCast(t2 - t1) };
 }
 
 pub fn refreshWith(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, previous: ?Index, pool: ?*worker_pool.Pool) !RefreshResult {

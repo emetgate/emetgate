@@ -25,6 +25,8 @@ pub const Report = struct {
     recomputed: usize = 0,
     changed: bool = false,
     loaded_from_disk: bool = false,
+    stamp_ns: u64 = 0,
+    work_ns: u64 = 0,
 };
 
 const Stamp = search_index.Stamp;
@@ -185,6 +187,7 @@ pub const Session = struct {
         }
         if (reason.len != 0) {
             self.last.mode = .full;
+            self.last.reason = reason;
             try self.fullRefresh(root);
         }
         self.last.reason = reason;
@@ -206,15 +209,21 @@ pub const Session = struct {
     fn fullRefresh(self: *Session, root: []const u8) !void {
         const first_build = self.index == null;
         const pool: ?*worker_pool.Pool = if (self.pool.helpers() != 0) &self.pool else null;
-        const refreshed = try search_index.refreshWith(self.gpa, self.io, root, self.files.?, self.index, pool);
         self.last.loaded_from_disk = self.reconcile;
-        if (self.index) |old| old.deinit();
+        const compact = std.mem.eql(u8, self.last.reason, "compact");
+        const in_place: ?search_index.RefreshResult = if (compact) null else if (self.index) |*idx| try search_index.refreshInPlace(self.gpa, self.io, root, self.files.?, idx, pool) else null;
+        const refreshed = in_place orelse try search_index.refreshWith(self.gpa, self.io, root, self.files.?, self.index, pool);
+        if (in_place == null) {
+            if (self.index) |old| old.deinit();
+        }
         self.index = refreshed.index;
         self.reconcile = false;
         self.last.reused = refreshed.reused;
         self.last.recomputed = refreshed.recomputed;
+        self.last.stamp_ns = refreshed.stamp_ns;
+        self.last.work_ns = refreshed.work_ns;
         self.last.changed = refreshed.changed;
-        self.updates_since_full = 0;
+        self.updates_since_full = if (in_place != null) self.updates_since_full + refreshed.recomputed else 0;
         if (refreshed.changed or first_build) self.unsaved = true;
         if (first_build) self.saveIfNeeded();
     }
