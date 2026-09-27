@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **985**
-- Mutations declared in `tests/mutations.json`: **567**
-  - killed: **541**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **986**
+- Mutations declared in `tests/mutations.json`: **568**
+  - killed: **542**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -526,7 +526,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-134 mutation(s).
+135 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -664,6 +664,7 @@ python tools/verification_page.py --check
 | `VR6-rule-digest-not-compared` | `src/verify/checker.zig` | `if (!std.mem.eql(u8, &now, &rule.digest)) outcome.raise(.mismat...` -> `_ = now;` | verify: a rule the receipt names with a changed digest is a mismatch | killed |
 | `VR7-symmetry-alpha-not-checked` | `src/verify/checker.zig` | `if (!try c.alphaEqual(k.path, before, after)) outcome.raise(.mi...` -> `_ = try c.alphaEqual(k.path, before, after);` | verify: a spending change relabelled as a symmetric rename fails the alpha hash | killed |
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
+| `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
 
 ## What this system does not prove
 

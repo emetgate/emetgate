@@ -11,6 +11,7 @@ const rule_command = @import("emetgate").rule_command;
 const Runtime = @import("emetgate").runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
+const n_version = @import("verify_n_version.zig");
 
 const testing = std.testing;
 const TsRepo = fixture.TsRepo;
@@ -70,7 +71,9 @@ const Case = struct {
     }
 
     fn verify(self: *Case, options: verify_run.Options) !verify_run.Result {
-        return verify_run.run(testing.allocator, self.arena(), testing.io, self.runtime, self.repo.root_abs, options);
+        const result = try verify_run.run(testing.allocator, self.arena(), testing.io, self.runtime, self.repo.root_abs, options);
+        try n_version.compare(self.arena(), self.repo.root_abs, result);
+        return result;
     }
 
     fn note(self: *Case) ![]u8 {

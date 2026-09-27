@@ -5678,6 +5678,15 @@
       "kills": [
         "dir flush dropJ: recovery that loses a journal deletion after removing the commit record does not roll the batch back"
       ]
+    },
+    {
+      "id": "VR9-python-verified-with-unchecked-fields",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "    if verdict == VERIFIED and skipped:\n        return CONSISTENT\n",
+      "to": "",
+      "kills": [
+        "verify: a gated edit gets a receipt that verifies at the user's commit, tests rerun in the sandbox"
+      ]
     }
   ]
 }
