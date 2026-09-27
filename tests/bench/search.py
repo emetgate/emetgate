@@ -3,6 +3,7 @@ import os
 import shutil
 import statistics
 import subprocess
+import sys
 import time
 
 import tiktoken
@@ -287,5 +288,79 @@ def main():
             print(f"  - {name}: rg {rg_ms:.1f} ms, emetgate cold {cold_ms:.1f} ms, warm {warm_ms:.1f} ms")
 
 
+PROFILE_SCENARIOS = [
+    ("an error message string", EXPRESS, "not found", False),
+    ("a term only in comments", ESLINT, "eslint-disable", False),
+    ("a regex pattern", EXPRESS, "req\\.(params|query)", True),
+]
+
+PROFILE_STAGES = [
+    "index_load_ms",
+    "index_refresh_ms",
+    "index_save_ms",
+    "files_candidates",
+    "files_read",
+    "read_ms",
+    "probe_ms",
+    "files_parsed",
+    "parse_ms",
+    "classify_ms",
+    "json_ms",
+]
+
+
+def profile_one(repo, pattern, regex):
+    clear_index()
+    session = McpSession(repo)
+    try:
+        cold_text, is_error, cold_ms = session.call("emetgate_search", {"pattern": pattern, "regex": regex, "stats": True})
+        if is_error:
+            raise RuntimeError(f"emetgate_search failed: {cold_text}")
+        cold_stats = json.loads(cold_text.splitlines()[0])["stats"]
+        cold_pid = cold_stats["pid"]
+
+        warm_text, is_error, warm_ms = session.call("emetgate_search", {"pattern": pattern, "regex": regex, "stats": True})
+        if is_error:
+            raise RuntimeError(f"emetgate_search failed: {warm_text}")
+        warm_stats = json.loads(warm_text.splitlines()[0])["stats"]
+        warm_pid = warm_stats["pid"]
+    finally:
+        session.close()
+    return {
+        "cold_ms": cold_ms,
+        "warm_ms": warm_ms,
+        "cold": cold_stats,
+        "warm": warm_stats,
+        "same_process": cold_pid == warm_pid and cold_pid != 0,
+        "pid": cold_pid,
+    }
+
+
+def profile_main():
+    print("Stage profile for the 3 worst scenarios (single run each, not a median; see search.py bench above for the ms medians).")
+    print("Proves the MCP child process stays open across cold/warm calls in one session (same pid) rather than respawning per call.\n")
+    for name, repo, pattern, regex in PROFILE_SCENARIOS:
+        if not os.path.isdir(repo):
+            continue
+        p = profile_one(repo, pattern, regex)
+        print(f"=== {name} ({repo}) ===")
+        print(f"same process across cold+warm calls: {p['same_process']} (pid={p['pid']})")
+        print(f"tool-call wall time: cold {p['cold_ms']:.1f} ms, warm {p['warm_ms']:.1f} ms")
+        print("{:<20} {:>12} {:>12}".format("stage", "cold", "warm"))
+        for stage in PROFILE_STAGES:
+            cold_v = p["cold"].get(stage, "-")
+            warm_v = p["warm"].get(stage, "-")
+            if isinstance(cold_v, float):
+                cold_v = f"{cold_v:.2f}"
+            if isinstance(warm_v, float):
+                warm_v = f"{warm_v:.2f}"
+            print("{:<20} {:>12} {:>12}".format(stage, cold_v, warm_v))
+        print("tracked_files={} files_total_is_not_reported_here".format(p["cold"].get("tracked_files")))
+        print()
+
+
 if __name__ == "__main__":
-    main()
+    if "--profile" in sys.argv:
+        profile_main()
+    else:
+        main()
