@@ -282,7 +282,9 @@ pub const Pending = struct {
                 self.closeHandles();
                 if (!deleteWithRetry(self.io, self.backup)) {
                     if (leftover) |out| out.record(self.backup);
-                }
+                } else flushParent(self.backup) catch {
+                    if (leftover) |out| out.record(self.backup);
+                };
             },
             .delete => {
                 defer self.closeHandles();

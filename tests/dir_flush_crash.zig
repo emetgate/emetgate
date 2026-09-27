@@ -154,6 +154,16 @@ test "dir flush bak: a backup whose directory entry was lost with the swapped ta
     try setup.noDebris();
 }
 
+test "dir flush fin: a power loss after a finished batch does not bring a deleted backup back" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const setup = try Setup.init(.modify_two);
+    defer setup.deinit();
+    try setup.run(null);
+    setup.log.powerLoss(anything);
+    try setup.recover();
+    try testing.expectEqual(.new, try setup.state());
+    try setup.noDebris();
+}
 
 fn flushCount(shape: Shape, stop: ?usize, in_recovery: bool) !usize {
     const dry = try Setup.init(shape);
