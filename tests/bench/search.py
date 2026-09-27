@@ -218,7 +218,7 @@ Methodology (read before quoting a number):
   round trip, the watch barrier, the trigram candidate filter, and reading the candidate
   bytes once at the scan bandwidth bytes.find reaches over 64 MB already in memory.
 - A scenario ripgrep wins is reported anyway, not hidden.
-- Reproduce: `python tests/bench/search.py` (needs a built emetgate binary, `rg` on PATH,
+- Reproduce: `python tests/bench/search.py [--save]` (needs a ReleaseFast emetgate binary, `rg` on PATH,
   and read-only checkouts at {express} and {eslint}).
 """.format(express=EXPRESS, eslint=ESLINT, samples=MS_SAMPLES)
 
@@ -354,6 +354,32 @@ def main():
             print(f"  - {name}: rg {rg_ms:.1f} ms, git grep {git_ms:.1f} ms, emetgate warm {warm_ms:.1f} ms")
     else:
         print("\nWarm emetgate ms beat both rg and git grep in every scenario.")
+
+    if "--save" in sys.argv:
+        out = {
+            "date": time.strftime("%Y-%m-%d"),
+            "scan_gb_per_s": round(bandwidth / 1e6, 2),
+            "rows": [
+                {
+                    "name": s["name"],
+                    "group": s["group"],
+                    "rg_tokens": s["rg_tokens"],
+                    "emetgate_tokens": s["emetgate_tokens"],
+                    "rg_turns": s["rg_turns"],
+                    "emetgate_turns": s["emetgate_turns"],
+                    "rg_ms": round(s["rg_ms"], 1),
+                    "git_ms": round(s["git_ms"], 1),
+                    "cold_ms": round(s["cold_ms"], 1),
+                    "warm_ms": round(s["warm_ms"], 1),
+                    "floor_ms": round(floor_ms(s["floor"], bandwidth), 2),
+                }
+                for s in rows
+            ],
+        }
+        with open(os.path.join(BENCH, "search_results.json"), "w", encoding="utf-8", newline="\n") as f:
+            json.dump(out, f, indent=2)
+            f.write("\n")
+        print("saved tests/bench/search_results.json; run python tools/readme_facts.py")
 
 
 PROFILE_SCENARIOS = [

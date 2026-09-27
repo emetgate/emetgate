@@ -1,0 +1,123 @@
+{
+  "date": "2026-09-27",
+  "scan_gb_per_s": 3.4,
+  "rows": [
+    {
+      "name": "an error message string",
+      "group": "string",
+      "rg_tokens": 315999,
+      "emetgate_tokens": 267,
+      "rg_turns": 1,
+      "emetgate_turns": 1,
+      "rg_ms": 22.2,
+      "git_ms": 23.6,
+      "cold_ms": 97.8,
+      "warm_ms": 2.5,
+      "floor_ms": 0.62
+    },
+    {
+      "name": "a term only in comments",
+      "group": "comment",
+      "rg_tokens": 29371,
+      "emetgate_tokens": 7668,
+      "rg_turns": 1,
+      "emetgate_turns": 1,
+      "rg_ms": 52.0,
+      "git_ms": 44.6,
+      "cold_ms": 1007.2,
+      "warm_ms": 9.5,
+      "floor_ms": 3.7
+    },
+    {
+      "name": "a JSON key value",
+      "group": "json",
+      "rg_tokens": 375981,
+      "emetgate_tokens": 6060,
+      "rg_turns": 1,
+      "emetgate_turns": 1,
+      "rg_ms": 29.3,
+      "git_ms": 26.9,
+      "cold_ms": 120.5,
+      "warm_ms": 5.8,
+      "floor_ms": 0.81
+    },
+    {
+      "name": "a common short word",
+      "group": "code",
+      "rg_tokens": 414187,
+      "emetgate_tokens": 6088,
+      "rg_turns": 1,
+      "emetgate_turns": 1,
+      "rg_ms": 29.7,
+      "git_ms": 30.3,
+      "cold_ms": 127.4,
+      "warm_ms": 6.8,
+      "floor_ms": 0.75
+    },
+    {
+      "name": "a regex pattern",
+      "group": "code",
+      "rg_tokens": 352283,
+      "emetgate_tokens": 3313,
+      "rg_turns": 1,
+      "emetgate_turns": 1,
+      "rg_ms": 26.1,
+      "git_ms": 25.6,
+      "cold_ms": 118.6,
+      "warm_ms": 6.2,
+      "floor_ms": 0.89
+    },
+    {
+      "name": "tryRender usages (rg+Read full file)",
+      "group": "code",
+      "rg_tokens": 3586,
+      "emetgate_tokens": 135,
+      "rg_turns": 2,
+      "emetgate_turns": 1,
+      "rg_ms": 25.0,
+      "git_ms": 25.7,
+      "cold_ms": 119.8,
+      "warm_ms": 1.7,
+      "floor_ms": 0.61
+    },
+    {
+      "name": "tryRender usages (rg+Read best-case range)",
+      "group": "code",
+      "rg_tokens": 65,
+      "emetgate_tokens": 135,
+      "rg_turns": 2,
+      "emetgate_turns": 1,
+      "rg_ms": 25.0,
+      "git_ms": 25.7,
+      "cold_ms": 119.8,
+      "warm_ms": 1.7,
+      "floor_ms": 0.61
+    },
+    {
+      "name": "logerror usages (rg+Read full file)",
+      "group": "code",
+      "rg_tokens": 3647,
+      "emetgate_tokens": 130,
+      "rg_turns": 2,
+      "emetgate_turns": 1,
+      "rg_ms": 23.8,
+      "git_ms": 25.9,
+      "cold_ms": 122.9,
+      "warm_ms": 2.1,
+      "floor_ms": 0.72
+    },
+    {
+      "name": "logerror usages (rg+Read best-case range)",
+      "group": "code",
+      "rg_tokens": 123,
+      "emetgate_tokens": 130,
+      "rg_turns": 2,
+      "emetgate_turns": 1,
+      "rg_ms": 23.8,
+      "git_ms": 25.9,
+      "cold_ms": 122.9,
+      "warm_ms": 2.1,
+      "floor_ms": 0.72
+    }
+  ]
+}
