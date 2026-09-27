@@ -210,6 +210,7 @@ test "search on disk: a new session loads the saved index after its watcher star
         try testing.expectEqualStrings("first_build", found.reason);
     }
     try repo.write(3, "export const between_sessions_token = 1;\n");
+    try repo.write(4, "export const same = 9;\n");
 
     var second = search_session.Session.init(gpa, testing.io, repo.root, .{});
     defer second.deinit();
@@ -219,7 +220,9 @@ test "search on disk: a new session loads the saved index after its watcher star
     const found = try search(runtime, &second, repo.root, "between_sessions_token", &reason_buf);
     try testing.expectEqualStrings("loaded_from_disk", found.reason);
     try testing.expectEqual(@as(usize, 1), found.files);
-    try testing.expectEqual(@as(i64, 1), found.recomputed);
+    try testing.expectEqual(@as(i64, 2), found.recomputed);
+    const same_size = try search(runtime, &second, repo.root, "same = 9", &reason_buf);
+    try testing.expectEqual(@as(usize, 1), same_size.files);
 }
 
 test "search on disk: a damaged, cut or foreign index file is ignored and rebuilt" {
