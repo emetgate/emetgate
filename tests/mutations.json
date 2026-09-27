@@ -6097,8 +6097,8 @@
     {
       "id": "SW3-git-index-change-ignored",
       "file": "src/platform/search_session.zig",
-      "from": "        if (self.files != null and self.list_trusted and stamp != null and self.git_stamp != null) {",
-      "to": "        if (self.files != null) {\n            if (true) return false;",
+      "from": "                if (sameGitStamp(stamp, saved)) return false;",
+      "to": "                if (true or sameGitStamp(stamp, saved)) return false;",
       "kills": [
         "search freshness: a git add that changes the tracked set is picked up without waiting"
       ]
@@ -6194,6 +6194,51 @@
       "to": "    const written = receipts.write(gpa, io, root, rec);\n    if (full and false) {",
       "kills": [
         "node edit: read_symbol with nodes gives hash|code lines and a node try commits exactly that node with a receipt that verifies"
+      ]
+    },
+    {
+      "id": "SW7-file-list-change-forces-a-full-refresh",
+      "file": "src/platform/search_session.zig",
+      "from": "        if (listed and reason.len == 0 and dirty == null) reason = \"file_list_changed\";",
+      "to": "        if (listed and reason.len == 0) reason = \"file_list_changed\";",
+      "kills": [
+        "search freshness: after a committed write and a git commit the file list is listed once and then reused"
+      ]
+    },
+    {
+      "id": "SW8-git-index-stamp-never-trusted",
+      "file": "src/platform/search_session.zig",
+      "from": "    return c.mtime_ns == saved.mtime_ns and c.size == saved.size and c.id == saved.id;",
+      "to": "    return false and c.mtime_ns == saved.mtime_ns and c.size == saved.size and c.id == saved.id;",
+      "kills": [
+        "search freshness: after a committed write and a git commit the file list is listed once and then reused"
+      ]
+    },
+    {
+      "id": "GI1-git-index-checksum-not-verified",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;",
+      "to": "        _ = &sha1;\n        return 20;",
+      "kills": [
+        "git index reader: a split index, a flipped byte or a cut file is not read"
+      ]
+    },
+    {
+      "id": "GI2-split-git-index-read-as-complete",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (std.mem.eql(u8, signature, \"link\") or std.mem.eql(u8, signature, \"sdir\")) return null;",
+      "to": "        if (std.mem.eql(u8, signature, \"sdir\")) return null;",
+      "kills": [
+        "an index whose entries live partly in a shared index is not read as the whole list"
+      ]
+    },
+    {
+      "id": "GI3-v4-prefix-not-stripped",
+      "file": "src/platform/git_index.zig",
+      "from": "            previous.shrinkRetainingCapacity(previous.items.len - strip);",
+      "to": "            previous.shrinkRetainingCapacity(0);",
+      "kills": [
+        "git index reader: version 4 prefix compression and an intent-to-add entry read the same as git ls-files"
       ]
     }
   ]

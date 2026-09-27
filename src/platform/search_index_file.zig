@@ -5,11 +5,12 @@ const doc_spans = @import("../engine/doc_spans.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const magic = "EMGIDX\x00\x02";
-pub const version: u32 = 2;
+pub const magic = "EMGIDX\x00\x03";
+pub const version: u32 = 3;
 pub const checksum_len = 16;
 
 pub const Stamp = struct { mtime_ns: i96, size: u64 };
+pub const GitStamp = struct { mtime_ns: i96, size: u64, id: u64 };
 
 pub const Entry = struct {
     path: []const u8,
@@ -22,7 +23,7 @@ pub const Entry = struct {
 
 pub const Contents = struct {
     written_ns: i96,
-    git_stamp: ?Stamp,
+    git_stamp: ?GitStamp,
     files: []const []const u8,
     entries: []Entry,
 };
@@ -61,6 +62,7 @@ pub fn encode(gpa: Allocator, contents: Contents) ![]u8 {
     if (contents.git_stamp) |g| {
         try w.int(i128, g.mtime_ns);
         try w.int(u64, g.size);
+        try w.int(u64, g.id);
     }
     try w.int(u32, @intCast(contents.files.len));
     for (contents.files) |f| try w.str(f);
@@ -166,8 +168,8 @@ pub fn decode(a: Allocator, bytes: []const u8) DecodeError!Contents {
     if (!std.mem.eql(u8, try r.take(magic.len), magic)) return error.Corrupt;
     if (try r.int(u32) != version) return error.Corrupt;
     const written_ns: i96 = @intCast(try r.int(i128));
-    var git_stamp: ?Stamp = null;
-    if (try r.flag()) git_stamp = .{ .mtime_ns = @intCast(try r.int(i128)), .size = try r.int(u64) };
+    var git_stamp: ?GitStamp = null;
+    if (try r.flag()) git_stamp = .{ .mtime_ns = @intCast(try r.int(i128)), .size = try r.int(u64), .id = try r.int(u64) };
     const files = try a.alloc([]const u8, try r.count(4));
     for (files) |*f| f.* = try r.str(a);
     const entries = try a.alloc(Entry, try r.count(4 + 16 + 8 + 1 + 4 + 1 + 1));
@@ -225,7 +227,7 @@ fn sample(a: Allocator) !Contents {
         .{ .path = "src/a b.ts", .stamp = .{ .mtime_ns = -5, .size = 40 }, .trigrams = &.{ 1, 0xabcdef }, .content_hash = [_]u8{3} ** 16, .spans = .{ .symbols = symbols, .kind_spans = kinds, .reference_spans = refs }, .doc = null },
         .{ .path = "package.json", .stamp = .{ .mtime_ns = 1 << 80, .size = 9 }, .trigrams = &.{}, .content_hash = null, .spans = null, .doc = .{ .kind = .json, .spans = doc } },
     });
-    return .{ .written_ns = 123456789, .git_stamp = .{ .mtime_ns = 99, .size = 1024 }, .files = &.{ "src/a b.ts", "package.json" }, .entries = entries };
+    return .{ .written_ns = 123456789, .git_stamp = .{ .mtime_ns = 99, .size = 1024, .id = 0x1234 }, .files = &.{ "src/a b.ts", "package.json" }, .entries = entries };
 }
 
 test "an index file round-trips every field, text with quotes and newlines included" {
@@ -238,6 +240,7 @@ test "an index file round-trips every field, text with quotes and newlines inclu
     const back = try decode(a, bytes);
     try testing.expectEqual(original.written_ns, back.written_ns);
     try testing.expectEqual(original.git_stamp.?.size, back.git_stamp.?.size);
+    try testing.expectEqual(original.git_stamp.?.id, back.git_stamp.?.id);
     try testing.expectEqualStrings("package.json", back.files[1]);
     try testing.expectEqualStrings("src/a b.ts", back.entries[0].path);
     try testing.expectEqual(@as(i96, -5), back.entries[0].stamp.mtime_ns);

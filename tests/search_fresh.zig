@@ -4,6 +4,8 @@ const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const search_session = @import("emetgate").search_session;
 const search_index = @import("emetgate").search_index;
+const symbol = @import("emetgate").symbol;
+const support = @import("runner_support.zig");
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -61,6 +63,10 @@ const Found = struct {
     files: usize,
     reason: []const u8,
     recomputed: i64 = 0,
+    mode: Mode = .none,
+    list_reused: bool = false,
+
+    const Mode = enum { none, full, dirty };
 };
 
 fn search(runtime: *Runtime, session: *search_session.Session, root: []const u8, pattern: []const u8, reason_buf: []u8) !Found {
@@ -85,8 +91,10 @@ fn search(runtime: *Runtime, session: *search_session.Session, root: []const u8,
     const reason = body.value.object.get("stats").?.object.get("refresh_reason").?.string;
     const n = @min(reason.len, reason_buf.len);
     @memcpy(reason_buf[0..n], reason[0..n]);
-    const recomputed = body.value.object.get("stats").?.object.get("index_recomputed").?.integer;
-    return .{ .files = files.count(), .reason = reason_buf[0..n], .recomputed = recomputed };
+    const stats = body.value.object.get("stats").?.object;
+    const recomputed = stats.get("index_recomputed").?.integer;
+    const mode = std.meta.stringToEnum(Found.Mode, stats.get("refresh_mode").?.string) orelse .none;
+    return .{ .files = files.count(), .reason = reason_buf[0..n], .recomputed = recomputed, .mode = mode, .list_reused = stats.get("list_reused").?.bool };
 }
 
 test "search freshness: a tracked file written and searched with no pause is found, 200 times in a row" {
@@ -258,4 +266,59 @@ test "search on disk: a damaged, cut or foreign index file is ignored and rebuil
         try testing.expectEqual(@as(usize, 1), found.files);
         try repo.write(1, "export const seed = 0;\n");
     }
+}
+
+fn tryCommit(runtime: *Runtime, session: *search_session.Session, root: []const u8, file_abs: []const u8, body: []const u8) !void {
+    const hash = symbol.formatHash(try support.hashOfRef(gpa, testing.io, runtime, file_abs, "add"));
+    var line: std.Io.Writer.Allocating = .init(gpa);
+    defer line.deinit();
+    var js: std.json.Stringify = .{ .writer = &line.writer };
+    try js.write(.{ .jsonrpc = "2.0", .id = 2, .method = "tools/call", .params = .{ .name = "emetgate_try", .arguments = .{ .file = file_abs, .symbol = "add", .hash = @as([]const u8, &hash), .body = body } } });
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root, .search_session = session, .test_command = "cmd /c exit 0" });
+    errdefer std.debug.print("{s}\n", .{out.written()});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "committed") != null);
+}
+
+test "search freshness: after a committed write and a git commit the file list is listed once and then reused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init(3);
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/calc.ts", .data = "export function add(a: number, b: number): number {\n  return a + b;\n}\n" });
+    try gitIn(repo.root, &.{ "add", "." });
+    try gitIn(repo.root, &.{ "commit", "-q", "-m", "calc" });
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    var reason_buf: [64]u8 = undefined;
+    _ = try search(runtime, &session, repo.root, "seed", &reason_buf);
+
+    const calc_abs = try std.fmt.allocPrint(gpa, "{s}\\src\\calc.ts", .{repo.root});
+    defer gpa.free(calc_abs);
+    try tryCommit(runtime, &session, repo.root, calc_abs, "{\n  return b + a;\n}");
+    try gitIn(repo.root, &.{ "add", "-A" });
+    try gitIn(repo.root, &.{ "commit", "-q", "-m", "after try" });
+
+    const first = try search(runtime, &session, repo.root, "b + a", &reason_buf);
+    try testing.expectEqual(@as(usize, 1), first.files);
+    try testing.expect(!first.list_reused);
+    try testing.expectEqual(Found.Mode.dirty, first.mode);
+    for (0..5) |_| {
+        const next = try search(runtime, &session, repo.root, "b + a", &reason_buf);
+        errdefer std.debug.print("reason {s}, mode {s}, list reused {}\n", .{ next.reason, @tagName(next.mode), next.list_reused });
+        try testing.expectEqual(@as(usize, 1), next.files);
+        try testing.expect(next.list_reused);
+        try testing.expectEqual(Found.Mode.dirty, next.mode);
+    }
+
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/late.ts", .data = "export const late_token = 1;\n" });
+    try gitIn(repo.root, &.{ "add", "src/late.ts" });
+    const added = try search(runtime, &session, repo.root, "late_token", &reason_buf);
+    try testing.expectEqual(@as(usize, 1), added.files);
+    try testing.expect(!added.list_reused);
+    const reused = try search(runtime, &session, repo.root, "late_token", &reason_buf);
+    try testing.expectEqual(@as(usize, 1), reused.files);
+    try testing.expect(reused.list_reused);
 }

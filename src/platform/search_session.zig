@@ -3,12 +3,12 @@ const shadow = @import("shadow.zig");
 const search_index = @import("search_index.zig");
 const change_watch = @import("change_watch.zig");
 const worker_pool = @import("worker_pool.zig");
+const git_index = @import("git_index.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub const sync_timeout_ms: u32 = 250;
 pub const compact_after_updates: usize = 4096;
-pub const racy_list_ns: i96 = 2 * std.time.ns_per_s;
 
 pub const Mode = enum { none, full, dirty };
 
@@ -39,8 +39,7 @@ pub const Session = struct {
     watcher: ?*change_watch.Watcher = null,
     files: ?[][]u8 = null,
     git_index: ?[]u8 = null,
-    git_stamp: ?Stamp = null,
-    list_trusted: bool = false,
+    git_stamp: ?GitStamp = null,
     index: ?search_index.Index = null,
     index_path: ?[]u8 = null,
     reconcile: bool = false,
@@ -93,7 +92,6 @@ pub const Session = struct {
         self.reconcile = false;
         self.unsaved = false;
         self.git_stamp = null;
-        self.list_trusted = false;
         if (self.root) |r| self.gpa.free(r);
         self.root = null;
         self.updates_since_full = 0;
@@ -112,10 +110,9 @@ pub const Session = struct {
         const index = loaded orelse return;
         self.index = index;
         self.reconcile = true;
-        const current = if (self.git_index) |g| statOf(self.io, g) else null;
+        const current = if (self.git_index) |g| gitStampOf(self.io, g) else null;
         const saved = index.git_stamp orelse return;
-        const now = std.Io.Clock.real.now(self.io).nanoseconds;
-        if (current == null or current.?.mtime_ns != saved.mtime_ns or current.?.size != saved.size or now - saved.mtime_ns <= racy_list_ns) return;
+        if (!sameGitStamp(current, saved)) return;
         const files = try self.gpa.alloc([]u8, index.files.len);
         var made: usize = 0;
         errdefer {
@@ -128,7 +125,6 @@ pub const Session = struct {
         }
         self.files = files;
         self.git_stamp = saved;
-        self.list_trusted = true;
     }
 
     pub fn owns(self: *const Session, root_abs: []const u8) bool {
@@ -172,7 +168,7 @@ pub const Session = struct {
         self.last.list_reused = !listed;
         if (self.index == null and reason.len == 0) reason = "first_build";
         if (self.reconcile and reason.len == 0) reason = "loaded_from_disk";
-        if (listed and reason.len == 0) reason = "file_list_changed";
+        if (listed and reason.len == 0 and dirty == null) reason = "file_list_changed";
         if (self.updates_since_full >= compact_after_updates and reason.len == 0) reason = "compact";
 
         if (reason.len == 0) {
@@ -184,6 +180,7 @@ pub const Session = struct {
                     error.NeedsFullRefresh => reason = "entry_reappeared",
                 };
             }
+            if (listed and reason.len == 0) try self.indexNewFiles(root);
         }
         if (reason.len != 0) {
             self.last.mode = .full;
@@ -204,6 +201,14 @@ pub const Session = struct {
             self.last.updated += 1;
             self.updates_since_full += 1;
         }
+    }
+
+    fn indexNewFiles(self: *Session, root: []const u8) !void {
+        const pool: ?*worker_pool.Pool = if (self.pool.helpers() != 0) &self.pool else null;
+        const added = try search_index.addMissing(self.gpa, self.io, root, self.files.?, &self.index.?, pool);
+        self.last.recomputed += added.recomputed;
+        self.updates_since_full += added.recomputed;
+        if (added.changed) self.unsaved = true;
     }
 
     fn fullRefresh(self: *Session, root: []const u8) !void {
@@ -229,19 +234,20 @@ pub const Session = struct {
     }
 
     fn refreshList(self: *Session, root: []const u8) !bool {
-        const stamp: ?Stamp = if (self.git_index) |g| statOf(self.io, g) else null;
-        if (self.files != null and self.list_trusted and stamp != null and self.git_stamp != null) {
-            if (stamp.?.mtime_ns == self.git_stamp.?.mtime_ns and stamp.?.size == self.git_stamp.?.size) return false;
+        const stamp: ?GitStamp = if (self.git_index) |g| gitStampOf(self.io, g) else null;
+        if (self.files != null) {
+            if (self.git_stamp) |saved| {
+                if (sameGitStamp(stamp, saved)) return false;
+            }
         }
-        const files = try shadow.trackedFiles(self.gpa, self.io, root);
+        const from_index: ?[][]u8 = if (self.git_index) |g| try git_index.readTracked(self.gpa, self.io, g) else null;
+        const files = from_index orelse try shadow.trackedFiles(self.gpa, self.io, root);
         if (self.files) |f| {
             shadow.freeFileList(self.gpa, f);
             self.gpa.free(f);
         }
         self.files = files;
         self.git_stamp = stamp;
-        const now = std.Io.Clock.real.now(self.io).nanoseconds;
-        self.list_trusted = if (stamp) |s| now - s.mtime_ns > racy_list_ns else false;
         return true;
     }
 };
@@ -260,6 +266,19 @@ const Timer = struct {
         return @intCast(now - self.last);
     }
 };
+
+const GitStamp = search_index.GitStamp;
+
+fn gitStampOf(io: std.Io, abs: []const u8) ?GitStamp {
+    const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch return null;
+    return .{ .mtime_ns = stat.mtime.nanoseconds, .size = stat.size, .id = @intCast(stat.inode) };
+}
+
+fn sameGitStamp(current: ?GitStamp, saved: GitStamp) bool {
+    const c = current orelse return false;
+    if (c.id == 0 or saved.id == 0) return false;
+    return c.mtime_ns == saved.mtime_ns and c.size == saved.size and c.id == saved.id;
+}
 
 fn statOf(io: std.Io, abs: []const u8) ?Stamp {
     const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch return null;

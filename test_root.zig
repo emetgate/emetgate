@@ -44,6 +44,7 @@ pub const module_paths = src.module_paths;
 pub const search_index = src.search_index;
 pub const search_index_file = src.search_index_file;
 pub const search_session = src.search_session;
+pub const git_index = src.git_index;
 pub const worker_pool = src.worker_pool;
 pub const search_v1 = src.search_v1;
 pub const disk = src.disk;
@@ -92,6 +93,7 @@ test {
     _ = @import("tests/scan.zig");
     _ = @import("tests/change_watch.zig");
     _ = @import("tests/search_fresh.zig");
+    _ = @import("tests/git_index.zig");
     _ = @import("tests/scan_tool.zig");
     _ = @import("tests/redteam_memory.zig");
     _ = @import("tests/redteam_ledger.zig");

@@ -666,13 +666,19 @@ loaded. The first search of a session then checks every tracked file against the
 index: it lists each directory once (`FindFirstFileExW`, no file is opened), and re-reads
 a file whose last-write time or size differs, or whose time falls within 3 s of when the
 index was saved (the racy rule, since a write in the same instant as the save can keep its
-stamp); every other entry is used as loaded. The file list is reused when the git index
-file has the saved stamp and that stamp is more than 2 s old. Every search first calls
+stamp); every other entry is used as loaded. The file list is reused while the git index
+file keeps its last-write time, size and file id: git replaces the file on every write
+(a lock file renamed over it), so a new file id marks a change even within the same
+timestamp, and no waiting period is needed. Every search first calls
 the watcher's barrier (`sync`, 250 ms budget): it creates a cookie file under
 `.emetgate/cookies/` and waits until the watcher reports it; NTFS reports changes to one
 directory handle in order, so every change that finished before the call is in the dirty
-set by then. Only the dirty files are read and re-indexed. The file list is listed
-again when the git index file's stamp changes. If the barrier overflows, times out or the watcher has stopped, the search falls
+set by then. Only the dirty files are read and re-indexed. When the git index file
+changes (a `git add`, a commit, a checkout), the tracked paths are read from it directly
+(`git_index.zig`: index versions 2 to 4, checked against the file's own SHA-1 or SHA-256
+trailer; a split or sparse index, or any file that does not check out, falls back to
+`git ls-files`), the paths that are new get an entry, and the dirty files are handled as
+usual, with no full refresh. If the barrier overflows, times out or the watcher has stopped, the search falls
 back to a full refresh that stats every tracked file and re-reads each one whose stamp
 changed; nothing is reported clean on a failure. Outside a session (the CLI, tests without
 one) every search lists the files and does that full refresh against the saved index. The
@@ -764,7 +770,7 @@ that only held `bar`; a test and two mutations hold the rule now.
 
 Measured with `tests/bench/search.py` (ReleaseFast build, 10-run medians, run alone under
 the lock script) against `rg` and `git grep` on `eval/express-test` and
-`eval/eslint-test`: <!-- generated:search-summary -->a new session's first search 4.6 to 22.0 ms and later searches 1.4 to 9.3 ms, against rg 21.3 to 53.2 ms and git grep 21.6 to 46.0 ms; building the index the first time, once per repository, took 98 to 1,322 ms (2026-09-27, scan bandwidth 3.00 GB/s)<!-- /generated -->.
+`eval/eslint-test`: <!-- generated:search-summary -->a new session's first search 5.5 to 22.7 ms and later searches 1.9 to 10.1 ms, against rg 27.2 to 80.9 ms and git grep 29.1 to 65.7 ms; building the index the first time, once per repository, took 91 to 1,335 ms (2026-09-27, scan bandwidth 3.13 GB/s)<!-- /generated -->.
 rg and git grep are timed as the process a tool call starts, since Claude Code's Grep starts
 rg for every call; emetgate is timed as the MCP round trip of one call to a running server.
 Cold is the first search of a new server with the index on disk, warm the second; both
@@ -781,15 +787,16 @@ lines (a best case the model cannot know without having read the file).
 
 | Scenario | rg ms | git grep ms | emetgate cold ms | emetgate warm ms | floor ms | startup ms | index build ms (one time) | rg tokens | emetgate tokens | turns rg/emetgate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| an error message string | 21.3 | 21.6 | 5.0 | 2.3 | 0.64 | 39.1 | 98.3 | 315,999 | 267 | 1/1 |
-| a term only in comments | 53.2 | 46.0 | 22.0 | 9.3 | 3.72 | 62.0 | 1322.5 | 29,371 | 7,668 | 1/1 |
-| a JSON key value | 27.6 | 26.3 | 7.4 | 4.3 | 0.73 | 48.4 | 118.2 | 375,981 | 6,060 | 1/1 |
-| a common short word | 29.2 | 32.4 | 8.5 | 5.2 | 0.66 | 48.5 | 118.7 | 414,187 | 6,088 | 1/1 |
-| a regex pattern | 24.8 | 24.6 | 8.8 | 5.0 | 0.87 | 48.6 | 121.8 | 352,283 | 3,313 | 1/1 |
-| tryRender usages (rg+Read full file) | 24.6 | 24.3 | 4.6 | 1.4 | 0.47 | 48.7 | 115.1 | 3,586 | 135 | 2/1 |
-| tryRender usages (rg+Read best-case range) | 24.6 | 24.3 | 4.6 | 1.4 | 0.47 | 48.7 | 115.1 | 65 | 135 | 2/1 |
-| logerror usages (rg+Read full file) | 23.4 | 24.4 | 4.8 | 1.8 | 0.54 | 48.4 | 117.9 | 3,647 | 130 | 2/1 |
-| logerror usages (rg+Read best-case range) | 23.4 | 24.4 | 4.8 | 1.8 | 0.54 | 48.4 | 117.9 | 123 | 130 | 2/1 |
+| an error message string | 28.1 | 34.8 | 6.2 | 3.1 | 0.72 | 50.8 | 91.2 | 315,999 | 267 | 1/1 |
+| a term only in comments | 80.9 | 65.7 | 22.7 | 9.9 | 3.53 | 63.1 | 1335.3 | 29,371 | 7,668 | 1/1 |
+| a JSON key value | 27.2 | 29.1 | 8.1 | 4.8 | 0.70 | 51.8 | 93.4 | 375,981 | 6,060 | 1/1 |
+| a common short word | 33.3 | 35.9 | 11.4 | 6.5 | 0.75 | 68.7 | 116.9 | 414,187 | 6,088 | 1/1 |
+| a regex pattern | 31.3 | 47.2 | 10.1 | 5.9 | 1.07 | 59.2 | 108.4 | 352,283 | 3,313 | 1/1 |
+| tryRender usages (rg+Read full file) | 36.8 | 36.6 | 5.9 | 1.9 | 0.58 | 64.6 | 115.1 | 3,586 | 135 | 2/1 |
+| tryRender usages (rg+Read best-case range) | 36.8 | 36.6 | 5.9 | 1.9 | 0.58 | 64.6 | 115.1 | 65 | 135 | 2/1 |
+| logerror usages (rg+Read full file) | 28.4 | 37.9 | 5.5 | 2.1 | 0.59 | 52.8 | 98.4 | 3,647 | 130 | 2/1 |
+| logerror usages (rg+Read best-case range) | 28.4 | 37.9 | 5.5 | 2.1 | 0.59 | 52.8 | 98.4 | 123 | 130 | 2/1 |
+| search right after a committed write and a git commit | 32.0 | 29.2 | 13.6 | 10.1 | 0.50 | 49.7 | 377.9 | 15 | 103 | 1/1 |
 <!-- /generated -->
 
 Cold and warm search are faster than both rg and git grep in every scenario. Building
