@@ -862,6 +862,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             try js.write(r.updated);
             try js.objectField("list_reused");
             try js.write(r.list_reused);
+            try js.objectField("refresh_stamp_ms");
+            try js.write(nsToMs(r.stamp_ns));
+            try js.objectField("refresh_work_ms");
+            try js.write(nsToMs(r.work_ns));
         }
         try js.objectField("total_ms");
         try js.write(nsToMs(s.total_ns));
