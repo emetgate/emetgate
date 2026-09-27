@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1026**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1041**
 - Mutations declared in `tests/mutations.json`: **583**
   - killed: **555**
   - equivalent: **5**
@@ -200,7 +200,7 @@ python tools/verification_page.py --check
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
 | `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.gate(gpa, io, root, rel, ref, created.snapsho...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
 | `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     if (o...` -> `if (options.trace) \|t\| t.test_ms = report.duration_ns / std.t...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
-| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` -> `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
+| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` -> `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
 | `CR1-crash-threshold-removed` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR2-crash-threshold-counts-own-kill` | `src/platform/sandbox.zig` | `const ntstatus_error_floor: u32 = 0xC0000000;` -> `const ntstatus_error_floor: u32 = 0xDEAD;` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
 | `CR3-crash-threshold-exclusive` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor)` -> `return if (code > ntstatus_error_floor)` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
