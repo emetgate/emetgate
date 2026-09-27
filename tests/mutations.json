@@ -4945,8 +4945,8 @@
     {
       "id": "JV5-delete-skips-reference-check",
       "file": "src/platform/batch_plan.zig",
-      "from": "        if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;\n",
-      "to": "",
+      "from": "\n        if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;\n",
+      "to": "\n",
       "kills": [
         "redteam batch delete: a file-local symbol that its own file still calls is refused"
       ]
