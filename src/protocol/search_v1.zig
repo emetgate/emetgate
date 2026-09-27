@@ -36,6 +36,9 @@ pub const min_gram_len = 3;
 pub const regex_budget: u64 = 2_000_000;
 
 pub const Stats = struct {
+    jail_ns: u64 = 0,
+    list_ns: u64 = 0,
+    total_ns: u64 = 0,
     index_load_ns: u64 = 0,
     index_refresh_ns: u64 = 0,
     index_save_ns: u64 = 0,
@@ -244,16 +247,23 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
 
 fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, index_slot: ?*search_index.Slot, pattern: []const u8, dir: []const u8, is_regex: bool, kinds: ?[]const Value, w: *Writer) !void {
     if (pattern.len == 0) return error.EmptyPattern;
+    var total_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
+    var timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
+    if (timer) |*t| if (stats_sink) |s| {
+        s.jail_ns += t.lap();
+    };
 
     const files = try shadow.trackedFiles(gpa, io, place.root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
+    if (timer) |*t| if (stats_sink) |s| {
+        s.list_ns += t.lap();
+    };
 
     const index_path = search_index.indexPath(gpa, place.root) catch null;
     defer if (index_path) |p| gpa.free(p);
-    var timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     var previous_from_slot: ?search_index.Index = null;
     const previous_index: ?search_index.Index = blk: {
         if (index_slot) |slot| {
@@ -578,8 +588,15 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     try js.objectField("truncated");
     try js.write(truncated);
     if (stats_sink) |s| {
+        if (total_timer) |*t| s.total_ns += t.lap();
         try js.objectField("stats");
         try js.beginObject();
+        try js.objectField("jail_ms");
+        try js.write(nsToMs(s.jail_ns));
+        try js.objectField("list_ms");
+        try js.write(nsToMs(s.list_ns));
+        try js.objectField("total_ms");
+        try js.write(nsToMs(s.total_ns));
         try js.objectField("pid");
         try js.write(currentPid());
         try js.objectField("tracked_files");

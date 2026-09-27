@@ -295,6 +295,9 @@ PROFILE_SCENARIOS = [
 ]
 
 PROFILE_STAGES = [
+    "total_ms",
+    "jail_ms",
+    "list_ms",
     "index_load_ms",
     "index_refresh_ms",
     "index_save_ms",
