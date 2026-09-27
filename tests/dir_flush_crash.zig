@@ -140,6 +140,21 @@ fn anything(op: durability_log.Op) bool {
     return true;
 }
 
+test "dir flush bak: a backup whose directory entry was lost with the swapped target still recovers to all old" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const setup = try Setup.init(.modify_two);
+    defer setup.deinit();
+    disk.resetRenameCount();
+    disk.crash_after_rename = 1;
+    defer disk.crash_after_rename = null;
+    try testing.expectError(error.Crashed, setup.run(null));
+    setup.log.powerLoss(isBackupCreation);
+    try setup.recover();
+    try testing.expectEqual(.old, try setup.state());
+    try setup.noDebris();
+}
+
+
 fn flushCount(shape: Shape, stop: ?usize, in_recovery: bool) !usize {
     const dry = try Setup.init(shape);
     defer dry.deinit();
@@ -152,7 +167,10 @@ fn flushCount(shape: Shape, stop: ?usize, in_recovery: bool) !usize {
     return dry.log.flushes;
 }
 
+
 const after_commit_record = 8;
+
+
 
 test "dir flush log: a power loss undoes an unflushed creation and keeps one whose directory was flushed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;

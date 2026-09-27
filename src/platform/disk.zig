@@ -245,6 +245,7 @@ pub const Pending = struct {
         if (!std.mem.eql(u8, &symbol.hashOf(bytes), &self.base_hash.?)) return error.BaseChanged;
         try writeDurably(self.io, self.backup, bytes);
         self.state = .backed_up;
+        try flushParent(self.backup);
         if (in_gap) |hook| try hook.run(hook.context);
         try self.replacement.?.renameReplacing(self.gpa, self.path);
         applyAttributes(self.path, self.saved_attributes) catch {};
