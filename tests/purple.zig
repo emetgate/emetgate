@@ -178,7 +178,7 @@ test "purple C1: a concurrent change is caught at commit and the original surviv
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     const file = try repo.filePath(&buf);
 
-    try testing.expectError(error.BaseChanged, disk.replaceReporting(testing.allocator, testing.io, file, "corrupted", symbol.hashOf("some other content"), null, null));
+    try testing.expectError(error.BaseChanged, disk.replaceReporting(testing.allocator, testing.io, file, "corrupted", symbol.hashOf("some other content"), null, null, null));
     try expectPristine(&repo);
 }
 

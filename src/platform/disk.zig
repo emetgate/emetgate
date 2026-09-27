@@ -160,8 +160,8 @@ pub fn replaceAtomically(gpa: Allocator, io: std.Io, path_abs: []const u8, data:
     return replaceInternal(gpa, io, path_abs, data, expected_base, null, null, null);
 }
 
-pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, journal_dir: ?[]const u8) !void {
-    return replaceInternal(gpa, io, path_abs, data, expected_base, leftover, null, journal_dir);
+pub fn replaceReporting(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash, leftover: ?*Leftover, journal_dir: ?[]const u8, step: ?*const Step) !void {
+    return replaceInternal(gpa, io, path_abs, data, expected_base, leftover, step, journal_dir);
 }
 
 pub fn create(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8) !void {

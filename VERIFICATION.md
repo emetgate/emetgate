@@ -6,17 +6,17 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **999**
-- Mutations declared in `tests/mutations.json`: **574**
-  - killed: **548**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1026**
+- Mutations declared in `tests/mutations.json`: **583**
+  - killed: **555**
   - equivalent: **5**
-  - defense in depth: **6**
+  - defense in depth: **7**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-  - survives, not yet classified: **4** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename)
-- Red-team suites: **11** files, **88** tests total
+  - survives, not yet classified: **5** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create)
+- Red-team suites: **12** files, **96** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
@@ -28,6 +28,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_rename.zig`: 10
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
+  - `tests/redteam_write_doc.zig`: 8
 - Security findings recorded in README's Security History: **8**
 
 ## Reproducing this
@@ -185,8 +186,8 @@ python tools/verification_page.py --check
 | `K2e-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | only killed on a machine with user-level MCP servers configured | verified end-to-end, not by the mutation harness |
 | `K3e-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config"` |  | verified end-to-end, not by the mutation harness |
 | `K5e-lockdown-reserved-guard-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);` -> `` |  | verified end-to-end, not by the mutation harness |
-| `MR2-batch-duplicate-file-allowed` | `src/platform/batch.zig` | `if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.Duplicate...` -> `_ = p;` | a batch cannot edit the same file twice | killed |
-| `SELF-a-compile-error-is-not-a-kill` | `src/platform/batch.zig` | `if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.Duplicate...` -> `` | control: removing the line leaves an unused capture, which must not count as killed | control |
+| `MR2-batch-duplicate-file-allowed` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {             _ = p;         }      ...` | a batch cannot edit the same file twice | killed |
+| `SELF-a-compile-error-is-not-a-kill` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {         }         const planned = ...` | control: removing the line leaves an unused capture, which must not count as killed | control |
 | `T1-typecheck-failure-ignored` | `src/platform/runner.zig` | `if (!checked.passed()) return .{ .typecheck = checked };` -> `` | typecheck: a failing typecheck rejects before the tests run and leaves disk unt...; typec... | killed |
 | `G1-rules-gate-skipped-for-single-edit` | `src/platform/runner.zig` | `applied.snapshot.tree, applied.body, options.allow_repo_memory)...` -> `applied.snapshot.tree, applied.body, options.allow_repo_memory)...` | rules: an enforced no_comment rule rejects a commented body before the tests run | killed |
 | `G2-rules-gate-skipped-for-batch` | `src/platform/batch.zig` | `p.body, options.allow_repo_memory)) {             .ok => {},   ...` -> `p.body, options.allow_repo_memory)) {             .ok => {},   ...` | rules: one violating edit rejects the whole batch and leaves disk untouched | killed |
@@ -528,7 +529,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-140 mutation(s).
+149 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -570,8 +571,8 @@ python tools/verification_page.py --check
 | `RO1-a-new-tool-slips-into-the-surface` | `src/protocol/server.zig` | `.name = "emetgate_scan",` -> `.name = "emetgate_rule_add",` | red line: the served tool surface is exactly this list, so a new tool cannot sl...; scan ... | killed |
 | `RO2-a-rule-writing-tool-is-dispatched` | `src/protocol/handlers.zig` | `return error.UnknownTool; }` -> `if (std.mem.eql(u8, name, "emetgate_rule_add")) return callScan...` | red line: no tool on the model side can adopt, change or forget a rule | killed |
 | `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.s...` -> `try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.s...` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
-| `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = true,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
-| `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = false,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.new_body = body,         .test_command = test_command,        ...` -> `.new_body = body,         .test_command = test_command,        ...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.new_body = body,         .test_command = test_command,        ...` -> `.new_body = body,         .test_command = test_command,        ...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = true, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM16-mcp-batch-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = false, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `CB2-mcp-scan-without-call-budget` | `src/protocol/handlers.zig` | `.call_operations = max_scan_operations,` -> `.call_operations = null,` | scan tool: one call has a total operation budget, and the files past it come ba... | killed |
@@ -672,6 +673,15 @@ python tools/verification_page.py --check
 | `AC4-lpac-opt-out-dropped` | `src/platform/appcontainer.zig` | `pub const all_application_packages_opt_out: u32 = 0x1;` -> `pub const all_application_packages_opt_out: u32 = 0x0;` | redteam appcontainer: an lpac profile opts out of the all-packages group, a reg... | killed |
 | `AC5-app-container-grant-covers-the-parent` | `src/platform/appcontainer.zig` | `const wide = try toWide(&path_w, path_abs);` -> `const wide = try toWide(&path_w, std.fs.path.dirname(path_abs) ...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
 | `AC6-app-container-grant-propagates-to-existing-files` | `src/platform/appcontainer.zig` | `if (win.SetFileSecurityW(wide, win.dacl_security_information, &...` -> `if (win.SetNamedSecurityInfoW(wide, win.se_file_object, win.dac...` | a grant on a tree holding a hardlink leaves the linked file's acl untouched and... | killed |
+| `DW1-splice-hash-check-removed` | `src/engine/docnode.zig` | `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` -> `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` | applyJsonPointer refuses a stale hash and refuses a value that is not valid json; applyLi... | killed |
+| `DW2-doc-size-cap-removed` | `src/engine/docnode.zig` | `if (source.len > max_bytes) return error.DocTooLarge;` -> `` | defense in depth: both callers (doc_writer.tryWriteDoc and batch_plan.planDoc) already re... | defense in depth |
+| `DW3-doc-binary-check-removed` | `src/engine/docnode.zig` | `if (looksBinary(source)) return error.BinaryFile;` -> `` | doc_writer: a binary file is refused before any parse or sandbox run | killed |
+| `DW4-doc-write-skips-journal` | `src/platform/doc_writer.zig` | `try disk.replaceReporting(gpa, io, options.file_abs, applied.so...` -> `try disk.replaceReporting(gpa, io, options.file_abs, applied.so...` | doc_writer: a crash right after the journal is written leaves a journal entry, ... | killed |
+| `DW5-json-pointer-post-write-check-removed` | `src/engine/docnode.zig` | `if (!std.mem.eql(u8, reparsed.text(verify.node), new_value)) re...` -> `` | applyJsonPointer refuses a value that reparses to something other than exactly ... | killed |
+| `DW6-markdown-outer-region-check-removed` | `src/engine/docnode.zig` | `found = candidate.node.endByte() == span.start + new_section.le...` -> `found = true;` | applyMarkdownHeading refuses a replacement whose unclosed code fence swallows t...; apply... | killed |
+| `DW7-write-doc-jail-dropped` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = repo.Jailed{ .root = try gpa.dupe(u8, policy.root...` | write_doc refuses a path outside the repo, leaves the target untouched; write_doc refuses... | killed |
+| `DW8-write-doc-allows-create` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = try repo.jailTarget(gpa, io, policy.root, file, t...` | writeDocInto always reads the target file (for base_hash and the splice) before it writes... | survives (unclassified) |
+| `DW9-try-batch-drops-doc-edits` | `src/protocol/handlers.zig` | `.{ .edits = edits, .doc_edits = doc_edits, .test_command = reso...` -> `.{ .edits = edits, .test_command = resolved,` | emetgate_try_batch commits a code edit and a doc edit together | killed |
 
 ## What this system does not prove
 

@@ -41,6 +41,7 @@ If a check cannot finish, the change is refused. The model cannot change the tes
 | `emetgate_git` | Read-only `status`, `diff`, `log`, `show` |
 | `emetgate_mutate` | Check a proposed body without writing it |
 | `emetgate_try`, `emetgate_try_batch` | Replace, create or delete symbols and files, one change or an atomic batch |
+| `emetgate_write_doc` | JSON pointer, Markdown section or text range write, alone or in a batch with code |
 | `emetgate_rename` | Rename a function, class, variable, type or enum everywhere it is used |
 | `emetgate_move` | Move a declaration to another file; imports are derived by the kernel |
 | `emetgate_move_file` | Move or rename a file and rewrite every import to and from it |

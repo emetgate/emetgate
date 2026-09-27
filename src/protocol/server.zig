@@ -160,6 +160,19 @@ pub const tool_defs = [_]Tool{
         .description = run_tool.description,
         .props = &.{.{ .name = "command", .desc = "one allowlist entry, byte for byte; omit to list the allowlist", .optional = true }},
     },
+    .{
+        .name = "emetgate_write_doc",
+        .description = "Atomic hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section (its heading line and everything nested under it) or a line range of a plain text file. Runs the project's trusted typecheck command (when configured) and then its test command in a sandbox, and writes to disk only if both pass; otherwise nothing is written. Exactly one of pointer, heading or the line_start/line_end pair selects the node. A replacement JSON value must itself be valid JSON; a replacement Markdown section must start with a heading line of some level. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.",
+        .props = &.{
+            .{ .name = "file", .desc = "path to a .json, .md or plain text file inside the repo" },
+            .{ .name = "hash", .desc = "content hash of the current node, from emetgate_read_file" },
+            .{ .name = "content", .desc = "replacement text for the selected node" },
+            .{ .name = "pointer", .desc = "JSON pointer selecting the node to replace, e.g. /dependencies/express", .optional = true },
+            .{ .name = "heading", .desc = "exact Markdown heading text selecting the section to replace", .optional = true },
+            .{ .name = "line_start", .desc = "1-based start line of a plain text range to replace", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "1-based end line of a plain text range to replace", .optional = true, .ty = "integer" },
+        },
+    },
 };
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
@@ -364,7 +377,7 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("name");
     try js.write("emetgate_try_batch");
     try js.objectField("description");
-    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. hash \"absent\" adds a new top-level symbol or a new file. op \"delete\" with symbol and hash removes an unreferenced top-level symbol; op \"delete\" without symbol deletes the file (hash, when given, is the hash of the whole file). The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.");
+    try js.write("All-or-nothing cross-file mutation: apply several edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. kind \"code\" (default): {file, symbol, hash, body} to write, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file. hash \"absent\" adds a new top-level symbol or a new file. kind \"doc\": {file, hash, content} plus exactly one of pointer, heading or the line_start/line_end pair, same as emetgate_write_doc's node selectors; a code edit and a doc edit can appear in the same call and commit together or not at all. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.");
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");
@@ -376,20 +389,37 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("type");
     try js.write("array");
     try js.objectField("description");
-    try js.write("one edit per file: {file, symbol, hash, body} to write, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file");
+    try js.write("one edit per file: kind \"code\" (default) with {file, symbol, hash, body} to write, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file; kind \"doc\" with {file, hash, content} plus one of pointer, heading or line_start/line_end");
     try js.objectField("items");
     try js.beginObject();
     try js.objectField("type");
     try js.write("object");
     try js.objectField("properties");
     try js.beginObject();
-    inline for (.{ "file", "symbol", "hash", "body" }) |field| {
+    inline for (.{ "file", "symbol", "hash", "body", "content", "pointer", "heading" }) |field| {
         try js.objectField(field);
         try js.beginObject();
         try js.objectField("type");
         try js.write("string");
         try js.endObject();
     }
+    inline for (.{ "line_start", "line_end" }) |field| {
+        try js.objectField(field);
+        try js.beginObject();
+        try js.objectField("type");
+        try js.write("integer");
+        try js.endObject();
+    }
+    try js.objectField("kind");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("string");
+    try js.objectField("enum");
+    try js.beginArray();
+    try js.write("code");
+    try js.write("doc");
+    try js.endArray();
+    try js.endObject();
     try js.objectField("op");
     try js.beginObject();
     try js.objectField("type");
