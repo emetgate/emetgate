@@ -5833,6 +5833,108 @@
       "kills": [
         "emetgate_try_batch commits a code edit and a doc edit together"
       ]
+    },
+    {
+      "id": "NC1-node-outside-check-dropped",
+      "file": "src/engine/node_cas.zig",
+      "from": "    try sameOutside(a, base.tree, next.tree, holes);\n",
+      "to": "",
+      "kills": [
+        "text that spills outside its node or reshapes a neighbour is a BodyEscape or a syntax error",
+        "redteam node: text that spills out of its node is a BodyEscape, including a comment that swallows its neighbours",
+        "redteam node: text for one node cannot reshape the neighbour next to it"
+      ]
+    },
+    {
+      "id": "NC2-node-position-check-dropped",
+      "file": "src/engine/node_cas.zig",
+      "from": "    return shift(holes, old.node.startByte()) == new.node.startByte() and shift(holes, old.node.endByte()) == new.node.endByte();",
+      "to": "    _ = holes;\n    return true;",
+      "kills": [
+        "redteam node: text for one node cannot reshape the neighbour next to it"
+      ]
+    },
+    {
+      "id": "NC3-node-syntax-check-dropped",
+      "file": "src/engine/node_cas.zig",
+      "from": "    if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;",
+      "to": "",
+      "expect_status": "survived",
+      "note": "equivalent today: a spliced source with a syntax error also fails next.symbols(), which apply maps to MutationSyntaxInvalid before it returns, and nothing between the two has an effect; the early check stays so the refusal does not depend on the symbol table being built"
+    },
+    {
+      "id": "NC4-node-ambiguity-check-dropped",
+      "file": "src/engine/node_cas.zig",
+      "from": "            if (slot.* != null) return error.AmbiguousNode;",
+      "to": "",
+      "kills": [
+        "a node whose content occurs twice is ambiguous"
+      ]
+    },
+    {
+      "id": "NC5-node-overlap-check-dropped",
+      "file": "src/engine/node_cas.zig",
+      "from": "        if (previous.old.end > current.old.start) return error.OverlappingNodes;",
+      "to": "        if (false and previous.old.end > current.old.start) return error.OverlappingNodes;",
+      "kills": [
+        "an empty text deletes a statement and several edits land in one call"
+      ]
+    },
+    {
+      "id": "NC6-node-placeholder-check-dropped",
+      "file": "src/engine/node_cas.zig",
+      "from": "    for (holes) |hole| try rejectPlaceholderRun(base.profile, hole.node, hole.run);",
+      "to": "",
+      "kills": [
+        "a placeholder comment cannot stand in for a node, a real comment edit is allowed",
+        "node edit: a failing test, a stale hash, an ambiguous or mixed request leave the file untouched"
+      ]
+    },
+    {
+      "id": "NC7-node-short-address-accepted",
+      "file": "src/engine/node_cas.zig",
+      "from": "    if (text.len < min_address_len or text.len > symbol.hash_hex_len) return error.InvalidHash;",
+      "to": "    if (text.len > symbol.hash_hex_len) return error.InvalidHash;",
+      "kills": [
+        "a stale, unknown or malformed address is refused before anything is spliced",
+        "node edit: a failing test, a stale hash, an ambiguous or mixed request leave the file untouched"
+      ]
+    },
+    {
+      "id": "NC8-node-delete-reference-check-skipped",
+      "file": "src/platform/batch_plan.zig",
+      "from": "            if (ref.container.len != 0) continue;",
+      "to": "            if (ref.container.len == 0) continue;",
+      "kills": [
+        "redteam node: deleting a function that is still called is refused unless the call goes in the same batch"
+      ]
+    },
+    {
+      "id": "NC9-node-rule-gate-on-empty-span",
+      "file": "src/platform/batch.zig",
+      "from": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, unit.span, options.allow_repo_memory)) {",
+      "to": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, .{ .start = 0, .end = 0 }, options.allow_repo_memory)) {",
+      "kills": [
+        "node edit: a top-level statement is still held to a file-scoped enforced rule"
+      ]
+    },
+    {
+      "id": "NC10-node-mixed-form-accepted",
+      "file": "src/protocol/node_tool.zig",
+      "from": "    inline for (.{ \"symbol\", \"hash\", \"body\", \"op\" }) |field| {",
+      "to": "    inline for (.{ \"body\", \"op\" }) |field| {",
+      "kills": [
+        "node edit: a failing test, a stale hash, an ambiguous or mixed request leave the file untouched"
+      ]
+    },
+    {
+      "id": "NC11-nodes-read-shortened-by-mirror",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!nodes) if (mirror) |m| {",
+      "to": "    if (true) if (mirror) |m| {",
+      "kills": [
+        "redteam node: a mirrored body read never hides node hashes, and symbols with nodes annotates each declaration"
+      ]
     }
   ]
 }
