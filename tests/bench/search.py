@@ -303,6 +303,7 @@ PROFILE_STAGES = [
     "read_ms",
     "probe_ms",
     "files_parsed",
+    "files_fast_classified",
     "parse_ms",
     "classify_ms",
     "json_ms",

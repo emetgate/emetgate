@@ -3,6 +3,7 @@ const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const tree_cache_mod = @import("emetgate").tree_cache;
 const search_index = @import("emetgate").search_index;
+const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -407,4 +408,100 @@ test "a search scoped to a subdirectory does not return hits from outside it" {
         try testing.expect(!std.mem.eql(u8, g.object.get("file").?.string, "outside.txt"));
     }
     try testing.expect(groupsOf(body.value).len >= 1);
+}
+
+test "a resident index entry whose stored hash does not match the file's live bytes is never trusted for symbol grouping" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const real_bytes = "export function realFn() {\n  return 1;\n}\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = real_bytes });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{root});
+    defer testing.allocator.free(abs);
+
+    const real_stat = try std.Io.Dir.cwd().statFile(testing.io, abs, .{});
+    const stamp: search_index.Stamp = .{ .mtime_ns = real_stat.mtime.nanoseconds, .size = real_stat.size };
+    const trigrams = try search_index.trigramsOfAlloc(testing.allocator, real_bytes);
+    defer testing.allocator.free(trigrams);
+
+    const fake_arena = try testing.allocator.create(std.heap.ArenaAllocator);
+    fake_arena.* = std.heap.ArenaAllocator.init(testing.allocator);
+
+    var wrong_hash: symbol.Hash = std.mem.zeroes(symbol.Hash);
+    wrong_hash[0] = 0xff;
+    var fake_symbols = [_]search_index.kind_spans.SymbolSpan{.{
+        .ref_text = "wrongName",
+        .name = "wrongName",
+        .hash = std.mem.zeroes(symbol.Hash),
+        .node_start = 0,
+        .body_start = 0,
+        .node_end = @intCast(real_bytes.len),
+    }};
+    const fake_spans = search_index.kind_spans.FileSpans{
+        .symbols = fake_symbols[0..],
+        .kind_spans = &.{},
+        .reference_spans = &.{},
+    };
+    var fake_entries = [_]search_index.Entry{.{
+        .path = "a.ts",
+        .stamp = stamp,
+        .trigrams = trigrams,
+        .content_hash = wrong_hash,
+        .spans = fake_spans,
+    }};
+    var slot: search_index.Slot = .{ .index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null } };
+    defer if (slot.index) |idx| idx.deinit();
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "realFn", .dir = root }, .{ .root = root, .search_index_slot = &slot });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+
+    try testing.expect(findGroupBySymbol(groupsOf(body.value), "realFn") != null);
+    try testing.expect(findGroupBySymbol(groupsOf(body.value), "wrongName") == null);
+}
+
+test "a symbol's byte offsets are recomputed, not reused stale, after the file grows by a leading comment" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function foo() {\n  return 1;\n}\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    {
+        var reply = try search(runtime, root, "foo");
+        defer reply.deinit();
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expect(findGroupBySymbol(groupsOf(body.value), "foo") != null);
+    }
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "// a leading comment that shifts every later byte offset\nexport function foo() {\n  return 1;\n}\n" });
+    try gitIn(root, &.{ "add", "." });
+    try gitIn(root, &.{ "commit", "-q", "-m", "shift" });
+
+    var reply = try search(runtime, root, "foo");
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+
+    const group = findGroupBySymbol(groupsOf(body.value), "foo") orelse return error.TestUnexpectedResult;
+    var saw_definition = false;
+    for (hitKinds(group)) |h| {
+        if (h.object.get("role")) |role| {
+            if (std.mem.eql(u8, role.string, "definition")) saw_definition = true;
+        }
+    }
+    try testing.expect(saw_definition);
 }

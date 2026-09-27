@@ -4,6 +4,9 @@ const sandbox = @import("sandbox.zig");
 const shadow_root = @import("shadow_root.zig");
 const disk = @import("disk.zig");
 const symbol = @import("../engine/symbol.zig");
+const ts = @import("../engine/tree_sitter.zig");
+const registry = @import("../engine/lang/registry.zig");
+pub const kind_spans = @import("../engine/kind_spans.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -23,7 +26,41 @@ pub const Entry = struct {
     path: []const u8,
     stamp: Stamp,
     trigrams: []const u24,
+    content_hash: ?symbol.Hash = null,
+    spans: ?kind_spans.FileSpans = null,
 };
+
+fn dupeSpans(a: Allocator, spans: ?kind_spans.FileSpans) !?kind_spans.FileSpans {
+    const s = spans orelse return null;
+    const symbols = try a.alloc(kind_spans.SymbolSpan, s.symbols.len);
+    for (s.symbols, 0..) |sym, i| {
+        symbols[i] = .{
+            .ref_text = try a.dupe(u8, sym.ref_text),
+            .name = try a.dupe(u8, sym.name),
+            .hash = sym.hash,
+            .node_start = sym.node_start,
+            .body_start = sym.body_start,
+            .node_end = sym.node_end,
+        };
+    }
+    return .{
+        .symbols = symbols,
+        .kind_spans = try a.dupe(kind_spans.KindSpan, s.kind_spans),
+        .reference_spans = try a.dupe(kind_spans.Span, s.reference_spans),
+    };
+}
+
+fn spansFor(a: Allocator, rel: []const u8, bytes: []const u8) ?kind_spans.FileSpans {
+    const profile = registry.forPath(rel) orelse return null;
+    var parser = ts.Parser.init(profile.grammar()) catch return null;
+    defer parser.deinit();
+    const tree = parser.parse(bytes) catch return null;
+    defer tree.deinit();
+    if (tree.root().hasError()) return null;
+    var table = symbol.Table.build(a, profile, tree) catch return null;
+    defer table.deinit();
+    return kind_spans.build(a, profile, tree, &table) catch null;
+}
 
 pub const Index = struct {
     arena: *std.heap.ArenaAllocator,
@@ -122,6 +159,8 @@ pub fn build(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
             .path = try a.dupe(u8, rel),
             .stamp = stamp,
             .trigrams = try a.dupe(u24, trigrams),
+            .content_hash = symbol.fileHash(bytes),
+            .spans = spansFor(a, rel, bytes),
         });
     }
     return .{ .arena = arena, .entries = try entries.toOwnedSlice(a) };
@@ -157,6 +196,8 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
                         .path = try a.dupe(u8, rel),
                         .stamp = stamp,
                         .trigrams = try a.dupe(u24, old.trigrams),
+                        .content_hash = old.content_hash,
+                        .spans = try dupeSpans(a, old.spans),
                     });
                     reused += 1;
                     continue;
@@ -173,6 +214,8 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
             .path = try a.dupe(u8, rel),
             .stamp = stamp,
             .trigrams = try a.dupe(u24, trigrams),
+            .content_hash = symbol.fileHash(bytes),
+            .spans = spansFor(a, rel, bytes),
         });
         recomputed += 1;
     }

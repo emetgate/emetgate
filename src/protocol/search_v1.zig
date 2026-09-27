@@ -47,6 +47,7 @@ pub const Stats = struct {
     files_candidates: usize = 0,
     files_read: usize = 0,
     files_parsed: usize = 0,
+    files_fast_classified: usize = 0,
     files_index_reused: usize = 0,
     files_index_recomputed: usize = 0,
 };
@@ -145,6 +146,20 @@ fn nodeAt(root: ts.Node, offset: u32) ts.Node {
         }
         current = next orelse return current;
     }
+}
+
+fn mapKind(k: ?search_index.kind_spans.Kind) Kind {
+    return switch (k orelse return .code) {
+        .comment => .comment,
+        .string => .string,
+    };
+}
+
+fn mapRole(r: ?search_index.kind_spans.Role) ?Role {
+    return switch (r orelse return null) {
+        .definition => .definition,
+        .reference => .reference,
+    };
 }
 
 fn classify(profile: *const profile_mod.Profile, root: ts.Node, offset: u32) Kind {
@@ -360,19 +375,32 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         var owned_snapshot = false;
         defer if (owned_snapshot) snapshot.?.destroy();
         var table: ?*const symbol.Table = null;
+        var fast_spans: ?*const search_index.kind_spans.FileSpans = null;
         var parse_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
         if (profile) |p| {
-            snapshot = if (tree_cache) |cache|
-                cache.loadWithSource(runtime, io, abs, bytes) catch |err| blk2: {
-                    if (err == error.OutOfMemory) return err;
-                    break :blk2 null;
+            if (fresh_index) |idx| {
+                if (idx.find(f)) |entry| {
+                    if (entry.content_hash) |ch| {
+                        const live_hash = symbol.fileHash(bytes);
+                        if (std.mem.eql(u8, &ch, &live_hash)) {
+                            if (entry.spans) |*spans_ptr| fast_spans = spans_ptr;
+                        }
+                    }
                 }
-            else blk: {
-                owned_snapshot = true;
-                const owned_source = gpa.dupe(u8, bytes) catch |err| break :blk (if (err == error.OutOfMemory) return err else null);
-                break :blk Loader.Snapshot.fromSource(runtime, p, owned_source) catch null;
-            };
-            if (snapshot) |snap| table = snap.symbols() catch null;
+            }
+            if (fast_spans == null) {
+                snapshot = if (tree_cache) |cache|
+                    cache.loadWithSource(runtime, io, abs, bytes) catch |err| blk2: {
+                        if (err == error.OutOfMemory) return err;
+                        break :blk2 null;
+                    }
+                else blk: {
+                    owned_snapshot = true;
+                    const owned_source = gpa.dupe(u8, bytes) catch |err| break :blk (if (err == error.OutOfMemory) return err else null);
+                    break :blk Loader.Snapshot.fromSource(runtime, p, owned_source) catch null;
+                };
+                if (snapshot) |snap| table = snap.symbols() catch null;
+            }
         }
 
         var json_tree: ?ts.Tree = null;
@@ -394,7 +422,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         }
         if (parse_timer) |*t| if (stats_sink) |s| {
             s.parse_ns += t.lap();
-            s.files_parsed += 1;
+            if (fast_spans == null) s.files_parsed += 1 else s.files_fast_classified += 1;
         };
 
         var offset: u32 = 0;
@@ -419,7 +447,15 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             var group_heading: ?[]const u8 = null;
 
             if (profile) |p| {
-                if (snapshot) |snap| {
+                if (fast_spans) |spans| {
+                    kind = mapKind(search_index.kind_spans.classify(spans.kind_spans, match_at));
+                    const enclosing = search_index.kind_spans.enclosing(spans.symbols, match_at);
+                    if (enclosing) |sym| {
+                        group_symbol = try gpa.dupe(u8, sym.ref_text);
+                        group_hash = sym.hash;
+                    }
+                    role = mapRole(search_index.kind_spans.role(enclosing, spans.reference_spans, match_at, if (is_regex) "" else pattern));
+                } else if (snapshot) |snap| {
                     kind = classify(p, snap.tree.root(), match_at);
                     if (table) |t| {
                         const enclosing = enclosingSymbol(t, match_at);
@@ -554,6 +590,8 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         try js.write(s.files_read);
         try js.objectField("files_parsed");
         try js.write(s.files_parsed);
+        try js.objectField("files_fast_classified");
+        try js.write(s.files_fast_classified);
         try js.objectField("index_reused");
         try js.write(s.files_index_reused);
         try js.objectField("index_recomputed");
