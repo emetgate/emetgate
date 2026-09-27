@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1012**
-- Mutations declared in `tests/mutations.json`: **574**
-  - killed: **548**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1017**
+- Mutations declared in `tests/mutations.json`: **575**
+  - killed: **549**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -526,7 +526,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-141 mutation(s).
+142 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -668,9 +668,10 @@ python tools/verification_page.py --check
 | `SR1-index-stale-entry-trusted` | `src/platform/search_index.zig` | `if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == ...` -> `if (true) {` | refresh reuses unchanged entries and recomputes a file that changed; a stale index does n... | killed |
 | `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !p.isRacy(stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o... | killed |
 | `SR2-index-checksum-not-verified` | `src/platform/search_index.zig` | `if (!std.mem.eql(u8, &actual, &claimed)) return null;` -> `_ = actual;     _ = claimed;` | a corrupted index file is rejected instead of trusted | killed |
-| `SR3-comment-kind-reversed` | `src/protocol/search_v1.zig` | `if (profile.isComment(n.kind())) return .comment;` -> `if (profile.isComment(n.kind())) return .code;` | a hit inside a function is grouped by its enclosing symbol with a hash and a de... | killed |
+| `SR3-comment-kind-reversed` | `src/protocol/search_v1.zig` | `if (profile.isComment(n.kind())) return .comment;` -> `if (profile.isComment(n.kind())) return .code;` | a hash-matching index entry with no persisted spans still classifies comments a... | killed |
 | `SR4-hit-cap-ignored` | `src/protocol/search_v1.zig` | `if (total_hits >= max_matches) {` -> `if (false) {` | the total hit count is capped and truncated is reported | killed |
 | `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `if (!read_tools.inDirectory(f, place.rel)) continue;` -> `_ = place.rel;` | a search scoped to a subdirectory does not return hits from outside it | killed |
+| `SK1-stale-symbol-table-trusted` | `src/protocol/search_v1.zig` | `if (std.mem.eql(u8, &ch, &live_hash)) {` -> `if (std.mem.eql(u8, &ch, &live_hash) or true) {` | a resident index entry whose stored hash does not match the file's live bytes i... | killed |
 
 ## What this system does not prove
 
