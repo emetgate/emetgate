@@ -109,7 +109,16 @@ pub const Profile = struct {
         var merged: ?*anyopaque = null;
         if (win.SetEntriesInAclW(1, &access, dacl, &merged) != 0) return error.AclFailed;
         defer _ = win.LocalFree(merged);
-        if (win.SetNamedSecurityInfoW(wide, win.se_file_object, win.dacl_security_information, null, null, merged, null) != 0) return error.AclFailed;
+
+        var control: u16 = 0;
+        var revision: std.os.windows.DWORD = 0;
+        if (win.GetSecurityDescriptorControl(descriptor.?, &control, &revision) == .FALSE) return error.AclFailed;
+        var absolute: win.SecurityDescriptor align(@alignOf(usize)) = undefined;
+        if (win.InitializeSecurityDescriptor(&absolute, win.security_descriptor_revision) == .FALSE) return error.AclFailed;
+        if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FALSE) == .FALSE) return error.AclFailed;
+        const kept = control & win.dacl_inheritance_bits;
+        if (win.SetSecurityDescriptorControl(&absolute, win.dacl_inheritance_bits, kept) == .FALSE) return error.AclFailed;
+        if (win.SetFileSecurityW(wide, win.dacl_security_information, &absolute) == .FALSE) return error.AclFailed;
     }
 };
 
@@ -136,6 +145,18 @@ const win = struct {
     const object_inherit_ace: windows.DWORD = 0x1;
     const container_inherit_ace: windows.DWORD = 0x2;
     const sub_containers_and_objects_inherit: windows.DWORD = object_inherit_ace | container_inherit_ace;
+    const security_descriptor_revision: windows.DWORD = 1;
+    const dacl_inheritance_bits: u16 = 0x0400 | 0x1000;
+
+    const SecurityDescriptor = extern struct {
+        revision: u8,
+        sbz1: u8,
+        control: u16,
+        owner: ?*anyopaque,
+        group: ?*anyopaque,
+        sacl: ?*anyopaque,
+        dacl: ?*anyopaque,
+    };
 
     const Trustee = extern struct {
         multiple_trustee: ?*anyopaque = null,
@@ -161,6 +182,14 @@ const win = struct {
     extern "advapi32" fn GetTokenInformation(token: windows.HANDLE, class: c_int, info: *anyopaque, length: windows.DWORD, returned: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "advapi32" fn GetNamedSecurityInfoW(name: [*:0]const u16, object_type: c_int, info: windows.DWORD, owner: ?*?*anyopaque, group: ?*?*anyopaque, dacl: *?*anyopaque, sacl: ?*?*anyopaque, descriptor: *?*anyopaque) callconv(.winapi) windows.DWORD;
     extern "advapi32" fn SetNamedSecurityInfoW(name: [*:0]u16, object_type: c_int, info: windows.DWORD, owner: ?*anyopaque, group: ?*anyopaque, dacl: ?*anyopaque, sacl: ?*anyopaque) callconv(.winapi) windows.DWORD;
+    extern "advapi32" fn SetFileSecurityW(name: [*:0]const u16, info: windows.DWORD, descriptor: *SecurityDescriptor) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn InitializeSecurityDescriptor(descriptor: *SecurityDescriptor, revision: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn SetSecurityDescriptorDacl(descriptor: *SecurityDescriptor, present: windows.BOOL, dacl: ?*anyopaque, defaulted: windows.BOOL) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn GetSecurityDescriptorControl(descriptor: *anyopaque, control: *u16, revision: *windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn SetSecurityDescriptorControl(descriptor: *SecurityDescriptor, mask: u16, bits: u16) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor: *anyopaque, revision: windows.DWORD, info: windows.DWORD, text: *?[*:0]u16, length: ?*windows.ULONG) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn ConvertSidToStringSidW(sid: *anyopaque, text: *?[*:0]u16) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn CreateHardLinkW(link: [*:0]const u16, existing: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) windows.BOOL;
     extern "advapi32" fn SetEntriesInAclW(count: windows.ULONG, list: *ExplicitAccess, old: ?*anyopaque, new: *?*anyopaque) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
@@ -188,4 +217,69 @@ test "a fresh profile carries no capabilities and points its security struct at 
     try testing.expectEqual(@as(u32, 0), caps.capability_count);
     try testing.expectEqual(@as(?*anyopaque, null), caps.capabilities);
     try testing.expectEqual(profile.sid, caps.app_container_sid.?);
+}
+
+fn daclText(gpa: std.mem.Allocator, path_abs: []const u8) ![]u8 {
+    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const wide = try toWide(&path_w, path_abs);
+    var dacl: ?*anyopaque = null;
+    var descriptor: ?*anyopaque = null;
+    if (win.GetNamedSecurityInfoW(wide, win.se_file_object, win.dacl_security_information, null, null, &dacl, null, &descriptor) != 0) return error.AclFailed;
+    defer _ = win.LocalFree(descriptor);
+    var text: ?[*:0]u16 = null;
+    if (win.ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor.?, 1, win.dacl_security_information, &text, null) == .FALSE) return error.AclFailed;
+    defer _ = win.LocalFree(text);
+    return std.unicode.wtf16LeToWtf8Alloc(gpa, std.mem.span(text.?));
+}
+
+fn sidText(gpa: std.mem.Allocator, sid: *anyopaque) ![]u8 {
+    var text: ?[*:0]u16 = null;
+    if (win.ConvertSidToStringSidW(sid, &text) == .FALSE) return error.AclFailed;
+    defer _ = win.LocalFree(text);
+    return std.unicode.wtf16LeToWtf8Alloc(gpa, std.mem.span(text.?));
+}
+
+test "a grant on a tree holding a hardlink leaves the linked file's acl untouched and only new children inherit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "source");
+    try tmp.dir.createDirPath(testing.io, "tree");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "source/real.txt", .data = "real\n" });
+    const real = try tmp.dir.realPathFileAlloc(testing.io, "source/real.txt", gpa);
+    defer gpa.free(real);
+    const tree = try tmp.dir.realPathFileAlloc(testing.io, "tree", gpa);
+    defer gpa.free(tree);
+    const link = try std.fmt.allocPrint(gpa, "{s}\\linked.txt", .{tree});
+    defer gpa.free(link);
+
+    var link_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    var real_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    try testing.expect(win.CreateHardLinkW(try toWide(&link_w, link), try toWide(&real_w, real), null) != .FALSE);
+
+    var profile = try Profile.create(false);
+    defer profile.deinit();
+    const sid = try sidText(gpa, profile.sid);
+    defer gpa.free(sid);
+
+    const real_before = try daclText(gpa, real);
+    defer gpa.free(real_before);
+    try profile.allowRead(tree);
+
+    const real_after = try daclText(gpa, real);
+    defer gpa.free(real_after);
+    try testing.expectEqualStrings(real_before, real_after);
+    try testing.expect(std.mem.indexOf(u8, real_after, sid) == null);
+
+    const tree_after = try daclText(gpa, tree);
+    defer gpa.free(tree_after);
+    try testing.expect(std.mem.indexOf(u8, tree_after, sid) != null);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "tree/new.txt", .data = "new\n" });
+    const fresh = try tmp.dir.realPathFileAlloc(testing.io, "tree/new.txt", gpa);
+    defer gpa.free(fresh);
+    const fresh_text = try daclText(gpa, fresh);
+    defer gpa.free(fresh_text);
+    try testing.expect(std.mem.indexOf(u8, fresh_text, sid) != null);
 }

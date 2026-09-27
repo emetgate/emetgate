@@ -5712,11 +5712,12 @@
     {
       "id": "AC3-app-container-grant-not-applied",
       "file": "src/platform/appcontainer.zig",
-      "from": "win.dacl_security_information, null, null, merged, null) != 0) return error.AclFailed;",
-      "to": "win.dacl_security_information, null, null, dacl, null) != 0) return error.AclFailed;",
+      "from": "if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FALSE) == .FALSE) return error.AclFailed;",
+      "to": "if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, dacl, .FALSE) == .FALSE) return error.AclFailed;",
       "kills": [
         "redteam appcontainer: a granted directory is writable, a non-granted directory is not",
-        "redteam appcontainer: a non-granted secret is unreadable, and granting it proves the check is real"
+        "redteam appcontainer: a non-granted secret is unreadable, and granting it proves the check is real",
+        "a grant on a tree holding a hardlink leaves the linked file's acl untouched and only new children inherit"
       ]
     },
     {
@@ -5736,6 +5737,15 @@
       "kills": [
         "redteam appcontainer: a granted directory is writable, a non-granted directory is not",
         "redteam appcontainer: a non-granted secret is unreadable, and granting it proves the check is real"
+      ]
+    },
+    {
+      "id": "AC6-app-container-grant-propagates-to-existing-files",
+      "file": "src/platform/appcontainer.zig",
+      "from": "        if (win.SetFileSecurityW(wide, win.dacl_security_information, &absolute) == .FALSE) return error.AclFailed;",
+      "to": "        if (win.SetNamedSecurityInfoW(wide, win.se_file_object, win.dacl_security_information, null, null, merged, null) != 0) return error.AclFailed;",
+      "kills": [
+        "a grant on a tree holding a hardlink leaves the linked file's acl untouched and only new children inherit"
       ]
     }
   ]

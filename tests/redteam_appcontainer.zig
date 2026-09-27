@@ -118,7 +118,7 @@ test "redteam appcontainer: a non-granted secret is unreadable, and granting it 
     errdefer std.debug.print("read outcome {any}\n", .{blocked.outcome});
     try testing.expect(!blocked.passed());
 
-    try fx.profile.allowRead(fx.fake_dir_abs);
+    try fx.profile.allowReadFile(fx.secret_abs);
     const allowed = try fx.run(&.{ "readfile", fx.secret_abs });
     defer allowed.deinit(gpa);
     try testing.expectEqual(sandbox.Outcome{ .exited = 0 }, allowed.outcome);
