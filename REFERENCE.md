@@ -631,22 +631,36 @@ Example reply shape:
  "truncated":false}
 ```
 
-**Candidate file index.** A trigram (n=3) index of git-tracked files lives outside the
-repo at `%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\index.v1` (the same hashed-path
-convention as the shadow root, `shadow_root.repoKey`, so a repo is never written into and
-a poisoned clone cannot carry a poisoned index). Each entry is a file's mtime+size stamp
-and its sorted, deduplicated set of 3-byte grams (`search_index.zig`). Before every search
-the index is **refreshed**: a file whose stamp matches its entry reuses the stored grams at
-no I/O cost; a changed, new, or removed file is recomputed from its current content, so the
-on-disk index is always caught up with the filesystem by the time it is used, then saved
-back. A file is a candidate only when its indexed grams are a superset of the query's
-grams; a file with no entry (too large, binary, or new since the last refresh completed)
-is always a candidate — filtering only ever narrows toward files that provably cannot
-match, never away from ones that might. On-disk corruption is caught by a trailing
-checksum line (`blake3` over everything before it); a checksum mismatch, a missing file,
-or any parse error makes `load` return "no index," which the caller treats exactly like an
-empty index — every file becomes a candidate, i.e. a full scan. The index can only ever
-make a search slower to skip work; it can never make it wrong.
+**Candidate file index.** Each tracked file has an entry: its mtime and size stamp, its
+sorted set of 3-byte grams, its content hash, and the spans a hit is classified from (for a
+registered language the symbols, comment and string ranges and reference ranges from
+`kind_spans`; for `.json` every value's pointer and range, for `.md` every section's
+heading and range, from `doc_spans`). A file is a candidate only when its grams are a
+superset of the query's grams; a file with no entry is always a candidate, so the index can
+only skip files that cannot match. A candidate is read from disk, and its stored spans are
+used only when the content hash of the bytes just read equals the entry's; otherwise the
+file is parsed live, so a stale entry can cost time but never a wrong kind, symbol, pointer
+or heading.
+
+**Freshness.** Inside `emetgate mcp` the index, the `git ls-files` list and a change
+watcher (`src/platform/change_watch.zig`) live for the session (`search_session.zig`). The
+watcher starts with the session, before the index is first built. Every search first calls
+the watcher's barrier (`sync`, 250 ms budget): it creates a cookie file under
+`.emetgate/cookies/` and waits until the watcher reports it; NTFS reports changes to one
+directory handle in order, so every change that finished before the call is in the dirty
+set by then. Only the dirty files are read and re-indexed. The file list is reused while
+the git index file keeps its stamp and that stamp is more than 2 s old, and listed again
+otherwise. If the barrier overflows, times out or the watcher has stopped, the search falls
+back to a full refresh that stats every tracked file and re-reads each one whose stamp
+changed; nothing is reported clean on a failure. Outside a session (the CLI, tests without
+one) every search lists the files and does that full refresh, with the grams kept on disk
+at `%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\index.v1` (checksummed; a bad
+checksum is treated as no index). The contract: a write whose handle was closed or flushed
+before the search starts is in the result. **Limit:** a program that keeps a file open and
+writes to it without closing or flushing is not reported by `ReadDirectoryChangesW` until it
+does, and a stat can miss it too (NTFS updates the last-write time once per handle), so
+such a write can be missing from a result until the writer closes the file. Editors, git,
+package managers and emetgate itself close what they write.
 
 **Sparse gram size — measured, not assumed.** GitHub's Blackbird search
 (https://github.blog/2023-02-06-the-technology-behind-githubs-new-code-search/) uses
@@ -717,61 +731,53 @@ index. This is a measurement on two repos, five queries, and one untrained weigh
 the script if a different weight function or corpus is worth checking.
 
 **Regex candidates.** Russ Cox's trigram-index regex matching
-(https://swtch.com/~rsc/regexp/regexp4.html) derives the full set of trigrams every match
-of a regex must contain, including through alternation, by an algebra over the regex AST.
-This project's regex engine (`src/engine/regex.zig`) compiles straight to an NFA and does
-not expose that AST, so implementing Cox's algebra was out of scope for this pass.
-`regex_hint.longestLiteralChunk` (`src/engine/regex_hint.zig`) instead extracts the single
-longest metacharacter-free run in the pattern text (an escaped metacharacter breaks the
-run at the same point a real one would, so the extracted text is never a false literal)
-and uses its grams to narrow candidates when it is at least 3 bytes; a pattern with no such
-run (`.*`, `[a-z]+`) always gets a full scan. This is strictly weaker than Cox's algebra —
-it cannot combine an alternation's branches into a joint constraint — but it is sound (it
-narrows only using text that must literally appear) and it is what makes the regex
-benchmark row below faster than a full scan in the common case of a mostly-literal pattern
-with a few metacharacters.
+(https://swtch.com/~rsc/regexp/regexp4.html) derives the trigrams every match must contain,
+alternation included, from the regex AST. This regex engine compiles straight to an NFA and
+does not expose that AST, so `regex_hint.longestLiteralChunk` takes the longest literal run
+that every match must contain: text outside any group, with the character before `?`, `*`
+or `{` left out, and nothing at all when the pattern has a `|` outside a group
+(`foo|bar`, `colou?r` and `(ab)?cd` give no hint, `colo` and `cd`). Its grams narrow the
+candidate files when it is at least 3 bytes, and the same text screens lines before the
+regex runs on them. An earlier version took any literal run, so `foo|bar` skipped files
+that only held `bar`; a test and two mutations hold the rule now.
 
-Measured with `tests/bench/search.py` against `rg` (ripgrep, what the built-in Grep tool
-uses) on `eval/express-test` and `eval/eslint-test`. Every `+edit` scenario charges the
-built-in path for the `Read` Claude Code requires before an `Edit`, in two columns: reading
-the whole file, and reading only the exact changed function's line range (the best case a
-model could reach, which it cannot know without already having read the file). `ms` is the
-median of 10 runs, wall time for the tool call(s) only; rg gets one `ms` column, emetgate
-gets separate cold (index directory deleted first) and warm (second call, same session)
-columns, since a query's first and later runs pay a different index cost:
+Measured with `tests/bench/search.py` (ReleaseFast build, 10-run medians, run alone under
+the lock script) against `rg` and `git grep` on `eval/express-test` and
+`eval/eslint-test`: <!-- generated:search-summary -->warm 1.7 to 9.5 ms against rg 22.2 to 52.0 ms and git grep 23.6 to 44.6 ms; a new session's first search, which builds the index, took 98 to 1,007 ms (2026-09-27, scan bandwidth 3.40 GB/s)<!-- /generated -->.
+rg and git grep are timed as the process a tool call starts, since Claude Code's Grep starts
+rg for every call; emetgate is timed as the MCP round trip of one call to a running server.
+Warm is the second search in a session and includes the barrier. The floor is what a warm
+search cannot avoid, measured in the same session: an MCP ping round trip, the barrier, the
+candidate filter and one pass over the candidate bytes at the scan bandwidth `bytes.find`
+reaches in memory. The `+edit` rows charge the built-in path for the `Read` Claude Code
+requires before an `Edit`, in two versions: the whole file, and only the changed function's
+lines (a best case the model cannot know without having read the file).
+<!-- generated:search-table -->
 
-| Scenario | rg tokens | emetgate tokens | ratio | rg turns | emetgate turns | rg ms | emetgate cold ms | emetgate warm ms |
+| Scenario | rg ms | git grep ms | emetgate warm ms | floor ms | emetgate cold ms | rg tokens | emetgate tokens | turns rg/emetgate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| function usages (+edit, full-file Read) | 3586 | 135 | 0.04x | 2 | 1 | 19.4 | 362.4 | 141.6 |
-| function usages (+edit, best-case-range Read) | 65 | 135 | 2.08x | 2 | 1 | 19.4 | 362.4 | 141.6 |
-| function usages, another symbol (+edit, full-file Read) | 3647 | 130 | 0.04x | 2 | 1 | 19.7 | 592.1 | 323.2 |
-| function usages, another symbol (+edit, best-case-range Read) | 123 | 130 | 1.06x | 2 | 1 | 19.7 | 592.1 | 323.2 |
-| an error message string | 315999 | 267 | 0.00x | 1 | 1 | 22.1 | 1503.2 | 1117.5 |
-| a term only in comments | 29371 | 7668 | 0.26x | 1 | 1 | 73.4 | 8914.1 | 3244.5 |
-| a JSON key value | 375981 | 6060 | 0.02x | 1 | 1 | 24.4 | 1365.5 | 1083.5 |
-| a common short word | 414187 | 6088 | 0.01x | 1 | 1 | 25.1 | 1211.8 | 847.4 |
-| a regex pattern | 352283 | 3171 | 0.01x | 1 | 1 | 23.8 | 1811.4 | 1167.9 |
+| an error message string | 22.2 | 23.6 | 2.5 | 0.62 | 97.8 | 315,999 | 267 | 1/1 |
+| a term only in comments | 52.0 | 44.6 | 9.5 | 3.70 | 1007.2 | 29,371 | 7,668 | 1/1 |
+| a JSON key value | 29.3 | 26.9 | 5.8 | 0.81 | 120.5 | 375,981 | 6,060 | 1/1 |
+| a common short word | 29.7 | 30.3 | 6.8 | 0.75 | 127.4 | 414,187 | 6,088 | 1/1 |
+| a regex pattern | 26.1 | 25.6 | 6.2 | 0.89 | 118.6 | 352,283 | 3,313 | 1/1 |
+| tryRender usages (rg+Read full file) | 25.0 | 25.7 | 1.7 | 0.61 | 119.8 | 3,586 | 135 | 2/1 |
+| tryRender usages (rg+Read best-case range) | 25.0 | 25.7 | 1.7 | 0.61 | 119.8 | 65 | 135 | 2/1 |
+| logerror usages (rg+Read full file) | 23.8 | 25.9 | 2.1 | 0.72 | 122.9 | 3,647 | 130 | 2/1 |
+| logerror usages (rg+Read best-case range) | 23.8 | 25.9 | 2.1 | 0.72 | 122.9 | 123 | 130 | 2/1 |
+<!-- /generated -->
 
-Two scenarios are at parity rather than 3x better on tokens, reported rather than hidden:
-against the best-case range a model cannot actually reach without having read the file
-first, ripgrep's raw output for a low-frequency symbol name is already close to the minimum
-size, and the "+edit" bookkeeping charges both sides for the follow-up read needed to get an
-editable hash — emetgate pays a fixed grouping/hash JSON wrapper on top of content that was
-already small, the same physical floor the reader section's tiny-symbol row hits. Against
-the full-file Read a model actually has to make without foreknowledge, both `+edit`
-scenarios clear 3x by two orders of magnitude, same as every non-edit scenario.
-
-**On `ms`, emetgate does not beat `rg` in any scenario measured, and that is not hidden.**
-rg is a single, already-optimized native process per call; emetgate's index path costs a
-full MCP round trip (process spawn, JSON-RPC, tree-sitter reparse on a cold index) that rg's
-raw grep does not pay. Cold is always slower than warm (the index is rebuilt), and warm is
-still 6-45x slower in wall time than rg's raw scan on every measured query, worst on "a term
-only in comments" (rg 73.4 ms vs emetgate warm 3244.5 ms). The token-count win is real and
-is what a model pays for in context, but it does not come with a wall-clock win; a caller
-that is latency-sensitive rather than context-sensitive should not read this section as
-"emetgate is faster." Reproduce with `python tests/bench/search.py`; run it alone (e.g. under
-`agir-is.ps1` on an otherwise idle machine) since these are wall-clock numbers and a busy
-machine inflates every column, especially the cold ones.
+Warm search is faster than both rg and git grep in every scenario. The cold column is not:
+the first search of a session reads, grams and parses every tracked file on up to 8 threads
+before it can answer, 98 ms on express's 215 files and about 1 s on eslint's 2362. The next
+lever is to keep the content hashes and spans on disk with the grams, so a new session loads
+the index and re-reads only the files whose stamps changed. Between warm and floor are the
+worker threads started for each search, the grouping and the JSON reply (1 to 6 ms); a
+thread pool kept for the session is the next lever there. Two `+edit` rows are at token
+parity against the best-case range a model cannot reach without reading the file first:
+ripgrep's output for a rare name is already near the minimum, and emetgate adds a fixed
+grouping and hash wrapper. Against the whole-file `Read` both clear 3x by two orders of
+magnitude.
 
 **Limits:** no automatic index eviction (an index for a repo that is deleted or moved
 stays on disk under its old path hash; harmless, since a rebuilt repo gets a fresh hash,
