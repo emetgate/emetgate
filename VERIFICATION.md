@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **998**
-- Mutations declared in `tests/mutations.json`: **573**
-  - killed: **547**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **999**
+- Mutations declared in `tests/mutations.json`: **574**
+  - killed: **548**
   - equivalent: **5**
   - defense in depth: **6**
   - open: **4**
@@ -528,7 +528,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-139 mutation(s).
+140 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -668,9 +668,10 @@ python tools/verification_page.py --check
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
 | `AC2-app-container-gains-a-capability` | `src/platform/appcontainer.zig` | `.capabilities = null, .capability_count = 0, .reserved = 0 };` -> `.capabilities = null, .capability_count = 1, .reserved = 0 };` | a fresh profile carries no capabilities and points its security struct at its o...; redte... | killed |
-| `AC3-app-container-grant-not-applied` | `src/platform/appcontainer.zig` | `win.dacl_security_information, null, null, merged, null) != 0) ...` -> `win.dacl_security_information, null, null, dacl, null) != 0) re...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
+| `AC3-app-container-grant-not-applied` | `src/platform/appcontainer.zig` | `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FA...` -> `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, dacl, .FALS...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
 | `AC4-lpac-opt-out-dropped` | `src/platform/appcontainer.zig` | `pub const all_application_packages_opt_out: u32 = 0x1;` -> `pub const all_application_packages_opt_out: u32 = 0x0;` | redteam appcontainer: an lpac profile opts out of the all-packages group, a reg... | killed |
 | `AC5-app-container-grant-covers-the-parent` | `src/platform/appcontainer.zig` | `const wide = try toWide(&path_w, path_abs);` -> `const wide = try toWide(&path_w, std.fs.path.dirname(path_abs) ...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
+| `AC6-app-container-grant-propagates-to-existing-files` | `src/platform/appcontainer.zig` | `if (win.SetFileSecurityW(wide, win.dacl_security_information, &...` -> `if (win.SetNamedSecurityInfoW(wide, win.se_file_object, win.dac...` | a grant on a tree holding a hardlink leaves the linked file's acl untouched and... | killed |
 
 ## What this system does not prove
 
