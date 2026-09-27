@@ -6191,7 +6191,7 @@
       "id": "WR3-receipt-note-always-full",
       "file": "src/protocol/receipt_note.zig",
       "from": "    const written = receipts.write(gpa, io, root, rec);\n    if (!full) {",
-      "to": "    const written = receipts.write(gpa, io, root, rec);\n    if (false) {",
+      "to": "    const written = receipts.write(gpa, io, root, rec);\n    if (full and false) {",
       "kills": [
         "node edit: read_symbol with nodes gives hash|code lines and a node try commits exactly that node with a receipt that verifies"
       ]
