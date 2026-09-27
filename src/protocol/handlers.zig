@@ -12,6 +12,9 @@ const read_tools = @import("read_tools.zig");
 const git_tools = @import("git_tools.zig");
 const rename_tool = @import("rename_tool.zig");
 const move_tool = @import("move_tool.zig");
+const node_tool = @import("node_tool.zig");
+const node_cas_mod = @import("../engine/node_cas.zig");
+const batch_mod = @import("../platform/batch.zig");
 const move_file_tool = @import("move_file_tool.zig");
 const run_tool = @import("run_tool.zig");
 const receipt_note = @import("receipt_note.zig");
@@ -185,6 +188,7 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
     const file = try requireString(args, "file");
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
+    const nodes = if (args) |a| tool_result.getBool(a, "nodes") orelse false else false;
     event.label = "read_symbol";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
@@ -194,14 +198,14 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     const line_end = getInt(arguments, "line_end");
     const symbols = getStringArray(arguments, "symbols");
     if (line_start != null or line_end != null) {
-        renderSymbolRange(gpa, io, runtime, root, file, line_start, line_end, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
+        renderSymbolRange(gpa, io, runtime, root, file, line_start, line_end, force, nodes, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return failure(gpa, &buffer, err, event);
         };
         return success(gpa, &buffer);
     }
     if (symbols) |list| {
-        renderSymbolBodies(gpa, io, runtime, root, file, list, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
+        renderSymbolBodies(gpa, io, runtime, root, file, list, force, nodes, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return failure(gpa, &buffer, err, event);
         };
@@ -209,7 +213,7 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     }
     const sym = try requireString(args, "symbol");
     event.symbol = sym;
-    renderSymbolBody(gpa, io, runtime, root, file, sym, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
+    renderSymbolBody(gpa, io, runtime, root, file, sym, force, nodes, mirror, tree_cache, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -220,7 +224,7 @@ fn mirrorKey(gpa: Allocator, file: []const u8, sym: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa, "symbol:{s}#{s}", .{ file, sym });
 }
 
-fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, force: bool, nodes: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
     const snapshot = loaded.snapshot;
@@ -229,7 +233,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     defer ref.deinit(gpa);
     const found = try table.resolve(ref);
     event.hash = found.hash;
-    if (mirror) |m| {
+    if (!nodes) if (mirror) |m| {
         const key = try mirrorKey(gpa, file, sym);
         defer gpa.free(key);
         if (try m.check(key, found.hash, force) == .unchanged) {
@@ -237,14 +241,20 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
             event.chars_fullfile = snapshot.source.len;
             return wire.writeUnchanged(w, file, sym, found.hash, null);
         }
+    };
+    event.chars_fullfile = snapshot.source.len;
+    if (nodes) {
+        const annotated = try node_cas_mod.annotate(gpa, snapshot.tree, found.declaration);
+        defer gpa.free(annotated);
+        event.chars_emetgate = annotated.len;
+        return wire.writeSymbolNodes(w, file, sym, found.hash, annotated);
     }
     const body = snapshot.tree.text(found.body);
     event.chars_emetgate = body.len;
-    event.chars_fullfile = snapshot.source.len;
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
 }
 
-fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     if (symbols.len == 0) return error.MissingArgument;
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
@@ -252,6 +262,8 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     const table = try snapshot.symbols();
     const entries = try gpa.alloc(wire.SymbolEntry, symbols.len);
     defer gpa.free(entries);
+    var annotated: usize = 0;
+    defer for (entries[0..annotated]) |entry| gpa.free(entry.body.?);
     var chars: usize = 0;
     for (symbols, 0..) |item, i| {
         const sym = switch (item) {
@@ -261,6 +273,13 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         const ref = try symbol.Ref.parse(gpa, sym);
         defer ref.deinit(gpa);
         const found = try table.resolve(ref);
+        if (nodes) {
+            const text = try node_cas_mod.annotate(gpa, snapshot.tree, found.declaration);
+            entries[i] = .{ .ref = sym, .hash = found.hash, .body = text, .nodes = true };
+            annotated = i + 1;
+            chars += text.len;
+            continue;
+        }
         var unchanged = false;
         if (mirror) |m| {
             const key = try mirrorKey(gpa, file, sym);
@@ -280,13 +299,22 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     try wire.writeSymbolBodies(w, file, entries);
 }
 
-fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, nodes: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     const start = line_start orelse return error.MissingArgument;
     const end = line_end orelse return error.MissingArgument;
     if (start < 1 or end < 1) return error.InvalidLineRange;
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
     const snapshot = loaded.snapshot;
+    if (nodes) {
+        if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
+        const region = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
+        const annotated = try node_cas_mod.annotate(gpa, snapshot.tree, region);
+        defer gpa.free(annotated);
+        event.chars_emetgate = annotated.len;
+        event.chars_fullfile = snapshot.source.len;
+        return wire.writeRangeNodes(w, file, @intCast(start), @intCast(end), annotated);
+    }
     const table = try snapshot.symbols();
     const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
     const matched = try line_range.symbolsOverlapping(gpa, table.*, requested);
@@ -379,6 +407,7 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
 }
 
 fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    if (args) |a| if (node_tool.isNodeForm(a)) return node_tool.callTry(gpa, io, runtime, args, event, policy);
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
@@ -588,6 +617,7 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
                 _ = try docSelector(item);
             },
             .code => {
+                if (node_tool.isNodeForm(item)) continue;
                 if (try itemOp(item) == .delete) continue;
                 _ = getString(item, "symbol") orelse return error.MissingArgument;
                 _ = getString(item, "hash") orelse return error.MissingArgument;
@@ -620,20 +650,27 @@ fn itemOp(item: Value) !runner.EditOp {
 
 fn firstAbsentFile(items: []const Value) []const u8 {
     for (items) |item| {
+        if (node_tool.isNodeForm(item)) continue;
         const expected = symbol.parseExpected(getString(item, "hash") orelse continue) catch continue;
         if (expected == .absent) return getString(item, "file").?;
     }
     return getString(items[0], "file").?;
 }
 
-fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, before_hashes: []const ?symbol.Hash, committed: []const @import("../platform/batch.zig").Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var files: std.ArrayList(receipts.FileChange) = .empty;
     var symbols: std.ArrayList(@import("../verify/receipt.zig").SymbolEntry) = .empty;
     var symmetric = true;
-    for (places, edits, before_hashes, committed) |place, edit, before, c| {
+    for (places, edits, prepared, before_hashes, committed) |place, edit, p, before, c| {
+        if (p.nodes) |applied| {
+            try files.append(arena, .{ .rel = place.rel, .before = before, .after_abs = place.abs });
+            try node_tool.symbolEntries(arena, place.rel, applied, &symbols);
+            symmetric = false;
+            continue;
+        }
         const removes_file = c.deleted and edit.ref_text.len == 0;
         try files.append(arena, .{ .rel = place.rel, .before = before, .after_abs = if (removes_file) null else place.abs });
         if (c.deleted) {
@@ -683,6 +720,10 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer gpa.free(places);
     var built: usize = 0;
     defer for (places[0..built]) |place| place.deinit(gpa);
+    const node_lists = try gpa.alloc([]node_cas_mod.Edit, items.len);
+    defer gpa.free(node_lists);
+    var parsed: usize = 0;
+    defer for (node_lists[0..parsed]) |list| gpa.free(list);
 
     var ci: usize = 0;
     var di: usize = 0;
@@ -690,9 +731,12 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         const file = getString(item, "file").?;
         switch (try itemKind(item)) {
             .code => {
+                const node_form = node_tool.isNodeForm(item);
+                node_lists[i] = if (node_form) try node_tool.parse(gpa, item) else &.{};
+                parsed = i + 1;
                 const op = try itemOp(item);
                 const expected: symbol.Expected = if (getString(item, "hash")) |hash| try symbol.parseExpected(hash) else .absent;
-                places[i] = try repo.jailTarget(gpa, io, policy.root, file, op == .write and expected == .absent);
+                places[i] = try repo.jailTarget(gpa, io, policy.root, file, !node_form and op == .write and expected == .absent);
                 built = i + 1;
                 if (op == .delete) try repo.refuseLinkAsWritten(gpa, io, file);
                 edits[ci] = .{
@@ -701,11 +745,14 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                     .new_body = getString(item, "body") orelse "",
                     .expected_hash = expected,
                     .op = op,
+                    .nodes = node_lists[i],
                 };
                 order[i] = ci;
                 ci += 1;
             },
             .doc => {
+                node_lists[i] = &.{};
+                parsed = i + 1;
                 places[i] = try repo.jailTarget(gpa, io, policy.root, file, false);
                 built = i + 1;
                 const picked = try docSelector(item);
@@ -730,14 +777,18 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
     defer gpa.free(before_hashes);
     for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const result = try runner.tryMutateBatch(gpa, io, runtime, .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service });
+    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service };
+    var planned = try batch_mod.planBatch(gpa, io, runtime, options);
+    defer planned.deinit(gpa);
+    const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits, options);
     defer result.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
     defer gpa.free(note_root);
     const note = wire.shadowNote(note_root, event.trace);
 
     var sent: usize = 0;
-    for (items) |item| {
+    for (items, node_lists) |item, list| {
+        sent += node_tool.sentChars(list);
         inline for (.{ "symbol", "hash", "body", "content" }) |field| {
             if (getString(item, field)) |text| sent += text.len;
         }
@@ -761,6 +812,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                         .new_hash = committed[slot].hash,
                         .evidence = committed[slot].evidence,
                         .deleted = committed[slot].deleted,
+                        .nodes = planned.prepared.items[slot].nodes,
                     },
                     .doc => .{
                         .file = getString(item, "file").?,
@@ -782,7 +834,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 code_places[order[i]] = places[i];
                 code_committed[order[i]] = committed[order[i]];
             }
-            try recordBatch(gpa, io, code_places, edits, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w);
+            try recordBatch(gpa, io, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w);
             return false;
         },
         .rejected => |report| {

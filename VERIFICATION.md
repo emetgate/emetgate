@@ -6,17 +6,17 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1026**
-- Mutations declared in `tests/mutations.json`: **583**
-  - killed: **555**
-  - equivalent: **5**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1048**
+- Mutations declared in `tests/mutations.json`: **594**
+  - killed: **565**
+  - equivalent: **6**
   - defense in depth: **7**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
   - survives, not yet classified: **5** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create)
-- Red-team suites: **12** files, **96** tests total
+- Red-team suites: **13** files, **103** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
@@ -25,6 +25,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
   - `tests/redteam_move.zig`: 10
+  - `tests/redteam_node.zig`: 7
   - `tests/redteam_rename.zig`: 10
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
@@ -170,7 +171,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-57 mutation(s).
+58 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -200,7 +201,7 @@ python tools/verification_page.py --check
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
 | `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.gate(gpa, io, root, rel, ref, created.snapsho...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
 | `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     if (o...` -> `if (options.trace) \|t\| t.test_ms = report.duration_ns / std.t...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
-| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` -> `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
+| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` -> `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
 | `CR1-crash-threshold-removed` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR2-crash-threshold-counts-own-kill` | `src/platform/sandbox.zig` | `const ntstatus_error_floor: u32 = 0xC0000000;` -> `const ntstatus_error_floor: u32 = 0xDEAD;` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
 | `CR3-crash-threshold-exclusive` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor)` -> `return if (code > ntstatus_error_floor)` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
@@ -231,10 +232,11 @@ python tools/verification_page.py --check
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
 | `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
+| `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 
 ### Disk, repository boundary and atomic commit
 
-50 mutation(s).
+51 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -288,6 +290,7 @@ python tools/verification_page.py --check
 | `DF3-journal-delete-flush-dropped` | `src/platform/disk.zig` | `const journal_gone = if (commit_record.flushDir(b.journal_dir))...` -> `const journal_gone = true;` | dir flush dropJ: a journal whose deletion was lost after its commit record was ... | killed |
 | `DF4-recovery-dir-flush-dropped` | `src/platform/disk.zig` | `fn flushTouched(path_abs: []const u8) bool {     flushParent(pa...` -> `fn flushTouched(path_abs: []const u8) bool {     _ = path_abs;` | dir flush rec: a restore made by recovery is durable before the journal that as... | killed |
 | `DF5-recovery-journal-delete-flush-dropped` | `src/platform/disk.zig` | `commit_record.flushDir(journal_dir) catch return;` -> `` | dir flush dropJ: recovery that loses a journal deletion after removing the comm... | killed |
+| `NC8-node-delete-reference-check-skipped` | `src/platform/batch_plan.zig` | `if (ref.container.len != 0) continue;` -> `if (ref.container.len == 0) continue;` | redteam node: deleting a function that is still called is refused unless the ca... | killed |
 
 ### Rules and the q: query engine
 
@@ -529,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-149 mutation(s).
+158 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -682,6 +685,15 @@ python tools/verification_page.py --check
 | `DW7-write-doc-jail-dropped` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = repo.Jailed{ .root = try gpa.dupe(u8, policy.root...` | write_doc refuses a path outside the repo, leaves the target untouched; write_doc refuses... | killed |
 | `DW8-write-doc-allows-create` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = try repo.jailTarget(gpa, io, policy.root, file, t...` | writeDocInto always reads the target file (for base_hash and the splice) before it writes... | survives (unclassified) |
 | `DW9-try-batch-drops-doc-edits` | `src/protocol/handlers.zig` | `.{ .edits = edits, .doc_edits = doc_edits, .test_command = reso...` -> `.{ .edits = edits, .test_command = resolved,` | emetgate_try_batch commits a code edit and a doc edit together | killed |
+| `NC1-node-outside-check-dropped` | `src/engine/node_cas.zig` | `try sameOutside(a, base.tree, next.tree, holes);` -> `` | text that spills outside its node or reshapes a neighbour is a BodyEscape or a ...; redte... | killed |
+| `NC2-node-position-check-dropped` | `src/engine/node_cas.zig` | `return shift(holes, old.node.startByte()) == new.node.startByte...` -> `_ = holes;     return true;` | redteam node: text for one node cannot reshape the neighbour next to it | killed |
+| `NC3-node-syntax-check-dropped` | `src/engine/node_cas.zig` | `if (next.tree.root().hasError()) return error.MutationSyntaxInv...` -> `` | equivalent today: a spliced source with a syntax error also fails next.symbols(), which a... | equivalent |
+| `NC4-node-ambiguity-check-dropped` | `src/engine/node_cas.zig` | `if (slot.* != null) return error.AmbiguousNode;` -> `` | a node whose content occurs twice is ambiguous | killed |
+| `NC5-node-overlap-check-dropped` | `src/engine/node_cas.zig` | `if (previous.old.end > current.old.start) return error.Overlapp...` -> `if (false and previous.old.end > current.old.start) return erro...` | an empty text deletes a statement and several edits land in one call | killed |
+| `NC6-node-placeholder-check-dropped` | `src/engine/node_cas.zig` | `for (holes) \|hole\| try rejectPlaceholderRun(base.profile, hol...` -> `` | a placeholder comment cannot stand in for a node, a real comment edit is allowed; node ed... | killed |
+| `NC7-node-short-address-accepted` | `src/engine/node_cas.zig` | `if (text.len < min_address_len or text.len > symbol.hash_hex_le...` -> `if (text.len > symbol.hash_hex_len) return error.InvalidHash;` | a stale, unknown or malformed address is refused before anything is spliced; node edit: a... | killed |
+| `NC10-node-mixed-form-accepted` | `src/protocol/node_tool.zig` | `inline for (.{ "symbol", "hash", "body", "op" }) \|field\| {` -> `inline for (.{ "body", "op" }) \|field\| {` | node edit: a failing test, a stale hash, an ambiguous or mixed request leave th... | killed |
+| `NC11-nodes-read-shortened-by-mirror` | `src/protocol/handlers.zig` | `if (!nodes) if (mirror) \|m\| {` -> `if (true) if (mirror) \|m\| {` | redteam node: a mirrored body read never hides node hashes, and symbols with no... | killed |
 
 ## What this system does not prove
 

@@ -20,7 +20,7 @@ const relativeUnder = repo.relativeUnder;
 pub const Edit = batch_plan.Edit;
 pub const EditOp = batch_plan.Op;
 pub const DocEdit = batch_plan.DocEdit;
-const Prepared = batch_plan.Prepared;
+pub const Prepared = batch_plan.Prepared;
 
 pub const Committed = struct {
     hash: symbol.Hash,
@@ -60,19 +60,32 @@ pub const BatchResult = union(enum) {
     }
 };
 
-pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !BatchResult {
+pub const Planned = struct {
+    root: []u8,
+    lock: shadow.Lock,
+    prepared: std.ArrayList(Prepared),
+
+    pub fn deinit(self: *Planned, gpa: Allocator) void {
+        for (self.prepared.items) |p| p.deinit(gpa);
+        self.prepared.deinit(gpa);
+        self.lock.release();
+        gpa.free(self.root);
+    }
+};
+
+pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !Planned {
     if (options.test_command.len == 0) return error.NoTestCommand;
     if (options.edits.len == 0 and options.doc_edits.len == 0) return error.EmptyBatch;
 
     const first_file = if (options.edits.len != 0) options.edits[0].file_abs else options.doc_edits[0].file_abs;
     const dir0 = std.fs.path.dirname(first_file) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir0);
-    defer gpa.free(root);
+    errdefer gpa.free(root);
     const lock = try shadow.Lock.acquire(io, root);
-    defer lock.release();
+    errdefer lock.release();
 
     var prepared: std.ArrayList(Prepared) = .empty;
-    defer {
+    errdefer {
         for (prepared.items) |p| p.deinit(gpa);
         prepared.deinit(gpa);
     }
@@ -90,12 +103,32 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
         try prepared.append(gpa, planned);
     }
     try batch_plan.checkDeletions(gpa, io, root, prepared.items, options.edits, options.language_service);
-    return commitPlanned(gpa, io, root, prepared.items, options.edits, options);
+    return .{ .root = root, .lock = lock, .prepared = prepared };
+}
+
+pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !BatchResult {
+    var planned = try planBatch(gpa, io, runtime, options);
+    defer planned.deinit(gpa);
+    return commitPlanned(gpa, io, planned.root, planned.prepared.items, options.edits, options);
 }
 
 pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit, options: BatchOptions) !BatchResult {
     if (options.test_command.len == 0) return error.NoTestCommand;
     for (prepared, edits[0..prepared.len]) |p, edit| {
+        if (p.nodes) |applied| {
+            const snapshot = applied.snapshot;
+            for (applied.units) |unit| {
+                if (!unit.checked()) continue;
+                const ref = try unit.parseRef(gpa);
+                defer ref.deinit(gpa);
+                switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, unit.span, options.allow_repo_memory)) {
+                    .ok => {},
+                    .violated => |report| return .{ .rule_violation = report },
+                    .failed => |failure| return .{ .rule_check_failed = failure },
+                }
+            }
+            continue;
+        }
         if (!p.addsCode() or edit.ref_text.len == 0) continue;
         const ref = try symbol.Ref.parse(gpa, edit.ref_text);
         defer ref.deinit(gpa);
@@ -231,11 +264,23 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
     }
     for (doc_prepared) |p| try workspace.writeFile(p.rel, p.source());
 
-    const targets = try gpa.alloc(rules.Target, prepared.len);
+    var wanted: usize = prepared.len;
+    for (prepared) |p| {
+        if (p.nodes) |applied| wanted += applied.units.len;
+    }
+    const targets = try gpa.alloc(rules.Target, wanted);
     defer gpa.free(targets);
     var built: usize = 0;
     defer for (targets[0..built]) |target| target.ref.deinit(gpa);
     for (prepared, edits[0..prepared.len]) |p, edit| {
+        if (p.nodes) |applied| {
+            for (applied.units) |unit| {
+                if (!unit.checked()) continue;
+                targets[built] = .{ .file = p.rel, .ref = try unit.parseRef(gpa) };
+                built += 1;
+            }
+            continue;
+        }
         if (!p.addsCode() or edit.ref_text.len == 0) continue;
         targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
         built += 1;
