@@ -155,6 +155,8 @@ FACTS = {
     "engine-mutant-summary": fact_engine_mutant_summary,
 }
 
+FACT_FILES = [README_PATH, os.path.join(ROOT, "REFERENCE.md")]
+
 MARKER = re.compile(r"<!-- generated:([a-zA-Z0-9_-]+) -->(.*?)<!-- /generated -->", re.DOTALL)
 
 
@@ -174,24 +176,26 @@ def main():
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
-    current = read(README_PATH)
-    updated = render(current)
+    stale = []
+    for path in FACT_FILES:
+        current = read(path)
+        updated = render(current)
+        name = os.path.basename(path)
+        if updated == current:
+            continue
+        if args.check:
+            stale.append(name)
+            continue
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(updated)
+        print(f"updated {name}")
 
     if args.check:
-        if updated != current:
-            names = [m.group(1) for m in MARKER.finditer(current)]
-            print("README.md generated facts are stale for one or more of:", ", ".join(names))
+        if stale:
+            print("generated facts are stale in:", ", ".join(stale))
             print("run: python tools/readme_facts.py")
             sys.exit(1)
         print("README.md generated facts are up to date")
-        return
-
-    if updated != current:
-        with open(README_PATH, "w", encoding="utf-8", newline="\n") as f:
-            f.write(updated)
-        print("updated README.md")
-    else:
-        print("README.md already up to date")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,6 @@ const max_list_entries = 2000;
 const max_search_matches = 200;
 const max_search_file_bytes = 1024 * 1024;
 const max_match_text = 200;
-const binary_probe_bytes = 8000;
 
 pub const refuseInternal = repo.refuseInternal;
 
@@ -39,9 +38,8 @@ pub fn utf8Prefix(bytes: []const u8, limit: usize) []const u8 {
     return bytes[0..end];
 }
 
-fn looksBinary(bytes: []const u8) bool {
-    return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_probe_bytes)], 0) != null;
-}
+const docnode = @import("../engine/docnode.zig");
+const looksBinary = docnode.looksBinary;
 
 pub fn inDirectory(path: []const u8, prefix: []const u8) bool {
     if (prefix.len == 0) return true;

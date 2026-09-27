@@ -1,6 +1,7 @@
 const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const symmetry = @import("../engine/symmetry.zig");
+const node_cas = @import("../engine/node_cas.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
@@ -115,6 +116,37 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try writer.writeByte('\n');
 }
 
+pub fn writeSymbolNodes(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, text: []const u8) !void {
+    const hex = symbol.formatHash(hash);
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("symbol");
+    try js.write(ref);
+    try js.objectField("hash");
+    try js.write(hex[0..]);
+    try js.objectField("nodes");
+    try js.write(text);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub fn writeRangeNodes(writer: *Writer, file: []const u8, start_line: u32, end_line: u32, text: []const u8) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("start_line");
+    try js.write(start_line);
+    try js.objectField("end_line");
+    try js.write(end_line);
+    try js.objectField("nodes");
+    try js.write(text);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub fn writeFileHash(js: *std.json.Stringify, file_hash: symbol.Hash) !void {
     const hex = symbol.formatHash(file_hash);
     try js.objectField("file_hash");
@@ -146,6 +178,7 @@ pub const SymbolEntry = struct {
     ref: []const u8,
     hash: symbol.Hash,
     body: ?[]const u8,
+    nodes: bool = false,
 };
 
 pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const SymbolEntry) !void {
@@ -163,7 +196,7 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
         try js.objectField("hash");
         try js.write(hex[0..]);
         if (entry.body) |body| {
-            try js.objectField("body");
+            try js.objectField(if (entry.nodes) "nodes" else "body");
             try js.write(body);
         } else {
             try js.objectField("status");
@@ -285,7 +318,50 @@ pub const BatchEdit = struct {
     new_hash: symbol.Hash,
     evidence: ?symmetry.Evidence = null,
     deleted: bool = false,
+    nodes: ?node_cas.Applied = null,
 };
+
+fn writeNodeFields(js: *std.json.Stringify, applied: node_cas.Applied) !void {
+    try js.objectField("nodes");
+    try js.beginArray();
+    for (applied.placed) |placed| {
+        try js.beginArray();
+        for (placed.nodes) |address| try js.write(address);
+        try js.endArray();
+    }
+    try js.endArray();
+    try js.objectField("symbols");
+    try js.beginArray();
+    for (applied.units) |unit| {
+        if (unit.ref.len == 0) continue;
+        try js.beginObject();
+        try js.objectField("symbol");
+        try js.write(unit.ref);
+        if (unit.after) |hash| {
+            const hex = symbol.formatHash(hash);
+            try js.objectField("new_hash");
+            try js.write(hex[0..]);
+        } else {
+            try js.objectField("deleted");
+            try js.write(true);
+        }
+        try js.endObject();
+    }
+    try js.endArray();
+}
+
+pub fn writeNodesCommitted(writer: *Writer, file: []const u8, applied: node_cas.Applied, note: ?ShadowNote) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("committed");
+    try js.objectField("file");
+    try js.write(file);
+    try writeNodeFields(&js, applied);
+    try writeShadowNote(&js, note);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
 
 pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?ShadowNote) !void {
     var js: std.json.Stringify = .{ .writer = writer };
@@ -301,6 +377,11 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
         try js.beginObject();
         try js.objectField("file");
         try js.write(edit.file);
+        if (edit.nodes) |applied| {
+            try writeNodeFields(&js, applied);
+            try js.endObject();
+            continue;
+        }
         try js.objectField("symbol");
         try js.write(edit.symbol);
         try js.objectField("old_hash");
@@ -859,7 +940,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.UntrustedRepoConfig => 15,
         error.UntrustedRepoMemory => 37,
         error.ModelSuppliedTestPolicy => 17,
-        error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern, error.UseSymbolToolsForSource, error.InvalidLineRange, error.LineOutOfRange, error.NoSymbolInRange, error.InvalidJson, error.PointerNotFound, error.HeadingNotFound => 18,
+        error.UnsupportedLanguage, error.InternalPath, error.BinaryFile, error.NotUtf8, error.EmptyPattern, error.UseSymbolToolsForSource, error.InvalidLineRange, error.LineOutOfRange, error.NoSymbolInRange, error.InvalidJson, error.PointerNotFound, error.HeadingNotFound, error.DocSyntaxInvalid, error.DocTooLarge => 18,
         error.WorkspaceBusy, error.WorkspaceLockFailed => 14,
         error.Conflict => 11,
         error.WrittenButUnverified => 12,
@@ -878,6 +959,8 @@ pub fn exitCode(err: anyerror) u8 {
         error.ContentHashMismatch, error.BodyChanged, error.IncompleteMove, error.MovedImportBroken => 50,
         error.NoClobber, error.CaseOnlyRename => 51,
         error.DynamicPathUse, error.FileMoveUnresolved, error.ServiceMismatch => 52,
+        error.AmbiguousNode => 56,
+        error.OverlappingNodes, error.NoNodeEdits, error.TooManyNodeEdits, error.MixedEditForms => 57,
         else => 1,
     };
 }

@@ -6,17 +6,18 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1017**
-- Mutations declared in `tests/mutations.json`: **575**
-  - killed: **549**
-  - equivalent: **5**
-  - defense in depth: **6**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1094**
+- Mutations declared in `tests/mutations.json`: **609**
+  - killed: **579**
+  - equivalent: **7**
+  - defense in depth: **7**
   - open: **4**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-  - survives, not yet classified: **4** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename)
-- Red-team suites: **10** files, **83** tests total
+  - survives, not yet classified: **5** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create)
+- Red-team suites: **13** files, **103** tests total
+  - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_git.zig`: 3
@@ -24,9 +25,11 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
   - `tests/redteam_move.zig`: 10
+  - `tests/redteam_node.zig`: 7
   - `tests/redteam_rename.zig`: 10
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
+  - `tests/redteam_write_doc.zig`: 8
 - Security findings recorded in README's Security History: **8**
 
 ## Reproducing this
@@ -168,7 +171,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-56 mutation(s).
+58 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -184,8 +187,8 @@ python tools/verification_page.py --check
 | `K2e-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | only killed on a machine with user-level MCP servers configured | verified end-to-end, not by the mutation harness |
 | `K3e-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config"` |  | verified end-to-end, not by the mutation harness |
 | `K5e-lockdown-reserved-guard-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);` -> `` |  | verified end-to-end, not by the mutation harness |
-| `MR2-batch-duplicate-file-allowed` | `src/platform/batch.zig` | `if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.Duplicate...` -> `_ = p;` | a batch cannot edit the same file twice | killed |
-| `SELF-a-compile-error-is-not-a-kill` | `src/platform/batch.zig` | `if (std.ascii.eqlIgnoreCase(p.rel, rel)) return error.Duplicate...` -> `` | control: removing the line leaves an unused capture, which must not count as killed | control |
+| `MR2-batch-duplicate-file-allowed` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {             _ = p;         }      ...` | a batch cannot edit the same file twice | killed |
+| `SELF-a-compile-error-is-not-a-kill` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {         }         const planned = ...` | control: removing the line leaves an unused capture, which must not count as killed | control |
 | `T1-typecheck-failure-ignored` | `src/platform/runner.zig` | `if (!checked.passed()) return .{ .typecheck = checked };` -> `` | typecheck: a failing typecheck rejects before the tests run and leaves disk unt...; typec... | killed |
 | `G1-rules-gate-skipped-for-single-edit` | `src/platform/runner.zig` | `applied.snapshot.tree, applied.body, options.allow_repo_memory)...` -> `applied.snapshot.tree, applied.body, options.allow_repo_memory)...` | rules: an enforced no_comment rule rejects a commented body before the tests run | killed |
 | `G2-rules-gate-skipped-for-batch` | `src/platform/batch.zig` | `p.body, options.allow_repo_memory)) {             .ok => {},   ...` -> `p.body, options.allow_repo_memory)) {             .ok => {},   ...` | rules: one violating edit rejects the whole batch and leaves disk untouched | killed |
@@ -198,7 +201,7 @@ python tools/verification_page.py --check
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
 | `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.gate(gpa, io, root, rel, ref, created.snapsho...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
 | `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     if (o...` -> `if (options.trace) \|t\| t.test_ms = report.duration_ns / std.t...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
-| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` -> `\|p, edit\| {         if (!p.addsCode() or edit.ref_text.len ==...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
+| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` -> `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
 | `CR1-crash-threshold-removed` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR2-crash-threshold-counts-own-kill` | `src/platform/sandbox.zig` | `const ntstatus_error_floor: u32 = 0xC0000000;` -> `const ntstatus_error_floor: u32 = 0xDEAD;` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
 | `CR3-crash-threshold-exclusive` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor)` -> `return if (code > ntstatus_error_floor)` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
@@ -228,10 +231,12 @@ python tools/verification_page.py --check
 | `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
 | `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
+| `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
+| `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 
 ### Disk, repository boundary and atomic commit
 
-50 mutation(s).
+51 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -285,6 +290,7 @@ python tools/verification_page.py --check
 | `DF3-journal-delete-flush-dropped` | `src/platform/disk.zig` | `const journal_gone = if (commit_record.flushDir(b.journal_dir))...` -> `const journal_gone = true;` | dir flush dropJ: a journal whose deletion was lost after its commit record was ... | killed |
 | `DF4-recovery-dir-flush-dropped` | `src/platform/disk.zig` | `fn flushTouched(path_abs: []const u8) bool {     flushParent(pa...` -> `fn flushTouched(path_abs: []const u8) bool {     _ = path_abs;` | dir flush rec: a restore made by recovery is durable before the journal that as... | killed |
 | `DF5-recovery-journal-delete-flush-dropped` | `src/platform/disk.zig` | `commit_record.flushDir(journal_dir) catch return;` -> `` | dir flush dropJ: recovery that loses a journal deletion after removing the comm... | killed |
+| `NC8-node-delete-reference-check-skipped` | `src/platform/batch_plan.zig` | `if (ref.container.len != 0) continue;` -> `if (ref.container.len == 0) continue;` | redteam node: deleting a function that is still called is refused unless the ca... | killed |
 
 ### Rules and the q: query engine
 
@@ -526,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-142 mutation(s).
+173 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -568,8 +574,8 @@ python tools/verification_page.py --check
 | `RO1-a-new-tool-slips-into-the-surface` | `src/protocol/server.zig` | `.name = "emetgate_scan",` -> `.name = "emetgate_rule_add",` | red line: the served tool surface is exactly this list, so a new tool cannot sl...; scan ... | killed |
 | `RO2-a-rule-writing-tool-is-dispatched` | `src/protocol/handlers.zig` | `return error.UnknownTool; }` -> `if (std.mem.eql(u8, name, "emetgate_rule_add")) return callScan...` | red line: no tool on the model side can adopt, change or forget a rule | killed |
 | `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.s...` -> `try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.s...` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
-| `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = true,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
-| `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory,` -> `.allow_repo_memory = false,` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.new_body = body,         .test_command = test_command,        ...` -> `.new_body = body,         .test_command = test_command,        ...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.new_body = body,         .test_command = test_command,        ...` -> `.new_body = body,         .test_command = test_command,        ...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = true, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM16-mcp-batch-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = false, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `CB2-mcp-scan-without-call-budget` | `src/protocol/handlers.zig` | `.call_operations = max_scan_operations,` -> `.call_operations = null,` | scan tool: one call has a total operation budget, and the files past it come ba... | killed |
@@ -672,6 +678,37 @@ python tools/verification_page.py --check
 | `SR4-hit-cap-ignored` | `src/protocol/search_v1.zig` | `if (total_hits >= max_matches) {` -> `if (false) {` | the total hit count is capped and truncated is reported | killed |
 | `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `if (!read_tools.inDirectory(f, place.rel)) continue;` -> `_ = place.rel;` | a search scoped to a subdirectory does not return hits from outside it | killed |
 | `SK1-stale-symbol-table-trusted` | `src/protocol/search_v1.zig` | `if (std.mem.eql(u8, &ch, &live_hash)) {` -> `if (std.mem.eql(u8, &ch, &live_hash) or true) {` | a resident index entry whose stored hash does not match the file's live bytes i... | killed |
+| `AC2-app-container-gains-a-capability` | `src/platform/appcontainer.zig` | `.capabilities = null, .capability_count = 0, .reserved = 0 };` -> `.capabilities = null, .capability_count = 1, .reserved = 0 };` | a fresh profile carries no capabilities and points its security struct at its o...; redte... | killed |
+| `AC3-app-container-grant-not-applied` | `src/platform/appcontainer.zig` | `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FA...` -> `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, dacl, .FALS...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
+| `AC4-lpac-opt-out-dropped` | `src/platform/appcontainer.zig` | `pub const all_application_packages_opt_out: u32 = 0x1;` -> `pub const all_application_packages_opt_out: u32 = 0x0;` | redteam appcontainer: an lpac profile opts out of the all-packages group, a reg... | killed |
+| `AC5-app-container-grant-covers-the-parent` | `src/platform/appcontainer.zig` | `const wide = try toWide(&path_w, path_abs);` -> `const wide = try toWide(&path_w, std.fs.path.dirname(path_abs) ...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
+| `AC6-app-container-grant-propagates-to-existing-files` | `src/platform/appcontainer.zig` | `if (win.SetFileSecurityW(wide, win.dacl_security_information, &...` -> `if (win.SetNamedSecurityInfoW(wide, win.se_file_object, win.dac...` | a grant on a tree holding a hardlink leaves the linked file's acl untouched and... | killed |
+| `DW1-splice-hash-check-removed` | `src/engine/docnode.zig` | `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` -> `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` | applyJsonPointer refuses a stale hash and refuses a value that is not valid json; applyLi... | killed |
+| `DW2-doc-size-cap-removed` | `src/engine/docnode.zig` | `if (source.len > max_bytes) return error.DocTooLarge;` -> `` | defense in depth: both callers (doc_writer.tryWriteDoc and batch_plan.planDoc) already re... | defense in depth |
+| `DW3-doc-binary-check-removed` | `src/engine/docnode.zig` | `if (looksBinary(source)) return error.BinaryFile;` -> `` | doc_writer: a binary file is refused before any parse or sandbox run | killed |
+| `DW4-doc-write-skips-journal` | `src/platform/doc_writer.zig` | `try disk.replaceReporting(gpa, io, options.file_abs, applied.so...` -> `try disk.replaceReporting(gpa, io, options.file_abs, applied.so...` | doc_writer: a crash right after the journal is written leaves a journal entry, ... | killed |
+| `DW5-json-pointer-post-write-check-removed` | `src/engine/docnode.zig` | `if (!std.mem.eql(u8, reparsed.text(verify.node), new_value)) re...` -> `` | applyJsonPointer refuses a value that reparses to something other than exactly ... | killed |
+| `DW6-markdown-outer-region-check-removed` | `src/engine/docnode.zig` | `found = candidate.node.endByte() == span.start + new_section.le...` -> `found = true;` | applyMarkdownHeading refuses a replacement whose unclosed code fence swallows t...; apply... | killed |
+| `DW7-write-doc-jail-dropped` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = repo.Jailed{ .root = try gpa.dupe(u8, policy.root...` | write_doc refuses a path outside the repo, leaves the target untouched; write_doc refuses... | killed |
+| `DW8-write-doc-allows-create` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = try repo.jailTarget(gpa, io, policy.root, file, t...` | writeDocInto always reads the target file (for base_hash and the splice) before it writes... | survives (unclassified) |
+| `DW9-try-batch-drops-doc-edits` | `src/protocol/handlers.zig` | `.{ .edits = edits, .doc_edits = doc_edits, .test_command = reso...` -> `.{ .edits = edits, .test_command = resolved,` | emetgate_try_batch commits a code edit and a doc edit together | killed |
+| `NC1-node-outside-check-dropped` | `src/engine/node_cas.zig` | `try sameOutside(a, base.tree, next.tree, holes);` -> `` | text that spills outside its node or reshapes a neighbour is a BodyEscape or a ...; redte... | killed |
+| `NC2-node-position-check-dropped` | `src/engine/node_cas.zig` | `return shift(holes, old.node.startByte()) == new.node.startByte...` -> `_ = holes;     return true;` | redteam node: text for one node cannot reshape the neighbour next to it | killed |
+| `NC3-node-syntax-check-dropped` | `src/engine/node_cas.zig` | `if (next.tree.root().hasError()) return error.MutationSyntaxInv...` -> `` | equivalent today: a spliced source with a syntax error also fails next.symbols(), which a... | equivalent |
+| `NC4-node-ambiguity-check-dropped` | `src/engine/node_cas.zig` | `if (slot.* != null) return error.AmbiguousNode;` -> `` | a node whose content occurs twice is ambiguous | killed |
+| `NC5-node-overlap-check-dropped` | `src/engine/node_cas.zig` | `if (previous.old.end > current.old.start) return error.Overlapp...` -> `if (false and previous.old.end > current.old.start) return erro...` | an empty text deletes a statement and several edits land in one call | killed |
+| `NC6-node-placeholder-check-dropped` | `src/engine/node_cas.zig` | `for (holes) \|hole\| try rejectPlaceholderRun(base.profile, hol...` -> `` | a placeholder comment cannot stand in for a node, a real comment edit is allowed; node ed... | killed |
+| `NC7-node-short-address-accepted` | `src/engine/node_cas.zig` | `if (text.len < min_address_len or text.len > symbol.hash_hex_le...` -> `if (text.len > symbol.hash_hex_len) return error.InvalidHash;` | a stale, unknown or malformed address is refused before anything is spliced; node edit: a... | killed |
+| `NC10-node-mixed-form-accepted` | `src/protocol/node_tool.zig` | `inline for (.{ "symbol", "hash", "body", "op" }) \|field\| {` -> `inline for (.{ "body", "op" }) \|field\| {` | node edit: a failing test, a stale hash, an ambiguous or mixed request leave th... | killed |
+| `NC11-nodes-read-shortened-by-mirror` | `src/protocol/handlers.zig` | `if (!nodes) if (mirror) \|m\| {` -> `if (true) if (mirror) \|m\| {` | redteam node: a mirrored body read never hides node hashes, and symbols with no... | killed |
+| `CW1-barrier-returns-without-waiting` | `src/platform/change_watch.zig` | `while (!self.cookie_seen) {` -> `while (false and !self.cookie_seen) {` | equivalent on a local NTFS volume today: NTFS reports a change inside the writer's own ca... | equivalent |
+| `CW2-overflow-flag-ignored` | `src/platform/change_watch.zig` | `if (self.overflowed) return self.fail(error.Overflow);` -> `if (false) return self.fail(error.Overflow);` | change watch: a buffer too small for the burst reports Overflow and the next sy... | killed |
+| `CW3-timeout-hands-out-a-clean-set` | `src/platform/change_watch.zig` | `if (now >= deadline) return self.fail(error.Timeout);` -> `if (now >= deadline) return self.take();` | change watch: a sync that runs out of time says Timeout and never hands out a c... | killed |
+| `CW4-rename-old-end-dropped` | `src/platform/change_watch.zig` | `if (action == win.file_action_renamed_old_name) {             t...` -> `if (action == win.file_action_renamed_old_name) {             r...` | change watch: rename marks both ends, delete, directory rename and a nested cre... | killed |
+| `CW5-dirty-set-not-reset-after-take` | `src/platform/change_watch.zig` | `const subtrees = try keys(self.gpa, &self.subtrees);         se...` -> `const subtrees = try keys(self.gpa, &self.subtrees);` | change watch: a sync hands the dirty set over once and starts a new one | killed |
+| `CW6-cookie-dir-junction-followed` | `src/platform/change_watch.zig` | `if (attributes & win.file_attribute_reparse_point != 0) return ...` -> `` | redteam change watch: a cookie directory that is a file or a junction is refuse... | killed |
+| `CW7-parent-path-event-accepted` | `src/platform/change_watch.zig` | `if (std.mem.eql(u8, part, "..") or std.mem.eql(u8, part, ".")) ...` -> `` | classify drops the repository's own directories and refuses names that leave th... | killed |
+| `CW8-directory-rename-new-end-not-a-subtree` | `src/platform/change_watch.zig` | `if (self.isDirectoryOrGone(rel)) try addKey(self.gpa, &self.sub...` -> `` | change watch: rename marks both ends, delete, directory rename and a nested cre...; chang... | killed |
 
 ## What this system does not prove
 

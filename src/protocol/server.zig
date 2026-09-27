@@ -48,7 +48,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair. When the server was started with --mirror, a symbol whose hash was already sent unchanged this session comes back as a one-line 'unchanged: <file>#<symbol> #<hash>' instead of its body; pass force:true to always get the full body.",
+        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair. When the server was started with --mirror, a symbol whose hash was already sent unchanged this session comes back as a one-line 'unchanged: <file>#<symbol> #<hash>' instead of its body; pass force:true to always get the full body. Pass nodes:true to get each whole declaration (with symbol or symbols, never shortened to unchanged) or exactly the requested lines, top-level code included (with line_start and line_end, not widened), with every line that starts a syntax node prefixed by that node's short hash and a bar (hash|code); a line without a prefix starts no node of its own or a node whose content occurs twice. Feed such a hash to emetgate_try as node to replace or delete just that node.",
         .props = &.{
             .{ .name = "file", .desc = "path to a source file in a registered language" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add", .optional = true },
@@ -56,16 +56,20 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_start", .desc = "1-based start line of a range to read, widened to symbol boundaries", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "1-based end line of a range to read, widened to symbol boundaries", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "always return the full body even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
+            .{ .name = "nodes", .desc = "true to return the declaration with node hashes (hash|code) instead of the bare body", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_try",
-        .description = "Atomic mutation: replaces the symbol body, runs the project's trusted typecheck command (when configured) and then its test command in a sandbox, and writes to disk only if both pass; otherwise nothing is written. The test command is fixed by the user who started emetgate (emetgate mcp --test <cmd>, or the repo .emetgaterc.json with --allow-repo-config); a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.",
+        .description = "Atomic mutation: replaces the symbol body, runs the project's trusted typecheck command (when configured) and then its test command in a sandbox, and writes to disk only if both pass; otherwise nothing is written. The test command is fixed by the user who started emetgate (emetgate mcp --test <cmd>, or the repo .emetgaterc.json with --allow-repo-config); a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused. Node form, instead of symbol, hash and body: node (a node hash from emetgate_read_symbol with nodes:true, at least 12 hex) and text (the new source of just that node; an empty text deletes it), or nodes: [{node, text}, ...] for several non-overlapping nodes of one file. A node hash stays valid after edits elsewhere in the file. Each text is spliced into its node's exact span and the file is reparsed; the edit is refused unless every byte and every syntax node outside the replaced nodes is unchanged (BodyEscape). An unknown or stale hash is HashMismatch, a hash that matches more than one node is AmbiguousNode.",
         .props = &.{
             .{ .name = "file", .desc = "path to a source file in a registered language" },
-            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
-            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
-            .{ .name = "body", .desc = "new function body including braces" },
+            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add", .optional = true },
+            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols", .optional = true },
+            .{ .name = "body", .desc = "new function body including braces", .optional = true },
+            .{ .name = "node", .desc = "node hash from emetgate_read_symbol with nodes:true", .optional = true },
+            .{ .name = "text", .desc = "new source of that node; empty deletes it", .optional = true },
+            .{ .name = "nodes", .desc = "array of {node, text} for several nodes of the same file", .optional = true, .ty = "array" },
         },
     },
     .{
@@ -162,6 +166,19 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_run",
         .description = run_tool.description,
         .props = &.{.{ .name = "command", .desc = "one allowlist entry, byte for byte; omit to list the allowlist", .optional = true }},
+    },
+    .{
+        .name = "emetgate_write_doc",
+        .description = "Atomic hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section (its heading line and everything nested under it) or a line range of a plain text file. Runs the project's trusted typecheck command (when configured) and then its test command in a sandbox, and writes to disk only if both pass; otherwise nothing is written. Exactly one of pointer, heading or the line_start/line_end pair selects the node. A replacement JSON value must itself be valid JSON; a replacement Markdown section must start with a heading line of some level. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.",
+        .props = &.{
+            .{ .name = "file", .desc = "path to a .json, .md or plain text file inside the repo" },
+            .{ .name = "hash", .desc = "content hash of the current node, from emetgate_read_file" },
+            .{ .name = "content", .desc = "replacement text for the selected node" },
+            .{ .name = "pointer", .desc = "JSON pointer selecting the node to replace, e.g. /dependencies/express", .optional = true },
+            .{ .name = "heading", .desc = "exact Markdown heading text selecting the section to replace", .optional = true },
+            .{ .name = "line_start", .desc = "1-based start line of a plain text range to replace", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "1-based end line of a plain text range to replace", .optional = true, .ty = "integer" },
+        },
     },
 };
 
@@ -370,7 +387,7 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("name");
     try js.write("emetgate_try_batch");
     try js.objectField("description");
-    try js.write("All-or-nothing cross-file mutation: apply several symbol edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. hash \"absent\" adds a new top-level symbol or a new file. op \"delete\" with symbol and hash removes an unreferenced top-level symbol; op \"delete\" without symbol deletes the file (hash, when given, is the hash of the whole file). The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.");
+    try js.write("All-or-nothing cross-file mutation: apply several edits across files, run the project's trusted typecheck command (when configured) and then its test command once over all of them, and commit every file only if both pass; otherwise nothing is written. One edit per file. kind \"code\" (default): {file, symbol, hash, body} to write, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file, or the node form of emetgate_try ({file, node, text} or {file, nodes: [{node, text}, ...]}) instead of symbol, hash and body. hash \"absent\" adds a new top-level symbol or a new file. kind \"doc\": {file, hash, content} plus exactly one of pointer, heading or the line_start/line_end pair, same as emetgate_write_doc's node selectors; a code edit and a doc edit can appear in the same call and commit together or not at all. The test command is fixed by the user who started emetgate; a call that passes test_cmd, typecheck_cmd, allow_repo_config or allow_repo_memory is refused.");
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");
@@ -382,20 +399,42 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.objectField("type");
     try js.write("array");
     try js.objectField("description");
-    try js.write("one edit per file: {file, symbol, hash, body} to write, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file");
+    try js.write("one edit per file: kind \"code\" (default) with {file, symbol, hash, body} to write, {file, node, text} or {file, nodes} to replace syntax nodes, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file; kind \"doc\" with {file, hash, content} plus one of pointer, heading or line_start/line_end");
     try js.objectField("items");
     try js.beginObject();
     try js.objectField("type");
     try js.write("object");
     try js.objectField("properties");
     try js.beginObject();
-    inline for (.{ "file", "symbol", "hash", "body" }) |field| {
+    inline for (.{ "file", "symbol", "hash", "body", "node", "text", "content", "pointer", "heading" }) |field| {
         try js.objectField(field);
         try js.beginObject();
         try js.objectField("type");
         try js.write("string");
         try js.endObject();
     }
+    inline for (.{ "line_start", "line_end" }) |field| {
+        try js.objectField(field);
+        try js.beginObject();
+        try js.objectField("type");
+        try js.write("integer");
+        try js.endObject();
+    }
+    try js.objectField("nodes");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("array");
+    try js.endObject();
+    try js.objectField("kind");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("string");
+    try js.objectField("enum");
+    try js.beginArray();
+    try js.write("code");
+    try js.write("doc");
+    try js.endArray();
+    try js.endObject();
     try js.objectField("op");
     try js.beginObject();
     try js.objectField("type");

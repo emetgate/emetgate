@@ -1,8 +1,11 @@
 const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
+const node_cas = @import("../engine/node_cas.zig");
 const removal = @import("../engine/removal.zig");
 const symmetry = @import("../engine/symmetry.zig");
+const docnode = @import("../engine/docnode.zig");
+const ts = @import("../engine/tree_sitter.zig");
 const repo = @import("repo.zig");
 const create = @import("create.zig");
 const tsserver = @import("tsserver.zig");
@@ -21,9 +24,17 @@ pub const Edit = struct {
     new_body: []const u8 = "",
     op: Op = .write,
     move_source: ?[]const u8 = null,
+    nodes: []const node_cas.Edit = &.{},
 };
 
-pub const Action = enum { write, insert, create, delete_symbol, delete_file, move_file };
+pub const Action = enum { write, insert, create, delete_symbol, delete_file, move_file, write_doc };
+
+pub const DocEdit = struct {
+    file_abs: []const u8,
+    selector: docnode.Selector,
+    expected_hash: symbol.Hash,
+    new_text: []const u8,
+};
 
 pub const Prepared = struct {
     rel: []u8,
@@ -36,14 +47,20 @@ pub const Prepared = struct {
     source_rel: ?[]u8 = null,
     removed_span: symbol.Span = .{ .start = 0, .end = 0 },
     name_offset: ?u32 = null,
+    doc_source: ?[]u8 = null,
+    nodes: ?node_cas.Applied = null,
 
     pub fn deinit(self: Prepared, gpa: Allocator) void {
         if (self.source_rel) |s| gpa.free(s);
-        if (self.snapshot) |s| s.destroy();
+        if (self.nodes) |applied| {
+            applied.deinit();
+        } else if (self.snapshot) |s| s.destroy();
+        if (self.doc_source) |d| gpa.free(d);
         gpa.free(self.rel);
     }
 
     pub fn source(self: Prepared) []const u8 {
+        if (self.doc_source) |d| return d;
         const s = self.snapshot orelse return "";
         return s.source;
     }
@@ -51,10 +68,37 @@ pub const Prepared = struct {
     pub fn addsCode(self: Prepared) bool {
         return switch (self.action) {
             .write, .insert, .create, .move_file => true,
-            .delete_symbol, .delete_file => false,
+            .write_doc, .delete_symbol, .delete_file => false,
+        };
+    }
+
+    pub fn isDeletion(self: Prepared) bool {
+        return switch (self.action) {
+            .delete_symbol, .delete_file => true,
+            .write, .insert, .create, .move_file, .write_doc => false,
         };
     }
 };
+
+fn readDocSource(gpa: Allocator, io: std.Io, file_abs: []const u8) ![]u8 {
+    const source = std.Io.Dir.cwd().readFileAlloc(io, file_abs, gpa, .limited(docnode.max_bytes + 1)) catch |err| switch (err) {
+        error.StreamTooLong => return error.DocTooLarge,
+        else => |e| return e,
+    };
+    errdefer gpa.free(source);
+    try docnode.checkReadable(source);
+    return source;
+}
+
+pub fn planDoc(gpa: Allocator, io: std.Io, edit: DocEdit, rel: []u8) !Prepared {
+    const source = try readDocSource(gpa, io, edit.file_abs);
+    defer gpa.free(source);
+    const base_hash = symbol.hashOf(source);
+    const parser = ts.Parser.create();
+    defer parser.deinit();
+    const applied = try docnode.apply(gpa, parser, source, edit.selector, edit.expected_hash, edit.new_text);
+    return .{ .rel = rel, .action = .write_doc, .base_hash = base_hash, .hash = applied.hash, .doc_source = applied.source };
+}
 
 pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     return switch (edit.op) {
@@ -63,7 +107,16 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edi
     };
 }
 
+fn planNodes(io: std.Io, runtime: *Runtime, edit: Edit, rel: []u8) !Prepared {
+    const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
+    defer base.destroy();
+    if (base.tree.root().hasError()) return error.SourceHasErrors;
+    const applied = try node_cas.apply(base, edit.nodes);
+    return .{ .rel = rel, .action = .write, .base_hash = symbol.hashOf(base.source), .hash = symbol.fileHash(applied.snapshot.source), .snapshot = applied.snapshot, .nodes = applied };
+}
+
 fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
+    if (edit.nodes.len != 0) return planNodes(io, runtime, edit, rel);
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     switch (edit.expected_hash) {
@@ -133,6 +186,16 @@ pub fn checkDeletions(gpa: Allocator, io: std.Io, root: []const u8, prepared: []
     const sources = try gpa.alloc(create.Source, prepared.len);
     defer gpa.free(sources);
     for (prepared, sources) |p, *slot| slot.* = .{ .rel = p.rel, .text = p.source() };
+    for (prepared) |p| {
+        const applied = p.nodes orelse continue;
+        for (applied.units) |unit| {
+            if (unit.ref.len == 0 or unit.after != null) continue;
+            const ref = try symbol.Ref.parse(gpa, unit.ref);
+            defer ref.deinit(gpa);
+            if (ref.container.len != 0) continue;
+            if (try create.mentionedAnywhere(gpa, io, root, sources, null, ref.name, null)) return error.SymbolReferenced;
+        }
+    }
     for (prepared, edits[0..prepared.len], 0..) |p, edit, i| {
         const local = p.removed orelse continue;
         const ref = try symbol.Ref.parse(gpa, edit.ref_text);
