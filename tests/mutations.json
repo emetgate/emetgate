@@ -5746,8 +5746,8 @@
     {
       "id": "SK1-stale-symbol-table-trusted",
       "file": "src/protocol/search_v1.zig",
-      "from": "if (std.mem.eql(u8, &ch, &live_hash)) {",
-      "to": "if (std.mem.eql(u8, &ch, &live_hash) or true) {",
+      "from": "if (std.mem.eql(u8, &ch, &live)) {",
+      "to": "if (std.mem.eql(u8, &ch, &live) or true) {",
       "kills": [
         "a resident index entry whose stored hash does not match the file's live bytes is never trusted for symbol grouping"
       ]

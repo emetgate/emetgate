@@ -217,6 +217,27 @@ pub const RefreshResult = struct {
 };
 
 pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, previous: ?Index) !RefreshResult {
+    const slots = try gpa.alloc(Pending, files.len);
+    defer gpa.free(slots);
+    for (slots, files) |*slot, rel| slot.* = .{ .rel = rel };
+
+    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = previous, .slots = slots };
+    const count = workerCount(files.len);
+    const workers = try gpa.alloc(Worker, count);
+    defer gpa.free(workers);
+    for (workers) |*w| w.* = .{ .job = &job, .arena = .init(gpa) };
+    defer for (workers) |*w| w.arena.deinit();
+    var threads: [max_workers]std.Thread = undefined;
+    var spawned: usize = 0;
+    {
+        defer for (threads[0..spawned]) |t| t.join();
+        while (spawned + 1 < count) : (spawned += 1) {
+            threads[spawned] = std.Thread.spawn(.{}, Worker.run, .{&workers[spawned + 1]}) catch break;
+        }
+        workers[0].run();
+    }
+    if (job.failure) |err| return err;
+
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
@@ -226,43 +247,26 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
     var entries: std.ArrayList(Entry) = .empty;
     var reused: usize = 0;
     var recomputed: usize = 0;
-    for (files) |rel| {
-        const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, rel });
-        defer gpa.free(abs);
-        const stamp = statOf(io, abs) orelse continue;
-        if (stamp.size > max_indexed_file_bytes) continue;
-
-        if (previous) |p| {
-            if (p.find(rel)) |old| {
-                if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {
-                    try entries.append(a, .{
-                        .path = try a.dupe(u8, rel),
-                        .stamp = stamp,
-                        .trigrams = try a.dupe(u24, old.trigrams),
-                        .content_hash = old.content_hash,
-                        .spans = try dupeSpans(a, old.spans),
-                        .doc = try doc_spans.dupe(a, old.doc),
-                    });
-                    reused += 1;
-                    continue;
-                }
-            }
-        }
-
-        const bytes = Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_indexed_file_bytes)) catch continue;
-        defer gpa.free(bytes);
-        if (looksBinary(bytes)) continue;
-        const trigrams = try trigramsOfAlloc(gpa, bytes);
-        defer gpa.free(trigrams);
+    for (slots) |slot| {
+        const source = switch (slot.state) {
+            .skip => continue,
+            .reuse => blk: {
+                reused += 1;
+                break :blk slot.reuse.?.*;
+            },
+            .fresh => blk: {
+                recomputed += 1;
+                break :blk slot.fresh;
+            },
+        };
         try entries.append(a, .{
-            .path = try a.dupe(u8, rel),
-            .stamp = stamp,
-            .trigrams = try a.dupe(u24, trigrams),
-            .content_hash = symbol.fileHash(bytes),
-            .spans = spansFor(a, rel, bytes),
-            .doc = doc_spans.build(a, rel, bytes),
+            .path = try a.dupe(u8, slot.rel),
+            .stamp = slot.stamp,
+            .trigrams = try a.dupe(u24, source.trigrams),
+            .content_hash = source.content_hash,
+            .spans = try dupeSpans(a, source.spans),
+            .doc = try doc_spans.dupe(a, source.doc),
         });
-        recomputed += 1;
     }
     const changed = recomputed != 0 or entries.items.len != if (previous) |p| p.entries.len else 0;
     return .{
@@ -272,6 +276,93 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
         .recomputed = recomputed,
     };
 }
+
+pub const max_workers = 8;
+const min_files_per_worker = 16;
+
+fn workerCount(files: usize) usize {
+    if (files <= min_files_per_worker) return 1;
+    const cpus = std.Thread.getCpuCount() catch 1;
+    return @max(1, @min(@min(cpus, max_workers), files / min_files_per_worker));
+}
+
+const Pending = struct {
+    rel: []const u8,
+    state: enum { skip, reuse, fresh } = .skip,
+    stamp: Stamp = .{ .mtime_ns = 0, .size = 0 },
+    reuse: ?*const Entry = null,
+    fresh: Entry = undefined,
+};
+
+const Job = struct {
+    gpa: Allocator,
+    io: std.Io,
+    root: []const u8,
+    previous: ?Index,
+    slots: []Pending,
+    next: std.atomic.Value(usize) = .init(0),
+    failure: ?anyerror = null,
+    failed: std.atomic.Value(bool) = .init(false),
+
+    fn fail(self: *Job, err: anyerror) void {
+        if (self.failed.swap(true, .acq_rel)) return;
+        self.failure = err;
+    }
+};
+
+const Worker = struct {
+    job: *Job,
+    arena: std.heap.ArenaAllocator,
+
+    fn run(self: *Worker) void {
+        const job = self.job;
+        while (!job.failed.load(.acquire)) {
+            const i = job.next.fetchAdd(1, .monotonic);
+            if (i >= job.slots.len) return;
+            self.fill(&job.slots[i]) catch |err| {
+                job.fail(err);
+                return;
+            };
+        }
+    }
+
+    fn fill(self: *Worker, slot: *Pending) !void {
+        const job = self.job;
+        const gpa = job.gpa;
+        const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ job.root, slot.rel });
+        defer gpa.free(abs);
+        const stamp = statOf(job.io, abs) orelse return;
+        if (stamp.size > max_indexed_file_bytes) return;
+        slot.stamp = stamp;
+        if (job.previous) |p| {
+            if (p.find(slot.rel)) |old| {
+                if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {
+                    slot.reuse = old;
+                    slot.state = .reuse;
+                    return;
+                }
+            }
+        }
+        const bytes = Dir.cwd().readFileAlloc(job.io, abs, gpa, .limited(max_indexed_file_bytes)) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return,
+        };
+        defer gpa.free(bytes);
+        if (looksBinary(bytes)) return;
+        const a = self.arena.allocator();
+        const trigrams = try trigramsOfAlloc(gpa, bytes);
+        defer gpa.free(trigrams);
+        slot.fresh = .{
+            .path = slot.rel,
+            .stamp = stamp,
+            .trigrams = try a.dupe(u24, trigrams),
+            .content_hash = symbol.fileHash(bytes),
+            .spans = spansFor(a, slot.rel, bytes),
+            .doc = doc_spans.build(a, slot.rel, bytes),
+        };
+        slot.state = .fresh;
+    }
+};
 
 fn renderBody(gpa: Allocator, index: Index, written_ns: i96) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
