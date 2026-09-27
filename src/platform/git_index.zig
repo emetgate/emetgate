@@ -22,10 +22,11 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
     const count = std.mem.readInt(u32, body[8..12], .big);
 
     var names: std.ArrayList([]u8) = .empty;
-    errdefer {
+    var handed_over = false;
+    defer if (!handed_over) {
         for (names.items) |n| gpa.free(n);
         names.deinit(gpa);
-    }
+    };
     var previous: std.ArrayList(u8) = .empty;
     defer previous.deinit(gpa);
     var pos: usize = 12;
@@ -79,7 +80,9 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
         if (body.len - pos - 8 < size) return null;
         pos += 8 + size;
     }
-    return try names.toOwnedSlice(gpa);
+    const out = try names.toOwnedSlice(gpa);
+    handed_over = true;
+    return out;
 }
 
 fn trailerLen(bytes: []const u8) ?usize {
