@@ -156,13 +156,13 @@ def fact_search_table():
     lines = [
         "",
         "",
-        "| Scenario | rg ms | git grep ms | emetgate warm ms | floor ms | emetgate cold ms | rg tokens | emetgate tokens | turns rg/emetgate |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Scenario | rg ms | git grep ms | emetgate cold ms | emetgate warm ms | floor ms | startup ms | index build ms (one time) | rg tokens | emetgate tokens | turns rg/emetgate |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in data["rows"]:
-        lines.append("| {} | {:.1f} | {:.1f} | {:.1f} | {:.2f} | {:.1f} | {:,} | {:,} | {}/{} |".format(
-            row["name"], row["rg_ms"], row["git_ms"], row["warm_ms"], row["floor_ms"], row["cold_ms"],
-            row["rg_tokens"], row["emetgate_tokens"], row["rg_turns"], row["emetgate_turns"],
+        lines.append("| {} | {:.1f} | {:.1f} | {:.1f} | {:.1f} | {:.2f} | {:.1f} | {:.1f} | {:,} | {:,} | {}/{} |".format(
+            row["name"], row["rg_ms"], row["git_ms"], row["cold_ms"], row["warm_ms"], row["floor_ms"],
+            row["startup_ms"], row["build_ms"], row["rg_tokens"], row["emetgate_tokens"], row["rg_turns"], row["emetgate_turns"],
         ))
     lines.append("")
     return "\n".join(lines)
@@ -175,8 +175,9 @@ def fact_search_summary():
     rg = [r["rg_ms"] for r in rows]
     git = [r["git_ms"] for r in rows]
     cold = [r["cold_ms"] for r in rows]
-    return "warm {:.1f} to {:.1f} ms against rg {:.1f} to {:.1f} ms and git grep {:.1f} to {:.1f} ms; a new session's first search, which builds the index, took {:.0f} to {:,.0f} ms ({}, scan bandwidth {:.2f} GB/s)".format(
-        min(warm), max(warm), min(rg), max(rg), min(git), max(git), min(cold), max(cold), data["date"], data["scan_gb_per_s"],
+    build = [r["build_ms"] for r in rows]
+    return "a new session's first search {:.1f} to {:.1f} ms and later searches {:.1f} to {:.1f} ms, against rg {:.1f} to {:.1f} ms and git grep {:.1f} to {:.1f} ms; building the index the first time, once per repository, took {:.0f} to {:,.0f} ms ({}, scan bandwidth {:.2f} GB/s)".format(
+        min(cold), max(cold), min(warm), max(warm), min(rg), max(rg), min(git), max(git), min(build), max(build), data["date"], data["scan_gb_per_s"],
     )
 
 
