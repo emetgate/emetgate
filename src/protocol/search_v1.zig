@@ -38,6 +38,8 @@ pub const regex_budget: u64 = 2_000_000;
 
 pub const Stats = struct {
     session: ?search_session.Report = null,
+    filter_ns: u64 = 0,
+    candidate_bytes: usize = 0,
     sync_ns: u64 = 0,
     jail_ns: u64 = 0,
     list_ns: u64 = 0,
@@ -251,6 +253,7 @@ const FileWork = struct {
     entry: ?*const search_index.Entry,
     state: enum { skipped, no_match, fast, slow } = .skipped,
     read: bool = false,
+    size: usize = 0,
     bytes: []u8 = &.{},
     hits: std.ArrayList(Pending) = .empty,
     read_ns: u64 = 0,
@@ -349,6 +352,7 @@ fn scanFile(shared: *Shared, item: *FileWork, scratch: []u32, budget: *u64) !voi
         else => return,
     };
     item.read = true;
+    item.size = bytes.len;
     item.read_ns = lap(shared.io, shared.timed, &since);
     var keep = false;
     defer if (!keep) gpa.free(bytes);
@@ -691,6 +695,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     var files_scanned: usize = 0;
     var files_total: usize = 0;
 
+    if (timer) |*t| _ = t.lap();
     var work: std.ArrayList(FileWork) = .empty;
     defer {
         for (work.items) |*item| item.deinit(gpa);
@@ -709,6 +714,9 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         try work.append(gpa, .{ .rel = f, .entry = entry });
     }
     if (stats_sink) |s| s.files_candidates += work.items.len;
+    if (timer) |*t| if (stats_sink) |s| {
+        s.filter_ns += t.lap();
+    };
 
     var shared: Shared = .{
         .gpa = gpa,
@@ -730,6 +738,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             s.probe_ns += item.probe_ns;
             s.classify_ns += item.classify_ns;
             if (item.read) s.files_read += 1;
+            s.candidate_bytes += item.size;
         }
         switch (item.state) {
             .skipped, .no_match => continue,
@@ -829,6 +838,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         try js.write(nsToMs(s.list_ns));
         try js.objectField("sync_ms");
         try js.write(nsToMs(s.sync_ns));
+        try js.objectField("filter_ms");
+        try js.write(nsToMs(s.filter_ns));
+        try js.objectField("candidate_bytes");
+        try js.write(s.candidate_bytes);
         if (s.session) |r| {
             try js.objectField("refresh_mode");
             try js.write(@tagName(r.mode));
