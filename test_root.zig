@@ -44,6 +44,7 @@ pub const module_paths = src.module_paths;
 pub const search_index = src.search_index;
 pub const search_index_file = src.search_index_file;
 pub const search_session = src.search_session;
+pub const worker_pool = src.worker_pool;
 pub const search_v1 = src.search_v1;
 pub const disk = src.disk;
 pub const durability_log = src.durability_log;
