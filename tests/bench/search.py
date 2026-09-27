@@ -55,12 +55,21 @@ class McpSession:
     def _send(self, method, params):
         self._id += 1
         msg = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
+        self.last_request = msg
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
         line = self.proc.stdout.readline()
         if not line:
             err = self.proc.stderr.read()
-            raise RuntimeError(f"emetgate mcp produced no response; stderr: {err}")
+            code = self.proc.poll()
+            if code is None:
+                self.proc.wait(timeout=5)
+                code = self.proc.returncode
+            raise RuntimeError(
+                "emetgate mcp produced no response; "
+                f"exit_code={code} (0x{code & 0xFFFFFFFF:08X}) "
+                f"last_request={json.dumps(msg)} stderr={err!r}"
+            )
         return json.loads(line)
 
     def call(self, name, arguments):
