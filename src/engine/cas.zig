@@ -189,7 +189,7 @@ fn edgeToken(node: ts.Node, comptime side: enum { first, last }) ts.Node {
     return current;
 }
 
-fn rejectPlaceholder(profile: *const Profile, body: ts.Node) error{PlaceholderBody}!void {
+pub fn rejectPlaceholder(profile: *const Profile, body: ts.Node) error{PlaceholderBody}!void {
     if (!std.mem.eql(u8, profile.block, body.kind())) return;
     var has_statement = false;
     var has_comment = false;

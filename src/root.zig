@@ -9,6 +9,7 @@ pub const line_range = @import("engine/line_range.zig");
 pub const docnode = @import("engine/docnode.zig");
 pub const skeleton = @import("engine/skeleton.zig");
 pub const cas = @import("engine/cas.zig");
+pub const node_cas = @import("engine/node_cas.zig");
 pub const boundedness = @import("engine/boundedness.zig");
 pub const symmetry = @import("engine/symmetry.zig");
 pub const removal = @import("engine/removal.zig");
