@@ -5633,6 +5633,51 @@
       "kills": [
         "verify: a forged digest, a non-canonical note, an added and a removed receipt are caught"
       ]
+    },
+    {
+      "id": "DF1-backup-dir-flush-dropped",
+      "file": "src/platform/disk.zig",
+      "from": "        self.state = .backed_up;\n        try flushParent(self.backup);\n",
+      "to": "        self.state = .backed_up;\n",
+      "kills": [
+        "dir flush bak: a backup whose directory entry was lost with the swapped target still recovers to all old"
+      ]
+    },
+    {
+      "id": "DF2-backup-delete-flush-dropped",
+      "file": "src/platform/disk.zig",
+      "from": "                } else flushParent(self.backup) catch {\n                    if (leftover) |out| out.record(self.backup);\n                };\n",
+      "to": "                }\n",
+      "kills": [
+        "dir flush fin: a power loss after a finished batch does not bring a deleted backup back"
+      ]
+    },
+    {
+      "id": "DF3-journal-delete-flush-dropped",
+      "file": "src/platform/disk.zig",
+      "from": "        const journal_gone = if (commit_record.flushDir(b.journal_dir)) |_| true else |_| false;\n",
+      "to": "        const journal_gone = true;\n",
+      "kills": [
+        "dir flush dropJ: a journal whose deletion was lost after its commit record was removed does not roll a finished batch back"
+      ]
+    },
+    {
+      "id": "DF4-recovery-dir-flush-dropped",
+      "file": "src/platform/disk.zig",
+      "from": "fn flushTouched(path_abs: []const u8) bool {\n    flushParent(path_abs) catch |err| return err == error.DirMissing;\n",
+      "to": "fn flushTouched(path_abs: []const u8) bool {\n    _ = path_abs;\n",
+      "kills": [
+        "dir flush rec: a restore made by recovery is durable before the journal that asked for it is gone"
+      ]
+    },
+    {
+      "id": "DF5-recovery-journal-delete-flush-dropped",
+      "file": "src/platform/disk.zig",
+      "from": "    commit_record.flushDir(journal_dir) catch return;\n",
+      "to": "",
+      "kills": [
+        "dir flush dropJ: recovery that loses a journal deletion after removing the commit record does not roll the batch back"
+      ]
     }
   ]
 }
