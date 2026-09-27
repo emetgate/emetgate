@@ -15,7 +15,7 @@
 A verification gate between a coding model and your source tree. The model proposes a change; Emetgate checks it and writes it only if the checks pass.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="Five proposals through the gate: four refused, one committed" width="900">
+  <img src="assets/demo.gif" alt="The gate refusing a placeholder and a test-breaking body and committing a correct one; a search against rg; a node edit against Read and Edit" width="900">
 </p>
 
 It runs as an MCP server. `emetgate lockdown` starts Claude Code with only Emetgate's tools, so every write goes through the gate.
