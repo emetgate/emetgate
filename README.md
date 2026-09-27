@@ -20,7 +20,7 @@ It runs as an MCP server. `emetgate lockdown` starts Claude Code with only Emetg
 
 ## How a write is checked
 
-1. **Address.** A change names a symbol and the hash of the content it was based on. If the file changed since, the hash does not match and the change is refused.
+1. **Address.** A change names a symbol and the hash of the content it was based on. If the file changed since, the hash does not match and the change is refused. A change can also name one syntax node inside a body, such as an `if` block or a statement, by the hash of its content and send only that node's new text.
 2. **Splice and reparse.** The new body replaces exactly the old one by byte range. The file is reparsed with tree-sitter. Syntax errors, a body that escapes its braces, placeholder bodies and any change outside the span are refused.
 3. **Proof, where there is one.** Renames are checked with a name-abstracted (alpha) hash and a scope resolver that cross-checks the TypeScript language service. Moves keep the moved code's hash and derive every import. New and deleted symbols must be unreferenced.
 4. **Rules.** Rules you add from the CLI run here: built-in checks, tree-sitter queries (`q:`) or your own linter (`cmd:`).
@@ -35,12 +35,12 @@ If a check cannot finish, the change is refused. The model cannot change the tes
 | Tool | What it does |
 |---|---|
 | `emetgate_symbols`, `emetgate_skeleton` | Symbols and signatures with content hashes |
-| `emetgate_read_symbol` | One or more symbol bodies, or a line range widened to whole symbols |
+| `emetgate_read_symbol` | One or more symbol bodies, or a line range widened to whole symbols; `nodes:true` adds a hash to every line that starts a syntax node |
 | `emetgate_read_file` | JSON key tree or one pointer, Markdown headings or one section, text line range |
 | `emetgate_list`, `emetgate_search` | Files and text search inside the repository |
 | `emetgate_git` | Read-only `status`, `diff`, `log`, `show` |
 | `emetgate_mutate` | Check a proposed body without writing it |
-| `emetgate_try`, `emetgate_try_batch` | Replace, create or delete symbols and files, one change or an atomic batch |
+| `emetgate_try`, `emetgate_try_batch` | Replace, create or delete symbols, single syntax nodes and files, one change or an atomic batch |
 | `emetgate_write_doc` | JSON pointer, Markdown section or text range write, alone or in a batch with code |
 | `emetgate_rename` | Rename a function, class, variable, type or enum everywhere it is used |
 | `emetgate_move` | Move a declaration to another file; imports are derived by the kernel |
@@ -83,7 +83,20 @@ Tokens for common reads, against Claude Code's `Read` (o200k_base, `python tests
 | Read the same symbol again in a session | 13,313 | 84 |
 | Reread a 3-line symbol after it changed | 18 | 74 |
 
-The last row is worse: the reply carries the hash the next edit needs. Rule and query cost measurements are in [REFERENCE.md](REFERENCE.md).
+The last row is worse: the reply carries the hash the next edit needs.
+
+Tokens for whole edits, against Claude Code's `Read` then `Edit` (o200k_base, both sides counted as the `tool_use` and `tool_result` blocks the model context holds, `python tests/bench/write_flow.py`, 2026-09-27, the same 1.6k-line file):
+
+| Task | Read + Edit | Emetgate |
+|---|---:|---:|
+| Change one line in a large function | 24,646 | 2,241 |
+| Replace an `if` block | 24,703 | 2,284 |
+| Replace a small function whole | 24,734 | 597 |
+| Delete a function and its one call site | 24,934 | 908 |
+| Two edits in one file | 24,813 | 2,312 |
+| Change one line in a file already read | 139 | 287 |
+
+The last row is worse. With the file already in context, `Edit` sends the changed line and gets one line back; emetgate's reply carries the new hashes and a receipt, and its arguments alone would still allow at most 1.9x. Emetgate also runs the tests on every edit, which is most of its 200 to 420 ms per edit. Rule, query and full write measurements are in [REFERENCE.md](REFERENCE.md).
 
 ## How the gate itself is tested
 
