@@ -111,6 +111,9 @@ test "git index reader: a split index, a flipped byte or a cut file is not read"
 
     try gitOk(fx.root, &.{ "update-index", "--split-index" });
     try testing.expect((try git_index.readTracked(gpa, testing.io, index_path)) == null);
+    try fx.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/added_after_split.ts", .data = "x" });
+    try gitOk(fx.root, &.{ "add", "added_after_split.ts" });
+    try testing.expect((try git_index.readTracked(gpa, testing.io, index_path)) == null);
 }
 
 test "git index reader: the eval repositories read the same as git ls-files" {
