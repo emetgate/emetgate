@@ -8,6 +8,7 @@ const ts = @import("../engine/tree_sitter.zig");
 const registry = @import("../engine/lang/registry.zig");
 pub const kind_spans = @import("../engine/kind_spans.zig");
 pub const doc_spans = @import("../engine/doc_spans.zig");
+const index_file = @import("search_index_file.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -18,10 +19,7 @@ const max_index_file_bytes: usize = 64 * 1024 * 1024;
 
 pub const racy_window_ns: i96 = 3 * std.time.ns_per_s;
 
-pub const Stamp = struct {
-    mtime_ns: i96,
-    size: u64,
-};
+pub const Stamp = index_file.Stamp;
 
 pub const Entry = struct {
     path: []const u8,
@@ -69,6 +67,8 @@ pub const Index = struct {
     entries: []Entry,
     written_ns: ?i96 = null,
     lookup: std.StringHashMapUnmanaged(u32) = .empty,
+    files: []const []const u8 = &.{},
+    git_stamp: ?Stamp = null,
 
     fn finish(arena: *std.heap.ArenaAllocator, entries: []Entry, written_ns: ?i96) !Index {
         var lookup: std.StringHashMapUnmanaged(u32) = .empty;
@@ -364,47 +364,27 @@ const Worker = struct {
     }
 };
 
-fn renderBody(gpa: Allocator, index: Index, written_ns: i96) ![]u8 {
-    var out: std.Io.Writer.Allocating = .init(gpa);
-    defer out.deinit();
-    const w = &out.writer;
-    try w.writeAll("emetgate-search-index v1\n");
-    try w.print("W {x}\n", .{written_ns});
-    for (index.entries) |entry| {
-        try w.print("F {x} {d} ", .{ entry.stamp.mtime_ns, entry.stamp.size });
-        for (entry.trigrams, 0..) |t, i| {
-            if (i != 0) try w.writeByte(':');
-            try w.print("{x:0>6}", .{t});
-        }
-        try w.print(" {s}\n", .{entry.path});
-    }
-    const hash = symbol.hashOf(out.written());
-    try w.print("C {s}\n", .{&symbol.formatHash(hash)});
-    return out.toOwnedSlice();
-}
-
-pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index) !void {
+pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index, files: []const []const u8, git_stamp: ?Stamp) !void {
     if (std.fs.path.dirname(path)) |dir| try Dir.cwd().createDirPath(io, dir);
+    const entries = try gpa.alloc(index_file.Entry, index.lookup.count());
+    defer gpa.free(entries);
+    var n: usize = 0;
+    for (index.entries, 0..) |e, i| {
+        const at = index.lookup.get(e.path) orelse continue;
+        if (at != i or n == entries.len) continue;
+        entries[n] = .{ .path = e.path, .stamp = e.stamp, .trigrams = e.trigrams, .content_hash = e.content_hash, .spans = e.spans, .doc = e.doc };
+        n += 1;
+    }
+    const written_ns = std.Io.Clock.real.now(io).nanoseconds;
+    const bytes = try index_file.encode(gpa, .{ .written_ns = written_ns, .git_stamp = git_stamp, .files = files, .entries = entries[0..n] });
+    defer gpa.free(bytes);
 
     var random: [8]u8 = undefined;
     io.random(&random);
     const tag = std.fmt.bytesToHex(random, .lower);
     const temp = try std.fmt.allocPrint(gpa, "{s}.emetgate-{s}.tmp", .{ path, &tag });
     defer gpa.free(temp);
-
-    const first_pass = try renderBody(gpa, index, 0);
-    defer gpa.free(first_pass);
-    try disk.writeDurably(io, temp, first_pass);
-
-    const stat = Dir.cwd().statFile(io, temp, .{}) catch {
-        _ = Dir.deleteFileAbsolute(io, temp) catch {};
-        return error.SearchIndexWriteFailed;
-    };
-    Dir.deleteFileAbsolute(io, temp) catch {};
-    const final_body = try renderBody(gpa, index, stat.mtime.nanoseconds);
-    defer gpa.free(final_body);
-    try disk.writeDurably(io, temp, final_body);
-
+    try disk.writeDurably(io, temp, bytes);
     moveDurablyReplacing(temp, path) catch |err| {
         _ = Dir.deleteFileAbsolute(io, temp) catch {};
         return err;
@@ -436,60 +416,32 @@ const win = struct {
 pub fn load(gpa: Allocator, io: std.Io, path: []const u8) !?Index {
     const bytes = Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_index_file_bytes)) catch return null;
     defer gpa.free(bytes);
-    return parse(gpa, bytes) catch null;
+    return parse(gpa, bytes) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
 }
 
 fn parse(gpa: Allocator, bytes: []const u8) !?Index {
-    const checksum_marker = "\nC ";
-    const at = std.mem.lastIndexOf(u8, bytes, checksum_marker) orelse return null;
-    const body = bytes[0 .. at + 1];
-    const claimed_hex = std.mem.trimEnd(u8, bytes[at + checksum_marker.len ..], "\r\n");
-    const claimed = symbol.parseHash(claimed_hex) catch return null;
-    const actual = symbol.hashOf(body);
-    if (!std.mem.eql(u8, &actual, &claimed)) return null;
-
-    var lines = std.mem.splitScalar(u8, body, '\n');
-    const header = lines.next() orelse return null;
-    if (!std.mem.eql(u8, header, "emetgate-search-index v1")) return null;
-    const written_line = lines.next() orelse return null;
-    if (written_line.len < 2 or written_line[0] != 'W') return null;
-    const written_ns = std.fmt.parseInt(i96, written_line[2..], 16) catch return null;
-
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
     errdefer arena.deinit();
     const a = arena.allocator();
-
-    var entries: std.ArrayList(Entry) = .empty;
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        if (line[0] != 'F') return null;
-        var fields = std.mem.splitScalar(u8, line[2..], ' ');
-        const mtime_text = fields.next() orelse return null;
-        const size_text = fields.next() orelse return null;
-        const trigram_text = fields.next() orelse return null;
-        const path = fields.rest();
-        if (path.len == 0) return null;
-
-        const mtime_ns = std.fmt.parseInt(i96, mtime_text, 16) catch return null;
-        const size = std.fmt.parseInt(u64, size_text, 10) catch return null;
-
-        var trigrams: std.ArrayList(u24) = .empty;
-        if (!std.mem.eql(u8, trigram_text, "")) {
-            var parts = std.mem.splitScalar(u8, trigram_text, ':');
-            while (parts.next()) |part| {
-                const t = std.fmt.parseInt(u24, part, 16) catch return null;
-                try trigrams.append(a, t);
-            }
-        }
-        try entries.append(a, .{
-            .path = try a.dupe(u8, path),
-            .stamp = .{ .mtime_ns = mtime_ns, .size = size },
-            .trigrams = try trigrams.toOwnedSlice(a),
-        });
-    }
-    return try Index.finish(arena, try entries.toOwnedSlice(a), written_ns);
+    const contents = index_file.decode(a, bytes) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.Corrupt => {
+            arena.deinit();
+            gpa.destroy(arena);
+            return null;
+        },
+    };
+    const entries = try a.alloc(Entry, contents.entries.len);
+    for (contents.entries, entries) |e, *out| out.* = .{ .path = e.path, .stamp = e.stamp, .trigrams = e.trigrams, .content_hash = e.content_hash, .spans = e.spans, .doc = e.doc };
+    var index = try Index.finish(arena, entries, contents.written_ns);
+    index.files = contents.files;
+    index.git_stamp = contents.git_stamp;
+    return index;
 }
 
 const testing = std.testing;
@@ -507,7 +459,7 @@ test "build then save then load round-trips the same entries" {
 
     const path = try std.fmt.allocPrint(testing.allocator, "{s}\\idx", .{root_abs});
     defer testing.allocator.free(path);
-    try save(testing.allocator, testing.io, path, built);
+    try save(testing.allocator, testing.io, path, built, &.{}, null);
 
     const loaded = (try load(testing.allocator, testing.io, path)) orelse return error.TestUnexpectedResult;
     defer loaded.deinit();
@@ -529,7 +481,7 @@ test "a corrupted index file is rejected instead of trusted" {
 
     const path = try std.fmt.allocPrint(testing.allocator, "{s}\\idx", .{root_abs});
     defer testing.allocator.free(path);
-    try save(testing.allocator, testing.io, path, built);
+    try save(testing.allocator, testing.io, path, built, &.{}, null);
 
     const original = try tmp.dir.readFileAlloc(testing.io, "idx", testing.allocator, .unlimited);
     defer testing.allocator.free(original);

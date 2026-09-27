@@ -40,6 +40,7 @@ pub const move_batch = @import("platform/move_batch.zig");
 pub const file_move = @import("platform/file_move.zig");
 pub const module_paths = @import("platform/module_paths.zig");
 pub const search_index = @import("platform/search_index.zig");
+pub const search_index_file = @import("platform/search_index_file.zig");
 pub const search_session = @import("platform/search_session.zig");
 pub const search_v1 = @import("protocol/search_v1.zig");
 pub const disk = @import("platform/disk.zig");

@@ -662,7 +662,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         if (refreshed) |r| {
             if (r.changed) {
                 if (owned_index) |idx| {
-                    if (index_path) |p| search_index.save(gpa, io, p, idx) catch {};
+                    if (index_path) |p| search_index.save(gpa, io, p, idx, files, null) catch {};
                 }
             }
         }
