@@ -325,8 +325,7 @@ pub const Watcher = struct {
             self.gpa.free(files);
         }
         const subtrees = try keys(self.gpa, &self.subtrees);
-        self.files.clearRetainingCapacity();
-        self.subtrees.clearRetainingCapacity();
+        self.clearSets();
         return .{ .files = files, .subtrees = subtrees };
     }
 
@@ -390,9 +389,13 @@ fn addKey(gpa: Allocator, set: *std.StringHashMapUnmanaged(void), rel: []const u
 
 fn keys(gpa: Allocator, set: *std.StringHashMapUnmanaged(void)) error{OutOfMemory}![][]u8 {
     const out = try gpa.alloc([]u8, set.count());
+    var copied: usize = 0;
+    errdefer {
+        for (out[0..copied]) |p| gpa.free(p);
+        gpa.free(out);
+    }
     var it = set.keyIterator();
-    var i: usize = 0;
-    while (it.next()) |k| : (i += 1) out[i] = @constCast(k.*);
+    while (it.next()) |k| : (copied += 1) out[copied] = try gpa.dupe(u8, k.*);
     std.mem.sort([]u8, out, {}, lessPath);
     return out;
 }
