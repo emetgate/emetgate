@@ -605,8 +605,9 @@ pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usiz
     for (pendings) |*p| p.freePaths();
     if (batch) |b| {
         if (journal_path) |jp| _ = deleteWithRetry(b.io, jp);
+        const journal_gone = if (commit_record.flushDir(b.journal_dir)) |_| true else |_| false;
         if (Step.stops(step)) return error.Crashed;
-        commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
+        if (journal_gone) commit_record.remove(b.gpa, b.io, b.journal_dir, &b.tag) catch {};
     }
     return indexed;
 }
@@ -913,6 +914,7 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
     }
     index.flush(io, root_abs, report);
     for (index_journals.items) |jp| _ = deleteWithRetry(io, jp);
+    commit_record.flushDir(journal_dir) catch return;
     try commit_record.removeAll(gpa, io, journal_dir, kept.items);
     if (std.Io.Dir.cwd().deleteDir(io, journal_dir)) |_| durability_log.removedDir(journal_dir) else |_| {}
 }

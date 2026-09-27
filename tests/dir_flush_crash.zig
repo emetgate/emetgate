@@ -177,9 +177,38 @@ fn flushCount(shape: Shape, stop: ?usize, in_recovery: bool) !usize {
     return dry.log.flushes;
 }
 
+test "dir flush dropJ: a journal whose deletion was lost after its commit record was removed does not roll a finished batch back" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const last = try flushCount(.create_and_modify, null, false);
+    const setup = try Setup.init(.create_and_modify);
+    defer setup.deinit();
+    setup.log.crash_at_flush = last;
+    try setup.run(null);
+    setup.log.powerLoss(isJournalRemoval);
+    try setup.recover();
+    try testing.expectEqual(.new, try setup.state());
+    try setup.noDebris();
+}
 
 const after_commit_record = 8;
 
+test "dir flush dropJ: recovery that loses a journal deletion after removing the commit record does not roll the batch back" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const last = try flushCount(.create_and_modify, after_commit_record, true);
+    const setup = try Setup.init(.create_and_modify);
+    defer setup.deinit();
+    var at: StopAt = .{ .target = after_commit_record };
+    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    try testing.expectError(error.Crashed, setup.run(&step));
+    setup.log.flushes = 0;
+    setup.log.crash_at_flush = last;
+    try setup.recover();
+    try testing.expectEqual(.new, try setup.state());
+    setup.log.powerLoss(isJournalRemoval);
+    try setup.recover();
+    try testing.expectEqual(.new, try setup.state());
+    try setup.noDebris();
+}
 
 
 test "dir flush log: a power loss undoes an unflushed creation and keeps one whose directory was flushed" {
