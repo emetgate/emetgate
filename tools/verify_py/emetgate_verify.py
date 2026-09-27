@@ -25,8 +25,9 @@ HEX = re.compile(r"^[0-9a-f]*$")
 VERIFIED = "verified"
 UNVERIFIED = "unverified"
 MISMATCH = "mismatch"
+CONSISTENT = "consistent"
 RANK = {VERIFIED: 0, UNVERIFIED: 1, MISMATCH: 2}
-EXIT = {VERIFIED: 0, UNVERIFIED: 53, MISMATCH: 54}
+EXIT = {VERIFIED: 0, CONSISTENT: 55, UNVERIFIED: 53, MISMATCH: 54}
 
 
 class Invalid(Exception):
@@ -192,6 +193,12 @@ def not_checked(r):
     return out
 
 
+def reported(verdict, skipped):
+    if verdict == VERIFIED and skipped:
+        return CONSISTENT
+    return verdict
+
+
 def verify(git, spec):
     rev = git.commit(spec)
     if rev is None:
@@ -291,11 +298,30 @@ def verify(git, spec):
         for path in changed:
             raise_file(path, MISMATCH, "the receipt note is not canonical JSON")
     skipped = sorted({name for r in results for name in r.get("not_checked", [])})
+    file_skipped = {p: set() for p in order}
+    for r in results:
+        if r["receipt"] is None:
+            continue
+        for f in r["receipt"]["files"]:
+            file_skipped[f["path"]].update(r.get("not_checked", []))
+
+    def file_entry(p):
+        entry = {"path": p, "verdict": reported(files[p].verdict, file_skipped[p]), "not_checked": sorted(file_skipped[p])}
+        if files[p].reason:
+            entry["reason"] = files[p].reason
+        return entry
+
+    def receipt_entry(r):
+        entry = {"id": r["id"], "batch": r["batch"], "operation": r["operation"], "verdict": reported(r["outcome"].verdict, r.get("not_checked", [])), "not_checked": r.get("not_checked", [])}
+        if r["outcome"].reason:
+            entry["reason"] = r["outcome"].reason
+        return entry
+
     return {
         "commit": rev,
-        "verdict": verdict,
-        "files": [dict({"path": p, "verdict": files[p].verdict}, **({"reason": files[p].reason} if files[p].reason else {})) for p in order],
-        "receipts": [dict({"id": r["id"], "batch": r["batch"], "operation": r["operation"], "verdict": r["outcome"].verdict, "not_checked": r.get("not_checked", [])}, **({"reason": r["outcome"].reason} if r["outcome"].reason else {})) for r in results],
+        "verdict": reported(verdict, skipped),
+        "files": [file_entry(p) for p in order],
+        "receipts": [receipt_entry(r) for r in results],
         "not_checked": skipped,
     }
 
@@ -319,6 +345,8 @@ def main():
             print("  %-10s %s%s" % (f["verdict"], f["path"], ("  (" + f["reason"] + ")") if "reason" in f else ""))
         if report["not_checked"]:
             print("  not checked here: " + ", ".join(report["not_checked"]))
+        if report["verdict"] == CONSISTENT:
+            print("  consistent: everything this checker checks holds; it is not verified, the fields above were not checked")
     return EXIT[report["verdict"]]
 
 

@@ -29,8 +29,15 @@ fn category(reason: []const u8) ?[]const u8 {
 
 fn rank(verdict: []const u8) u8 {
     if (std.mem.eql(u8, verdict, "verified")) return 0;
+    if (std.mem.eql(u8, verdict, "consistent")) return 0;
     if (std.mem.eql(u8, verdict, "unverified")) return 1;
     return 2;
+}
+
+fn honest(py_verdict: []const u8, not_checked: []const std.json.Value) bool {
+    if (std.mem.eql(u8, py_verdict, "verified")) return not_checked.len == 0;
+    if (std.mem.eql(u8, py_verdict, "consistent")) return not_checked.len != 0;
+    return true;
 }
 
 fn contains(list: []const std.json.Value, name: []const u8) bool {
@@ -39,6 +46,7 @@ fn contains(list: []const std.json.Value, name: []const u8) bool {
 }
 
 fn allowed(zig_verdict: checker.Verdict, zig_reason: []const u8, py_verdict: []const u8, not_checked: []const std.json.Value) bool {
+    if (!honest(py_verdict, not_checked)) return false;
     const z = rank(@tagName(zig_verdict));
     const p = rank(py_verdict);
     if (z == p) return true;
@@ -58,7 +66,7 @@ pub fn run(arena: Allocator, root: []const u8, commit: []const u8) !Python {
         .exited => |c| @intCast(c),
         else => return error.PythonCheckerCrashed,
     };
-    if (code != 0 and code != 53 and code != 54) {
+    if (code != 0 and code != 53 and code != 54 and code != 55) {
         std.debug.print("python checker failed: {s}\n", .{result.stderr});
         return error.PythonCheckerFailed;
     }
@@ -81,7 +89,7 @@ pub fn compare(arena: Allocator, root: []const u8, zig: verify_run.Result) !void
             const o = item.object;
             if (!std.mem.eql(u8, o.get("path").?.string, f.path)) continue;
             found = true;
-            if (!allowed(f.outcome.verdict, f.outcome.reason, o.get("verdict").?.string, not_checked)) return error.NVersionDisagreement;
+            if (!allowed(f.outcome.verdict, f.outcome.reason, o.get("verdict").?.string, o.get("not_checked").?.array.items)) return error.NVersionDisagreement;
         }
         if (!found) return error.NVersionDisagreement;
     }
@@ -94,13 +102,14 @@ pub fn compare(arena: Allocator, root: []const u8, zig: verify_run.Result) !void
         if (!allowed(r.outcome.verdict, r.outcome.reason, o.get("verdict").?.string, o.get("not_checked").?.array.items)) return error.NVersionDisagreement;
     }
     const overall = report.get("verdict").?.string;
+    if (!honest(overall, not_checked)) return error.NVersionDisagreement;
     if (rank(overall) > rank(@tagName(zig.report.verdict))) return error.NVersionDisagreement;
     if (rank(overall) < rank(@tagName(zig.report.verdict))) {
         for (zig.report.files) |f| {
             if (rank(@tagName(f.outcome.verdict)) > rank(overall) and !allowed(f.outcome.verdict, f.outcome.reason, overall, not_checked)) return error.NVersionDisagreement;
         }
     }
-    const expected_exit: u8 = switch (rank(overall)) {
+    const expected_exit: u8 = if (std.mem.eql(u8, overall, "consistent")) 55 else switch (rank(overall)) {
         0 => 0,
         1 => 53,
         else => 54,
