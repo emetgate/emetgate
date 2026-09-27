@@ -559,3 +559,29 @@ test "a symbol's byte offsets are recomputed, not reused stale, after the file g
     }
     try testing.expect(saw_definition);
 }
+
+test "a regex whose literal parts are optional or alternatives still finds every file that matches" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "only_bar.ts", .data = "export const a = \"bar\";\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "only_foo.ts", .data = "export const b = \"foo\";\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "us.ts", .data = "export const c = \"color\";\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "uk.ts", .data = "export const d = \"colour\";\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const Case = struct { pattern: []const u8, files: usize };
+    for ([_]Case{ .{ .pattern = "foo|bar", .files = 2 }, .{ .pattern = "colou?r", .files = 2 } }) |case| {
+        var reply = try searchRegex(runtime, root, case.pattern);
+        defer reply.deinit();
+        try testing.expect(!reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        errdefer std.debug.print("{s}: {s}\n", .{ case.pattern, reply.text });
+        try testing.expectEqual(case.files, groupsOf(body.value).len);
+    }
+}
