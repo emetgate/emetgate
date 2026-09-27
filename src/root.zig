@@ -5,6 +5,7 @@ pub const runtime = @import("engine/runtime.zig");
 pub const loader = @import("engine/loader.zig");
 pub const tree_cache = @import("engine/tree_cache.zig");
 pub const symbol = @import("engine/symbol.zig");
+pub const kind_spans = @import("engine/kind_spans.zig");
 pub const line_range = @import("engine/line_range.zig");
 pub const skeleton = @import("engine/skeleton.zig");
 pub const cas = @import("engine/cas.zig");

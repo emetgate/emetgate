@@ -7,6 +7,7 @@ pub const runtime = src.runtime;
 pub const loader = src.loader;
 pub const tree_cache = src.tree_cache;
 pub const symbol = src.symbol;
+pub const kind_spans = src.kind_spans;
 pub const line_range = src.line_range;
 pub const skeleton = src.skeleton;
 pub const cas = src.cas;
