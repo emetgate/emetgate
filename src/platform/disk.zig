@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const commit_record = @import("commit_record.zig");
+const durability_log = @import("durability_log.zig");
 const journal = @import("journal.zig");
 const git_repo = @import("repo.zig");
 const shadow_root = @import("shadow_root.zig");
@@ -65,7 +66,10 @@ pub const Guard = struct {
 
     fn deleteSelf(self: Guard) !void {
         var info: win.FILE_DISPOSITION_INFO_EX = .{ .flags = win.file_disposition_flag_delete | win.file_disposition_flag_posix_semantics };
-        if (win.SetFileInformationByHandle(self.handle, win.file_disposition_info_ex, &info, @sizeOf(win.FILE_DISPOSITION_INFO_EX)) != .FALSE) return;
+        const removal = durability_log.beforeHandleRemove(self.handle);
+        const ok = win.SetFileInformationByHandle(self.handle, win.file_disposition_info_ex, &info, @sizeOf(win.FILE_DISPOSITION_INFO_EX)) != .FALSE;
+        durability_log.handleRemoved(removal, ok);
+        if (ok) return;
         return switch (win.GetLastError()) {
             win.error_sharing_violation, win.error_lock_violation => error.FileLocked,
             win.error_access_denied => error.AccessDenied,
@@ -490,10 +494,10 @@ fn writeBatchJournal(b: *const Batch, pendings: []const Pending) ![]u8 {
 
 fn makeDirs(b: *const Batch) !void {
     for (b.created_dirs) |dir| {
-        std.Io.Dir.cwd().createDir(b.io, dir, .default_dir) catch |err| switch (err) {
+        if (std.Io.Dir.cwd().createDir(b.io, dir, .default_dir)) |_| durability_log.madeDir(dir) else |err| switch (err) {
             error.PathAlreadyExists => {},
             else => |e| return e,
-        };
+        }
         try flushParent(dir);
     }
 }
@@ -504,6 +508,7 @@ fn removeEmptyDirs(io: std.Io, dirs: []const []const u8) void {
         k -= 1;
         clearSidecarTemps(io, dirs[k]);
         std.Io.Dir.cwd().deleteDir(io, dirs[k]) catch continue;
+        durability_log.removedDir(dirs[k]);
         flushParent(dirs[k]) catch {};
     }
 }
@@ -906,7 +911,7 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
     index.flush(io, root_abs, report);
     for (index_journals.items) |jp| _ = deleteWithRetry(io, jp);
     try commit_record.removeAll(gpa, io, journal_dir, kept.items);
-    std.Io.Dir.cwd().deleteDir(io, journal_dir) catch {};
+    if (std.Io.Dir.cwd().deleteDir(io, journal_dir)) |_| durability_log.removedDir(journal_dir) else |_| {}
 }
 
 const JournalOutcome = enum { delete, after_index, keep };
@@ -1073,7 +1078,10 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     info.file_name_length = @intCast(name_bytes);
     @memcpy(buffer[header..][0..name_bytes], std.mem.sliceAsBytes(std.mem.sliceTo(name, 0)));
 
-    if (win.SetFileInformationByHandle(handle, win.file_rename_info_ex, buffer.ptr, @intCast(buffer.len)) != .FALSE) return;
+    const pending = durability_log.beforeRename(handle, target_abs, replace_existing);
+    const ok = win.SetFileInformationByHandle(handle, win.file_rename_info_ex, buffer.ptr, @intCast(buffer.len)) != .FALSE;
+    durability_log.renamed(pending, target_abs, ok);
+    if (ok) return;
     return switch (win.GetLastError()) {
         win.error_already_exists, win.error_file_exists => error.PathAlreadyExists,
         win.error_sharing_violation, win.error_lock_violation => error.FileLocked,
@@ -1108,6 +1116,7 @@ pub fn writeDurably(io: std.Io, path: []const u8, data: []const u8) !void {
     defer file.close(io);
     try file.writeStreamingAll(io, data);
     try file.sync(io);
+    durability_log.created(path);
 }
 
 fn applyAttributes(path_abs: []const u8, attributes: windows.DWORD) !void {
@@ -1120,6 +1129,13 @@ const delete_retries = 5;
 const delete_retry_ms: windows.DWORD = 40;
 
 fn deleteWithRetry(io: std.Io, path: []const u8) bool {
+    const saved = durability_log.beforeRemove(path);
+    const deleted = deleteAttempts(io, path);
+    if (deleted) durability_log.removed(path, saved) else durability_log.discard(saved);
+    return deleted;
+}
+
+fn deleteAttempts(io: std.Io, path: []const u8) bool {
     var attempt: usize = 0;
     while (true) : (attempt += 1) {
         std.Io.Dir.deleteFileAbsolute(io, path) catch |err| switch (err) {
