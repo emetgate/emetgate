@@ -3,6 +3,7 @@ const shadow = @import("shadow.zig");
 const search_index = @import("search_index.zig");
 const change_watch = @import("change_watch.zig");
 const worker_pool = @import("worker_pool.zig");
+const git_index = @import("git_index.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -239,7 +240,8 @@ pub const Session = struct {
                 if (sameGitStamp(stamp, saved)) return false;
             }
         }
-        const files = try shadow.trackedFiles(self.gpa, self.io, root);
+        const from_index: ?[][]u8 = if (self.git_index) |g| try git_index.readTracked(self.gpa, self.io, g) else null;
+        const files = from_index orelse try shadow.trackedFiles(self.gpa, self.io, root);
         if (self.files) |f| {
             shadow.freeFileList(self.gpa, f);
             self.gpa.free(f);
