@@ -118,7 +118,14 @@ pub fn build(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
     return .{ .arena = arena, .entries = try entries.toOwnedSlice(a) };
 }
 
-pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, previous: ?Index) !Index {
+pub const RefreshResult = struct {
+    index: Index,
+    changed: bool,
+    reused: usize,
+    recomputed: usize,
+};
+
+pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8, previous: ?Index) !RefreshResult {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
@@ -126,6 +133,8 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
     const a = arena.allocator();
 
     var entries: std.ArrayList(Entry) = .empty;
+    var reused: usize = 0;
+    var recomputed: usize = 0;
     for (files) |rel| {
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, rel });
         defer gpa.free(abs);
@@ -140,6 +149,7 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
                         .stamp = stamp,
                         .trigrams = try a.dupe(u24, old.trigrams),
                     });
+                    reused += 1;
                     continue;
                 }
             }
@@ -155,8 +165,15 @@ pub fn refresh(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const 
             .stamp = stamp,
             .trigrams = try a.dupe(u24, trigrams),
         });
+        recomputed += 1;
     }
-    return .{ .arena = arena, .entries = try entries.toOwnedSlice(a) };
+    const changed = recomputed != 0 or entries.items.len != if (previous) |p| p.entries.len else 0;
+    return .{
+        .index = .{ .arena = arena, .entries = try entries.toOwnedSlice(a) },
+        .changed = changed,
+        .reused = reused,
+        .recomputed = recomputed,
+    };
 }
 
 fn renderBody(gpa: Allocator, index: Index, written_ns: i96) ![]u8 {
@@ -367,13 +384,34 @@ test "refresh reuses unchanged entries and recomputes a file that changed" {
 
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export const value = 999999;\n" });
 
-    const second = try refresh(testing.allocator, testing.io, root_abs, &.{ "a.ts", "b.ts" }, first);
+    const refreshed = try refresh(testing.allocator, testing.io, root_abs, &.{ "a.ts", "b.ts" }, first);
+    const second = refreshed.index;
     defer second.deinit();
+    try testing.expect(refreshed.changed);
+    try testing.expectEqual(@as(usize, 1), refreshed.reused);
+    try testing.expectEqual(@as(usize, 1), refreshed.recomputed);
 
     const a_entry = second.find("a.ts").?;
     const b_entry = second.find("b.ts").?;
     try testing.expect(!std.mem.eql(u24, a_entry.trigrams, first.find("a.ts").?.trigrams));
     try testing.expectEqualSlices(u24, first.find("b.ts").?.trigrams, b_entry.trigrams);
+}
+
+test "refresh reports unchanged when every entry is reused and no file was added or removed" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export const value = 1;\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+
+    const first = try build(testing.allocator, testing.io, root_abs, &.{"a.ts"});
+    defer first.deinit();
+
+    const refreshed = try refresh(testing.allocator, testing.io, root_abs, &.{"a.ts"}, first);
+    defer refreshed.index.deinit();
+    try testing.expect(!refreshed.changed);
+    try testing.expectEqual(@as(usize, 1), refreshed.reused);
+    try testing.expectEqual(@as(usize, 0), refreshed.recomputed);
 }
 
 test "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set" {
@@ -405,9 +443,10 @@ test "a racy mtime collision around the index write time forces a recompute inst
     defer fake_arena.deinit();
 
     const refreshed = try refresh(testing.allocator, testing.io, root_abs, &.{"a.ts"}, fake_previous);
-    defer refreshed.deinit();
+    defer refreshed.index.deinit();
 
     const fresh_trigrams = try trigramsOfAlloc(testing.allocator, "export const zzzneedle = 2;\n");
     defer testing.allocator.free(fresh_trigrams);
-    try testing.expectEqualSlices(u24, fresh_trigrams, refreshed.find("a.ts").?.trigrams);
+    try testing.expectEqualSlices(u24, fresh_trigrams, refreshed.index.find("a.ts").?.trigrams);
+    try testing.expect(refreshed.changed);
 }

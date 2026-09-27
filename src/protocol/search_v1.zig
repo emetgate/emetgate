@@ -35,6 +35,38 @@ pub const max_match_text = 200;
 pub const min_gram_len = 3;
 pub const regex_budget: u64 = 2_000_000;
 
+pub const Stats = struct {
+    index_load_ns: u64 = 0,
+    index_refresh_ns: u64 = 0,
+    index_save_ns: u64 = 0,
+    read_ns: u64 = 0,
+    parse_ns: u64 = 0,
+    classify_ns: u64 = 0,
+    json_ns: u64 = 0,
+    files_read: usize = 0,
+    files_parsed: usize = 0,
+    files_index_reused: usize = 0,
+    files_index_recomputed: usize = 0,
+};
+
+pub threadlocal var stats_sink: ?*Stats = null;
+
+const StageTimer = struct {
+    io: std.Io,
+    last_ns: i96,
+
+    fn start(io: std.Io) StageTimer {
+        return .{ .io = io, .last_ns = std.Io.Clock.awake.now(io).nanoseconds };
+    }
+
+    fn lap(self: *StageTimer) u64 {
+        const now_ns = std.Io.Clock.awake.now(self.io).nanoseconds;
+        const delta = now_ns - self.last_ns;
+        self.last_ns = now_ns;
+        return @intCast(delta);
+    }
+};
+
 pub const Kind = enum { code, comment, string };
 
 fn kindName(kind: Kind) []const u8 {
@@ -187,13 +219,32 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
 
     const index_path = search_index.indexPath(gpa, place.root) catch null;
     defer if (index_path) |p| gpa.free(p);
+    var timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     const previous_index: ?search_index.Index = if (index_path) |p| (search_index.load(gpa, io, p) catch null) else null;
     defer if (previous_index) |idx| idx.deinit();
-    const fresh_index: ?search_index.Index = search_index.refresh(gpa, io, place.root, files, previous_index) catch null;
+    if (timer) |*t| if (stats_sink) |s| {
+        s.index_load_ns += t.lap();
+    };
+    const refreshed: ?search_index.RefreshResult = search_index.refresh(gpa, io, place.root, files, previous_index) catch null;
+    const fresh_index: ?search_index.Index = if (refreshed) |r| r.index else null;
     defer if (fresh_index) |idx| idx.deinit();
-    if (fresh_index) |idx| {
-        if (index_path) |p| search_index.save(gpa, io, p, idx) catch {};
+    if (timer) |*t| if (stats_sink) |s| {
+        s.index_refresh_ns += t.lap();
+        if (refreshed) |r| {
+            s.files_index_reused += r.reused;
+            s.files_index_recomputed += r.recomputed;
+        }
+    };
+    if (refreshed) |r| {
+        if (r.changed) {
+            if (fresh_index) |idx| {
+                if (index_path) |p| search_index.save(gpa, io, p, idx) catch {};
+            }
+        }
     }
+    if (timer) |*t| if (stats_sink) |s| {
+        s.index_save_ns += t.lap();
+    };
 
     const gram_query: ?[]u24 = blk: {
         const literal_hint = if (is_regex) regex_hint.longestLiteralChunk(pattern) else pattern;
@@ -234,9 +285,28 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             }
         }
 
+        var read_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
         const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_file_bytes)) catch continue;
         defer gpa.free(bytes);
+        if (read_timer) |*t| if (stats_sink) |s| {
+            s.read_ns += t.lap();
+            s.files_read += 1;
+        };
         if (std.mem.indexOfScalar(u8, bytes, 0) != null) continue;
+
+        var has_any_match = false;
+        {
+            var probe_offset: u32 = 0;
+            var probe_lines = std.mem.splitScalar(u8, bytes, '\n');
+            while (probe_lines.next()) |raw| {
+                probe_offset += @intCast(raw.len + 1);
+                if (try matcher.find(gpa, raw)) {
+                    has_any_match = true;
+                    break;
+                }
+            }
+        }
+        if (!has_any_match) continue;
         files_scanned += 1;
 
         const profile = registry.forPath(f);
@@ -244,6 +314,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         var owned_snapshot = false;
         defer if (owned_snapshot) snapshot.?.destroy();
         var table: ?*const symbol.Table = null;
+        var parse_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
         if (profile) |p| {
             snapshot = if (tree_cache) |cache|
                 cache.load(runtime, io, abs) catch |err| blk2: {
@@ -275,6 +346,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             defer parser.deinit();
             md_tree = parser.parseIn(markdown_heading.grammar(), bytes) catch null;
         }
+        if (parse_timer) |*t| if (stats_sink) |s| {
+            s.parse_ns += t.lap();
+            s.files_parsed += 1;
+        };
 
         var offset: u32 = 0;
         var lines = std.mem.splitScalar(u8, bytes, '\n');
@@ -285,6 +360,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             offset += @intCast(raw.len + 1);
             if (!try matcher.find(gpa, raw)) continue;
             const match_at: u32 = line_start + @as(u32, @intCast(std.mem.indexOf(u8, raw, if (is_regex) raw else pattern) orelse 0));
+            var classify_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
+            defer if (classify_timer) |*t| if (stats_sink) |s| {
+                s.classify_ns += t.lap();
+            };
 
             var kind: Kind = .code;
             var role: ?Role = null;
@@ -359,6 +438,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         }
     }.lessThan);
 
+    var json_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
+    defer if (json_timer) |*t| if (stats_sink) |s| {
+        s.json_ns += t.lap();
+    };
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("pattern");
