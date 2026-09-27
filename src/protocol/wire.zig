@@ -178,6 +178,7 @@ pub const SymbolEntry = struct {
     ref: []const u8,
     hash: symbol.Hash,
     body: ?[]const u8,
+    nodes: bool = false,
 };
 
 pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const SymbolEntry) !void {
@@ -195,7 +196,7 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
         try js.objectField("hash");
         try js.write(hex[0..]);
         if (entry.body) |body| {
-            try js.objectField("body");
+            try js.objectField(if (entry.nodes) "nodes" else "body");
             try js.write(body);
         } else {
             try js.objectField("status");

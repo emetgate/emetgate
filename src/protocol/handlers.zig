@@ -205,7 +205,7 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
         return success(gpa, &buffer);
     }
     if (symbols) |list| {
-        renderSymbolBodies(gpa, io, runtime, root, file, list, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
+        renderSymbolBodies(gpa, io, runtime, root, file, list, force, nodes, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return failure(gpa, &buffer, err, event);
         };
@@ -233,7 +233,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     defer ref.deinit(gpa);
     const found = try table.resolve(ref);
     event.hash = found.hash;
-    if (mirror) |m| {
+    if (!nodes) if (mirror) |m| {
         const key = try mirrorKey(gpa, file, sym);
         defer gpa.free(key);
         if (try m.check(key, found.hash, force) == .unchanged) {
@@ -241,7 +241,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
             event.chars_fullfile = snapshot.source.len;
             return wire.writeUnchanged(w, file, sym, found.hash, null);
         }
-    }
+    };
     event.chars_fullfile = snapshot.source.len;
     if (nodes) {
         const annotated = try node_cas_mod.annotate(gpa, snapshot.tree, found.declaration);
@@ -254,7 +254,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
 }
 
-fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     if (symbols.len == 0) return error.MissingArgument;
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
@@ -262,6 +262,8 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     const table = try snapshot.symbols();
     const entries = try gpa.alloc(wire.SymbolEntry, symbols.len);
     defer gpa.free(entries);
+    var annotated: usize = 0;
+    defer for (entries[0..annotated]) |entry| gpa.free(entry.body.?);
     var chars: usize = 0;
     for (symbols, 0..) |item, i| {
         const sym = switch (item) {
@@ -271,6 +273,13 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         const ref = try symbol.Ref.parse(gpa, sym);
         defer ref.deinit(gpa);
         const found = try table.resolve(ref);
+        if (nodes) {
+            const text = try node_cas_mod.annotate(gpa, snapshot.tree, found.declaration);
+            entries[i] = .{ .ref = sym, .hash = found.hash, .body = text, .nodes = true };
+            annotated = i + 1;
+            chars += text.len;
+            continue;
+        }
         var unchanged = false;
         if (mirror) |m| {
             const key = try mirrorKey(gpa, file, sym);
