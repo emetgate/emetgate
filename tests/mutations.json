@@ -5687,6 +5687,56 @@
       "kills": [
         "verify: a gated edit gets a receipt that verifies at the user's commit, tests rerun in the sandbox"
       ]
+    },
+    {
+      "id": "AC1-app-container-falls-back-to-low-integrity",
+      "file": "src/platform/sandbox.zig",
+      "from": "        .app_container => |profile| .{ .app = profile },",
+      "to": "        .app_container => .{ .low = LowToken.create() catch return error.SandboxUnavailable },",
+      "kills": [
+        "redteam appcontainer: the sandboxed process runs inside an app container, a low-integrity run does not",
+        "redteam appcontainer: a non-granted secret is unreadable, and granting it proves the check is real",
+        "redteam appcontainer: a loopback connection is refused inside the container but reachable from a low-integrity run"
+      ]
+    },
+    {
+      "id": "AC2-app-container-gains-a-capability",
+      "file": "src/platform/appcontainer.zig",
+      "from": ".capabilities = null, .capability_count = 0, .reserved = 0 };",
+      "to": ".capabilities = null, .capability_count = 1, .reserved = 0 };",
+      "kills": [
+        "a fresh profile carries no capabilities and points its security struct at its own sid",
+        "redteam appcontainer: the sandboxed process runs inside an app container, a low-integrity run does not"
+      ]
+    },
+    {
+      "id": "AC3-app-container-grant-not-applied",
+      "file": "src/platform/appcontainer.zig",
+      "from": "win.dacl_security_information, null, null, merged, null) != 0) return error.AclFailed;",
+      "to": "win.dacl_security_information, null, null, dacl, null) != 0) return error.AclFailed;",
+      "kills": [
+        "redteam appcontainer: a granted directory is writable, a non-granted directory is not",
+        "redteam appcontainer: a non-granted secret is unreadable, and granting it proves the check is real"
+      ]
+    },
+    {
+      "id": "AC4-lpac-opt-out-dropped",
+      "file": "src/platform/appcontainer.zig",
+      "from": "pub const all_application_packages_opt_out: u32 = 0x1;",
+      "to": "pub const all_application_packages_opt_out: u32 = 0x0;",
+      "kills": [
+        "redteam appcontainer: an lpac profile opts out of the all-packages group, a regular one does not"
+      ]
+    },
+    {
+      "id": "AC5-app-container-grant-covers-the-parent",
+      "file": "src/platform/appcontainer.zig",
+      "from": "        const wide = try toWide(&path_w, path_abs);",
+      "to": "        const wide = try toWide(&path_w, std.fs.path.dirname(path_abs) orelse path_abs);",
+      "kills": [
+        "redteam appcontainer: a granted directory is writable, a non-granted directory is not",
+        "redteam appcontainer: a non-granted secret is unreadable, and granting it proves the check is real"
+      ]
     }
   ]
 }
