@@ -5,7 +5,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-CHECKED_FILES = ["README.md", "SECURITY.md", "VERIFICATION.md"]
+CHECKED_FILES = ["README.md", "REFERENCE.md", "SECURITY.md", "VERIFICATION.md"]
 
 FORBIDDEN = [
     "robust", "seamless", "seamlessly", "crucial", "leverage", "leveraging",
