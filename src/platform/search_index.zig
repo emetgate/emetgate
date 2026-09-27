@@ -101,15 +101,6 @@ pub const Index = struct {
     }
 };
 
-pub const Slot = struct {
-    index: ?Index = null,
-
-    pub fn deinit(self: *Slot) void {
-        if (self.index) |idx| idx.deinit();
-        self.* = undefined;
-    }
-};
-
 pub fn indexPath(gpa: Allocator, root_abs: []const u8) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -179,6 +170,43 @@ pub fn build(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
         });
     }
     return Index.finish(arena, try entries.toOwnedSlice(a), null);
+}
+
+pub const UpdateError = error{ NeedsFullRefresh, OutOfMemory };
+
+pub fn updateEntry(gpa: Allocator, io: std.Io, index: *Index, root_abs: []const u8, rel: []const u8) UpdateError!void {
+    const slot = index.lookup.get(rel);
+    const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, rel });
+    defer gpa.free(abs);
+    const stamp = statOf(io, abs) orelse {
+        _ = index.lookup.remove(rel);
+        return;
+    };
+    if (stamp.size > max_indexed_file_bytes) {
+        _ = index.lookup.remove(rel);
+        return;
+    }
+    const bytes = Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_indexed_file_bytes)) catch {
+        _ = index.lookup.remove(rel);
+        return;
+    };
+    defer gpa.free(bytes);
+    if (looksBinary(bytes)) {
+        _ = index.lookup.remove(rel);
+        return;
+    }
+    const at = slot orelse return error.NeedsFullRefresh;
+    const a = index.arena.allocator();
+    const trigrams = try trigramsOfAlloc(gpa, bytes);
+    defer gpa.free(trigrams);
+    index.entries[at] = .{
+        .path = index.entries[at].path,
+        .stamp = stamp,
+        .trigrams = try a.dupe(u24, trigrams),
+        .content_hash = symbol.fileHash(bytes),
+        .spans = spansFor(a, rel, bytes),
+        .doc = doc_spans.build(a, rel, bytes),
+    };
 }
 
 pub const RefreshResult = struct {

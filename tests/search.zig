@@ -3,6 +3,7 @@ const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const tree_cache_mod = @import("emetgate").tree_cache;
 const search_index = @import("emetgate").search_index;
+const search_session = @import("emetgate").search_session;
 const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
@@ -451,13 +452,14 @@ test "a resident index entry whose stored hash does not match the file's live by
         .content_hash = wrong_hash,
         .spans = fake_spans,
     }};
-    var slot: search_index.Slot = .{ .index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null } };
-    defer if (slot.index) |idx| idx.deinit();
+    var session = search_session.Session.init(testing.allocator, testing.io, root, .{});
+    defer session.deinit();
+    session.index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null };
 
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "realFn", .dir = root }, .{ .root = root, .search_index_slot = &slot });
+    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "realFn", .dir = root }, .{ .root = root, .search_session = &session });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -493,13 +495,14 @@ test "a hash-matching index entry with no persisted spans still classifies comme
         .content_hash = symbol.fileHash(real_bytes),
         .spans = null,
     }};
-    var slot: search_index.Slot = .{ .index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null } };
-    defer if (slot.index) |idx| idx.deinit();
+    var session = search_session.Session.init(testing.allocator, testing.io, root, .{});
+    defer session.deinit();
+    session.index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null };
 
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "loadPending", .dir = root }, .{ .root = root, .search_index_slot = &slot });
+    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "loadPending", .dir = root }, .{ .root = root, .search_session = &session });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();

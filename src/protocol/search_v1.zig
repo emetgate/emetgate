@@ -2,6 +2,7 @@ const std = @import("std");
 const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
 const search_index = @import("../platform/search_index.zig");
+const search_session = @import("../platform/search_session.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const symbol = @import("../engine/symbol.zig");
 const registry = @import("../engine/lang/registry.zig");
@@ -36,6 +37,8 @@ pub const min_gram_len = 3;
 pub const regex_budget: u64 = 2_000_000;
 
 pub const Stats = struct {
+    session: ?search_session.Report = null,
+    sync_ns: u64 = 0,
     jail_ns: u64 = 0,
     list_ns: u64 = 0,
     total_ns: u64 = 0,
@@ -223,7 +226,7 @@ const Matcher = union(enum) {
     }
 };
 
-pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, index_slot: ?*search_index.Slot) !ToolResult {
+pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session) !ToolResult {
     const pattern = try requireString(args, "pattern");
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     const is_regex = if (args) |a| getBool(a, "regex") orelse false else false;
@@ -238,14 +241,14 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     defer if (want_stats) {
         stats_sink = null;
     };
-    renderSearch(gpa, io, runtime, root, tree_cache, index_slot, pattern, dir, is_regex, kinds, &buffer.writer) catch |err| {
+    renderSearch(gpa, io, runtime, root, tree_cache, session, pattern, dir, is_regex, kinds, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, index_slot: ?*search_index.Slot, pattern: []const u8, dir: []const u8, is_regex: bool, kinds: ?[]const Value, w: *Writer) !void {
+fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, pattern: []const u8, dir: []const u8, is_regex: bool, kinds: ?[]const Value, w: *Writer) !void {
     if (pattern.len == 0) return error.EmptyPattern;
     var total_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     var timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
@@ -255,61 +258,66 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         s.jail_ns += t.lap();
     };
 
-    const files = try shadow.trackedFiles(gpa, io, place.root);
-    defer gpa.free(files);
-    defer shadow.freeFileList(gpa, files);
-    if (timer) |*t| if (stats_sink) |s| {
+    var session_files: ?[]const []u8 = null;
+    var session_index: ?search_index.Index = null;
+    if (session) |sess| {
+        if (sess.owns(place.root) or sess.root == null) {
+            try sess.prepare(place.root);
+            session_files = sess.files.?;
+            session_index = sess.index;
+            if (stats_sink) |s| {
+                s.session = sess.last;
+                s.list_ns += sess.last.list_ns;
+                s.index_refresh_ns += sess.last.refresh_ns;
+                s.sync_ns += sess.last.sync_ns;
+                s.files_index_reused += sess.last.reused;
+                s.files_index_recomputed += sess.last.recomputed;
+            }
+            if (timer) |*t| _ = t.lap();
+        }
+    }
+
+    const owned_files: ?[][]u8 = if (session_files == null) try shadow.trackedFiles(gpa, io, place.root) else null;
+    defer if (owned_files) |f| {
+        shadow.freeFileList(gpa, f);
+        gpa.free(f);
+    };
+    const files: []const []u8 = session_files orelse owned_files.?;
+    if (session_files == null) if (timer) |*t| if (stats_sink) |s| {
         s.list_ns += t.lap();
     };
 
-    const index_path = search_index.indexPath(gpa, place.root) catch null;
-    defer if (index_path) |p| gpa.free(p);
-    var previous_from_slot: ?search_index.Index = null;
-    const previous_index: ?search_index.Index = blk: {
-        if (index_slot) |slot| {
-            if (slot.index) |idx| {
-                previous_from_slot = idx;
-                break :blk idx;
+    var owned_index: ?search_index.Index = null;
+    defer if (owned_index) |idx| idx.deinit();
+    if (session_files == null) {
+        const index_path = search_index.indexPath(gpa, place.root) catch null;
+        defer if (index_path) |p| gpa.free(p);
+        const previous_index: ?search_index.Index = if (index_path) |p| (search_index.load(gpa, io, p) catch null) else null;
+        defer if (previous_index) |idx| idx.deinit();
+        if (timer) |*t| if (stats_sink) |s| {
+            s.index_load_ns += t.lap();
+        };
+        const refreshed: ?search_index.RefreshResult = search_index.refresh(gpa, io, place.root, files, previous_index) catch null;
+        if (refreshed) |r| owned_index = r.index;
+        if (timer) |*t| if (stats_sink) |s| {
+            s.index_refresh_ns += t.lap();
+            if (refreshed) |r| {
+                s.files_index_reused += r.reused;
+                s.files_index_recomputed += r.recomputed;
             }
-        }
-        break :blk if (index_path) |p| (search_index.load(gpa, io, p) catch null) else null;
-    };
-    defer if (previous_from_slot == null) {
-        if (previous_index) |idx| idx.deinit();
-    };
-    if (timer) |*t| if (stats_sink) |s| {
-        s.index_load_ns += t.lap();
-    };
-    const refreshed: ?search_index.RefreshResult = search_index.refresh(gpa, io, place.root, files, previous_index) catch null;
-    const fresh_index: ?search_index.Index = if (refreshed) |r| r.index else null;
-    var fresh_owned_locally = true;
-    if (index_slot) |slot| {
-        if (fresh_index) |idx| {
-            if (previous_from_slot) |old_idx| old_idx.deinit();
-            slot.index = idx;
-            fresh_owned_locally = false;
-        }
-    }
-    defer if (fresh_owned_locally) {
-        if (fresh_index) |idx| idx.deinit();
-    };
-    if (timer) |*t| if (stats_sink) |s| {
-        s.index_refresh_ns += t.lap();
+        };
         if (refreshed) |r| {
-            s.files_index_reused += r.reused;
-            s.files_index_recomputed += r.recomputed;
-        }
-    };
-    if (refreshed) |r| {
-        if (r.changed) {
-            if (fresh_index) |idx| {
-                if (index_path) |p| search_index.save(gpa, io, p, idx) catch {};
+            if (r.changed) {
+                if (owned_index) |idx| {
+                    if (index_path) |p| search_index.save(gpa, io, p, idx) catch {};
+                }
             }
         }
+        if (timer) |*t| if (stats_sink) |s| {
+            s.index_save_ns += t.lap();
+        };
     }
-    if (timer) |*t| if (stats_sink) |s| {
-        s.index_save_ns += t.lap();
-    };
+    const fresh_index: ?search_index.Index = session_index orelse owned_index;
 
     const gram_query: ?[]u24 = blk: {
         const literal_hint = if (is_regex) regex_hint.longestLiteralChunk(pattern) else pattern;
@@ -602,6 +610,20 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         try js.write(nsToMs(s.jail_ns));
         try js.objectField("list_ms");
         try js.write(nsToMs(s.list_ns));
+        try js.objectField("sync_ms");
+        try js.write(nsToMs(s.sync_ns));
+        if (s.session) |r| {
+            try js.objectField("refresh_mode");
+            try js.write(@tagName(r.mode));
+            try js.objectField("refresh_reason");
+            try js.write(r.reason);
+            try js.objectField("dirty_paths");
+            try js.write(r.dirty_paths);
+            try js.objectField("updated");
+            try js.write(r.updated);
+            try js.objectField("list_reused");
+            try js.write(r.list_reused);
+        }
         try js.objectField("total_ms");
         try js.write(nsToMs(s.total_ns));
         try js.objectField("pid");
