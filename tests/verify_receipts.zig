@@ -58,6 +58,7 @@ const Case = struct {
         try args.put(self.arena(), "symbol", .{ .string = "add" });
         try args.put(self.arena(), "hash", .{ .string = try self.arena().dupe(u8, &hash) });
         try args.put(self.arena(), "body", .{ .string = body });
+        try args.put(self.arena(), "detail", .{ .string = "full" });
         return self.call("emetgate_try", args, test_command);
     }
 

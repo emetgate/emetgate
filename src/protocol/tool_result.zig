@@ -64,3 +64,9 @@ pub fn getStringArray(value: Value, key: []const u8) ?[]const Value {
         else => null,
     };
 }
+
+pub fn wantsFull(args: ?Value) bool {
+    const object = args orelse return false;
+    const detail = getString(object, "detail") orelse return false;
+    return std.mem.eql(u8, detail, "full");
+}

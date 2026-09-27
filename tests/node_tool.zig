@@ -130,10 +130,13 @@ test "node edit: read_symbol with nodes gives hash|code lines and a node try com
     const symbols = parsed.object.get("symbols").?.array.items;
     try testing.expectEqual(@as(usize, 1), symbols.len);
     try testing.expectEqualStrings("clamp", symbols[0].object.get("symbol").?.string);
-    try testing.expect(parsed.object.get("receipt") != null);
+    try testing.expect(parsed.object.get("receipt") == null);
+    try testing.expect(parsed.object.get("shadow") == null);
 
-    const chained = try case.call("emetgate_try", try case.object(.{ .file = "src/math.ts", .node = nodes[0].array.items[0].string, .text = "return Math.max(x, 1);" }), green);
+    const chained = try case.call("emetgate_try", try case.object(.{ .file = "src/math.ts", .node = nodes[0].array.items[0].string, .text = "return Math.max(x, 1);", .detail = "full" }), green);
     try testing.expect(!chained.is_error);
+    const chained_parsed = try std.json.parseFromSliceLeaky(Value, case.arena(), chained.text, .{});
+    try testing.expect(chained_parsed.object.get("receipt") != null);
 
     try support.Repo.git(case.repo.root_abs, &.{ "add", "-A" });
     try support.Repo.git(case.repo.root_abs, &.{ "commit", "-q", "-m", "node edits" });

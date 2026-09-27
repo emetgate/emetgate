@@ -100,6 +100,8 @@ fn batchLine(items: []const Item) ![]u8 {
         try js.endObject();
     }
     try js.endArray();
+    try js.objectField("detail");
+    try js.write("full");
     try js.endObject();
     try js.endObject();
     try js.endObject();

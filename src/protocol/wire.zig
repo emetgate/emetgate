@@ -292,7 +292,7 @@ fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
     }
 }
 
-pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash, note: ?ShadowNote) !void {
+pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expected, new_hash: symbol.Hash, note: ?ShadowNote, full: bool) !void {
     var old_buf: [symbol.hash_hex_len]u8 = undefined;
     const old_hex = old_hash.text(&old_buf);
     const new_hex = symbol.formatHash(new_hash);
@@ -302,11 +302,13 @@ pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expecte
     try js.write("committed");
     try js.objectField("symbol");
     try js.write(sym);
-    try js.objectField("old_hash");
-    try js.write(old_hex[0..]);
+    if (full) {
+        try js.objectField("old_hash");
+        try js.write(old_hex[0..]);
+    }
     try js.objectField("new_hash");
     try js.write(new_hex[0..]);
-    try writeShadowNote(&js, note);
+    if (full) try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -350,7 +352,7 @@ fn writeNodeFields(js: *std.json.Stringify, applied: node_cas.Applied) !void {
     try js.endArray();
 }
 
-pub fn writeNodesCommitted(writer: *Writer, file: []const u8, applied: node_cas.Applied, note: ?ShadowNote) !void {
+pub fn writeNodesCommitted(writer: *Writer, file: []const u8, applied: node_cas.Applied, note: ?ShadowNote, full: bool) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
@@ -358,12 +360,12 @@ pub fn writeNodesCommitted(writer: *Writer, file: []const u8, applied: node_cas.
     try js.objectField("file");
     try js.write(file);
     try writeNodeFields(&js, applied);
-    try writeShadowNote(&js, note);
+    if (full) try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
 
-pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?ShadowNote) !void {
+pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?ShadowNote, full: bool) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
@@ -384,8 +386,10 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
         }
         try js.objectField("symbol");
         try js.write(edit.symbol);
-        try js.objectField("old_hash");
-        try js.write(old_hex);
+        if (full) {
+            try js.objectField("old_hash");
+            try js.write(old_hex);
+        }
         if (edit.deleted) {
             try js.objectField("deleted");
             try js.write(true);
@@ -393,11 +397,13 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
             try js.objectField("new_hash");
             try js.write(new_hex[0..]);
         }
-        if (edit.evidence) |evidence| try writeEvidence(&js, evidence);
+        if (full) {
+            if (edit.evidence) |evidence| try writeEvidence(&js, evidence);
+        }
         try js.endObject();
     }
     try js.endArray();
-    try writeShadowNote(&js, note);
+    if (full) try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -1090,11 +1096,24 @@ test "symbol body payload carries ref, hash and the escaped body" {
 test "committed payload names the symbol and both hashes" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), null);
+    try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), null, true);
 
     try testing.expectEqualStrings(
         "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
             "\"old_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("a")) ++ "\"," ++
+            "\"new_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("b")) ++ "\"}\n",
+        buffer.written(),
+    );
+}
+
+test "compact committed payload drops the old hash and the shadow note" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const note: ShadowNote = .{ .root = "D:\\shadows", .dotted = false, .linked_files = 1, .copied_files = 0, .skipped_links = 0 };
+    try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), note, false);
+
+    try testing.expectEqualStrings(
+        "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
             "\"new_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("b")) ++ "\"}\n",
         buffer.written(),
     );
@@ -1246,7 +1265,7 @@ test "a result names the shadow root and its link counts, and warns when that ro
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
     const plain: ShadowNote = .{ .root = "D:\\shadows", .dotted = false, .linked_files = 6634, .copied_files = 2, .skipped_links = 1 };
-    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), plain);
+    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), plain, true);
     try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"shadow\":{\"root\":\"D:\\\\shadows\",\"linked_files\":6634,\"copied_files\":2,\"skipped_links\":1}") != null);
     try testing.expect(std.mem.indexOf(u8, buffer.written(), "shadow_path_warning") == null);
 
@@ -1254,6 +1273,6 @@ test "a result names the shadow root and its link counts, and warns when that ro
     var dotted = plain;
     dotted.root = "C:\\Users\\.me\\AppData\\Local\\emetgate\\shadow";
     dotted.dotted = true;
-    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), dotted);
+    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), dotted, true);
     try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"shadow_path_warning\":\"" ++ shadow_path_warning ++ "\"") != null);
 }

@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1109**
-- Mutations declared in `tests/mutations.json`: **619**
-  - killed: **589**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1110**
+- Mutations declared in `tests/mutations.json`: **622**
+  - killed: **592**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-183 mutation(s).
+186 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -719,6 +719,9 @@ python tools/verification_page.py --check
 | `SW6-loaded-index-trusted-without-a-restat` | `src/platform/search_session.zig` | `self.reconcile = true;` -> `self.reconcile = false;` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `IF1-index-file-version-not-checked` | `src/platform/search_index_file.zig` | `if (try r.int(u32) != version) return error.Corrupt;` -> `_ = try r.int(u32);` | a flipped byte, a cut tail, another version or another magic is refused | killed |
 | `PF1-directory-stamp-reads-the-creation-time` | `src/platform/search_index.zig` | `const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32...` -> `const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) ...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
+| `WR1-compact-reply-drops-new-hash` | `src/protocol/wire.zig` | `try js.objectField("new_hash");     try js.write(new_hex[0..]);...` -> `if (full) {         try js.objectField("new_hash");         try...` | compact committed payload drops the old hash and the shadow note | killed |
+| `WR2-detail-full-ignored` | `src/protocol/wire.zig` | `if (full) {         try js.objectField("old_hash");         try...` -> `if (false) {         try js.objectField("old_hash");         tr...` | committed payload names the symbol and both hashes | killed |
+| `WR3-receipt-note-always-full` | `src/protocol/receipt_note.zig` | `const written = receipts.write(gpa, io, root, rec);     if (!fu...` -> `const written = receipts.write(gpa, io, root, rec);     if (ful...` | node edit: read_symbol with nodes gives hash\\|code lines and a node try commits... | killed |
 
 ## What this system does not prove
 
