@@ -11,6 +11,7 @@ pub const line_range = src.line_range;
 pub const docnode = src.docnode;
 pub const skeleton = src.skeleton;
 pub const cas = src.cas;
+pub const node_cas = src.node_cas;
 pub const boundedness = src.boundedness;
 pub const symmetry = src.symmetry;
 pub const removal = src.removal;
@@ -108,6 +109,7 @@ test {
     _ = @import("tests/rename_typescript.zig");
     _ = @import("tests/rename_kinds.zig");
     _ = @import("tests/move_tool.zig");
+    _ = @import("tests/node_tool.zig");
     _ = @import("tests/create_kinds.zig");
     _ = @import("tests/redteam_move.zig");
     _ = @import("tests/move_crash.zig");
