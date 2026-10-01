@@ -321,7 +321,8 @@ const LineCursor = struct {
         self.number += @intCast(std.mem.count(u8, self.bytes[self.counted_to..start], "\n"));
         self.counted_to = start;
         self.pos = end + 1;
-        return .{ .text = self.bytes[start..end], .start = @intCast(start), .number = self.number };
+        const text_end = if (end > start and self.bytes[end - 1] == '\r') end - 1 else end;
+        return .{ .text = self.bytes[start..text_end], .start = @intCast(start), .number = self.number };
     }
 };
 
@@ -920,6 +921,8 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         try js.endArray();
     }
     if (request.certificate) {
+        try js.objectField("sees");
+        try js.write("writes closed or flushed before this search");
         try js.objectField("certificate");
         try verdict.writeCertificate(&js);
     }

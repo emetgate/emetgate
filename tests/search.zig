@@ -585,6 +585,80 @@ test "a file rewritten with its old size and change time but a new last-write ti
     try testing.expect(findGroupBySymbol(groupsOf(body.value), "realFn___") != null);
 }
 
+test "a regex sees the line of a CRLF file without its carriage return, as rg --crlf does" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "crlf.txt", .data = "alpha end\r\nbeta gamma\r\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    defer dropIndex(root);
+    try commitAll(root);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const Case = struct { pattern: []const u8, hits: usize };
+    for ([_]Case{ .{ .pattern = "end$", .hits = 1 }, .{ .pattern = "^[a-z ]+$", .hits = 2 }, .{ .pattern = "[^a-z ]", .hits = 0 } }) |case| {
+        var reply = try searchRegex(runtime, root, case.pattern);
+        defer reply.deinit();
+        errdefer std.debug.print("{s}: {s}\n", .{ case.pattern, reply.text });
+        try testing.expect(!reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        var hits: usize = 0;
+        for (groupsOf(body.value)) |g| hits += g.object.get("hits").?.array.items.len;
+        try testing.expectEqual(case.hits, hits);
+    }
+}
+
+fn searchReason(runtime: *Runtime, session: *search_session.Session, root: []const u8, pattern: []const u8, reason: []u8) !struct { files: usize, reason: []const u8 } {
+    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = pattern, .dir = root, .stats = true, .detail = "full" }, .{ .root = root, .search_session = session });
+    defer reply.deinit();
+    var body = try reply.payload();
+    defer body.deinit();
+    const why = body.value.object.get("stats").?.object.get("refresh_reason").?.string;
+    const n = @min(why.len, reason.len);
+    @memcpy(reason[0..n], why[0..n]);
+    return .{ .files = groupsOf(body.value).len, .reason = reason[0..n] };
+}
+
+test "a full refresh re-reads a file the running session read inside the racy window, though it was rewritten with its old size and both of its old times" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for (0..150) |i| {
+        var name: [32]u8 = undefined;
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&name, "f{d}.txt", .{i}), .data = "seed\n" });
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "zeroText\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    defer dropIndex(root);
+    try commitAll(root);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(testing.allocator, testing.io, root, .{ .buffer_bytes = 1024 });
+    defer session.deinit();
+    var reason: [64]u8 = undefined;
+    _ = try searchReason(runtime, &session, root, "seed", &reason);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "firstText\n" });
+    const first = try searchReason(runtime, &session, root, "firstText", &reason);
+    try testing.expectEqual(@as(usize, 1), first.files);
+
+    const before = try readTimes(tmp.dir, "a.txt");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "otherText\n" });
+    try writeTimes(tmp.dir, "a.txt", before.write, before.change);
+    for (0..150) |i| {
+        var name: [32]u8 = undefined;
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&name, "f{d}.txt", .{i}), .data = "burst\n" });
+    }
+    const after = try readTimes(tmp.dir, "a.txt");
+    try testing.expectEqual(before.write, after.write);
+    try testing.expectEqual(before.change, after.change);
+    const found = try searchReason(runtime, &session, root, "otherText", &reason);
+    try testing.expectEqualStrings("overflow", found.reason);
+    try testing.expectEqual(@as(usize, 1), found.files);
+}
+
 test "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -695,7 +769,7 @@ test "a regex whose literal parts are optional or alternatives still finds every
     defer runtime.destroy() catch @panic("live snapshots");
 
     const Case = struct { pattern: []const u8, files: usize };
-    for ([_]Case{ .{ .pattern = "foo|bar", .files = 2 }, .{ .pattern = "colou?r", .files = 2 } }) |case| {
+    for ([_]Case{ .{ .pattern = "foo|bar", .files = 2 }, .{ .pattern = "(foo|bar)", .files = 2 }, .{ .pattern = "colou?r", .files = 2 } }) |case| {
         var reply = try searchRegex(runtime, root, case.pattern);
         defer reply.deinit();
         try testing.expect(!reply.is_error);
