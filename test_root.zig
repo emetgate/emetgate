@@ -22,6 +22,7 @@ pub const scope = src.scope;
 pub const alpha = src.alpha;
 pub const declarations = src.declarations;
 pub const modules = src.modules;
+pub const facts = src.facts;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
