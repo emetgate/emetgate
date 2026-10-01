@@ -101,7 +101,10 @@ pub const Table = struct {
 
     pub fn build(gpa: Allocator, profile: *const Profile, tree: ts.Tree) BuildError!Table {
         if (tree.root().hasError()) return error.SourceHasErrors;
+        return buildTolerant(gpa, profile, tree);
+    }
 
+    pub fn buildTolerant(gpa: Allocator, profile: *const Profile, tree: ts.Tree) Allocator.Error!Table {
         const arena = try gpa.create(std.heap.ArenaAllocator);
         errdefer gpa.destroy(arena);
         arena.* = .init(gpa);
