@@ -5,10 +5,10 @@ const testing = std.testing;
 
 const allowed = "mcp__emetgate__emetgate_search mcp__emetgate__emetgate_read_file";
 
-test "lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args" {
+test "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args" {
     const argv = try lockdown.buildArgv(testing.allocator, "C:\\repo\\.mcp.json", allowed, &.{ "-p", "fix the bug" });
     defer testing.allocator.free(argv);
-    const expected = [_][]const u8{ "claude", "--tools", "ToolSearch", "--allowedTools", allowed, "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "-p", "fix the bug" };
+    const expected = [_][]const u8{ "claude", "--tools", "", "--allowedTools", allowed, "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "-p", "fix the bug" };
     try testing.expectEqual(expected.len, argv.len);
     for (expected, argv) |want, got| try testing.expectEqualStrings(want, got);
 }
@@ -85,7 +85,7 @@ test "a user prompt never becomes a --tools or --mcp-config value" {
         var parsed = try parseLikeClaude(argv);
         defer parsed.deinit();
         try testing.expectEqual(@as(usize, 1), parsed.tools.items.len);
-        try testing.expectEqualStrings("ToolSearch", parsed.tools.items[0]);
+        try testing.expectEqualStrings("", parsed.tools.items[0]);
         try testing.expectEqual(@as(usize, 1), parsed.allowed.items.len);
         try testing.expectEqualStrings(allowed, parsed.allowed.items[0]);
         try testing.expectEqual(@as(usize, 1), parsed.configs.items.len);
@@ -112,8 +112,10 @@ test "lockdown refuses to launch when the directory has no .mcp.json" {
 test "a lock override is refused before .mcp.json is looked up" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    try testing.expectError(error.LockdownFlagOverride, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &.{ "--tools", "default" }));
-    try testing.expectError(error.McpConfigMissing, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &.{ "-p", "hi" }));
+    var parent: std.process.Environ.Map = .init(testing.allocator);
+    defer parent.deinit();
+    try testing.expectError(error.LockdownFlagOverride, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, &.{ "--tools", "default" }));
+    try testing.expectError(error.McpConfigMissing, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, &.{ "-p", "hi" }));
 }
 
 test "ordinary claude args pass through the lock" {

@@ -3,9 +3,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const claude_program = "claude";
-pub const allowed_builtin_tools = "ToolSearch";
+pub const allowed_builtin_tools = "";
 pub const mcp_config_name = ".mcp.json";
 pub const max_mcp_config_bytes = 1024 * 1024;
+pub const tool_search_variable = "ENABLE_TOOL_SEARCH";
+pub const tool_search_value = "false";
 
 pub const read_only_tools = [_][]const u8{
     "emetgate_symbols",
@@ -45,7 +47,7 @@ pub fn refuseReserved(passthrough: []const []const u8) error{LockdownFlagOverrid
     }
 }
 
-pub fn buildArgv(gpa: Allocator, mcp_config_abs: []const u8, allowed_tools: []const u8, passthrough: []const []const u8) ![]const []const u8 {
+pub fn buildArgv(gpa: Allocator, mcp_config_abs: []const u8, allowed_tools: []const u8, passthrough: []const []const u8) ![][]const u8 {
     try refuseReserved(passthrough);
     const fixed = [_][]const u8{ claude_program, "--tools", allowed_builtin_tools, "--allowedTools", allowed_tools, "--mcp-config", mcp_config_abs, "--strict-mcp-config" };
     const argv = try gpa.alloc([]const u8, fixed.len + passthrough.len);
@@ -134,11 +136,18 @@ pub fn resolveMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir) ![:0]u8 {
     };
 }
 
-pub fn launch(gpa: Allocator, io: std.Io, passthrough: []const []const u8) !u8 {
-    return launchIn(gpa, io, std.Io.Dir.cwd(), passthrough);
+pub fn childEnviron(gpa: Allocator, parent: *const std.process.Environ.Map) !std.process.Environ.Map {
+    var env = try parent.clone(gpa);
+    errdefer env.deinit();
+    try env.put(tool_search_variable, tool_search_value);
+    return env;
 }
 
-pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, passthrough: []const []const u8) !u8 {
+pub fn launch(gpa: Allocator, io: std.Io, parent_env: *const std.process.Environ.Map, passthrough: []const []const u8) !u8 {
+    return launchIn(gpa, io, std.Io.Dir.cwd(), parent_env, claude_program, passthrough);
+}
+
+pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const std.process.Environ.Map, program: []const u8, passthrough: []const []const u8) !u8 {
     try refuseReserved(passthrough);
     const config_abs = try resolveMcpConfig(gpa, io, dir);
     defer gpa.free(config_abs);
@@ -150,7 +159,10 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, passthrough: []cons
     defer gpa.free(allowed);
     const argv = try buildArgv(gpa, config_abs, allowed, passthrough);
     defer gpa.free(argv);
-    var child = try std.process.spawn(io, .{ .argv = argv });
+    argv[0] = program;
+    var env = try childEnviron(gpa, parent_env);
+    defer env.deinit();
+    var child = try std.process.spawn(io, .{ .argv = argv, .environ_map = &env });
     const term = try child.wait(io);
     return switch (term) {
         .exited => |code| code,

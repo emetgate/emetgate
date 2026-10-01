@@ -45,9 +45,9 @@ const usage =
     \\a proposal they cover is refused with UntrustedRepoMemory instead.
     \\scan without --allow-repo-memory skips those q: rules and lists each one as not run.
     \\
-    \\lockdown starts claude with only ToolSearch and the .mcp.json servers
-    \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config) and lets
-    \\emetgate's read-only tools run without a permission prompt (--allowedTools).
+    \\lockdown starts claude with no built-in tool and only the .mcp.json servers
+    \\(--tools "" --mcp-config .mcp.json --strict-mcp-config, ENABLE_TOOL_SEARCH=false)
+    \\and lets emetgate's read-only tools run without a permission prompt (--allowedTools).
     \\It refuses to start unless .mcp.json has exactly one emetgate server.
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
@@ -140,7 +140,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "lockdown")) {
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
         for (args[2..], 0..) |arg, i| passthrough[i] = arg;
-        return lockdown.launch(runtime.gpa, init.io, passthrough);
+        return lockdown.launch(runtime.gpa, init.io, init.environ_map, passthrough);
     }
     exitWithUsage();
 }
