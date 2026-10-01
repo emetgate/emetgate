@@ -271,7 +271,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     };
     event.chars_fullfile = snapshot.source.len;
     if (nodes) {
-        const annotated = try node_cas_mod.annotate(gpa, snapshot.tree, found.declaration);
+        const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.declaration);
         defer gpa.free(annotated);
         event.chars_emetgate = annotated.len;
         return wire.writeSymbolNodes(w, file, sym, found.hash, annotated);
@@ -312,7 +312,7 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         defer ref.deinit(gpa);
         const found = try table.resolve(ref);
         if (nodes) {
-            const text = try node_cas_mod.annotate(gpa, snapshot.tree, found.declaration);
+            const text = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.declaration);
             entries[i] = .{ .ref = sym, .hash = found.hash, .body = text, .nodes = true };
             annotated = i + 1;
             chars += text.len;
@@ -353,7 +353,7 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
     if (nodes) {
         if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
         const region = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
-        const annotated = try node_cas_mod.annotate(gpa, snapshot.tree, region);
+        const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, region);
         defer gpa.free(annotated);
         event.chars_emetgate = annotated.len;
         event.chars_fullfile = snapshot.source.len;
