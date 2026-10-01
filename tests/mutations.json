@@ -6404,8 +6404,8 @@
     {
       "id": "SW5-index-loaded-before-the-watcher-starts",
       "file": "src/platform/search_session.zig",
-      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root, self.options.watch()) catch null;\n        self.watch_started_ns = self.now();\n        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;",
-      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;\n        defer self.watcher = change_watch.Watcher.start(self.gpa, self.io, root, self.options.watch()) catch null;\n        defer self.watch_started_ns = self.now();",
+      "from": "        self.startWatcher();\n        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;",
+      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;\n        defer self.startWatcher();",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
@@ -7890,19 +7890,10 @@
     {
       "id": "MR1-root-cache-ignores-writes",
       "file": "src/platform/search_session.zig",
-      "from": "        if (hit.version != self.delta.version) return null;\n",
-      "to": "",
+      "from": "            tree.tree.update(at, answer.pathLeafHash(.{ .path = tree.paths[at], .digest = digest }));",
+      "to": "            _ = answer.pathLeafHash(.{ .path = tree.paths[at], .digest = digest });",
       "kills": [
-        "search answers: the snapshot root is the Merkle root of the searched files and follows a write in the same session"
-      ]
-    },
-    {
-      "id": "MR2-delta-write-keeps-the-version",
-      "file": "src/platform/search_session.zig",
-      "from": "        got.value_ptr.* = prepared;\n        self.version += 1;",
-      "to": "        got.value_ptr.* = prepared;",
-      "kills": [
-        "search answers: the snapshot root is the Merkle root of the searched files and follows a write in the same session"
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
       ]
     },
     {
@@ -8041,6 +8032,87 @@
       "to": "if (field != .integer or field.integer < -1 or field.integer > max_offset) return error.InvalidOffset;",
       "kills": [
         "search answers: an unknown detail or a negative offset is refused"
+      ]
+    },
+    {
+      "id": "MR2-delta-write-not-journaled",
+      "file": "src/platform/search_session.zig",
+      "from": "        got.value_ptr.* = prepared;\n        self.commit(gpa, copy);",
+      "to": "        got.value_ptr.* = prepared;\n        gpa.free(copy);",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "MR3-added-file-left-out-of-the-root",
+      "file": "src/platform/search_session.zig",
+      "from": "                if (current != null) return false;\n",
+      "to": "",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "MR4-deleted-file-kept-in-the-root",
+      "file": "src/platform/search_session.zig",
+      "from": "            const digest = current orelse return false;",
+      "to": "            const digest = current orelse continue;",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "MR5-tree-update-stops-at-the-first-level",
+      "file": "src/engine/merkle_tree.zig",
+      "from": "            if (at >= here.len) break;",
+      "to": "            if (at >= here.len or level > 1) break;",
+      "kills": [
+        "merkle tree: updating any leaf gives the root a fresh build gives"
+      ]
+    },
+    {
+      "id": "MR6-root-folds-the-wrong-way",
+      "file": "src/engine/merkle_tree.zig",
+      "from": "            acc = answer.nodeHash(blocks[i], acc);",
+      "to": "            acc = answer.nodeHash(acc, blocks[i]);",
+      "kills": [
+        "merkle tree: the root of every size up to 70 matches the RFC 9162 tree hash"
+      ]
+    },
+    {
+      "id": "WT1-watcher-started-on-the-warm-thread",
+      "file": "src/platform/search_session.zig",
+      "from": "        self.startWatcher();\n        self.warm_thread = std.Thread.spawn(.{}, warmTask, .{self}) catch null;",
+      "to": "        self.warm_thread = std.Thread.spawn(.{}, warmTask, .{self}) catch null;",
+      "kills": [
+        "search freshness: a session warmed on a background thread keeps its watcher after that thread ends"
+      ]
+    },
+    {
+      "id": "JF1-root-prefix-not-compared",
+      "file": "src/platform/repo.zig",
+      "from": "    if (target.len < root_nt.len or !sameWideIgnoreCase(target[0..root_nt.len], root_nt)) return null;",
+      "to": "    if (target.len < root_nt.len) return null;",
+      "kills": [
+        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
+      ]
+    },
+    {
+      "id": "JF2-cached-root-name-reused-for-another-root",
+      "file": "src/platform/repo.zig",
+      "from": "    if (names.root_len == root.len and std.mem.eql(u8, names.root[0..names.root_len], root)) {",
+      "to": "    if (names.root_len != 0) {",
+      "kills": [
+        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
+      ]
+    },
+    {
+      "id": "NC1-node-index-rebuilt-every-call",
+      "file": "src/engine/node_cas.zig",
+      "from": "    snapshot.node_hashes = index.hashes;",
+      "to": "    _ = &snapshot.node_hashes;",
+      "kills": [
+        "a snapshot builds its node index once and annotates from it like a fresh build"
       ]
     }
   ]
