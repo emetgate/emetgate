@@ -166,7 +166,8 @@ def outcome(tool, text, is_error):
         return "ok"
     body = first_json(text) or {}
     hits = sum(len(g.get("hits", [])) for g in body.get("groups", []))
-    return f"{hits} hits/{body.get('files_total', '?')} files"
+    files = body.get("scope", {}).get("files", body.get("files_total", "?"))
+    return f"{body.get('status', '-')} {hits} hits/{files} files"
 
 
 def new_sessions(exe, repo, count, delay_s):
@@ -222,6 +223,47 @@ def fmt(v):
     return str(v)
 
 
+def git_grep_lines(repo, args, pattern_args, path):
+    result = subprocess.run(["git", "grep", "-c", "-I", *args, *pattern_args, "--", path], cwd=repo, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    total = 0
+    for line in result.stdout.splitlines():
+        if line.strip():
+            total += int(line.rsplit(":", 1)[-1])
+    return total
+
+
+def differential(exe, repo):
+    session = McpSession(exe, repo)
+    rows = []
+    seen = set()
+    try:
+        for tool, args in CALLS:
+            if tool != "emetgate_search":
+                continue
+            plain = {k: v for k, v in args.items() if k != "kinds"}
+            key = json.dumps(plain, sort_keys=True)
+            if key in seen:
+                continue
+            seen.add(key)
+            text, is_error, _ = session.call(tool, plain)
+            body = first_json(text) or {}
+            hits = sum(len(g.get("hits", [])) for g in body.get("groups", []))
+            pattern = plain["pattern"]
+            path = plain.get("dir", ".")
+            if body.get("read_as") == "literal alternatives":
+                expected = git_grep_lines(repo, ["-F"], [x for alt in body["alternatives"] for x in ("-e", alt)], path)
+            elif plain.get("regex"):
+                expected = git_grep_lines(repo, ["-E"], ["-e", pattern], path)
+            else:
+                expected = git_grep_lines(repo, ["-F"], ["-e", pattern], path)
+            capped = bool(body.get("truncated"))
+            same = hits == expected or (capped and hits <= expected)
+            rows.append({"call": describe(tool, plain), "status": body.get("status", "error" if is_error else "?"), "emetgate": hits, "git_grep": expected, "capped": capped, "same": same})
+    finally:
+        session.close()
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", default=DEFAULT_EXE)
@@ -231,6 +273,7 @@ def main():
     parser.add_argument("--delay", type=float, default=0.0)
     parser.add_argument("--json")
     parser.add_argument("--skip-new", action="store_true")
+    parser.add_argument("--diff", action="store_true")
     options = parser.parse_args()
     if not os.path.exists(options.exe):
         raise SystemExit(f"emetgate binary not found at {options.exe}")
@@ -240,6 +283,21 @@ def main():
     print(f"exe {options.exe}")
     print(f"repo {options.repo}")
     result = {"exe": options.exe, "repo": options.repo}
+
+    if options.diff:
+        rows = differential(options.exe, options.repo)
+        print("\n## Matching lines: emetgate_search (kinds dropped) against git grep on the same tracked files\n")
+        print("| call | status | emetgate | git grep | capped | same |")
+        print("|---|---|---:|---:|---|---|")
+        for r in rows:
+            print(f"| {r['call']} | {r['status']} | {r['emetgate']} | {r['git_grep']} | {r['capped']} | {r['same']} |")
+        different = [r for r in rows if not r["same"]]
+        print(f"\n{len(rows) - len(different)} of {len(rows)} calls give the same number of matching lines")
+        if options.json:
+            with open(options.json, "w", encoding="utf-8", newline="\n") as f:
+                json.dump({"diff": rows}, f, indent=1)
+                f.write("\n")
+        sys.exit(1 if different else 0)
 
     if not options.skip_new:
         rows = new_sessions(options.exe, options.repo, options.new, options.delay)
