@@ -3,6 +3,7 @@ const emetgate = @import("emetgate");
 const fact_store = emetgate.fact_store;
 const fact_file = emetgate.fact_file;
 const facts_query = emetgate.facts_query;
+const facts_evidence = emetgate.facts_evidence;
 const io_seam = emetgate.io_seam;
 const answer = emetgate.answer;
 const test_util = emetgate.test_util;
@@ -305,4 +306,27 @@ test "fact store: an in-memory edit relinks the file and moves the snapshot root
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     try testing.expectEqual(@as(usize, 0), (try callerPaths(arena.allocator(), repo, "f")).len);
+}
+
+test "fact store: evidence never shows a line of a file that changed after the snapshot as current" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try fixture.write(.{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return 7 + f(); }\n" });
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try repo.query(arena.allocator(), .{ .relation = .callers, .subject = "f" });
+    var lines: fact_store.SourceLines = .{ .repo = repo, .arena = arena.allocator() };
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    _ = try facts_evidence.render(arena.allocator(), &out.writer, result, lines.source(), facts_evidence.default_budget);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "return 7") == null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "source unavailable") != null);
 }

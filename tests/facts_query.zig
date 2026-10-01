@@ -308,3 +308,30 @@ test "facts evidence: a function over the budget keeps the whole block around ea
     }
     try testing.expect(std.mem.indexOf(u8, text, "emetgate_read_symbol {\"file\":\"a.ts\",\"symbol\":\"big\"}") != null);
 }
+
+test "facts evidence: a complete answer whose lines do not all fit turns partial and says how many were cut" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    _ = try repo.put("a.ts", "export function f() { return 1; }\n");
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(testing.allocator);
+    try source.appendSlice(testing.allocator, "import { f } from \"./a\";\nexport function many() {\n");
+    for (0..150) |_| try source.appendSlice(testing.allocator, "  f();\n");
+    try source.appendSlice(testing.allocator, "}\n");
+    _ = try repo.put("b.ts", source.items);
+    try repo.linkAll();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try ask(arena.allocator(), &repo, .callers, "f");
+    try testing.expectEqual(answer.Status.complete, result.status());
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var files: RepoFiles = .{ .repo = &repo };
+    const rendered = try facts_evidence.render(arena.allocator(), &out.writer, result, files.source(), facts_evidence.min_budget);
+    try testing.expect(rendered.cut > 0);
+    try testing.expectEqual(answer.Status.partial, rendered.status);
+    try testing.expect(std.mem.startsWith(u8, out.written(), "partial:"));
+    try testing.expect(std.mem.indexOf(u8, out.written(), "budget") != null);
+}
