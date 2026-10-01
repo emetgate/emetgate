@@ -46,7 +46,9 @@ const usage =
     \\scan without --allow-repo-memory skips those q: rules and lists each one as not run.
     \\
     \\lockdown starts claude with only ToolSearch and the .mcp.json servers
-    \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config).
+    \\(--tools ToolSearch --mcp-config .mcp.json --strict-mcp-config) and lets
+    \\emetgate's read-only tools run without a permission prompt (--allowedTools).
+    \\It refuses to start unless .mcp.json has exactly one emetgate server.
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
     \\For mutate/try with --hash <hex> (an existing symbol), --body/--body-file is

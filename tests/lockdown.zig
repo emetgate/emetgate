@@ -3,16 +3,18 @@ const lockdown = @import("emetgate").lockdown;
 
 const testing = std.testing;
 
+const allowed = "mcp__emetgate__emetgate_search mcp__emetgate__emetgate_read_file";
+
 test "lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args" {
-    const argv = try lockdown.buildArgv(testing.allocator, "C:\\repo\\.mcp.json", &.{ "-p", "fix the bug" });
+    const argv = try lockdown.buildArgv(testing.allocator, "C:\\repo\\.mcp.json", allowed, &.{ "-p", "fix the bug" });
     defer testing.allocator.free(argv);
-    const expected = [_][]const u8{ "claude", "--tools", "ToolSearch", "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "-p", "fix the bug" };
+    const expected = [_][]const u8{ "claude", "--tools", "ToolSearch", "--allowedTools", allowed, "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "-p", "fix the bug" };
     try testing.expectEqual(expected.len, argv.len);
     for (expected, argv) |want, got| try testing.expectEqualStrings(want, got);
 }
 
 test "a positional prompt right after lockdown is not swallowed by a variadic flag" {
-    const argv = try lockdown.buildArgv(testing.allocator, "cfg", &.{"hello"});
+    const argv = try lockdown.buildArgv(testing.allocator, "cfg", allowed, &.{"hello"});
     defer testing.allocator.free(argv);
     try testing.expectEqualStrings("--strict-mcp-config", argv[argv.len - 2]);
     try testing.expectEqualStrings("hello", argv[argv.len - 1]);
@@ -36,17 +38,19 @@ test "a passthrough arg that would override the lock is refused in both spelling
         const joined = try std.fmt.allocPrint(testing.allocator, "{s}=default", .{flag});
         defer testing.allocator.free(joined);
         try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{joined}));
-        try testing.expectError(error.LockdownFlagOverride, lockdown.buildArgv(testing.allocator, "cfg", &.{flag}));
+        try testing.expectError(error.LockdownFlagOverride, lockdown.buildArgv(testing.allocator, "cfg", allowed, &.{flag}));
     }
 }
 
 const Parsed = struct {
     tools: std.ArrayList([]const u8) = .empty,
+    allowed: std.ArrayList([]const u8) = .empty,
     configs: std.ArrayList([]const u8) = .empty,
     positional: std.ArrayList([]const u8) = .empty,
 
     fn deinit(self: *Parsed) void {
         self.tools.deinit(testing.allocator);
+        self.allowed.deinit(testing.allocator);
         self.configs.deinit(testing.allocator);
         self.positional.deinit(testing.allocator);
     }
@@ -58,7 +62,7 @@ fn parseLikeClaude(argv: []const []const u8) !Parsed {
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         const arg = argv[i];
-        const list: ?*std.ArrayList([]const u8) = if (std.mem.eql(u8, arg, "--tools")) &parsed.tools else if (std.mem.eql(u8, arg, "--mcp-config")) &parsed.configs else null;
+        const list: ?*std.ArrayList([]const u8) = if (std.mem.eql(u8, arg, "--tools")) &parsed.tools else if (std.mem.eql(u8, arg, "--allowedTools")) &parsed.allowed else if (std.mem.eql(u8, arg, "--mcp-config")) &parsed.configs else null;
         if (list) |values| {
             while (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) : (i += 1) try values.append(testing.allocator, argv[i + 1]);
         } else if (!std.mem.startsWith(u8, arg, "-")) {
@@ -76,12 +80,14 @@ test "a user prompt never becomes a --tools or --mcp-config value" {
         &.{ "fix", "the", "bug", "--verbose" },
     };
     for (cases) |passthrough| {
-        const argv = try lockdown.buildArgv(testing.allocator, "C:\\repo\\.mcp.json", passthrough);
+        const argv = try lockdown.buildArgv(testing.allocator, "C:\\repo\\.mcp.json", allowed, passthrough);
         defer testing.allocator.free(argv);
         var parsed = try parseLikeClaude(argv);
         defer parsed.deinit();
         try testing.expectEqual(@as(usize, 1), parsed.tools.items.len);
         try testing.expectEqualStrings("ToolSearch", parsed.tools.items[0]);
+        try testing.expectEqual(@as(usize, 1), parsed.allowed.items.len);
+        try testing.expectEqualStrings(allowed, parsed.allowed.items[0]);
         try testing.expectEqual(@as(usize, 1), parsed.configs.items.len);
         try testing.expectEqualStrings("C:\\repo\\.mcp.json", parsed.configs.items[0]);
         var expected_positional: usize = 0;
