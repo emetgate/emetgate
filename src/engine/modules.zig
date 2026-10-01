@@ -17,6 +17,8 @@ pub const Named = struct {
     alias: ?[]const u8,
     span: Span,
     type_only: bool,
+    name_start: u32 = 0,
+    local_start: u32 = 0,
 
     pub fn local(self: Named) []const u8 {
         return self.alias orelse self.name;
@@ -31,7 +33,9 @@ pub const Import = struct {
     form: Form,
     type_only: bool,
     default_name: ?[]const u8 = null,
+    default_start: u32 = 0,
     namespace: ?[]const u8 = null,
+    namespace_start: u32 = 0,
     named: []const Named = &.{},
 };
 
@@ -75,8 +79,10 @@ fn namedList(arena: Allocator, snapshot: *const Snapshot, m: *const Modules, lis
     while (list.namedChild(i)) |item| : (i += 1) {
         if (!std.mem.eql(u8, item.kind(), item_kind)) continue;
         const name = item.childByField(m.name_field) orelse continue;
-        const alias: ?[]const u8 = if (item.childByField(m.alias_field)) |a| snapshot.tree.text(a) else null;
-        try out.append(arena, .{ .name = snapshot.tree.text(name), .alias = alias, .span = span(item), .type_only = hasToken(item, m.type_keywords) });
+        const alias_node = item.childByField(m.alias_field);
+        const alias: ?[]const u8 = if (alias_node) |a| snapshot.tree.text(a) else null;
+        const local_start = if (alias_node) |a| a.startByte() else name.startByte();
+        try out.append(arena, .{ .name = snapshot.tree.text(name), .alias = alias, .span = span(item), .type_only = hasToken(item, m.type_keywords), .name_start = name.startByte(), .local_start = local_start });
     }
     return out.items;
 }
@@ -103,8 +109,10 @@ pub fn imports(arena: Allocator, snapshot: *const Snapshot) ![]Import {
                     } else if (std.mem.eql(u8, part.kind(), m.namespace_import)) {
                         const name = part.namedChild(0) orelse continue;
                         entry.namespace = snapshot.tree.text(name);
+                        entry.namespace_start = name.startByte();
                     } else {
                         entry.default_name = snapshot.tree.text(part);
+                        entry.default_start = part.startByte();
                     }
                 }
             }
@@ -113,6 +121,12 @@ pub fn imports(arena: Allocator, snapshot: *const Snapshot) ![]Import {
             var entry: Import = .{ .statement = span(statement), .spec = spec, .form = .star_reexport, .type_only = hasToken(statement, m.type_keywords) };
             var j: u32 = 0;
             while (statement.namedChild(j)) |clause| : (j += 1) {
+                if (oneOf(clause.kind(), snapshot.profile.namespace_exports)) {
+                    const name = clause.namedChild(0) orelse continue;
+                    entry.namespace = snapshot.tree.text(name);
+                    entry.namespace_start = name.startByte();
+                    continue;
+                }
                 if (!std.mem.eql(u8, clause.kind(), m.export_clause)) continue;
                 entry.form = .reexport;
                 entry.named = try namedList(arena, snapshot, m, clause, m.export_specifier);
@@ -235,6 +249,26 @@ test "modules: named, aliased, default, namespace, type-only, bare and re-export
     try testing.expectEqual(Form.reexport, found[4].form);
     try testing.expectEqualStrings("e", found[4].named[0].name);
     try testing.expectEqual(Form.star_reexport, found[5].form);
+    try testing.expectEqual(@as(?[]const u8, null), found[5].namespace);
+    try testing.expectEqualStrings("c", source[found[0].named[1].local_start..][0..1]);
+    try testing.expectEqualStrings("b", source[found[0].named[1].name_start..][0..1]);
+    try testing.expectEqualStrings("d", source[found[1].default_start..][0..1]);
+    try testing.expectEqualStrings("ns", source[found[1].namespace_start..][0..2]);
+}
+
+test "modules: a namespace re-export names its namespace and keeps the star form" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "export * as tools from \"./tools\";\n";
+    const snapshot = try test_util.snapshotOf(runtime, source);
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try imports(arena_state.allocator(), snapshot);
+    try testing.expectEqual(@as(usize, 1), found.len);
+    try testing.expectEqual(Form.star_reexport, found[0].form);
+    try testing.expectEqualStrings("tools", found[0].namespace.?);
+    try testing.expectEqualStrings("tools", source[found[0].namespace_start..][0..5]);
 }
 
 test "modules: a call or an expression at module level is an effect, declarations and imports are not" {

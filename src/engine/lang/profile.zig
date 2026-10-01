@@ -157,6 +157,44 @@ pub const MemberTraits = struct {
     is_constructor: bool = false,
 };
 
+pub const FieldSite = struct {
+    parent: []const u8,
+    field: []const u8,
+};
+
+pub const TypedBinder = struct {
+    node: []const u8,
+    name_field: []const u8,
+    type_field: []const u8,
+};
+
+pub const Facts = struct {
+    member: []const u8,
+    object_field: []const u8,
+    property_field: []const u8,
+    qualified_type: ?[]const u8,
+    qualified_module_field: []const u8,
+    qualified_name_field: []const u8,
+    generic_type: ?[]const u8,
+    generic_name_field: []const u8,
+    type_annotation: ?[]const u8,
+    this_keyword: []const u8,
+    super_keyword: []const u8,
+    classes: []const []const u8,
+    class_fields: []const []const u8,
+    heritage: []const u8,
+    extends_clause: ?[]const u8,
+    extends_value_field: []const u8,
+    typed_binders: []const TypedBinder,
+    parameter_properties: []const []const u8,
+    property_markers: []const []const u8,
+    writes: []const FieldSite,
+    call_like: []const FieldSite,
+    error_node: []const u8,
+    export_value_field: []const u8,
+    export_declaration_field: []const u8,
+};
+
 pub const Profile = struct {
     name: []const u8,
     extensions: []const []const u8,
@@ -196,6 +234,7 @@ pub const Profile = struct {
     rename: ?*const Rename = null,
     modules: ?*const Modules = null,
     declarations: Declarations = .{},
+    facts: ?*const Facts = null,
 
     pub fn hasVisibilityKeyword(self: *const Profile, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;

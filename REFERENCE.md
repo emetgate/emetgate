@@ -664,7 +664,7 @@ The JSON is canonical ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785), keys 
 
 Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the exit code is 0 only when everything is verified (53 for unverified, 54 for mismatch), so "not measured" is never reported green. In CI, `emetgate verify HEAD --test "<the project's test command>"` after `git fetch origin refs/notes/emetgate:refs/notes/emetgate` can run as a status check; that step is documented here, not shipped.
 
-**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,502 non-blank lines of Zig in 22 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->383 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, plus one more verdict, `consistent` (exit code 55). It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
+**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,619 non-blank lines of Zig in 23 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->383 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, plus one more verdict, `consistent` (exit code 55). It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
 
 ### Search
 
@@ -904,6 +904,82 @@ lookaround, or counted `{n,m}` repetition, see `src/engine/regex.zig`) bounds wh
 profile data (declaration span, call-site field), not a full tags.scm implementation, and
 can miss less direct reference shapes (e.g. an identifier passed as a callback rather than
 called directly stays untagged, not mistagged).
+
+### Fact store
+
+`emetgate facts` keeps the definitions, references, imports and exports of every
+TypeScript and JavaScript file of the repository in one store and answers structural
+questions from it without a model:
+
+```
+emetgate facts build
+emetgate facts callers WorkflowExecute.processRunExecutionData
+emetgate facts callees WorkflowExecute.processRunExecutionData --depth 2
+emetgate facts refs C.m --file src/a.ts
+emetgate facts defined_at handleNodeExecutionError
+emetgate facts bench --samples 200 --updates 50
+```
+
+The facts are `def(kind, name, qualified name, file, span, body hash, alpha hash)`,
+`ref(from, target or unresolved(reason), file, line, kind: call | new | read | write | type | import)`,
+containment through each definition's parent, and `imports(file, file | external)`. Names
+resolve with `src/engine/scope.zig` and imports with `src/engine/modules.zig`: relative
+paths, tsconfig `paths` and `baseUrl` (following `extends`), and workspace `package.json`
+entries mapped from `outDir` to `rootDir` as the package's own tsconfig files declare them.
+A member call binds through `this`, a class used statically, a namespace import, a declared
+type, a constructor parameter property or a constant made with `new`. The last three are
+labelled `typed`, the others `proven`. Everything else stays `unresolved` with its reason.
+
+The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v2`: versioned, with a
+BLAKE3 checksum, written to a temporary file and moved into place. A refresh lists the
+tracked files, compares directory stamps, re-reads only changed files (a file stamped within
+2 s of the store's write time is always re-hashed), extracts a file again only when its
+content hash changed, and relinks only the files whose links read a file whose exports or
+definitions changed.
+
+Answers use the answer algebra (`complete`, `partial`, `refused`) with a certificate over the
+snapshot: an RFC 9162 Merkle root over each file's path and SHA-256. `callers` and `refs` are
+`complete` only when nothing could bind to the subject without being resolved: no reference
+with the subject's name on a receiver of unknown type anywhere, no dynamic-key call
+(`obj[k](...)`, `eval`) in a file that reaches the subject's module through imports, and no
+file that names the subject but was not analyzed (another language, syntax errors,
+unreadable, over the size limit). Calls bind statically: a call on a receiver typed as the
+base class is listed under the base member, not under its overrides.
+
+The evidence shows the subject as a whole function when it fits the budget (default 9,500
+characters, under the 10,000-character limit of a Claude Code hook). When it does not, it
+shows the complete statements around the relevant lines and the headers of the blocks that
+hold them, names every elided range, and turns the answer `partial`. Callers are shown by
+signature and call line. The last line always gives the number of unresolved references.
+
+n8n (2026-10-01, ReleaseFast, 16 logical CPUs, 8 worker threads):
+
+| | |
+|---|---|
+| files in scope | 22,776: 21,453 parsed (175 with syntax errors), 1,323 not parsed (`.vue` and similar) |
+| definitions, references | 130,040, 1,885,039 (743,276 resolved, 64,458 of them typed) |
+| full build | 91.5 s wall, mostly cold reads on this machine (about 15 ms per file); parse 38 s and extraction 96 s of CPU over 8 threads; link 2.3 s; save 0.9 s |
+| store, memory | 47.8 MB on disk; peak working set 705 MB while building, 412 MB loaded |
+| warm open | load 0.85 s, file listing 0.1 s warm (2.8 s cold), stamps 0.08 s |
+| query p50 / p99, 200 seeded samples | callers 0.28 / 3.9 ms, callees 0.10 / 0.26 ms, defined_at 0.18 / 0.85 ms, refs 0.37 / 3.8 ms |
+| evidence p50 / p99 | 22 / 391 ms (reads and parses the files it quotes) |
+| one-file update p50 / p99 | 9.2 / 37 ms (parse, extract, relink, snapshot root) |
+
+`tests/bench/facts_tsserver.py` compares `callers` with tsserver's `findReferences` call
+sites on 30 seeded callables from `packages/core`, `packages/workflow` and six `@n8n`
+packages (745 program files, TypeScript 6.0.3). n8n has no `node_modules`, so tsserver is
+given emetgate's module map. 101 call sites are in both, 0 only in emetgate and 22 only in
+tsserver: 11 emetgate lists as unresolved (`property_needs_type`) and 11 it binds to an
+override or another implementation of the same interface member, a family tsserver merges.
+Precision 1.00 and recall 0.82 against tsserver, no unclassified difference.
+
+**Limits:** TypeScript namespaces are not definitions; `.vue`, `.svelte`, `.astro`, `.mts`
+and `.cts` files are not parsed, only their identifiers are kept to decide whether an
+answer must name them; a CommonJS `module.exports` is not read as an export table; return
+types are not inferred, so a call on a value returned by a function stays unresolved; a
+workspace package resolves only through the `outDir` and `rootDir` it declares; the
+tsserver comparison shares emetgate's module map.
+
 ## How the kernel itself is verified
 
 Numbers in this README that can be read out of the source or the mutation corpus are

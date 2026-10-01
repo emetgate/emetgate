@@ -27,6 +27,8 @@ const binder_sites = [_]BinderSite{
     .{ .parent = "for_in_statement", .field = "left", .scope = .own },
     .{ .parent = "assignment_pattern", .field = "left", .scope = .pattern },
     .{ .parent = "pair_pattern", .field = "value", .scope = .pattern },
+    .{ .parent = "object_pattern", .field = null, .scope = .pattern },
+    .{ .parent = "object_assignment_pattern", .field = "left", .scope = .pattern },
     .{ .parent = "import_specifier", .field = "alias", .namespace = .both, .scope = .program },
     .{ .parent = "import_specifier", .field = "name", .unless = "alias", .namespace = .both, .scope = .program },
     .{ .parent = "formal_parameters", .field = null, .scope = .function },

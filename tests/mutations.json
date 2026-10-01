@@ -6554,6 +6554,586 @@
       ]
     },
     {
+      "id": "ANS1-partial-answer-reported-complete",
+      "file": "src/engine/answer.zig",
+      "from": "        if (missing.len == 0) return .{ .complete = .{ .value = value, .cert = cert } };",
+      "to": "        if (missing.len != std.math.maxInt(usize)) return .{ .complete = .{ .value = value, .cert = cert } };",
+      "kills": [
+        "a missing file makes the answer partial and never complete"
+      ]
+    },
+    {
+      "id": "ANS2-unaccounted-file-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "    if (accounted != in_scope) return \"evaluated and missing files do not add up to the scope\";",
+      "to": "    if (accounted != in_scope and false) return \"evaluated and missing files do not add up to the scope\";",
+      "kills": [
+        "an answer whose evaluated and missing files do not add up to the scope is refused"
+      ]
+    },
+    {
+      "id": "ANS3-partial-status-shows-check-mark",
+      "file": "src/engine/answer.zig",
+      "from": "                    try w.print(\"partial: {d} {s} in {d} of \", .{ count, noun, p.cert.scope.evaluated });",
+      "to": "                    try w.print(\"\\u{2713} {d} {s} in {d} of \", .{ count, noun, p.cert.scope.evaluated });",
+      "kills": [
+        "only a complete answer is rendered with a check mark"
+      ]
+    },
+    {
+      "id": "ANS4-zero-result-status-hides-scope",
+      "file": "src/engine/answer.zig",
+      "from": "                    try writeFiles(w, c.cert.scope.evaluated);\n",
+      "to": "",
+      "kills": [
+        "a complete answer with no results still states the scope and snapshot"
+      ]
+    },
+    {
+      "id": "ANS5-leaf-domain-separation-lost",
+      "file": "src/engine/answer.zig",
+      "from": "    hasher.update(&.{0x00});\n    hasher.update(data);",
+      "to": "    hasher.update(&.{0x01});\n    hasher.update(data);",
+      "kills": [
+        "the merkle root matches the RFC 6962 reference vectors for zero to eight leaves"
+      ]
+    },
+    {
+      "id": "ANS6-merkle-children-swapped",
+      "file": "src/engine/answer.zig",
+      "from": "    return nodeHash(treeHash(Item, items[0..k], hashItem), treeHash(Item, items[k..], hashItem));",
+      "to": "    return nodeHash(treeHash(Item, items[k..], hashItem), treeHash(Item, items[0..k], hashItem));",
+      "kills": [
+        "the merkle root matches the RFC 6962 reference vectors for zero to eight leaves"
+      ]
+    },
+    {
+      "id": "ANS7-repeated-leaf-hashed",
+      "file": "src/engine/answer.zig",
+      "from": "        if (std.mem.order(u8, leaves[i - 1].path, leaves[i].path) != .lt) return error.UnsortedLeaves;",
+      "to": "        if (std.mem.order(u8, leaves[i - 1].path, leaves[i].path) == .gt) return error.UnsortedLeaves;",
+      "kills": [
+        "leaves out of path order or repeated are refused instead of hashed"
+      ]
+    },
+    {
+      "id": "ANS8-overspent-budget-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "        if (budget.used > budget.max) return \"a budget was overspent\";",
+      "to": "        if (budget.used > budget.max and false) return \"a budget was overspent\";",
+      "kills": [
+        "a budget used beyond its declared maximum is refused"
+      ]
+    },
+    {
+      "id": "ANS9-undeclared-limit-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            if (!declares(cert.budgets, limit)) return \"a missing reason names an undeclared limit\";",
+      "to": "            if (!declares(cert.budgets, limit) and false) return \"a missing reason names an undeclared limit\";",
+      "kills": [
+        "a missing reason that names a limit needs that limit declared with its value"
+      ]
+    },
+    {
+      "id": "ANS10-unlisted-unresolved-reference-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "        .facts => |facts| if (facts.unresolved != unresolved) return \"unresolved references are not all listed\",",
+      "to": "        .facts => |facts| if (facts.unresolved != unresolved and false) return \"unresolved references are not all listed\",",
+      "kills": [
+        "callers with an unresolved reference in scope are partial and every unresolved reference is listed"
+      ]
+    },
+    {
+      "id": "ANS11-kinds-filtered-hits-not-told",
+      "file": "src/engine/answer.zig",
+      "from": "        .text => |text| if (text.filtered != 0) try w.print(\"; {d} hidden by kinds\", .{text.filtered}),",
+      "to": "        .text => |text| if (text.filtered == 0) try w.print(\"; {d} hidden by kinds\", .{text.filtered}),",
+      "kills": [
+        "hits hidden by a kinds filter and skipped binary files are counted in the status"
+      ]
+    },
+    {
+      "id": "ANS12-missing-order-leaks-into-certificate",
+      "file": "src/engine/answer.zig",
+      "from": "            std.mem.sort(Missing, missing, {}, missingLess);\n",
+      "to": "",
+      "kills": [
+        "the certificate bytes do not depend on the order missing files were reported"
+      ]
+    },
+    {
+      "id": "ANS13-file-missing-twice-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            if (entry.reason.fileLevel()) return \"a file is reported missing twice\";",
+      "to": "            if (entry.reason.fileLevel() and false) return \"a file is reported missing twice\";",
+      "kills": [
+        "the same file reported missing twice is refused"
+      ]
+    },
+    {
+      "id": "ANS14-empty-missing-entry-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "        if (entry.files == 0) return \"a missing entry covers no file\";",
+      "to": "        if (entry.files == 0 and false) return \"a missing entry covers no file\";",
+      "kills": [
+        "a missing entry must cover at least one file and a named path exactly one"
+      ]
+    },
+    {
+      "id": "ANS15-filtered-hits-without-filter-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            if (text.kinds.eql(.initFull()) and text.filtered != 0) return \"hits were filtered without a kinds filter\";",
+      "to": "            if (text.kinds.eql(.initFull()) and text.filtered != 0 and false) return \"hits were filtered without a kinds filter\";",
+      "kills": [
+        "hits counted as filtered without a kinds filter are refused"
+      ]
+    },
+    {
+      "id": "ANS16-scope-prefix-excludes-itself",
+      "file": "src/engine/answer.zig",
+      "from": "    if (path.len == prefix.len) return true;",
+      "to": "    if (path.len == prefix.len) return false;",
+      "kills": [
+        "a scope prefix covers itself and the paths below it and nothing beside it"
+      ]
+    },
+    {
+      "id": "ANS17-unresolved-reference-in-unevaluated-file-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            return \"an unresolved reference sits in a file that was not evaluated\";\n",
+      "to": "",
+      "kills": [
+        "callers with an unresolved reference in scope are partial and every unresolved reference is listed"
+      ]
+    },
+    {
+      "id": "IOS1-read-error-becomes-empty-content",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch |err| return readError(err);",
+      "to": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch return gpa.alloc(u8, 0);",
+      "kills": [
+        "the real file system reads below the limit and refuses a file at the limit as too large"
+      ]
+    },
+    {
+      "id": "IOS2-too-large-read-reported-as-missing",
+      "file": "src/platform/io_seam.zig",
+      "from": "        error.StreamTooLong, error.FileTooBig => error.TooLarge,",
+      "to": "        error.StreamTooLong, error.FileTooBig => error.FileNotFound,",
+      "kills": [
+        "every read error keeps its meaning when it crosses the seam"
+      ]
+    },
+    {
+      "id": "IOS3-stat-error-becomes-empty-file",
+      "file": "src/platform/io_seam.zig",
+      "from": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch |err| return statError(err);",
+      "to": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch return .{ .kind = .file, .size = 0, .mtime_ns = 0, .id = 0 };",
+      "kills": [
+        "the real file system stats a file, a directory and a missing path"
+      ]
+    },
+    {
+      "id": "IOS4-missing-directory-listed-empty",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (handle == windows.INVALID_HANDLE_VALUE) return win32ListError(win.GetLastError());",
+      "to": "        if (handle == windows.INVALID_HANDLE_VALUE) return;",
+      "kills": [
+        "the real file system lists every entry of a directory with its kind and size and refuses a missing one"
+      ]
+    },
+    {
+      "id": "IOS5-listing-drops-entries",
+      "file": "src/platform/io_seam.zig",
+      "from": "            if (!std.mem.eql(u8, name, \".\") and !std.mem.eql(u8, name, \"..\")) {",
+      "to": "            if (!std.mem.eql(u8, name, \".\") and !std.mem.eql(u8, name, \"..\") and name.len > 5) {",
+      "kills": [
+        "the real file system lists every entry of a directory with its kind and size and refuses a missing one"
+      ]
+    },
+    {
+      "id": "IOS6-watch-records-reported-pending",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return .{ .records = bytes };",
+      "to": "        return .pending;",
+      "kills": [
+        "the real watch reports a file created after it was opened"
+      ]
+    },
+    {
+      "id": "IOS7-watch-overflow-reported-pending",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (bytes == 0 or bytes > out.len) {\n            self.issue();\n            return .overflow;",
+      "to": "        if (bytes == 0 or bytes > out.len) {\n            self.issue();\n            return .pending;",
+      "kills": [
+        "a change that does not fit the watch buffer is reported as overflow and never as silence"
+      ]
+    },
+    {
+      "id": "IOS8-exclusive-create-overwrites",
+      "file": "src/platform/io_seam.zig",
+      "from": "        const file = Dir.createFileAbsolute(io, path, .{ .exclusive = true }) catch |err| return writeError(err);",
+      "to": "        const file = Dir.createFileAbsolute(io, path, .{ .exclusive = false }) catch |err| return writeError(err);",
+      "kills": [
+        "the real file system creates a file once and refuses to create it again"
+      ]
+    },
+    {
+      "id": "IOS9-failed-rename-reported-done",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (win.MoveFileExW(from_w, to_w, win.movefile_replace_existing | win.movefile_write_through) == .FALSE) return win32WriteError(win.GetLastError());",
+      "to": "        _ = win.MoveFileExW(from_w, to_w, win.movefile_replace_existing | win.movefile_write_through);",
+      "kills": [
+        "the real file system replaces a file by rename and refuses to rename a missing file"
+      ]
+    },
+    {
+      "id": "IOS10-cut-record-read-as-end",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (at + record_header_bytes > self.bytes.len) return error.Malformed;",
+      "to": "        if (at + record_header_bytes > self.bytes.len) return null;",
+      "kills": [
+        "notify records decode in order and a cut or overlapping record is malformed"
+      ]
+    },
+    {
+      "id": "IOS11-overlapping-record-accepted",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (step != 0 and (step % 4 != 0 or step < record_header_bytes + name_bytes)) return error.Malformed;",
+      "to": "        if (step != 0 and step % 4 != 0) return error.Malformed;",
+      "kills": [
+        "notify records decode in order and a cut or overlapping record is malformed"
+      ]
+    },
+    {
+      "id": "IOS12-failed-listing-becomes-empty-repository",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return shadow.trackedFiles(gpa, of(context).io, root) catch |err| return trackedError(err);",
+      "to": "        return shadow.trackedFiles(gpa, of(context).io, root) catch return gpa.alloc([]u8, 0);",
+      "kills": [
+        "the real file system lists the files a repository tracks"
+      ]
+    },
+    {
+      "id": "IOS13-delete-of-missing-file-succeeds",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return Dir.deleteFileAbsolute(of(context).io, path) catch |err| return writeError(err);",
+      "to": "        return Dir.deleteFileAbsolute(of(context).io, path) catch {};",
+      "kills": [
+        "the real file system deletes a file, makes a nested path and resolves a path to its real form"
+      ]
+    },
+    {
+      "id": "IOS14-closed-watch-polled-as-pending",
+      "file": "src/platform/io_seam.zig",
+      "from": "        const slot = of(context).watchSlot(handle) orelse return .dead;",
+      "to": "        const slot = of(context).watchSlot(handle) orelse return .pending;",
+      "kills": [
+        "polling a handle that was never opened or was closed reports a dead watch"
+      ]
+    },
+    {
+      "id": "FCQ1-unresolved-same-name-call-ignored",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (!bindable(reason) and !(script_global and reason == .global)) continue;",
+      "to": "if (true or (!bindable(reason) and !(script_global and reason == .global))) continue;",
+      "kills": [
+        "facts query: a same-name call on an unknown receiver makes callers partial and is listed with its place"
+      ],
+      "note": "silent drop: an unresolved reference that could bind to the subject would vanish and the answer would read complete"
+    },
+    {
+      "id": "FCQ2-import-reach-not-followed",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (still) try self.scope_files.put(self.arena, importer, {});",
+      "to": "if (still and false) try self.scope_files.put(self.arena, importer, {});",
+      "kills": [
+        "facts query: a dynamic-key call counts only in a file that reaches the subject's module through imports"
+      ]
+    },
+    {
+      "id": "FCQ3-computed-import-counted-as-dynamic-key",
+      "file": "src/engine/facts_query.zig",
+      "from": "                if (reason == .computed_import) continue;\n",
+      "to": "                if (reason == .computed_import and false) continue;\n",
+      "kills": [
+        "facts query: a dynamic-key call counts only in a file that reaches the subject's module through imports"
+      ]
+    },
+    {
+      "id": "FCQ4-unreadable-file-left-out",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (state.status == .unreadable or state.status == .too_large) try self.unread.put(self.arena, @intCast(id), {});",
+      "to": "_ = .{ state, id };",
+      "kills": [
+        "fact store: a file over the size limit is never read as empty, it makes the answer partial with a declared limit",
+        "fact store: a tracked file whose directory is gone is reported unreadable and the failed listing is counted"
+      ],
+      "note": "silent drop: a file that could not be read would no longer make the answer partial"
+    },
+    {
+      "id": "FCQ5-unparsed-file-naming-the-subject-left-out",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (hides) try self.unread.put(self.arena, key.file, {});",
+      "to": "_ = hides;",
+      "kills": [
+        "facts query: a file that mentions the name but was not parsed is reported as not analyzed"
+      ],
+      "note": "silent drop: a file in an unsupported language that names the subject would count as evaluated"
+    },
+    {
+      "id": "FCE2-evidence-last-line-dropped",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "    try out.writeAll(last);\n",
+      "to": "",
+      "kills": [
+        "facts evidence: a partial answer ends with the not-a-proof line and stays within the budget",
+        "facts evidence: a complete answer says so on its last line and labels each edge"
+      ]
+    },
+    {
+      "id": "FCS1-typed-edge-labelled-proven",
+      "file": "src/engine/facts_store.zig",
+      "from": "certainty = .typed;",
+      "to": "certainty = .proven;",
+      "kills": [
+        "facts store: an inherited method is found through the base class of another file, a typed receiver is labelled typed",
+        "facts evidence: a complete answer says so on its last line and labels each edge"
+      ]
+    },
+    {
+      "id": "FCS2-stale-generation-accepted",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (state.status != .indexed or state.link_gen != key.gen or key.index >= state.links.len) return null;",
+      "to": "if (state.status != .indexed or key.index >= state.links.len) return null;",
+      "kills": [
+        "facts store: an edit that keeps a reference at the same index does not count the old edge twice"
+      ],
+      "note": "an edge recorded before a file changed would keep counting after it changed"
+    },
+    {
+      "id": "FCS3-dependents-not-relinked",
+      "file": "src/engine/facts_store.zig",
+      "from": "            const more = try self.dependents(self.gpa, id);",
+      "to": "            const more = try self.gpa.dupe(FileId, &.{id});",
+      "kills": [
+        "facts store: a changed caller leaves no stale edge, a removed export turns the importer's edge unresolved"
+      ],
+      "note": "an importer would keep its edge to an export that no longer exists"
+    },
+    {
+      "id": "FCS4-body-edit-relinks-every-importer",
+      "file": "src/engine/facts_store.zig",
+      "from": "return !was_indexed or !std.mem.eql(u8, &old_signature, &state.signature);",
+      "to": "return true or !was_indexed or !std.mem.eql(u8, &old_signature, &state.signature);",
+      "kills": [
+        "facts store: a body edit keeps every definition's identity and does not relink the importers"
+      ]
+    },
+    {
+      "id": "FCS5-missing-member-counted-as-the-class",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (c.base == none) return .{ .unresolved = .member_not_found };",
+      "to": "if (c.base == none) return .{ .def = owner };",
+      "kills": [
+        "facts store: a member the class does not declare stays unresolved and is never counted as the class"
+      ],
+      "note": "an unresolved member call would be counted as a resolved reference to the class"
+    },
+    {
+      "id": "FCS6-reexport-cycle-not-cut",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (visit.onPath(id) or visit.path.items.len >= max_chain) return .{ .unresolved = .reexport_cycle };",
+      "to": "if (false) return .{ .unresolved = .reexport_cycle };",
+      "kills": [
+        "facts store: a re-export cycle ends as unresolved instead of looping"
+      ]
+    },
+    {
+      "id": "FCS7-unresolved-specifiers-read-as-empty",
+      "file": "src/engine/facts_store.zig",
+      "from": "        if (state.spec_targets.len != state.facts.specs.len) return error.SpecsNotResolved;\n        for (state.facts.exports) |e| {",
+      "to": "        for (state.facts.exports) |e| {",
+      "kills": [
+        "facts store: linking through a file whose imports are not resolved yet is an error, never an empty answer"
+      ]
+    },
+    {
+      "id": "FCX1-name-in-syntax-error-resolved-normally",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (self.inError()) return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(node), .target = .{ .unresolved = .parse_error } });\n",
+      "to": "",
+      "kills": [
+        "facts extract: a name inside a syntax error is unresolved as a parse error, the rest of the file still resolves"
+      ]
+    },
+    {
+      "id": "FCX2-unknown-receiver-call-not-recorded",
+      "file": "src/engine/facts_extract.zig",
+      "from": "                if (role.invokes()) return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(property), .target = target });\n",
+      "to": "",
+      "kills": [
+        "facts extract: a property of an unknown value, a computed callee, eval and a callback stay unresolved with a reason",
+        "facts query: a same-name call on an unknown receiver makes callers partial and is listed with its place"
+      ],
+      "note": "silent drop: a call on a value of unknown type would leave no trace"
+    },
+    {
+      "id": "FCX3-class-keyword-token-read-as-a-class",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (node.isNamed() and oneOf(kind, self.f.classes)) try self.classShape(node);",
+      "to": "if (oneOf(kind, self.f.classes)) try self.classShape(node);",
+      "kills": [
+        "facts extract: a JavaScript class records its base class without a type annotation table"
+      ]
+    },
+    {
+      "id": "FCX4-typed-constant-read-as-its-variable",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (self.typed_at.get(binder)) |t| return .{ .member_of_type = t };\n",
+      "to": "",
+      "kills": [
+        "facts extract: declared parameter types, constructed constants and parameter properties type a member call"
+      ]
+    },
+    {
+      "id": "FCX5-numeric-index-call-read-as-dynamic-key",
+      "file": "src/engine/facts_extract.zig",
+      "from": "const reason: facts.Reason = if (oneOf(index.kind(), self.g.literal_index_kinds)) .local_value else .dynamic_access;",
+      "to": "const reason: facts.Reason = .dynamic_access;",
+      "kills": [
+        "facts query: a dynamic-key call counts only in a file that reaches the subject's module through imports"
+      ]
+    },
+    {
+      "id": "FCR1-destructured-shorthand-not-a-binder",
+      "file": "src/engine/lang/ecma/rename.zig",
+      "from": "    .{ .parent = \"object_pattern\", .field = null, .scope = .pattern },\n",
+      "to": "",
+      "kills": [
+        "facts extract: a destructured name shadows an outer function, so its call is a local value, never the function",
+        "scope: a destructured shorthand binds its own name, so a use inside its block does not reach the outer function"
+      ]
+    },
+    {
+      "id": "FCP1-oversized-file-taken-as-unchanged",
+      "file": "src/platform/fact_store.zig",
+      "from": "                self.outcomes[i] = .{ .failed = .{ .status = .too_large, .note = \"too_large\" } };",
+      "to": "                self.outcomes[i] = .same;",
+      "kills": [
+        "fact store: a file over the size limit is never read as empty, it makes the answer partial with a declared limit"
+      ],
+      "note": "silent drop: a file over the limit would disappear from the store"
+    },
+    {
+      "id": "FCP2-failed-listing-not-counted",
+      "file": "src/platform/fact_store.zig",
+      "from": "            self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit }) catch {\n                _ = self.failures.fetchAdd(1, .monotonic);\n",
+      "to": "            self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit }) catch {\n",
+      "kills": [
+        "fact store: a tracked file whose directory is gone is reported unreadable and the failed listing is counted"
+      ],
+      "note": "silent degradation: a directory that cannot be listed would be read again with no visible event"
+    },
+    {
+      "id": "FCP3-store-checksum-not-verified",
+      "file": "src/platform/fact_file.zig",
+      "from": "    if (!std.mem.eql(u8, &sum, bytes[bytes.len - checksum_len ..])) return error.Corrupt;\n",
+      "to": "    _ = &sum;\n",
+      "kills": [
+        "fact store: a store whose definition name was altered on disk is refused by its checksum and rebuilt"
+      ]
+    },
+    {
+      "id": "FCP4-corrupt-store-reported-as-absent",
+      "file": "src/platform/fact_file.zig",
+      "from": "    const body = verified(bytes) catch |err| return .{ .rebuilt = switch (err) {",
+      "to": "    const body = verified(bytes) catch |err| return if (@intFromError(err) != 0) .absent else .{ .rebuilt = switch (err) {",
+      "kills": [
+        "fact store: a store file with one flipped byte is rebuilt and says why"
+      ],
+      "note": "silent drop: a corrupt store would be rebuilt with no reason given"
+    },
+    {
+      "id": "FCP5-invalid-manifest-not-reported",
+      "file": "src/platform/fact_modules.zig",
+      "from": "                try self.notes.append(a, .{ .path = try a.dupe(u8, rel), .problem = \"invalid json\" });\n",
+      "to": "",
+      "kills": [
+        "fact store: an invalid package manifest is reported, never skipped in silence"
+      ],
+      "note": "silent drop: a package manifest that cannot be parsed would be skipped with no visible event"
+    },
+    {
+      "id": "FCE1-evidence-budget-not-enforced",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "return self.used + text.len + 1 + reserve <= self.limit;",
+      "to": "return self.used + text.len + 1 + reserve <= self.limit or true;",
+      "kills": [
+        "facts evidence: a partial answer ends with the not-a-proof line and stays within the budget",
+        "facts evidence: a complete answer whose lines do not all fit turns partial and says how many were cut"
+      ]
+    },
+    {
+      "id": "FCE3-elided-range-not-declared",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "            if (range.first > next) _ = try self.push(try self.elisionLine(next, range.first - 1, subject.path, subject.qname));\n",
+      "to": "",
+      "kills": [
+        "facts evidence: a function over the budget keeps the whole block around each call, declares every elided range and turns the answer partial"
+      ],
+      "note": "silent cut: lines of a function would vanish from the evidence without an elision line"
+    },
+    {
+      "id": "FCE4-cut-function-shown-as-whole",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "        self.body_elided = true;\n        try self.markElided(subject.path);\n        var next = first;",
+      "to": "        var next = first;",
+      "kills": [
+        "facts evidence: a function over the budget keeps the whole block around each call, declares every elided range and turns the answer partial"
+      ],
+      "note": "a function shown in part would leave the answer complete as if it were shown whole"
+    },
+    {
+      "id": "FCE5-cut-sites-leave-answer-complete",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "    for (value.sites[shown_sites..]) |site| {\n        r.cut += 1;\n        try r.markElided(site.path);\n    }",
+      "to": "    for (value.sites[shown_sites..]) |site| {\n        r.cut += 1;\n        _ = site;\n    }",
+      "kills": [
+        "facts evidence: a complete answer whose lines do not all fit turns partial and says how many were cut"
+      ],
+      "note": "silent cut: call sites left out by the budget would not make the answer partial"
+    },
+    {
+      "id": "FCSP1-small-block-not-kept-whole",
+      "file": "src/engine/facts_spine.zig",
+      "from": "if (s_last - s_first + 1 <= max_block_lines) {",
+      "to": "if (false) {",
+      "kills": [
+        "spine: the lines around a call keep its whole small if statement and the headers of the large blocks around it"
+      ]
+    },
+    {
+      "id": "FCM1-stale-merkle-node-kept",
+      "file": "src/engine/facts_merkle.zig",
+      "from": "            _ = self.nodes.remove(rangeKey(lo, hi));\n",
+      "to": "",
+      "kills": [
+        "merkle: a cached tree updated one leaf at a time has the same root as the tree hashed from scratch",
+        "fact store: an in-memory edit relinks the file and moves the snapshot root to the value a full recount gives"
+      ]
+    },
+    {
+      "id": "FCP6-changed-file-shown-as-current",
+      "file": "src/platform/fact_store.zig",
+      "from": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash);",
+      "to": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash) or true;",
+      "kills": [
+        "fact store: evidence never shows a line of a file that changed after the snapshot as current"
+      ],
+      "note": "evidence would quote a line that is no longer the line the facts were computed from"
+    },
+    {
       "id": "IL1-index-load-failure-swallowed",
       "file": "src/platform/search_session.zig",
       "from": "                self.load_failure = why;\n",
