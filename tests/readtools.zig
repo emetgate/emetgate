@@ -295,6 +295,54 @@ test "read tools refuse a path outside the repo" {
     try expectToolError(runtime, "emetgate_search", .{ .pattern = "fonts", .dir = "C:\\Windows" }, "FileOutsideRepo");
 }
 
+test "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "r");
+    try tmp.dir.createDirPath(testing.io, "x/y");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "r/a.txt", .data = "inside\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "x/y/f.txt", .data = "outside secret\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, "r", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+    const outside = try tmp.dir.realPathFileAlloc(testing.io, "x/y/f.txt", testing.allocator);
+    defer testing.allocator.free(outside);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    for ([_][]const u8{ "emetgate_read_file", "emetgate_search" }) |tool| {
+        var reply = if (std.mem.eql(u8, tool, "emetgate_read_file"))
+            try callToolServed(runtime, root, tool, .{ .file = outside })
+        else
+            try callToolServed(runtime, root, tool, .{ .pattern = "secret", .dir = outside });
+        defer reply.deinit();
+        try testing.expect(reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expectEqualStrings("FileOutsideRepo", body.value.object.get("error").?.string);
+    }
+
+    try tmp.dir.createDirPath(testing.io, "s");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "s/b.txt", .data = "other repo\n" });
+    const other = try tmp.dir.realPathFileAlloc(testing.io, "s", testing.allocator);
+    defer testing.allocator.free(other);
+    try commitAll(other);
+    const first = try tmp.dir.realPathFileAlloc(testing.io, "r/a.txt", testing.allocator);
+    defer testing.allocator.free(first);
+    {
+        var reply = try callToolServed(runtime, root, "emetgate_read_file", .{ .file = first });
+        defer reply.deinit();
+        try testing.expect(!reply.is_error);
+    }
+    var reply = try callToolServed(runtime, other, "emetgate_read_file", .{ .file = first });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("FileOutsideRepo", body.value.object.get("error").?.string);
+}
+
 test "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const runtime = try Runtime.create(testing.allocator);
