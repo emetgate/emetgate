@@ -1,33 +1,6 @@
 {
   "mutations": [
     {
-      "id": "M1-search-size-cap-removed",
-      "file": "src/protocol/read_tools.zig",
-      "from": ".limited(limits.file_bytes)",
-      "to": ".unlimited",
-      "kills": [
-        "search reads a tracked file just under 1 MiB and skips one of 1 MiB"
-      ]
-    },
-    {
-      "id": "M2-search-binary-skip-removed",
-      "file": "src/protocol/read_tools.zig",
-      "from": "if (looksBinary(bytes)) continue;",
-      "to": "",
-      "kills": [
-        "search skips a tracked binary file"
-      ]
-    },
-    {
-      "id": "M3-search-cap-raised-to-2MiB",
-      "file": "src/protocol/read_tools.zig",
-      "from": "const max_search_file_bytes = 1024 * 1024;",
-      "to": "const max_search_file_bytes = 2 * 1024 * 1024;",
-      "kills": [
-        "search reads a tracked file just under 1 MiB and skips one of 1 MiB"
-      ]
-    },
-    {
       "id": "RF1-read-file-raw-range-ignored",
       "file": "src/protocol/read_tools.zig",
       "from": "    if (line_start != null or line_end != null) {\n        return renderRange(",

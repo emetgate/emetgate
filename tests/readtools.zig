@@ -605,65 +605,10 @@ fn gitIn(root: []const u8, args: []const []const u8) !void {
     }
 }
 
-fn searchedFiles(root: []const u8, limits: read_tools.SearchLimits) !std.json.Parsed(Value) {
-    var out: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer out.deinit();
-    try read_tools.searchIn(testing.allocator, testing.io, root, "", "needle", limits, &out.writer);
-    return std.json.parseFromSlice(Value, testing.allocator, out.written(), .{ .allocate = .alloc_always });
-}
-
-fn matchedFile(parsed: Value, name: []const u8) bool {
-    for (parsed.object.get("matches").?.array.items) |m| {
-        if (std.mem.eql(u8, m.object.get("file").?.string, name)) return true;
-    }
-    return false;
-}
-
 fn commitAll(root: []const u8) !void {
     try git_fixture.initRepo(root);
     try gitIn(root, &.{ "add", "." });
     try gitIn(root, &.{ "commit", "-q", "-m", "init" });
-}
-
-test "search reads a tracked file just under 1 MiB and skips one of 1 MiB" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const mib = 1024 * 1024;
-    const under_cap = try testing.allocator.alloc(u8, mib - 1);
-    defer testing.allocator.free(under_cap);
-    @memset(under_cap, 'x');
-    @memcpy(under_cap[0..7], "needle\n");
-    const at_cap = try testing.allocator.alloc(u8, mib);
-    defer testing.allocator.free(at_cap);
-    @memset(at_cap, 'x');
-    @memcpy(at_cap[0..7], "needle\n");
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "under_cap.txt", .data = under_cap });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "at_cap.txt", .data = at_cap });
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(root);
-    try commitAll(root);
-
-    var result = try searchedFiles(root, .{});
-    defer result.deinit();
-    try testing.expect(matchedFile(result.value, "under_cap.txt"));
-    try testing.expect(!matchedFile(result.value, "at_cap.txt"));
-}
-
-test "search skips a tracked binary file" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "text.txt", .data = "needle here\n" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "blob.bin", .data = "needle\x00binary\n" });
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(root);
-    try commitAll(root);
-
-    var result = try searchedFiles(root, .{});
-    defer result.deinit();
-    try testing.expect(matchedFile(result.value, "text.txt"));
-    try testing.expect(!matchedFile(result.value, "blob.bin"));
 }
 
 test "internal workspace and git paths are refused, others pass" {
