@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1139**
-- Mutations declared in `tests/mutations.json`: **641**
-  - killed: **611**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1141**
+- Mutations declared in `tests/mutations.json`: **644**
+  - killed: **614**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -535,7 +535,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-202 mutation(s).
+205 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -675,7 +675,7 @@ python tools/verification_page.py --check
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
 | `SR1-index-stale-entry-trusted` | `src/platform/search_index.zig` | `if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == ...` -> `if (true) {` | search on disk: a new session loads the saved index after its watcher started a...; refre... | killed |
-| `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !p.isRacy(stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o... | killed |
+| `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !Index.isRacy(old, stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o...; an in... | killed |
 | `SR2-index-checksum-not-verified` | `src/platform/search_index_file.zig` | `if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;` -> `_ = actual;     _ = claimed;` | a corrupted index file is rejected instead of trusted; a flipped byte, a cut tail, anothe... | killed |
 | `SR3-comment-kind-reversed` | `src/protocol/search_v1.zig` | `if (profile.isComment(n.kind())) return .comment;` -> `if (profile.isComment(n.kind())) return .code;` | a hash-matching index entry with no persisted spans still classifies comments a... | killed |
 | `SR4-hit-cap-ignored` | `src/protocol/search_v1.zig` | `if (total_hits >= max_matches) {` -> `if (false) {` | the total hit count is capped and truncated is reported | killed |
@@ -741,6 +741,9 @@ python tools/verification_page.py --check
 | `SA5-matches-removed-by-kinds-not-counted` | `src/protocol/search_v1.zig` | `item.filtered.getPtr(pending.kind).* += 1;` -> `_ = &item.filtered;` | search answers: kinds that remove every match say how many matches of which kin... | killed |
 | `SA6-unknown-kind-accepted` | `src/protocol/search_v1.zig` | `set.insert(std.meta.stringToEnum(Kind, v.string) orelse return ...` -> `set.insert(std.meta.stringToEnum(Kind, v.string) orelse continu...` | search answers: an unknown kind name is refused instead of filtering everything... | killed |
 | `SA7-empty-answer-without-a-note` | `src/protocol/search_v1.zig` | `if (result.groups.items.len == 0) {` -> `if (false) {` | search answers: a complete answer with no match states how many files it evalua...; searc... | killed |
+| `RS2-built-entry-has-no-read-time` | `src/platform/search_index.zig` | `const seen_ns = wallClock(io);     for (files) \|rel\| {` -> `const seen_ns: i96 = 0;     for (files) \|rel\| {` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
+| `RS3-refreshed-entry-has-no-read-time` | `src/platform/search_index.zig` | `.seen_ns = job.seen_ns,` -> `.seen_ns = 0,` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
+| `RS4-racy-entry-saved-with-its-real-stamp` | `src/platform/search_index.zig` | `const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_...` -> `const stamp: Stamp = e.stamp;` | saving smudges the stamp of an entry read inside the racy window, so the next s... | killed |
 
 ## What this system does not prove
 

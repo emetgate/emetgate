@@ -683,9 +683,12 @@ written when a session first builds it and when a session that changed it ends.
 (`search_session.zig`). The watcher starts with the session, before the saved index is
 loaded. The first search of a session then checks every tracked file against the loaded
 index: it lists each directory once (`FindFirstFileExW`, no file is opened), and re-reads
-a file whose last-write time or size differs, or whose time falls within 3 s of when the
-index was saved (the racy rule, since a write in the same instant as the save can keep its
-stamp); every other entry is used as loaded. The file list is reused while the git index
+a file whose last-write time or size differs, or whose last-write time falls within 3 s of
+when its entry was read (git's racy rule: a second write in the same instant as the read
+can keep the stamp). Every entry carries that read time, whether it was built in this
+process, refreshed, or loaded (then the save time stands in), and saving gives a racy entry
+an impossible stamp, as git smudges a racily clean index entry, so the next session reads
+that file again; every other entry is used as loaded. The file list is reused while the git index
 file keeps its last-write time, size and file id: git replaces the file on every write
 (a lock file renamed over it), so a new file id marks a change even within the same
 timestamp, and no waiting period is needed. Every search first calls
