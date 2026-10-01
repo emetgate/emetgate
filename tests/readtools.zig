@@ -209,6 +209,59 @@ test "read_file with a line range returns just that range and its hash" {
     try testing.expect(std.mem.count(u8, content, "\n") <= 1);
 }
 
+fn linesOf(bytes: []const u8, first: usize, last: usize) []const u8 {
+    var line: usize = 1;
+    var start: ?usize = if (first == 1) 0 else null;
+    for (bytes, 0..) |c, i| {
+        if (c != '\n') continue;
+        if (line == last) return bytes[start.? .. i + 1];
+        line += 1;
+        if (line == first) start = i + 1;
+    }
+    return bytes[start.?..];
+}
+
+test "read_file applies a line range to a raw read of a source file" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const path = "tests/fixtures/functions.ts";
+    const whole = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .unlimited);
+    defer testing.allocator.free(whole);
+
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = true, .line_start = 3, .line_end = 5 });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings(linesOf(whole, 3, 5), body.value.object.get("content").?.string);
+    try testing.expectEqual(@as(i64, 3), body.value.object.get("start_line").?.integer);
+    try testing.expectEqual(@as(i64, 5), body.value.object.get("end_line").?.integer);
+    try testing.expect(body.value.object.get("status") == null);
+    try testing.expect(body.value.object.get("truncated") == null);
+}
+
+test "read_file refuses an inverted or out-of-file line range and marks a range cut at the end of the file as partial" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const path = "tests/fixtures/functions.ts";
+    const whole = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .unlimited);
+    defer testing.allocator.free(whole);
+    const last: i64 = @intCast(std.mem.count(u8, whole, "\n") + @intFromBool(whole[whole.len - 1] != '\n'));
+
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = path, .raw = true, .line_start = 5, .line_end = 3 }, "InvalidLineRange");
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = path, .raw = true, .line_start = last + 1, .line_end = last + 5 }, "LineOutOfRange");
+
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = true, .line_start = last - 1, .line_end = last + 40 });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("partial", body.value.object.get("status").?.string);
+    try testing.expectEqual(last, body.value.object.get("end_line").?.integer);
+    try testing.expectEqual(last + 40, body.value.object.get("requested_end_line").?.integer);
+    try testing.expectEqualStrings(linesOf(whole, @intCast(last - 1), @intCast(last)), body.value.object.get("content").?.string);
+}
+
 test "read_file caps a large file and says it was truncated" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");

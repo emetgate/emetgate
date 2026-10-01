@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1151**
-- Mutations declared in `tests/mutations.json`: **662**
-  - killed: **632**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1153**
+- Mutations declared in `tests/mutations.json`: **666**
+  - killed: **636**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -553,13 +553,17 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-205 mutation(s).
+209 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
 | `M1-search-size-cap-removed` | `src/protocol/read_tools.zig` | `.limited(limits.file_bytes)` -> `.unlimited` | search reads a tracked file just under 1 MiB and skips one of 1 MiB | killed |
 | `M2-search-binary-skip-removed` | `src/protocol/read_tools.zig` | `if (looksBinary(bytes)) continue;` -> `` | search skips a tracked binary file | killed |
 | `M3-search-cap-raised-to-2MiB` | `src/protocol/read_tools.zig` | `const max_search_file_bytes = 1024 * 1024;` -> `const max_search_file_bytes = 2 * 1024 * 1024;` | search reads a tracked file just under 1 MiB and skips one of 1 MiB | killed |
+| `RF1-read-file-raw-range-ignored` | `src/protocol/read_tools.zig` | `if (line_start != null or line_end != null) {         return re...` -> `if (!raw and (line_start != null or line_end != null)) {       ...` | read_file applies a line range to a raw read of a source file; read_file refuses an inver... | killed |
+| `RF2-read-file-range-shifted-by-one` | `src/protocol/read_tools.zig` | `line_range.byteRangeForLines(bytes, @intCast(start), @intCast(s...` -> `line_range.byteRangeForLines(bytes, @intCast(start + 1), @intCa...` | read_file applies a line range to a raw read of a source file | killed |
+| `RF3-read-file-range-cut-silently` | `src/protocol/read_tools.zig` | `if (shown_end < end) {` -> `if (false) {` | read_file refuses an inverted or out-of-file line range and marks a range cut a... | killed |
+| `RF4-read-file-range-past-the-file-not-refused` | `src/protocol/read_tools.zig` | `if (start > last) return error.LineOutOfRange;` -> `` | read_file refuses an inverted or out-of-file line range and marks a range cut a... | killed |
 | `SELF-a-harmless-change-survives` | `src/protocol/server.zig` | `const server_version = "0.1.0";` -> `const server_version = "0.1.1";` | control: proves the harness reports a survivor instead of calling everything killed | control |
 | `R7-checks-template-string-prose-allowed` | `src/engine/lang/ecma/common.zig` | `pub const prose_strings = [_][]const u8{ "string", "template_st...` -> `pub const prose_strings = [_][]const u8{"string"};` | no_comment flags prose smuggled in as a string or template statement | killed |
 | `EB6-bnd-dynamic-import-ignored` | `src/engine/lang/ecma/common.zig` | `pub const dynamic_callees = [_][]const u8{ "eval", "import" };` -> `pub const dynamic_callees = [_][]const u8{"eval"};` | adversarial: a dynamic import anywhere in the file forces UNBOUNDED | killed |

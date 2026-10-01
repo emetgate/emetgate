@@ -28,6 +28,43 @@
       ]
     },
     {
+      "id": "RF1-read-file-raw-range-ignored",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (line_start != null or line_end != null) {\n        return renderRange(",
+      "to": "    if (!raw and (line_start != null or line_end != null)) {\n        return renderRange(",
+      "kills": [
+        "read_file applies a line range to a raw read of a source file",
+        "read_file refuses an inverted or out-of-file line range and marks a range cut at the end of the file as partial"
+      ]
+    },
+    {
+      "id": "RF2-read-file-range-shifted-by-one",
+      "file": "src/protocol/read_tools.zig",
+      "from": "line_range.byteRangeForLines(bytes, @intCast(start), @intCast(shown_end))",
+      "to": "line_range.byteRangeForLines(bytes, @intCast(start + 1), @intCast(shown_end + 1))",
+      "kills": [
+        "read_file applies a line range to a raw read of a source file"
+      ]
+    },
+    {
+      "id": "RF3-read-file-range-cut-silently",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (shown_end < end) {",
+      "to": "    if (false) {",
+      "kills": [
+        "read_file refuses an inverted or out-of-file line range and marks a range cut at the end of the file as partial"
+      ]
+    },
+    {
+      "id": "RF4-read-file-range-past-the-file-not-refused",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (start > last) return error.LineOutOfRange;\n",
+      "to": "",
+      "kills": [
+        "read_file refuses an inverted or out-of-file line range and marks a range cut at the end of the file as partial"
+      ]
+    },
+    {
       "id": "K1-lockdown-tools-default",
       "file": "src/platform/lockdown.zig",
       "from": "pub const allowed_builtin_tools = \"\";",
