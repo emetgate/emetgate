@@ -10,7 +10,7 @@ const Store = facts_store.Store;
 const none = facts.none;
 
 pub const magic = "EMGFACTS";
-pub const version: u32 = 1;
+pub const version: u32 = 2;
 pub const checksum_len = 16;
 pub const max_store_bytes: usize = std.math.maxInt(u32);
 
