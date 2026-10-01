@@ -15,6 +15,8 @@ const call_like = [_]FieldSite{
     .{ .parent = "jsx_self_closing_element", .field = "name" },
 };
 
+const branch_statements = [_][]const u8{ "if_statement", "else_clause", "switch_statement", "switch_case", "switch_default", "return_statement", "break_statement", "continue_statement", "throw_statement", "catch_clause", "ternary_expression" };
+
 const typed_binders = [_]TypedBinder{
     .{ .node = "variable_declarator", .name_field = "name", .type_field = "type" },
     .{ .node = "required_parameter", .name_field = "pattern", .type_field = "type" },
@@ -22,6 +24,7 @@ const typed_binders = [_]TypedBinder{
 };
 
 pub const typescript: Facts = .{
+    .branch_statements = &branch_statements,
     .member = "member_expression",
     .object_field = "object",
     .property_field = "property",
@@ -49,6 +52,7 @@ pub const typescript: Facts = .{
 };
 
 pub const javascript: Facts = .{
+    .branch_statements = &branch_statements,
     .member = "member_expression",
     .object_field = "object",
     .property_field = "property",

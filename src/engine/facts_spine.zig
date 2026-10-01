@@ -101,7 +101,7 @@ fn rangeLess(_: void, a: Range, b: Range) bool {
     return a.last < b.last;
 }
 
-fn merged(arena: Allocator, ranges: []Range) ![]const Range {
+pub fn merged(arena: Allocator, ranges: []Range) ![]const Range {
     std.mem.sort(Range, ranges, {}, rangeLess);
     var out: std.ArrayList(Range) = .empty;
     for (ranges) |r| {
@@ -115,43 +115,109 @@ fn merged(arena: Allocator, ranges: []Range) ![]const Range {
     return out.items;
 }
 
-pub fn compute(arena: Allocator, profile: *const Profile, tree: ts.Tree, lines: Lines, span: facts.Span, relevant: []const u32) !Spine {
+pub const Frame = struct {
+    holder: ts.Node,
+    first: u32,
+    last: u32,
+    signature_last: u32,
+};
+
+pub fn frameOf(tree: ts.Tree, lines: Lines, span: facts.Span) Frame {
     const first = lines.lineAt(span.start);
     const last = lines.lineAt(if (span.end > span.start) span.end - 1 else span.start);
-    var keep: std.ArrayList(Range) = .empty;
     const holder = covering(tree.root(), span);
     const body = holder.childByField("body");
     const signature_end = if (body) |b| lines.lineAt(b.startByte()) else first;
-    try add(arena, &keep, first, @min(signature_end, last));
-    try add(arena, &keep, last, last);
-    for (relevant) |line| {
-        if (line < first or line > last) continue;
-        const offset = lines.firstCode(line) orelse continue;
-        var chain: std.ArrayList(ts.Node) = .empty;
-        var node: ?ts.Node = deepest(holder, offset);
-        while (node) |current| : (node = current.parent()) {
-            if (current.eql(holder)) break;
-            const parent = current.parent() orelse break;
-            if (std.mem.eql(u8, parent.kind(), profile.block)) try chain.append(arena, current);
-        }
-        if (chain.items.len == 0) {
-            try add(arena, &keep, line, line);
-            continue;
-        }
-        var i = chain.items.len;
-        while (i > 0) : (i -= 1) {
-            const statement = chain.items[i - 1];
-            const s_first = lines.lineAt(statement.startByte());
-            const s_last = lines.lineAt(statement.endByte() - 1);
-            if (s_last - s_first + 1 <= max_block_lines) {
-                try add(arena, &keep, s_first, s_last);
+    return .{ .holder = holder, .first = first, .last = last, .signature_last = @min(signature_end, last) };
+}
+
+fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
+    for (kinds) |candidate| {
+        if (std.mem.eql(u8, candidate, kind)) return true;
+    }
+    return false;
+}
+
+fn statementAt(profile: *const Profile, frame: Frame, path: []const ts.Node, at: usize) bool {
+    const parent = if (at + 1 < path.len) path[at + 1] else frame.holder;
+    return std.mem.eql(u8, parent.kind(), profile.block);
+}
+
+fn lineSpan(lines: Lines, node: ts.Node) Range {
+    const first = lines.lineAt(node.startByte());
+    return .{ .first = first, .last = @max(first, lines.lineAt(node.endByte() -| 1)) };
+}
+
+pub fn unit(arena: Allocator, profile: *const Profile, frame: Frame, lines: Lines, line: u32, branches: []const []const u8) ![]const Range {
+    var keep: std.ArrayList(Range) = .empty;
+    try unitInto(arena, &keep, profile, frame, lines, line, branches, true);
+    return keep.items;
+}
+
+fn unitInto(arena: Allocator, keep: *std.ArrayList(Range), profile: *const Profile, frame: Frame, lines: Lines, line: u32, branches: []const []const u8, follow: bool) Allocator.Error!void {
+    if (line < frame.first or line > frame.last) return;
+    const offset = lines.firstCode(line) orelse return;
+    const leaf = deepest(frame.holder, offset);
+    var path: std.ArrayList(ts.Node) = .empty;
+    var node: ?ts.Node = leaf;
+    while (node) |current| : (node = current.parent()) {
+        if (current.eql(frame.holder)) break;
+        try path.append(arena, current);
+    }
+    const items = path.items;
+    var kept: ?usize = null;
+    if (branches.len != 0) {
+        for (items, 0..) |candidate, at| {
+            if (oneOf(candidate.kind(), branches)) {
+                kept = at;
                 break;
             }
-            try add(arena, &keep, s_first, s_first);
-            try add(arena, &keep, s_last, s_last);
-        } else try add(arena, &keep, line, line);
+        }
     }
-    return .{ .first = first, .last = last, .keep = try merged(arena, keep.items) };
+    const floor = kept orelse 0;
+    var i = items.len;
+    while (i > floor) : (i -= 1) {
+        const at = i - 1;
+        if (!statementAt(profile, frame, items, at) and !oneOf(items[at].kind(), branches)) continue;
+        const statement = items[at];
+        const s_first = lines.lineAt(statement.startByte());
+        const s_last = lines.lineAt(statement.endByte() - 1);
+        if (s_last - s_first + 1 <= max_block_lines) {
+            kept = at;
+            break;
+        }
+    }
+    const outer_from = if (kept) |k| k + 1 else 0;
+    if (kept) |k| {
+        const whole = lineSpan(lines, items[k]);
+        try add(arena, keep, whole.first, whole.last);
+    } else try add(arena, keep, line, line);
+    for (items[outer_from..], outer_from..) |outer, at| {
+        if (!statementAt(profile, frame, items, at) and !oneOf(outer.kind(), branches) and profile.functionKind(outer.kind()) == null) continue;
+        const span = lineSpan(lines, outer);
+        try add(arena, keep, span.first, span.first);
+        try add(arena, keep, span.last, span.last);
+    }
+    if (follow and oneOf(leaf.kind(), profile.comments)) {
+        var next = lineSpan(lines, leaf).last + 1;
+        while (next <= frame.last) : (next += 1) {
+            const text = lines.text(next) orelse break;
+            if (std.mem.trim(u8, text, " \t").len == 0) continue;
+            const at = lines.firstCode(next) orelse break;
+            if (oneOf(deepest(frame.holder, at).kind(), profile.comments)) continue;
+            try unitInto(arena, keep, profile, frame, lines, next, branches, false);
+            break;
+        }
+    }
+}
+
+pub fn compute(arena: Allocator, profile: *const Profile, tree: ts.Tree, lines: Lines, span: facts.Span, relevant: []const u32) !Spine {
+    const frame = frameOf(tree, lines, span);
+    var keep: std.ArrayList(Range) = .empty;
+    try add(arena, &keep, frame.first, frame.signature_last);
+    try add(arena, &keep, frame.last, frame.last);
+    for (relevant) |line| try unitInto(arena, &keep, profile, frame, lines, line, &.{}, true);
+    return .{ .first = frame.first, .last = frame.last, .keep = try merged(arena, keep.items) };
 }
 
 const testing = std.testing;
