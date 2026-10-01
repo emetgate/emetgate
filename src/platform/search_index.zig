@@ -31,7 +31,19 @@ pub const Entry = struct {
     content_hash: ?symbol.Hash = null,
     spans: ?kind_spans.FileSpans = null,
     doc: ?doc_spans.DocSpans = null,
+    seen_ns: i96 = 0,
 };
+
+pub const smudged_mtime_ns: i96 = std.math.minInt(i64);
+
+pub fn racyAt(stamp: Stamp, seen_ns: i96) bool {
+    const delta = stamp.mtime_ns - seen_ns;
+    return delta > -racy_window_ns and delta < racy_window_ns;
+}
+
+fn wallClock(io: std.Io) i96 {
+    return std.Io.Clock.real.now(io).nanoseconds;
+}
 
 fn dupeSpans(a: Allocator, spans: ?kind_spans.FileSpans) !?kind_spans.FileSpans {
     const s = spans orelse return null;
@@ -97,10 +109,8 @@ pub const Index = struct {
         return null;
     }
 
-    fn isRacy(self: Index, stamp: Stamp) bool {
-        const written = self.written_ns orelse return false;
-        const delta = stamp.mtime_ns - written;
-        return delta > -racy_window_ns and delta < racy_window_ns;
+    fn isRacy(entry: *const Entry, stamp: Stamp) bool {
+        return racyAt(stamp, entry.seen_ns);
     }
 };
 
@@ -132,6 +142,7 @@ pub fn build(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
     const a = arena.allocator();
 
     var entries: std.ArrayList(Entry) = .empty;
+    const seen_ns = wallClock(io);
     for (files) |rel| {
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, rel });
         defer gpa.free(abs);
@@ -149,6 +160,7 @@ pub fn build(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
             .content_hash = symbol.fileHash(bytes),
             .spans = spansFor(a, rel, bytes),
             .doc = doc_spans.build(a, rel, bytes),
+            .seen_ns = seen_ns,
         });
     }
     return Index.finish(arena, try entries.toOwnedSlice(a), null);
@@ -158,6 +170,7 @@ pub const UpdateError = error{ NeedsFullRefresh, OutOfMemory };
 
 pub fn updateEntry(gpa: Allocator, io: std.Io, index: *Index, root_abs: []const u8, rel: []const u8) UpdateError!void {
     const slot = index.lookup.get(rel);
+    const seen_ns = wallClock(io);
     const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, rel });
     defer gpa.free(abs);
     const stamp = statOf(io, abs) orelse {
@@ -188,6 +201,7 @@ pub fn updateEntry(gpa: Allocator, io: std.Io, index: *Index, root_abs: []const 
         .content_hash = symbol.fileHash(bytes),
         .spans = spansFor(a, rel, bytes),
         .doc = doc_spans.build(a, rel, bytes),
+        .seen_ns = seen_ns,
     };
 }
 
@@ -222,6 +236,7 @@ fn reconcile(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
     const slots = try gpa.alloc(Pending, files.len);
     defer gpa.free(slots);
     for (slots, files) |*slot, rel| slot.* = .{ .rel = rel };
+    const seen_ns = wallClock(io);
     const t0 = std.Io.Clock.awake.now(io).nanoseconds;
     try prefillStamps(gpa, root_abs, slots, pool);
     const t1 = std.Io.Clock.awake.now(io).nanoseconds;
@@ -229,7 +244,7 @@ fn reconcile(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
     const count = workerCount(files.len);
     const workers = try gpa.alloc(Worker, count);
     defer gpa.free(workers);
-    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = index.*, .slots = slots, .workers = workers };
+    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = index.*, .slots = slots, .workers = workers, .seen_ns = seen_ns };
     for (workers) |*w| w.* = .{ .job = &job, .arena = .init(gpa) };
     defer for (workers) |*w| w.arena.deinit();
     if (pool) |p| p.run(count - 1, Job.runOne, &job) else Job.runOne(&job);
@@ -260,6 +275,7 @@ fn reconcile(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []
                     .content_hash = e.content_hash,
                     .spans = try dupeSpans(a, e.spans),
                     .doc = try doc_spans.dupe(a, e.doc),
+                    .seen_ns = e.seen_ns,
                 };
                 if (at) |i| index.entries[i] = entry else try added.append(gpa, entry);
             },
@@ -289,12 +305,13 @@ pub fn refreshWith(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []co
     const slots = try gpa.alloc(Pending, files.len);
     defer gpa.free(slots);
     for (slots, files) |*slot, rel| slot.* = .{ .rel = rel };
+    const seen_ns = wallClock(io);
     if (previous != null) try prefillStamps(gpa, root_abs, slots, pool);
 
     const count = workerCount(files.len);
     const workers = try gpa.alloc(Worker, count);
     defer gpa.free(workers);
-    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = previous, .slots = slots, .workers = workers };
+    var job: Job = .{ .gpa = gpa, .io = io, .root = root_abs, .previous = previous, .slots = slots, .workers = workers, .seen_ns = seen_ns };
     for (workers) |*w| w.* = .{ .job = &job, .arena = .init(gpa) };
     defer for (workers) |*w| w.arena.deinit();
     if (pool) |p| {
@@ -338,6 +355,7 @@ pub fn refreshWith(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []co
             .content_hash = source.content_hash,
             .spans = try dupeSpans(a, source.spans),
             .doc = try doc_spans.dupe(a, source.doc),
+            .seen_ns = source.seen_ns,
         });
     }
     const changed = recomputed != 0 or entries.items.len != if (previous) |p| p.entries.len else 0;
@@ -445,6 +463,7 @@ const Job = struct {
     previous: ?Index,
     slots: []Pending,
     workers: []Worker,
+    seen_ns: i96,
     next: std.atomic.Value(usize) = .init(0),
     next_worker: std.atomic.Value(usize) = .init(0),
     failure: ?anyerror = null,
@@ -489,7 +508,7 @@ const Worker = struct {
         slot.stamp = stamp;
         if (job.previous) |p| {
             if (p.find(slot.rel)) |old| {
-                if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {
+                if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !Index.isRacy(old, stamp)) {
                     slot.reuse = old;
                     slot.state = .reuse;
                     return;
@@ -512,6 +531,7 @@ const Worker = struct {
             .content_hash = symbol.fileHash(bytes),
             .spans = spansFor(a, slot.rel, bytes),
             .doc = doc_spans.build(a, slot.rel, bytes),
+            .seen_ns = job.seen_ns,
         };
         slot.state = .fresh;
     }
@@ -525,7 +545,8 @@ pub fn save(gpa: Allocator, io: std.Io, path: []const u8, index: Index, files: [
     for (index.entries, 0..) |e, i| {
         const at = index.lookup.get(e.path) orelse continue;
         if (at != i or n == entries.len) continue;
-        entries[n] = .{ .path = e.path, .stamp = e.stamp, .trigrams = e.trigrams, .content_hash = e.content_hash, .spans = e.spans, .doc = e.doc };
+        const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_ns = smudged_mtime_ns, .size = e.stamp.size } else e.stamp;
+        entries[n] = .{ .path = e.path, .stamp = stamp, .trigrams = e.trigrams, .content_hash = e.content_hash, .spans = e.spans, .doc = e.doc };
         n += 1;
     }
     const written_ns = std.Io.Clock.real.now(io).nanoseconds;
@@ -626,7 +647,7 @@ fn parse(gpa: Allocator, bytes: []const u8) index_file.DecodeError!Loaded {
     const a = arena.allocator();
     const contents = try index_file.decode(a, bytes);
     const entries = try a.alloc(Entry, contents.entries.len);
-    for (contents.entries, entries) |e, *out| out.* = .{ .path = e.path, .stamp = e.stamp, .trigrams = e.trigrams, .content_hash = e.content_hash, .spans = e.spans, .doc = e.doc };
+    for (contents.entries, entries) |e, *out| out.* = .{ .path = e.path, .stamp = e.stamp, .trigrams = e.trigrams, .content_hash = e.content_hash, .spans = e.spans, .doc = e.doc, .seen_ns = contents.written_ns };
     var index = try Index.finish(arena, entries, contents.written_ns);
     index.files = contents.files;
     index.git_stamp = contents.git_stamp;
@@ -709,6 +730,8 @@ test "refresh reuses unchanged entries and recomputes a file that changed" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.ts", .data = "export const other = 2;\n" });
     const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root_abs);
+    try ageOutOfRacyWindow(tmp.dir, "a.ts");
+    try ageOutOfRacyWindow(tmp.dir, "b.ts");
 
     const first = try build(testing.allocator, testing.io, root_abs, &.{ "a.ts", "b.ts" });
     defer first.deinit();
@@ -734,6 +757,7 @@ test "refresh reports unchanged when every entry is reused and no file was added
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export const value = 1;\n" });
     const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root_abs);
+    try ageOutOfRacyWindow(tmp.dir, "a.ts");
 
     const first = try build(testing.allocator, testing.io, root_abs, &.{"a.ts"});
     defer first.deinit();
@@ -765,6 +789,7 @@ test "a racy mtime collision around the index write time forces a recompute inst
         .path = "a.ts",
         .stamp = current_stamp,
         .trigrams = stale_trigrams,
+        .seen_ns = current_stamp.mtime_ns,
     }};
     const fake_previous = Index{
         .arena = &fake_arena,
@@ -780,4 +805,79 @@ test "a racy mtime collision around the index write time forces a recompute inst
     defer testing.allocator.free(fresh_trigrams);
     try testing.expectEqualSlices(u24, fresh_trigrams, refreshed.index.find("a.ts").?.trigrams);
     try testing.expect(refreshed.changed);
+}
+
+fn ageOutOfRacyWindow(dir: std.Io.Dir, sub_path: []const u8) !void {
+    const file = try dir.openFile(testing.io, sub_path, .{ .mode = .read_write });
+    defer file.close(testing.io);
+    try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = std.Io.Clock.real.now(testing.io).nanoseconds - std.time.ns_per_hour } } });
+}
+
+fn rewriteKeepingStamp(dir: std.Io.Dir, abs: []const u8, sub_path: []const u8, data: []const u8) !Stamp {
+    const before = statOf(testing.io, abs).?;
+    try dir.writeFile(testing.io, .{ .sub_path = sub_path, .data = data });
+    const file = try dir.openFile(testing.io, sub_path, .{ .mode = .read_write });
+    defer file.close(testing.io);
+    try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = before.mtime_ns } } });
+    const after = statOf(testing.io, abs).?;
+    try testing.expectEqual(before.mtime_ns, after.mtime_ns);
+    try testing.expectEqual(before.size, after.size);
+    return after;
+}
+
+test "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export const value = 1;\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{root_abs});
+    defer testing.allocator.free(abs);
+
+    const first = try build(testing.allocator, testing.io, root_abs, &.{"a.ts"});
+    defer first.deinit();
+    _ = try rewriteKeepingStamp(tmp.dir, abs, "a.ts", "export const value = 2;\n");
+    const second = try refresh(testing.allocator, testing.io, root_abs, &.{"a.ts"}, first);
+    defer second.index.deinit();
+    try testing.expectEqual(@as(usize, 1), second.recomputed);
+    const want2 = try trigramsOfAlloc(testing.allocator, "export const value = 2;\n");
+    defer testing.allocator.free(want2);
+    try testing.expectEqualSlices(u24, want2, second.index.find("a.ts").?.trigrams);
+
+    _ = try rewriteKeepingStamp(tmp.dir, abs, "a.ts", "export const value = 3;\n");
+    const third = try refresh(testing.allocator, testing.io, root_abs, &.{"a.ts"}, second.index);
+    defer third.index.deinit();
+    try testing.expectEqual(@as(usize, 1), third.recomputed);
+    const want3 = try trigramsOfAlloc(testing.allocator, "export const value = 3;\n");
+    defer testing.allocator.free(want3);
+    try testing.expectEqualSlices(u24, want3, third.index.find("a.ts").?.trigrams);
+}
+
+test "saving smudges the stamp of an entry read inside the racy window, so the next session reads it again" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "fresh.ts", .data = "export const a = 1;\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "old.ts", .data = "export const b = 1;\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    const old = try tmp.dir.openFile(testing.io, "old.ts", .{ .mode = .read_write });
+    try old.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = std.Io.Clock.real.now(testing.io).nanoseconds - std.time.ns_per_hour } } });
+    old.close(testing.io);
+
+    const built = try build(testing.allocator, testing.io, root_abs, &.{ "fresh.ts", "old.ts" });
+    defer built.deinit();
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}\\idx", .{root_abs});
+    defer testing.allocator.free(path);
+    try save(testing.allocator, testing.io, path, built, &.{}, null);
+    const loaded = switch (load(testing.allocator, testing.io, path)) {
+        .index => |index| index,
+        .failed => return error.TestUnexpectedResult,
+    };
+    defer loaded.deinit();
+    try testing.expectEqual(smudged_mtime_ns, loaded.find("fresh.ts").?.stamp.mtime_ns);
+    try testing.expectEqual(built.find("old.ts").?.stamp.mtime_ns, loaded.find("old.ts").?.stamp.mtime_ns);
+    const refreshed = try refresh(testing.allocator, testing.io, root_abs, &.{ "fresh.ts", "old.ts" }, loaded);
+    defer refreshed.index.deinit();
+    try testing.expectEqual(@as(usize, 1), refreshed.recomputed);
+    try testing.expectEqual(@as(usize, 1), refreshed.reused);
 }

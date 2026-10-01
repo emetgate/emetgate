@@ -5691,7 +5691,7 @@
     {
       "id": "SR1-index-stale-entry-trusted",
       "file": "src/platform/search_index.zig",
-      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {",
+      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !Index.isRacy(old, stamp)) {",
       "to": "if (true) {",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
@@ -5702,10 +5702,11 @@
     {
       "id": "SR6-racy-stamp-not-checked",
       "file": "src/platform/search_index.zig",
-      "from": "and !p.isRacy(stamp)) {",
+      "from": "and !Index.isRacy(old, stamp)) {",
       "to": ") {",
       "kills": [
-        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set"
+        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set",
+        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
       ]
     },
     {
@@ -6373,6 +6374,33 @@
       "kills": [
         "search answers: a complete answer with no match states how many files it evaluated",
         "search answers: a literal with regex syntax and no match says the pattern looks like a regex"
+      ]
+    },
+    {
+      "id": "RS2-built-entry-has-no-read-time",
+      "file": "src/platform/search_index.zig",
+      "from": "            .doc = doc_spans.build(a, rel, bytes),\n            .seen_ns = seen_ns,\n",
+      "to": "            .doc = doc_spans.build(a, rel, bytes),\n            .seen_ns = 0,\n",
+      "kills": [
+        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
+      ]
+    },
+    {
+      "id": "RS3-refreshed-entry-has-no-read-time",
+      "file": "src/platform/search_index.zig",
+      "from": "            .seen_ns = job.seen_ns,\n",
+      "to": "            .seen_ns = 0,\n",
+      "kills": [
+        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
+      ]
+    },
+    {
+      "id": "RS4-racy-entry-saved-with-its-real-stamp",
+      "file": "src/platform/search_index.zig",
+      "from": "const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_ns = smudged_mtime_ns, .size = e.stamp.size } else e.stamp;",
+      "to": "const stamp: Stamp = e.stamp;",
+      "kills": [
+        "saving smudges the stamp of an entry read inside the racy window, so the next session reads it again"
       ]
     }
   ]
