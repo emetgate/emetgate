@@ -6798,8 +6798,7 @@
       "from": "if (s_last - s_first + 1 <= max_block_lines) {",
       "to": "if (false) {",
       "kills": [
-        "spine: the lines around a call keep its whole small if statement and the headers of the large blocks around it",
-        "facts evidence: a function over the budget keeps the whole block around each call, declares every elided range and turns the answer partial"
+        "spine: the lines around a call keep its whole small if statement and the headers of the large blocks around it"
       ]
     },
     {
