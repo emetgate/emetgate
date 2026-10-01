@@ -7144,6 +7144,157 @@
       "note": "evidence would quote a line that is no longer the line the facts were computed from"
     },
     {
+      "id": "EV1-elided-range-not-declared",
+      "file": "src/engine/evidence.zig",
+      "from": "                    if (r.first > next) try out.append(self.arena, try self.elision(p, next, r.first - 1));\n",
+      "to": "",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "silent cut: lines between two kept blocks would vanish without an elision line"
+    },
+    {
+      "id": "EV2-whole-function-shown-half",
+      "file": "src/engine/evidence.zig",
+      "from": "while (n <= p.last) : (n += 1) try out.append(self.arena, try self.lineText(p, n));",
+      "to": "while (n < p.last) : (n += 1) try out.append(self.arena, try self.lineText(p, n));",
+      "kills": [
+        "evidence: a target that fits is shown whole between the header line and the certificate status line"
+      ],
+      "note": "a function shown as whole would lose its last line"
+    },
+    {
+      "id": "EV3-oversized-body-shown-whole",
+      "file": "src/engine/evidence.zig",
+      "from": ".whole => if (p.whole > share) {",
+      "to": ".whole => if (false) {",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a body larger than its share would be printed whole and pass the budget"
+    },
+    {
+      "id": "EV4-relation-lines-not-budgeted",
+      "file": "src/engine/evidence.zig",
+      "from": "if (self.used + text.len + 1 > self.cap) return false;",
+      "to": "if (false) return false;",
+      "kills": [
+        "evidence: the block never passes its budget whatever the budget and the intent",
+        "evidence: callers that do not fit the budget are counted, named as cut and turn the answer partial"
+      ],
+      "note": "caller, callee and unresolved lines would pass the budget"
+    },
+    {
+      "id": "EV5-unresolved-dropped",
+      "file": "src/engine/evidence.zig",
+      "from": "        for (value.unknown) |u| try self.addUnknown(u);\n",
+      "to": "",
+      "kills": [
+        "evidence: callers are shown by signature and call line, every unresolved candidate is listed and the reason is named"
+      ],
+      "note": "an unresolved candidate would vanish and the answer would read complete"
+    },
+    {
+      "id": "EV6-term-branch-not-kept-whole",
+      "file": "src/engine/lang/ecma/facts.zig",
+      "from": "\"if_statement\", \"else_clause\"",
+      "to": "\"else_clause\"",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a decides answer would show only the header of an if statement that holds a term"
+    },
+    {
+      "id": "EV7-cut-call-sites-not-counted",
+      "file": "src/engine/evidence.zig",
+      "from": "        self.cut_sites += rest.len;\n        for (rest) |site| try self.markCut(site.path);\n",
+      "to": "        _ = self;\n        _ = rest;\n",
+      "kills": [
+        "evidence: callers that do not fit the budget are counted, named as cut and turn the answer partial"
+      ],
+      "note": "silent cut: call sites left out by the budget would leave the answer complete"
+    },
+    {
+      "id": "EV8-vanished-file-left-complete",
+      "file": "src/engine/evidence.zig",
+      "from": "                try self.vanished.put(self.arena, path, {});\n",
+      "to": "",
+      "kills": [
+        "evidence: a target whose file changed after the snapshot is named, never shown, and the answer is partial"
+      ],
+      "note": "a target whose file changed after the snapshot would not make the answer partial"
+    },
+    {
+      "id": "EV9-long-line-not-cut",
+      "file": "src/engine/evidence.zig",
+      "from": "if (text.len <= max_line_chars) return",
+      "to": "if (text.len <= max_line_chars * 1000) return",
+      "kills": [
+        "evidence: a line too long for the evidence is cut with the number of hidden characters and the answer turns partial"
+      ],
+      "note": "one minified line could take the whole budget"
+    },
+    {
+      "id": "EV10-comment-not-followed",
+      "file": "src/engine/facts_spine.zig",
+      "from": "if (follow and oneOf(leaf.kind(), profile.comments)) {",
+      "to": "if (follow and oneOf(leaf.kind(), &.{})) {",
+      "kills": [
+        "evidence: a term found in a comment brings the statement the comment describes"
+      ],
+      "note": "a term found in a comment would show the comment without the code it describes"
+    },
+    {
+      "id": "EV11-enclosing-function-header-dropped",
+      "file": "src/engine/facts_spine.zig",
+      "from": " and profile.functionKind(outer.kind()) == null) continue;",
+      "to": ") continue;",
+      "kills": [
+        "evidence: a cut class keeps the header of the method that holds a relevant line"
+      ],
+      "note": "a block inside a method of a cut class would appear without the method it belongs to"
+    },
+    {
+      "id": "EV12-partial-reason-not-given",
+      "file": "src/engine/evidence.zig",
+      "from": "const reason = try b.reasonLine(result);",
+      "to": "const reason: ?[]const u8 = null;",
+      "kills": [
+        "evidence: callers are shown by signature and call line, every unresolved candidate is listed and the reason is named"
+      ],
+      "note": "a partial answer would not say why it is partial"
+    },
+    {
+      "id": "EV13-call-to-other-target-not-kept",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!sameDef(other.id, p.subject.id) and sameDef(other.id, d.id)) weight = target_weight;",
+      "to": "if (!sameDef(other.id, p.subject.id) and sameDef(other.id, d.id)) weight = 0;",
+      "kills": [
+        "evidence: a call from one target to another target is kept when the caller does not fit"
+      ],
+      "note": "the line that links two targets would be elided"
+    },
+    {
+      "id": "EV14-term-lines-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": "if (weight != 0) try weights.put(self.arena, n, weight);",
+      "to": "if (false) try weights.put(self.arena, n, weight);",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a cut body would keep no line that holds a term"
+    },
+    {
+      "id": "EV15-cut-body-left-complete",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!file_level.contains(path)) budget_files += 1;",
+      "to": "if (!file_level.contains(path)) budget_files += 0;",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a function shown in part would leave the answer complete as if it were shown whole"
+    },
+    {
       "id": "IL1-index-load-failure-swallowed",
       "file": "src/platform/search_session.zig",
       "from": "                self.load_failure = why;\n",
