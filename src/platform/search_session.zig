@@ -625,15 +625,15 @@ pub const Session = struct {
         while (id < v.count()) : (id += 1) {
             if (!matched.isSet(id)) try self.delta.markRemoved(self.gpa, id, v.count(), v.path(id));
         }
-        try self.applyPrepared(root, todo_paths.items, todo_seen.items);
+        try self.applyPrepared(root, todo_paths.items, todo_seen.items, true);
         report.recomputed = todo_paths.items.len;
         report.changed = todo_paths.items.len != 0 or matched.count() != v.count();
         report.work_ns = timer.lap();
     }
 
-    fn applyPrepared(self: *Session, root: []const u8, paths: []const []const u8, seen: []const ?Seen) !void {
+    fn applyPrepared(self: *Session, root: []const u8, paths: []const []const u8, seen: []const ?Seen, with_spans: bool) !void {
         if (paths.len == 0) return;
-        const prepared = try search_index.prepareAll(self.gpa, self.io, root, paths, seen, true, false, self.poolPtr(), null);
+        const prepared = try search_index.prepareAll(self.gpa, self.io, root, paths, seen, true, with_spans, self.poolPtr(), null);
         defer self.gpa.free(prepared);
         var moved: usize = 0;
         errdefer for (prepared[moved..]) |p| p.deinit(self.gpa);
@@ -754,7 +754,7 @@ pub const Session = struct {
             self.gpa.free(owned);
         }
         for (todo_paths.items, owned) |p, *o| o.* = try self.gpa.dupe(u8, p);
-        try self.applyPrepared(root, owned, todo_seen.items);
+        try self.applyPrepared(root, owned, todo_seen.items, false);
         report.recomputed = owned.len;
         report.changed = owned.len != 0;
         report.work_ns = timer.lap();
@@ -820,7 +820,7 @@ pub const Session = struct {
         const seen = try self.gpa.alloc(?Seen, todo.items.len);
         defer self.gpa.free(seen);
         @memset(seen, null);
-        try self.applyPrepared(root, todo.items, seen);
+        try self.applyPrepared(root, todo.items, seen, false);
         self.last.updated = todo.items.len;
     }
 
@@ -842,7 +842,7 @@ pub const Session = struct {
         const seen = try self.gpa.alloc(?Seen, todo.items.len);
         defer self.gpa.free(seen);
         @memset(seen, null);
-        try self.applyPrepared(root, todo.items, seen);
+        try self.applyPrepared(root, todo.items, seen, false);
         self.last.updated += todo.items.len;
     }
 
@@ -1034,7 +1034,7 @@ pub const Session = struct {
         const seen = try self.gpa.alloc(?Seen, fresh.items.len);
         defer self.gpa.free(seen);
         @memset(seen, null);
-        try self.applyPrepared(root, fresh.items, seen);
+        try self.applyPrepared(root, fresh.items, seen, false);
         self.last.recomputed += fresh.items.len;
     }
 

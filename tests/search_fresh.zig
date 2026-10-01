@@ -266,6 +266,7 @@ test "search on disk: a new session loads the saved index after its watcher star
     try testing.expect(second.watcher != null);
     try testing.expect(second.base != null);
     try testing.expect(second.watch_started_ns <= second.loaded_ns);
+    try testing.expect(second.delta.get("src/f3.ts").?.spans.len != 0);
     const found = try search(runtime, &second, repo.root, "between_sessions_token", &reason_buf);
     try testing.expectEqualStrings("loaded_from_disk", found.reason);
     try testing.expectEqual(@as(?search_index.LoadFailure, null), found.index_load);
