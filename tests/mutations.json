@@ -5691,7 +5691,7 @@
     {
       "id": "SR1-index-stale-entry-trusted",
       "file": "src/platform/search_index.zig",
-      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !p.isRacy(stamp)) {",
+      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !Index.isRacy(old, stamp)) {",
       "to": "if (true) {",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
@@ -5702,10 +5702,11 @@
     {
       "id": "SR6-racy-stamp-not-checked",
       "file": "src/platform/search_index.zig",
-      "from": "and !p.isRacy(stamp)) {",
+      "from": "and !Index.isRacy(old, stamp)) {",
       "to": ") {",
       "kills": [
-        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set"
+        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set",
+        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
       ]
     },
     {
@@ -5739,8 +5740,8 @@
     {
       "id": "SR5-directory-scope-not-enforced",
       "file": "src/protocol/search_v1.zig",
-      "from": "if (!read_tools.inDirectory(f, place.rel)) continue;",
-      "to": "_ = place.rel;",
+      "from": "        return read_tools.inDirectory(f, self.rel);",
+      "to": "        return true;",
       "kills": [
         "a search scoped to a subdirectory does not return hits from outside it"
       ]
@@ -6136,8 +6137,8 @@
     {
       "id": "SW5-index-loaded-before-the-watcher-starts",
       "file": "src/platform/search_session.zig",
-      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
-      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
@@ -6154,8 +6155,8 @@
     {
       "id": "IF1-index-file-version-not-checked",
       "file": "src/platform/search_index_file.zig",
-      "from": "    if (try r.int(u32) != version) return error.Corrupt;",
-      "to": "    _ = try r.int(u32);",
+      "from": "    return bytes[family.len] != magic[family.len] or std.mem.readInt(u32, bytes[magic.len..][0..4], .little) != version;",
+      "to": "    return bytes[family.len] != magic[family.len];",
       "kills": [
         "a flipped byte, a cut tail, another version or another magic is refused"
       ]
@@ -6239,6 +6240,167 @@
       "to": "            previous.shrinkRetainingCapacity(0);",
       "kills": [
         "git index reader: version 4 prefix compression and an intent-to-add entry read the same as git ls-files"
+      ]
+    },
+    {
+      "id": "IL1-index-load-failure-swallowed",
+      "file": "src/platform/search_session.zig",
+      "from": "                self.load_failure = why;\n",
+      "to": "                _ = why;\n",
+      "kills": [
+        "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
+      ]
+    },
+    {
+      "id": "IL2-index-read-capped-at-64-mib",
+      "file": "src/platform/search_index.zig",
+      "from": "const max_index_file_bytes: u64 = 4 * 1024 * 1024 * 1024;",
+      "to": "const max_index_file_bytes: u64 = 64 * 1024 * 1024;",
+      "kills": [
+        "an index file larger than 64 MiB is read whole and judged by its bytes, not refused by its size"
+      ]
+    },
+    {
+      "id": "JR1-file-of-a-nested-repository-accepted-under-the-cached-root",
+      "file": "src/platform/repo.zig",
+      "from": "    if (try entryExists(gpa, io, dir, \".git\")) return true;",
+      "to": "    if (false) return true;",
+      "kills": [
+        "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth",
+        "purple V7: no MCP tool reaches a repository other than the one being served"
+      ]
+    },
+    {
+      "id": "JR2-only-the-file-directory-is-checked-for-a-nested-repository",
+      "file": "src/platform/repo.zig",
+      "from": "        dir = std.fs.path.dirname(dir) orelse return error.FileOutsideRepo;",
+      "to": "        dir = root;",
+      "kills": [
+        "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth"
+      ]
+    },
+    {
+      "id": "JR3-nested-bare-repository-not-recognized",
+      "file": "src/platform/repo.zig",
+      "from": "    return try entryExists(gpa, io, dir, \"objects\") and try entryExists(gpa, io, dir, \"refs\");",
+      "to": "    return false;",
+      "kills": [
+        "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth"
+      ]
+    },
+    {
+      "id": "TQ1-regex-budget-overrun-read-as-no-match",
+      "file": "src/engine/text_query.zig",
+      "from": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .over_budget;",
+      "to": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .none;",
+      "kills": [
+        "a line that exhausts the regex step budget is reported, never read as no match",
+        "search answers: a line that runs out of regex steps makes the answer partial and names the file"
+      ]
+    },
+    {
+      "id": "RH3-required-literals-keep-only-the-first-branch",
+      "file": "src/engine/regex_hint.zig",
+      "from": "    return out[0..n];\n}\n\nfn unwrapGroup",
+      "to": "    return out[0..@min(n, 1)];\n}\n\nfn unwrapGroup",
+      "kills": [
+        "every line a regex matches contains one of its required literals",
+        "requiredLiterals gives one literal per top-level branch, also inside one enclosing group",
+        "search answers: a regex alternation over many files finds every match a line by line scan finds"
+      ]
+    },
+    {
+      "id": "SA1-partial-answer-reported-complete",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        return self.truncated or self.missing.items.len != 0;",
+      "to": "        return self.truncated and false;",
+      "kills": [
+        "search answers: a line that runs out of regex steps makes the answer partial and names the file",
+        "search answers: a capped answer is partial",
+        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+      ]
+    },
+    {
+      "id": "SA2-unreadable-file-skipped-quietly",
+      "file": "src/protocol/search_v1.zig",
+      "from": "                try result.missing.append(gpa, .{ .path = item.rel, .reason = \"unreadable\" });\n",
+      "to": "",
+      "kills": [
+        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+      ]
+    },
+    {
+      "id": "SA3-file-given-as-dir-scoped-as-a-directory",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        if (self.file) return change_watch.samePath(f, self.rel);\n",
+      "to": "",
+      "kills": [
+        "search answers: a file given as dir is searched by itself"
+      ]
+    },
+    {
+      "id": "SA4-literal-alternatives-not-tried",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        alternatives = try Query.alternatives(gpa, pattern);",
+      "to": "        alternatives = null;",
+      "kills": [
+        "search answers: a literal with a bar that is not found is read as literal alternatives and says so"
+      ]
+    },
+    {
+      "id": "SA5-matches-removed-by-kinds-not-counted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "item.filtered.getPtr(pending.kind).* += 1;",
+      "to": "_ = &item.filtered;",
+      "all": true,
+      "kills": [
+        "search answers: kinds that remove every match say how many matches of which kind were removed"
+      ]
+    },
+    {
+      "id": "SA6-unknown-kind-accepted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        set.insert(std.meta.stringToEnum(Kind, v.string) orelse return error.UnknownKind);",
+      "to": "        set.insert(std.meta.stringToEnum(Kind, v.string) orelse continue);",
+      "kills": [
+        "search answers: an unknown kind name is refused instead of filtering everything away"
+      ]
+    },
+    {
+      "id": "SA7-empty-answer-without-a-note",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (result.groups.items.len == 0) {",
+      "to": "    if (false) {",
+      "kills": [
+        "search answers: a complete answer with no match states how many files it evaluated",
+        "search answers: a literal with regex syntax and no match says the pattern looks like a regex"
+      ]
+    },
+    {
+      "id": "RS2-built-entry-has-no-read-time",
+      "file": "src/platform/search_index.zig",
+      "from": "    const seen_ns = wallClock(io);\n    for (files) |rel| {\n",
+      "to": "    const seen_ns: i96 = 0;\n    for (files) |rel| {\n",
+      "kills": [
+        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
+      ]
+    },
+    {
+      "id": "RS3-refreshed-entry-has-no-read-time",
+      "file": "src/platform/search_index.zig",
+      "from": "            .seen_ns = job.seen_ns,\n",
+      "to": "            .seen_ns = 0,\n",
+      "kills": [
+        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
+      ]
+    },
+    {
+      "id": "RS4-racy-entry-saved-with-its-real-stamp",
+      "file": "src/platform/search_index.zig",
+      "from": "const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_ns = smudged_mtime_ns, .size = e.stamp.size } else e.stamp;",
+      "to": "const stamp: Stamp = e.stamp;",
+      "kills": [
+        "saving smudges the stamp of an entry read inside the racy window, so the next session reads it again"
       ]
     }
   ]

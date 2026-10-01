@@ -1,5 +1,6 @@
 const std = @import("std");
 const shadow = @import("shadow.zig");
+const sandbox = @import("sandbox.zig");
 
 const Allocator = std.mem.Allocator;
 const max_git_output = 64 * 1024;
@@ -206,6 +207,48 @@ const index_add_attempts = 3;
 const index_retry_ms = 100;
 
 fn expectSameRepo(gpa: Allocator, io: std.Io, root: []const u8, abs: []const u8) !void {
+    if (try gitDiscoveryOverridden(gpa)) return expectSameRepoByGit(gpa, io, root, abs);
+    var dir = std.fs.path.dirname(abs) orelse return error.FileOutsideRepo;
+    while (dir.len > root.len) {
+        if (try ownsRepository(gpa, io, dir)) return error.FileOutsideRepo;
+        dir = std.fs.path.dirname(dir) orelse return error.FileOutsideRepo;
+    }
+    if (!std.ascii.eqlIgnoreCase(dir, root)) return error.FileOutsideRepo;
+}
+
+const discovery_variables = [_][:0]const u16{
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_DIR"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_WORK_TREE"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_CEILING_DIRECTORIES"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_DISCOVERY_ACROSS_FILESYSTEM"),
+};
+
+fn gitDiscoveryOverridden(gpa: Allocator) !bool {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    for (discovery_variables) |name| {
+        if (try sandbox.environmentValue(arena_state.allocator(), name) != null) return true;
+    }
+    return false;
+}
+
+fn ownsRepository(gpa: Allocator, io: std.Io, dir: []const u8) !bool {
+    if (try entryExists(gpa, io, dir, ".git")) return true;
+    if (!try entryExists(gpa, io, dir, "HEAD")) return false;
+    return try entryExists(gpa, io, dir, "objects") and try entryExists(gpa, io, dir, "refs");
+}
+
+fn entryExists(gpa: Allocator, io: std.Io, dir: []const u8, name: []const u8) !bool {
+    const path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ dir, name });
+    defer gpa.free(path);
+    std.Io.Dir.cwd().access(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return error.FileOutsideRepo,
+    };
+    return true;
+}
+
+fn expectSameRepoByGit(gpa: Allocator, io: std.Io, root: []const u8, abs: []const u8) !void {
     const dir = std.fs.path.dirname(abs) orelse return error.FileOutsideRepo;
     const own = gitToplevel(gpa, io, dir) catch |err| switch (err) {
         error.NotInRepo => return error.FileOutsideRepo,

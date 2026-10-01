@@ -27,7 +27,19 @@ pub const Report = struct {
     loaded_from_disk: bool = false,
     stamp_ns: u64 = 0,
     work_ns: u64 = 0,
+    index_load: ?search_index.LoadFailure = null,
+    save_failure: ?anyerror = null,
 };
+
+pub fn rebuildNote(why: search_index.LoadFailure) []const u8 {
+    return switch (why) {
+        .missing => "built: no saved index",
+        .too_large => "rebuilt: the saved index was too large to load",
+        .io => "rebuilt: the saved index could not be read",
+        .corrupt => "rebuilt: the saved index was damaged",
+        .version => "rebuilt: the saved index was written by another version",
+    };
+}
 
 const Stamp = search_index.Stamp;
 
@@ -43,6 +55,8 @@ pub const Session = struct {
     index: ?search_index.Index = null,
     index_path: ?[]u8 = null,
     reconcile: bool = false,
+    load_failure: ?search_index.LoadFailure = null,
+    save_failure: ?anyerror = null,
     unsaved: bool = false,
     updates_since_full: usize = 0,
     watch_started_ns: i96 = 0,
@@ -71,7 +85,10 @@ pub const Session = struct {
         const path = self.index_path orelse return;
         const index = self.index orelse return;
         const files = self.files orelse return;
-        search_index.save(self.gpa, self.io, path, index, files, self.git_stamp) catch return;
+        search_index.save(self.gpa, self.io, path, index, files, self.git_stamp) catch |err| {
+            self.save_failure = err;
+            return;
+        };
         self.unsaved = false;
     }
 
@@ -90,6 +107,7 @@ pub const Session = struct {
         if (self.index_path) |i| self.gpa.free(i);
         self.index_path = null;
         self.reconcile = false;
+        self.load_failure = null;
         self.unsaved = false;
         self.git_stamp = null;
         if (self.root) |r| self.gpa.free(r);
@@ -105,9 +123,15 @@ pub const Session = struct {
         self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;
         self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;
         self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;
-        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;
+        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };
         self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;
-        const index = loaded orelse return;
+        const index = switch (loaded) {
+            .index => |index| index,
+            .failed => |why| {
+                self.load_failure = why;
+                return;
+            },
+        };
         self.index = index;
         self.reconcile = true;
         const current = if (self.git_index) |g| gitStampOf(self.io, g) else null;
@@ -166,7 +190,11 @@ pub const Session = struct {
         const listed = try self.refreshList(root);
         self.last.list_ns = timer.lap();
         self.last.list_reused = !listed;
-        if (self.index == null and reason.len == 0) reason = "first_build";
+        if (self.index == null) {
+            self.last.index_load = self.load_failure orelse .missing;
+            self.load_failure = null;
+            if (reason.len == 0) reason = "first_build";
+        }
         if (self.reconcile and reason.len == 0) reason = "loaded_from_disk";
         if (listed and reason.len == 0 and dirty == null) reason = "file_list_changed";
         if (self.updates_since_full >= compact_after_updates and reason.len == 0) reason = "compact";
@@ -189,6 +217,8 @@ pub const Session = struct {
         }
         self.last.reason = reason;
         self.last.refresh_ns = timer.lap();
+        self.last.save_failure = self.save_failure;
+        self.save_failure = null;
     }
 
     fn applyDirty(self: *Session, root: []const u8, dirty: change_watch.Dirty) search_index.UpdateError!void {

@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1117**
-- Mutations declared in `tests/mutations.json`: **627**
-  - killed: **597**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1141**
+- Mutations declared in `tests/mutations.json`: **644**
+  - killed: **614**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -236,7 +236,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-51 mutation(s).
+54 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -291,6 +291,9 @@ python tools/verification_page.py --check
 | `DF4-recovery-dir-flush-dropped` | `src/platform/disk.zig` | `fn flushTouched(path_abs: []const u8) bool {     flushParent(pa...` -> `fn flushTouched(path_abs: []const u8) bool {     _ = path_abs;` | dir flush rec: a restore made by recovery is durable before the journal that as... | killed |
 | `DF5-recovery-journal-delete-flush-dropped` | `src/platform/disk.zig` | `commit_record.flushDir(journal_dir) catch return;` -> `` | dir flush dropJ: recovery that loses a journal deletion after removing the comm... | killed |
 | `NC8-node-delete-reference-check-skipped` | `src/platform/batch_plan.zig` | `if (ref.container.len != 0) continue;` -> `if (ref.container.len == 0) continue;` | redteam node: deleting a function that is still called is refused unless the ca... | killed |
+| `JR1-file-of-a-nested-repository-accepted-under-the-cached-root` | `src/platform/repo.zig` | `if (try entryExists(gpa, io, dir, ".git")) return true;` -> `if (false) return true;` | read tools refuse a file of a nested repository, worktree or bare repository un...; purpl... | killed |
+| `JR2-only-the-file-directory-is-checked-for-a-nested-repository` | `src/platform/repo.zig` | `dir = std.fs.path.dirname(dir) orelse return error.FileOutsideR...` -> `dir = root;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
+| `JR3-nested-bare-repository-not-recognized` | `src/platform/repo.zig` | `return try entryExists(gpa, io, dir, "objects") and try entryEx...` -> `return false;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 
 ### Rules and the q: query engine
 
@@ -532,7 +535,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-191 mutation(s).
+205 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -672,11 +675,11 @@ python tools/verification_page.py --check
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
 | `SR1-index-stale-entry-trusted` | `src/platform/search_index.zig` | `if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == ...` -> `if (true) {` | search on disk: a new session loads the saved index after its watcher started a...; refre... | killed |
-| `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !p.isRacy(stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o... | killed |
+| `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !Index.isRacy(old, stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o...; an in... | killed |
 | `SR2-index-checksum-not-verified` | `src/platform/search_index_file.zig` | `if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;` -> `_ = actual;     _ = claimed;` | a corrupted index file is rejected instead of trusted; a flipped byte, a cut tail, anothe... | killed |
 | `SR3-comment-kind-reversed` | `src/protocol/search_v1.zig` | `if (profile.isComment(n.kind())) return .comment;` -> `if (profile.isComment(n.kind())) return .code;` | a hash-matching index entry with no persisted spans still classifies comments a... | killed |
 | `SR4-hit-cap-ignored` | `src/protocol/search_v1.zig` | `if (total_hits >= max_matches) {` -> `if (false) {` | the total hit count is capped and truncated is reported | killed |
-| `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `if (!read_tools.inDirectory(f, place.rel)) continue;` -> `_ = place.rel;` | a search scoped to a subdirectory does not return hits from outside it | killed |
+| `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `return read_tools.inDirectory(f, self.rel);` -> `return true;` | a search scoped to a subdirectory does not return hits from outside it | killed |
 | `SK1-stale-symbol-table-trusted` | `src/protocol/search_v1.zig` | `if (std.mem.eql(u8, &ch, &live)) {` -> `if (std.mem.eql(u8, &ch, &live) or true) {` | a resident index entry whose stored hash does not match the file's live bytes i... | killed |
 | `AC2-app-container-gains-a-capability` | `src/platform/appcontainer.zig` | `.capabilities = null, .capability_count = 0, .reserved = 0 };` -> `.capabilities = null, .capability_count = 1, .reserved = 0 };` | a fresh profile carries no capabilities and points its security struct at its o...; redte... | killed |
 | `AC3-app-container-grant-not-applied` | `src/platform/appcontainer.zig` | `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FA...` -> `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, dacl, .FALS...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
@@ -717,7 +720,7 @@ python tools/verification_page.py --check
 | `RH2-hint-keeps-an-optional-character` | `src/engine/regex_hint.zig` | `if (i > r) best.close(run, i - 1);` -> `if (i > r) best.close(run, i);` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
 | `SW5-index-loaded-before-the-watcher-starts` | `src/platform/search_session.zig` | `self.watcher = change_watch.Watcher.start(self.gpa, self.io, ro...` -> `self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catc...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `SW6-loaded-index-trusted-without-a-restat` | `src/platform/search_session.zig` | `self.reconcile = true;` -> `self.reconcile = false;` | search on disk: a new session loads the saved index after its watcher started a... | killed |
-| `IF1-index-file-version-not-checked` | `src/platform/search_index_file.zig` | `if (try r.int(u32) != version) return error.Corrupt;` -> `_ = try r.int(u32);` | a flipped byte, a cut tail, another version or another magic is refused | killed |
+| `IF1-index-file-version-not-checked` | `src/platform/search_index_file.zig` | `return bytes[family.len] != magic[family.len] or std.mem.readIn...` -> `return bytes[family.len] != magic[family.len];` | a flipped byte, a cut tail, another version or another magic is refused | killed |
 | `PF1-directory-stamp-reads-the-creation-time` | `src/platform/search_index.zig` | `const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32...` -> `const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) ...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `WR1-compact-reply-drops-new-hash` | `src/protocol/wire.zig` | `try js.objectField("new_hash");     try js.write(new_hex[0..]);...` -> `if (full) {         try js.objectField("new_hash");         try...` | compact committed payload drops the old hash and the shadow note | killed |
 | `WR2-detail-full-ignored` | `src/protocol/wire.zig` | `if (full) {         try js.objectField("old_hash");         try...` -> `if (false) {         try js.objectField("old_hash");         tr...` | committed payload names the symbol and both hashes | killed |
@@ -727,6 +730,20 @@ python tools/verification_page.py --check
 | `GI1-git-index-checksum-not-verified` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;` -> `_ = &sha1;         return 20;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
 | `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, signature, "link") or std.mem.eql(u8, signa...` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | an index whose entries live partly in a shared index is not read as the whole l... | killed |
 | `GI3-v4-prefix-not-stripped` | `src/platform/git_index.zig` | `previous.shrinkRetainingCapacity(previous.items.len - strip);` -> `previous.shrinkRetainingCapacity(0);` | git index reader: version 4 prefix compression and an intent-to-add entry read ... | killed |
+| `IL1-index-load-failure-swallowed` | `src/platform/search_session.zig` | `self.load_failure = why;` -> `_ = why;` | search on disk: a damaged, cut or foreign index file is ignored and rebuilt | killed |
+| `IL2-index-read-capped-at-64-mib` | `src/platform/search_index.zig` | `const max_index_file_bytes: u64 = 4 * 1024 * 1024 * 1024;` -> `const max_index_file_bytes: u64 = 64 * 1024 * 1024;` | an index file larger than 64 MiB is read whole and judged by its bytes, not ref... | killed |
+| `TQ1-regex-budget-overrun-read-as-no-match` | `src/engine/text_query.zig` | `const matched = re.isMatchIn(scratch, line, &budget) catch retu...` -> `const matched = re.isMatchIn(scratch, line, &budget) catch retu...` | a line that exhausts the regex step budget is reported, never read as no match; search an... | killed |
+| `RH3-required-literals-keep-only-the-first-branch` | `src/engine/regex_hint.zig` | `return out[0..n]; }  fn unwrapGroup` -> `return out[0..@min(n, 1)]; }  fn unwrapGroup` | every line a regex matches contains one of its required literals; requiredLiterals gives ... | killed |
+| `SA1-partial-answer-reported-complete` | `src/protocol/search_v1.zig` | `return self.truncated or self.missing.items.len != 0;` -> `return self.truncated and false;` | search answers: a line that runs out of regex steps makes the answer partial an...; searc... | killed |
+| `SA2-unreadable-file-skipped-quietly` | `src/protocol/search_v1.zig` | `try result.missing.append(gpa, .{ .path = item.rel, .reason = "...` -> `` | search answers: a file that cannot be read makes the answer partial instead of ... | killed |
+| `SA3-file-given-as-dir-scoped-as-a-directory` | `src/protocol/search_v1.zig` | `if (self.file) return change_watch.samePath(f, self.rel);` -> `` | search answers: a file given as dir is searched by itself | killed |
+| `SA4-literal-alternatives-not-tried` | `src/protocol/search_v1.zig` | `alternatives = try Query.alternatives(gpa, pattern);` -> `alternatives = null;` | search answers: a literal with a bar that is not found is read as literal alter... | killed |
+| `SA5-matches-removed-by-kinds-not-counted` | `src/protocol/search_v1.zig` | `item.filtered.getPtr(pending.kind).* += 1;` -> `_ = &item.filtered;` | search answers: kinds that remove every match say how many matches of which kin... | killed |
+| `SA6-unknown-kind-accepted` | `src/protocol/search_v1.zig` | `set.insert(std.meta.stringToEnum(Kind, v.string) orelse return ...` -> `set.insert(std.meta.stringToEnum(Kind, v.string) orelse continu...` | search answers: an unknown kind name is refused instead of filtering everything... | killed |
+| `SA7-empty-answer-without-a-note` | `src/protocol/search_v1.zig` | `if (result.groups.items.len == 0) {` -> `if (false) {` | search answers: a complete answer with no match states how many files it evalua...; searc... | killed |
+| `RS2-built-entry-has-no-read-time` | `src/platform/search_index.zig` | `const seen_ns = wallClock(io);     for (files) \|rel\| {` -> `const seen_ns: i96 = 0;     for (files) \|rel\| {` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
+| `RS3-refreshed-entry-has-no-read-time` | `src/platform/search_index.zig` | `.seen_ns = job.seen_ns,` -> `.seen_ns = 0,` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
+| `RS4-racy-entry-saved-with-its-real-stamp` | `src/platform/search_index.zig` | `const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_...` -> `const stamp: Stamp = e.stamp;` | saving smudges the stamp of an entry read inside the racy window, so the next s... | killed |
 
 ## What this system does not prove
 
