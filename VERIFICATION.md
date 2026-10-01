@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1117**
-- Mutations declared in `tests/mutations.json`: **627**
-  - killed: **597**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1138**
+- Mutations declared in `tests/mutations.json`: **644**
+  - killed: **614**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-191 mutation(s).
+208 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -727,6 +727,23 @@ python tools/verification_page.py --check
 | `GI1-git-index-checksum-not-verified` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;` -> `_ = &sha1;         return 20;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
 | `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, signature, "link") or std.mem.eql(u8, signa...` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | an index whose entries live partly in a shared index is not read as the whole l... | killed |
 | `GI3-v4-prefix-not-stripped` | `src/platform/git_index.zig` | `previous.shrinkRetainingCapacity(previous.items.len - strip);` -> `previous.shrinkRetainingCapacity(0);` | git index reader: version 4 prefix compression and an intent-to-add entry read ... | killed |
+| `ANS1-partial-answer-reported-complete` | `src/engine/answer.zig` | `if (missing.len == 0) return .{ .complete = .{ .value = value, ...` -> `if (missing.len != std.math.maxInt(usize)) return .{ .complete ...` | a missing file makes the answer partial and never complete | killed |
+| `ANS2-unaccounted-file-accepted` | `src/engine/answer.zig` | `if (accounted != in_scope) return "evaluated and missing files ...` -> `if (accounted != in_scope and false) return "evaluated and miss...` | an answer whose evaluated and missing files do not add up to the scope is refus... | killed |
+| `ANS3-partial-status-shows-check-mark` | `src/engine/answer.zig` | `try w.print("partial: {d} {s} in {d} of ", .{ count, noun, p.ce...` -> `try w.print("\u{2713} {d} {s} in {d} of ", .{ count, noun, p.ce...` | only a complete answer is rendered with a check mark | killed |
+| `ANS4-zero-result-status-hides-scope` | `src/engine/answer.zig` | `try writeFiles(w, c.cert.scope.evaluated);` -> `` | a complete answer with no results still states the scope and snapshot | killed |
+| `ANS5-leaf-domain-separation-lost` | `src/engine/answer.zig` | `hasher.update(&.{0x00});     hasher.update(data);` -> `hasher.update(&.{0x01});     hasher.update(data);` | the merkle root matches the RFC 6962 reference vectors for zero to eight leaves | killed |
+| `ANS6-merkle-children-swapped` | `src/engine/answer.zig` | `return nodeHash(treeHash(Item, items[0..k], hashItem), treeHash...` -> `return nodeHash(treeHash(Item, items[k..], hashItem), treeHash(...` | the merkle root matches the RFC 6962 reference vectors for zero to eight leaves | killed |
+| `ANS7-repeated-leaf-hashed` | `src/engine/answer.zig` | `if (std.mem.order(u8, leaves[i - 1].path, leaves[i].path) != .l...` -> `if (std.mem.order(u8, leaves[i - 1].path, leaves[i].path) == .g...` | leaves out of path order or repeated are refused instead of hashed | killed |
+| `ANS8-overspent-budget-accepted` | `src/engine/answer.zig` | `if (budget.used > budget.max) return "a budget was overspent";` -> `if (budget.used > budget.max and false) return "a budget was ov...` | a budget used beyond its declared maximum is refused | killed |
+| `ANS9-undeclared-limit-accepted` | `src/engine/answer.zig` | `if (!declares(cert.budgets, limit)) return "a missing reason na...` -> `if (!declares(cert.budgets, limit) and false) return "a missing...` | a missing reason that names a limit needs that limit declared with its value | killed |
+| `ANS10-unlisted-unresolved-reference-accepted` | `src/engine/answer.zig` | `.facts => \|facts\| if (facts.unresolved != unresolved) return ...` -> `.facts => \|facts\| if (facts.unresolved != unresolved and fals...` | callers with an unresolved reference in scope are partial and every unresolved ... | killed |
+| `ANS11-kinds-filtered-hits-not-told` | `src/engine/answer.zig` | `.text => \|text\| if (text.filtered != 0) try w.print("; {d} hi...` -> `.text => \|text\| if (text.filtered == 0) try w.print("; {d} hi...` | hits hidden by a kinds filter and skipped binary files are counted in the status | killed |
+| `ANS12-missing-order-leaks-into-certificate` | `src/engine/answer.zig` | `std.mem.sort(Missing, missing, {}, missingLess);` -> `` | the certificate bytes do not depend on the order missing files were reported | killed |
+| `ANS13-file-missing-twice-accepted` | `src/engine/answer.zig` | `if (entry.reason.fileLevel()) return "a file is reported missin...` -> `if (entry.reason.fileLevel() and false) return "a file is repor...` | the same file reported missing twice is refused | killed |
+| `ANS14-empty-missing-entry-accepted` | `src/engine/answer.zig` | `if (entry.files == 0) return "a missing entry covers no file";` -> `if (entry.files == 0 and false) return "a missing entry covers ...` | a missing entry must cover at least one file and a named path exactly one | killed |
+| `ANS15-filtered-hits-without-filter-accepted` | `src/engine/answer.zig` | `if (text.kinds.eql(.initFull()) and text.filtered != 0) return ...` -> `if (text.kinds.eql(.initFull()) and text.filtered != 0 and fals...` | hits counted as filtered without a kinds filter are refused | killed |
+| `ANS16-scope-prefix-excludes-itself` | `src/engine/answer.zig` | `if (path.len == prefix.len) return true;` -> `if (path.len == prefix.len) return false;` | a scope prefix covers itself and the paths below it and nothing beside it | killed |
+| `ANS17-unresolved-reference-in-unevaluated-file-accepted` | `src/engine/answer.zig` | `return "an unresolved reference sits in a file that was not eva...` -> `` | callers with an unresolved reference in scope are partial and every unresolved ... | killed |
 
 ## What this system does not prove
 

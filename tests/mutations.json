@@ -6240,6 +6240,159 @@
       "kills": [
         "git index reader: version 4 prefix compression and an intent-to-add entry read the same as git ls-files"
       ]
+    },
+    {
+      "id": "ANS1-partial-answer-reported-complete",
+      "file": "src/engine/answer.zig",
+      "from": "        if (missing.len == 0) return .{ .complete = .{ .value = value, .cert = cert } };",
+      "to": "        if (missing.len != std.math.maxInt(usize)) return .{ .complete = .{ .value = value, .cert = cert } };",
+      "kills": [
+        "a missing file makes the answer partial and never complete"
+      ]
+    },
+    {
+      "id": "ANS2-unaccounted-file-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "    if (accounted != in_scope) return \"evaluated and missing files do not add up to the scope\";",
+      "to": "    if (accounted != in_scope and false) return \"evaluated and missing files do not add up to the scope\";",
+      "kills": [
+        "an answer whose evaluated and missing files do not add up to the scope is refused"
+      ]
+    },
+    {
+      "id": "ANS3-partial-status-shows-check-mark",
+      "file": "src/engine/answer.zig",
+      "from": "                    try w.print(\"partial: {d} {s} in {d} of \", .{ count, noun, p.cert.scope.evaluated });",
+      "to": "                    try w.print(\"\\u{2713} {d} {s} in {d} of \", .{ count, noun, p.cert.scope.evaluated });",
+      "kills": [
+        "only a complete answer is rendered with a check mark"
+      ]
+    },
+    {
+      "id": "ANS4-zero-result-status-hides-scope",
+      "file": "src/engine/answer.zig",
+      "from": "                    try writeFiles(w, c.cert.scope.evaluated);\n",
+      "to": "",
+      "kills": [
+        "a complete answer with no results still states the scope and snapshot"
+      ]
+    },
+    {
+      "id": "ANS5-leaf-domain-separation-lost",
+      "file": "src/engine/answer.zig",
+      "from": "    hasher.update(&.{0x00});\n    hasher.update(data);",
+      "to": "    hasher.update(&.{0x01});\n    hasher.update(data);",
+      "kills": [
+        "the merkle root matches the RFC 6962 reference vectors for zero to eight leaves"
+      ]
+    },
+    {
+      "id": "ANS6-merkle-children-swapped",
+      "file": "src/engine/answer.zig",
+      "from": "    return nodeHash(treeHash(Item, items[0..k], hashItem), treeHash(Item, items[k..], hashItem));",
+      "to": "    return nodeHash(treeHash(Item, items[k..], hashItem), treeHash(Item, items[0..k], hashItem));",
+      "kills": [
+        "the merkle root matches the RFC 6962 reference vectors for zero to eight leaves"
+      ]
+    },
+    {
+      "id": "ANS7-repeated-leaf-hashed",
+      "file": "src/engine/answer.zig",
+      "from": "        if (std.mem.order(u8, leaves[i - 1].path, leaves[i].path) != .lt) return error.UnsortedLeaves;",
+      "to": "        if (std.mem.order(u8, leaves[i - 1].path, leaves[i].path) == .gt) return error.UnsortedLeaves;",
+      "kills": [
+        "leaves out of path order or repeated are refused instead of hashed"
+      ]
+    },
+    {
+      "id": "ANS8-overspent-budget-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "        if (budget.used > budget.max) return \"a budget was overspent\";",
+      "to": "        if (budget.used > budget.max and false) return \"a budget was overspent\";",
+      "kills": [
+        "a budget used beyond its declared maximum is refused"
+      ]
+    },
+    {
+      "id": "ANS9-undeclared-limit-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            if (!declares(cert.budgets, limit)) return \"a missing reason names an undeclared limit\";",
+      "to": "            if (!declares(cert.budgets, limit) and false) return \"a missing reason names an undeclared limit\";",
+      "kills": [
+        "a missing reason that names a limit needs that limit declared with its value"
+      ]
+    },
+    {
+      "id": "ANS10-unlisted-unresolved-reference-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "        .facts => |facts| if (facts.unresolved != unresolved) return \"unresolved references are not all listed\",",
+      "to": "        .facts => |facts| if (facts.unresolved != unresolved and false) return \"unresolved references are not all listed\",",
+      "kills": [
+        "callers with an unresolved reference in scope are partial and every unresolved reference is listed"
+      ]
+    },
+    {
+      "id": "ANS11-kinds-filtered-hits-not-told",
+      "file": "src/engine/answer.zig",
+      "from": "        .text => |text| if (text.filtered != 0) try w.print(\"; {d} hidden by kinds\", .{text.filtered}),",
+      "to": "        .text => |text| if (text.filtered == 0) try w.print(\"; {d} hidden by kinds\", .{text.filtered}),",
+      "kills": [
+        "hits hidden by a kinds filter and skipped binary files are counted in the status"
+      ]
+    },
+    {
+      "id": "ANS12-missing-order-leaks-into-certificate",
+      "file": "src/engine/answer.zig",
+      "from": "            std.mem.sort(Missing, missing, {}, missingLess);\n",
+      "to": "",
+      "kills": [
+        "the certificate bytes do not depend on the order missing files were reported"
+      ]
+    },
+    {
+      "id": "ANS13-file-missing-twice-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            if (entry.reason.fileLevel()) return \"a file is reported missing twice\";",
+      "to": "            if (entry.reason.fileLevel() and false) return \"a file is reported missing twice\";",
+      "kills": [
+        "the same file reported missing twice is refused"
+      ]
+    },
+    {
+      "id": "ANS14-empty-missing-entry-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "        if (entry.files == 0) return \"a missing entry covers no file\";",
+      "to": "        if (entry.files == 0 and false) return \"a missing entry covers no file\";",
+      "kills": [
+        "a missing entry must cover at least one file and a named path exactly one"
+      ]
+    },
+    {
+      "id": "ANS15-filtered-hits-without-filter-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            if (text.kinds.eql(.initFull()) and text.filtered != 0) return \"hits were filtered without a kinds filter\";",
+      "to": "            if (text.kinds.eql(.initFull()) and text.filtered != 0 and false) return \"hits were filtered without a kinds filter\";",
+      "kills": [
+        "hits counted as filtered without a kinds filter are refused"
+      ]
+    },
+    {
+      "id": "ANS16-scope-prefix-excludes-itself",
+      "file": "src/engine/answer.zig",
+      "from": "    if (path.len == prefix.len) return true;",
+      "to": "    if (path.len == prefix.len) return false;",
+      "kills": [
+        "a scope prefix covers itself and the paths below it and nothing beside it"
+      ]
+    },
+    {
+      "id": "ANS17-unresolved-reference-in-unevaluated-file-accepted",
+      "file": "src/engine/answer.zig",
+      "from": "            return \"an unresolved reference sits in a file that was not evaluated\";\n",
+      "to": "",
+      "kills": [
+        "callers with an unresolved reference in scope are partial and every unresolved reference is listed"
+      ]
     }
   ]
 }

@@ -28,6 +28,7 @@ pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");
 pub const regex_hint = @import("engine/regex_hint.zig");
 pub const query = @import("engine/query.zig");
+pub const answer = @import("engine/answer.zig");
 pub const lang_registry = @import("engine/lang/registry.zig");
 pub const lang_profile = @import("engine/lang/profile.zig");
 pub const test_util = @import("engine/test_util.zig");

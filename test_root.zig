@@ -30,6 +30,7 @@ pub const checks = src.checks;
 pub const regex = src.regex;
 pub const regex_hint = src.regex_hint;
 pub const query = src.query;
+pub const answer = src.answer;
 pub const lang_registry = src.lang_registry;
 pub const lang_profile = src.lang_profile;
 pub const test_util = src.test_util;
