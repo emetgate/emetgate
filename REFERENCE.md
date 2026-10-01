@@ -669,9 +669,10 @@ Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the
 ### Search
 
 `emetgate_search` (`src/protocol/search_v1.zig`) finds a literal substring or, with
-`regex:true`, a regular expression (`src/engine/regex.zig`) in git-tracked text files.
-Unlike a flat grep, hits are grouped so a result can go straight into `emetgate_try` or
-`emetgate_read_symbol` without a second lookup:
+`regex:true`, a regular expression (`src/engine/regex.zig`) in the git-tracked text files
+under `dir`, which may name a directory or one file. Unlike a flat grep, hits are grouped
+so a result can go straight into `emetgate_try` or `emetgate_read_symbol` without a second
+lookup:
 
 - In a registered language, hits are grouped by their **enclosing symbol** (ref + content
   hash), and each hit is tagged **code** / **comment** / **string** from the tree-sitter
@@ -679,97 +680,185 @@ Unlike a flat grep, hits are grouped so a result can go straight into `emetgate_
   the engine itself names no language). A hit that names a known symbol is further tagged
   **definition** (inside the symbol's own signature, matching its name) or **reference**
   (the callee of a call expression, per `profile.call`, or a generic identifier-reference
-  node kind). Groups with a definition hit sort first, so "where is X defined" resolves in
-  the same reply as "where is X used."
+  node kind).
 - In a `.json` file, hits are grouped by the JSON pointer of the value they fall in
   (`json_pointer.pointerAt`); in a `.md` file, by the innermost heading whose section
   contains them (`markdown_heading.sectionAt`). Any other tracked text file is ungrouped
-  (line only).
-- `kinds:["code"]` (etc.) filters the kind tag before the hit cap is applied; a kind name
-  other than `code`, `comment` or `string` is refused (`UnknownKind`). At most 200 hits
-  total, `truncated:true` when cut, matching `emetgate_scan`'s cap style.
-- `dir` may name a file: the search then covers that one tracked file
-  (`scope.is_file:true`).
+  (line only) and its hits count as code.
+- `kinds:["code"]` (etc.) filters the kind tag; a kind name other than `code`, `comment`
+  or `string` is refused (`UnknownKind`).
 
-Every reply says whether it is **complete** or **partial** and what it covered. `scope`
-counts the tracked files under `dir` (`files`), how many of them were fully evaluated
-(`evaluated`), and the ones left out by a declared rule (`skipped_large` for 1 MiB or more,
-`skipped_binary`, `deleted_on_disk`). A reply is `partial` when the hit cap cut it or a
-file could not be fully evaluated: an unreadable file, or a line on which the regex ran
-past its step budget (2,000,000 steps per line); `missing` names those files and why. A
-reply with no hit carries a `note` that says why the zero can be trusted or what did not
-fit: `no match in 157 file(s)`, `7 matching line(s) (0 code, 0 comment, 7 string) were all
+**The answer.** Every reply starts with `answer`, one line built by `src/engine/answer.zig`
+that says what was covered:
+
+- `✓ 18 matches in 157 files @3fa2` is complete: every tracked text file in scope was
+  evaluated, at the snapshot whose root starts with `3fa2`.
+- `partial: 31 matches in 120 of 157 files @3fa2; missing 37 match_limit` is partial: the
+  files counted under `missing` were in scope but are not fully in the reply.
+- `; excluded 412 binary, 37 > 1 MiB` follows either form when a declared rule left files
+  out: binary content, files over 1 MiB, and the repository's own `.git` and `.emetgate`
+  paths. Excluded files are counted (and listed with `certificate:true`); they do not make
+  an answer partial.
+
+`status` repeats `complete` or `partial`. `missing` names the files and why: `unreadable`
+(could not be opened, for example locked by another process, or a tracked path that is now
+a directory or a link), `vanished` (tracked but gone from the work tree), `budget` (a line
+ran past the regex step budget of 2,000,000 steps), `unclassified` (a `kinds` filter was
+given and the file did not parse cleanly, so its hits cannot be classified), and
+`match_limit` (hits that were found but are not in this reply, counted as files). A reply
+with no hit carries a `note` that says why the zero can be trusted or what did not fit:
+`no match in 157 file(s)`, `7 matching line(s) (0 code, 0 comment, 7 string) were all
 removed by kinds [code]`, `<path> is not a file git tracks`, or, for a literal that looks
 like a regex, a pointer to `regex:true`. A literal with a `|` whose whole text is not found
 is searched once more as the literal alternatives between the bars, and the reply says so
-(`read_as:"literal alternatives"`): a model that writes `a(|b` without `regex:true` gets
-the hits for `a(` and `b`. Errors (a path outside the repository, a bad regex) are the
-refused answers.
+(`read_as:"literal alternatives"`). An answer whose counts do not add up (evaluated and
+missing files against the scope, a budget overspent, a missing reason with no declared
+limit, excluded paths against their counts) is refused as `InconsistentCertificate`
+instead of being shown. Errors (a path outside the repository, a bad regex, an unknown
+`detail`, a negative `offset`) are the other refused answers.
+
+`certificate:true` adds the whole certificate: the snapshot (`barrier`, the barriers this
+session has passed, and `root`, the RFC 9162 Merkle root over every in-scope file that was
+read, each leaf its path and the SHA-256 of its bytes, in byte order of path), the scope
+(`prefix`, `listed`, `excluded` per rule with `excluded_paths`, `evaluated`, `in_scope`),
+the semantics (pattern, literal or regex, case, kinds, and `filtered`, the hits a kinds
+filter hid) and the budgets (`file_bytes`, `matches`, and `steps` for a regex). The session
+keeps one Merkle tree per scope it has answered and updates it from a journal of changed
+paths, so a write recomputes one path from leaf to root; adding or removing a tracked file
+rebuilds that scope's tree.
+
+**Reply size.** A reply holds about 5,000 characters of groups. Groups are ranked: those
+with a definition hit first, then those whose symbol name contains the pattern, then groups
+with a code hit, then files with more hits, then by path and line. When the size cut
+leaves hits out, `more` says how many hits in how many files were left out and which
+`offset` gives the next page, those files count under `match_limit`, and the answer is
+partial. `offset:N` skips the first N ranked hits; `detail:"full"` lifts the size budget
+(the scan still stops 200 hits past the offset and says `truncated:true`). On the searches
+of the recorded sessions: <!-- generated:search-reply-sizes -->82 distinct searches from the recorded sessions, replayed on n8n: without the budget p50 1,748, p90 7,788, max 35,258 characters; with it p50 1,748, p90 5,293, max 5,727 (201,478 against 394,762 characters in total)<!-- /generated -->.
 
 Example reply shape:
 
 ```json
-{"status":"complete","pattern":"loadPending","regex":false,
- "scope":{"path":"src","files":42,"evaluated":42},"matched_files":3,
+{"answer":"✓ 3 matches in 42 files @1a2b","status":"complete",
  "groups":[{"file":"src/index.js","symbol":"loadPending","hash":"…",
             "hits":[{"line":93,"kind":"code","role":"definition","text":"function loadPending() {"},
                      {"line":112,"kind":"code","role":"reference","text":"loadPending();"}]}],
  "truncated":false}
 ```
 
-**Candidate file index.** Each tracked file has an entry: its mtime and size stamp, its
-sorted set of 3-byte grams, its content hash, and the spans a hit is classified from (for a
-registered language the symbols, comment and string ranges and reference ranges from
-`kind_spans`; for `.json` every value's pointer and range, for `.md` every section's
-heading and range, from `doc_spans`). A file is a candidate only when its grams are a
-superset of the query's grams; a file with no entry is always a candidate, so the index can
-only skip files that cannot match. A candidate is read from disk, and its stored spans are
-used only when the content hash of the bytes just read equals the entry's; otherwise the
-file is parsed live, so a stale entry can cost time but never a wrong kind, symbol, pointer
-or heading.
+**The index.** One index per repository lives under
+`%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\` (the same hashed-path convention as the
+shadow root, so a repository is never written into and a poisoned clone cannot carry a
+poisoned index) and is mapped read-only into memory (`index_map.zig`,
+`search_index_file.zig`). It holds the records sorted by case-folded path (path, stamp,
+state, SHA-256 of the content), the text of every indexed file, its spans (symbols,
+comment and string ranges, reference ranges, JSON pointers, Markdown headings;
+`span_codec.zig`), and for every trigram a posting list of file ids stored as Elias–Fano
+or as a bitmap, whichever is smaller (`postings.zig`). A query intersects the posting lists
+of the trigrams of each literal the pattern must contain and reads the candidates straight
+from the mapped text; a file is never re-read from disk for a search. The body is checked
+by a BLAKE3 hash per 4 MiB chunk and the header by its own hash when a session loads it; an
+index of another version is refused by its version byte, any other damage as corrupt, and
+either way it is rebuilt and the reply says so (`index`). A new index goes to a new
+generation file (`index.v4.<tag>`, written durably, then renamed), a pointer file names the
+current generation, and generations older than 60 s are removed. On n8n: <!-- generated:search-n8n-summary -->245.1 MB on disk for 179.0 MB of indexable text (1.37x) across 29,124 tracked files, and a new session loads and checks it in 99 to 127 ms (slowest 136 ms) while the first search can already wait for it (2026-10-01)<!-- /generated -->.
 
-**On disk.** The index is saved at
-`%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\index.v2` (the same hashed-path
-convention as the shadow root, so a repository is never written into and a poisoned clone
-cannot carry a poisoned index) in a versioned, length-prefixed binary format
-(`search_index_file.zig`): the `git ls-files` list with the git index file's stamp, then
-every entry with its stamp, content hash, grams and spans, and a BLAKE3 checksum of all of
-it at the end. A file with another magic or version, a bad checksum or a cut tail is
-ignored and the index is built again; text in it is never escaped, only counted. It is
-written when a session first builds it and when a session that changed it ends.
+**Freshness.** Inside `emetgate mcp` a session owns the mapped index, an in-memory delta of
+the files that changed since, a change watcher (`src/platform/change_watch.zig`) and a
+thread pool (`search_session.zig`). `initialize` starts the watcher on the server's own
+thread and then loads, checks and reconciles the saved index on a background thread; the
+first search waits for that only if it is still running. (Windows cancels a read that was
+issued by a thread that has ended; an earlier version started the watcher on the warm-up
+thread, so every new session's first search found it gone and fell back to a full stat.)
+Reconciling lists every directory once (`stat_scan.zig`, no file is opened) and re-reads a
+file whose size, last-write time or change time differs from its stamp; the change time
+catches a rewrite that sets the last-write time back. A file whose last-write or change
+time lies within 3 s of the moment it was read is given an impossible stamp at that moment
+(git's racy smudge), so the next comparison re-reads it; this applies to the saved index
+and to the in-memory delta alike. A file that could not be read is tried again at every
+search. Every search first passes the barrier: a cookie file is created (delete-on-close)
+under `.emetgate/cookies/` and the search waits until the watcher reports it; NTFS reports
+the changes to one directory handle in order, so every change closed or flushed before the
+call has been delivered by then. Only the changed files are read again (content, digest and
+trigrams; their spans are parsed when a hit in them needs a kind or a symbol). The tracked
+list comes from the git index file (`git_index.zig`: versions 2 to 4, checked against the
+file's SHA-1 or SHA-256 trailer; a conflicted path is listed once and a submodule entry is
+not a file; a split or sparse index falls back to `git ls-files`), and it is read again
+only when that file's last-write time, size or file id changes. If the barrier overflows,
+times out or finds the watcher gone, the search falls back to a full refresh that stats
+every tracked file and re-reads each one whose stamp changed; nothing is reported clean on
+a failure. Outside a session (the CLI, tests without one) every search does that full
+refresh against the saved index.
 
-**Freshness.** Inside `emetgate mcp` the index, the file list, a change watcher
-(`src/platform/change_watch.zig`) and a thread pool live for the session
-(`search_session.zig`). The watcher starts with the session, before the saved index is
-loaded. The first search of a session then checks every tracked file against the loaded
-index: it lists each directory once (`FindFirstFileExW`, no file is opened), and re-reads
-a file whose last-write time or size differs, or whose last-write time falls within 3 s of
-when its entry was read (git's racy rule: a second write in the same instant as the read
-can keep the stamp). Every entry carries that read time, whether it was built in this
-process, refreshed, or loaded (then the save time stands in), and saving gives a racy entry
-an impossible stamp, as git smudges a racily clean index entry, so the next session reads
-that file again; every other entry is used as loaded. The file list is reused while the git index
-file keeps its last-write time, size and file id: git replaces the file on every write
-(a lock file renamed over it), so a new file id marks a change even within the same
-timestamp, and no waiting period is needed. Every search first calls
-the watcher's barrier (`sync`, 250 ms budget): it creates a cookie file under
-`.emetgate/cookies/` and waits until the watcher reports it; NTFS reports changes to one
-directory handle in order, so every change that finished before the call is in the dirty
-set by then. Only the dirty files are read and re-indexed. When the git index file
-changes (a `git add`, a commit, a checkout), the tracked paths are read from it directly
-(`git_index.zig`: index versions 2 to 4, checked against the file's own SHA-1 or SHA-256
-trailer; a split or sparse index, or any file that does not check out, falls back to
-`git ls-files`), the paths that are new get an entry, and the dirty files are handled as
-usual, with no full refresh. If the barrier overflows, times out or the watcher has stopped, the search falls
-back to a full refresh that stats every tracked file and re-reads each one whose stamp
-changed; nothing is reported clean on a failure. Outside a session (the CLI, tests without
-one) every search lists the files and does that full refresh against the saved index. The
-contract: a write whose handle was closed or flushed
-before the search starts is in the result. **Limit:** a program that keeps a file open and
-writes to it without closing or flushing is not reported by `ReadDirectoryChangesW` until it
-does, and a stat can miss it too (NTFS updates the last-write time once per handle), so
-such a write can be missing from a result until the writer closes the file. Editors, git,
-package managers and emetgate itself close what they write.
+Measured on the n8n clone with `tests/bench/n8n_fresh.py` (ReleaseFast, each change
+followed at once by a search for a token only the changed state has; "barrier + refresh"
+is the server's own time for the barrier, the list and the refresh, "search" the MCP round
+trip of that search): <!-- generated:search-fresh-table -->
+
+| Change, then search at once | rounds | barrier + refresh p50 ms | barrier + refresh p99 ms | search p50 ms | search p99 ms | misses |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline: search with no write before it | 200 | 0.43 | 0.67 | 1.73 | 2.52 | 0 |
+| save in place (write + close) | 200 | 0.72 | 1.27 | 3.14 | 6.54 | 0 |
+| save by rename over the file | 200 | 1.08 | 1.72 | 3.45 | 6.90 | 0 |
+| create a file and git add it | 200 | 18.60 | 22.96 | 30.37 | 38.94 | 0 |
+| git rm and delete the file | 200 | 18.32 | 23.14 | 29.71 | 37.57 | 0 |
+| create a file without git add (outside the tracked scope) | 10 | 0.68 | 2.04 | 2.50 | 3.62 | 0 |
+| delete a tracked file from disk | 200 | 0.58 | 1.10 | 10.05 | 13.18 | 0 |
+| put the deleted file back | 200 | 0.86 | 2.99 | 10.85 | 26.82 | 0 |
+| git mv a tracked file | 200 | 20.27 | 25.84 | 35.53 | 70.85 | 0 |
+| rename a tracked file without git (old path vanished, new path untracked) | 20 | 19.86 | 22.56 | 30.41 | 34.30 | 0 |
+| git mv a directory of 15 tracked files | 50 | 24.04 | 30.51 | 28.55 | 36.82 | 0 |
+| git checkout of 59 changed files, first search | 40 | 68.26 | 85.66 | 93.52 | 143.79 | 0 |
+| git checkout of 523 changed files, first search | 40 | 295.39 | 396.82 | 420.01 | 564.38 | 0 |
+| 100 files changed while no server ran, first search right after initialize | 30 | 181.22 | 274.41 | 255.38 | 304.85 | 0 |
+| 100 files changed while no server ran, first search after a 3 s pause | 30 | 61.82 | 82.61 | 170.28 | 211.54 | 0 |
+| save in place while another thread rewrites other tracked files | 200 | 2.39 | 4.78 | 6.18 | 13.14 | 0 |
+| writer keeps its handle open (append), search after close | 40 | 0.71 | 1.47 | 2.81 | 6.36 | 0 |
+| writer keeps its handle open (overwrite), search after close | 40 | 0.69 | 11.50 | 2.82 | 15.80 | 0 |
+<!-- /generated -->
+
+**What a search does not see.** Three things are outside the snapshot, and each is said
+where the model reads it:
+
+- *A write through a handle that is still open and not flushed.* Measured on n8n (40
+  rounds each, `n8n_fresh.py`): after an append or an in-place overwrite through a handle
+  kept open, `ReadDirectoryChangesW` reported nothing, not even 250 ms later (0 of 40),
+  and the directory entry's size did not move either, so neither the barrier nor a full
+  stat can see the write; the size read through a handle did move (40 of 40 for appends).
+  Before the flush the search found the new text in 0 of 40 append rounds and 1 of 40
+  overwrite rounds (that file was read again for an earlier change). After
+  `FlushFileBuffers` the notification arrived every time, 0.4 to 0.5 ms later, and the
+  next search found the new text in every round; closing the file has the same effect. The tool description says it ("a write is in the answer once its writer has
+  closed or flushed the file"), and with `certificate:true` the reply carries
+  `"sees":"writes closed or flushed before this search"`. Closing the gap would mean
+  opening and querying files on every search: a handle stat costs 20 to 40 µs per file,
+  about 1 s for every tracked file of n8n, so it only pays for a short list of files that
+  changed recently, and a writer that has never flushed is not on any such list.
+- *Files git does not track.* The scope is the tracked files (`basis: tracked`), as for
+  `git grep`; a file that is created and not yet added is not searched, and a tracked file
+  that was renamed on disk without git is reported `vanished` under its old name.
+  Listing untracked, not ignored files took 1.3 to 5.3 s on n8n (`git ls-files -o
+  --exclude-standard`), and one `git check-ignore` call 0.3 s.
+- *Submodules and links.* A submodule entry is not a file and is not listed; a tracked
+  symbolic link that is a real link on disk (`core.symlinks`) is reported `unreadable`,
+  since following it could leave the repository.
+
+Measured on n8n (29,000 tracked files) with `tests/bench/n8n_search.py` (ReleaseFast; rg
+and git grep as the process a tool call starts; emetgate as the MCP round trip to a running
+server and, for the kernel, the server's own time; "new session" is the first search after
+`initialize`, at once or after 3 s; "right after a write" rewrites one file in scope before
+each search): <!-- generated:search-n8n-table -->
+
+| Search | rg ms | git grep ms | new session, at once ms | new session, after 3 s ms | warm p50 ms | warm p99 ms | kernel p50 ms | kernel p99 ms | barrier p50 ms | right after a write ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| a rare name in one package | 29.6 | 36.7 | 137.5 | 17.28 | 2.17 | 2.88 | 1.32 | 1.83 | 0.43 | 11.91 |
+| a common name in one package | 30.4 | 38.4 | 123.2 | 15.00 | 3.15 | 4.21 | 2.15 | 3.20 | 0.42 | 12.13 |
+| a regex with four alternatives | 30.4 | 38.2 | 103.1 | 5.03 | 3.50 | 4.85 | 2.52 | 3.90 | 0.39 | 4.47 |
+| a name across the whole repository | 630.9 | 528.5 | 110.5 | 12.77 | 3.64 | 4.87 | 2.14 | 3.17 | 0.64 | 5.73 |
+| a name in one file | 22.2 | 39.7 | 102.6 | 2.94 | 3.10 | 5.59 | 1.73 | 2.94 | 0.69 | 5.51 |
+| read one symbol | - | - | - | - | 2.24 | 5.40 | - | - | - | - |
+| read a line range | - | - | - | - | 2.90 | 3.73 | - | - | - | - |
+<!-- /generated -->
 
 **Sparse gram size — measured, not assumed.** GitHub's Blackbird search
 (https://github.blog/2023-02-06-the-technology-behind-githubs-new-code-search/) uses

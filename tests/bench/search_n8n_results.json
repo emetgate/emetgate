@@ -1,0 +1,103 @@
+{
+  "date": "2026-10-01",
+  "repo": "n8n",
+  "ping_p50_ms": 0.085,
+  "index_bytes": 245094320,
+  "tracked_files": 29124,
+  "tracked_bytes": 205457416,
+  "indexable_bytes": 179048855,
+  "rows": [
+    {
+      "name": "a rare name in one package",
+      "rg_ms": 29.6,
+      "git_ms": 36.7,
+      "warm_p50_ms": 2.17,
+      "warm_p99_ms": 2.88,
+      "kernel_p50_ms": 1.32,
+      "kernel_p99_ms": 1.83,
+      "barrier_p50_ms": 0.43,
+      "after_write_ms": 11.91,
+      "new_now_ms": 137.5,
+      "warm_wait_ms": 125.7,
+      "warmup_ms": 127.1,
+      "warmup_max_ms": 135.9,
+      "new_3s_ms": 17.28
+    },
+    {
+      "name": "a common name in one package",
+      "rg_ms": 30.4,
+      "git_ms": 38.4,
+      "warm_p50_ms": 3.15,
+      "warm_p99_ms": 4.21,
+      "kernel_p50_ms": 2.15,
+      "kernel_p99_ms": 3.2,
+      "barrier_p50_ms": 0.42,
+      "after_write_ms": 12.13,
+      "new_now_ms": 123.2,
+      "warm_wait_ms": 112.1,
+      "warmup_ms": 113.5,
+      "warmup_max_ms": 119.8,
+      "new_3s_ms": 15.0
+    },
+    {
+      "name": "a regex with four alternatives",
+      "rg_ms": 30.4,
+      "git_ms": 38.2,
+      "warm_p50_ms": 3.5,
+      "warm_p99_ms": 4.85,
+      "kernel_p50_ms": 2.52,
+      "kernel_p99_ms": 3.9,
+      "barrier_p50_ms": 0.39,
+      "after_write_ms": 4.47,
+      "new_now_ms": 103.1,
+      "warm_wait_ms": 98.2,
+      "warmup_ms": 99.4,
+      "warmup_max_ms": 103.5,
+      "new_3s_ms": 5.03
+    },
+    {
+      "name": "a name across the whole repository",
+      "rg_ms": 630.9,
+      "git_ms": 528.5,
+      "warm_p50_ms": 3.64,
+      "warm_p99_ms": 4.87,
+      "kernel_p50_ms": 2.14,
+      "kernel_p99_ms": 3.17,
+      "barrier_p50_ms": 0.64,
+      "after_write_ms": 5.73,
+      "new_now_ms": 110.5,
+      "warm_wait_ms": 98.4,
+      "warmup_ms": 99.5,
+      "warmup_max_ms": 101.6,
+      "new_3s_ms": 12.77
+    },
+    {
+      "name": "a name in one file",
+      "rg_ms": 22.2,
+      "git_ms": 39.7,
+      "warm_p50_ms": 3.1,
+      "warm_p99_ms": 5.59,
+      "kernel_p50_ms": 1.73,
+      "kernel_p99_ms": 2.94,
+      "barrier_p50_ms": 0.69,
+      "after_write_ms": 5.51,
+      "new_now_ms": 102.6,
+      "warm_wait_ms": 100.0,
+      "warmup_ms": 101.3,
+      "warmup_max_ms": 103.6,
+      "new_3s_ms": 2.94
+    }
+  ],
+  "reads": [
+    {
+      "name": "read one symbol",
+      "p50_ms": 2.24,
+      "p99_ms": 5.4
+    },
+    {
+      "name": "read a line range",
+      "p50_ms": 2.9,
+      "p99_ms": 3.73
+    }
+  ]
+}
