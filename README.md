@@ -52,7 +52,7 @@ If a check cannot finish, the change is refused. The model cannot change the tes
 
 Reads repeat nothing within a session when `--mirror` is on: an unchanged symbol comes back as one line with its hash.
 
-`emetgate lockdown` starts Claude Code with no built-in tool, only the `.mcp.json` servers and tool search off. It passes the nine tools that neither change the repository nor run a command to `--allowedTools`, so `emetgate_symbols`, `emetgate_skeleton`, `emetgate_read_symbol`, `emetgate_read_file`, `emetgate_list`, `emetgate_search`, `emetgate_scan`, `emetgate_git` and `emetgate_mutate` run without a permission check; the tools that write or run a command keep the permission mode you chose. On n8n a short read question went from 3 turns to 2 and a warm search call from about 640 ms to about 60 ms. The reason for each tool and the measurement are in [REFERENCE.md](REFERENCE.md#lockdown).
+`emetgate lockdown` starts Claude Code with no built-in tool, only the `.mcp.json` servers and tool search off. It passes the nine tools that neither change the repository nor run a command to `--allowedTools`, so `emetgate_symbols`, `emetgate_skeleton`, `emetgate_read_symbol`, `emetgate_read_file`, `emetgate_list`, `emetgate_search`, `emetgate_scan`, `emetgate_git` and `emetgate_mutate` run without a permission check; the tools that write or run a command keep the permission mode you chose, which lockdown refuses only when it is `bypassPermissions`. On n8n a short read question went from 3 turns to 2 and a warm search call from about 640 ms to about 60 ms. The reason for each tool and the measurement are in [REFERENCE.md](REFERENCE.md#lockdown).
 
 ## Rules
 

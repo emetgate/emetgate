@@ -464,6 +464,7 @@ claude --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<serv
 ```
 
 `--tools ""` leaves Claude Code no built-in tool: no shell, no file read or edit, no web access and no ToolSearch. `--strict-mcp-config` with the absolute path loads only the servers of that `.mcp.json`. A user argument that would change any of this (`--tools`, `--allowedTools`, `--allowed-tools`, `--mcp-config`, `--strict-mcp-config`, `--settings`, `--plugin-dir`, `--agents`, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, alone or as `--flag=value`) is refused before anything starts.
+`--permission-mode bypassPermissions` (also `--permission-mode=bypassPermissions`, in any letter case, though Claude Code 2.1.286 accepts only this spelling) is refused the same way, since it skips every permission check as `--dangerously-skip-permissions` does; the other modes (`acceptEdits`, `auto`, `manual`, `dontAsk`, `plan`) pass.
 
 `--allowedTools` lists the emetgate tools that neither change the repository nor run a command, so Claude Code runs them without a permission check; in auto mode that check added 0.5 to 1.6 s to each call in the measurement below. The list comes from reading each handler:
 
