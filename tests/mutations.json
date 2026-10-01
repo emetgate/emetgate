@@ -6374,7 +6374,7 @@
     {
       "id": "SW4-dirty-file-not-reindexed",
       "file": "src/platform/search_session.zig",
-      "from": "        try self.applyPrepared(root, todo.items, seen);\n        self.last.updated = todo.items.len;",
+      "from": "        try self.applyPrepared(root, todo.items, seen, false);\n        self.last.updated = todo.items.len;",
       "to": "        _ = .{ root, seen };\n        self.last.updated = todo.items.len;",
       "kills": [
         "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
@@ -8160,6 +8160,15 @@
       "to": ".hash = hashes[0], .owned = false",
       "kills": [
         "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "ES1-reconciled-file-left-without-spans",
+      "file": "src/platform/search_session.zig",
+      "from": "        try self.applyPrepared(root, todo_paths.items, todo_seen.items, true);",
+      "to": "        try self.applyPrepared(root, todo_paths.items, todo_seen.items, false);",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
     }
   ]
