@@ -5975,32 +5975,22 @@
     {
       "id": "SR1-index-stale-entry-trusted",
       "file": "src/platform/search_index.zig",
-      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !Index.isRacy(old, stamp)) {",
-      "to": "if (true) {",
+      "from": "    return a.mtime_ns == b.mtime_ns and a.ctime_ns == b.ctime_ns and a.size == b.size;",
+      "to": "    return a.size == b.size;",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
-        "refresh reuses unchanged entries and recomputes a file that changed",
-        "a stale index does not hide a match added to a file after the index was built"
-      ]
-    },
-    {
-      "id": "SR6-racy-stamp-not-checked",
-      "file": "src/platform/search_index.zig",
-      "from": "and !Index.isRacy(old, stamp)) {",
-      "to": ") {",
-      "kills": [
-        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set",
-        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
+        "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved",
+        "a file rewritten with its old size and change time but a new last-write time is read again by the next session"
       ]
     },
     {
       "id": "SR2-index-checksum-not-verified",
       "file": "src/platform/search_index_file.zig",
-      "from": "if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;",
-      "to": "_ = actual;\n    _ = claimed;",
+      "from": "            if (!std.mem.eql(u8, &actual, &self.sums[i])) self.bad.store(true, .release);",
+      "to": "            _ = actual;",
       "kills": [
-        "a corrupted index file is rejected instead of trusted",
-        "a flipped byte, a cut tail, another version or another magic is refused"
+        "index v4: any flipped byte is refused at open or at verify, and another version is named",
+        "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
       ]
     },
     {
@@ -6009,16 +5999,17 @@
       "from": "if (profile.isComment(n.kind())) return .comment;",
       "to": "if (profile.isComment(n.kind())) return .code;",
       "kills": [
-        "a hash-matching index entry with no persisted spans still classifies comments and definitions via a live parse"
+        "a file that did not parse cleanly is searched through a live parse, and a kinds filter on it makes the answer partial as unclassified"
       ]
     },
     {
       "id": "SR4-hit-cap-ignored",
       "file": "src/protocol/search_v1.zig",
-      "from": "if (total_hits >= max_matches) {",
-      "to": "if (false) {",
+      "from": "                if (result.hits >= max_matches) {",
+      "to": "                if (false) {",
       "kills": [
-        "the total hit count is capped and truncated is reported"
+        "the total hit count is capped and truncated is reported",
+        "search answers: a capped answer is partial"
       ]
     },
     {
@@ -6028,15 +6019,6 @@
       "to": "        return true;",
       "kills": [
         "a search scoped to a subdirectory does not return hits from outside it"
-      ]
-    },
-    {
-      "id": "SK1-stale-symbol-table-trusted",
-      "file": "src/protocol/search_v1.zig",
-      "from": "if (std.mem.eql(u8, &ch, &live)) {",
-      "to": "if (std.mem.eql(u8, &ch, &live) or true) {",
-      "kills": [
-        "a resident index entry whose stored hash does not match the file's live bytes is never trusted for symbol grouping"
       ]
     },
     {
@@ -6382,17 +6364,18 @@
     {
       "id": "SW3-git-index-change-ignored",
       "file": "src/platform/search_session.zig",
-      "from": "                if (sameGitStamp(stamp, saved)) return false;",
-      "to": "                if (true or sameGitStamp(stamp, saved)) return false;",
+      "from": "        const list_changed = !(if (self.git_stamp) |saved| sameGitStamp(current, saved) else false);",
+      "to": "        const list_changed = self.git_stamp == null;",
       "kills": [
-        "search freshness: a git add that changes the tracked set is picked up without waiting"
+        "search freshness: a git add that changes the tracked set is picked up without waiting",
+        "search freshness: after a committed write and a git commit the file list is listed once and then reused"
       ]
     },
     {
       "id": "SW4-dirty-file-not-reindexed",
       "file": "src/platform/search_session.zig",
-      "from": "            try search_index.updateEntry(self.gpa, self.io, index, root, rel);\n",
-      "to": "            _ = .{ index, root };\n",
+      "from": "        try self.applyPrepared(root, todo.items, seen);\n        self.last.updated = todo.items.len;",
+      "to": "        _ = .{ root, seen };\n        self.last.updated = todo.items.len;",
       "kills": [
         "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
         "search freshness: every write is found while another thread keeps rewriting other tracked files"
@@ -6421,8 +6404,8 @@
     {
       "id": "SW5-index-loaded-before-the-watcher-starts",
       "file": "src/platform/search_session.zig",
-      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
-      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root, self.options.watch()) catch null;\n        self.watch_started_ns = self.now();\n        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;",
+      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;\n        defer self.watcher = change_watch.Watcher.start(self.gpa, self.io, root, self.options.watch()) catch null;\n        defer self.watch_started_ns = self.now();",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
@@ -6430,28 +6413,12 @@
     {
       "id": "SW6-loaded-index-trusted-without-a-restat",
       "file": "src/platform/search_session.zig",
-      "from": "        self.reconcile = true;\n",
-      "to": "        self.reconcile = false;\n",
+      "from": "            try self.reconcile(root, listed, &report);",
+      "to": "            _ = listed;",
       "kills": [
-        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
-      ]
-    },
-    {
-      "id": "IF1-index-file-version-not-checked",
-      "file": "src/platform/search_index_file.zig",
-      "from": "    return bytes[family.len] != magic[family.len] or std.mem.readInt(u32, bytes[magic.len..][0..4], .little) != version;",
-      "to": "    return bytes[family.len] != magic[family.len];",
-      "kills": [
-        "a flipped byte, a cut tail, another version or another magic is refused"
-      ]
-    },
-    {
-      "id": "PF1-directory-stamp-reads-the-creation-time",
-      "file": "src/platform/search_index.zig",
-      "from": "const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32) | data.last_write.low);",
-      "to": "const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) | data.creation.low);",
-      "kills": [
-        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
+        "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved",
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session"
       ]
     },
     {
@@ -6484,8 +6451,8 @@
     {
       "id": "SW7-file-list-change-forces-a-full-refresh",
       "file": "src/platform/search_session.zig",
-      "from": "        if (listed and reason.len == 0 and dirty == null) reason = \"file_list_changed\";",
-      "to": "        if (listed and reason.len == 0) reason = \"file_list_changed\";",
+      "from": "        if (reason.len != 0) {\n            self.last.mode = .full;",
+      "to": "        if (reason.len != 0 or list_changed) {\n            self.last.mode = .full;",
       "kills": [
         "search freshness: after a committed write and a git commit the file list is listed once and then reused"
       ]
@@ -7597,19 +7564,10 @@
     {
       "id": "IL1-index-load-failure-swallowed",
       "file": "src/platform/search_session.zig",
-      "from": "                self.load_failure = why;\n",
-      "to": "                _ = why;\n",
+      "from": "            .failed => |why| self.load_failure = why,",
+      "to": "            .failed => {},",
       "kills": [
         "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
-      ]
-    },
-    {
-      "id": "IL2-index-read-capped-at-64-mib",
-      "file": "src/platform/search_index.zig",
-      "from": "const max_index_file_bytes: u64 = 4 * 1024 * 1024 * 1024;",
-      "to": "const max_index_file_bytes: u64 = 64 * 1024 * 1024;",
-      "kills": [
-        "an index file larger than 64 MiB is read whole and judged by its bytes, not refused by its size"
       ]
     },
     {
@@ -7643,7 +7601,7 @@
     {
       "id": "TQ1-regex-budget-overrun-read-as-no-match",
       "file": "src/engine/text_query.zig",
-      "from": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .over_budget;",
+      "from": "        const matched = re.isMatchIn(scratch, line, &budget) catch {\n            most_steps.* = line_budget;\n            return .over_budget;\n        };",
       "to": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .none;",
       "kills": [
         "a line that exhausts the regex step budget is reported, never read as no match",
@@ -7664,21 +7622,20 @@
     {
       "id": "SA1-partial-answer-reported-complete",
       "file": "src/protocol/search_v1.zig",
-      "from": "        return self.truncated or self.missing.items.len != 0;",
-      "to": "        return self.truncated and false;",
+      "from": "                try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });",
+      "to": "                {}",
       "kills": [
-        "search answers: a line that runs out of regex steps makes the answer partial and names the file",
-        "search answers: a capped answer is partial",
-        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+        "search answers: a line that runs out of regex steps makes the answer partial and names the file"
       ]
     },
     {
       "id": "SA2-unreadable-file-skipped-quietly",
       "file": "src/protocol/search_v1.zig",
-      "from": "                try result.missing.append(gpa, .{ .path = item.rel, .reason = \"unreadable\" });\n",
-      "to": "",
+      "from": "            .unreadable, .link => {\n                try self.missing.append(gpa, .{ .path = path, .reason = .unreadable });\n                return true;\n            },",
+      "to": "            .unreadable, .link => .binary,",
       "kills": [
-        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip",
+        "search answers: a tracked path that is now a directory makes the answer partial as unreadable"
       ]
     },
     {
@@ -7726,33 +7683,6 @@
       "kills": [
         "search answers: a complete answer with no match states how many files it evaluated",
         "search answers: a literal with regex syntax and no match says the pattern looks like a regex"
-      ]
-    },
-    {
-      "id": "RS2-built-entry-has-no-read-time",
-      "file": "src/platform/search_index.zig",
-      "from": "    const seen_ns = wallClock(io);\n    for (files) |rel| {\n",
-      "to": "    const seen_ns: i96 = 0;\n    for (files) |rel| {\n",
-      "kills": [
-        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
-      ]
-    },
-    {
-      "id": "RS3-refreshed-entry-has-no-read-time",
-      "file": "src/platform/search_index.zig",
-      "from": "            .seen_ns = job.seen_ns,\n",
-      "to": "            .seen_ns = 0,\n",
-      "kills": [
-        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
-      ]
-    },
-    {
-      "id": "RS4-racy-entry-saved-with-its-real-stamp",
-      "file": "src/platform/search_index.zig",
-      "from": "const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_ns = smudged_mtime_ns, .size = e.stamp.size } else e.stamp;",
-      "to": "const stamp: Stamp = e.stamp;",
-      "kills": [
-        "saving smudges the stamp of an entry read inside the racy window, so the next session reads it again"
       ]
     },
     {
@@ -7861,6 +7791,185 @@
       "to": "        if (digits != 0 and digits % 3 == 0 and false) {",
       "kills": [
         "counts in the status are grouped by thousands"
+      ]
+    },
+    {
+      "id": "CT1-change-time-not-compared",
+      "file": "src/platform/search_index.zig",
+      "from": "    return a.mtime_ns == b.mtime_ns and a.ctime_ns == b.ctime_ns and a.size == b.size;",
+      "to": "    return a.mtime_ns == b.mtime_ns and a.size == b.size;",
+      "kills": [
+        "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved"
+      ]
+    },
+    {
+      "id": "SR6-racy-stamp-not-smudged",
+      "file": "src/platform/search_index.zig",
+      "from": "    if (!isRacy(stamp, read_ns)) return stamp;",
+      "to": "    if (true) return stamp;",
+      "kills": [
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp"
+      ]
+    },
+    {
+      "id": "RS2-read-time-not-taken",
+      "file": "src/platform/search_index.zig",
+      "from": "prepared.stamp = smudgedIfRacy(prepared.stamp, wallNow(self.io));",
+      "to": "prepared.stamp = smudgedIfRacy(prepared.stamp, 0 * wallNow(self.io));",
+      "kills": [
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp"
+      ]
+    },
+    {
+      "id": "RS4-racy-entry-kept-with-its-real-stamp",
+      "file": "src/platform/search_index.zig",
+      "from": "    return .{ .mtime_ns = smudged_mtime_ns, .ctime_ns = stamp.ctime_ns, .size = stamp.size };",
+      "to": "    return .{ .mtime_ns = stamp.mtime_ns, .ctime_ns = stamp.ctime_ns, .size = stamp.size };",
+      "kills": [
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp"
+      ]
+    },
+    {
+      "id": "TL1-file-of-exactly-the-limit-excluded",
+      "file": "src/platform/search_index.zig",
+      "from": "    if (stamp.size > max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
+      "to": "    if (stamp.size >= max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
+      "kills": [
+        "search answers: a tracked file of exactly 1 MiB is searched and one a byte larger is excluded as too large"
+      ]
+    },
+    {
+      "id": "PF1-stamp-reads-the-creation-time",
+      "file": "src/platform/stat_scan.zig",
+      "from": "            const write = std.mem.readInt(i64, rec[24..32], .little);",
+      "to": "            const write = std.mem.readInt(i64, rec[8..16], .little);",
+      "kills": [
+        "a file rewritten with its old size and change time but a new last-write time is read again by the next session",
+        "stat scan: every listed file gets its size, write time and change time, and a missing one stays null"
+      ]
+    },
+    {
+      "id": "HS1-header-sum-not-checked",
+      "file": "src/platform/search_index_file.zig",
+      "from": "        if (!std.mem.eql(u8, &headerSum(bytes, sums), &header.header_sum)) return error.Corrupt;",
+      "to": "",
+      "kills": [
+        "index v4: any flipped byte is refused at open or at verify, and another version is named"
+      ]
+    },
+    {
+      "id": "IF1-index-file-version-not-named",
+      "file": "src/platform/search_index_file.zig",
+      "from": "        if (bytes.len >= 8 and std.mem.startsWith(u8, bytes, \"EMGIDX\\x00\") and bytes[7] != magic[7]) return error.Version;",
+      "to": "",
+      "kills": [
+        "index v4: any flipped byte is refused at open or at verify, and another version is named"
+      ]
+    },
+    {
+      "id": "VF1-loaded-index-not-verified",
+      "file": "src/platform/search_session.zig",
+      "from": "                if (image.view.verify(self.poolPtr())) {",
+      "to": "                if (true) {",
+      "kills": [
+        "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
+      ]
+    },
+    {
+      "id": "RU1-unreadable-file-never-retried",
+      "file": "src/platform/search_session.zig",
+      "from": "        try self.retryUnreadable(root);\n",
+      "to": "",
+      "kills": [
+        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip",
+        "search answers: a file locked during one search is read by the next search of the same session once the lock is gone"
+      ]
+    },
+    {
+      "id": "MR1-root-cache-ignores-writes",
+      "file": "src/platform/search_session.zig",
+      "from": "        if (hit.version != self.delta.version) return null;\n",
+      "to": "",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows a write in the same session"
+      ]
+    },
+    {
+      "id": "MR2-delta-write-keeps-the-version",
+      "file": "src/platform/search_session.zig",
+      "from": "        got.value_ptr.* = prepared;\n        self.version += 1;",
+      "to": "        got.value_ptr.* = prepared;",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows a write in the same session"
+      ]
+    },
+    {
+      "id": "VA1-vanished-file-skipped-quietly",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            .deleted => {\n                try self.missing.append(gpa, .{ .path = path, .reason = .vanished });\n                return true;\n            },",
+      "to": "            .deleted => .binary,",
+      "kills": [
+        "search answers: a tracked file deleted from the work tree makes the answer partial as vanished"
+      ]
+    },
+    {
+      "id": "TL2-large-file-counted-as-binary",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            .large => .too_large,",
+      "to": "            .large => .binary,",
+      "kills": [
+        "search answers: a tracked file of exactly 1 MiB is searched and one a byte larger is excluded as too large"
+      ]
+    },
+    {
+      "id": "UC1-unclassified-file-not-reported",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {",
+      "to": "            } else if (false) {",
+      "kills": [
+        "a file that did not parse cleanly is searched through a live parse, and a kinds filter on it makes the answer partial as unclassified"
+      ]
+    },
+    {
+      "id": "PO1-elias-fano-low-bits-dropped",
+      "file": "src/engine/postings.zig",
+      "from": "        return @intCast((@as(u64, high_value) << low) | low_value);",
+      "to": "        return @intCast((@as(u64, high_value) << low) | (low_value & 0));",
+      "kills": [
+        "postings: an encoded list iterates back to the same ids for sparse and dense shapes",
+        "postings: intersect returns exactly the ids every list holds inside the range"
+      ]
+    },
+    {
+      "id": "PO2-intersect-skips-an-equal-candidate",
+      "file": "src/engine/postings.zig",
+      "from": "                candidate = iters[0].nextAtLeast(at) orelse return;",
+      "to": "                candidate = iters[0].nextAtLeast(at + 1) orelse return;",
+      "kills": [
+        "postings: intersect returns exactly the ids every list holds inside the range"
+      ]
+    },
+    {
+      "id": "GI4-conflict-stages-listed-each",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (names.items.len != 0 and std.mem.eql(u8, names.items[names.items.len - 1], name)) continue;\n",
+      "to": "",
+      "kills": [
+        "a conflicted path is listed once and a submodule entry is not listed as a file",
+        "search answers: a search in the middle of a merge conflict answers from the conflicted file instead of failing",
+        "git index reader: a merge conflict lists its path once, as git ls-files --deduplicate does"
+      ]
+    },
+    {
+      "id": "GI5-submodule-listed-as-a-file",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (mode & 0o170000 == 0o160000) continue;\n",
+      "to": "        _ = mode;\n",
+      "kills": [
+        "a conflicted path is listed once and a submodule entry is not listed as a file"
       ]
     }
   ]

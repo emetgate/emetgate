@@ -200,6 +200,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     defer session_tree_cache.deinit();
     served.tree_cache = &session_tree_cache;
     var session_search = search_session_mod.Session.init(gpa, io, root, .{});
+    session_search.start();
     defer session_search.deinit();
     served.search_session = &session_search;
     var language_service: tsserver.Session = .{ .gpa = gpa, .io = io, .root = root };

@@ -2,6 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
+const answer_mod = @import("emetgate").answer;
+const search_index = @import("emetgate").search_index;
+const search_session = @import("emetgate").search_session;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -41,6 +44,10 @@ const Repo = struct {
     }
 
     fn deinit(self: *Repo) void {
+        if (search_index.indexDir(gpa, self.root)) |dir| {
+            std.Io.Dir.cwd().deleteTree(testing.io, dir) catch {};
+            gpa.free(dir);
+        } else |_| {}
         gpa.free(self.root);
         self.tmp.cleanup();
     }
@@ -73,7 +80,11 @@ const Answer = struct {
     }
 
     fn scope(self: *Answer, key: []const u8) i64 {
-        return self.get("scope").?.object.get(key).?.integer;
+        return self.get("certificate").?.object.get("scope").?.object.get(key).?.integer;
+    }
+
+    fn line(self: *Answer) []const u8 {
+        return self.get("answer").?.string;
     }
 
     fn note(self: *Answer) []const u8 {
@@ -92,13 +103,21 @@ const Answer = struct {
 };
 
 fn search(runtime: *Runtime, root: []const u8, args: anytype) !Answer {
+    return searchPolicy(runtime, .{ .root = root }, args);
+}
+
+fn searchIn(runtime: *Runtime, session: *search_session.Session, root: []const u8, args: anytype) !Answer {
+    return searchPolicy(runtime, .{ .root = root, .search_session = session }, args);
+}
+
+fn searchPolicy(runtime: *Runtime, policy: server.Policy, args: anytype) !Answer {
     var line: std.Io.Writer.Allocating = .init(gpa);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
     try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_search", .arguments = args } });
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
+    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, policy);
     var parsed = try std.json.parseFromSlice(Value, gpa, out.written(), .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
     const result = parsed.value.object.get("result") orelse return error.NotAToolResult;
@@ -120,12 +139,12 @@ test "search answers: a file given as dir is searched by itself" {
     const file = try repo.path("src/engine/run.ts");
     defer gpa.free(file);
 
-    var answer = try search(runtime, repo.root, .{ .pattern = "continueOnFail", .dir = file });
+    var answer = try search(runtime, repo.root, .{ .pattern = "continueOnFail", .dir = file, .certificate = true });
     defer answer.deinit();
     try testing.expect(!answer.is_error);
     try testing.expectEqualStrings("complete", answer.status());
-    try testing.expectEqual(@as(i64, 1), answer.scope("files"));
-    try testing.expect(answer.get("scope").?.object.get("is_file").?.bool);
+    try testing.expectEqual(@as(i64, 1), answer.scope("in_scope"));
+    try testing.expectEqualStrings("src/engine/run.ts", answer.get("certificate").?.object.get("scope").?.object.get("prefix").?.string);
     try testing.expectEqual(@as(usize, 1), answer.groups().len);
     try testing.expect(std.mem.endsWith(u8, answer.groups()[0].object.get("file").?.string, "run.ts"));
 }
@@ -139,9 +158,9 @@ test "search answers: an untracked file given as dir is named as untracked, not 
     const file = try repo.path("loose.ts");
     defer gpa.free(file);
 
-    var answer = try search(runtime, repo.root, .{ .pattern = "continueOnFail", .dir = file });
+    var answer = try search(runtime, repo.root, .{ .pattern = "continueOnFail", .dir = file, .certificate = true });
     defer answer.deinit();
-    try testing.expectEqual(@as(i64, 0), answer.scope("files"));
+    try testing.expectEqual(@as(i64, 0), answer.scope("listed"));
     try testing.expect(std.mem.indexOf(u8, answer.note(), "is not a file git tracks") != null);
 }
 
@@ -213,12 +232,13 @@ test "search answers: a complete answer with no match states how many files it e
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var answer = try search(runtime, repo.root, .{ .pattern = "absentNeedle", .dir = repo.root });
+    var answer = try search(runtime, repo.root, .{ .pattern = "absentNeedle", .dir = repo.root, .certificate = true });
     defer answer.deinit();
     try testing.expectEqualStrings("complete", answer.status());
-    try testing.expectEqual(@as(i64, 3), answer.scope("files"));
+    try testing.expectEqual(@as(i64, 3), answer.scope("in_scope"));
     try testing.expectEqual(@as(i64, 3), answer.scope("evaluated"));
     try testing.expectEqualStrings("no match in 3 file(s)", answer.note());
+    try testing.expect(std.mem.startsWith(u8, answer.line(), "\u{2713} 0 matches in 3 files @"));
 }
 
 test "search answers: a regex alternation over many files finds every match a line by line scan finds" {
@@ -247,7 +267,6 @@ test "search answers: a regex alternation over many files finds every match a li
     var answer = try search(runtime, root, .{ .pattern = "handleNodeExecutionError|continueExecution", .dir = root, .regex = true });
     defer answer.deinit();
     try testing.expectEqualStrings("complete", answer.status());
-    try testing.expectEqual(@as(i64, file_count), answer.get("matched_files").?.integer);
     try testing.expectEqual(@as(usize, file_count), answer.hitCount());
 }
 
@@ -268,13 +287,13 @@ test "search answers: a line that runs out of regex steps makes the answer parti
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var answer = try search(runtime, root, .{ .pattern = "(a|b|c|d|e|f|g|h)*z", .dir = root, .regex = true });
+    var answer = try search(runtime, root, .{ .pattern = "(a|b|c|d|e|f|g|h)*z", .dir = root, .regex = true, .certificate = true });
     defer answer.deinit();
     try testing.expectEqualStrings("partial", answer.status());
     const missing = answer.get("missing").?.array.items;
     try testing.expectEqual(@as(usize, 1), missing.len);
     try testing.expectEqualStrings("long.txt", missing[0].object.get("path").?.string);
-    try testing.expectEqualStrings("regex_step_budget", missing[0].object.get("reason").?.string);
+    try testing.expectEqualStrings("budget", missing[0].object.get("reason").?.string);
     try testing.expectEqual(@as(i64, 1), answer.scope("evaluated"));
     try testing.expectEqual(@as(usize, 1), answer.hitCount());
 }
@@ -291,7 +310,8 @@ test "search answers: a file that cannot be read makes the answer partial instea
     const locked = try repo.path("locked.txt");
     defer gpa.free(locked);
     const held = try std.Io.Dir.cwd().openFile(testing.io, locked, .{ .mode = .read_write, .lock = .exclusive });
-    defer held.close(testing.io);
+    var released = false;
+    defer if (!released) held.close(testing.io);
 
     var answer = try search(runtime, repo.root, .{ .pattern = "lockedneedle", .dir = repo.root });
     defer answer.deinit();
@@ -300,6 +320,168 @@ test "search answers: a file that cannot be read makes the answer partial instea
     try testing.expectEqual(@as(usize, 1), missing.len);
     try testing.expectEqualStrings("unreadable", missing[0].object.get("reason").?.string);
     try testing.expectEqual(@as(usize, 1), answer.groups().len);
+
+    held.close(testing.io);
+    released = true;
+    var after = try search(runtime, repo.root, .{ .pattern = "lockedneedle", .dir = repo.root });
+    defer after.deinit();
+    try testing.expectEqualStrings("complete", after.status());
+    try testing.expectEqual(@as(usize, 2), after.groups().len);
+}
+
+test "search answers: a file locked during one search is read by the next search of the same session once the lock is gone" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init(&.{
+        .{ "locked.txt", "lockedneedle here\n" },
+        .{ "open.txt", "lockedneedle there\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    const locked = try repo.path("locked.txt");
+    defer gpa.free(locked);
+
+    {
+        const held = try std.Io.Dir.cwd().openFile(testing.io, locked, .{ .mode = .read_write, .lock = .exclusive });
+        defer held.close(testing.io);
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "lockedneedle", .dir = repo.root });
+        defer answer.deinit();
+        try testing.expectEqualStrings("partial", answer.status());
+        try testing.expectEqualStrings("unreadable", answer.get("missing").?.array.items[0].object.get("reason").?.string);
+    }
+    var after = try searchIn(runtime, &session, repo.root, .{ .pattern = "lockedneedle", .dir = repo.root });
+    defer after.deinit();
+    try testing.expectEqualStrings("complete", after.status());
+    try testing.expectEqual(@as(usize, 2), after.groups().len);
+}
+
+test "search answers: a tracked file deleted from the work tree makes the answer partial as vanished" {
+    var repo = try Repo.init(&.{
+        .{ "a.txt", "goneneedle a\n" },
+        .{ "b.txt", "goneneedle b\n" },
+    });
+    defer repo.deinit();
+    try repo.tmp.dir.deleteFile(testing.io, "b.txt");
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var answer = try search(runtime, repo.root, .{ .pattern = "goneneedle", .dir = repo.root });
+    defer answer.deinit();
+    try testing.expectEqualStrings("partial", answer.status());
+    const missing = answer.get("missing").?.array.items;
+    try testing.expectEqual(@as(usize, 1), missing.len);
+    try testing.expectEqualStrings("b.txt", missing[0].object.get("path").?.string);
+    try testing.expectEqualStrings("vanished", missing[0].object.get("reason").?.string);
+    try testing.expectEqual(@as(usize, 1), answer.groups().len);
+}
+
+test "search answers: a tracked path that is now a directory makes the answer partial as unreadable" {
+    var repo = try Repo.init(&.{
+        .{ "a.txt", "dirneedle a\n" },
+        .{ "c.txt", "dirneedle c\n" },
+    });
+    defer repo.deinit();
+    try repo.tmp.dir.deleteFile(testing.io, "c.txt");
+    try repo.tmp.dir.createDirPath(testing.io, "c.txt");
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var answer = try search(runtime, repo.root, .{ .pattern = "dirneedle", .dir = repo.root });
+    defer answer.deinit();
+    try testing.expectEqualStrings("partial", answer.status());
+    const missing = answer.get("missing").?.array.items;
+    try testing.expectEqual(@as(usize, 1), missing.len);
+    try testing.expectEqualStrings("c.txt", missing[0].object.get("path").?.string);
+    try testing.expectEqualStrings("unreadable", missing[0].object.get("reason").?.string);
+}
+
+test "search answers: a tracked file of exactly 1 MiB is searched and one a byte larger is excluded as too large" {
+    const mib = 1024 * 1024;
+    const at_cap = try gpa.alloc(u8, mib);
+    defer gpa.free(at_cap);
+    @memset(at_cap, 'x');
+    @memcpy(at_cap[0..10], "capneedle\n");
+    const over_cap = try gpa.alloc(u8, mib + 1);
+    defer gpa.free(over_cap);
+    @memset(over_cap, 'x');
+    @memcpy(over_cap[0..10], "capneedle\n");
+    var repo = try Repo.init(&.{
+        .{ "at_cap.txt", at_cap },
+        .{ "over_cap.txt", over_cap },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var answer = try search(runtime, repo.root, .{ .pattern = "capneedle", .dir = repo.root, .certificate = true });
+    defer answer.deinit();
+    try testing.expectEqualStrings("complete", answer.status());
+    try testing.expectEqual(@as(usize, 1), answer.groups().len);
+    try testing.expectEqualStrings("at_cap.txt", answer.groups()[0].object.get("file").?.string);
+    try testing.expect(std.mem.endsWith(u8, answer.line(), "; excluded 1 > 1 MiB"));
+    const listed = answer.get("certificate").?.object.get("scope").?.object.get("excluded_paths").?.array.items;
+    try testing.expectEqual(@as(usize, 1), listed.len);
+    try testing.expectEqualStrings("over_cap.txt", listed[0].object.get("path").?.string);
+    try testing.expectEqualStrings("too_large", listed[0].object.get("rule").?.string);
+}
+
+test "search answers: a tracked binary file is excluded as binary and listed in the certificate" {
+    var repo = try Repo.init(&.{
+        .{ "text.txt", "binneedle here\n" },
+        .{ "blob.bin", "binneedle\x00binary\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var answer = try search(runtime, repo.root, .{ .pattern = "binneedle", .dir = repo.root, .certificate = true });
+    defer answer.deinit();
+    try testing.expectEqualStrings("complete", answer.status());
+    try testing.expectEqual(@as(usize, 1), answer.groups().len);
+    try testing.expectEqualStrings("text.txt", answer.groups()[0].object.get("file").?.string);
+    try testing.expect(std.mem.endsWith(u8, answer.line(), "; excluded 1 binary"));
+    const listed = answer.get("certificate").?.object.get("scope").?.object.get("excluded_paths").?.array.items;
+    try testing.expectEqual(@as(usize, 1), listed.len);
+    try testing.expectEqualStrings("blob.bin", listed[0].object.get("path").?.string);
+    try testing.expectEqualStrings("binary", listed[0].object.get("rule").?.string);
+}
+
+fn expectedRoot(files: []const [2][]const u8) [64]u8 {
+    var leaves: [8]answer_mod.Leaf = undefined;
+    for (files, 0..) |f, i| leaves[i] = .{ .path = f[0], .digest = answer_mod.contentDigest(f[1]) };
+    const root = answer_mod.merkleRoot(leaves[0..files.len]) catch unreachable;
+    return std.fmt.bytesToHex(root, .lower);
+}
+
+fn snapshotRoot(answer: *Answer) []const u8 {
+    return answer.get("certificate").?.object.get("snapshot").?.object.get("root").?.string;
+}
+
+test "search answers: the snapshot root is the Merkle root of the searched files and follows a write in the same session" {
+    var repo = try Repo.init(&.{
+        .{ "a.txt", "alpha rootneedle\n" },
+        .{ "b/c.txt", "beta rootneedle\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+
+    {
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "rootneedle", .dir = repo.root, .certificate = true });
+        defer answer.deinit();
+        const want = expectedRoot(&.{ .{ "a.txt", "alpha rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" } });
+        try testing.expectEqualStrings(&want, snapshotRoot(&answer));
+        try testing.expect(std.mem.indexOf(u8, answer.line(), want[0..4]) != null);
+    }
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "gamma rootneedle\n" });
+    var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "rootneedle", .dir = repo.root, .certificate = true });
+    defer answer.deinit();
+    const want = expectedRoot(&.{ .{ "a.txt", "gamma rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" } });
+    try testing.expectEqualStrings(&want, snapshotRoot(&answer));
 }
 
 test "search answers: a capped answer is partial" {
@@ -315,4 +497,38 @@ test "search answers: a capped answer is partial" {
     defer answer.deinit();
     try testing.expectEqualStrings("partial", answer.status());
     try testing.expect(answer.get("truncated").?.bool);
+}
+
+fn gitExit(root: []const u8, args: []const []const u8) !u8 {
+    var argv: [8][]const u8 = undefined;
+    argv[0] = "git";
+    @memcpy(argv[1..][0..args.len], args);
+    const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root } });
+    gpa.free(result.stdout);
+    gpa.free(result.stderr);
+    return switch (result.term) {
+        .exited => |code| code,
+        else => error.GitSetupFailed,
+    };
+}
+
+test "search answers: a search in the middle of a merge conflict answers from the conflicted file instead of failing" {
+    var repo = try Repo.init(&.{.{ "a.txt", "base line\n" }});
+    defer repo.deinit();
+    try gitIn(repo.root, &.{ "checkout", "-q", "-b", "side" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "side line\n" });
+    try gitIn(repo.root, &.{ "commit", "-q", "-am", "side" });
+    try gitIn(repo.root, &.{ "checkout", "-q", "-" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "main line\n" });
+    try gitIn(repo.root, &.{ "commit", "-q", "-am", "main" });
+    try testing.expect(try gitExit(repo.root, &.{ "merge", "-q", "side" }) != 0);
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var answer = try search(runtime, repo.root, .{ .pattern = "side line", .dir = repo.root });
+    defer answer.deinit();
+    try testing.expect(!answer.is_error);
+    try testing.expectEqualStrings("complete", answer.status());
+    try testing.expectEqual(@as(usize, 1), answer.groups().len);
+    try testing.expectEqualStrings("a.txt", answer.groups()[0].object.get("file").?.string);
 }

@@ -35,6 +35,7 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
     while (i < count) : (i += 1) {
         const start = pos;
         if (body.len < pos + fixed + 2) return null;
+        const mode = std.mem.readInt(u32, body[pos + 24 ..][0..4], .big);
         pos += fixed;
         const flags = std.mem.readInt(u16, body[pos..][0..2], .big);
         pos += 2;
@@ -70,6 +71,8 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
             if (pos > body.len) return null;
         }
         if (name.len == 0 or name[name.len - 1] == '/') return null;
+        if (mode & 0o170000 == 0o160000) continue;
+        if (names.items.len != 0 and std.mem.eql(u8, names.items[names.items.len - 1], name)) continue;
         try names.append(gpa, try gpa.dupe(u8, name));
     }
     while (pos < body.len) {
@@ -126,6 +129,51 @@ fn buildIndex(gpa: Allocator, name: []const u8, extension: ?[]const u8) ![]u8 {
     std.crypto.hash.Sha1.hash(out.items, &sum, .{});
     try out.appendSlice(gpa, &sum);
     return out.toOwnedSlice(gpa);
+}
+
+const Entry = struct { name: []const u8, mode: u32 = 0o100644, stage: u16 = 0 };
+
+fn buildEntries(gpa: Allocator, entries: []const Entry) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, "DIRC");
+    var header: [8]u8 = undefined;
+    std.mem.writeInt(u32, header[0..4], 2, .big);
+    std.mem.writeInt(u32, header[4..8], @intCast(entries.len), .big);
+    try out.appendSlice(gpa, &header);
+    for (entries) |e| {
+        const start = out.items.len;
+        try out.appendNTimes(gpa, 0, 40 + 20);
+        std.mem.writeInt(u32, out.items[start + 24 ..][0..4], e.mode, .big);
+        var flags: [2]u8 = undefined;
+        std.mem.writeInt(u16, &flags, (e.stage << 12) | @as(u16, @intCast(e.name.len)), .big);
+        try out.appendSlice(gpa, &flags);
+        try out.appendSlice(gpa, e.name);
+        const entry_len = (out.items.len - start + 8) & ~@as(usize, 7);
+        try out.appendNTimes(gpa, 0, start + entry_len - out.items.len);
+    }
+    var sum: [20]u8 = undefined;
+    std.crypto.hash.Sha1.hash(out.items, &sum, .{});
+    try out.appendSlice(gpa, &sum);
+    return out.toOwnedSlice(gpa);
+}
+
+test "a conflicted path is listed once and a submodule entry is not listed as a file" {
+    const bytes = try buildEntries(testing.allocator, &.{
+        .{ .name = "a.ts", .stage = 1 },
+        .{ .name = "a.ts", .stage = 2 },
+        .{ .name = "a.ts", .stage = 3 },
+        .{ .name = "lib", .mode = 0o160000 },
+        .{ .name = "link", .mode = 0o120000 },
+        .{ .name = "z.ts", .mode = 0o100755 },
+    });
+    defer testing.allocator.free(bytes);
+    const names = (try parse(testing.allocator, bytes)) orelse return error.NotRead;
+    defer freeList(testing.allocator, names);
+    try testing.expectEqual(@as(usize, 3), names.len);
+    try testing.expectEqualStrings("a.ts", names[0]);
+    try testing.expectEqualStrings("link", names[1]);
+    try testing.expectEqualStrings("z.ts", names[2]);
 }
 
 test "an index whose entries live partly in a shared index is not read as the whole list" {

@@ -266,7 +266,13 @@ test "a corrupted on-disk index still returns correct results, not a false empty
     defer warm.deinit();
     try testing.expect(!warm.is_error);
 
-    const index_path = try search_index.indexPath(testing.allocator, root);
+    const index_dir = try search_index.indexDir(testing.allocator, root);
+    defer testing.allocator.free(index_dir);
+    const pointer = try std.fmt.allocPrint(testing.allocator, "{s}\\index.v4", .{index_dir});
+    defer testing.allocator.free(pointer);
+    var tag: [16]u8 = undefined;
+    const generation = try std.Io.Dir.cwd().readFile(testing.io, pointer, &tag);
+    const index_path = try std.fmt.allocPrint(testing.allocator, "{s}\\index.v4.{s}", .{ index_dir, generation });
     defer testing.allocator.free(index_path);
     const original = std.Io.Dir.cwd().readFileAlloc(testing.io, index_path, testing.allocator, .unlimited) catch return error.TestUnexpectedResult;
     defer testing.allocator.free(original);
@@ -411,114 +417,221 @@ test "a search scoped to a subdirectory does not return hits from outside it" {
     try testing.expect(groupsOf(body.value).len >= 1);
 }
 
-test "a resident index entry whose stored hash does not match the file's live bytes is never trusted for symbol grouping" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const real_bytes = "export function realFn() {\n  return 1;\n}\n";
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = real_bytes });
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(root);
-    try commitAll(root);
-    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{root});
-    defer testing.allocator.free(abs);
+const win = std.os.windows;
 
-    const real_stat = try std.Io.Dir.cwd().statFile(testing.io, abs, .{});
-    const stamp: search_index.Stamp = .{ .mtime_ns = real_stat.mtime.nanoseconds, .size = real_stat.size };
-    const trigrams = try search_index.trigramsOfAlloc(testing.allocator, real_bytes);
-    defer testing.allocator.free(trigrams);
+const BasicInfo = extern struct {
+    creation: i64,
+    access: i64,
+    write: i64,
+    change: i64,
+    attributes: u32,
+};
 
-    const fake_arena = try testing.allocator.create(std.heap.ArenaAllocator);
-    fake_arena.* = std.heap.ArenaAllocator.init(testing.allocator);
+const file_basic_info: c_int = 0;
+const filetime_unix_offset: i64 = 116444736000000000;
 
-    var wrong_hash: symbol.Hash = std.mem.zeroes(symbol.Hash);
-    wrong_hash[0] = 0xff;
-    var fake_symbols = [_]search_index.kind_spans.SymbolSpan{.{
-        .ref_text = "wrongName",
-        .name = "wrongName",
-        .hash = std.mem.zeroes(symbol.Hash),
-        .node_start = 0,
-        .body_start = 0,
-        .node_end = @intCast(real_bytes.len),
-    }};
-    const fake_spans = search_index.kind_spans.FileSpans{
-        .symbols = fake_symbols[0..],
-        .kind_spans = &.{},
-        .reference_spans = &.{},
-    };
-    var fake_entries = [_]search_index.Entry{.{
-        .path = "a.ts",
-        .stamp = stamp,
-        .trigrams = trigrams,
-        .content_hash = wrong_hash,
-        .spans = fake_spans,
-    }};
-    var session = search_session.Session.init(testing.allocator, testing.io, root, .{});
-    defer session.deinit();
-    session.index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null };
+extern "kernel32" fn GetFileInformationByHandleEx(file: win.HANDLE, class: c_int, info: *anyopaque, size: win.DWORD) callconv(.winapi) win.BOOL;
+extern "kernel32" fn SetFileInformationByHandle(file: win.HANDLE, class: c_int, info: *anyopaque, size: win.DWORD) callconv(.winapi) win.BOOL;
 
-    const runtime = try Runtime.create(testing.allocator);
-    defer runtime.destroy() catch @panic("live snapshots");
-
-    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "realFn", .dir = root }, .{ .root = root, .search_session = &session });
-    defer reply.deinit();
-    try testing.expect(!reply.is_error);
-    var body = try reply.payload();
-    defer body.deinit();
-
-    try testing.expect(findGroupBySymbol(groupsOf(body.value), "realFn") != null);
-    try testing.expect(findGroupBySymbol(groupsOf(body.value), "wrongName") == null);
+fn readTimes(dir: std.Io.Dir, sub_path: []const u8) !BasicInfo {
+    const file = try dir.openFile(testing.io, sub_path, .{});
+    defer file.close(testing.io);
+    var info: BasicInfo = undefined;
+    if (GetFileInformationByHandleEx(file.handle, file_basic_info, &info, @sizeOf(BasicInfo)) == .FALSE) return error.Unexpected;
+    return info;
 }
 
-test "a hash-matching index entry with no persisted spans still classifies comments and definitions via a live parse" {
+fn writeTimes(dir: std.Io.Dir, sub_path: []const u8, write: i64, change: i64) !void {
+    const file = try dir.openFile(testing.io, sub_path, .{ .mode = .read_write });
+    defer file.close(testing.io);
+    var info: BasicInfo = .{ .creation = 0, .access = 0, .write = write, .change = change, .attributes = 0 };
+    if (SetFileInformationByHandle(file.handle, file_basic_info, &info, @sizeOf(BasicInfo)) == .FALSE) return error.Unexpected;
+}
+
+fn filetimeAgo(seconds: i64) i64 {
+    const now_ns: i64 = @intCast(std.Io.Clock.real.now(testing.io).nanoseconds);
+    return @divTrunc(now_ns, 100) + filetime_unix_offset - seconds * 10_000_000;
+}
+
+fn dropIndex(root: []const u8) void {
+    const dir = search_index.indexDir(testing.allocator, root) catch return;
+    defer testing.allocator.free(dir);
+    std.Io.Dir.cwd().deleteTree(testing.io, dir) catch {};
+}
+
+fn searchIn(runtime: *Runtime, session: *search_session.Session, root: []const u8, pattern: []const u8) !Reply {
+    return callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = pattern, .dir = root }, .{ .root = root, .search_session = session });
+}
+
+test "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const real_bytes = "export function loadPending(): number {\n  // loadPending starts here\n  return 1;\n}\n";
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = real_bytes });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function wrongName() {\n  return 1;\n}\n" });
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
+    defer dropIndex(root);
     try commitAll(root);
-    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{root});
-    defer testing.allocator.free(abs);
-
-    const real_stat = try std.Io.Dir.cwd().statFile(testing.io, abs, .{});
-    const stamp: search_index.Stamp = .{ .mtime_ns = real_stat.mtime.nanoseconds, .size = real_stat.size };
-    const trigrams = try search_index.trigramsOfAlloc(testing.allocator, real_bytes);
-    defer testing.allocator.free(trigrams);
-
-    const fake_arena = try testing.allocator.create(std.heap.ArenaAllocator);
-    fake_arena.* = std.heap.ArenaAllocator.init(testing.allocator);
-
-    var fake_entries = [_]search_index.Entry{.{
-        .path = "a.ts",
-        .stamp = stamp,
-        .trigrams = trigrams,
-        .content_hash = symbol.fileHash(real_bytes),
-        .spans = null,
-    }};
-    var session = search_session.Session.init(testing.allocator, testing.io, root, .{});
-    defer session.deinit();
-    session.index = .{ .arena = fake_arena, .entries = fake_entries[0..], .written_ns = null };
-
+    const old = filetimeAgo(3600);
+    try writeTimes(tmp.dir, "a.ts", old, old);
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
+    {
+        var first = search_session.Session.init(testing.allocator, testing.io, root, .{});
+        defer first.deinit();
+        var reply = try searchIn(runtime, &first, root, "wrongName");
+        defer reply.deinit();
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expect(findGroupBySymbol(groupsOf(body.value), "wrongName") != null);
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function realFn___() {\n  return 1;\n}\n" });
+    try writeTimes(tmp.dir, "a.ts", old, 0);
+    const times = try readTimes(tmp.dir, "a.ts");
+    try testing.expectEqual(old, times.write);
+    try testing.expect(times.change != old);
 
-    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "loadPending", .dir = root }, .{ .root = root, .search_session = &session });
+    var second = search_session.Session.init(testing.allocator, testing.io, root, .{});
+    defer second.deinit();
+    var reply = try searchIn(runtime, &second, root, "realFn___");
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
+    try testing.expect(findGroupBySymbol(groupsOf(body.value), "realFn___") != null);
+    var stale = try searchIn(runtime, &second, root, "wrongName");
+    defer stale.deinit();
+    var stale_body = try stale.payload();
+    defer stale_body.deinit();
+    try testing.expectEqual(@as(usize, 0), groupsOf(stale_body.value).len);
+}
 
-    const group = findGroupBySymbol(groupsOf(body.value), "loadPending") orelse return error.TestUnexpectedResult;
-    var saw_definition = false;
-    var saw_comment = false;
-    for (hitKinds(group)) |h| {
-        if (h.object.get("role")) |role| {
-            if (std.mem.eql(u8, role.string, "definition")) saw_definition = true;
-        }
-        if (std.mem.eql(u8, h.object.get("kind").?.string, "comment")) saw_comment = true;
+test "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "firstText\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    defer dropIndex(root);
+    try commitAll(root);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "firstText\n" });
+    {
+        var first = search_session.Session.init(testing.allocator, testing.io, root, .{});
+        defer first.deinit();
+        var reply = try searchIn(runtime, &first, root, "firstText");
+        defer reply.deinit();
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expectEqual(@as(usize, 1), groupsOf(body.value).len);
     }
-    try testing.expect(saw_definition);
+    const before = try readTimes(tmp.dir, "a.txt");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "otherText\n" });
+    try writeTimes(tmp.dir, "a.txt", before.write, before.change);
+    const after = try readTimes(tmp.dir, "a.txt");
+    try testing.expectEqual(before.write, after.write);
+    try testing.expectEqual(before.change, after.change);
+
+    var second = search_session.Session.init(testing.allocator, testing.io, root, .{});
+    defer second.deinit();
+    var reply = try searchIn(runtime, &second, root, "otherText");
+    defer reply.deinit();
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqual(@as(usize, 1), groupsOf(body.value).len);
+}
+
+test "a file rewritten with its old size and change time but a new last-write time is read again by the next session" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function wrongName() {\n  return 1;\n}\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    defer dropIndex(root);
+    try commitAll(root);
+    const old = filetimeAgo(3600);
+    try writeTimes(tmp.dir, "a.ts", old, old);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    {
+        var first = search_session.Session.init(testing.allocator, testing.io, root, .{});
+        defer first.deinit();
+        var reply = try searchIn(runtime, &first, root, "wrongName");
+        defer reply.deinit();
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expect(findGroupBySymbol(groupsOf(body.value), "wrongName") != null);
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function realFn___() {\n  return 1;\n}\n" });
+    const newer = filetimeAgo(1800);
+    try writeTimes(tmp.dir, "a.ts", newer, old);
+    const times = try readTimes(tmp.dir, "a.ts");
+    try testing.expectEqual(newer, times.write);
+    try testing.expectEqual(old, times.change);
+
+    var second = search_session.Session.init(testing.allocator, testing.io, root, .{});
+    defer second.deinit();
+    var reply = try searchIn(runtime, &second, root, "realFn___");
+    defer reply.deinit();
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(findGroupBySymbol(groupsOf(body.value), "realFn___") != null);
+}
+
+test "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "old.txt", .data = "old\n" });
+    const old = filetimeAgo(3600);
+    try writeTimes(tmp.dir, "old.txt", old, old);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "fresh.txt", .data = "fresh\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    const paths = [_][]const u8{ "fresh.txt", "old.txt" };
+    const seen = [_]?search_index.Seen{ null, null };
+    const prepared = try search_index.prepareAll(testing.allocator, testing.io, root, &paths, &seen, false, null, null);
+    defer search_index.freeAll(testing.allocator, prepared);
+    try testing.expectEqual(search_index.smudged_mtime_ns, prepared[0].stamp.mtime_ns);
+    try testing.expect(prepared[1].stamp.mtime_ns != search_index.smudged_mtime_ns);
+    try testing.expectEqual(@as(u64, 4), prepared[1].stamp.size);
+}
+test "a file that did not parse cleanly is searched through a live parse, and a kinds filter on it makes the answer partial as unclassified" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const real_bytes = "export function loadPending(): number {\n  // loadPending starts here\n  return 1;\n}\nconst broken = (;\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = real_bytes });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(testing.allocator, testing.io, root, .{});
+    defer session.deinit();
+
+    var reply = try searchIn(runtime, &session, root, "loadPending");
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("complete", body.value.object.get("status").?.string);
+    var saw_comment = false;
+    for (groupsOf(body.value)) |g| {
+        for (hitKinds(g)) |h| {
+            if (std.mem.eql(u8, h.object.get("kind").?.string, "comment")) saw_comment = true;
+        }
+    }
     try testing.expect(saw_comment);
+
+    var filtered = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "loadPending", .dir = root, .kinds = &[_][]const u8{"code"} }, .{ .root = root, .search_session = &session });
+    defer filtered.deinit();
+    errdefer std.debug.print("{s}\n", .{filtered.text});
+    var filtered_body = try filtered.payload();
+    defer filtered_body.deinit();
+    try testing.expectEqualStrings("partial", filtered_body.value.object.get("status").?.string);
+    const missing = filtered_body.value.object.get("missing").?.array.items;
+    try testing.expectEqualStrings("unclassified", missing[0].object.get("reason").?.string);
 }
 
 test "a symbol's byte offsets are recomputed, not reused stale, after the file grows by a leading comment" {

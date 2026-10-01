@@ -199,9 +199,19 @@ test "search freshness: a git add that changes the tracked set is picked up with
 }
 
 fn removeIndexFile(root: []const u8) void {
-    const path = search_index.indexPath(gpa, root) catch return;
-    defer gpa.free(path);
-    std.Io.Dir.deleteFileAbsolute(testing.io, path) catch {};
+    const dir = search_index.indexDir(gpa, root) catch return;
+    defer gpa.free(dir);
+    std.Io.Dir.cwd().deleteTree(testing.io, dir) catch {};
+}
+
+fn currentGeneration(root: []const u8) ![]u8 {
+    const dir = try search_index.indexDir(gpa, root);
+    defer gpa.free(dir);
+    const pointer = try std.fmt.allocPrint(gpa, "{s}\\index.v4", .{dir});
+    defer gpa.free(pointer);
+    var tag: [16]u8 = undefined;
+    const text = try std.Io.Dir.cwd().readFile(testing.io, pointer, &tag);
+    return std.fmt.allocPrint(gpa, "{s}\\index.v4.{s}", .{ dir, text });
 }
 
 test "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed" {
@@ -225,8 +235,9 @@ test "search on disk: a new session loads the saved index after its watcher star
 
     var second = search_session.Session.init(gpa, testing.io, repo.root, .{});
     defer second.deinit();
+    try second.warm();
     try testing.expect(second.watcher != null);
-    try testing.expect(second.index != null);
+    try testing.expect(second.base != null);
     try testing.expect(second.watch_started_ns <= second.loaded_ns);
     const found = try search(runtime, &second, repo.root, "between_sessions_token", &reason_buf);
     try testing.expectEqualStrings("loaded_from_disk", found.reason);
@@ -250,25 +261,37 @@ test "search on disk: a damaged, cut or foreign index file is ignored and rebuil
         defer first.deinit();
         _ = try search(runtime, &first, repo.root, "seed", &reason_buf);
     }
-    const path = try search_index.indexPath(gpa, repo.root);
-    defer gpa.free(path);
-    const good = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, gpa, .unlimited);
-    defer gpa.free(good);
-
-    const flipped = try gpa.dupe(u8, good);
-    defer gpa.free(flipped);
-    flipped[flipped.len / 2] ^= 0x01;
-    const old_text = "emetgate-search-index v1\nW 0\nC 00000000000000000000000000000000\n";
-    const Case = struct { bytes: []const u8, why: search_index.LoadFailure };
-    for ([_]Case{ .{ .bytes = flipped, .why = .corrupt }, .{ .bytes = good[0 .. good.len / 2], .why = .corrupt }, .{ .bytes = old_text, .why = .version }, .{ .bytes = "", .why = .corrupt } }) |case| {
-        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = case.bytes });
+    const Case = enum { flipped, cut, empty, old_version };
+    const expected = [_]search_index.LoadFailure{ .corrupt, .corrupt, .corrupt, .version };
+    for ([_]Case{ .flipped, .cut, .empty, .old_version }, expected) |case, why| {
+        const path = try currentGeneration(repo.root);
+        defer gpa.free(path);
+        const good = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, gpa, .unlimited);
+        defer gpa.free(good);
+        switch (case) {
+            .flipped => {
+                good[good.len / 2] ^= 0x01;
+                try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = good });
+            },
+            .cut => try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = good[0 .. good.len / 2] }),
+            .empty => try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "" }),
+            .old_version => {
+                const dir = try search_index.indexDir(gpa, repo.root);
+                defer gpa.free(dir);
+                const pointer = try std.fmt.allocPrint(gpa, "{s}\\index.v4", .{dir});
+                defer gpa.free(pointer);
+                try std.Io.Dir.deleteFileAbsolute(testing.io, pointer);
+                const old = try std.fmt.allocPrint(gpa, "{s}\\index.v3", .{dir});
+                defer gpa.free(old);
+                try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = old, .data = "EMGIDX\x00\x03 an index from the previous format" });
+            },
+        }
         try repo.write(1, "export const after_damage = 1;\n");
         var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
         defer session.deinit();
-        try testing.expect(session.index == null);
         const found = try search(runtime, &session, repo.root, "after_damage", &reason_buf);
         try testing.expectEqualStrings("first_build", found.reason);
-        try testing.expectEqual(@as(?search_index.LoadFailure, case.why), found.index_load);
+        try testing.expectEqual(@as(?search_index.LoadFailure, why), found.index_load);
         try testing.expectEqual(@as(usize, 1), found.files);
         try repo.write(1, "export const seed = 0;\n");
     }
