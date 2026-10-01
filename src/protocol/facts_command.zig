@@ -5,13 +5,17 @@ const fact_store = @import("../platform/fact_store.zig");
 const worker_pool = @import("../platform/worker_pool.zig");
 const facts_query = @import("../engine/facts_query.zig");
 const facts_evidence = @import("../engine/facts_evidence.zig");
+const evidence = @import("../engine/evidence.zig");
 const symbol = @import("../engine/symbol.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
-pub const Command = enum { build, callers, callees, defined_at, refs, bench, modules, defs };
+pub const Command = enum { build, callers, callees, defined_at, refs, bench, modules, defs, evidence };
+
+pub const max_targets = 16;
+pub const max_terms = 16;
 
 pub const Options = struct {
     command: Command,
@@ -25,7 +29,17 @@ pub const Options = struct {
     seed: u64 = 1,
     samples: usize = 200,
     updates: usize = 50,
+    intent: ?evidence.Intent = null,
+    targets: [max_targets]evidence.SymbolRef = undefined,
+    target_count: usize = 0,
+    terms: [max_terms][]const u8 = undefined,
+    term_count: usize = 0,
 };
+
+fn symbolRef(text: []const u8) evidence.SymbolRef {
+    const hash = std.mem.lastIndexOfScalar(u8, text, '#') orelse return .{ .path = "", .qname = text };
+    return .{ .path = text[0..hash], .qname = text[hash + 1 ..] };
+}
 
 fn number(comptime T: type, text: []const u8) ?T {
     return std.fmt.parseInt(T, text, 10) catch |err| switch (err) {
@@ -72,10 +86,21 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.samples = number(usize, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--updates")) {
             options.updates = number(usize, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--intent")) {
+            options.intent = std.meta.stringToEnum(evidence.Intent, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--target")) {
+            if (options.target_count == max_targets) return null;
+            options.targets[options.target_count] = symbolRef(value);
+            options.target_count += 1;
+        } else if (std.mem.eql(u8, arg, "--term")) {
+            if (options.term_count == max_terms) return null;
+            options.terms[options.term_count] = value;
+            options.term_count += 1;
         } else return null;
     }
     switch (options.command) {
         .build, .bench, .modules, .defs => if (positional != null) return null,
+        .evidence => if (positional != null or options.intent == null or options.target_count == 0) return null,
         else => options.subject = positional orelse return null,
     }
     return options;
@@ -102,6 +127,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
         .bench => return bench(gpa, seam.clock, repo, options, out),
         .modules => return modules(repo, options, out),
         .defs => return defs(repo, options, out),
+        .evidence => return evidenceCommand(gpa, seam.clock, repo, options, out),
         else => return query(gpa, seam.clock, repo, options, refresh_us, out),
     }
 }
@@ -116,7 +142,7 @@ fn relationOf(command: Command) facts_query.Relation {
         .callees => .callees,
         .defined_at => .defined_at,
         .refs => .refs,
-        .build, .bench, .modules, .defs => unreachable,
+        .build, .bench, .modules, .defs, .evidence => unreachable,
     };
 }
 
@@ -192,6 +218,67 @@ fn defs(repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
         }
     }
     return 0;
+}
+
+fn evidenceCommand(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const store = try repo.factStore(arena);
+    const request: evidence.EvidenceRequest = .{ .targets = options.targets[0..options.target_count], .intent = options.intent.?, .terms = options.terms[0..options.term_count] };
+    const started = clock.monotonic();
+    const result = evidence.evidence(&store, request, options.budget);
+    const elapsed_us = microsSince(clock, started);
+    const block: ?evidence.EvidenceBlock = switch (result) {
+        .complete => |c| c.value,
+        .partial => |p| p.value,
+        .refused => null,
+    };
+    if (!options.json) {
+        if (block) |b| try out.writeAll(b.text) else try result.writeStatus(out, 0, "targets");
+        try out.writeByte('\n');
+        return if (block == null) 2 else 0;
+    }
+    var js: std.json.Stringify = .{ .writer = out };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write(@tagName(result.status()));
+    try js.objectField("evidence_us");
+    try js.write(elapsed_us);
+    try js.objectField("certificate");
+    try result.writeCertificate(&js);
+    if (block) |b| {
+        try js.objectField("text");
+        try js.write(b.text);
+        try js.objectField("chars");
+        try js.write(b.text.len);
+        try js.objectField("targets");
+        try js.write(b.targets.len);
+        try js.objectField("not_found");
+        try js.write(b.not_found.len);
+        try js.objectField("sites");
+        try js.write(b.sites.len);
+        try js.objectField("unresolved");
+        try js.write(b.unresolved.len);
+        try js.objectField("cut");
+        try js.write(b.cut);
+        try js.objectField("elided");
+        try js.beginArray();
+        for (b.elided) |e| {
+            try js.beginObject();
+            try js.objectField("path");
+            try js.write(e.path);
+            try js.objectField("first");
+            try js.write(e.first);
+            try js.objectField("last");
+            try js.write(e.last);
+            try js.endObject();
+        }
+        try js.endArray();
+    }
+    try js.endObject();
+    try out.writeByte('\n');
+    return if (block == null) 2 else 0;
 }
 
 fn exitCode(result: facts_query.FactsAnswer) u8 {
