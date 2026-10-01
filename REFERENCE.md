@@ -455,6 +455,50 @@ On disk the move is the protocol's rename intent: the new content goes to a temp
 
 The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, that audits a CLAUDE.md or AGENTS.md file: it sorts every instruction sentence into enforceable, waiting for a mechanism, unverifiable or belief, proposes a check and scope for the enforceable ones, measures each with `emetgate_scan` and reports, changing nothing. To use it in every project, copy the `md-audit` folder into `%USERPROFILE%\.claude\skills\` (`~/.claude/skills/` elsewhere).
 
+### Lockdown
+
+`emetgate lockdown [<claude args>...]` starts `claude` in the current directory with this argv in front of the user's arguments, and with `ENABLE_TOOL_SEARCH=false` added to its environment:
+
+```
+claude --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<server>__emetgate_mutate" --mcp-config <absolute .mcp.json> --strict-mcp-config
+```
+
+`--tools ""` leaves Claude Code no built-in tool: no shell, no file read or edit, no web access and no ToolSearch. `--strict-mcp-config` with the absolute path loads only the servers of that `.mcp.json`. A user argument that would change any of this (`--tools`, `--allowedTools`, `--allowed-tools`, `--mcp-config`, `--strict-mcp-config`, `--settings`, `--plugin-dir`, `--agents`, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, alone or as `--flag=value`) is refused before anything starts.
+
+`--allowedTools` lists the emetgate tools that neither change the repository nor run a command, so Claude Code runs them without a permission check; in auto mode that check added 0.5 to 1.6 s to each call in the measurement below. The list comes from reading each handler:
+
+| Tool | Why it is pre-allowed |
+|---|---|
+| `emetgate_symbols` | Loads one file through the repository jail and the in-memory tree cache and lists its symbols |
+| `emetgate_skeleton` | Same load, plus a read of the rule ledger without taking its lock |
+| `emetgate_read_symbol` | Same load; the session mirror lives in memory |
+| `emetgate_read_file` | Reads one file inside the repository |
+| `emetgate_list` | Runs `git ls-files` with a fixed argument list |
+| `emetgate_search` | Reads tracked files; its only write is its own index cache under `%LOCALAPPDATA%\emetgate\index` |
+| `emetgate_scan` | Measures one check in memory, writes nothing and does not read the ledger; a `cmd:` check is refused as not static, so no command runs |
+| `emetgate_git` | Runs `status`, `diff`, `log` or `show` with a fixed argument list, `--no-optional-locks` and no pager, external diff, textconv or fsmonitor |
+| `emetgate_mutate` | Builds the changed source in memory; it runs no command and writes nothing |
+
+The other tools keep whatever permission mode the user chose: `emetgate_try`, `emetgate_try_batch` and `emetgate_write_doc` write files after the trusted test command passes, `emetgate_rename`, `emetgate_move` and `emetgate_move_file` write several files and run the TypeScript language service, and `emetgate_run` runs a command from the user's allowlist. Every call, pre-allowed or not, appends one line to `.emetgate/events.ndjson`, emetgate's own git-ignored log. A test in `tests/lockdown.zig` fails when the server gains a tool that is in neither list.
+
+The server name comes from `.mcp.json`. Lockdown looks for the entry whose `command` is `emetgate` or `emetgate.exe` (any directory, any letter case) and whose first argument is `mcp` or `serve`, and turns its key into a tool name prefix the way Claude Code 2.1.286 does: every character outside `A-Z`, `a-z`, `0-9`, `_` and `-` becomes `_`, two of them for a character outside the Basic Multilingual Plane. The key `emetgate` gives `mcp__emetgate__emetgate_search`. With no such entry lockdown stops with `NoEmetgateServer`, with more than one with `SeveralEmetgateServers`, and with a file that is not a JSON object of servers with `McpConfigInvalid`; Claude Code is not started in any of these cases.
+
+Measured on the n8n repository with Claude Code 2.1.286 and Opus, two `emetgate lockdown -p` sessions per launcher, on 2026-10-01. Both launchers used the same `.mcp.json` and so the same emetgate server binary:
+
+| | Before (`--tools ToolSearch`) | After |
+|---|---|---|
+| Short read question: turns | 3, 3 | 2, 2 |
+| Short read question: API time | 5.5 s, 6.5 s | 3.5 s, 3.9 s |
+| Short read question: first request prompt | 18,514 tokens | 25,140 tokens |
+| `emetgate_read_file`, `tool_use` to `tool_result` | 795 ms, 1,664 ms | 80 ms, 70 ms |
+| Three searches in a row: turns | 5, 5 | 4, 4 |
+| Three searches in a row: API time | 16.3 s, 19.7 s | 14.4 s, 16.3 s |
+| Warm `emetgate_search`, `tool_use` to `tool_result` | 557, 698, 876, 588 ms | 69, 54, 60, 63 ms |
+
+The lost turn is the ToolSearch round: with tool search on, Claude Code defers the MCP tool definitions and the model loads them first; with it off, the definitions are in the first request, which costs the extra 6,626 prompt tokens. The first search of a session builds the index in the server process and does not depend on the launcher: 76.0 s and 21.9 s before, 21.6 s and 21.5 s after.
+
+`--tools ""` was chosen over `--tools ToolSearch`. With `ENABLE_TOOL_SEARCH=false` both gave the same 16 tools and the same 25,140-token first request in four sessions; with `--tools ""` and the variable unset, Claude Code still loaded the MCP tools up front in one session. So the model has one tool fewer, and turning tool search off does not depend on the variable alone.
+
 ### Reader
 
 A 284-session measurement found that read tokens (`Read` plus shell `cat`/`sed`) were
@@ -533,7 +577,7 @@ what it sent, not whether the model still has it. An `unchanged` reply after com
 is telling the model "you already have this" when it may not — the wrong direction to
 get wrong, which is why `force:true` exists and every `unchanged` reply advertises it.
 This branch does not wire an automatic reset on compaction: `src/platform/lockdown.zig`
-only launches Claude Code with a fixed `--tools`/`--mcp-config` argv today and does not
+only launches Claude Code with a fixed argv and one environment variable today and does not
 manage `.claude/settings.json` or hooks, and a `PreCompact` hook would need to reach a
 mirror that lives in a specific running MCP process's memory. Until that lands, the
 mirror stays **off by default**; a project that opts in with `--mirror` is accepting
