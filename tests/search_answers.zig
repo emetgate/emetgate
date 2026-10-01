@@ -5,6 +5,7 @@ const server = @import("emetgate").server;
 const answer_mod = @import("emetgate").answer;
 const search_index = @import("emetgate").search_index;
 const search_session = @import("emetgate").search_session;
+const search_v1 = @import("emetgate").search_v1;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -61,6 +62,7 @@ const Answer = struct {
     parsed: std.json.Parsed(Value),
     body: ?std.json.Parsed(Value),
     is_error: bool,
+    chars: usize = 0,
 
     fn deinit(self: *Answer) void {
         if (self.body) |*b| b.deinit();
@@ -125,7 +127,7 @@ fn searchPolicy(runtime: *Runtime, policy: server.Policy, args: anytype) !Answer
     const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
     errdefer std.debug.print("{s}\n", .{text});
     const body = try std.json.parseFromSlice(Value, gpa, text[0..end], .{ .allocate = .alloc_always });
-    return .{ .parsed = parsed, .body = body, .is_error = result.object.get("isError").?.bool };
+    return .{ .parsed = parsed, .body = body, .is_error = result.object.get("isError").?.bool, .chars = text.len };
 }
 
 test "search answers: a file given as dir is searched by itself" {
@@ -264,7 +266,7 @@ test "search answers: a regex alternation over many files finds every match a li
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var answer = try search(runtime, root, .{ .pattern = "handleNodeExecutionError|continueExecution", .dir = root, .regex = true });
+    var answer = try search(runtime, root, .{ .pattern = "handleNodeExecutionError|continueExecution", .dir = root, .regex = true, .detail = "full" });
     defer answer.deinit();
     try testing.expectEqualStrings("complete", answer.status());
     try testing.expectEqual(@as(usize, file_count), answer.hitCount());
@@ -478,10 +480,160 @@ test "search answers: the snapshot root is the Merkle root of the searched files
         try testing.expect(std.mem.indexOf(u8, answer.line(), want[0..4]) != null);
     }
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "gamma rootneedle\n" });
+    {
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "rootneedle", .dir = repo.root, .certificate = true });
+        defer answer.deinit();
+        const want = expectedRoot(&.{ .{ "a.txt", "gamma rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" } });
+        try testing.expectEqualStrings(&want, snapshotRoot(&answer));
+    }
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "delta rootneedle\n" });
     var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "rootneedle", .dir = repo.root, .certificate = true });
     defer answer.deinit();
-    const want = expectedRoot(&.{ .{ "a.txt", "gamma rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" } });
+    const want = expectedRoot(&.{ .{ "a.txt", "delta rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" } });
     try testing.expectEqualStrings(&want, snapshotRoot(&answer));
+}
+
+test "search answers: a file given as dir is searched by itself after it changed in the session" {
+    var repo = try Repo.init(&.{
+        .{ "src/engine/run.ts", "export function run() {\n  return 1;\n}\n" },
+        .{ "src/engine/run.tsx", "export const y = continueOnFail;\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    const file = try repo.path("src/engine/run.ts");
+    defer gpa.free(file);
+    {
+        var warm = try searchIn(runtime, &session, repo.root, .{ .pattern = "continueOnFail", .dir = file });
+        defer warm.deinit();
+        try testing.expectEqual(@as(usize, 0), warm.groups().len);
+    }
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "src/engine/run.ts", .data = "export function run() {\n  return continueOnFail();\n}\n" });
+    var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "continueOnFail", .dir = file, .certificate = true });
+    defer answer.deinit();
+    try testing.expectEqualStrings("complete", answer.status());
+    try testing.expectEqual(@as(i64, 1), answer.scope("in_scope"));
+    try testing.expectEqual(@as(usize, 1), answer.groups().len);
+    try testing.expectEqualStrings("src/engine/run.ts", answer.groups()[0].object.get("file").?.string);
+}
+
+fn budgetRepo() !Repo {
+    var names: [41][2][]const u8 = undefined;
+    var storage: std.ArrayList([]u8) = .empty;
+    defer {
+        for (storage.items) |b| gpa.free(b);
+        storage.deinit(gpa);
+    }
+    names[0] = .{ "z_def.ts", "export function budgetNeedle(): number {\n  return 1;\n}\n" };
+    for (0..20) |i| {
+        const path = try std.fmt.allocPrint(gpa, "code_{d:0>2}.ts", .{i});
+        try storage.append(gpa, path);
+        const body = try std.fmt.allocPrint(gpa, "export const v{d} = budgetNeedle() + {d};\n", .{ i, i });
+        try storage.append(gpa, body);
+        names[1 + i] = .{ path, body };
+    }
+    for (0..20) |i| {
+        const path = try std.fmt.allocPrint(gpa, "note_{d:0>2}.ts", .{i});
+        try storage.append(gpa, path);
+        const body = try std.fmt.allocPrint(gpa, "// budgetNeedle is described here, part one of note {d}\n// budgetNeedle again, part two of note {d}\n// budgetNeedle a third time, part three of note {d}\nexport const n{d} = {d};\n", .{ i, i, i, i, i });
+        try storage.append(gpa, body);
+        names[21 + i] = .{ path, body };
+    }
+    return Repo.init(&names);
+}
+
+const Spot = struct { file: []const u8, line: i64 };
+
+fn spots(answer: *Answer, out: *std.ArrayList(Spot)) !void {
+    for (answer.groups()) |g| {
+        for (g.object.get("hits").?.array.items) |h| {
+            try out.append(gpa, .{ .file = g.object.get("file").?.string, .line = h.object.get("line").?.integer });
+        }
+    }
+}
+
+test "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial" {
+    var repo = try budgetRepo();
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var answer = try search(runtime, repo.root, .{ .pattern = "budgetNeedle", .dir = repo.root });
+    defer answer.deinit();
+    errdefer std.debug.print("{s}\n", .{answer.line()});
+    try testing.expect(answer.chars < search_v1.reply_budget + 1500);
+    try testing.expectEqualStrings("partial", answer.status());
+    try testing.expect(answer.get("truncated").?.bool);
+    const more = answer.get("more").?.string;
+    try testing.expect(std.mem.indexOf(u8, more, "more hits in") != null);
+    try testing.expect(std.mem.indexOf(u8, more, "offset:") != null);
+    const groups = answer.groups();
+    try testing.expectEqualStrings("z_def.ts", groups[0].object.get("file").?.string);
+    try testing.expectEqualStrings("definition", groups[0].object.get("hits").?.array.items[0].object.get("role").?.string);
+    try testing.expect(std.mem.startsWith(u8, groups[1].object.get("file").?.string, "code_"));
+    var match_limit: i64 = 0;
+    for (answer.get("missing").?.array.items) |m| {
+        if (std.mem.eql(u8, m.object.get("reason").?.string, "match_limit")) match_limit += m.object.get("files").?.integer;
+    }
+    try testing.expect(match_limit > 0);
+    try testing.expect(std.mem.indexOf(u8, answer.line(), "partial:") != null);
+}
+
+test "search answers: detail full lifts the size budget and offset pages through the ranked hits without overlap" {
+    var repo = try budgetRepo();
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var full = try search(runtime, repo.root, .{ .pattern = "budgetNeedle", .dir = repo.root, .detail = "full" });
+    defer full.deinit();
+    try testing.expectEqualStrings("complete", full.status());
+    try testing.expect(full.get("more") == null);
+    var all: std.ArrayList(Spot) = .empty;
+    defer all.deinit(gpa);
+    try spots(&full, &all);
+    try testing.expectEqual(@as(usize, 81), all.items.len);
+
+    var paged: std.ArrayList(Spot) = .empty;
+    defer paged.deinit(gpa);
+    var pages: std.ArrayList(Answer) = .empty;
+    defer {
+        for (pages.items) |*p| p.deinit();
+        pages.deinit(gpa);
+    }
+    var offset: usize = 0;
+    while (pages.items.len < 20) {
+        try pages.append(gpa, try search(runtime, repo.root, .{ .pattern = "budgetNeedle", .dir = repo.root, .offset = offset }));
+        const page = &pages.items[pages.items.len - 1];
+        const before = paged.items.len;
+        try spots(page, &paged);
+        try testing.expect(paged.items.len > before);
+        offset = paged.items.len;
+        if (page.get("more") == null) break;
+    }
+    try testing.expect(pages.items.len > 1);
+    try testing.expectEqual(all.items.len, paged.items.len);
+    for (all.items, paged.items) |a, b| {
+        try testing.expectEqualStrings(a.file, b.file);
+        try testing.expectEqual(a.line, b.line);
+    }
+}
+
+test "search answers: an unknown detail or a negative offset is refused" {
+    var repo = try Repo.init(&.{.{ "a.ts", "export const a = 1;\n" }});
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var detail = try search(runtime, repo.root, .{ .pattern = "a", .dir = repo.root, .detail = "everything" });
+    defer detail.deinit();
+    try testing.expect(detail.is_error);
+    try testing.expectEqualStrings("UnknownDetail", detail.errorName());
+    var offset = try search(runtime, repo.root, .{ .pattern = "a", .dir = repo.root, .offset = -1 });
+    defer offset.deinit();
+    try testing.expect(offset.is_error);
+    try testing.expectEqualStrings("InvalidOffset", offset.errorName());
 }
 
 test "search answers: a capped answer is partial" {
@@ -493,10 +645,11 @@ test "search answers: a capped answer is partial" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var answer = try search(runtime, repo.root, .{ .pattern = "capneedle", .dir = repo.root });
+    var answer = try search(runtime, repo.root, .{ .pattern = "capneedle", .dir = repo.root, .detail = "full" });
     defer answer.deinit();
     try testing.expectEqualStrings("partial", answer.status());
     try testing.expect(answer.get("truncated").?.bool);
+    try testing.expectEqual(@as(usize, 200), answer.hitCount());
 }
 
 fn gitExit(root: []const u8, args: []const []const u8) !u8 {

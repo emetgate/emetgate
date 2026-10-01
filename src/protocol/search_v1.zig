@@ -39,6 +39,8 @@ const failure = tool_result.failure;
 
 pub const max_file_bytes = search_index.max_indexed_file_bytes;
 pub const max_matches = 200;
+pub const reply_budget = 5000;
+pub const max_offset = 100_000;
 pub const max_match_text = 200;
 pub const max_missing_listed = 20;
 const chunk_files = 64;
@@ -256,6 +258,7 @@ const Shared = struct {
     gpa: Allocator,
     query: *const Query,
     kinds: ?KindSet,
+    hit_limit: usize,
     work: []FileWork,
     next: std.atomic.Value(usize) = .init(0),
     failure: ?anyerror = null,
@@ -328,7 +331,7 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
     var decoded: ?span_codec.Decoded = null;
     var cursor: LineCursor = .{ .bytes = item.content, .query = shared.query };
     while (cursor.next()) |line| {
-        if (item.hits.items.len > max_matches) return;
+        if (item.hits.items.len > shared.hit_limit) return;
         const found = switch (shared.query.matchLineCounting(scratch, line.text, &item.most_steps)) {
             .none => continue,
             .over_budget => {
@@ -388,7 +391,7 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
     }
 }
 
-fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_cache_mod.TreeCache, root: []const u8, query: *const Query, kinds: ?KindSet, item: *FileWork) !void {
+fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_cache_mod.TreeCache, root: []const u8, query: *const Query, kinds: ?KindSet, hit_limit: usize, item: *FileWork) !void {
     const bytes = item.content;
     const f = item.path;
     const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, f });
@@ -439,7 +442,7 @@ fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_ca
     defer gpa.free(scratch);
     var cursor: LineCursor = .{ .bytes = bytes, .query = query };
     while (cursor.next()) |line| {
-        if (item.hits.items.len > max_matches) break;
+        if (item.hits.items.len > hit_limit) break;
         const found = switch (query.matchLineCounting(scratch, line.text, &item.most_steps)) {
             .none => continue,
             .over_budget => {
@@ -527,13 +530,15 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     event.file = dir;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
+    const full = parseDetail(args) catch |err| return failure(gpa, &buffer, err, event);
+    const offset = parseOffset(args) catch |err| return failure(gpa, &buffer, err, event);
     var stats: Stats = .{};
     if (want_stats) stats_sink = &stats;
     defer if (want_stats) {
         stats_sink = null;
     };
     var outcome: Outcome = .{};
-    const request: Request = .{ .pattern = pattern, .dir = dir, .is_regex = is_regex, .kinds = kinds, .certificate = want_certificate or want_stats };
+    const request: Request = .{ .pattern = pattern, .dir = dir, .is_regex = is_regex, .kinds = kinds, .certificate = want_certificate or want_stats, .full = full, .offset = offset };
     renderSearch(gpa, io, runtime, root, tree_cache, session, request, &outcome, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         if (outcome.refusal.len != 0) event.reason = outcome.refusal;
@@ -556,7 +561,25 @@ const Request = struct {
     is_regex: bool,
     kinds: ?[]const Value,
     certificate: bool,
+    full: bool = false,
+    offset: usize = 0,
 };
+
+fn parseDetail(args: ?Value) !bool {
+    const a = args orelse return false;
+    const field = tool_result.getField(a, "detail") orelse return false;
+    if (field != .string) return error.UnknownDetail;
+    if (std.mem.eql(u8, field.string, "full")) return true;
+    if (std.mem.eql(u8, field.string, "compact")) return false;
+    return error.UnknownDetail;
+}
+
+fn parseOffset(args: ?Value) !usize {
+    const a = args orelse return 0;
+    const field = tool_result.getField(a, "offset") orelse return 0;
+    if (field != .integer or field.integer < 0 or field.integer > max_offset) return error.InvalidOffset;
+    return @intCast(field.integer);
+}
 
 const Outcome = struct {
     index_load: ?search_index.LoadFailure = null,
@@ -596,6 +619,8 @@ const Result = struct {
     matched_lines: usize = 0,
     filtered: std.EnumArray(Kind, usize) = .initFill(0),
     truncated: bool = false,
+    cut_file: ?[]const u8 = null,
+    unrepresented: u32 = 0,
     largest_file: u64 = 0,
     most_steps: u64 = 0,
 
@@ -681,6 +706,7 @@ const Corpus = struct {
     kinds: ?KindSet,
     want_paths: bool,
     want_leaves: bool,
+    hit_limit: usize,
 };
 
 fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, request: Request, outcome: *Outcome, w: *Writer) !void {
@@ -733,6 +759,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         .kinds = kind_set,
         .want_paths = request.certificate,
         .want_leaves = cached_root == null,
+        .hit_limit = max_matches + request.offset,
     };
 
     var query = if (request.is_regex) Query.regex(gpa, pattern, null) catch |err| switch (err) {
@@ -771,6 +798,13 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         }
     }.less);
 
+    try rankGroups(gpa, result.groups.items, used_query);
+    var shown: std.ArrayList(Shown) = .empty;
+    defer shown.deinit(gpa);
+    const page = try pageGroups(gpa, result.groups.items, request.offset, if (request.full) null else reply_budget, &shown);
+    const cut = try cutFiles(gpa, &result, shown.items);
+    if (cut != 0) try addMatchLimit(gpa, &result, cut);
+
     const evaluated = result.evaluated() orelse return error.InconsistentCertificate;
     var prefix_buf: [std.fs.max_path_bytes]u8 = undefined;
     const prefix = slashed(&prefix_buf, place.rel);
@@ -778,7 +812,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     var budget_count: usize = 0;
     budgets_buf[budget_count] = .{ .limit = .file_bytes, .max = search_index.max_indexed_file_bytes, .used = @min(result.largest_file, search_index.max_indexed_file_bytes) };
     budget_count += 1;
-    budgets_buf[budget_count] = .{ .limit = .matches, .max = max_matches, .used = result.hits };
+    budgets_buf[budget_count] = .{ .limit = .matches, .max = corpus.hit_limit, .used = result.hits };
     budget_count += 1;
     if (used_query.re != null) {
         budgets_buf[budget_count] = .{ .limit = .steps, .max = text_query.line_budget, .used = @min(result.most_steps, text_query.line_budget) };
@@ -800,7 +834,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     const verdict = SearchAnswer.finish({}, cert, result.missing.items);
     var line: std.Io.Writer.Allocating = .init(gpa);
     defer line.deinit();
-    try verdict.writeStatus(&line.writer, result.hits, "matches");
+    try verdict.writeStatus(&line.writer, page.shown, "matches");
     switch (verdict) {
         .refused => |r| {
             outcome.refusal = r.detail;
@@ -820,12 +854,6 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     }
     outcome.partial = verdict.status() == .partial;
 
-    std.mem.sort(Group, result.groups.items, {}, struct {
-        fn lessThan(_: void, a: Group, b: Group) bool {
-            return a.priority() < b.priority();
-        }
-    }.lessThan);
-
     var json_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     defer if (json_timer) |*t| if (stats_sink) |s| {
         s.json_ns += t.lap();
@@ -843,9 +871,14 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         try js.write(alt.literals);
     }
     try js.objectField("groups");
-    try writeGroups(&js, result.groups.items);
+    try writeShown(&js, result.groups.items, shown.items);
     try js.objectField("truncated");
-    try js.write(result.truncated);
+    try js.write(result.truncated or page.hidden != 0 or page.skipped != 0);
+    if (page.hidden != 0 or result.truncated) {
+        var more_buf: [256]u8 = undefined;
+        try js.objectField("more");
+        try js.write(moreLine(&more_buf, page, result.truncated));
+    }
     const missing = verdict.missingList();
     if (missing.len != 0) {
         try js.objectField("missing");
@@ -873,6 +906,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         var note_buf: [512]u8 = undefined;
         try js.objectField("note");
         try js.write(emptyNote(&note_buf, result, scope, place.rel, query, request.kinds, alternatives != null));
+    } else if (shown.items.len == 0) {
+        var note_buf: [128]u8 = undefined;
+        try js.objectField("note");
+        try js.write(std.fmt.bufPrint(&note_buf, "offset {d} is past the last of the {d} hits", .{ request.offset, result.hits }) catch "offset is past the last hit");
     }
     if (outcome.index_load) |why| {
         try js.objectField("index");
@@ -901,6 +938,179 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     }
     try js.endObject();
     try w.writeByte('\n');
+}
+
+const Shown = struct { group: usize, lo: usize, hi: usize };
+
+const Page = struct { shown: usize, hidden: usize, skipped: usize, hidden_files: usize };
+
+const GroupKey = struct {
+    index: usize,
+    rank: u8,
+    code: bool,
+    file_hits: usize,
+    file: []const u8,
+    line: u32,
+
+    fn less(_: void, a: GroupKey, b: GroupKey) bool {
+        if (a.rank != b.rank) return a.rank < b.rank;
+        if (a.code != b.code) return a.code;
+        if (a.file_hits != b.file_hits) return a.file_hits > b.file_hits;
+        switch (std.mem.order(u8, a.file, b.file)) {
+            .lt => return true,
+            .gt => return false,
+            .eq => {},
+        }
+        if (a.line != b.line) return a.line < b.line;
+        return a.index < b.index;
+    }
+};
+
+fn groupRank(g: Group, query: *const Query) u8 {
+    if (g.priority() == 0) return 0;
+    if (g.symbol) |name| {
+        for (query.literals) |lit| {
+            if (lit.len != 0 and std.mem.indexOf(u8, name, lit) != null) return 1;
+        }
+    }
+    return 2;
+}
+
+fn hasCode(g: Group) bool {
+    for (g.hits.items) |h| {
+        if (h.kind == .code) return true;
+    }
+    return false;
+}
+
+fn rankGroups(gpa: Allocator, groups: []Group, query: *const Query) !void {
+    if (groups.len < 2) return;
+    var per_file: std.StringHashMapUnmanaged(usize) = .empty;
+    defer per_file.deinit(gpa);
+    for (groups) |g| {
+        const got = try per_file.getOrPut(gpa, g.file);
+        if (!got.found_existing) got.value_ptr.* = 0;
+        got.value_ptr.* += g.hits.items.len;
+    }
+    const keys = try gpa.alloc(GroupKey, groups.len);
+    defer gpa.free(keys);
+    for (groups, keys, 0..) |g, *k, i| k.* = .{
+        .index = i,
+        .rank = groupRank(g, query),
+        .code = hasCode(g),
+        .file_hits = per_file.get(g.file).?,
+        .file = g.file,
+        .line = if (g.hits.items.len != 0) g.hits.items[0].line else 0,
+    };
+    std.mem.sort(GroupKey, keys, {}, GroupKey.less);
+    const sorted = try gpa.alloc(Group, groups.len);
+    defer gpa.free(sorted);
+    for (keys, sorted) |k, *s| s.* = groups[k.index];
+    @memcpy(groups, sorted);
+}
+
+fn pageGroups(gpa: Allocator, groups: []const Group, offset: usize, budget: ?usize, shown: *std.ArrayList(Shown)) !Page {
+    var sizer: std.Io.Writer.Allocating = .init(gpa);
+    defer sizer.deinit();
+    var hidden_files: std.StringHashMapUnmanaged(void) = .empty;
+    defer hidden_files.deinit(gpa);
+    var skip = offset;
+    var page: Page = .{ .shown = 0, .hidden = 0, .skipped = 0, .hidden_files = 0 };
+    var used: usize = 2;
+    var full = false;
+    for (groups, 0..) |g, gi| {
+        const n = g.hits.items.len;
+        if (skip >= n) {
+            skip -= n;
+            page.skipped += n;
+            continue;
+        }
+        const lo = skip;
+        page.skipped += skip;
+        skip = 0;
+        if (full) {
+            page.hidden += n - lo;
+            try hidden_files.put(gpa, g.file, {});
+            continue;
+        }
+        const limit = budget orelse {
+            try shown.append(gpa, .{ .group = gi, .lo = lo, .hi = n });
+            page.shown += n - lo;
+            continue;
+        };
+        var hi = lo;
+        var size = try groupSize(&sizer, g, lo, lo) + 1;
+        while (hi < n) {
+            const grown = size + try hitSize(&sizer, g.hits.items[hi]) + @intFromBool(hi != lo);
+            if (used + grown > limit and !(page.shown == 0 and hi == lo)) break;
+            size = grown;
+            hi += 1;
+        }
+        if (hi > lo) {
+            try shown.append(gpa, .{ .group = gi, .lo = lo, .hi = hi });
+            page.shown += hi - lo;
+            used += size;
+        }
+        if (hi < n) {
+            page.hidden += n - hi;
+            try hidden_files.put(gpa, g.file, {});
+            full = true;
+        }
+    }
+    page.hidden_files = hidden_files.count();
+    return page;
+}
+
+fn groupSize(sizer: *std.Io.Writer.Allocating, g: Group, lo: usize, hi: usize) !usize {
+    sizer.clearRetainingCapacity();
+    var js: std.json.Stringify = .{ .writer = &sizer.writer };
+    try writeGroupSlice(&js, g, lo, hi);
+    return sizer.written().len;
+}
+
+fn hitSize(sizer: *std.Io.Writer.Allocating, hit: Hit) !usize {
+    sizer.clearRetainingCapacity();
+    var js: std.json.Stringify = .{ .writer = &sizer.writer };
+    try writeHit(&js, hit);
+    return sizer.written().len;
+}
+
+fn cutFiles(gpa: Allocator, result: *const Result, shown: []const Shown) !u32 {
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(gpa);
+    for (result.missing.items) |m| {
+        if (m.path) |p| try seen.put(gpa, p, {});
+    }
+    var cut: std.StringHashMapUnmanaged(void) = .empty;
+    defer cut.deinit(gpa);
+    var whole = try gpa.alloc(bool, result.groups.items.len);
+    defer gpa.free(whole);
+    @memset(whole, false);
+    for (shown) |s| {
+        if (s.lo == 0 and s.hi == result.groups.items[s.group].hits.items.len) whole[s.group] = true;
+    }
+    for (result.groups.items, whole) |g, all| {
+        if (!all and !seen.contains(g.file)) try cut.put(gpa, g.file, {});
+    }
+    if (result.cut_file) |f| {
+        if (!seen.contains(f)) try cut.put(gpa, f, {});
+    }
+    return @intCast(cut.count() + result.unrepresented);
+}
+
+fn addMatchLimit(gpa: Allocator, result: *Result, files: u32) !void {
+    for (result.missing.items) |*m| {
+        if (m.path == null and m.reason == .match_limit) {
+            m.files += files;
+            return;
+        }
+    }
+    try result.missing.append(gpa, .{ .path = null, .reason = .match_limit, .files = files });
+}
+
+fn moreLine(buf: []u8, page: Page, capped: bool) []const u8 {
+    const plus: []const u8 = if (capped) "+" else "";
+    return std.fmt.bufPrint(buf, "\u{2026} {d}{s} more hits in {d}{s} files; narrow with dir, kinds or a longer pattern, or pass offset:{d}", .{ page.hidden, plus, page.hidden_files, plus, page.skipped + page.shown }) catch "more hits; narrow with dir, kinds or a longer pattern";
 }
 
 fn answerKinds(set: KindSet) answer.Kinds {
@@ -1064,7 +1274,7 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
             made += 1;
             if (stats_sink) |s| s.candidate_bytes += src.content.len;
         }
-        var shared: Shared = .{ .gpa = gpa, .query = query, .kinds = corpus.kinds, .work = work };
+        var shared: Shared = .{ .gpa = gpa, .query = query, .kinds = corpus.kinds, .hit_limit = corpus.hit_limit, .work = work };
         const helpers: usize = if (work.len < 4) 0 else worker_pool.max_threads;
         if (corpus.pool) |p| p.run(helpers, workerTask, &shared) else workerTask(&shared);
         if (shared.failure) |err| return err;
@@ -1077,7 +1287,7 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
                 continue;
             }
             if (item.needs_live_parse) {
-                try liveFile(gpa, corpus.io, corpus.runtime, corpus.tree_cache, corpus.root, query, corpus.kinds, item);
+                try liveFile(gpa, corpus.io, corpus.runtime, corpus.tree_cache, corpus.root, query, corpus.kinds, corpus.hit_limit, item);
                 if (stats_sink) |s| s.files_parsed += 1;
             }
             result.most_steps = @max(result.most_steps, item.most_steps);
@@ -1090,7 +1300,7 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
             }
             var kept: usize = 0;
             for (item.hits.items) |*pending| {
-                if (result.hits >= max_matches) {
+                if (result.hits >= corpus.hit_limit) {
                     result.truncated = true;
                     break;
                 }
@@ -1098,14 +1308,16 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
                 result.hits += 1;
                 kept += 1;
             }
-            if (result.truncated and kept < item.hits.items.len and item.over_budget_lines == 0 and !(item.unclassified and corpus.kinds != null and item.matched_lines != 0)) unrepresented += 1;
+            if (result.truncated and kept < item.hits.items.len and item.over_budget_lines == 0 and !(item.unclassified and corpus.kinds != null and item.matched_lines != 0)) {
+                if (kept == 0) unrepresented += 1 else result.cut_file = item.path;
+            }
         }
         if (timer.*) |*t| if (stats_sink) |s| {
             s.parse_ns += t.lap();
         };
         at = end;
     }
-    if (unrepresented != 0) try result.missing.append(gpa, .{ .path = null, .reason = .match_limit, .files = unrepresented });
+    result.unrepresented = unrepresented;
     return result;
 }
 
@@ -1159,47 +1371,51 @@ fn kindsList(buf: []u8, kinds: ?[]const Value) []const u8 {
     return w.buffered();
 }
 
-fn writeGroups(js: *std.json.Stringify, groups: []const Group) !void {
+fn writeShown(js: *std.json.Stringify, groups: []const Group, shown: []const Shown) !void {
     try js.beginArray();
-    for (groups) |g| {
-        try js.beginObject();
-        try js.objectField("file");
-        try js.write(g.file);
-        if (g.symbol) |s| {
-            try js.objectField("symbol");
-            try js.write(s);
-            try js.objectField("hash");
-            const hex = symbol.formatHash(g.hash.?);
-            try js.write(hex[0..]);
-        }
-        if (g.pointer) |p| {
-            try js.objectField("pointer");
-            try js.write(p);
-        }
-        if (g.heading) |h| {
-            try js.objectField("heading");
-            try js.write(h);
-        }
-        try js.objectField("hits");
-        try js.beginArray();
-        for (g.hits.items) |hit| {
-            try js.beginObject();
-            try js.objectField("line");
-            try js.write(hit.line);
-            try js.objectField("kind");
-            try js.write(kindName(hit.kind));
-            if (hit.role) |role| {
-                try js.objectField("role");
-                try js.write(roleName(role));
-            }
-            try js.objectField("text");
-            try js.write(hit.text);
-            try js.endObject();
-        }
-        try js.endArray();
-        try js.endObject();
-    }
+    for (shown) |s| try writeGroupSlice(js, groups[s.group], s.lo, s.hi);
     try js.endArray();
+}
+
+fn writeGroupSlice(js: *std.json.Stringify, g: Group, lo: usize, hi: usize) !void {
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(g.file);
+    if (g.symbol) |s| {
+        try js.objectField("symbol");
+        try js.write(s);
+        try js.objectField("hash");
+        const hex = symbol.formatHash(g.hash.?);
+        try js.write(hex[0..]);
+    }
+    if (g.pointer) |p| {
+        try js.objectField("pointer");
+        try js.write(p);
+    }
+    if (g.heading) |h| {
+        try js.objectField("heading");
+        try js.write(h);
+    }
+    try js.objectField("hits");
+    try js.beginArray();
+    for (g.hits.items[lo..hi]) |hit| try writeHit(js, hit);
+    try js.endArray();
+    try js.endObject();
+}
+
+fn writeHit(js: *std.json.Stringify, hit: Hit) !void {
+    try js.beginObject();
+    try js.objectField("line");
+    try js.write(hit.line);
+    try js.objectField("kind");
+    try js.write(kindName(hit.kind));
+    if (hit.role) |role| {
+        try js.objectField("role");
+        try js.write(roleName(role));
+    }
+    try js.objectField("text");
+    try js.write(hit.text);
+    try js.endObject();
 }
 
 fn writeStats(js: *std.json.Stringify, s: *const Stats, indexed: usize) !void {

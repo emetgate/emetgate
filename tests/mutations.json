@@ -6005,7 +6005,7 @@
     {
       "id": "SR4-hit-cap-ignored",
       "file": "src/protocol/search_v1.zig",
-      "from": "                if (result.hits >= max_matches) {",
+      "from": "                if (result.hits >= corpus.hit_limit) {",
       "to": "                if (false) {",
       "kills": [
         "the total hit count is capped and truncated is reported",
@@ -6414,7 +6414,7 @@
       "id": "SW6-loaded-index-trusted-without-a-restat",
       "file": "src/platform/search_session.zig",
       "from": "            try self.reconcile(root, listed, &report);",
-      "to": "            _ = listed;",
+      "to": "            if (false) try self.reconcile(root, listed, &report);",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
         "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved",
@@ -7641,8 +7641,8 @@
     {
       "id": "SA3-file-given-as-dir-scoped-as-a-directory",
       "file": "src/protocol/search_v1.zig",
-      "from": "        if (self.file) return change_watch.samePath(f, self.rel);\n",
-      "to": "",
+      "from": "    if (scope.file) {\n        const id = view.find(scope.rel) orelse return .{ 0, 0 };\n        return .{ id, id + 1 };\n    }\n    return view.dirRange(scope.rel);",
+      "to": "    return view.dirRange(scope.rel);",
       "kills": [
         "search answers: a file given as dir is searched by itself"
       ]
@@ -7806,7 +7806,7 @@
       "id": "SR6-racy-stamp-not-smudged",
       "file": "src/platform/search_index.zig",
       "from": "    if (!isRacy(stamp, read_ns)) return stamp;",
-      "to": "    if (true) return stamp;",
+      "to": "    if (!isRacy(stamp, read_ns) or true) return stamp;",
       "kills": [
         "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
         "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp"
@@ -7884,7 +7884,6 @@
       "from": "        try self.retryUnreadable(root);\n",
       "to": "",
       "kills": [
-        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip",
         "search answers: a file locked during one search is read by the next search of the same session once the lock is gone"
       ]
     },
@@ -7970,6 +7969,78 @@
       "to": "        _ = mode;\n",
       "kills": [
         "a conflicted path is listed once and a submodule entry is not listed as a file"
+      ]
+    },
+    {
+      "id": "SA6-changed-file-given-as-dir-left-out",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        if (self.file) return change_watch.samePath(f, self.rel);\n",
+      "to": "",
+      "kills": [
+        "search answers: a file given as dir is searched by itself after it changed in the session"
+      ]
+    },
+    {
+      "id": "RB1-reply-size-budget-ignored",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (request.full) null else reply_budget",
+      "to": "if (request.full) null else null",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB2-cut-reply-reported-complete",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (cut != 0) try addMatchLimit(gpa, &result, cut);",
+      "to": "    _ = cut;",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB3-groups-not-ranked",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    try rankGroups(gpa, result.groups.items, used_query);",
+      "to": "    if (false) try rankGroups(gpa, result.groups.items, used_query);",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB4-offset-ignored",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    var skip = offset;",
+      "to": "    var skip = offset * 0;",
+      "kills": [
+        "search answers: detail full lifts the size budget and offset pages through the ranked hits without overlap"
+      ]
+    },
+    {
+      "id": "RB5-comment-groups-before-code",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        if (a.code != b.code) return a.code;",
+      "to": "        if (a.code != b.code) return b.code;",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB6-unknown-detail-read-as-compact",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (std.mem.eql(u8, field.string, \"compact\")) return false;\n    return error.UnknownDetail;",
+      "to": "    if (std.mem.eql(u8, field.string, \"compact\")) return false;\n    return false;",
+      "kills": [
+        "search answers: an unknown detail or a negative offset is refused"
+      ]
+    },
+    {
+      "id": "RB7-negative-offset-accepted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (field != .integer or field.integer < 0 or field.integer > max_offset) return error.InvalidOffset;",
+      "to": "if (field != .integer or field.integer < -1 or field.integer > max_offset) return error.InvalidOffset;",
+      "kills": [
+        "search answers: an unknown detail or a negative offset is refused"
       ]
     }
   ]

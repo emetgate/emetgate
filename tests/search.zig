@@ -323,12 +323,15 @@ test "the total hit count is capped and truncated is reported" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try search(runtime, root, "needleword");
+    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "needleword", .dir = root, .detail = "full" }, .{ .root = root });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
     try testing.expect(body.value.object.get("truncated").?.bool);
+    var hits: usize = 0;
+    for (groupsOf(body.value)) |g| hits += g.object.get("hits").?.array.items.len;
+    try testing.expectEqual(@as(usize, 200), hits);
 }
 
 test "regex mode matches a pattern that has no literal three-byte run" {
@@ -442,9 +445,13 @@ fn readTimes(dir: std.Io.Dir, sub_path: []const u8) !BasicInfo {
 }
 
 fn writeTimes(dir: std.Io.Dir, sub_path: []const u8, write: i64, change: i64) !void {
+    return writeAllTimes(dir, sub_path, 0, write, change);
+}
+
+fn writeAllTimes(dir: std.Io.Dir, sub_path: []const u8, creation: i64, write: i64, change: i64) !void {
     const file = try dir.openFile(testing.io, sub_path, .{ .mode = .read_write });
     defer file.close(testing.io);
-    var info: BasicInfo = .{ .creation = 0, .access = 0, .write = write, .change = change, .attributes = 0 };
+    var info: BasicInfo = .{ .creation = creation, .access = 0, .write = write, .change = change, .attributes = 0 };
     if (SetFileInformationByHandle(file.handle, file_basic_info, &info, @sizeOf(BasicInfo)) == .FALSE) return error.Unexpected;
 }
 
@@ -550,7 +557,7 @@ test "a file rewritten with its old size and change time but a new last-write ti
     defer dropIndex(root);
     try commitAll(root);
     const old = filetimeAgo(3600);
-    try writeTimes(tmp.dir, "a.ts", old, old);
+    try writeAllTimes(tmp.dir, "a.ts", old, old, old);
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
     {
@@ -564,7 +571,7 @@ test "a file rewritten with its old size and change time but a new last-write ti
     }
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.ts", .data = "export function realFn___() {\n  return 1;\n}\n" });
     const newer = filetimeAgo(1800);
-    try writeTimes(tmp.dir, "a.ts", newer, old);
+    try writeAllTimes(tmp.dir, "a.ts", old, newer, old);
     const times = try readTimes(tmp.dir, "a.ts");
     try testing.expectEqual(newer, times.write);
     try testing.expectEqual(old, times.change);

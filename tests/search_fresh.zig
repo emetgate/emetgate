@@ -74,7 +74,7 @@ fn search(runtime: *Runtime, session: *search_session.Session, root: []const u8,
     var line: std.Io.Writer.Allocating = .init(gpa);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
-    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_search", .arguments = .{ .pattern = pattern, .dir = root, .stats = true } } });
+    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_search", .arguments = .{ .pattern = pattern, .dir = root, .stats = true, .detail = "full" } } });
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root, .search_session = session });

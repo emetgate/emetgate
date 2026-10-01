@@ -137,12 +137,15 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_search",
-        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in git-tracked text files under a directory of the repo. Hits are grouped by file and, in a registered language, by the enclosing symbol (ref + content hash, ready for emetgate_read_symbol/emetgate_try); in a .json file by JSON pointer, in a .md file by heading, otherwise ungrouped. Each hit is tagged code/comment/string and, when it names a known symbol, definition/reference. Groups with a definition hit are listed first. A trigram file index under %LOCALAPPDATA%\\emetgate\\index narrows which files are read; a stale or missing index only widens the file set scanned, never narrows it below a full scan. At most 200 hits total, truncated:true when cut; files of 1 MiB or more are skipped.",
+        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in the git-tracked text files under dir, a directory or one file. Hits are grouped by file and, in a registered language, by the enclosing symbol (ref + content hash, ready for emetgate_read_symbol/emetgate_try); in a .json file by JSON pointer, in a .md file by heading. Each hit is tagged code/comment/string and, when it names a known symbol, definition/reference. The first field, answer, says complete (\u{2713}) or partial and what was covered: binary files, files over 1 MiB and internal paths are excluded and counted; a file that could not be read or fully evaluated makes the answer partial and is named in missing. The reply holds about 5000 characters of the best groups (definitions first, then symbol and code hits); more says what was left out; pass offset to page, or detail:\"full\" for up to 200 hits.",
         .props = &.{
             .{ .name = "pattern", .desc = "text or, with regex:true, a regular expression to find" },
-            .{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true },
+            .{ .name = "dir", .desc = "directory or file inside the repo; defaults to the repo root", .optional = true },
             .{ .name = "regex", .desc = "treat pattern as a regular expression instead of a literal substring", .optional = true, .ty = "boolean" },
             .{ .name = "kinds", .desc = "keep only hits of these kinds, e.g. [\"code\"] to skip comments and strings", .optional = true, .ty = "array" },
+            .{ .name = "offset", .desc = "skip this many ranked hits, to page through a long answer", .optional = true, .ty = "integer" },
+            .{ .name = "detail", .desc = "\"full\" lifts the reply size budget (up to 200 hits); the default is \"compact\"", .optional = true },
+            .{ .name = "certificate", .desc = "add the answer's certificate: snapshot root, scope counts, excluded paths and budgets", .optional = true, .ty = "boolean" },
         },
     },
     .{
