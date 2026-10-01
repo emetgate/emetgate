@@ -175,6 +175,80 @@ pub const FileFacts = struct {
     parse_errors: bool,
 };
 
+const Copier = struct {
+    arena: std.mem.Allocator,
+    strings: std.StringHashMapUnmanaged([]const u8) = .empty,
+
+    fn str(self: *Copier, text: []const u8) ![]const u8 {
+        if (text.len == 0) return "";
+        if (self.strings.get(text)) |kept| return kept;
+        const kept = try self.arena.dupe(u8, text);
+        try self.strings.put(self.arena, kept, kept);
+        return kept;
+    }
+};
+
+pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
+    var c: Copier = .{ .arena = arena };
+    const defs = try arena.alloc(Def, from.defs.len);
+    for (from.defs, defs) |d, *slot| {
+        slot.* = d;
+        slot.name = try c.str(d.name);
+        slot.qname = try c.str(d.qname);
+    }
+    const refs = try arena.alloc(Ref, from.refs.len);
+    for (from.refs, refs) |r, *slot| {
+        slot.* = r;
+        slot.name = try c.str(r.name);
+    }
+    const specs = try arena.alloc(Spec, from.specs.len);
+    for (from.specs, specs) |s, *slot| {
+        slot.* = s;
+        slot.text = try c.str(s.text);
+    }
+    const bindings = try arena.alloc(Binding, from.bindings.len);
+    for (from.bindings, bindings) |b, *slot| {
+        slot.* = b;
+        slot.imported = try c.str(b.imported);
+        slot.local = try c.str(b.local);
+    }
+    const exports = try arena.alloc(Export, from.exports.len);
+    for (from.exports, exports) |e, *slot| {
+        slot.* = e;
+        slot.name = try c.str(e.name);
+    }
+    const types = try arena.alloc(TypeRef, from.types.len);
+    for (from.types, types) |t, *slot| {
+        slot.* = t;
+        slot.member = try c.str(t.member);
+    }
+    const member_types = try arena.alloc(MemberType, from.member_types.len);
+    for (from.member_types, member_types) |m, *slot| {
+        slot.* = m;
+        slot.name = try c.str(m.name);
+    }
+    const loose = try arena.alloc(Loose, from.loose.len);
+    for (from.loose, loose) |l, *slot| {
+        slot.* = l;
+        slot.name = try c.str(l.name);
+    }
+    c.strings.deinit(arena);
+    return .{
+        .defs = defs,
+        .refs = refs,
+        .specs = specs,
+        .bindings = bindings,
+        .exports = exports,
+        .types = types,
+        .classes = try arena.dupe(Class, from.classes),
+        .member_types = member_types,
+        .loose = loose,
+        .dynamic_reads = from.dynamic_reads,
+        .module_mode = from.module_mode,
+        .parse_errors = from.parse_errors,
+    };
+}
+
 pub fn qualified(arena: std.mem.Allocator, owner: []const u8, member: []const u8, is_static: bool) ![]const u8 {
     if (owner.len == 0) return std.fmt.allocPrint(arena, "{s}{s}", .{ member, if (is_static) "@static" else "" });
     return std.fmt.allocPrint(arena, "{s}.{s}{s}", .{ owner, member, if (is_static) "@static" else "" });

@@ -557,8 +557,13 @@ const Extractor = struct {
         return current;
     }
 
-    fn memberTarget(self: *Extractor, object: ts.Node) facts.Target {
+    fn memberTarget(self: *Extractor, object: ts.Node) Error!facts.Target {
         const kind = object.kind();
+        if (std.mem.eql(u8, kind, self.g.new_expression)) {
+            const constructor = object.childByField(self.g.new_constructor_field) orelse return .{ .unresolved = .property_needs_type };
+            const constructed = (try self.typeRefOfName(constructor)) orelse return .{ .unresolved = .property_needs_type };
+            return .{ .member_of_type = constructed };
+        }
         if (std.mem.eql(u8, kind, self.f.this_keyword)) {
             const class = self.enclosingClass() orelse return .{ .unresolved = .dynamic_this };
             return .{ .member_of_def = class.def };
@@ -599,7 +604,7 @@ const Extractor = struct {
         const from = try self.ownerAt(node.startByte());
         if (self.inError()) return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(property), .target = .{ .unresolved = .parse_error } });
         const object = self.strip(object_node);
-        const target = self.memberTarget(object);
+        const target = try self.memberTarget(object);
         var is_static = false;
         const object_kind = object.kind();
         if (std.mem.eql(u8, object_kind, self.f.this_keyword) or std.mem.eql(u8, object_kind, self.f.super_keyword)) {
