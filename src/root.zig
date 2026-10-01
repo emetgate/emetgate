@@ -59,6 +59,7 @@ pub const worker_pool = @import("platform/worker_pool.zig");
 pub const io_seam = @import("platform/io_seam.zig");
 pub const exe_path = @import("platform/exe_path.zig");
 pub const repo = @import("platform/repo.zig");
+pub const open_nowait = @import("platform/open_nowait.zig");
 pub const fact_modules = @import("platform/fact_modules.zig");
 pub const fact_store = @import("platform/fact_store.zig");
 pub const fact_file = @import("platform/fact_file.zig");
