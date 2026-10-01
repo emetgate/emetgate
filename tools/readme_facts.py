@@ -11,6 +11,9 @@ import json
 
 QUERY_ZIG = os.path.join(ROOT, "src", "engine", "query.zig")
 SEARCH_RESULTS = os.path.join(ROOT, "tests", "bench", "search_results.json")
+N8N_SEARCH_RESULTS = os.path.join(ROOT, "tests", "bench", "search_n8n_results.json")
+N8N_FRESH_RESULTS = os.path.join(ROOT, "tests", "bench", "fresh_n8n_results.json")
+N8N_REPLY_RESULTS = os.path.join(ROOT, "tests", "bench", "replies_n8n_results.json")
 HANDLERS_ZIG = os.path.join(ROOT, "src", "protocol", "handlers.zig")
 
 ENGINE_FILES = {
@@ -200,7 +203,72 @@ def fact_search_summary():
     )
 
 
+def load(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def fact_search_n8n_table():
+    data = load(N8N_SEARCH_RESULTS)
+    lines = [
+        "",
+        "",
+        "| Search | rg ms | git grep ms | new session, at once ms | new session, after 3 s ms | warm p50 ms | warm p99 ms | kernel p50 ms | kernel p99 ms | barrier p50 ms | right after a write ms |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for r in data["rows"]:
+        lines.append("| {} | {:.1f} | {:.1f} | {:.1f} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {:.2f} |".format(
+            r["name"], r["rg_ms"], r["git_ms"], r["new_now_ms"], r["new_3s_ms"], r["warm_p50_ms"], r["warm_p99_ms"],
+            r["kernel_p50_ms"], r["kernel_p99_ms"], r["barrier_p50_ms"], r["after_write_ms"],
+        ))
+    for r in data["reads"]:
+        lines.append("| {} | - | - | - | - | {:.2f} | {:.2f} | - | - | - | - |".format(r["name"], r["p50_ms"], r["p99_ms"]))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def fact_search_n8n_summary():
+    data = load(N8N_SEARCH_RESULTS)
+    rows = data["rows"]
+    warmup = [r["warmup_ms"] for r in rows]
+    warmup_max = [r["warmup_max_ms"] for r in rows]
+    size = data["index_bytes"]
+    return "{:.1f} MB on disk for {:.1f} MB of indexable text ({:.2f}x) across {:,} tracked files, and a new session loads and checks it in {:.0f} to {:.0f} ms (slowest {:.0f} ms) while the first search can already wait for it ({})".format(
+        size / 1e6, data["indexable_bytes"] / 1e6, size / data["indexable_bytes"], data["tracked_files"],
+        min(warmup), max(warmup), max(warmup_max), data["date"],
+    )
+
+
+def fact_search_fresh_table():
+    data = load(N8N_FRESH_RESULTS)
+    lines = [
+        "",
+        "",
+        "| Change, then search at once | rounds | barrier + refresh p50 ms | barrier + refresh p99 ms | search p50 ms | search p99 ms | misses |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for r in data["rows"]:
+        lines.append("| {} | {} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {} |".format(
+            r["scenario"], r["rounds"], r["extra_p50_ms"], r["extra_p99_ms"], r["e2e_p50_ms"], r["e2e_p99_ms"], r["misses"],
+        ))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def fact_search_reply_sizes():
+    data = load(N8N_REPLY_RESULTS)
+    full = data["full"]
+    compact = data["compact"]
+    return "{} distinct searches from the recorded sessions, replayed on n8n: without the budget p50 {:,}, p90 {:,}, max {:,} characters; with it p50 {:,}, p90 {:,}, max {:,} ({:,} against {:,} characters in total)".format(
+        full["calls"], full["p50"], full["p90"], full["max"], compact["p50"], compact["p90"], compact["max"], compact["total"], full["total"],
+    )
+
+
 FACTS = {
+    "search-n8n-table": fact_search_n8n_table,
+    "search-n8n-summary": fact_search_n8n_summary,
+    "search-fresh-table": fact_search_fresh_table,
+    "search-reply-sizes": fact_search_reply_sizes,
     "search-table": fact_search_table,
     "search-table-short": fact_search_table_short,
     "search-summary": fact_search_summary,

@@ -34,8 +34,19 @@ def read(path):
         return f.read()
 
 
-def clear_index():
-    shutil.rmtree(INDEX_ROOT, ignore_errors=True)
+sys.path.insert(0, os.path.join(ROOT, "vendor", "pure_python_blake3"))
+from pure_blake3 import Hasher
+
+
+def repo_key(repo):
+    path = os.path.abspath(repo).rstrip("\\/")
+    hasher = Hasher()
+    hasher.update(path.replace("/", "\\").lower().encode("utf-8"))
+    return hasher.finalize(16).hex()
+
+
+def clear_index(repo):
+    shutil.rmtree(os.path.join(INDEX_ROOT, repo_key(repo)), ignore_errors=True)
 
 
 class McpSession:
@@ -166,7 +177,7 @@ def emetgate_cold_warm_ms(repo, pattern, regex, samples=MS_SAMPLES):
     text = None
     args = {"pattern": pattern, "regex": regex}
     for _ in range(samples):
-        clear_index()
+        clear_index(repo)
         session = McpSession(repo)
         try:
             t, is_error, build_ms = session.call("emetgate_search", args)
@@ -255,7 +266,7 @@ Methodology (read before quoting a number):
 def scenario(name, repo, pattern, group, extra_rg=None, regex=False):
     if not os.path.isdir(repo):
         return None
-    clear_index()
+    clear_index(repo)
     session = McpSession(repo)
     try:
         emetgate_text, is_error, _ = session.call("emetgate_search", {"pattern": pattern, "regex": regex})
@@ -291,7 +302,7 @@ def scenario(name, repo, pattern, group, extra_rg=None, regex=False):
 def scenario_edit(name, repo, pattern, group, symbol_name, file_rel, extra_rg=None, regex=False):
     if not os.path.isdir(repo):
         return None
-    clear_index()
+    clear_index(repo)
     session = McpSession(repo)
     try:
         emetgate_text, is_error, _ = session.call("emetgate_search", {"pattern": pattern, "regex": regex})
@@ -531,7 +542,7 @@ PROFILE_STAGES = [
 
 
 def profile_one(repo, pattern, regex):
-    clear_index()
+    clear_index(repo)
     builder = McpSession(repo)
     try:
         builder.call("emetgate_search", {"pattern": pattern, "regex": regex})
