@@ -53,6 +53,7 @@ pub const search_session = src.search_session;
 pub const git_index = src.git_index;
 pub const worker_pool = src.worker_pool;
 pub const io_seam = src.io_seam;
+pub const fact_modules = src.fact_modules;
 pub const search_v1 = src.search_v1;
 pub const disk = src.disk;
 pub const durability_log = src.durability_log;
