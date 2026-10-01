@@ -96,7 +96,8 @@ pub const Watcher = struct {
     overflowed: bool = false,
     files: std.StringHashMapUnmanaged(void) = .empty,
     subtrees: std.StringHashMapUnmanaged(void) = .empty,
-    cookie: ?[]u8 = null,
+    cookie_buf: [cookie_dir.len + 33]u8 = undefined,
+    cookie_len: usize = 0,
     cookie_seen: bool = false,
     stats: Stats = .{},
 
@@ -154,7 +155,6 @@ pub const Watcher = struct {
         self.clearSets();
         self.files.deinit(self.gpa);
         self.subtrees.deinit(self.gpa);
-        if (self.cookie) |c| self.gpa.free(c);
         self.gpa.free(self.buffer);
         self.gpa.free(self.root);
         self.gpa.destroy(self);
@@ -249,9 +249,7 @@ pub const Watcher = struct {
         };
         defer self.gpa.free(rel);
         std.mem.replaceScalar(u8, rel, '\\', '/');
-        if (self.cookie) |cookie| {
-            if (action == win.file_action_added and samePath(rel, cookie)) self.cookie_seen = true;
-        }
+        if (self.cookie_len != 0 and action == win.file_action_added and samePath(rel, self.cookie_buf[0..self.cookie_len])) self.cookie_seen = true;
         switch (classify(rel)) {
             .ignore => return,
             .unsafe => {
@@ -297,7 +295,6 @@ pub const Watcher = struct {
         if (self.dead) return error.NotWatching;
         const deadline = win.GetTickCount64() + timeout_ms;
         try self.createCookie();
-        defer self.dropCookie();
 
         while (!self.cookie_seen) {
             if (self.dead) return self.fail(error.NotWatching);
@@ -330,26 +327,23 @@ pub const Watcher = struct {
     }
 
     fn createCookie(self: *Watcher) SyncError!void {
-        if (self.cookie) |c| self.gpa.free(c);
-        self.cookie = null;
+        self.cookie_len = 0;
         self.cookie_seen = false;
         var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
         const dir_abs = std.fmt.bufPrint(&dir_buf, "{s}\\.emetgate\\cookies", .{self.root}) catch return error.NotWatching;
         try self.ensureCookieDir(dir_abs);
-
         var random: [16]u8 = undefined;
         self.io.random(&random);
         const hex = std.fmt.bytesToHex(random, .lower);
-        const rel = std.fmt.allocPrint(self.gpa, "{s}/{s}", .{ cookie_dir, hex }) catch return error.OutOfMemory;
-        errdefer self.gpa.free(rel);
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const abs = std.fmt.bufPrint(&path_buf, "{s}\\{s}", .{ dir_abs, hex }) catch return error.NotWatching;
         var wide: WidePath = undefined;
         const w = toWide(&wide, abs) catch return error.NotWatching;
-        const handle = win.CreateFileW(w, win.generic_write, 0, null, win.create_new, win.file_attribute_normal, null);
+        const handle = win.CreateFileW(w, win.generic_write | win.delete_access, 0, null, win.create_new, win.file_attribute_normal | win.file_flag_delete_on_close, null);
         if (handle == windows.INVALID_HANDLE_VALUE) return error.NotWatching;
         windows.CloseHandle(handle);
-        self.cookie = rel;
+        const rel = std.fmt.bufPrint(&self.cookie_buf, "{s}/{s}", .{ cookie_dir, hex }) catch return error.NotWatching;
+        self.cookie_len = rel.len;
     }
 
     fn ensureCookieDir(self: *Watcher, dir_abs: []const u8) SyncError!void {
@@ -367,16 +361,6 @@ pub const Watcher = struct {
             if (attributes & win.file_attribute_directory == 0) return error.NotWatching;
             if (attributes & win.file_attribute_reparse_point != 0) return error.NotWatching;
         }
-    }
-
-    fn dropCookie(self: *Watcher) void {
-        const rel = self.cookie orelse return;
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const abs = std.fmt.bufPrint(&path_buf, "{s}\\{s}", .{ self.root, rel }) catch return;
-        std.mem.replaceScalar(u8, abs, '/', '\\');
-        var wide: WidePath = undefined;
-        const w = toWide(&wide, abs) catch return;
-        _ = win.DeleteFileW(w);
     }
 };
 
@@ -436,6 +420,8 @@ const win = struct {
     const file_share_all: windows.DWORD = 0x00000007;
     const open_existing: windows.DWORD = 3;
     const create_new: windows.DWORD = 1;
+    const delete_access: windows.DWORD = 0x00010000;
+    const file_flag_delete_on_close: windows.DWORD = 0x04000000;
     const file_flag_backup_semantics: windows.DWORD = 0x02000000;
     const file_flag_overlapped: windows.DWORD = 0x40000000;
     const file_attribute_normal: windows.DWORD = 0x80;
@@ -466,7 +452,6 @@ const win = struct {
     extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn CreateDirectoryW(name: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) windows.BOOL;
-    extern "kernel32" fn DeleteFileW(name: [*:0]const u16) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetDriveTypeW(root: [*:0]const u16) callconv(.winapi) c_uint;
 };
 
