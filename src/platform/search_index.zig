@@ -145,13 +145,15 @@ pub fn spanBlob(gpa: Allocator, rel: []const u8, bytes: []const u8) ![]u8 {
 
 pub const Cancel = std.atomic.Value(bool);
 
+pub const parallel_from: usize = 8;
+
 pub fn prepareAll(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8, seen: []const ?Seen, want_grams: bool, want_spans: bool, pool: ?*worker_pool.Pool, cancel: ?*Cancel) ![]Prepared {
     std.debug.assert(paths.len == seen.len);
     const out = try gpa.alloc(Prepared, paths.len);
     var job: PrepareJob = .{ .gpa = gpa, .io = io, .root = root_abs, .paths = paths, .seen = seen, .out = out, .want_grams = want_grams, .want_spans = want_spans, .cancel = cancel, .done = try gpa.alloc(bool, paths.len) };
     defer gpa.free(job.done);
     @memset(job.done, false);
-    if (pool) |p| p.run(worker_pool.max_threads, PrepareJob.run, &job) else PrepareJob.run(&job);
+    if (pool != null and paths.len >= parallel_from) pool.?.run(worker_pool.max_threads, PrepareJob.run, &job) else PrepareJob.run(&job);
     if (job.failure != null or (cancel != null and cancel.?.load(.acquire))) {
         for (out, job.done) |p, d| if (d) p.deinit(gpa);
         gpa.free(out);

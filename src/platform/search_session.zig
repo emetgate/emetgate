@@ -171,12 +171,14 @@ pub const Delta = struct {
 
 pub const ScopeTree = struct {
     version: u64,
-    paths: [][]u8,
+    paths: [][]const u8,
+    owned: [][]u8,
     digests: []search_index.Digest,
     tree: merkle_tree.Tree,
 
     fn deinit(self: *ScopeTree, gpa: Allocator) void {
-        for (self.paths) |path| gpa.free(path);
+        for (self.owned) |path| gpa.free(path);
+        gpa.free(self.owned);
         gpa.free(self.paths);
         gpa.free(self.digests);
         self.tree.deinit(gpa);
@@ -215,6 +217,10 @@ pub const Session = struct {
     barrier: u64 = 0,
     trees: std.StringHashMapUnmanaged(*ScopeTree) = .empty,
     base_unreadable: ?[]u32 = null,
+    base_order: ?[]u32 = null,
+    base_leaves: ?[]search_index.Digest = null,
+    publish_thread: ?std.Thread = null,
+    publish_error: ?anyerror = null,
     pending: Report = .{},
     load_failure: ?LoadFailure = null,
     save_failure: ?anyerror = null,
@@ -284,13 +290,14 @@ pub const Session = struct {
     }
 
     fn reset(self: *Session) void {
+        self.joinPublish();
         if (self.watcher) |w| w.deinit();
         self.watcher = null;
         if (self.base) |b| b.deinit(self.gpa);
         self.base = null;
         self.delta.deinit(self.gpa);
         self.clearRoots();
-        self.forgetBaseUnreadable();
+        self.forgetBaseCaches();
         if (self.git_index) |g| self.gpa.free(g);
         self.git_index = null;
         if (self.index_dir) |d| self.gpa.free(d);
@@ -387,52 +394,70 @@ pub const Session = struct {
         return true;
     }
 
+    const TreeLeaf = struct { path: []const u8, digest: search_index.Digest, hash: search_index.Digest, owned: bool };
+
     fn buildTree(self: *Session, rel: []const u8, file: bool) !ScopeTree {
-        var leaves: std.ArrayList(answer.Leaf) = .empty;
+        var extra: std.ArrayList(TreeLeaf) = .empty;
+        defer extra.deinit(self.gpa);
+        for (self.delta.entries.values()) |p| {
+            if (p.state != .indexed or !inScope(p.path, rel, file) or isInternal(p.path)) continue;
+            try extra.append(self.gpa, .{ .path = p.path, .digest = p.digest, .hash = answer.pathLeafHash(.{ .path = p.path, .digest = p.digest }), .owned = true });
+        }
+        std.mem.sort(TreeLeaf, extra.items, {}, struct {
+            fn less(_: void, a: TreeLeaf, b: TreeLeaf) bool {
+                return std.mem.order(u8, a.path, b.path) == .lt;
+            }
+        }.less);
+
+        var leaves: std.ArrayList(TreeLeaf) = .empty;
         defer leaves.deinit(self.gpa);
+        var e: usize = 0;
         if (self.view()) |v| {
             const range: [2]u32 = if (file) blk: {
                 const id = v.find(rel) orelse break :blk .{ 0, 0 };
                 break :blk .{ id, id + 1 };
             } else v.dirRange(rel);
-            var id = range[0];
-            while (id < range[1]) : (id += 1) {
+            const order = try self.baseOrder();
+            const hashes = try self.baseLeaves();
+            for (order) |id| {
+                if (id < range[0] or id >= range[1]) continue;
                 if (self.delta.isRemoved(id) or v.stateOf(id) != .indexed) continue;
                 const path = v.path(id);
                 if (isInternal(path)) continue;
-                try leaves.append(self.gpa, .{ .path = path, .digest = v.record(id).digest });
+                while (e < extra.items.len and std.mem.order(u8, extra.items[e].path, path) == .lt) : (e += 1) try leaves.append(self.gpa, extra.items[e]);
+                try leaves.append(self.gpa, .{ .path = path, .digest = v.record(id).digest, .hash = hashes[id], .owned = false });
             }
         }
-        for (self.delta.entries.values()) |p| {
-            if (p.state != .indexed or !inScope(p.path, rel, file) or isInternal(p.path)) continue;
-            try leaves.append(self.gpa, .{ .path = p.path, .digest = p.digest });
-        }
-        std.mem.sort(answer.Leaf, leaves.items, {}, struct {
-            fn less(_: void, a: answer.Leaf, b: answer.Leaf) bool {
-                return std.mem.order(u8, a.path, b.path) == .lt;
-            }
-        }.less);
+        while (e < extra.items.len) : (e += 1) try leaves.append(self.gpa, extra.items[e]);
+
         const hashes = try self.gpa.alloc(search_index.Digest, leaves.items.len);
         defer self.gpa.free(hashes);
+        var owned_count: usize = 0;
         for (leaves.items, hashes, 0..) |leaf, *h, i| {
             if (i != 0 and std.mem.order(u8, leaves.items[i - 1].path, leaf.path) != .lt) return error.InconsistentCertificate;
-            h.* = answer.pathLeafHash(leaf);
+            h.* = leaf.hash;
+            if (leaf.owned) owned_count += 1;
         }
         var tree = try merkle_tree.Tree.build(self.gpa, hashes);
         errdefer tree.deinit(self.gpa);
-        const paths = try self.gpa.alloc([]u8, leaves.items.len);
+        const paths = try self.gpa.alloc([]const u8, leaves.items.len);
+        errdefer self.gpa.free(paths);
+        const owned = try self.gpa.alloc([]u8, owned_count);
         var made: usize = 0;
         errdefer {
-            for (paths[0..made]) |path| self.gpa.free(path);
-            self.gpa.free(paths);
+            for (owned[0..made]) |path| self.gpa.free(path);
+            self.gpa.free(owned);
         }
         for (leaves.items, paths) |leaf, *path| {
-            path.* = try self.gpa.dupe(u8, leaf.path);
-            made += 1;
+            if (leaf.owned) {
+                owned[made] = try self.gpa.dupe(u8, leaf.path);
+                path.* = owned[made];
+                made += 1;
+            } else path.* = leaf.path;
         }
         const digests = try self.gpa.alloc(search_index.Digest, leaves.items.len);
         for (leaves.items, digests) |leaf, *d| d.* = leaf.digest;
-        return .{ .version = self.delta.version, .paths = paths, .digests = digests, .tree = tree };
+        return .{ .version = self.delta.version, .paths = paths, .owned = owned, .digests = digests, .tree = tree };
     }
 
     pub fn owns(self: *const Session, root_abs: []const u8) bool {
@@ -471,7 +496,7 @@ pub const Session = struct {
                 const verify_started = self.now();
                 if (image.view.verify(self.poolPtr())) {
                     self.base = image;
-                    self.forgetBaseUnreadable();
+                    self.forgetBaseCaches();
                 } else {
                     image.deinit(self.gpa);
                     self.load_failure = .corrupt;
@@ -506,11 +531,9 @@ pub const Session = struct {
         }
         report.mode = .full;
         report.refresh_ns = timer.lap();
-        if (self.publish_due or self.delta.entries.count() >= persist_after) {
-            self.persist() catch |err| {
-                report.save_failure = err;
-            };
-        }
+        if (self.publish_due) self.publishInBackground();
+        _ = try self.baseOrder();
+        _ = try self.baseLeaves();
         report.warmup_ns = @intCast(self.now() - started);
         self.pending = report;
     }
@@ -555,7 +578,7 @@ pub const Session = struct {
         const image = try index_file.build(self.gpa, inputs, .{ .written_ns = written_ns, .git_stamp = self.git_stamp }, self.poolPtr());
         errdefer self.gpa.free(image);
         self.base = try index_map.fromHeap(image, index_map.newTag(self.io));
-        self.forgetBaseUnreadable();
+        self.forgetBaseCaches();
         self.publish_due = true;
         report.recomputed = prepared.len;
         report.changed = true;
@@ -837,9 +860,86 @@ pub const Session = struct {
         return self.base_unreadable.?;
     }
 
-    fn forgetBaseUnreadable(self: *Session) void {
+    fn forgetBaseCaches(self: *Session) void {
         if (self.base_unreadable) |ids| self.gpa.free(ids);
         self.base_unreadable = null;
+        if (self.base_order) |ids| self.gpa.free(ids);
+        self.base_order = null;
+        if (self.base_leaves) |hashes| self.gpa.free(hashes);
+        self.base_leaves = null;
+    }
+
+    fn baseOrder(self: *Session) ![]const u32 {
+        if (self.base_order) |ids| return ids;
+        const v = self.view() orelse return &.{};
+        const ids = try self.gpa.alloc(u32, v.count());
+        for (ids, 0..) |*id, i| id.* = @intCast(i);
+        std.mem.sort(u32, ids, v, struct {
+            fn less(view_ptr: *const index_file.View, a: u32, b: u32) bool {
+                return std.mem.order(u8, view_ptr.path(a), view_ptr.path(b)) == .lt;
+            }
+        }.less);
+        self.base_order = ids;
+        return ids;
+    }
+
+    fn baseLeaves(self: *Session) ![]const search_index.Digest {
+        if (self.base_leaves) |hashes| return hashes;
+        const v = self.view() orelse return &.{};
+        const hashes = try self.gpa.alloc(search_index.Digest, v.count());
+        var job: LeafJob = .{ .view = v, .out = hashes };
+        if (self.poolPtr()) |p| p.run(worker_pool.max_threads, LeafJob.run, &job) else LeafJob.run(&job);
+        self.base_leaves = hashes;
+        return hashes;
+    }
+
+    const LeafJob = struct {
+        view: *const index_file.View,
+        out: []search_index.Digest,
+        next: std.atomic.Value(usize) = .init(0),
+
+        const chunk: usize = 1024;
+
+        fn run(ctx: *anyopaque) void {
+            const self: *LeafJob = @ptrCast(@alignCast(ctx));
+            while (true) {
+                const first = self.next.fetchAdd(chunk, .monotonic);
+                if (first >= self.out.len) return;
+                const last = @min(self.out.len, first + chunk);
+                for (first..last) |i| {
+                    const id: u32 = @intCast(i);
+                    self.out[i] = answer.pathLeafHash(.{ .path = self.view.path(id), .digest = self.view.record(id).digest });
+                }
+            }
+        }
+    };
+
+    fn publishInBackground(self: *Session) void {
+        const dir = self.index_dir orelse return;
+        const base = self.base orelse return;
+        const image = switch (base.backing) {
+            .heap => |bytes| bytes,
+            .mapped => return,
+        };
+        self.publish_error = null;
+        self.publish_thread = std.Thread.spawn(.{}, publishTask, .{ self, dir, image, base.generation }) catch null;
+    }
+
+    fn publishTask(self: *Session, dir: []const u8, image: []const u8, tag: [16]u8) void {
+        index_map.publish(self.gpa, self.io, dir, image, tag) catch |err| {
+            self.publish_error = err;
+        };
+    }
+
+    fn joinPublish(self: *Session) void {
+        const thread = self.publish_thread orelse return;
+        thread.join();
+        self.publish_thread = null;
+        if (self.publish_error) |err| {
+            self.save_failure = err;
+        } else {
+            self.publish_due = false;
+        }
     }
 
     fn queue(self: *Session, todo: *std.ArrayList([]const u8), queued: *std.StringHashMapUnmanaged(void), rel: []const u8) !void {
@@ -862,31 +962,75 @@ pub const Session = struct {
     }
 
     fn applyList(self: *Session, root: []const u8, listed: []const []const u8) !void {
-        var wanted: FoldedSet = .empty;
-        defer wanted.deinit(self.gpa);
-        try wanted.ensureTotalCapacity(self.gpa, listed.len);
-        var fresh: std.ArrayList([]const u8) = .empty;
-        defer fresh.deinit(self.gpa);
-        for (listed) |rel| {
-            wanted.putAssumeCapacity(rel, {});
-            if (!self.tracks(rel)) try fresh.append(self.gpa, rel);
-        }
+        var sorted: ?[][]const u8 = null;
+        defer if (sorted) |list| self.gpa.free(list);
+        const wanted: []const []const u8 = for (listed, 0..) |name, i| {
+            if (i != 0 and std.mem.order(u8, listed[i - 1], name) != .lt) {
+                const copy = try self.gpa.dupe([]const u8, listed);
+                std.mem.sort([]const u8, copy, {}, struct {
+                    fn less(_: void, a: []const u8, b: []const u8) bool {
+                        return std.mem.order(u8, a, b) == .lt;
+                    }
+                }.less);
+                sorted = copy;
+                break copy;
+            }
+        } else listed;
+
+        var current: std.ArrayList([]const u8) = .empty;
+        defer current.deinit(self.gpa);
+        var extra: std.ArrayList([]const u8) = .empty;
+        defer extra.deinit(self.gpa);
+        for (self.delta.entries.values()) |p| try extra.append(self.gpa, p.path);
+        std.mem.sort([]const u8, extra.items, {}, struct {
+            fn less(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.less);
+        var e: usize = 0;
         if (self.view()) |v| {
-            var id: u32 = 0;
-            while (id < v.count()) : (id += 1) {
+            for (try self.baseOrder()) |id| {
                 if (self.delta.isRemoved(id)) continue;
-                if (!wanted.contains(v.path(id))) try self.delta.markRemoved(self.gpa, id, v.count(), v.path(id));
+                const path = v.path(id);
+                while (e < extra.items.len and std.mem.order(u8, extra.items[e], path) == .lt) : (e += 1) try current.append(self.gpa, extra.items[e]);
+                try current.append(self.gpa, path);
             }
         }
-        var gone: std.ArrayList([]const u8) = .empty;
+        while (e < extra.items.len) : (e += 1) try current.append(self.gpa, extra.items[e]);
+
+        var fresh: std.ArrayList([]const u8) = .empty;
+        defer fresh.deinit(self.gpa);
+        var gone: std.ArrayList([]u8) = .empty;
         defer {
             for (gone.items) |g| self.gpa.free(g);
             gone.deinit(self.gpa);
         }
-        for (self.delta.entries.values()) |p| {
-            if (!wanted.contains(p.path)) try gone.append(self.gpa, try self.gpa.dupe(u8, p.path));
+        var i: usize = 0;
+        var j: usize = 0;
+        while (i < wanted.len or j < current.items.len) {
+            const order: std.math.Order = if (i == wanted.len) .gt else if (j == current.items.len) .lt else std.mem.order(u8, wanted[i], current.items[j]);
+            switch (order) {
+                .lt => {
+                    try fresh.append(self.gpa, wanted[i]);
+                    i += 1;
+                },
+                .gt => {
+                    try gone.append(self.gpa, try self.gpa.dupe(u8, current.items[j]));
+                    j += 1;
+                },
+                .eq => {
+                    i += 1;
+                    j += 1;
+                },
+            }
         }
-        for (gone.items) |g| try self.delta.drop(self.gpa, g);
+        for (gone.items) |g| {
+            if (self.delta.get(g) != null) {
+                try self.delta.drop(self.gpa, g);
+            } else if (self.view()) |v| {
+                if (v.find(g)) |id| try self.delta.markRemoved(self.gpa, id, v.count(), v.path(id));
+            }
+        }
         const seen = try self.gpa.alloc(?Seen, fresh.items.len);
         defer self.gpa.free(seen);
         @memset(seen, null);
@@ -895,6 +1039,8 @@ pub const Session = struct {
     }
 
     pub fn persist(self: *Session) !void {
+        self.joinPublish();
+        if (!self.publish_due and self.delta.entries.count() == 0 and self.delta.removed.count() == 0) return;
         const dir = self.index_dir orelse return error.NoIndexDir;
         const base = self.base orelse return;
         const merged = self.delta.entries.count() != 0 or self.delta.removed.count() != 0;
@@ -922,7 +1068,7 @@ pub const Session = struct {
                 self.base = mapped;
                 self.delta.deinit(self.gpa);
                 self.clearRoots();
-                self.forgetBaseUnreadable();
+                self.forgetBaseCaches();
             },
             .failed => return error.PublishedIndexUnreadable,
         }
