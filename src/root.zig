@@ -48,6 +48,7 @@ pub const search_index_file = @import("platform/search_index_file.zig");
 pub const search_session = @import("platform/search_session.zig");
 pub const git_index = @import("platform/git_index.zig");
 pub const worker_pool = @import("platform/worker_pool.zig");
+pub const io_seam = @import("platform/io_seam.zig");
 pub const search_v1 = @import("protocol/search_v1.zig");
 pub const disk = @import("platform/disk.zig");
 pub const durability_log = @import("platform/durability_log.zig");

@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1138**
-- Mutations declared in `tests/mutations.json`: **644**
-  - killed: **614**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1152**
+- Mutations declared in `tests/mutations.json`: **658**
+  - killed: **628**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-208 mutation(s).
+222 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -744,6 +744,20 @@ python tools/verification_page.py --check
 | `ANS15-filtered-hits-without-filter-accepted` | `src/engine/answer.zig` | `if (text.kinds.eql(.initFull()) and text.filtered != 0) return ...` -> `if (text.kinds.eql(.initFull()) and text.filtered != 0 and fals...` | hits counted as filtered without a kinds filter are refused | killed |
 | `ANS16-scope-prefix-excludes-itself` | `src/engine/answer.zig` | `if (path.len == prefix.len) return true;` -> `if (path.len == prefix.len) return false;` | a scope prefix covers itself and the paths below it and nothing beside it | killed |
 | `ANS17-unresolved-reference-in-unevaluated-file-accepted` | `src/engine/answer.zig` | `return "an unresolved reference sits in a file that was not eva...` -> `` | callers with an unresolved reference in scope are partial and every unresolved ... | killed |
+| `IOS1-read-error-becomes-empty-content` | `src/platform/io_seam.zig` | `return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limi...` -> `return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limi...` | the real file system reads below the limit and refuses a file at the limit as t... | killed |
+| `IOS2-too-large-read-reported-as-missing` | `src/platform/io_seam.zig` | `error.StreamTooLong, error.FileTooBig => error.TooLarge,` -> `error.StreamTooLong, error.FileTooBig => error.FileNotFound,` | every read error keeps its meaning when it crosses the seam | killed |
+| `IOS3-stat-error-becomes-empty-file` | `src/platform/io_seam.zig` | `const got = Dir.cwd().statFile(of(context).io, path, .{ .follow...` -> `const got = Dir.cwd().statFile(of(context).io, path, .{ .follow...` | the real file system stats a file, a directory and a missing path | killed |
+| `IOS4-missing-directory-listed-empty` | `src/platform/io_seam.zig` | `if (handle == windows.INVALID_HANDLE_VALUE) return win32ListErr...` -> `if (handle == windows.INVALID_HANDLE_VALUE) return;` | the real file system lists every entry of a directory with its kind and size an... | killed |
+| `IOS5-listing-drops-entries` | `src/platform/io_seam.zig` | `if (!std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, ".."...` -> `if (!std.mem.eql(u8, name, ".") and !std.mem.eql(u8, name, ".."...` | the real file system lists every entry of a directory with its kind and size an... | killed |
+| `IOS6-watch-records-reported-pending` | `src/platform/io_seam.zig` | `return .{ .records = bytes };` -> `return .pending;` | the real watch reports a file created after it was opened | killed |
+| `IOS7-watch-overflow-reported-pending` | `src/platform/io_seam.zig` | `if (bytes == 0 or bytes > out.len) {             self.issue(); ...` -> `if (bytes == 0 or bytes > out.len) {             self.issue(); ...` | a change that does not fit the watch buffer is reported as overflow and never a... | killed |
+| `IOS8-exclusive-create-overwrites` | `src/platform/io_seam.zig` | `const file = Dir.createFileAbsolute(io, path, .{ .exclusive = t...` -> `const file = Dir.createFileAbsolute(io, path, .{ .exclusive = f...` | the real file system creates a file once and refuses to create it again | killed |
+| `IOS9-failed-rename-reported-done` | `src/platform/io_seam.zig` | `if (win.MoveFileExW(from_w, to_w, win.movefile_replace_existing...` -> `_ = win.MoveFileExW(from_w, to_w, win.movefile_replace_existing...` | the real file system replaces a file by rename and refuses to rename a missing ... | killed |
+| `IOS10-cut-record-read-as-end` | `src/platform/io_seam.zig` | `if (at + record_header_bytes > self.bytes.len) return error.Mal...` -> `if (at + record_header_bytes > self.bytes.len) return null;` | notify records decode in order and a cut or overlapping record is malformed | killed |
+| `IOS11-overlapping-record-accepted` | `src/platform/io_seam.zig` | `if (step != 0 and (step % 4 != 0 or step < record_header_bytes ...` -> `if (step != 0 and step % 4 != 0) return error.Malformed;` | notify records decode in order and a cut or overlapping record is malformed | killed |
+| `IOS12-failed-listing-becomes-empty-repository` | `src/platform/io_seam.zig` | `return shadow.trackedFiles(gpa, of(context).io, root) catch \|e...` -> `return shadow.trackedFiles(gpa, of(context).io, root) catch ret...` | the real file system lists the files a repository tracks | killed |
+| `IOS13-delete-of-missing-file-succeeds` | `src/platform/io_seam.zig` | `return Dir.deleteFileAbsolute(of(context).io, path) catch \|err...` -> `return Dir.deleteFileAbsolute(of(context).io, path) catch {};` | the real file system deletes a file, makes a nested path and resolves a path to... | killed |
+| `IOS14-closed-watch-polled-as-pending` | `src/platform/io_seam.zig` | `const slot = of(context).watchSlot(handle) orelse return .dead;` -> `const slot = of(context).watchSlot(handle) orelse return .pendi...` | polling a handle that was never opened or was closed reports a dead watch | killed |
 
 ## What this system does not prove
 

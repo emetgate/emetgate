@@ -6393,6 +6393,132 @@
       "kills": [
         "callers with an unresolved reference in scope are partial and every unresolved reference is listed"
       ]
+    },
+    {
+      "id": "IOS1-read-error-becomes-empty-content",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch |err| return readError(err);",
+      "to": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch return gpa.alloc(u8, 0);",
+      "kills": [
+        "the real file system reads below the limit and refuses a file at the limit as too large"
+      ]
+    },
+    {
+      "id": "IOS2-too-large-read-reported-as-missing",
+      "file": "src/platform/io_seam.zig",
+      "from": "        error.StreamTooLong, error.FileTooBig => error.TooLarge,",
+      "to": "        error.StreamTooLong, error.FileTooBig => error.FileNotFound,",
+      "kills": [
+        "every read error keeps its meaning when it crosses the seam"
+      ]
+    },
+    {
+      "id": "IOS3-stat-error-becomes-empty-file",
+      "file": "src/platform/io_seam.zig",
+      "from": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch |err| return statError(err);",
+      "to": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch return .{ .kind = .file, .size = 0, .mtime_ns = 0, .id = 0 };",
+      "kills": [
+        "the real file system stats a file, a directory and a missing path"
+      ]
+    },
+    {
+      "id": "IOS4-missing-directory-listed-empty",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (handle == windows.INVALID_HANDLE_VALUE) return win32ListError(win.GetLastError());",
+      "to": "        if (handle == windows.INVALID_HANDLE_VALUE) return;",
+      "kills": [
+        "the real file system lists every entry of a directory with its kind and size and refuses a missing one"
+      ]
+    },
+    {
+      "id": "IOS5-listing-drops-entries",
+      "file": "src/platform/io_seam.zig",
+      "from": "            if (!std.mem.eql(u8, name, \".\") and !std.mem.eql(u8, name, \"..\")) {",
+      "to": "            if (!std.mem.eql(u8, name, \".\") and !std.mem.eql(u8, name, \"..\") and name.len > 5) {",
+      "kills": [
+        "the real file system lists every entry of a directory with its kind and size and refuses a missing one"
+      ]
+    },
+    {
+      "id": "IOS6-watch-records-reported-pending",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return .{ .records = bytes };",
+      "to": "        return .pending;",
+      "kills": [
+        "the real watch reports a file created after it was opened"
+      ]
+    },
+    {
+      "id": "IOS7-watch-overflow-reported-pending",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (bytes == 0 or bytes > out.len) {\n            self.issue();\n            return .overflow;",
+      "to": "        if (bytes == 0 or bytes > out.len) {\n            self.issue();\n            return .pending;",
+      "kills": [
+        "a change that does not fit the watch buffer is reported as overflow and never as silence"
+      ]
+    },
+    {
+      "id": "IOS8-exclusive-create-overwrites",
+      "file": "src/platform/io_seam.zig",
+      "from": "        const file = Dir.createFileAbsolute(io, path, .{ .exclusive = true }) catch |err| return writeError(err);",
+      "to": "        const file = Dir.createFileAbsolute(io, path, .{ .exclusive = false }) catch |err| return writeError(err);",
+      "kills": [
+        "the real file system creates a file once and refuses to create it again"
+      ]
+    },
+    {
+      "id": "IOS9-failed-rename-reported-done",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (win.MoveFileExW(from_w, to_w, win.movefile_replace_existing | win.movefile_write_through) == .FALSE) return win32WriteError(win.GetLastError());",
+      "to": "        _ = win.MoveFileExW(from_w, to_w, win.movefile_replace_existing | win.movefile_write_through);",
+      "kills": [
+        "the real file system replaces a file by rename and refuses to rename a missing file"
+      ]
+    },
+    {
+      "id": "IOS10-cut-record-read-as-end",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (at + record_header_bytes > self.bytes.len) return error.Malformed;",
+      "to": "        if (at + record_header_bytes > self.bytes.len) return null;",
+      "kills": [
+        "notify records decode in order and a cut or overlapping record is malformed"
+      ]
+    },
+    {
+      "id": "IOS11-overlapping-record-accepted",
+      "file": "src/platform/io_seam.zig",
+      "from": "        if (step != 0 and (step % 4 != 0 or step < record_header_bytes + name_bytes)) return error.Malformed;",
+      "to": "        if (step != 0 and step % 4 != 0) return error.Malformed;",
+      "kills": [
+        "notify records decode in order and a cut or overlapping record is malformed"
+      ]
+    },
+    {
+      "id": "IOS12-failed-listing-becomes-empty-repository",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return shadow.trackedFiles(gpa, of(context).io, root) catch |err| return trackedError(err);",
+      "to": "        return shadow.trackedFiles(gpa, of(context).io, root) catch return gpa.alloc([]u8, 0);",
+      "kills": [
+        "the real file system lists the files a repository tracks"
+      ]
+    },
+    {
+      "id": "IOS13-delete-of-missing-file-succeeds",
+      "file": "src/platform/io_seam.zig",
+      "from": "        return Dir.deleteFileAbsolute(of(context).io, path) catch |err| return writeError(err);",
+      "to": "        return Dir.deleteFileAbsolute(of(context).io, path) catch {};",
+      "kills": [
+        "the real file system deletes a file, makes a nested path and resolves a path to its real form"
+      ]
+    },
+    {
+      "id": "IOS14-closed-watch-polled-as-pending",
+      "file": "src/platform/io_seam.zig",
+      "from": "        const slot = of(context).watchSlot(handle) orelse return .dead;",
+      "to": "        const slot = of(context).watchSlot(handle) orelse return .pending;",
+      "kills": [
+        "polling a handle that was never opened or was closed reports a dead watch"
+      ]
     }
   ]
 }
