@@ -90,10 +90,9 @@ pub fn parseDetail(value: ?[]const u8) error{UnknownDetail}!Detail {
     return error.UnknownDetail;
 }
 
-pub fn fold(gpa: Allocator, source: []const u8, lines: Lines, body: ts.Node, budget: usize) !?View {
+pub fn fold(gpa: Allocator, source: []const u8, lines: Lines, body: ts.Node, budget: usize) !View {
     const start: u32 = body.startByte();
     const end: u32 = body.endByte();
-    if (end - start <= budget) return null;
     var blocks: std.ArrayList(Block) = .empty;
     defer blocks.deinit(gpa);
     try collect(gpa, &blocks, source, lines, body, 0);

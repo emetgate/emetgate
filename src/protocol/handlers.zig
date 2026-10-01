@@ -279,11 +279,10 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     if (folds) {
         const lines = try read_budget.Lines.init(gpa, snapshot.source);
         defer lines.deinit(gpa);
-        if (try read_budget.fold(gpa, snapshot.source, lines, found.body, reading.budget)) |view| {
-            defer view.deinit(gpa);
-            event.chars_emetgate = view.text.len;
-            return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
-        }
+        const view = try read_budget.fold(gpa, snapshot.source, lines, found.body, reading.budget);
+        defer view.deinit(gpa);
+        event.chars_emetgate = view.text.len;
+        return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
     }
     event.chars_emetgate = body.len;
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
@@ -332,11 +331,10 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         if (unchanged) continue;
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
-            if (try read_budget.fold(gpa, snapshot.source, lines.?, found.body, reading.budget)) |view| {
-                entries[i].folded = .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget };
-                chars += view.text.len;
-                continue;
-            }
+            const view = try read_budget.fold(gpa, snapshot.source, lines.?, found.body, reading.budget);
+            entries[i].folded = .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget };
+            chars += view.text.len;
+            continue;
         }
         chars += body.len;
     }
