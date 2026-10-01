@@ -16,6 +16,7 @@ pub const Repo = struct {
     runtime: *Runtime,
     store: facts_store.Store,
     sources: std.StringHashMapUnmanaged([]u8) = .empty,
+    last_reshaped: bool = false,
 
     pub fn init(runtime: *Runtime) Repo {
         return .{ .runtime = runtime, .store = facts_store.Store.init(testing.allocator) };
@@ -46,15 +47,14 @@ pub const Repo = struct {
             return err;
         };
         const id = try self.store.ensureFile(path);
-        _ = try self.store.replace(id, profile, symbol.fileHash(source), arena, kept, &.{});
+        self.last_reshaped = try self.store.replace(id, profile, symbol.fileHash(source), arena, kept, &.{});
         try self.remember(path, source);
         return id;
     }
 
     pub fn putReporting(self: *Repo, path: []const u8, source: []const u8) !bool {
-        const before = if (self.store.fileId(path)) |id| self.store.file(id).signature else std.mem.zeroes(facts.Hash);
-        const id = try self.put(path, source);
-        return !std.mem.eql(u8, &before, &self.store.file(id).signature);
+        _ = try self.put(path, source);
+        return self.last_reshaped;
     }
 
     fn remember(self: *Repo, path: []const u8, source: []const u8) !void {

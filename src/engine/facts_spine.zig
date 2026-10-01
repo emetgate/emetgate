@@ -164,7 +164,7 @@ test "spine: the lines around a call keep its whole small if statement and the h
     defer source.deinit(testing.allocator);
     try source.appendSlice(testing.allocator, "function big(x: number) {\n  for (let i = 0; i < x; i++) {\n");
     for (0..20) |_| try source.appendSlice(testing.allocator, "    noise();\n");
-    try source.appendSlice(testing.allocator, "    if (i > 3) {\n      target();\n    }\n");
+    try source.appendSlice(testing.allocator, "    if (i > 3) {\n      before();\n      target();\n      after();\n    }\n");
     for (0..20) |_| try source.appendSlice(testing.allocator, "    noise();\n");
     try source.appendSlice(testing.allocator, "  }\n  return x;\n}\n");
     const snapshot = try test_util.snapshotOf(runtime, source.items);
@@ -173,10 +173,10 @@ test "spine: the lines around a call keep its whole small if statement and the h
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const lines = try Lines.of(arena, snapshot.source);
-    const spine = try compute(arena, snapshot.profile, snapshot.tree, lines, .{ .start = 0, .end = @intCast(snapshot.source.len - 1) }, &.{24});
+    const spine = try compute(arena, snapshot.profile, snapshot.tree, lines, .{ .start = 0, .end = @intCast(snapshot.source.len - 1) }, &.{25});
     try testing.expectEqual(@as(u32, 1), spine.first);
-    try testing.expectEqual(@as(u32, 48), spine.last);
+    try testing.expectEqual(@as(u32, 50), spine.last);
     try testing.expect(!spine.whole());
-    const want = [_]Range{ .{ .first = 1, .last = 2 }, .{ .first = 23, .last = 25 }, .{ .first = 46, .last = 46 }, .{ .first = 48, .last = 48 } };
+    const want = [_]Range{ .{ .first = 1, .last = 2 }, .{ .first = 23, .last = 27 }, .{ .first = 48, .last = 48 }, .{ .first = 50, .last = 50 } };
     try testing.expectEqualSlices(Range, &want, spine.keep);
 }
