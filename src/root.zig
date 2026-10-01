@@ -40,6 +40,7 @@ pub const trigram = @import("engine/trigram.zig");
 pub const text_query = @import("engine/text_query.zig");
 pub const postings = @import("engine/postings.zig");
 pub const span_codec = @import("engine/span_codec.zig");
+pub const merkle_tree = @import("engine/merkle_tree.zig");
 pub const query = @import("engine/query.zig");
 pub const answer = @import("engine/answer.zig");
 pub const lang_registry = @import("engine/lang/registry.zig");

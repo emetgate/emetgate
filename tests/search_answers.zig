@@ -461,7 +461,7 @@ fn snapshotRoot(answer: *Answer) []const u8 {
     return answer.get("certificate").?.object.get("snapshot").?.object.get("root").?.string;
 }
 
-test "search answers: the snapshot root is the Merkle root of the searched files and follows a write in the same session" {
+test "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session" {
     var repo = try Repo.init(&.{
         .{ "a.txt", "alpha rootneedle\n" },
         .{ "b/c.txt", "beta rootneedle\n" },
@@ -487,9 +487,24 @@ test "search answers: the snapshot root is the Merkle root of the searched files
         try testing.expectEqualStrings(&want, snapshotRoot(&answer));
     }
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "delta rootneedle\n" });
+    {
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "rootneedle", .dir = repo.root, .certificate = true });
+        defer answer.deinit();
+        const want = expectedRoot(&.{ .{ "a.txt", "delta rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" } });
+        try testing.expectEqualStrings(&want, snapshotRoot(&answer));
+    }
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "c.txt", .data = "added rootneedle\n" });
+    try gitIn(repo.root, &.{ "add", "c.txt" });
+    {
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "rootneedle", .dir = repo.root, .certificate = true });
+        defer answer.deinit();
+        const want = expectedRoot(&.{ .{ "a.txt", "delta rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" }, .{ "c.txt", "added rootneedle\n" } });
+        try testing.expectEqualStrings(&want, snapshotRoot(&answer));
+    }
+    try repo.tmp.dir.deleteFile(testing.io, "b/c.txt");
     var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "rootneedle", .dir = repo.root, .certificate = true });
     defer answer.deinit();
-    const want = expectedRoot(&.{ .{ "a.txt", "delta rootneedle\n" }, .{ "b/c.txt", "beta rootneedle\n" } });
+    const want = expectedRoot(&.{ .{ "a.txt", "delta rootneedle\n" }, .{ "c.txt", "added rootneedle\n" } });
     try testing.expectEqualStrings(&want, snapshotRoot(&answer));
 }
 

@@ -57,6 +57,7 @@ pub const Stats = struct {
     match_ns: u64 = 0,
     parse_ns: u64 = 0,
     json_ns: u64 = 0,
+    root_ns: u64 = 0,
     files_candidates: usize = 0,
     files_parsed: usize = 0,
     files_index_reused: usize = 0,
@@ -342,7 +343,7 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
         };
         item.matched_lines += 1;
         if (decoded == null) {
-            decoded = span_codec.decode(arena_state.allocator(), item.spans) catch |err| switch (err) {
+            decoded = if (item.spans.len == 0) .{ .spans = null, .doc = null } else span_codec.decode(arena_state.allocator(), item.spans) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 error.Corrupt => blk: {
                     item.corrupt_spans = true;
@@ -611,7 +612,6 @@ const Result = struct {
     groups: std.ArrayList(Group) = .empty,
     missing: std.ArrayList(answer.Missing) = .empty,
     excluded_paths: std.ArrayList(answer.Excluded) = .empty,
-    leaves: std.ArrayList(answer.Leaf) = .empty,
     listed: u32 = 0,
     indexed: u32 = 0,
     excluded: answer.Exclusions = .initFill(0),
@@ -636,7 +636,6 @@ const Result = struct {
         self.groups.deinit(gpa);
         self.missing.deinit(gpa);
         self.excluded_paths.deinit(gpa);
-        self.leaves.deinit(gpa);
     }
 
     fn partial(self: Result) bool {
@@ -705,7 +704,6 @@ const Corpus = struct {
     scope: Scope,
     kinds: ?KindSet,
     want_paths: bool,
-    want_leaves: bool,
     hit_limit: usize,
 };
 
@@ -744,7 +742,6 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
 
     var root_key_buf: [std.fs.max_path_bytes + 1]u8 = undefined;
     const root_key = rootKey(&root_key_buf, scope);
-    const cached_root = if (root_key) |k| sess.cachedRoot(k) else null;
 
     const corpus: Corpus = .{
         .gpa = gpa,
@@ -758,7 +755,6 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         .scope = scope,
         .kinds = kind_set,
         .want_paths = request.certificate,
-        .want_leaves = cached_root == null,
         .hit_limit = max_matches + request.offset,
     };
 
@@ -782,15 +778,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     }
     const used_query: *const Query = if (alternatives) |*alt| alt else &query;
 
-    const snapshot_root = cached_root orelse blk: {
-        std.mem.sort(answer.Leaf, result.leaves.items, {}, struct {
-            fn less(_: void, a: answer.Leaf, b: answer.Leaf) bool {
-                return std.mem.order(u8, a.path, b.path) == .lt;
-            }
-        }.less);
-        const digest = answer.merkleRoot(result.leaves.items) catch return error.InconsistentCertificate;
-        if (root_key) |k| try sess.rememberRoot(k, digest);
-        break :blk digest;
+    var root_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
+    const snapshot_root = try sess.scopeRoot(root_key, place.rel, scope.file);
+    if (root_timer) |*t| if (stats_sink) |s| {
+        s.root_ns += t.lap();
     };
     std.mem.sort(answer.Excluded, result.excluded_paths.items, {}, struct {
         fn less(_: void, a: answer.Excluded, b: answer.Excluded) bool {
@@ -1217,8 +1208,7 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
                 continue;
             }
             const rec = view.record(id);
-            if (try result.account(gpa, p, view.stateOf(id), rec.size, corpus.want_paths)) continue;
-            if (corpus.want_leaves) try result.leaves.append(gpa, .{ .path = p, .digest = rec.digest });
+            _ = try result.account(gpa, p, view.stateOf(id), rec.size, corpus.want_paths);
         }
         var ids: std.ArrayList(u32) = .empty;
         defer ids.deinit(gpa);
@@ -1238,7 +1228,6 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
             continue;
         };
         if (try result.account(gpa, entry.path, entry.state, entry.stamp.size, corpus.want_paths)) continue;
-        if (corpus.want_leaves) try result.leaves.append(gpa, .{ .path = entry.path, .digest = entry.digest });
         if (!query.mayMatchFile(entry.grams)) continue;
         try sources.append(gpa, .{ .path = entry.path, .content = entry.content, .spans = entry.spans });
     }
@@ -1479,5 +1468,7 @@ fn writeStats(js: *std.json.Stringify, s: *const Stats, indexed: usize) !void {
     try js.write(nsToMs(s.parse_ns));
     try js.objectField("json_ms");
     try js.write(nsToMs(s.json_ns));
+    try js.objectField("root_ms");
+    try js.write(nsToMs(s.root_ns));
     try js.endObject();
 }

@@ -99,6 +99,26 @@ fn search(runtime: *Runtime, session: *search_session.Session, root: []const u8,
     return .{ .files = files.count(), .reason = reason_buf[0..n], .recomputed = recomputed, .mode = mode, .list_reused = stats.get("list_reused").?.bool, .index_load = index_load };
 }
 
+test "search freshness: a session warmed on a background thread keeps its watcher after that thread ends" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init(5);
+    defer repo.deinit();
+    defer removeIndexFile(repo.root);
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    session.start();
+    try session.warm();
+    var reason_buf: [64]u8 = undefined;
+    const first = try search(runtime, &session, repo.root, "seed", &reason_buf);
+    try testing.expectEqualStrings("first_build", first.reason);
+    try repo.write(2, "export const after_warm_token = 1;\n");
+    const found = try search(runtime, &session, repo.root, "after_warm_token", &reason_buf);
+    try testing.expectEqual(@as(usize, 1), found.files);
+    try testing.expectEqual(Found.Mode.dirty, found.mode);
+}
+
 test "search freshness: a tracked file written and searched with no pause is found, 200 times in a row" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init(5);

@@ -596,7 +596,7 @@ test "a file read within three seconds of its last change keeps a smudged stamp 
     defer testing.allocator.free(root);
     const paths = [_][]const u8{ "fresh.txt", "old.txt" };
     const seen = [_]?search_index.Seen{ null, null };
-    const prepared = try search_index.prepareAll(testing.allocator, testing.io, root, &paths, &seen, false, null, null);
+    const prepared = try search_index.prepareAll(testing.allocator, testing.io, root, &paths, &seen, false, true, null, null);
     defer search_index.freeAll(testing.allocator, prepared);
     try testing.expectEqual(search_index.smudged_mtime_ns, prepared[0].stamp.mtime_ns);
     try testing.expect(prepared[1].stamp.mtime_ns != search_index.smudged_mtime_ns);

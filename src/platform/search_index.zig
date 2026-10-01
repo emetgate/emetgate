@@ -107,7 +107,7 @@ pub fn statOne(io: std.Io, abs: []const u8) ?Seen {
     };
 }
 
-pub fn prepareOne(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8, seen: ?Seen, want_grams: bool) !Prepared {
+pub fn prepareOne(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8, seen: ?Seen, want_grams: bool, want_spans: bool) !Prepared {
     const path = try gpa.dupe(u8, rel);
     errdefer gpa.free(path);
     const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, rel });
@@ -131,20 +131,24 @@ pub fn prepareOne(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
         gpa.free(bytes);
         return .{ .path = path, .stamp = stamp, .state = .binary };
     }
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-    const blob = try span_codec.encode(gpa, spansFor(arena.allocator(), rel, bytes), doc_spans.build(arena.allocator(), rel, bytes));
+    const blob: []u8 = if (want_spans) try spanBlob(gpa, rel, bytes) else &.{};
     errdefer gpa.free(blob);
     const grams: []u24 = if (want_grams) try trigramsOfAlloc(gpa, bytes) else &.{};
     return .{ .path = path, .stamp = stamp, .state = .indexed, .content = bytes, .digest = index_file.contentDigest(bytes), .spans = blob, .grams = grams };
 }
 
+pub fn spanBlob(gpa: Allocator, rel: []const u8, bytes: []const u8) ![]u8 {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    return span_codec.encode(gpa, spansFor(arena.allocator(), rel, bytes), doc_spans.build(arena.allocator(), rel, bytes));
+}
+
 pub const Cancel = std.atomic.Value(bool);
 
-pub fn prepareAll(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8, seen: []const ?Seen, want_grams: bool, pool: ?*worker_pool.Pool, cancel: ?*Cancel) ![]Prepared {
+pub fn prepareAll(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8, seen: []const ?Seen, want_grams: bool, want_spans: bool, pool: ?*worker_pool.Pool, cancel: ?*Cancel) ![]Prepared {
     std.debug.assert(paths.len == seen.len);
     const out = try gpa.alloc(Prepared, paths.len);
-    var job: PrepareJob = .{ .gpa = gpa, .io = io, .root = root_abs, .paths = paths, .seen = seen, .out = out, .want_grams = want_grams, .cancel = cancel, .done = try gpa.alloc(bool, paths.len) };
+    var job: PrepareJob = .{ .gpa = gpa, .io = io, .root = root_abs, .paths = paths, .seen = seen, .out = out, .want_grams = want_grams, .want_spans = want_spans, .cancel = cancel, .done = try gpa.alloc(bool, paths.len) };
     defer gpa.free(job.done);
     @memset(job.done, false);
     if (pool) |p| p.run(worker_pool.max_threads, PrepareJob.run, &job) else PrepareJob.run(&job);
@@ -165,6 +169,7 @@ const PrepareJob = struct {
     out: []Prepared,
     done: []bool,
     want_grams: bool,
+    want_spans: bool,
     cancel: ?*Cancel,
     next: std.atomic.Value(usize) = .init(0),
     failed: std.atomic.Value(bool) = .init(false),
@@ -176,7 +181,7 @@ const PrepareJob = struct {
             if (self.cancel) |c| if (c.load(.acquire)) return;
             const i = self.next.fetchAdd(1, .monotonic);
             if (i >= self.paths.len) return;
-            var prepared = prepareOne(self.gpa, self.io, self.root, self.paths[i], self.seen[i], self.want_grams) catch |err| {
+            var prepared = prepareOne(self.gpa, self.io, self.root, self.paths[i], self.seen[i], self.want_grams, self.want_spans) catch |err| {
                 if (!self.failed.swap(true, .acq_rel)) self.failure = err;
                 return;
             };
@@ -210,7 +215,7 @@ test "prepareOne reads a source file into content, hash, grams and a span blob t
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
 
-    const p = try prepareOne(testing.allocator, testing.io, root, "a.ts", null, true);
+    const p = try prepareOne(testing.allocator, testing.io, root, "a.ts", null, true, true);
     defer p.deinit(testing.allocator);
     try testing.expectEqual(FileState.indexed, p.state);
     try testing.expect(std.mem.indexOf(u8, p.content, "loadPending") != null);
@@ -220,10 +225,10 @@ test "prepareOne reads a source file into content, hash, grams and a span blob t
     const decoded = try span_codec.decode(arena.allocator(), p.spans);
     try testing.expectEqualStrings("loadPending", decoded.spans.?.symbols[0].name);
 
-    const bin = try prepareOne(testing.allocator, testing.io, root, "b.bin", null, false);
+    const bin = try prepareOne(testing.allocator, testing.io, root, "b.bin", null, false, true);
     defer bin.deinit(testing.allocator);
     try testing.expectEqual(FileState.binary, bin.state);
-    const gone = try prepareOne(testing.allocator, testing.io, root, "gone.ts", null, false);
+    const gone = try prepareOne(testing.allocator, testing.io, root, "gone.ts", null, false, true);
     defer gone.deinit(testing.allocator);
     try testing.expectEqual(FileState.deleted, gone.state);
 }

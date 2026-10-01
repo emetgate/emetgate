@@ -509,7 +509,7 @@ pub const View = struct {
     }
 };
 
-fn foldedEqual(a: []const u8, b: []const u8) bool {
+pub fn foldedEqual(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| {
         if (foldByte(x) != foldByte(y)) return false;

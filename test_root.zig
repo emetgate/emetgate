@@ -42,6 +42,7 @@ pub const trigram = src.trigram;
 pub const text_query = src.text_query;
 pub const postings = src.postings;
 pub const span_codec = src.span_codec;
+pub const merkle_tree = src.merkle_tree;
 pub const query = src.query;
 pub const answer = src.answer;
 pub const lang_registry = src.lang_registry;

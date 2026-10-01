@@ -7,6 +7,8 @@ const stat_scan = @import("stat_scan.zig");
 const change_watch = @import("change_watch.zig");
 const worker_pool = @import("worker_pool.zig");
 const git_index = @import("git_index.zig");
+const answer = @import("../engine/answer.zig");
+const merkle_tree = @import("../engine/merkle_tree.zig");
 
 const Allocator = std.mem.Allocator;
 const Prepared = search_index.Prepared;
@@ -62,64 +64,140 @@ pub fn rebuildNote(why: LoadFailure) []const u8 {
     };
 }
 
-pub fn foldedKey(gpa: Allocator, rel: []const u8) ![]u8 {
-    const out = try gpa.alloc(u8, rel.len);
-    for (rel, out) |c, *o| o.* = index_file.foldByte(c);
-    return out;
-}
-
-pub const Delta = struct {
-    entries: std.StringArrayHashMapUnmanaged(Prepared) = .empty,
-    removed: std.DynamicBitSetUnmanaged = .{},
-    version: u64 = 0,
-
-    pub fn deinit(self: *Delta, gpa: Allocator) void {
-        for (self.entries.keys(), self.entries.values()) |k, v| {
-            gpa.free(k);
-            v.deinit(gpa);
+pub const FoldedContext = struct {
+    pub fn hash(_: FoldedContext, key: []const u8) u32 {
+        var hasher = std.hash.Wyhash.init(0);
+        var buf: [64]u8 = undefined;
+        var at: usize = 0;
+        while (at < key.len) {
+            const n = @min(buf.len, key.len - at);
+            for (key[at..][0..n], buf[0..n]) |c, *o| o.* = index_file.foldByte(c);
+            hasher.update(buf[0..n]);
+            at += n;
         }
-        self.entries.deinit(gpa);
-        self.removed.deinit(gpa);
-        self.* = .{ .version = self.version + 1 };
+        return @truncate(hasher.final());
     }
 
-    pub fn get(self: *const Delta, gpa: Allocator, rel: []const u8) ?*const Prepared {
-        const key = foldedKey(gpa, rel) catch return null;
-        defer gpa.free(key);
-        return self.entries.getPtr(key);
+    pub fn eql(_: FoldedContext, a: []const u8, b: []const u8, _: usize) bool {
+        return index_file.foldedEqual(a, b);
+    }
+};
+
+pub const FoldedSet = std.ArrayHashMapUnmanaged([]const u8, void, FoldedContext, true);
+
+pub const max_journal: usize = 8192;
+
+pub const Delta = struct {
+    entries: std.ArrayHashMapUnmanaged([]const u8, Prepared, FoldedContext, true) = .empty,
+    removed: std.DynamicBitSetUnmanaged = .{},
+    version: u64 = 0,
+    journal: std.ArrayList(Change) = .empty,
+    journal_from: u64 = 0,
+
+    pub const Change = struct { version: u64, path: []u8 };
+
+    pub fn deinit(self: *Delta, gpa: Allocator) void {
+        for (self.entries.values()) |v| v.deinit(gpa);
+        self.entries.deinit(gpa);
+        self.removed.deinit(gpa);
+        for (self.journal.items) |c| gpa.free(c.path);
+        self.journal.deinit(gpa);
+        const next = self.version + 1;
+        self.* = .{ .version = next, .journal_from = next };
+    }
+
+    pub fn get(self: *const Delta, rel: []const u8) ?*const Prepared {
+        return self.entries.getPtr(rel);
+    }
+
+    fn reserve(self: *Delta, gpa: Allocator, path: []const u8) ![]u8 {
+        try self.journal.ensureUnusedCapacity(gpa, 1);
+        return gpa.dupe(u8, path);
+    }
+
+    fn commit(self: *Delta, gpa: Allocator, copy: []u8) void {
+        self.version += 1;
+        self.journal.appendAssumeCapacity(.{ .version = self.version, .path = copy });
+        if (self.journal.items.len <= max_journal) return;
+        const cut = self.journal.items.len / 2;
+        for (self.journal.items[0..cut]) |c| gpa.free(c.path);
+        self.journal_from = self.journal.items[cut - 1].version;
+        std.mem.copyForwards(Change, self.journal.items[0..], self.journal.items[cut..]);
+        self.journal.shrinkRetainingCapacity(self.journal.items.len - cut);
+    }
+
+    pub fn changesSince(self: *const Delta, version: u64) ?[]const Change {
+        if (version < self.journal_from) return null;
+        var lo: usize = 0;
+        var hi: usize = self.journal.items.len;
+        while (lo < hi) {
+            const mid = (lo + hi) / 2;
+            if (self.journal.items[mid].version <= version) lo = mid + 1 else hi = mid;
+        }
+        return self.journal.items[lo..];
     }
 
     pub fn put(self: *Delta, gpa: Allocator, prepared: Prepared) !void {
-        const key = try foldedKey(gpa, prepared.path);
-        errdefer gpa.free(key);
-        const got = try self.entries.getOrPut(gpa, key);
-        if (got.found_existing) {
-            gpa.free(key);
-            got.value_ptr.deinit(gpa);
-        }
+        const copy = try self.reserve(gpa, prepared.path);
+        errdefer gpa.free(copy);
+        const got = try self.entries.getOrPut(gpa, prepared.path);
+        if (got.found_existing) got.value_ptr.deinit(gpa);
+        got.key_ptr.* = prepared.path;
         got.value_ptr.* = prepared;
-        self.version += 1;
+        self.commit(gpa, copy);
     }
 
-    pub fn drop(self: *Delta, gpa: Allocator, rel: []const u8) void {
-        const key = foldedKey(gpa, rel) catch return;
-        defer gpa.free(key);
-        const kv = self.entries.fetchOrderedRemove(key) orelse return;
-        gpa.free(kv.key);
-        kv.value.deinit(gpa);
-        self.version += 1;
+    pub fn drop(self: *Delta, gpa: Allocator, rel: []const u8) !void {
+        const index = self.entries.getIndex(rel) orelse return;
+        const copy = try self.reserve(gpa, self.entries.values()[index].path);
+        const value = self.entries.values()[index];
+        self.entries.orderedRemoveAt(index);
+        value.deinit(gpa);
+        self.commit(gpa, copy);
     }
 
     pub fn isRemoved(self: *const Delta, id: u32) bool {
         return id < self.removed.bit_length and self.removed.isSet(id);
     }
 
-    pub fn markRemoved(self: *Delta, gpa: Allocator, id: u32, universe: u32) !void {
+    pub fn markRemoved(self: *Delta, gpa: Allocator, id: u32, universe: u32, path: []const u8) !void {
         if (self.removed.bit_length < universe) try self.removed.resize(gpa, universe, false);
-        if (!self.removed.isSet(id)) self.version += 1;
+        if (self.removed.isSet(id)) return;
+        const copy = try self.reserve(gpa, path);
         self.removed.set(id);
+        self.commit(gpa, copy);
     }
 };
+
+pub const ScopeTree = struct {
+    version: u64,
+    paths: [][]u8,
+    digests: []search_index.Digest,
+    tree: merkle_tree.Tree,
+
+    fn deinit(self: *ScopeTree, gpa: Allocator) void {
+        for (self.paths) |path| gpa.free(path);
+        gpa.free(self.paths);
+        gpa.free(self.digests);
+        self.tree.deinit(gpa);
+    }
+
+    fn find(self: *const ScopeTree, path: []const u8) ?usize {
+        var lo: usize = 0;
+        var hi: usize = self.paths.len;
+        while (lo < hi) {
+            const mid = (lo + hi) / 2;
+            switch (std.mem.order(u8, self.paths[mid], path)) {
+                .lt => lo = mid + 1,
+                .gt => hi = mid,
+                .eq => return mid,
+            }
+        }
+        return null;
+    }
+};
+
+pub const max_scope_trees: usize = 16;
 
 pub const Session = struct {
     gpa: Allocator,
@@ -135,7 +213,7 @@ pub const Session = struct {
     pool: worker_pool.Pool = .{},
     last: Report = .{},
     barrier: u64 = 0,
-    roots: std.StringHashMapUnmanaged(Root) = .empty,
+    trees: std.StringHashMapUnmanaged(*ScopeTree) = .empty,
     base_unreadable: ?[]u32 = null,
     pending: Report = .{},
     load_failure: ?LoadFailure = null,
@@ -156,7 +234,14 @@ pub const Session = struct {
 
     pub fn start(self: *Session) void {
         if (self.root == null or self.warmed or self.warm_thread != null) return;
+        self.startWatcher();
         self.warm_thread = std.Thread.spawn(.{}, warmTask, .{self}) catch null;
+    }
+
+    fn startWatcher(self: *Session) void {
+        if (self.watcher != null) return;
+        self.watcher = change_watch.Watcher.start(self.gpa, self.io, self.root.?, self.options.watch()) catch null;
+        self.watch_started_ns = self.now();
     }
 
     fn warmTask(self: *Session) void {
@@ -185,7 +270,8 @@ pub const Session = struct {
         self.warm_thread = null;
         self.persistIfDue();
         self.reset();
-        self.roots.deinit(self.gpa);
+        self.clearRoots();
+        self.trees.deinit(self.gpa);
         self.pool.deinit();
     }
 
@@ -219,29 +305,134 @@ pub const Session = struct {
         self.publish_due = false;
     }
 
-    pub const Root = struct { version: u64, digest: [32]u8 };
-
     fn clearRoots(self: *Session) void {
-        var it = self.roots.keyIterator();
-        while (it.next()) |k| self.gpa.free(k.*);
-        self.roots.clearRetainingCapacity();
-    }
-
-    pub fn cachedRoot(self: *Session, key: []const u8) ?[32]u8 {
-        const hit = self.roots.get(key) orelse return null;
-        if (hit.version != self.delta.version) return null;
-        return hit.digest;
-    }
-
-    pub fn rememberRoot(self: *Session, key: []const u8, digest: [32]u8) !void {
-        const got = try self.roots.getOrPut(self.gpa, key);
-        if (!got.found_existing) {
-            got.key_ptr.* = self.gpa.dupe(u8, key) catch |err| {
-                self.roots.removeByPtr(got.key_ptr);
-                return err;
-            };
+        var it = self.trees.iterator();
+        while (it.next()) |kv| {
+            self.gpa.free(kv.key_ptr.*);
+            kv.value_ptr.*.deinit(self.gpa);
+            self.gpa.destroy(kv.value_ptr.*);
         }
-        got.value_ptr.* = .{ .version = self.delta.version, .digest = digest };
+        self.trees.clearRetainingCapacity();
+    }
+
+    pub fn scopeRoot(self: *Session, key: ?[]const u8, rel: []const u8, file: bool) !search_index.Digest {
+        if (key) |k| {
+            if (self.trees.get(k)) |tree| {
+                if (tree.version == self.delta.version) return tree.tree.root();
+                if (try self.advanceTree(tree, rel, file)) return tree.tree.root();
+            }
+        }
+        const built = try self.gpa.create(ScopeTree);
+        errdefer self.gpa.destroy(built);
+        built.* = try self.buildTree(rel, file);
+        const digest = built.tree.root();
+        const k = key orelse {
+            built.deinit(self.gpa);
+            self.gpa.destroy(built);
+            return digest;
+        };
+        if (self.trees.fetchRemove(k)) |old| {
+            self.gpa.free(old.key);
+            old.value.deinit(self.gpa);
+            self.gpa.destroy(old.value);
+        }
+        if (self.trees.count() >= max_scope_trees) self.clearRoots();
+        const owned = self.gpa.dupe(u8, k) catch |err| {
+            built.deinit(self.gpa);
+            return err;
+        };
+        self.trees.put(self.gpa, owned, built) catch |err| {
+            self.gpa.free(owned);
+            built.deinit(self.gpa);
+            return err;
+        };
+        return digest;
+    }
+
+    fn inScope(path: []const u8, rel: []const u8, file: bool) bool {
+        if (file) return change_watch.samePath(path, rel);
+        if (rel.len == 0) return true;
+        return change_watch.under(rel, path) and path.len > rel.len;
+    }
+
+    fn isInternal(path: []const u8) bool {
+        var segments = std.mem.tokenizeAny(u8, path, "/\\");
+        const first = segments.next() orelse return false;
+        return std.ascii.eqlIgnoreCase(first, ".git") or std.ascii.eqlIgnoreCase(first, shadow.workspace_dir);
+    }
+
+    fn leafDigest(self: *Session, path: []const u8) ?search_index.Digest {
+        if (self.delta.get(path)) |p| return if (p.state == .indexed) p.digest else null;
+        const v = self.view() orelse return null;
+        const id = v.find(path) orelse return null;
+        if (self.delta.isRemoved(id) or v.stateOf(id) != .indexed) return null;
+        return v.record(id).digest;
+    }
+
+    fn advanceTree(self: *Session, tree: *ScopeTree, rel: []const u8, file: bool) !bool {
+        const changes = self.delta.changesSince(tree.version) orelse return false;
+        for (changes) |change| {
+            if (!inScope(change.path, rel, file) or isInternal(change.path)) continue;
+            const current = self.leafDigest(change.path);
+            const at = tree.find(change.path) orelse {
+                if (current != null) return false;
+                continue;
+            };
+            const digest = current orelse return false;
+            if (std.mem.eql(u8, &digest, &tree.digests[at])) continue;
+            tree.digests[at] = digest;
+            tree.tree.update(at, answer.pathLeafHash(.{ .path = tree.paths[at], .digest = digest }));
+        }
+        tree.version = self.delta.version;
+        return true;
+    }
+
+    fn buildTree(self: *Session, rel: []const u8, file: bool) !ScopeTree {
+        var leaves: std.ArrayList(answer.Leaf) = .empty;
+        defer leaves.deinit(self.gpa);
+        if (self.view()) |v| {
+            const range: [2]u32 = if (file) blk: {
+                const id = v.find(rel) orelse break :blk .{ 0, 0 };
+                break :blk .{ id, id + 1 };
+            } else v.dirRange(rel);
+            var id = range[0];
+            while (id < range[1]) : (id += 1) {
+                if (self.delta.isRemoved(id) or v.stateOf(id) != .indexed) continue;
+                const path = v.path(id);
+                if (isInternal(path)) continue;
+                try leaves.append(self.gpa, .{ .path = path, .digest = v.record(id).digest });
+            }
+        }
+        for (self.delta.entries.values()) |p| {
+            if (p.state != .indexed or !inScope(p.path, rel, file) or isInternal(p.path)) continue;
+            try leaves.append(self.gpa, .{ .path = p.path, .digest = p.digest });
+        }
+        std.mem.sort(answer.Leaf, leaves.items, {}, struct {
+            fn less(_: void, a: answer.Leaf, b: answer.Leaf) bool {
+                return std.mem.order(u8, a.path, b.path) == .lt;
+            }
+        }.less);
+        const hashes = try self.gpa.alloc(search_index.Digest, leaves.items.len);
+        defer self.gpa.free(hashes);
+        for (leaves.items, hashes, 0..) |leaf, *h, i| {
+            if (i != 0 and std.mem.order(u8, leaves.items[i - 1].path, leaf.path) != .lt) return error.InconsistentCertificate;
+            h.* = answer.pathLeafHash(leaf);
+        }
+        var tree = try merkle_tree.Tree.build(self.gpa, hashes);
+        errdefer tree.deinit(self.gpa);
+        const paths = try self.gpa.alloc([]u8, leaves.items.len);
+        var made: usize = 0;
+        errdefer {
+            for (paths[0..made]) |path| self.gpa.free(path);
+            self.gpa.free(paths);
+        }
+        for (leaves.items, paths) |leaf, *path| {
+            path.* = try self.gpa.dupe(u8, leaf.path);
+            made += 1;
+        }
+        const digests = try self.gpa.alloc(search_index.Digest, leaves.items.len);
+        for (leaves.items, digests) |leaf, *d| d.* = leaf.digest;
+        return .{ .version = self.delta.version, .paths = paths, .digests = digests, .tree = tree };
     }
 
     pub fn owns(self: *const Session, root_abs: []const u8) bool {
@@ -271,8 +462,7 @@ pub const Session = struct {
         const root = self.root orelse return error.NoRoot;
         const started = self.now();
         var report: Report = .{};
-        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root, self.options.watch()) catch null;
-        self.watch_started_ns = self.now();
+        self.startWatcher();
         self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;
         self.index_dir = if (self.options.index_dir) |dir| try self.gpa.dupe(u8, dir) else search_index.indexDir(self.gpa, root) catch null;
         self.startPool();
@@ -356,7 +546,7 @@ pub const Session = struct {
         defer self.gpa.free(seen);
         try stat_scan.stampAll(self.gpa, root, paths, seen, self.poolPtr());
         report.stamp_ns = timer.lap();
-        const prepared = try search_index.prepareAll(self.gpa, self.io, root, paths, seen, false, self.poolPtr(), &self.cancel);
+        const prepared = try search_index.prepareAll(self.gpa, self.io, root, paths, seen, false, true, self.poolPtr(), &self.cancel);
         defer search_index.freeAll(self.gpa, prepared);
         search_index.sortByPath(prepared);
         const inputs = try self.gpa.alloc(index_file.Input, prepared.len);
@@ -410,7 +600,7 @@ pub const Session = struct {
         }
         var id: u32 = 0;
         while (id < v.count()) : (id += 1) {
-            if (!matched.isSet(id)) try self.delta.markRemoved(self.gpa, id, v.count());
+            if (!matched.isSet(id)) try self.delta.markRemoved(self.gpa, id, v.count(), v.path(id));
         }
         try self.applyPrepared(root, todo_paths.items, todo_seen.items);
         report.recomputed = todo_paths.items.len;
@@ -420,12 +610,12 @@ pub const Session = struct {
 
     fn applyPrepared(self: *Session, root: []const u8, paths: []const []const u8, seen: []const ?Seen) !void {
         if (paths.len == 0) return;
-        const prepared = try search_index.prepareAll(self.gpa, self.io, root, paths, seen, true, self.poolPtr(), null);
+        const prepared = try search_index.prepareAll(self.gpa, self.io, root, paths, seen, true, false, self.poolPtr(), null);
         defer self.gpa.free(prepared);
         var moved: usize = 0;
         errdefer for (prepared[moved..]) |p| p.deinit(self.gpa);
         for (prepared) |p| {
-            if (self.view()) |v| if (v.find(p.path)) |b| try self.delta.markRemoved(self.gpa, b, v.count());
+            if (self.view()) |v| if (v.find(p.path)) |b| try self.delta.markRemoved(self.gpa, b, v.count(), v.path(b));
             moved += 1;
             try self.delta.put(self.gpa, p);
         }
@@ -548,7 +738,7 @@ pub const Session = struct {
     }
 
     fn stampOf(self: *Session, rel: []const u8) ?Stamp {
-        if (self.delta.get(self.gpa, rel)) |p| return p.stamp;
+        if (self.delta.get(rel)) |p| return p.stamp;
         const v = self.view() orelse return null;
         const id = v.find(rel) orelse return null;
         if (self.delta.isRemoved(id)) return null;
@@ -556,7 +746,7 @@ pub const Session = struct {
     }
 
     fn stateOf(self: *Session, rel: []const u8) ?search_index.FileState {
-        if (self.delta.get(self.gpa, rel)) |p| return p.state;
+        if (self.delta.get(rel)) |p| return p.state;
         const v = self.view() orelse return null;
         const id = v.find(rel) orelse return null;
         if (self.delta.isRemoved(id)) return null;
@@ -564,7 +754,7 @@ pub const Session = struct {
     }
 
     pub fn tracks(self: *Session, rel: []const u8) bool {
-        if (self.delta.get(self.gpa, rel) != null) return true;
+        if (self.delta.get(rel) != null) return true;
         const v = self.view() orelse return false;
         const id = v.find(rel) orelse return false;
         return !self.delta.isRemoved(id);
@@ -664,7 +854,7 @@ pub const Session = struct {
     }
 
     fn trackedName(self: *Session, rel: []const u8) ?[]const u8 {
-        if (self.delta.get(self.gpa, rel)) |p| return p.path;
+        if (self.delta.get(rel)) |p| return p.path;
         const v = self.view() orelse return null;
         const id = v.find(rel) orelse return null;
         if (self.delta.isRemoved(id)) return null;
@@ -672,25 +862,20 @@ pub const Session = struct {
     }
 
     fn applyList(self: *Session, root: []const u8, listed: []const []const u8) !void {
-        var wanted: std.StringHashMapUnmanaged(void) = .empty;
-        defer {
-            var it = wanted.keyIterator();
-            while (it.next()) |k| self.gpa.free(k.*);
-            wanted.deinit(self.gpa);
-        }
+        var wanted: FoldedSet = .empty;
+        defer wanted.deinit(self.gpa);
+        try wanted.ensureTotalCapacity(self.gpa, listed.len);
         var fresh: std.ArrayList([]const u8) = .empty;
         defer fresh.deinit(self.gpa);
         for (listed) |rel| {
-            try wanted.put(self.gpa, try foldedKey(self.gpa, rel), {});
+            wanted.putAssumeCapacity(rel, {});
             if (!self.tracks(rel)) try fresh.append(self.gpa, rel);
         }
         if (self.view()) |v| {
             var id: u32 = 0;
             while (id < v.count()) : (id += 1) {
                 if (self.delta.isRemoved(id)) continue;
-                const key = try foldedKey(self.gpa, v.path(id));
-                defer self.gpa.free(key);
-                if (!wanted.contains(key)) try self.delta.markRemoved(self.gpa, id, v.count());
+                if (!wanted.contains(v.path(id))) try self.delta.markRemoved(self.gpa, id, v.count(), v.path(id));
             }
         }
         var gone: std.ArrayList([]const u8) = .empty;
@@ -698,10 +883,10 @@ pub const Session = struct {
             for (gone.items) |g| self.gpa.free(g);
             gone.deinit(self.gpa);
         }
-        for (self.delta.entries.keys(), self.delta.entries.values()) |k, p| {
-            if (!wanted.contains(k)) try gone.append(self.gpa, try self.gpa.dupe(u8, p.path));
+        for (self.delta.entries.values()) |p| {
+            if (!wanted.contains(p.path)) try gone.append(self.gpa, try self.gpa.dupe(u8, p.path));
         }
-        for (gone.items) |g| self.delta.drop(self.gpa, g);
+        for (gone.items) |g| try self.delta.drop(self.gpa, g);
         const seen = try self.gpa.alloc(?Seen, fresh.items.len);
         defer self.gpa.free(seen);
         @memset(seen, null);
@@ -747,6 +932,11 @@ pub const Session = struct {
         const v = &self.base.?.view;
         var inputs: std.ArrayList(index_file.Input) = .empty;
         defer inputs.deinit(self.gpa);
+        var blobs: std.ArrayList([]u8) = .empty;
+        defer {
+            for (blobs.items) |b| self.gpa.free(b);
+            blobs.deinit(self.gpa);
+        }
         const extra = try self.gpa.alloc(*const Prepared, self.delta.entries.count());
         defer self.gpa.free(extra);
         for (self.delta.entries.values(), extra) |*p, *e| e.* = p;
@@ -766,7 +956,14 @@ pub const Session = struct {
                 }
                 id += 1;
             } else {
-                try inputs.append(self.gpa, extra[e].input());
+                var input = extra[e].input();
+                if (input.state == .indexed and input.spans.len == 0) {
+                    try blobs.ensureUnusedCapacity(self.gpa, 1);
+                    const blob = try search_index.spanBlob(self.gpa, input.path, input.content);
+                    blobs.appendAssumeCapacity(blob);
+                    input.spans = blob;
+                }
+                try inputs.append(self.gpa, input);
                 e += 1;
             }
         }
