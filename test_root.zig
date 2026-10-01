@@ -140,6 +140,7 @@ test {
     _ = @import("tests/facts_store.zig");
     _ = @import("tests/facts_query.zig");
     _ = @import("tests/fact_store.zig");
+    _ = @import("tests/evidence.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");
