@@ -473,11 +473,104 @@ fn writeMicros(js: *std.json.Stringify, field: []const u8, ns: u64) !void {
     try js.write(@as(f64, @floatFromInt(ns)) / 1000.0);
 }
 
+const bench_intents = [_]evidence.Intent{ .explain, .decides, .callers, .callees, .flow };
+
+const Slow = struct { ns: u64 = 0, path: []const u8 = "", qname: []const u8 = "" };
+
+const EvidenceRun = struct {
+    name: []const u8,
+    ns: []u64,
+    chars: []u64,
+    tally: Tally = .{},
+    slowest: [3]Slow = @splat(.{}),
+
+    fn note(self: *EvidenceRun, ns: u64, s: Sampled) void {
+        var slot: Slow = .{ .ns = ns, .path = s.path, .qname = s.qname };
+        for (&self.slowest) |*kept| {
+            if (slot.ns > kept.ns) std.mem.swap(Slow, kept, &slot);
+        }
+    }
+};
+
+fn evidenceRuns(gpa: Allocator, arena: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, subjects: []const Sampled) ![]EvidenceRun {
+    const runs = try arena.alloc(EvidenceRun, bench_intents.len + 1);
+    for (runs, 0..) |*entry, k| {
+        const pair = k == bench_intents.len;
+        const intent: evidence.Intent = if (pair) .explain else bench_intents[k];
+        entry.* = .{ .name = if (pair) "explain_pair" else @tagName(intent), .ns = try arena.alloc(u64, subjects.len), .chars = try arena.alloc(u64, subjects.len) };
+        for (subjects, 0..) |s, i| {
+            var scratch = std.heap.ArenaAllocator.init(gpa);
+            defer scratch.deinit();
+            const other = subjects[(i + 1) % subjects.len];
+            const both = [_]evidence.SymbolRef{ .{ .path = s.path, .qname = s.qname }, .{ .path = other.path, .qname = other.qname } };
+            const terms = [_][]const u8{s.name};
+            const request: evidence.EvidenceRequest = .{ .targets = if (pair) both[0..2] else both[0..1], .intent = intent, .terms = if (intent == .decides) terms[0..] else &.{} };
+            const started = clock.monotonic();
+            const store = try repo.factStore(scratch.allocator());
+            const result = evidence.evidence(&store, request, evidence.default_budget);
+            const ns: u64 = @intCast(clock.monotonic() - started);
+            entry.ns[i] = ns;
+            entry.note(ns, s);
+            entry.chars[i] = switch (result) {
+                .complete => |c| c.value.text.len,
+                .partial => |p| p.value.text.len,
+                .refused => 0,
+            };
+            switch (result) {
+                .complete => entry.tally.complete += 1,
+                .partial => entry.tally.partial += 1,
+                .refused => entry.tally.refused += 1,
+            }
+        }
+    }
+    return runs;
+}
+
+fn writeEvidenceRuns(js: *std.json.Stringify, runs: []EvidenceRun) !void {
+    try js.objectField("evidence");
+    try js.beginObject();
+    for (runs) |*entry| {
+        try js.objectField(entry.name);
+        try js.beginObject();
+        const p = Percentiles.of(entry.ns);
+        try writeMicros(js, "p50_us", p.p50);
+        try writeMicros(js, "p99_us", p.p99);
+        try writeMicros(js, "max_us", p.max);
+        const c = Percentiles.of(entry.chars);
+        try js.objectField("chars_p50");
+        try js.write(c.p50);
+        try js.objectField("chars_max");
+        try js.write(c.max);
+        try js.objectField("complete");
+        try js.write(entry.tally.complete);
+        try js.objectField("partial");
+        try js.write(entry.tally.partial);
+        try js.objectField("refused");
+        try js.write(entry.tally.refused);
+        try js.objectField("slowest");
+        try js.beginArray();
+        for (entry.slowest) |slow| {
+            if (slow.ns == 0) continue;
+            try js.beginObject();
+            try writeMicros(js, "us", slow.ns);
+            try js.objectField("path");
+            try js.write(slow.path);
+            try js.objectField("qname");
+            try js.write(slow.qname);
+            try js.endObject();
+        }
+        try js.endArray();
+        try js.endObject();
+    }
+    try js.endObject();
+}
+
 fn bench(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const subjects = try sampleSubjects(arena, repo, options.seed, options.samples);
+    const runs = try evidenceRuns(gpa, arena, clock, repo, subjects);
     const relations = [_]facts_query.Relation{ .callers, .callees, .defined_at, .refs };
     var timings: [relations.len][]u64 = undefined;
     var tallies: [relations.len]Tally = @splat(.{});
@@ -567,6 +660,7 @@ fn bench(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, options: 
     try writeMicros(&js, "p50_us", rp.p50);
     try writeMicros(&js, "p99_us", rp.p99);
     try js.endObject();
+    try writeEvidenceRuns(&js, runs);
     const up = Percentiles.of(update_ns.items);
     try js.objectField("update");
     try js.beginObject();
