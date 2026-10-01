@@ -110,6 +110,7 @@ test "search freshness: a session warmed on a background thread keeps its watche
     defer session.deinit();
     session.start();
     try session.warm();
+    try testing.expectEqual(std.Thread.getCurrentId(), session.watcher.?.issuer);
     var reason_buf: [64]u8 = undefined;
     const first = try search(runtime, &session, repo.root, "seed", &reason_buf);
     try testing.expectEqualStrings("first_build", first.reason);
@@ -201,7 +202,7 @@ test "search freshness: a burst that overflows the watch buffer falls back to a 
     try testing.expectEqual(@as(usize, 150), found.files);
 }
 
-test "search freshness: a git add that changes the tracked set is picked up without waiting" {
+test "search freshness: a git add and a git rm that change the tracked set are picked up without waiting" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init(3);
     defer repo.deinit();
@@ -216,6 +217,12 @@ test "search freshness: a git add that changes the tracked set is picked up with
     try gitIn(repo.root, &.{ "add", "src/added.ts" });
     const found = try search(runtime, &session, repo.root, "added_token", &reason_buf);
     try testing.expectEqual(@as(usize, 1), found.files);
+
+    try gitIn(repo.root, &.{ "rm", "-q", "--cached", "src/added.ts", "src/f0.ts" });
+    const untracked = try search(runtime, &session, repo.root, "added_token", &reason_buf);
+    try testing.expectEqual(@as(usize, 0), untracked.files);
+    const left = try search(runtime, &session, repo.root, "seed", &reason_buf);
+    try testing.expectEqual(@as(usize, 2), left.files);
 }
 
 fn removeIndexFile(root: []const u8) void {

@@ -99,6 +99,7 @@ pub const Watcher = struct {
     cookie_buf: [cookie_dir.len + 33]u8 = undefined,
     cookie_len: usize = 0,
     cookie_seen: bool = false,
+    issuer: std.Thread.Id = 0,
     stats: Stats = .{},
 
     pub const Stats = struct {
@@ -171,6 +172,7 @@ pub const Watcher = struct {
             return;
         }
         self.pending = true;
+        self.issuer = std.Thread.getCurrentId();
         self.stats.reads += 1;
     }
 
