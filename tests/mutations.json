@@ -6312,7 +6312,7 @@
       "id": "SA1-partial-answer-reported-complete",
       "file": "src/protocol/search_v1.zig",
       "from": "        return self.truncated or self.missing.items.len != 0;",
-      "to": "        return false;",
+      "to": "        return self.truncated and false;",
       "kills": [
         "search answers: a line that runs out of regex steps makes the answer partial and names the file",
         "search answers: a capped answer is partial",
