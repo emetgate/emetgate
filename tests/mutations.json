@@ -7847,8 +7847,7 @@
       "from": "            const write = std.mem.readInt(i64, rec[24..32], .little);",
       "to": "            const write = std.mem.readInt(i64, rec[8..16], .little);",
       "kills": [
-        "a file rewritten with its old size and change time but a new last-write time is read again by the next session",
-        "stat scan: every listed file gets its size, write time and change time, and a missing one stays null"
+        "a file rewritten with its old size and change time but a new last-write time is read again by the next session"
       ]
     },
     {
