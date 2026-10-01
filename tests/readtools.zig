@@ -242,6 +242,43 @@ test "read tools refuse a path outside the repo" {
     try expectToolError(runtime, "emetgate_search", .{ .pattern = "fonts", .dir = "C:\\Windows" }, "FileOutsideRepo");
 }
 
+test "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "dirrepo/a/b");
+    const dirrepo = try tmp.dir.realPathFileAlloc(testing.io, "dirrepo", testing.allocator);
+    defer testing.allocator.free(dirrepo);
+    try git_fixture.initRepo(dirrepo);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "dirrepo/a/b/note.txt", .data = "nested\n" });
+    try tmp.dir.createDirPath(testing.io, "filerepo/src");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "filerepo/.git", .data = "gitdir: C:/nowhere/.git/worktrees/x\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "filerepo/src/note.txt", .data = "nested\n" });
+    try tmp.dir.createDirPath(testing.io, "bare.git/objects");
+    try tmp.dir.createDirPath(testing.io, "bare.git/refs");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "bare.git/HEAD", .data = "ref: refs/heads/main\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "bare.git/description", .data = "nested\n" });
+    try tmp.dir.createDirPath(testing.io, "plain/a");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "plain/a/note.txt", .data = "plain\n" });
+
+    for ([_][]const u8{ "dirrepo/a/b/note.txt", "filerepo/src/note.txt", "bare.git/description" }) |rel| {
+        const abs = try tmp.dir.realPathFileAlloc(testing.io, rel, testing.allocator);
+        defer testing.allocator.free(abs);
+        errdefer std.debug.print("not refused: {s}\n", .{rel});
+        try expectToolError(runtime, "emetgate_read_file", .{ .file = abs }, "FileOutsideRepo");
+    }
+    const plain = try tmp.dir.realPathFileAlloc(testing.io, "plain/a/note.txt", testing.allocator);
+    defer testing.allocator.free(plain);
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = plain });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("plain\n", body.value.object.get("content").?.string);
+}
+
 test "read tools refuse .git internals" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
