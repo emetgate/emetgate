@@ -26,6 +26,7 @@ pub const facts_store = @import("engine/facts_store.zig");
 pub const facts_query = @import("engine/facts_query.zig");
 pub const facts_evidence = @import("engine/facts_evidence.zig");
 pub const facts_spine = @import("engine/facts_spine.zig");
+pub const facts_merkle = @import("engine/facts_merkle.zig");
 pub const coverage = @import("engine/coverage.zig");
 pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");

@@ -280,3 +280,29 @@ test "fact store: a store whose definition name was altered on disk is refused b
         else => return error.AlteredStoreAccepted,
     }
 }
+
+test "fact store: an in-memory edit relinks the file and moves the snapshot root to the value a full recount gives" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+        .{ .path = "c.ts", .data = "export const c = 3;\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const before = repo.snapshot();
+    const update = try repo.updateSource("b.ts", "import { f } from \"./a\";\nexport function g() { return 2; }\n");
+    try testing.expect(!update.reshaped);
+    const after = repo.snapshot();
+    try testing.expect(after.barrier > before.barrier);
+    try testing.expect(!std.mem.eql(u8, &before.root, &after.root));
+    const incremental = after.root;
+    try repo.computeSnapshot();
+    try testing.expectEqualSlices(u8, &repo.snapshot().root, &incremental);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectEqual(@as(usize, 0), (try callerPaths(arena.allocator(), repo, "f")).len);
+}

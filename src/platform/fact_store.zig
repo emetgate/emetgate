@@ -7,6 +7,7 @@ const facts_store = @import("../engine/facts_store.zig");
 const facts_query = @import("../engine/facts_query.zig");
 const facts_evidence = @import("../engine/facts_evidence.zig");
 const answer = @import("../engine/answer.zig");
+const facts_merkle = @import("../engine/facts_merkle.zig");
 const registry = @import("../engine/lang/registry.zig");
 const Profile = @import("../engine/lang/profile.zig").Profile;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
@@ -299,6 +300,7 @@ pub const Repo = struct {
     load: Load = .absent,
     load_ms: u64 = 0,
     root_digest: answer.Digest = std.mem.zeroes(answer.Digest),
+    merkle: ?facts_merkle.Tree = null,
 
     pub fn open(gpa: Allocator, seam: io_seam.Seam, runtime: *Runtime, options: Options) !*Repo {
         const self = try gpa.create(Repo);
@@ -314,6 +316,7 @@ pub const Repo = struct {
     }
 
     pub fn deinit(self: *Repo) void {
+        if (self.merkle) |*tree| tree.deinit();
         if (self.workspace) |*w| w.deinit();
         self.pool.deinit();
         self.metas.deinit(self.gpa);
@@ -334,7 +337,18 @@ pub const Repo = struct {
             try leaves.append(self.gpa, .{ .path = state.path, .digest = m.digest });
         }
         std.mem.sort(answer.Leaf, leaves.items, {}, leafLess);
-        self.root_digest = try answer.merkleRoot(leaves.items);
+        if (self.merkle) |*tree| tree.deinit();
+        self.merkle = null;
+        self.merkle = try facts_merkle.Tree.build(self.gpa, leaves.items);
+        self.root_digest = try self.merkle.?.root();
+    }
+
+    fn updateSnapshot(self: *Repo, path: []const u8, digest: answer.Digest) !void {
+        const tree = if (self.merkle) |*t| t else return self.computeSnapshot();
+        tree.update(path, digest) catch |err| switch (err) {
+            error.NotALeaf => return self.computeSnapshot(),
+        };
+        self.root_digest = try tree.root();
     }
 
     pub fn snapshot(self: *const Repo) answer.Snapshot {
@@ -387,7 +401,7 @@ pub const Repo = struct {
         m.stamp = .{};
         const relinked = try self.store.relink(&.{id}, if (reshaped) &.{id} else &.{}, self.workspace.?.resolver());
         self.barrier += 1;
-        try self.computeSnapshot();
+        try self.updateSnapshot(self.store.file(id).path, m.digest);
         return .{ .reshaped = reshaped, .relinked = relinked };
     }
 
