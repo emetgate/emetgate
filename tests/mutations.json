@@ -6136,8 +6136,8 @@
     {
       "id": "SW5-index-loaded-before-the-watcher-starts",
       "file": "src/platform/search_session.zig",
-      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
-      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) catch null else null;\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
@@ -6154,8 +6154,8 @@
     {
       "id": "IF1-index-file-version-not-checked",
       "file": "src/platform/search_index_file.zig",
-      "from": "    if (try r.int(u32) != version) return error.Corrupt;",
-      "to": "    _ = try r.int(u32);",
+      "from": "    return bytes[family.len] != magic[family.len] or std.mem.readInt(u32, bytes[magic.len..][0..4], .little) != version;",
+      "to": "    return bytes[family.len] != magic[family.len];",
       "kills": [
         "a flipped byte, a cut tail, another version or another magic is refused"
       ]
@@ -6239,6 +6239,24 @@
       "to": "            previous.shrinkRetainingCapacity(0);",
       "kills": [
         "git index reader: version 4 prefix compression and an intent-to-add entry read the same as git ls-files"
+      ]
+    },
+    {
+      "id": "IL1-index-load-failure-swallowed",
+      "file": "src/platform/search_session.zig",
+      "from": "                self.load_failure = why;\n",
+      "to": "                _ = why;\n",
+      "kills": [
+        "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
+      ]
+    },
+    {
+      "id": "IL2-index-read-capped-at-64-mib",
+      "file": "src/platform/search_index.zig",
+      "from": "const max_index_file_bytes: u64 = 4 * 1024 * 1024 * 1024;",
+      "to": "const max_index_file_bytes: u64 = 64 * 1024 * 1024;",
+      "kills": [
+        "an index file larger than 64 MiB is read whole and judged by its bytes, not refused by its size"
       ]
     }
   ]

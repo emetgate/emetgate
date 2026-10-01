@@ -114,7 +114,17 @@ pub fn encode(gpa: Allocator, contents: Contents) ![]u8 {
     return w.list.toOwnedSlice(gpa);
 }
 
-pub const DecodeError = error{ Corrupt, OutOfMemory };
+pub const DecodeError = error{ Corrupt, Version, OutOfMemory };
+
+const family = "EMGIDX\x00";
+const text_family = "emetgate-search-index";
+
+fn otherVersion(bytes: []const u8) bool {
+    if (std.mem.startsWith(u8, bytes, text_family)) return true;
+    if (!std.mem.startsWith(u8, bytes, family)) return false;
+    if (bytes.len < magic.len + 4) return false;
+    return bytes[family.len] != magic[family.len] or std.mem.readInt(u32, bytes[magic.len..][0..4], .little) != version;
+}
 
 const Reader = struct {
     buf: []const u8,
@@ -159,14 +169,14 @@ const Reader = struct {
 };
 
 pub fn decode(a: Allocator, bytes: []const u8) DecodeError!Contents {
+    if (otherVersion(bytes)) return error.Version;
     if (bytes.len < magic.len + 4 + checksum_len) return error.Corrupt;
+    if (!std.mem.eql(u8, bytes[0..magic.len], magic)) return error.Corrupt;
     const body = bytes[0 .. bytes.len - checksum_len];
     const claimed = bytes[bytes.len - checksum_len ..];
     const actual = symbol.hashOf(body);
     if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;
-    var r: Reader = .{ .buf = body };
-    if (!std.mem.eql(u8, try r.take(magic.len), magic)) return error.Corrupt;
-    if (try r.int(u32) != version) return error.Corrupt;
+    var r: Reader = .{ .buf = body, .pos = magic.len + 4 };
     const written_ns: i96 = @intCast(try r.int(i128));
     var git_stamp: ?GitStamp = null;
     if (try r.flag()) git_stamp = .{ .mtime_ns = @intCast(try r.int(i128)), .size = try r.int(u64), .id = try r.int(u64) };
@@ -264,7 +274,8 @@ test "a flipped byte, a cut tail, another version or another magic is refused" {
         const copy = try testing.allocator.dupe(u8, bytes);
         defer testing.allocator.free(copy);
         copy[i] ^= 0x40;
-        try testing.expectError(error.Corrupt, decode(a, copy));
+        const in_version = i >= family.len and i < magic.len + 4;
+        try testing.expectError(if (in_version) error.Version else error.Corrupt, decode(a, copy));
     }
     for (0..bytes.len) |cut| try testing.expectError(error.Corrupt, decode(a, bytes[0..cut]));
 
@@ -273,5 +284,7 @@ test "a flipped byte, a cut tail, another version or another magic is refused" {
     std.mem.writeInt(u32, old[magic.len..][0..4], version - 1, .little);
     const resum = symbol.hashOf(old[0 .. old.len - checksum_len]);
     @memcpy(old[old.len - checksum_len ..], &resum);
-    try testing.expectError(error.Corrupt, decode(a, old));
+    try testing.expectError(error.Version, decode(a, old));
+    try testing.expectError(error.Version, decode(a, "emetgate-search-index v1\nW 0\n"));
+    try testing.expectError(error.Corrupt, decode(a, "not an index at all, long enough to pass the length check"));
 }

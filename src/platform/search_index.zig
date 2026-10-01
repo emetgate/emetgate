@@ -16,7 +16,7 @@ const Dir = std.Io.Dir;
 const WidePath = [std.fs.max_path_bytes:0]u16;
 
 pub const max_indexed_file_bytes: usize = 1 * 1024 * 1024;
-const max_index_file_bytes: usize = 64 * 1024 * 1024;
+const max_index_file_bytes: u64 = 4 * 1024 * 1024 * 1024;
 
 pub const racy_window_ns: i96 = 3 * std.time.ns_per_s;
 
@@ -606,35 +606,51 @@ const win = struct {
     extern "kernel32" fn MoveFileExW(from: [*:0]const u16, to: [*:0]const u16, flags: windows.DWORD) callconv(.winapi) windows.BOOL;
 };
 
-pub fn load(gpa: Allocator, io: std.Io, path: []const u8) !?Index {
-    const bytes = Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_index_file_bytes)) catch return null;
+pub const LoadFailure = enum { missing, too_large, io, corrupt, version };
+
+pub const Loaded = union(enum) {
+    index: Index,
+    failed: LoadFailure,
+};
+
+pub fn load(gpa: Allocator, io: std.Io, path: []const u8) Loaded {
+    const bytes = readWhole(gpa, io, path) catch |err| return .{ .failed = switch (err) {
+        error.FileNotFound => .missing,
+        error.TooLarge => .too_large,
+        else => .io,
+    } };
     defer gpa.free(bytes);
-    return parse(gpa, bytes) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => return null,
-    };
+    return parse(gpa, bytes) catch |err| .{ .failed = switch (err) {
+        error.OutOfMemory => .too_large,
+        error.Version => .version,
+        error.Corrupt => .corrupt,
+    } };
 }
 
-fn parse(gpa: Allocator, bytes: []const u8) !?Index {
+fn readWhole(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
+    const file = try Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const size = try file.length(io);
+    if (size > max_index_file_bytes) return error.TooLarge;
+    const bytes = gpa.alloc(u8, @intCast(size)) catch return error.TooLarge;
+    errdefer gpa.free(bytes);
+    if (try file.readPositionalAll(io, bytes, 0) != bytes.len) return error.Truncated;
+    return bytes;
+}
+
+fn parse(gpa: Allocator, bytes: []const u8) index_file.DecodeError!Loaded {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
     errdefer arena.deinit();
     const a = arena.allocator();
-    const contents = index_file.decode(a, bytes) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        error.Corrupt => {
-            arena.deinit();
-            gpa.destroy(arena);
-            return null;
-        },
-    };
+    const contents = try index_file.decode(a, bytes);
     const entries = try a.alloc(Entry, contents.entries.len);
     for (contents.entries, entries) |e, *out| out.* = .{ .path = e.path, .stamp = e.stamp, .trigrams = e.trigrams, .content_hash = e.content_hash, .spans = e.spans, .doc = e.doc };
     var index = try Index.finish(arena, entries, contents.written_ns);
     index.files = contents.files;
     index.git_stamp = contents.git_stamp;
-    return index;
+    return .{ .index = index };
 }
 
 const testing = std.testing;
@@ -654,7 +670,10 @@ test "build then save then load round-trips the same entries" {
     defer testing.allocator.free(path);
     try save(testing.allocator, testing.io, path, built, &.{}, null);
 
-    const loaded = (try load(testing.allocator, testing.io, path)) orelse return error.TestUnexpectedResult;
+    const loaded = switch (load(testing.allocator, testing.io, path)) {
+        .index => |index| index,
+        .failed => return error.TestUnexpectedResult,
+    };
     defer loaded.deinit();
     try testing.expectEqual(@as(usize, 1), loaded.entries.len);
     try testing.expectEqualStrings("a.ts", loaded.entries[0].path);
@@ -683,8 +702,24 @@ test "a corrupted index file is rejected instead of trusted" {
     tampered[tampered.len / 2] = tampered[tampered.len / 2] +% 1;
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "idx", .data = tampered });
 
-    const loaded = try load(testing.allocator, testing.io, path);
-    try testing.expect(loaded == null);
+    try testing.expectEqual(Loaded{ .failed = .corrupt }, load(testing.allocator, testing.io, path));
+}
+
+test "an index file larger than 64 MiB is read whole and judged by its bytes, not refused by its size" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const big = try testing.allocator.alloc(u8, 65 * 1024 * 1024);
+    defer testing.allocator.free(big);
+    @memset(big, 'x');
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "idx", .data = big });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}\\idx", .{root_abs});
+    defer testing.allocator.free(path);
+    try testing.expectEqual(Loaded{ .failed = .corrupt }, load(testing.allocator, testing.io, path));
+    const absent = try std.fmt.allocPrint(testing.allocator, "{s}\\absent", .{root_abs});
+    defer testing.allocator.free(absent);
+    try testing.expectEqual(Loaded{ .failed = .missing }, load(testing.allocator, testing.io, absent));
 }
 
 test "isSupersetSorted matches a subset regardless of order in the query" {

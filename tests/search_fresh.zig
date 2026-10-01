@@ -65,6 +65,7 @@ const Found = struct {
     recomputed: i64 = 0,
     mode: Mode = .none,
     list_reused: bool = false,
+    index_load: ?search_index.LoadFailure = null,
 
     const Mode = enum { none, full, dirty };
 };
@@ -94,7 +95,8 @@ fn search(runtime: *Runtime, session: *search_session.Session, root: []const u8,
     const stats = body.value.object.get("stats").?.object;
     const recomputed = stats.get("index_recomputed").?.integer;
     const mode = std.meta.stringToEnum(Found.Mode, stats.get("refresh_mode").?.string) orelse .none;
-    return .{ .files = files.count(), .reason = reason_buf[0..n], .recomputed = recomputed, .mode = mode, .list_reused = stats.get("list_reused").?.bool };
+    const index_load: ?search_index.LoadFailure = if (stats.get("index_load")) |v| std.meta.stringToEnum(search_index.LoadFailure, v.string) orelse return error.UnknownLoadFailure else null;
+    return .{ .files = files.count(), .reason = reason_buf[0..n], .recomputed = recomputed, .mode = mode, .list_reused = stats.get("list_reused").?.bool, .index_load = index_load };
 }
 
 test "search freshness: a tracked file written and searched with no pause is found, 200 times in a row" {
@@ -216,6 +218,7 @@ test "search on disk: a new session loads the saved index after its watcher star
         defer first.deinit();
         const found = try search(runtime, &first, repo.root, "seed", &reason_buf);
         try testing.expectEqualStrings("first_build", found.reason);
+        try testing.expectEqual(@as(?search_index.LoadFailure, .missing), found.index_load);
     }
     try repo.write(3, "export const between_sessions_token = 1;\n");
     try repo.write(4, "export const same = 9;\n");
@@ -227,6 +230,7 @@ test "search on disk: a new session loads the saved index after its watcher star
     try testing.expect(second.watch_started_ns <= second.loaded_ns);
     const found = try search(runtime, &second, repo.root, "between_sessions_token", &reason_buf);
     try testing.expectEqualStrings("loaded_from_disk", found.reason);
+    try testing.expectEqual(@as(?search_index.LoadFailure, null), found.index_load);
     try testing.expectEqual(@as(usize, 1), found.files);
     try testing.expectEqual(@as(i64, 2), found.recomputed);
     const same_size = try search(runtime, &second, repo.root, "same = 9", &reason_buf);
@@ -255,14 +259,16 @@ test "search on disk: a damaged, cut or foreign index file is ignored and rebuil
     defer gpa.free(flipped);
     flipped[flipped.len / 2] ^= 0x01;
     const old_text = "emetgate-search-index v1\nW 0\nC 00000000000000000000000000000000\n";
-    for ([_][]const u8{ flipped, good[0 .. good.len / 2], old_text, "" }) |bytes| {
-        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = bytes });
+    const Case = struct { bytes: []const u8, why: search_index.LoadFailure };
+    for ([_]Case{ .{ .bytes = flipped, .why = .corrupt }, .{ .bytes = good[0 .. good.len / 2], .why = .corrupt }, .{ .bytes = old_text, .why = .version }, .{ .bytes = "", .why = .corrupt } }) |case| {
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = case.bytes });
         try repo.write(1, "export const after_damage = 1;\n");
         var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
         defer session.deinit();
         try testing.expect(session.index == null);
         const found = try search(runtime, &session, repo.root, "after_damage", &reason_buf);
         try testing.expectEqualStrings("first_build", found.reason);
+        try testing.expectEqual(@as(?search_index.LoadFailure, case.why), found.index_load);
         try testing.expectEqual(@as(usize, 1), found.files);
         try repo.write(1, "export const seed = 0;\n");
     }

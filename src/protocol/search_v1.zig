@@ -603,14 +603,20 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     defer if (want_stats) {
         stats_sink = null;
     };
-    renderSearch(gpa, io, runtime, root, tree_cache, session, pattern, dir, is_regex, kinds, &buffer.writer) catch |err| {
+    var outcome: Outcome = .{};
+    renderSearch(gpa, io, runtime, root, tree_cache, session, pattern, dir, is_regex, kinds, &outcome, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
+    if (outcome.index_load) |why| event.reason = search_session.rebuildNote(why);
     return success(gpa, &buffer);
 }
 
-fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, pattern: []const u8, dir: []const u8, is_regex: bool, kinds: ?[]const Value, w: *Writer) !void {
+const Outcome = struct {
+    index_load: ?search_index.LoadFailure = null,
+};
+
+fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, pattern: []const u8, dir: []const u8, is_regex: bool, kinds: ?[]const Value, outcome: *Outcome, w: *Writer) !void {
     if (pattern.len == 0) return error.EmptyPattern;
     var total_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     var timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
@@ -627,6 +633,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             try sess.prepare(place.root);
             session_files = sess.files.?;
             session_index = sess.index;
+            outcome.index_load = sess.last.index_load;
             if (stats_sink) |s| {
                 s.session = sess.last;
                 s.list_ns += sess.last.list_ns;
@@ -654,7 +661,14 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     if (session_files == null) {
         const index_path = search_index.indexPath(gpa, place.root) catch null;
         defer if (index_path) |p| gpa.free(p);
-        const previous_index: ?search_index.Index = if (index_path) |p| (search_index.load(gpa, io, p) catch null) else null;
+        const loaded: search_index.Loaded = if (index_path) |p| search_index.load(gpa, io, p) else .{ .failed = .io };
+        const previous_index: ?search_index.Index = switch (loaded) {
+            .index => |index| index,
+            .failed => |why| blk: {
+                outcome.index_load = why;
+                break :blk null;
+            },
+        };
         defer if (previous_index) |idx| idx.deinit();
         if (timer) |*t| if (stats_sink) |s| {
             s.index_load_ns += t.lap();
@@ -837,6 +851,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     try js.endArray();
     try js.objectField("truncated");
     try js.write(truncated);
+    if (outcome.index_load) |why| {
+        try js.objectField("index");
+        try js.write(search_session.rebuildNote(why));
+    }
     if (stats_sink) |s| {
         if (total_timer) |*t| s.total_ns += t.lap();
         try js.objectField("stats");
@@ -856,6 +874,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             try js.write(@tagName(r.mode));
             try js.objectField("refresh_reason");
             try js.write(r.reason);
+            if (r.index_load) |why| {
+                try js.objectField("index_load");
+                try js.write(@tagName(why));
+            }
             try js.objectField("dirty_paths");
             try js.write(r.dirty_paths);
             try js.objectField("updated");
