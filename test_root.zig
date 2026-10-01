@@ -27,6 +27,7 @@ pub const facts_extract = src.facts_extract;
 pub const facts_store = src.facts_store;
 pub const facts_query = src.facts_query;
 pub const facts_evidence = src.facts_evidence;
+pub const facts_spine = src.facts_spine;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;

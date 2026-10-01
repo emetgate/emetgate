@@ -54,6 +54,7 @@ pub const Subject = struct {
     kind: facts.DefKind,
     line: u32,
     hash: facts.Hash,
+    span: facts.Span,
 };
 
 pub const Site = struct {
@@ -139,7 +140,7 @@ fn ownerOf(store: *const Store, file: FileId, def_index: u32) Owner {
 
 fn subjectOf(store: *const Store, id: DefId) ?Subject {
     const d = store.defOf(id) orelse return null;
-    return .{ .id = id, .path = store.file(id.file).path, .qname = d.qname, .kind = d.kind, .line = d.line, .hash = d.hash };
+    return .{ .id = id, .path = store.file(id.file).path, .qname = d.qname, .kind = d.kind, .line = d.line, .hash = d.hash, .span = d.span };
 }
 
 fn sameDef(a: DefId, b: DefId) bool {

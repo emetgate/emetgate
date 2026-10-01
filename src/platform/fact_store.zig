@@ -593,11 +593,19 @@ pub const SourceLines = struct {
     arena: Allocator,
     files: std.StringHashMapUnmanaged(?[]const u8) = .empty,
 
-    pub fn source(self: *SourceLines) facts_evidence.LineSource {
-        return .{ .ctx = self, .lineFn = lineOf };
+    pub fn source(self: *SourceLines) facts_evidence.Source {
+        return .{ .ctx = self, .fileFn = fileOf };
     }
 
-    fn bytesOf(self: *SourceLines, path: []const u8) facts_evidence.LineError!?[]const u8 {
+    fn fileOf(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
+        const self: *SourceLines = @ptrCast(@alignCast(ctx));
+        const bytes = (try self.bytesOf(path)) orelse return error.Unavailable;
+        const id = self.repo.store.fileId(path) orelse return error.Unavailable;
+        const profile = self.repo.store.file(id).profile orelse return error.Unavailable;
+        return .{ .bytes = bytes, .profile = profile };
+    }
+
+    fn bytesOf(self: *SourceLines, path: []const u8) facts_evidence.SourceError!?[]const u8 {
         if (self.files.get(path)) |cached| return cached;
         const id = self.repo.store.fileId(path) orelse return null;
         const abs = try std.fmt.allocPrint(self.arena, "{s}\\{s}", .{ self.repo.options.root_abs, path });
@@ -614,16 +622,6 @@ pub const SourceLines = struct {
         return kept;
     }
 
-    fn lineOf(ctx: *anyopaque, path: []const u8, number: u32) facts_evidence.LineError![]const u8 {
-        const self: *SourceLines = @ptrCast(@alignCast(ctx));
-        const bytes = (try self.bytesOf(path)) orelse return error.Unavailable;
-        var it = std.mem.splitScalar(u8, bytes, '\n');
-        var line: u32 = 1;
-        while (it.next()) |text| : (line += 1) {
-            if (line == number) return text;
-        }
-        return error.Unavailable;
-    }
 };
 
 fn sameStamp(a: Stamp, b: Stamp) bool {

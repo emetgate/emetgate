@@ -30,13 +30,18 @@ fn valueOf(a: facts_query.FactsAnswer) !facts_query.Edges {
     };
 }
 
-const NoLines = struct {
-    fn line(_: *anyopaque, _: []const u8, _: u32) facts_evidence.LineError![]const u8 {
-        return "code line";
+const RepoFiles = struct {
+    repo: *Repo,
+
+    fn file(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
+        const self: *RepoFiles = @ptrCast(@alignCast(ctx));
+        const bytes = self.repo.sources.get(path) orelse return error.Unavailable;
+        const profile = emetgate.lang_registry.forPath(path) orelse return error.Unavailable;
+        return .{ .bytes = bytes, .profile = profile };
     }
 
-    fn source() facts_evidence.LineSource {
-        return .{ .ctx = @constCast(@ptrCast(&context)), .lineFn = line };
+    fn source(self: *RepoFiles) facts_evidence.Source {
+        return .{ .ctx = self, .fileFn = file };
     }
 };
 
@@ -204,15 +209,18 @@ test "facts evidence: a partial answer ends with the not-a-proof line and stays 
     try testing.expectEqual(answer.Status.partial, result.status());
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    const rendered = try facts_evidence.render(arena.allocator(), &out.writer, result, NoLines.source(), facts_evidence.min_budget);
+    var files: RepoFiles = .{ .repo = &repo };
+    const rendered = try facts_evidence.render(arena.allocator(), &out.writer, result, files.source(), facts_evidence.min_budget);
     try testing.expect(out.written().len <= facts_evidence.min_budget);
     try testing.expectEqual(out.written().len, rendered.bytes);
     try testing.expect(rendered.cut > 0);
+    try testing.expectEqual(answer.Status.partial, rendered.status);
     const text = out.written();
     const last = text[(std.mem.lastIndexOfScalar(u8, text, '\n') orelse 0) + 1 ..];
-    try testing.expectEqualStrings(facts_evidence.open_footer ++ "120", last);
+    try testing.expect(std.mem.startsWith(u8, last, facts_evidence.open_footer ++ "120"));
+    try testing.expect(std.mem.indexOf(u8, text, "more lines not shown") != null);
     try testing.expect(std.mem.indexOf(u8, text, "proven]") != null);
-    try testing.expect(std.mem.startsWith(u8, text, "partial: 120 callers"));
+    try testing.expect(std.mem.indexOf(u8, text, "missing") != null);
 }
 
 test "facts evidence: a complete answer says so on its last line and labels each edge" {
@@ -229,9 +237,74 @@ test "facts evidence: a complete answer says so on its last line and labels each
     try testing.expectEqual(answer.Status.complete, result.status());
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
-    _ = try facts_evidence.render(arena.allocator(), &out.writer, result, NoLines.source(), facts_evidence.default_budget);
+    var files: RepoFiles = .{ .repo = &repo };
+    const rendered = try facts_evidence.render(arena.allocator(), &out.writer, result, files.source(), facts_evidence.default_budget);
     const text = out.written();
+    try testing.expectEqual(answer.Status.complete, rendered.status);
     try testing.expect(std.mem.endsWith(u8, text, facts_evidence.closed_footer));
     try testing.expectEqual(@as(usize, 2), std.mem.count(u8, text, " typed]"));
     try testing.expect(std.mem.startsWith(u8, text, "\u{2713} 2 callers in 2 files"));
+    try testing.expect(std.mem.indexOf(u8, text, "b.ts:2  export function use(c: C)") != null);
+}
+
+test "facts evidence: a function that fits is shown whole with its line numbers and nothing is elided" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    _ = try repo.put("a.ts", "function g() { return 1; }\nexport function f(x: number) {\n  if (x > 1) {\n    return g();\n  }\n  return 0;\n}\n");
+    try repo.linkAll();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try ask(arena.allocator(), &repo, .callees, "f");
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var files: RepoFiles = .{ .repo = &repo };
+    const rendered = try facts_evidence.render(arena.allocator(), &out.writer, result, files.source(), facts_evidence.default_budget);
+    const text = out.written();
+    try testing.expect(!rendered.elided);
+    try testing.expectEqual(answer.Status.complete, rendered.status);
+    for ([_][]const u8{ "     2  export function f(x: number) {", "     3    if (x > 1) {", "     4      return g();", "     6    return 0;", "     7  }" }) |line| {
+        if (std.mem.indexOf(u8, text, line) == null) {
+            std.debug.print("missing line {s} in\n{s}\n", .{ line, text });
+            return error.LineMissing;
+        }
+    }
+    try testing.expect(std.mem.indexOf(u8, text, "elided") == null);
+}
+
+test "facts evidence: a function over the budget keeps the whole block around each call, declares every elided range and turns the answer partial" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(testing.allocator);
+    try source.appendSlice(testing.allocator, "function target() { return 1; }\nfunction unused(): number { return 0; }\nexport function big(x: number) {\n  for (let i = 0; i < x; i++) {\n");
+    for (0..150) |_| try source.appendSlice(testing.allocator, "    x = x + i * 2 + 1;\n");
+    try source.appendSlice(testing.allocator, "    if (i > 3) {\n      target();\n    }\n");
+    for (0..150) |_| try source.appendSlice(testing.allocator, "    x = x + i * 2 + 1;\n");
+    try source.appendSlice(testing.allocator, "  }\n  return x;\n}\n");
+    _ = try repo.put("a.ts", source.items);
+    try repo.linkAll();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try facts_query.run(arena.allocator(), &repo.store, context, .{ .relation = .callees, .subject = "big" });
+    try testing.expectEqual(answer.Status.complete, result.status());
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var files: RepoFiles = .{ .repo = &repo };
+    const rendered = try facts_evidence.render(arena.allocator(), &out.writer, result, files.source(), facts_evidence.default_budget);
+    const text = out.written();
+    try testing.expect(text.len <= facts_evidence.default_budget);
+    try testing.expect(rendered.elided);
+    try testing.expectEqual(answer.Status.partial, rendered.status);
+    try testing.expect(std.mem.startsWith(u8, text, "partial:"));
+    for ([_][]const u8{ "   155      if (i > 3) {", "   156        target();", "   157      }", "     4    for (let i = 0; i < x; i++) {", "   308    }", "   310  }", "... 150 lines elided (5-154)", "... 150 lines elided (158-307)", "... 1 lines elided (309-309)" }) |line| {
+        if (std.mem.indexOf(u8, text, line) == null) {
+            std.debug.print("missing {s} in\n{s}\n", .{ line, text });
+            return error.LineMissing;
+        }
+    }
+    try testing.expect(std.mem.indexOf(u8, text, "emetgate_read_symbol {\"file\":\"a.ts\",\"symbol\":\"big\"}") != null);
 }
