@@ -38,13 +38,26 @@ const reserved_flags = [_][]const u8{
     "--allow-dangerously-skip-permissions",
 };
 
+const permission_mode_flag = "--permission-mode";
+const refused_permission_mode = "bypassPermissions";
+
 pub fn refuseReserved(passthrough: []const []const u8) error{LockdownFlagOverride}!void {
-    for (passthrough) |arg| {
+    for (passthrough, 0..) |arg, i| {
         for (reserved_flags) |flag| {
             if (std.mem.eql(u8, arg, flag)) return error.LockdownFlagOverride;
             if (arg.len > flag.len and std.mem.startsWith(u8, arg, flag) and arg[flag.len] == '=') return error.LockdownFlagOverride;
         }
+        if (permissionMode(passthrough, i)) |mode| {
+            if (std.ascii.eqlIgnoreCase(mode, refused_permission_mode)) return error.LockdownFlagOverride;
+        }
     }
+}
+
+fn permissionMode(args: []const []const u8, i: usize) ?[]const u8 {
+    const arg = args[i];
+    if (std.mem.eql(u8, arg, permission_mode_flag)) return if (i + 1 < args.len) args[i + 1] else null;
+    if (std.mem.startsWith(u8, arg, permission_mode_flag ++ "=")) return arg[permission_mode_flag.len + 1 ..];
+    return null;
 }
 
 pub fn buildArgv(gpa: Allocator, mcp_config_abs: []const u8, allowed_tools: []const u8, passthrough: []const []const u8) ![][]const u8 {
