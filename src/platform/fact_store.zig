@@ -8,6 +8,7 @@ const facts_query = @import("../engine/facts_query.zig");
 const facts_evidence = @import("../engine/facts_evidence.zig");
 const answer = @import("../engine/answer.zig");
 const facts_merkle = @import("../engine/facts_merkle.zig");
+const evidence = @import("../engine/evidence.zig");
 const registry = @import("../engine/lang/registry.zig");
 const Profile = @import("../engine/lang/profile.zig").Profile;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
@@ -372,6 +373,19 @@ pub const Repo = struct {
             .max_file_bytes = self.options.max_file_bytes,
             .largest_file_bytes = self.largestFile(),
         }, request);
+    }
+
+    pub fn factStore(self: *Repo, arena: Allocator) !evidence.FactStore {
+        const lines = try arena.create(SourceLines);
+        lines.* = .{ .repo = self, .arena = arena };
+        return .{
+            .arena = arena,
+            .store = &self.store,
+            .source = lines.source(),
+            .snapshot = self.snapshot(),
+            .max_file_bytes = self.options.max_file_bytes,
+            .largest_file_bytes = self.largestFile(),
+        };
     }
 
     pub fn updateSource(self: *Repo, rel: []const u8, bytes: []const u8) !Update {
