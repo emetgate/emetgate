@@ -376,7 +376,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 |---|---|
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
 | `emetgate_skeleton` | Signatures and structure without bodies, plus every adopted rule that covers the file (read-only) |
-| `emetgate_read_symbol` | The source of one symbol, several symbols at once, or a line range widened to the symbols it overlaps; with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
+| `emetgate_read_symbol` | The source of one symbol, several symbols at once, or a line range widened to the symbols it overlaps; a body over the read budget comes back folded (see Reader); with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
 | `emetgate_mutate` | Verify a proposed body structurally and return the result without writing |
 | `emetgate_try` | Verify, gate and commit a proposed body, or new text for one or more syntax nodes addressed by their hash |
 | `emetgate_try_batch` | Several proposals as one unit |
@@ -384,7 +384,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | `emetgate_move` | Move a top-level declaration to another file; the kernel derives and checks every import and commits source, target and users as one batch |
 | `emetgate_move_file` | Move or rename a file and rewrite every relative import to and from it as one batch |
 | `emetgate_write_doc` | Verify, gate and commit a hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section or a text line range; can commit together with a code edit in `emetgate_try_batch` |
-| `emetgate_read_file` | A JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim; confined to the repository |
+| `emetgate_read_file` | A JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim or a line range of it, source files included; confined to the repository |
 | `emetgate_list`, `emetgate_search` | Reads confined to the repository |
 | `emetgate_scan` | Measure one check expression against the repository, optionally within a `where` scope; writes nothing |
 | `emetgate_git` | Read-only `status`, `diff`, `log` or `show`, with a fixed argument list and safe overrides so nothing configured in the repository (pager, external diff, textconv, fsmonitor, a `clean`/`smudge` filter) can run; output is capped |
@@ -455,6 +455,51 @@ On disk the move is the protocol's rename intent: the new content goes to a temp
 
 The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, that audits a CLAUDE.md or AGENTS.md file: it sorts every instruction sentence into enforceable, waiting for a mechanism, unverifiable or belief, proposes a check and scope for the enforceable ones, measures each with `emetgate_scan` and reports, changing nothing. To use it in every project, copy the `md-audit` folder into `%USERPROFILE%\.claude\skills\` (`~/.claude/skills/` elsewhere).
 
+### Lockdown
+
+`emetgate lockdown [<claude args>...]` starts `claude` in the current directory with this argv in front of the user's arguments, and with `ENABLE_TOOL_SEARCH=false` added to its environment:
+
+```
+claude --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<server>__emetgate_mutate" --mcp-config <absolute .mcp.json> --strict-mcp-config
+```
+
+`--tools ""` leaves Claude Code no built-in tool: no shell, no file read or edit, no web access and no ToolSearch. `--strict-mcp-config` with the absolute path loads only the servers of that `.mcp.json`. A user argument that would change any of this (`--tools`, `--allowedTools`, `--allowed-tools`, `--mcp-config`, `--strict-mcp-config`, `--settings`, `--plugin-dir`, `--agents`, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, alone or as `--flag=value`) is refused before anything starts.
+`--permission-mode bypassPermissions` (also `--permission-mode=bypassPermissions`, in any letter case, though Claude Code 2.1.286 accepts only this spelling) is refused the same way, since it skips every permission check as `--dangerously-skip-permissions` does; the other modes (`acceptEdits`, `auto`, `manual`, `dontAsk`, `plan`) pass.
+
+`--allowedTools` lists the emetgate tools that neither change the repository nor run a command, so Claude Code runs them without a permission check; in auto mode that check added 0.5 to 1.6 s to each call in the measurement below. The list comes from reading each handler:
+
+| Tool | Why it is pre-allowed |
+|---|---|
+| `emetgate_symbols` | Loads one file through the repository jail and the in-memory tree cache and lists its symbols |
+| `emetgate_skeleton` | Same load, plus a read of the rule ledger without taking its lock |
+| `emetgate_read_symbol` | Same load; the session mirror lives in memory |
+| `emetgate_read_file` | Reads one file inside the repository |
+| `emetgate_list` | Runs `git ls-files` with a fixed argument list |
+| `emetgate_search` | Reads tracked files; its only write is its own index cache under `%LOCALAPPDATA%\emetgate\index` |
+| `emetgate_scan` | Measures one check in memory, writes nothing and does not read the ledger; a `cmd:` check is refused as not static, so no command runs |
+| `emetgate_git` | Runs `status`, `diff`, `log` or `show` with a fixed argument list, `--no-optional-locks` and no pager, external diff, textconv or fsmonitor |
+| `emetgate_mutate` | Builds the changed source in memory; it runs no command and writes nothing |
+
+The other tools keep whatever permission mode the user chose: `emetgate_try`, `emetgate_try_batch` and `emetgate_write_doc` write files after the trusted test command passes, `emetgate_rename`, `emetgate_move` and `emetgate_move_file` write several files and run the TypeScript language service, and `emetgate_run` runs a command from the user's allowlist. Every call, pre-allowed or not, appends one line to `.emetgate/events.ndjson`, emetgate's own git-ignored log. A test in `tests/lockdown.zig` fails when the server gains a tool that is in neither list.
+
+The server name comes from `.mcp.json`. Lockdown looks for the entry whose `command` is `emetgate` or `emetgate.exe` (any directory, any letter case) and whose first argument is `mcp` or `serve`, and turns its key into a tool name prefix the way Claude Code 2.1.286 does: every character outside `A-Z`, `a-z`, `0-9`, `_` and `-` becomes `_`, two of them for a character outside the Basic Multilingual Plane. The key `emetgate` gives `mcp__emetgate__emetgate_search`. With no such entry lockdown stops with `NoEmetgateServer`, with more than one with `SeveralEmetgateServers`, and with a file that is not a JSON object of servers with `McpConfigInvalid`; Claude Code is not started in any of these cases.
+
+Measured on the n8n repository with Claude Code 2.1.286 and Opus, two `emetgate lockdown -p` sessions per launcher, on 2026-10-01. Both launchers used the same `.mcp.json` and so the same emetgate server binary:
+
+| | Before (`--tools ToolSearch`) | After |
+|---|---|---|
+| Short read question: turns | 3, 3 | 2, 2 |
+| Short read question: API time | 5.5 s, 6.5 s | 3.5 s, 3.9 s |
+| Short read question: first request prompt | 18,514 tokens | 25,140 tokens |
+| `emetgate_read_file`, `tool_use` to `tool_result` | 795 ms, 1,664 ms | 80 ms, 70 ms |
+| Three searches in a row: turns | 5, 5 | 4, 4 |
+| Three searches in a row: API time | 16.3 s, 19.7 s | 14.4 s, 16.3 s |
+| Warm `emetgate_search`, `tool_use` to `tool_result` | 557, 698, 876, 588 ms | 69, 54, 60, 63 ms |
+
+The lost turn is the ToolSearch round: with tool search on, Claude Code defers the MCP tool definitions and the model loads them first; with it off, the definitions are in the first request, which costs the extra 6,626 prompt tokens. The first search of a session builds the index in the server process and does not depend on the launcher: 76.0 s and 21.9 s before, 21.6 s and 21.5 s after.
+
+`--tools ""` was chosen over `--tools ToolSearch`. With `ENABLE_TOOL_SEARCH=false` both gave the same 16 tools and the same 25,140-token first request in four sessions; with `--tools ""` and the variable unset, Claude Code still loaded the MCP tools up front in one session. So the model has one tool fewer, and turning tool search off does not depend on the variable alone.
+
 ### Reader
 
 A 284-session measurement found that read tokens (`Read` plus shell `cat`/`sed`) were
@@ -466,7 +511,22 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
   every signature, bodies elided) → body (`emetgate_read_symbol`: one symbol, several at
   once, or a line range widened to the symbols it overlaps, each with its own hash). A
   raw whole-file read of such a file is refused by `emetgate_read_file`
-  (`UseSymbolToolsForSource`) unless `raw:true` is passed explicitly.
+  (`UseSymbolToolsForSource`) unless `raw:true` is passed explicitly; with `raw:true`,
+  `line_start`/`line_end` return just those lines. A range that runs past the end of the
+  file comes back with `status: partial` and the line the file ends at; an inverted range
+  is `InvalidLineRange` and one that starts after the last line is `LineOutOfRange`.
+- **Read budget for long bodies.** A body longer than the read budget (8,192 characters,
+  `emetgate mcp --read-budget <chars>` to change it) comes back with `status: partial`:
+  the signature, an outline of its nested blocks (`if`, `for`, `try`, inner functions, each
+  with a line range), and the body folded from the deepest blocks outwards until it fits,
+  every elided range named in place as `… lines A-B elided (N lines); read them with
+  line_start/line_end` and listed under `elided`. If folding every block is not enough, the
+  tail is cut the same way. A line range inside such a declaration returns the requested
+  lines with the rest named the same way. `detail:"full"` returns every line. Bodies within
+  the budget come back exactly as before. On n8n, `WorkflowExecute.processRunExecutionData`
+  (20 KB body) went from a 25,147-character reply to 10,708, and `addNodeToBeExecuted` from
+  16,519 to 11,591; 4,096 also folded 6 to 8 KB bodies for little gain and 16,384 saved
+  little on the largest one (measured through a direct MCP session on n8n on 2026-10-01).
 - **JSON**: `emetgate_read_file` defaults to a key tree (every JSON pointer, its value
   type and content hash) instead of the raw text; `pointer` reads one subtree.
 - **Markdown**: `emetgate_read_file` defaults to a heading tree (heading, level, line,
@@ -533,7 +593,7 @@ what it sent, not whether the model still has it. An `unchanged` reply after com
 is telling the model "you already have this" when it may not — the wrong direction to
 get wrong, which is why `force:true` exists and every `unchanged` reply advertises it.
 This branch does not wire an automatic reset on compaction: `src/platform/lockdown.zig`
-only launches Claude Code with a fixed `--tools`/`--mcp-config` argv today and does not
+only launches Claude Code with a fixed argv and one environment variable today and does not
 manage `.claude/settings.json` or hooks, and a `PreCompact` hook would need to reach a
 mirror that lives in a specific running MCP process's memory. Until that lands, the
 mirror stays **off by default**; a project that opts in with `--mirror` is accepting
@@ -625,13 +685,32 @@ Unlike a flat grep, hits are grouped so a result can go straight into `emetgate_
   (`json_pointer.pointerAt`); in a `.md` file, by the innermost heading whose section
   contains them (`markdown_heading.sectionAt`). Any other tracked text file is ungrouped
   (line only).
-- `kinds:["code"]` (etc.) filters the kind tag before the hit cap is applied. At most 200
-  hits total, `truncated:true` when cut, matching `emetgate_scan`'s cap style.
+- `kinds:["code"]` (etc.) filters the kind tag before the hit cap is applied; a kind name
+  other than `code`, `comment` or `string` is refused (`UnknownKind`). At most 200 hits
+  total, `truncated:true` when cut, matching `emetgate_scan`'s cap style.
+- `dir` may name a file: the search then covers that one tracked file
+  (`scope.is_file:true`).
+
+Every reply says whether it is **complete** or **partial** and what it covered. `scope`
+counts the tracked files under `dir` (`files`), how many of them were fully evaluated
+(`evaluated`), and the ones left out by a declared rule (`skipped_large` for 1 MiB or more,
+`skipped_binary`, `deleted_on_disk`). A reply is `partial` when the hit cap cut it or a
+file could not be fully evaluated: an unreadable file, or a line on which the regex ran
+past its step budget (2,000,000 steps per line); `missing` names those files and why. A
+reply with no hit carries a `note` that says why the zero can be trusted or what did not
+fit: `no match in 157 file(s)`, `7 matching line(s) (0 code, 0 comment, 7 string) were all
+removed by kinds [code]`, `<path> is not a file git tracks`, or, for a literal that looks
+like a regex, a pointer to `regex:true`. A literal with a `|` whose whole text is not found
+is searched once more as the literal alternatives between the bars, and the reply says so
+(`read_as:"literal alternatives"`): a model that writes `a(|b` without `regex:true` gets
+the hits for `a(` and `b`. Errors (a path outside the repository, a bad regex) are the
+refused answers.
 
 Example reply shape:
 
 ```json
-{"pattern":"loadPending","regex":false,"files_total":42,"files_scanned":3,
+{"status":"complete","pattern":"loadPending","regex":false,
+ "scope":{"path":"src","files":42,"evaluated":42},"matched_files":3,
  "groups":[{"file":"src/index.js","symbol":"loadPending","hash":"…",
             "hits":[{"line":93,"kind":"code","role":"definition","text":"function loadPending() {"},
                      {"line":112,"kind":"code","role":"reference","text":"loadPending();"}]}],
@@ -664,9 +743,12 @@ written when a session first builds it and when a session that changed it ends.
 (`search_session.zig`). The watcher starts with the session, before the saved index is
 loaded. The first search of a session then checks every tracked file against the loaded
 index: it lists each directory once (`FindFirstFileExW`, no file is opened), and re-reads
-a file whose last-write time or size differs, or whose time falls within 3 s of when the
-index was saved (the racy rule, since a write in the same instant as the save can keep its
-stamp); every other entry is used as loaded. The file list is reused while the git index
+a file whose last-write time or size differs, or whose last-write time falls within 3 s of
+when its entry was read (git's racy rule: a second write in the same instant as the read
+can keep the stamp). Every entry carries that read time, whether it was built in this
+process, refreshed, or loaded (then the save time stands in), and saving gives a racy entry
+an impossible stamp, as git smudges a racily clean index entry, so the next session reads
+that file again; every other entry is used as loaded. The file list is reused while the git index
 file keeps its last-write time, size and file id: git replaces the file on every write
 (a lock file renamed over it), so a new file id marks a change even within the same
 timestamp, and no waiting period is needed. Every search first calls
@@ -760,13 +842,17 @@ the script if a different weight function or corpus is worth checking.
 **Regex candidates.** Russ Cox's trigram-index regex matching
 (https://swtch.com/~rsc/regexp/regexp4.html) derives the trigrams every match must contain,
 alternation included, from the regex AST. This regex engine compiles straight to an NFA and
-does not expose that AST, so `regex_hint.longestLiteralChunk` takes the longest literal run
-that every match must contain: text outside any group, with the character before `?`, `*`
-or `{` left out, and nothing at all when the pattern has a `|` outside a group
-(`foo|bar`, `colou?r` and `(ab)?cd` give no hint, `colo` and `cd`). Its grams narrow the
-candidate files when it is at least 3 bytes, and the same text screens lines before the
-regex runs on them. An earlier version took any literal run, so `foo|bar` skipped files
-that only held `bar`; a test and two mutations hold the rule now.
+does not expose that AST, so `regex_hint.requiredLiterals` takes, for each branch of a
+top-level alternation (also inside one group that encloses the whole pattern), the longest
+literal run that every match of that branch must contain: text outside any group, with the
+character before `?`, `*` or `{` left out. A match then holds at least one of those
+literals; a branch with no literal (`foo|.*`) means no hint at all. A file is a candidate
+when its grams cover the grams of one of the literals, a line is handed to the regex only
+when it contains one, and the hit's kind and role are read at that literal's column. Each
+line gets its own step budget, so one long line can make the reply partial but cannot hide
+matches in other lines or files. An earlier version shared one budget per worker thread
+across files and read a spent budget as no match; on n8n that returned 0 for
+`handleNodeExecutionError|continueExecution` where `rg` finds 6.
 
 Measured with `tests/bench/search.py` (ReleaseFast build, 10-run medians, run alone under
 the lock script) against `rg` and `git grep` on `eval/express-test` and

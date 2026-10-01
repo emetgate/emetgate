@@ -34,6 +34,22 @@ test "initialize reflects the client protocol version and advertises tools" {
     try testing.expect(std.mem.indexOf(u8, response, "\"id\":1") != null);
 }
 
+test "initialize reports the version written in build.zig.zon" {
+    const manifest = try std.Io.Dir.cwd().readFileAlloc(testing.io, "build.zig.zon", testing.allocator, .limited(64 * 1024));
+    defer testing.allocator.free(manifest);
+    const key = ".version = \"";
+    const at = (std.mem.indexOf(u8, manifest, key) orelse return error.NoVersionInManifest) + key.len;
+    const version = manifest[at .. at + (std.mem.indexOfScalar(u8, manifest[at..], '"') orelse return error.NoVersionInManifest)];
+
+    const response = (try respond(testing.allocator, testing.io, undefined,
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}
+    )).?;
+    defer testing.allocator.free(response);
+    const expected = try std.fmt.allocPrint(testing.allocator, "\"serverInfo\":{{\"name\":\"emetgate\",\"version\":\"{s}\"}}", .{version});
+    defer testing.allocator.free(expected);
+    try testing.expect(std.mem.indexOf(u8, response, expected) != null);
+}
+
 test "a notification produces no response" {
     try testing.expect((try respond(testing.allocator, testing.io, undefined,
         \\{"jsonrpc":"2.0","method":"notifications/initialized"}

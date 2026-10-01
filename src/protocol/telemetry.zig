@@ -9,7 +9,7 @@ const Writer = std.Io.Writer;
 
 pub const events_file = "events.ndjson";
 
-pub const Outcome = enum { ok, committed, rejected, failed };
+pub const Outcome = enum { ok, partial, committed, rejected, failed };
 
 pub const Event = struct {
     tool: []const u8,
@@ -35,6 +35,7 @@ pub const Event = struct {
     fn resultName(self: Event) []const u8 {
         return switch (self.outcome) {
             .ok => "ok",
+            .partial => "partial",
             .committed => "committed",
             .rejected => "rejected",
             .failed => self.result orelse "error",
@@ -143,6 +144,7 @@ pub fn renderFooter(w: *Writer, event: Event, session: Session) !void {
     try w.writeAll("emetgate ");
     switch (event.outcome) {
         .ok => try w.print("✓ {s}", .{event.label}),
+        .partial => try w.print("~ {s} partial, see missing", .{event.label}),
         .committed => try w.writeAll("✓ committed"),
         .rejected => try w.print("✗ rejected · {s}", .{event.reason orelse "rejected"}),
         .failed => try w.print("✗ {s}", .{event.resultName()}),

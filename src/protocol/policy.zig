@@ -5,6 +5,7 @@ const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
 const search_session_mod = @import("../platform/search_session.zig");
+const read_budget_mod = @import("read_budget.zig");
 
 const Value = std.json.Value;
 
@@ -16,6 +17,8 @@ pub const Policy = struct {
     shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
     mirror_enabled: bool = false,
+    read_budget: usize = read_budget_mod.default_budget,
+    read_budget_set: bool = false,
     mirror: ?*mirror_mod.Mirror = null,
     tree_cache: ?*tree_cache_mod.TreeCache = null,
     search_session: ?*search_session_mod.Session = null,
@@ -77,6 +80,14 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.typecheck_command = command;
+        } else if (std.mem.eql(u8, arg, "--read-budget")) {
+            if (policy.read_budget_set or i + 1 >= args.len) return null;
+            i += 1;
+            const text: []const u8 = args[i];
+            const value = std.fmt.parseInt(usize, text, 10) catch return null;
+            if (value == 0) return null;
+            policy.read_budget = value;
+            policy.read_budget_set = true;
         } else if (std.mem.eql(u8, arg, "--shadow-root")) {
             if (policy.shadow_root != null or i + 1 >= args.len) return null;
             i += 1;

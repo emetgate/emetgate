@@ -90,7 +90,7 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     if (!raw and hasExtension(file, ".md")) {
         return renderMarkdown(gpa, file, bytes, heading, force, mirror, w, event);
     }
-    if (!raw and (line_start != null or line_end != null)) {
+    if (line_start != null or line_end != null) {
         return renderRange(gpa, file, bytes, line_start, line_end, force, mirror, w, event);
     }
 
@@ -269,7 +269,11 @@ fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: 
     const start = line_start orelse return error.MissingArgument;
     const end = line_end orelse return error.MissingArgument;
     if (start < 1 or end < 1) return error.InvalidLineRange;
-    const span = try line_range.byteRangeForLines(bytes, @intCast(start), @intCast(end));
+    if (start > end) return error.InvalidLineRange;
+    const last = lastLine(bytes);
+    if (start > last) return error.LineOutOfRange;
+    const shown_end = @min(end, last);
+    const span = try line_range.byteRangeForLines(bytes, @intCast(start), @intCast(shown_end));
     const text = bytes[span.start..span.end];
     const hash = symbol.hashOf(text);
     if (mirror) |m| {
@@ -292,13 +296,28 @@ fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: 
     try js.objectField("start_line");
     try js.write(start);
     try js.objectField("end_line");
-    try js.write(end);
+    try js.write(shown_end);
+    if (shown_end < end) {
+        try js.objectField("status");
+        try js.write("partial");
+        try js.objectField("requested_end_line");
+        try js.write(end);
+        try js.objectField("note");
+        var note_buf: [128]u8 = undefined;
+        try js.write(try std.fmt.bufPrint(&note_buf, "the file ends at line {d}; lines {d}-{d} do not exist", .{ last, last + 1, end }));
+    }
     try js.objectField("hash");
     try js.write(hex[0..]);
     try js.objectField("content");
     try js.write(text);
     try js.endObject();
     try w.writeByte('\n');
+}
+
+fn lastLine(bytes: []const u8) i64 {
+    if (bytes.len == 0) return 0;
+    const newlines: i64 = @intCast(std.mem.count(u8, bytes, "\n"));
+    return if (bytes[bytes.len - 1] == '\n') newlines else newlines + 1;
 }
 
 pub fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {

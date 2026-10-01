@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1203**
-- Mutations declared in `tests/mutations.json`: **689**
-  - killed: **659**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1249**
+- Mutations declared in `tests/mutations.json`: **739**
+  - killed: **709**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -171,21 +171,39 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-58 mutation(s).
+76 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
-| `K1-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "ToolSearch";` -> `pub const allowed_builtin_tools = "default";` | lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the... | killed |
-| `K2-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the...; a pos... | killed |
-| `K3-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config"` | lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the... | killed |
+| `K1-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "";` -> `pub const allowed_builtin_tools = "default";` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th... | killed |
+| `K2-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th...; a pos... | killed |
+| `K3-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools"` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th... | killed |
 | `K5-lockdown-reserved-guard-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);` -> `` | a passthrough arg that would override the lock is refused in both spellings | killed |
 | `K5b-lockdown-launch-guard-only-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);     const config_abs` -> `const config_abs` | a lock override is refused before .mcp.json is looked up | killed |
 | `F1-lockdown-mcp-config-last` | `src/platform/lockdown.zig` | `"--mcp-config", mcp_config_abs, "--strict-mcp-config" }` -> `"--strict-mcp-config", "--mcp-config", mcp_config_abs }` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
-| `F2-lockdown-tools-last` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config", mcp_config_abs, "--strict-mcp...` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
+| `F2-lockdown-tools-last` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools", allowed_tools, "--mcp-confi...` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
 | `N1-lockdown-missing-config-guard-removed` | `src/platform/lockdown.zig` | `error.FileNotFound => return error.McpConfigMissing,` -> `error.FileNotFound => return gpa.dupeZ(u8, mcp_config_name),` | lockdown refuses to launch when the directory has no .mcp.json | killed |
-| `K1e-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "ToolSearch";` -> `pub const allowed_builtin_tools = "default";` |  | verified end-to-end, not by the mutation harness |
+| `K6-lockdown-writer-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_try", };` | lockdown pre-allows only emetgate tools that neither write to the repo nor run ...; every... | killed |
+| `K6b-lockdown-runner-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_run", };` | lockdown pre-allows only emetgate tools that neither write to the repo nor run ...; every... | killed |
+| `K7-lockdown-tool-search-env-dropped` | `src/platform/lockdown.zig` | `try env.put(tool_search_variable, tool_search_value);` -> `` | the child environment turns tool search off and keeps the rest; the launched claude gets ... | killed |
+| `K7b-lockdown-child-env-not-passed` | `src/platform/lockdown.zig` | `.{ .argv = argv, .environ_map = &env }` -> `.{ .argv = argv }` | the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had | killed |
+| `K7c-lockdown-tool-search-left-on` | `src/platform/lockdown.zig` | `pub const tool_search_value = "false";` -> `pub const tool_search_value = "true";` | the child environment turns tool search off and keeps the rest; the launched claude gets ... | killed |
+| `K8-lockdown-server-key-ignored` | `src/platform/lockdown.zig` | `return toolNamePart(gpa, found orelse return error.NoEmetgateSe...` -> `_ = found orelse return error.NoEmetgateServer;     return gpa....` | the allow-list names the emetgate server by its .mcp.json key | killed |
+| `K8b-lockdown-astral-char-counted-once` | `src/platform/lockdown.zig` | `if (c > 0xFFFF) 2 else 1` -> `1` | a server key becomes the tool name prefix claude derives from it | killed |
+| `K8c-lockdown-hyphen-replaced` | `src/platform/lockdown.zig` | `or c == '_' or c == '-')` -> `or c == '_')` | a server key becomes the tool name prefix claude derives from it | killed |
+| `K8d-lockdown-claude-ai-collapse-skipped` | `src/platform/lockdown.zig` | `if (std.mem.startsWith(u8, name, claude_ai_prefix)) collapseUnd...` -> `` | a server key becomes the tool name prefix claude derives from it | killed |
+| `K9-lockdown-allowed-tools-passthrough` | `src/platform/lockdown.zig` | `"--allowedTools",     "--allowed-tools",` -> `"--allowed-tools",` | a passthrough arg that would override the lock is refused in both spellings | killed |
+| `K9b-lockdown-allowed-tools-dash-passthrough` | `src/platform/lockdown.zig` | `"--allowed-tools",` -> `` | a passthrough arg that would override the lock is refused in both spellings | killed |
+| `K10-lockdown-second-server-accepted` | `src/platform/lockdown.zig` | `if (found != null) return error.SeveralEmetgateServers;` -> `` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
+| `K11-lockdown-any-program-is-emetgate` | `src/platform/lockdown.zig` | `return std.ascii.eqlIgnoreCase(stem, emetgate_program);` -> `_ = stem;     return true;` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
+| `K12-lockdown-mcp-arg-not-required` | `src/platform/lockdown.zig` | `if (std.mem.eql(u8, first.string, name)) return isEmetgateProgr...` -> `_ = name;         return isEmetgateProgram(command.string);` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
+| `K13-lockdown-bypass-mode-allowed` | `src/platform/lockdown.zig` | `if (std.ascii.eqlIgnoreCase(mode, refused_permission_mode)) ret...` -> `_ = mode;` | lockdown refuses the bypassPermissions mode in both spellings; the bypassPermissions refu... | killed |
+| `K14-lockdown-every-mode-refused` | `src/platform/lockdown.zig` | `if (std.ascii.eqlIgnoreCase(mode, refused_permission_mode)) ret...` -> `_ = mode;             return error.LockdownFlagOverride;` | the other permission modes pass through the lock | killed |
+| `K15-lockdown-bypass-equals-spelling-missed` | `src/platform/lockdown.zig` | `if (std.mem.startsWith(u8, arg, permission_mode_flag ++ "=")) r...` -> `` | lockdown refuses the bypassPermissions mode in both spellings; the bypassPermissions refu... | killed |
+| `K16-lockdown-bypass-case-sensitive` | `src/platform/lockdown.zig` | `std.ascii.eqlIgnoreCase(mode, refused_permission_mode)` -> `std.mem.eql(u8, mode, refused_permission_mode)` | the bypassPermissions refusal does not depend on letter case | killed |
+| `K1e-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "";` -> `pub const allowed_builtin_tools = "default";` |  | verified end-to-end, not by the mutation harness |
 | `K2e-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | only killed on a machine with user-level MCP servers configured | verified end-to-end, not by the mutation harness |
-| `K3e-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config"` |  | verified end-to-end, not by the mutation harness |
+| `K3e-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools"` |  | verified end-to-end, not by the mutation harness |
 | `K5e-lockdown-reserved-guard-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);` -> `` |  | verified end-to-end, not by the mutation harness |
 | `MR2-batch-duplicate-file-allowed` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {             _ = p;         }      ...` | a batch cannot edit the same file twice | killed |
 | `SELF-a-compile-error-is-not-a-kill` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {         }         const planned = ...` | control: removing the line leaves an unused capture, which must not count as killed | control |
@@ -236,7 +254,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-51 mutation(s).
+54 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -291,13 +309,17 @@ python tools/verification_page.py --check
 | `DF4-recovery-dir-flush-dropped` | `src/platform/disk.zig` | `fn flushTouched(path_abs: []const u8) bool {     flushParent(pa...` -> `fn flushTouched(path_abs: []const u8) bool {     _ = path_abs;` | dir flush rec: a restore made by recovery is durable before the journal that as... | killed |
 | `DF5-recovery-journal-delete-flush-dropped` | `src/platform/disk.zig` | `commit_record.flushDir(journal_dir) catch return;` -> `` | dir flush dropJ: recovery that loses a journal deletion after removing the comm... | killed |
 | `NC8-node-delete-reference-check-skipped` | `src/platform/batch_plan.zig` | `if (ref.container.len != 0) continue;` -> `if (ref.container.len == 0) continue;` | redteam node: deleting a function that is still called is refused unless the ca... | killed |
+| `JR1-file-of-a-nested-repository-accepted-under-the-cached-root` | `src/platform/repo.zig` | `if (try entryExists(gpa, io, dir, ".git")) return true;` -> `if (false) return true;` | read tools refuse a file of a nested repository, worktree or bare repository un...; purpl... | killed |
+| `JR2-only-the-file-directory-is-checked-for-a-nested-repository` | `src/platform/repo.zig` | `dir = std.fs.path.dirname(dir) orelse return error.FileOutsideR...` -> `dir = root;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
+| `JR3-nested-bare-repository-not-recognized` | `src/platform/repo.zig` | `return try entryExists(gpa, io, dir, "objects") and try entryEx...` -> `return false;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 
 ### Rules and the q: query engine
 
-97 mutation(s).
+98 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
+| `RB10-read-budget-zero-accepted` | `src/protocol/policy.zig` | `if (value == 0) return null;` -> `` | --read-budget sets the budget and refuses zero, a missing value or a non-number | killed |
 | `T2-model-supplied-typecheck-cmd-accepted` | `src/protocol/policy.zig` | `or tool_result.getField(a, "typecheck_cmd") != null` -> `` | purple C7: a typecheck command supplied by the model is refused and never runs | killed |
 | `G3-rules-enforce-flag-ignored` | `src/platform/rules.zig` | `if (decision.status != .active or !decision.enforce) continue;` -> `if (decision.status != .active) continue;` | rules: unenforced, checkless and forgotten rules never block an edit | killed |
 | `G5-rules-line-counting-broken` | `src/platform/rules.zig` | `if (byte == '\n') try starts.append(gpa, @intCast(i + 1));` -> `if (byte == '\r') try starts.append(gpa, @intCast(i + 1));` | violation positions hold at the edges: first and last line, empty lines, CRLF, ...; the l... | killed |
@@ -532,14 +554,28 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-253 mutation(s).
+281 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
 | `M1-search-size-cap-removed` | `src/protocol/read_tools.zig` | `.limited(limits.file_bytes)` -> `.unlimited` | search reads a tracked file just under 1 MiB and skips one of 1 MiB | killed |
 | `M2-search-binary-skip-removed` | `src/protocol/read_tools.zig` | `if (looksBinary(bytes)) continue;` -> `` | search skips a tracked binary file | killed |
 | `M3-search-cap-raised-to-2MiB` | `src/protocol/read_tools.zig` | `const max_search_file_bytes = 1024 * 1024;` -> `const max_search_file_bytes = 2 * 1024 * 1024;` | search reads a tracked file just under 1 MiB and skips one of 1 MiB | killed |
-| `SELF-a-harmless-change-survives` | `src/protocol/server.zig` | `const server_version = "0.1.0";` -> `const server_version = "0.1.1";` | control: proves the harness reports a survivor instead of calling everything killed | control |
+| `RF1-read-file-raw-range-ignored` | `src/protocol/read_tools.zig` | `if (line_start != null or line_end != null) {         return re...` -> `if (!raw and (line_start != null or line_end != null)) {       ...` | read_file applies a line range to a raw read of a source file; read_file refuses an inver... | killed |
+| `RF2-read-file-range-shifted-by-one` | `src/protocol/read_tools.zig` | `line_range.byteRangeForLines(bytes, @intCast(start), @intCast(s...` -> `line_range.byteRangeForLines(bytes, @intCast(start + 1), @intCa...` | read_file applies a line range to a raw read of a source file | killed |
+| `RF3-read-file-range-cut-silently` | `src/protocol/read_tools.zig` | `if (shown_end < end) {` -> `if (false) {` | read_file refuses an inverted or out-of-file line range and marks a range cut a... | killed |
+| `RF4-read-file-range-past-the-file-not-refused` | `src/protocol/read_tools.zig` | `if (start > last) return error.LineOutOfRange;` -> `` | read_file refuses an inverted or out-of-file line range and marks a range cut a... | killed |
+| `RB1-elision-line-not-written` | `src/protocol/read_budget.zig` | `const text = try elisionLine(gpa, source, lines, range);` -> `const text = try gpa.dupe(u8, "");` | a folded body names each elided range in place, deepest blocks first, with an o...; a tig... | killed |
+| `RB2-elision-range-off-by-one` | `src/protocol/read_budget.zig` | `range.line_start, range.line_end, range.line_end - range.line_s...` -> `range.line_start, range.line_end + 1, range.line_end - range.li...` | a folded body names each elided range in place, deepest blocks first, with an o...; a tig... | killed |
+| `RB3-body-at-the-budget-folded` | `src/protocol/handlers.zig` | `return self.detail == .budgeted and chars > self.budget;` -> `return self.detail == .budgeted and chars >= self.budget;` | a body exactly at the read budget is not folded and one byte over it is | killed |
+| `RB4-small-body-folded` | `src/protocol/handlers.zig` | `return self.detail == .budgeted and chars > self.budget;` -> `_ = chars;         return self.detail == .budgeted;` | a symbol body within the read budget comes back exactly as before; a body exactly at the ... | killed |
+| `RB5-detail-full-ignored` | `src/protocol/read_budget.zig` | `if (std.mem.eql(u8, text, "full")) return .full;` -> `if (std.mem.eql(u8, text, "full")) return .budgeted;` | detail full returns every line of a body over the read budget | killed |
+| `RB6-tail-left-over-the-budget` | `src/protocol/read_budget.zig` | `if (result.size > budget) try cutTail(gpa, &result, source, lin...` -> `` | a tighter budget folds the outer blocks and a tiny one cuts the tail, every ran... | killed |
+| `RB7-range-inside-a-large-declaration-not-focused` | `src/protocol/handlers.zig` | `if (folds) {             if (lines == null) lines = try read_bu...` -> `if (false) {             if (lines == null) lines = try read_bu...` | a line range inside a declaration over the budget returns the requested lines a... | killed |
+| `RB8-symbols-list-never-folded` | `src/protocol/handlers.zig` | `if (folds) {             if (lines == null) lines = try read_bu...` -> `if (false) {             if (lines == null) lines = try read_bu...` | with symbols, only the bodies over the read budget are folded | killed |
+| `RB9-unknown-detail-accepted` | `src/protocol/read_budget.zig` | `return error.UnknownDetail; }` -> `return .budgeted; }` | an unknown detail value is refused instead of ignored | killed |
+| `SELF-a-harmless-change-survives` | `src/protocol/server.zig` | `pub const server_version = @import("version").version;` -> `pub const server_version = "0.1.1";` | control: proves the harness reports a survivor instead of calling everything killed | control |
+| `V1-server-version-not-from-the-manifest` | `src/protocol/server.zig` | `pub const server_version = @import("version").version;` -> `pub const server_version = "0.1.0";` | initialize reports the version written in build.zig.zon | killed |
 | `R7-checks-template-string-prose-allowed` | `src/engine/lang/ecma/common.zig` | `pub const prose_strings = [_][]const u8{ "string", "template_st...` -> `pub const prose_strings = [_][]const u8{"string"};` | no_comment flags prose smuggled in as a string or template statement | killed |
 | `EB6-bnd-dynamic-import-ignored` | `src/engine/lang/ecma/common.zig` | `pub const dynamic_callees = [_][]const u8{ "eval", "import" };` -> `pub const dynamic_callees = [_][]const u8{"eval"};` | adversarial: a dynamic import anywhere in the file forces UNBOUNDED | killed |
 | `EB7-bnd-new-function-ignored` | `src/engine/lang/ecma/common.zig` | `.names = &.{"Function"}` -> `.names = &.{}` | adversarial: a Function constructor anywhere in the file forces UNBOUNDED | killed |
@@ -672,11 +708,11 @@ python tools/verification_page.py --check
 | `VR8-subject-not-bound-to-files` | `src/verify/checker.zig` | `if (!found) outcome.raise(.mismatch, "a subject does not match ...` -> `if (!found and false) outcome.raise(.mismatch, "a subject does ...` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR9-python-verified-with-unchecked-fields` | `tools/verify_py/emetgate_verify.py` | `if verdict == VERIFIED and skipped:         return CONSISTENT` -> `` | verify: a gated edit gets a receipt that verifies at the user's commit, tests r... | killed |
 | `SR1-index-stale-entry-trusted` | `src/platform/search_index.zig` | `if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == ...` -> `if (true) {` | search on disk: a new session loads the saved index after its watcher started a...; refre... | killed |
-| `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !p.isRacy(stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o... | killed |
+| `SR6-racy-stamp-not-checked` | `src/platform/search_index.zig` | `and !Index.isRacy(old, stamp)) {` -> `) {` | a racy mtime collision around the index write time forces a recompute instead o...; an in... | killed |
 | `SR2-index-checksum-not-verified` | `src/platform/search_index_file.zig` | `if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;` -> `_ = actual;     _ = claimed;` | a corrupted index file is rejected instead of trusted; a flipped byte, a cut tail, anothe... | killed |
 | `SR3-comment-kind-reversed` | `src/protocol/search_v1.zig` | `if (profile.isComment(n.kind())) return .comment;` -> `if (profile.isComment(n.kind())) return .code;` | a hash-matching index entry with no persisted spans still classifies comments a... | killed |
 | `SR4-hit-cap-ignored` | `src/protocol/search_v1.zig` | `if (total_hits >= max_matches) {` -> `if (false) {` | the total hit count is capped and truncated is reported | killed |
-| `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `if (!read_tools.inDirectory(f, place.rel)) continue;` -> `_ = place.rel;` | a search scoped to a subdirectory does not return hits from outside it | killed |
+| `SR5-directory-scope-not-enforced` | `src/protocol/search_v1.zig` | `return read_tools.inDirectory(f, self.rel);` -> `return true;` | a search scoped to a subdirectory does not return hits from outside it | killed |
 | `SK1-stale-symbol-table-trusted` | `src/protocol/search_v1.zig` | `if (std.mem.eql(u8, &ch, &live)) {` -> `if (std.mem.eql(u8, &ch, &live) or true) {` | a resident index entry whose stored hash does not match the file's live bytes i... | killed |
 | `AC2-app-container-gains-a-capability` | `src/platform/appcontainer.zig` | `.capabilities = null, .capability_count = 0, .reserved = 0 };` -> `.capabilities = null, .capability_count = 1, .reserved = 0 };` | a fresh profile carries no capabilities and points its security struct at its o...; redte... | killed |
 | `AC3-app-container-grant-not-applied` | `src/platform/appcontainer.zig` | `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FA...` -> `if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, dacl, .FALS...` | redteam appcontainer: a granted directory is writable, a non-granted directory ...; redte... | killed |
@@ -717,7 +753,7 @@ python tools/verification_page.py --check
 | `RH2-hint-keeps-an-optional-character` | `src/engine/regex_hint.zig` | `if (i > r) best.close(run, i - 1);` -> `if (i > r) best.close(run, i);` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
 | `SW5-index-loaded-before-the-watcher-starts` | `src/platform/search_session.zig` | `self.watcher = change_watch.Watcher.start(self.gpa, self.io, ro...` -> `self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catc...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `SW6-loaded-index-trusted-without-a-restat` | `src/platform/search_session.zig` | `self.reconcile = true;` -> `self.reconcile = false;` | search on disk: a new session loads the saved index after its watcher started a... | killed |
-| `IF1-index-file-version-not-checked` | `src/platform/search_index_file.zig` | `if (try r.int(u32) != version) return error.Corrupt;` -> `_ = try r.int(u32);` | a flipped byte, a cut tail, another version or another magic is refused | killed |
+| `IF1-index-file-version-not-checked` | `src/platform/search_index_file.zig` | `return bytes[family.len] != magic[family.len] or std.mem.readIn...` -> `return bytes[family.len] != magic[family.len];` | a flipped byte, a cut tail, another version or another magic is refused | killed |
 | `PF1-directory-stamp-reads-the-creation-time` | `src/platform/search_index.zig` | `const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32...` -> `const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) ...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `WR1-compact-reply-drops-new-hash` | `src/protocol/wire.zig` | `try js.objectField("new_hash");     try js.write(new_hex[0..]);...` -> `if (full) {         try js.objectField("new_hash");         try...` | compact committed payload drops the old hash and the shadow note | killed |
 | `WR2-detail-full-ignored` | `src/protocol/wire.zig` | `if (full) {         try js.objectField("old_hash");         try...` -> `if (false) {         try js.objectField("old_hash");         tr...` | committed payload names the symbol and both hashes | killed |
@@ -789,6 +825,20 @@ python tools/verification_page.py --check
 | `FCSP1-small-block-not-kept-whole` | `src/engine/facts_spine.zig` | `if (s_last - s_first + 1 <= max_block_lines) {` -> `if (false) {` | spine: the lines around a call keep its whole small if statement and the header... | killed |
 | `FCM1-stale-merkle-node-kept` | `src/engine/facts_merkle.zig` | `_ = self.nodes.remove(rangeKey(lo, hi));` -> `` | merkle: a cached tree updated one leaf at a time has the same root as the tree ...; fact ... | killed |
 | `FCP6-changed-file-shown-as-current` | `src/platform/fact_store.zig` | `const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.re...` -> `const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.re...` | fact store: evidence never shows a line of a file that changed after the snapsh... | killed |
+| `IL1-index-load-failure-swallowed` | `src/platform/search_session.zig` | `self.load_failure = why;` -> `_ = why;` | search on disk: a damaged, cut or foreign index file is ignored and rebuilt | killed |
+| `IL2-index-read-capped-at-64-mib` | `src/platform/search_index.zig` | `const max_index_file_bytes: u64 = 4 * 1024 * 1024 * 1024;` -> `const max_index_file_bytes: u64 = 64 * 1024 * 1024;` | an index file larger than 64 MiB is read whole and judged by its bytes, not ref... | killed |
+| `TQ1-regex-budget-overrun-read-as-no-match` | `src/engine/text_query.zig` | `const matched = re.isMatchIn(scratch, line, &budget) catch retu...` -> `const matched = re.isMatchIn(scratch, line, &budget) catch retu...` | a line that exhausts the regex step budget is reported, never read as no match; search an... | killed |
+| `RH3-required-literals-keep-only-the-first-branch` | `src/engine/regex_hint.zig` | `return out[0..n]; }  fn unwrapGroup` -> `return out[0..@min(n, 1)]; }  fn unwrapGroup` | every line a regex matches contains one of its required literals; requiredLiterals gives ... | killed |
+| `SA1-partial-answer-reported-complete` | `src/protocol/search_v1.zig` | `return self.truncated or self.missing.items.len != 0;` -> `return self.truncated and false;` | search answers: a line that runs out of regex steps makes the answer partial an...; searc... | killed |
+| `SA2-unreadable-file-skipped-quietly` | `src/protocol/search_v1.zig` | `try result.missing.append(gpa, .{ .path = item.rel, .reason = "...` -> `` | search answers: a file that cannot be read makes the answer partial instead of ... | killed |
+| `SA3-file-given-as-dir-scoped-as-a-directory` | `src/protocol/search_v1.zig` | `if (self.file) return change_watch.samePath(f, self.rel);` -> `` | search answers: a file given as dir is searched by itself | killed |
+| `SA4-literal-alternatives-not-tried` | `src/protocol/search_v1.zig` | `alternatives = try Query.alternatives(gpa, pattern);` -> `alternatives = null;` | search answers: a literal with a bar that is not found is read as literal alter... | killed |
+| `SA5-matches-removed-by-kinds-not-counted` | `src/protocol/search_v1.zig` | `item.filtered.getPtr(pending.kind).* += 1;` -> `_ = &item.filtered;` | search answers: kinds that remove every match say how many matches of which kin... | killed |
+| `SA6-unknown-kind-accepted` | `src/protocol/search_v1.zig` | `set.insert(std.meta.stringToEnum(Kind, v.string) orelse return ...` -> `set.insert(std.meta.stringToEnum(Kind, v.string) orelse continu...` | search answers: an unknown kind name is refused instead of filtering everything... | killed |
+| `SA7-empty-answer-without-a-note` | `src/protocol/search_v1.zig` | `if (result.groups.items.len == 0) {` -> `if (false) {` | search answers: a complete answer with no match states how many files it evalua...; searc... | killed |
+| `RS2-built-entry-has-no-read-time` | `src/platform/search_index.zig` | `const seen_ns = wallClock(io);     for (files) \|rel\| {` -> `const seen_ns: i96 = 0;     for (files) \|rel\| {` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
+| `RS3-refreshed-entry-has-no-read-time` | `src/platform/search_index.zig` | `.seen_ns = job.seen_ns,` -> `.seen_ns = 0,` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
+| `RS4-racy-entry-saved-with-its-real-stamp` | `src/platform/search_index.zig` | `const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_...` -> `const stamp: Stamp = e.stamp;` | saving smudges the stamp of an entry read inside the racy window, so the next s... | killed |
 
 ## What this system does not prove
 

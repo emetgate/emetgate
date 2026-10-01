@@ -4,6 +4,7 @@ const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
 const run_tool = @import("run_tool.zig");
+const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
@@ -26,7 +27,7 @@ pub const RunRefusal = policy_mod.RunRefusal;
 
 const default_protocol_version = "2025-06-18";
 const server_name = "emetgate";
-pub const server_version = "0.1.0";
+pub const server_version = @import("version").version;
 const max_message_bytes = 4 * 1024 * 1024;
 
 pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string" };
@@ -48,7 +49,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair. When the server was started with --mirror, a symbol whose hash was already sent unchanged this session comes back as a one-line 'unchanged: <file>#<symbol> #<hash>' instead of its body; pass force:true to always get the full body. Pass nodes:true to get each whole declaration (with symbol or symbols, never shortened to unchanged) or exactly the requested lines, top-level code included (with line_start and line_end, not widened), with every line that starts a syntax node prefixed by that node's short hash and a bar (hash|code); a line without a prefix starts no node of its own or a node whose content occurs twice. Feed such a hash to emetgate_try as node to replace or delete just that node.",
+        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair. A body (or a widened declaration) longer than the read budget (" ++ std.fmt.comptimePrint("{d}", .{read_budget.default_budget}) ++ " characters unless the server was started with --read-budget) comes back folded with status partial: the signature, an outline of its nested blocks with line ranges, and the text with each elided range named in place as '\u{2026} lines A-B elided (N lines); read them with line_start/line_end'; a line range inside such a declaration returns the requested lines with the rest elided. Pass detail:\"full\" for every line. When the server was started with --mirror, a symbol whose hash was already sent unchanged this session comes back as a one-line 'unchanged: <file>#<symbol> #<hash>' instead of its body; pass force:true to always get the full body. Pass nodes:true to get each whole declaration (with symbol or symbols, never shortened to unchanged) or exactly the requested lines, top-level code included (with line_start and line_end, not widened), with every line that starts a syntax node prefixed by that node's short hash and a bar (hash|code); a line without a prefix starts no node of its own or a node whose content occurs twice. Feed such a hash to emetgate_try as node to replace or delete just that node.",
         .props = &.{
             .{ .name = "file", .desc = "path to a source file in a registered language" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add", .optional = true },
@@ -57,6 +58,7 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_end", .desc = "1-based end line of a range to read, widened to symbol boundaries", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "always return the full body even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
             .{ .name = "nodes", .desc = "true to return the declaration with node hashes (hash|code) instead of the bare body", .optional = true, .ty = "boolean" },
+            .{ .name = "detail", .desc = "\"full\" to get every line of a body over the read budget instead of the folded text; the default is \"budgeted\"", .optional = true },
         },
     },
     .{
@@ -117,14 +119,14 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Read a non-code file inside the repo (README, JSON, config, docs). A .json file defaults to a key tree (every JSON pointer, its value type and content hash) instead of raw text; pass pointer to read one subtree's value and hash instead (e.g. pointer:\"/dependencies/express\"). A .md file defaults to a heading tree (every heading, its level, line and content hash); pass heading (the exact heading text) to read that section (including its nested subsections) and its hash instead. Any other file defaults to at most 16 KiB of raw content (truncated:true when cut); pass line_start and line_end (1-based, inclusive) to read just that line range with its own hash instead. A source file of a registered language is refused (error UseSymbolToolsForSource): use emetgate_symbols, emetgate_skeleton or emetgate_read_symbol instead, or pass raw:true to read it verbatim (ignores pointer, heading and the line range). Paths outside the repo, .git and .emetgate are refused. When the server was started with --mirror, unchanged content comes back as a one-line 'unchanged: <file> #<hash>' instead of the full content; pass force:true to always get the full content.",
+        .description = "Read a non-code file inside the repo (README, JSON, config, docs). A .json file defaults to a key tree (every JSON pointer, its value type and content hash) instead of raw text; pass pointer to read one subtree's value and hash instead (e.g. pointer:\"/dependencies/express\"). A .md file defaults to a heading tree (every heading, its level, line and content hash); pass heading (the exact heading text) to read that section (including its nested subsections) and its hash instead. Any other file defaults to at most 16 KiB of raw content (truncated:true when cut); pass line_start and line_end (1-based, inclusive) to read just that line range with its own hash instead. A source file of a registered language is refused (error UseSymbolToolsForSource): use emetgate_symbols, emetgate_skeleton or emetgate_read_symbol instead, or pass raw:true to read it verbatim (raw ignores pointer and heading; line_start and line_end still pick a line range). Paths outside the repo, .git and .emetgate are refused. When the server was started with --mirror, unchanged content comes back as a one-line 'unchanged: <file> #<hash>' instead of the full content; pass force:true to always get the full content.",
         .props = &.{
             .{ .name = "file", .desc = "path inside the repo" },
             .{ .name = "raw", .desc = "read a source file of a registered language verbatim instead of being refused, or skip the key/heading tree for a .json or .md file", .optional = true, .ty = "boolean" },
             .{ .name = "pointer", .desc = "JSON pointer (e.g. /dependencies/express) to read one subtree of a .json file instead of its key tree", .optional = true },
             .{ .name = "heading", .desc = "exact heading text to read one section of a .md file instead of its heading tree", .optional = true },
-            .{ .name = "line_start", .desc = "1-based start line of a range to read from a non-JSON, non-Markdown, non-source file", .optional = true, .ty = "integer" },
-            .{ .name = "line_end", .desc = "1-based end line of a range to read from a non-JSON, non-Markdown, non-source file", .optional = true, .ty = "integer" },
+            .{ .name = "line_start", .desc = "1-based start line of a range to read; for a source, .json or .md file pass raw:true as well", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "1-based end line of a range to read, inclusive; past the end of the file the reply says status partial", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "always return the full content even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
         },
     },

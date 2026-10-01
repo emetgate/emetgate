@@ -76,6 +76,80 @@ const Run = struct {
     }
 };
 
+pub const max_alternatives = 64;
+
+pub fn requiredLiterals(pattern: []const u8, out: *[max_alternatives][]const u8) []const []const u8 {
+    const body = unwrapGroup(pattern);
+    if (!hasTopLevelAlternation(body)) {
+        const one = longestLiteralChunk(pattern);
+        if (one.len == 0) return out[0..0];
+        out[0] = one;
+        return out[0..1];
+    }
+    var n: usize = 0;
+    var start: usize = 0;
+    var depth: usize = 0;
+    var in_class = false;
+    var i: usize = 0;
+    while (i <= body.len) : (i += 1) {
+        const at_end = i == body.len;
+        if (!at_end) {
+            const c = body[i];
+            if (c == '\\') {
+                i += 1;
+                continue;
+            }
+            if (in_class) {
+                if (c == ']') in_class = false;
+                continue;
+            }
+            switch (c) {
+                '[' => in_class = true,
+                '(' => depth += 1,
+                ')' => depth -|= 1,
+                else => {},
+            }
+            if (c != '|' or depth != 0) continue;
+        }
+        if (n == out.len) return out[0..0];
+        const chunk = longestLiteralChunk(body[start..i]);
+        if (chunk.len == 0) return out[0..0];
+        out[n] = chunk;
+        n += 1;
+        start = i + 1;
+    }
+    return out[0..n];
+}
+
+fn unwrapGroup(pattern: []const u8) []const u8 {
+    if (pattern.len < 2 or pattern[0] != '(' or pattern[pattern.len - 1] != ')') return pattern;
+    var depth: usize = 0;
+    var in_class = false;
+    var i: usize = 0;
+    while (i < pattern.len) : (i += 1) {
+        const c = pattern[i];
+        if (c == '\\') {
+            i += 1;
+            continue;
+        }
+        if (in_class) {
+            if (c == ']') in_class = false;
+            continue;
+        }
+        switch (c) {
+            '[' => in_class = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -|= 1;
+                if (depth == 0 and i != pattern.len - 1) return pattern;
+            },
+            else => {},
+        }
+    }
+    const inner = pattern[1 .. pattern.len - 1];
+    return if (std.mem.startsWith(u8, inner, "?:")) inner[2..] else inner;
+}
+
 fn hasTopLevelAlternation(pattern: []const u8) bool {
     var depth: usize = 0;
     var in_class = false;
@@ -129,6 +203,67 @@ test "longestLiteralChunk never returns text a match can do without" {
     try testing.expectEqualStrings("abc", longestLiteralChunk("abc+"));
     try testing.expectEqualStrings("", longestLiteralChunk("(a|b)"));
     try testing.expectEqualStrings("end", longestLiteralChunk("[|]end"));
+}
+
+test "requiredLiterals gives one literal per top-level branch, also inside one enclosing group" {
+    var buf: [max_alternatives][]const u8 = undefined;
+    const Case = struct { pattern: []const u8, literals: []const []const u8 };
+    const cases = [_]Case{
+        .{ .pattern = "handleNodeExecutionError|continueExecution", .literals = &.{ "handleNodeExecutionError", "continueExecution" } },
+        .{ .pattern = "continuesOnError\\(|onError ===|executionData\\.node\\.onError", .literals = &.{ "continuesOnError", "onError ===", "executionData" } },
+        .{ .pattern = "(isPlaceholderString|PLACEHOLDER_VALUE)", .literals = &.{ "isPlaceholderString", "PLACEHOLDER_VALUE" } },
+        .{ .pattern = "(?:ab|cd)", .literals = &.{ "ab", "cd" } },
+        .{ .pattern = "req\\.(params|query)", .literals = &.{"req"} },
+        .{ .pattern = "(a|b)?cde", .literals = &.{"cde"} },
+        .{ .pattern = "[|]x|y", .literals = &.{ "x", "y" } },
+    };
+    for (cases) |case| {
+        const got = requiredLiterals(case.pattern, &buf);
+        errdefer std.debug.print("{s}\n", .{case.pattern});
+        try testing.expectEqual(case.literals.len, got.len);
+        for (case.literals, got) |want, have| try testing.expectEqualStrings(want, have);
+    }
+}
+
+test "requiredLiterals gives nothing when one branch can match without any literal" {
+    var buf: [max_alternatives][]const u8 = undefined;
+    for ([_][]const u8{ "foo|.*", "x|", "|x", "a.c", "(foo|bar)?" }) |pattern| {
+        errdefer std.debug.print("{s}\n", .{pattern});
+        const got = requiredLiterals(pattern, &buf);
+        if (std.mem.eql(u8, pattern, "a.c")) {
+            try testing.expectEqual(@as(usize, 1), got.len);
+            continue;
+        }
+        try testing.expectEqual(@as(usize, 0), got.len);
+    }
+}
+
+test "every line a regex matches contains one of its required literals" {
+    const regex = @import("regex.zig");
+    var buf: [max_alternatives][]const u8 = undefined;
+    const Case = struct { pattern: []const u8, lines: []const []const u8 };
+    const cases = [_]Case{
+        .{ .pattern = "handleNodeExecutionError|continueExecution", .lines = &.{ "a continueExecution b", "x.handleNodeExecutionError(" } },
+        .{ .pattern = "continuesOnError\\(|onError ===", .lines = &.{ "continuesOnError(x)", "if (onError === 'y')" } },
+        .{ .pattern = "(isPlaceholderString|PLACEHOLDER_VALUE)", .lines = &.{"PLACEHOLDER_VALUE = 1"} },
+        .{ .pattern = "colou?r|hue", .lines = &.{ "color", "colour", "hue" } },
+    };
+    for (cases) |case| {
+        const re = try regex.Regex.compile(testing.allocator, case.pattern, null);
+        defer re.deinit(testing.allocator);
+        const literals = requiredLiterals(case.pattern, &buf);
+        try testing.expect(literals.len != 0);
+        for (case.lines) |line| {
+            var budget: u64 = 1_000_000;
+            try testing.expect(try re.isMatch(testing.allocator, line, &budget));
+            var found = false;
+            for (literals) |lit| {
+                if (std.mem.indexOf(u8, line, lit) != null) found = true;
+            }
+            errdefer std.debug.print("{s} on {s}\n", .{ case.pattern, line });
+            try testing.expect(found);
+        }
+    }
 }
 
 test "every longestLiteralChunk hint occurs in every line the regex matches" {
