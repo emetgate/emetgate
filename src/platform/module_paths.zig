@@ -53,13 +53,17 @@ pub fn resolveSpec(gpa: Allocator, existing: Existing, importer_abs: []const u8,
     const joined = try std.fs.path.resolve(gpa, &.{ dir, spec });
     defer gpa.free(joined);
     std.mem.replaceScalar(u8, joined, '/', '\\');
-    if (existing.has(joined)) return try gpa.dupe(u8, joined);
+    return resolveJoined(gpa, existing, joined, '\\');
+}
+
+pub fn resolveJoined(gpa: Allocator, lookup: anytype, joined: []const u8, separator: u8) !?[]u8 {
+    if (lookup.has(joined)) return try gpa.dupe(u8, joined);
     if (specExtension(joined)) |ext| {
         for (emitted) |e| {
             if (!std.mem.eql(u8, e.from, ext)) continue;
             for (e.to) |to| {
                 const candidate = try std.fmt.allocPrint(gpa, "{s}{s}", .{ joined[0 .. joined.len - ext.len], to });
-                if (existing.has(candidate)) return candidate;
+                if (lookup.has(candidate)) return candidate;
                 gpa.free(candidate);
             }
         }
@@ -67,12 +71,12 @@ pub fn resolveSpec(gpa: Allocator, existing: Existing, importer_abs: []const u8,
     }
     for (source_extensions) |ext| {
         const candidate = try std.fmt.allocPrint(gpa, "{s}{s}", .{ joined, ext });
-        if (existing.has(candidate)) return candidate;
+        if (lookup.has(candidate)) return candidate;
         gpa.free(candidate);
     }
     for (source_extensions) |ext| {
-        const candidate = try std.fmt.allocPrint(gpa, "{s}\\index{s}", .{ joined, ext });
-        if (existing.has(candidate)) return candidate;
+        const candidate = try std.fmt.allocPrint(gpa, "{s}{c}index{s}", .{ joined, separator, ext });
+        if (lookup.has(candidate)) return candidate;
         gpa.free(candidate);
     }
     return null;
