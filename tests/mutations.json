@@ -235,6 +235,44 @@
       ]
     },
     {
+      "id": "K13-lockdown-bypass-mode-allowed",
+      "file": "src/platform/lockdown.zig",
+      "from": "            if (std.ascii.eqlIgnoreCase(mode, refused_permission_mode)) return error.LockdownFlagOverride;",
+      "to": "            _ = mode;",
+      "kills": [
+        "lockdown refuses the bypassPermissions mode in both spellings",
+        "the bypassPermissions refusal does not depend on letter case"
+      ]
+    },
+    {
+      "id": "K14-lockdown-every-mode-refused",
+      "file": "src/platform/lockdown.zig",
+      "from": "            if (std.ascii.eqlIgnoreCase(mode, refused_permission_mode)) return error.LockdownFlagOverride;",
+      "to": "            _ = mode;\n            return error.LockdownFlagOverride;",
+      "kills": [
+        "the other permission modes pass through the lock"
+      ]
+    },
+    {
+      "id": "K15-lockdown-bypass-equals-spelling-missed",
+      "file": "src/platform/lockdown.zig",
+      "from": "    if (std.mem.startsWith(u8, arg, permission_mode_flag ++ \"=\")) return arg[permission_mode_flag.len + 1 ..];\n",
+      "to": "",
+      "kills": [
+        "lockdown refuses the bypassPermissions mode in both spellings",
+        "the bypassPermissions refusal does not depend on letter case"
+      ]
+    },
+    {
+      "id": "K16-lockdown-bypass-case-sensitive",
+      "file": "src/platform/lockdown.zig",
+      "from": "std.ascii.eqlIgnoreCase(mode, refused_permission_mode)",
+      "to": "std.mem.eql(u8, mode, refused_permission_mode)",
+      "kills": [
+        "the bypassPermissions refusal does not depend on letter case"
+      ]
+    },
+    {
       "id": "K1e-lockdown-tools-default",
       "file": "src/platform/lockdown.zig",
       "from": "pub const allowed_builtin_tools = \"\";",
