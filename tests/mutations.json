@@ -65,6 +65,103 @@
       ]
     },
     {
+      "id": "RB1-elision-line-not-written",
+      "file": "src/protocol/read_budget.zig",
+      "from": "            const text = try elisionLine(gpa, source, lines, range);",
+      "to": "            const text = try gpa.dupe(u8, \"\");",
+      "kills": [
+        "a folded body names each elided range in place, deepest blocks first, with an outline",
+        "a tighter budget folds the outer blocks and a tiny one cuts the tail, every range named"
+      ],
+      "note": "silent cut: folded lines would vanish without the line that names them"
+    },
+    {
+      "id": "RB2-elision-range-off-by-one",
+      "file": "src/protocol/read_budget.zig",
+      "from": "range.line_start, range.line_end, range.line_end - range.line_start + 1, eol",
+      "to": "range.line_start, range.line_end + 1, range.line_end - range.line_start + 1, eol",
+      "kills": [
+        "a folded body names each elided range in place, deepest blocks first, with an outline",
+        "a tighter budget folds the outer blocks and a tiny one cuts the tail, every range named",
+        "a line range inside a declaration over the budget returns the requested lines and names the rest"
+      ]
+    },
+    {
+      "id": "RB3-body-at-the-budget-folded",
+      "file": "src/protocol/handlers.zig",
+      "from": "return self.detail == .budgeted and chars > self.budget;",
+      "to": "return self.detail == .budgeted and chars >= self.budget;",
+      "kills": [
+        "a body exactly at the read budget is not folded and one byte over it is"
+      ]
+    },
+    {
+      "id": "RB4-small-body-folded",
+      "file": "src/protocol/handlers.zig",
+      "from": "return self.detail == .budgeted and chars > self.budget;",
+      "to": "return self.detail == .budgeted;",
+      "kills": [
+        "a symbol body within the read budget comes back exactly as before",
+        "a body exactly at the read budget is not folded and one byte over it is",
+        "with symbols, only the bodies over the read budget are folded"
+      ]
+    },
+    {
+      "id": "RB5-detail-full-ignored",
+      "file": "src/protocol/read_budget.zig",
+      "from": "    if (std.mem.eql(u8, text, \"full\")) return .full;",
+      "to": "    if (std.mem.eql(u8, text, \"full\")) return .budgeted;",
+      "kills": [
+        "detail full returns every line of a body over the read budget"
+      ]
+    },
+    {
+      "id": "RB6-tail-left-over-the-budget",
+      "file": "src/protocol/read_budget.zig",
+      "from": "    if (result.size > budget) try cutTail(gpa, &result, source, lines, last_line, budget);\n",
+      "to": "",
+      "kills": [
+        "a tighter budget folds the outer blocks and a tiny one cuts the tail, every range named"
+      ]
+    },
+    {
+      "id": "RB7-range-inside-a-large-declaration-not-focused",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (folds) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.focus(",
+      "to": "        if (false) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.focus(",
+      "kills": [
+        "a line range inside a declaration over the budget returns the requested lines and names the rest"
+      ]
+    },
+    {
+      "id": "RB8-symbols-list-never-folded",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (folds) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.fold(",
+      "to": "        if (false) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.fold(",
+      "kills": [
+        "with symbols, only the bodies over the read budget are folded"
+      ]
+    },
+    {
+      "id": "RB9-unknown-detail-accepted",
+      "file": "src/protocol/read_budget.zig",
+      "from": "    return error.UnknownDetail;\n}",
+      "to": "    return .budgeted;\n}",
+      "kills": [
+        "an unknown detail value is refused instead of ignored"
+      ],
+      "note": "an unknown detail value would be ignored silently"
+    },
+    {
+      "id": "RB10-read-budget-zero-accepted",
+      "file": "src/protocol/policy.zig",
+      "from": "            if (value == 0) return null;\n",
+      "to": "",
+      "kills": [
+        "--read-budget sets the budget and refuses zero, a missing value or a non-number"
+      ]
+    },
+    {
       "id": "K1-lockdown-tools-default",
       "file": "src/platform/lockdown.zig",
       "from": "pub const allowed_builtin_tools = \"\";",
