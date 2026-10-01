@@ -380,13 +380,22 @@
     {
       "id": "SELF-a-harmless-change-survives",
       "file": "src/protocol/server.zig",
-      "from": "const server_version = \"0.1.0\";",
-      "to": "const server_version = \"0.1.1\";",
+      "from": "pub const server_version = @import(\"version\").version;",
+      "to": "pub const server_version = \"0.1.1\";",
       "expect_status": "survived",
       "filter": [
         "initialize reflects the client protocol version and advertises tools"
       ],
       "note": "control: proves the harness reports a survivor instead of calling everything killed"
+    },
+    {
+      "id": "V1-server-version-not-from-the-manifest",
+      "file": "src/protocol/server.zig",
+      "from": "pub const server_version = @import(\"version\").version;",
+      "to": "pub const server_version = \"0.1.0\";",
+      "kills": [
+        "initialize reports the version written in build.zig.zon"
+      ]
     },
     {
       "id": "SELF-a-compile-error-is-not-a-kill",

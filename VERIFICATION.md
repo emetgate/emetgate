@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1153**
-- Mutations declared in `tests/mutations.json`: **666**
-  - killed: **636**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1154**
+- Mutations declared in `tests/mutations.json`: **667**
+  - killed: **637**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -553,7 +553,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-209 mutation(s).
+210 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -564,7 +564,8 @@ python tools/verification_page.py --check
 | `RF2-read-file-range-shifted-by-one` | `src/protocol/read_tools.zig` | `line_range.byteRangeForLines(bytes, @intCast(start), @intCast(s...` -> `line_range.byteRangeForLines(bytes, @intCast(start + 1), @intCa...` | read_file applies a line range to a raw read of a source file | killed |
 | `RF3-read-file-range-cut-silently` | `src/protocol/read_tools.zig` | `if (shown_end < end) {` -> `if (false) {` | read_file refuses an inverted or out-of-file line range and marks a range cut a... | killed |
 | `RF4-read-file-range-past-the-file-not-refused` | `src/protocol/read_tools.zig` | `if (start > last) return error.LineOutOfRange;` -> `` | read_file refuses an inverted or out-of-file line range and marks a range cut a... | killed |
-| `SELF-a-harmless-change-survives` | `src/protocol/server.zig` | `const server_version = "0.1.0";` -> `const server_version = "0.1.1";` | control: proves the harness reports a survivor instead of calling everything killed | control |
+| `SELF-a-harmless-change-survives` | `src/protocol/server.zig` | `pub const server_version = @import("version").version;` -> `pub const server_version = "0.1.1";` | control: proves the harness reports a survivor instead of calling everything killed | control |
+| `V1-server-version-not-from-the-manifest` | `src/protocol/server.zig` | `pub const server_version = @import("version").version;` -> `pub const server_version = "0.1.0";` | initialize reports the version written in build.zig.zon | killed |
 | `R7-checks-template-string-prose-allowed` | `src/engine/lang/ecma/common.zig` | `pub const prose_strings = [_][]const u8{ "string", "template_st...` -> `pub const prose_strings = [_][]const u8{"string"};` | no_comment flags prose smuggled in as a string or template statement | killed |
 | `EB6-bnd-dynamic-import-ignored` | `src/engine/lang/ecma/common.zig` | `pub const dynamic_callees = [_][]const u8{ "eval", "import" };` -> `pub const dynamic_callees = [_][]const u8{"eval"};` | adversarial: a dynamic import anywhere in the file forces UNBOUNDED | killed |
 | `EB7-bnd-new-function-ignored` | `src/engine/lang/ecma/common.zig` | `.names = &.{"Function"}` -> `.names = &.{}` | adversarial: a Function constructor anywhere in the file forces UNBOUNDED | killed |
