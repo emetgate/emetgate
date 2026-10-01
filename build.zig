@@ -1,4 +1,5 @@
 const std = @import("std");
+const manifest = @import("build.zig.zon");
 
 const ts_core_root = "vendor/tree-sitter/lib";
 
@@ -33,12 +34,18 @@ pub fn build(b: *std.Build) void {
     c_api.addIncludePath(b.path(ts_core_root ++ "/include"));
 
     const c_module = c_api.createModule();
+    const version_values = b.addOptions();
+    version_values.addOption([]const u8, "version", manifest.version);
+    const version_module = version_values.createModule();
     const emetgate = b.addModule("emetgate", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "c", .module = c_module }},
+        .imports = &.{
+            .{ .name = "c", .module = c_module },
+            .{ .name = "version", .module = version_module },
+        },
     });
     emetgate.linkLibrary(tree_sitter);
 
@@ -50,7 +57,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .tree_sitter = tree_sitter, .probe = probe };
+    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .probe = probe };
     const src_bench = srcModule(b, common, true);
 
     const exe = b.addExecutable(.{
@@ -146,6 +153,7 @@ const TestModuleOptions = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     c_module: *std.Build.Module,
+    version_module: *std.Build.Module,
     tree_sitter: *std.Build.Step.Compile,
     probe: *std.Build.Step.Compile,
 };
@@ -165,6 +173,7 @@ fn srcModule(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.
         .link_libc = true,
         .imports = &.{
             .{ .name = "c", .module = options.c_module },
+            .{ .name = "version", .module = options.version_module },
             .{ .name = "build_options", .module = buildOptions(b, options, bench) },
         },
     });
@@ -180,6 +189,7 @@ fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
         .link_libc = true,
         .imports = &.{
             .{ .name = "c", .module = options.c_module },
+            .{ .name = "version", .module = options.version_module },
             .{ .name = "build_options", .module = buildOptions(b, options, false) },
         },
     });

@@ -7,6 +7,7 @@ const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
 const runner = @import("../platform/runner.zig");
+const read_budget = @import("read_budget.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -116,6 +117,83 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try writer.writeByte('\n');
 }
 
+pub const Folded = struct {
+    view: read_budget.View,
+    signature: []const u8,
+    budget: usize,
+};
+
+fn writeFoldedFields(js: *std.json.Stringify, folded: Folded) !void {
+    const view = folded.view;
+    try js.objectField("status");
+    try js.write("partial");
+    try js.objectField("start_line");
+    try js.write(view.first_line);
+    try js.objectField("end_line");
+    try js.write(view.last_line);
+    try js.objectField("signature");
+    try js.write(folded.signature);
+    try js.objectField("budget");
+    try js.write(folded.budget);
+    try js.objectField("chars");
+    try js.write(view.full_chars);
+    if (view.outline.len != 0) {
+        try js.objectField("outline");
+        try js.beginArray();
+        for (view.outline) |block| {
+            try js.beginObject();
+            try js.objectField("kind");
+            try js.write(block.kind);
+            try js.objectField("line_start");
+            try js.write(block.line_start);
+            try js.objectField("line_end");
+            try js.write(block.line_end);
+            try js.objectField("text");
+            try js.write(block.header);
+            try js.endObject();
+        }
+        try js.endArray();
+        if (view.outline_total > view.outline.len) {
+            try js.objectField("outline_total");
+            try js.write(view.outline_total);
+        }
+    }
+    try js.objectField("elided");
+    try js.beginArray();
+    for (view.elided) |range| {
+        try js.beginObject();
+        try js.objectField("line_start");
+        try js.write(range.line_start);
+        try js.objectField("line_end");
+        try js.write(range.line_end);
+        try js.objectField("lines");
+        try js.write(range.line_end - range.line_start + 1);
+        try js.endObject();
+    }
+    try js.endArray();
+}
+
+pub const folded_note = "over the read budget, so the text is folded: every elided line range is named in place; read one with line_start/line_end, or pass detail:\"full\" for every line (do that before rewriting the whole body with emetgate_try)";
+
+pub fn writeSymbolBodyFolded(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, folded: Folded) !void {
+    const hex = symbol.formatHash(hash);
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("symbol");
+    try js.write(ref);
+    try js.objectField("hash");
+    try js.write(hex[0..]);
+    try writeFoldedFields(&js, folded);
+    try js.objectField("note");
+    try js.write(folded_note);
+    try js.objectField("body");
+    try js.write(folded.view.text);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub fn writeSymbolNodes(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, text: []const u8) !void {
     const hex = symbol.formatHash(hash);
     var js: std.json.Stringify = .{ .writer = writer };
@@ -179,6 +257,7 @@ pub const SymbolEntry = struct {
     hash: symbol.Hash,
     body: ?[]const u8,
     nodes: bool = false,
+    folded: ?Folded = null,
 };
 
 pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const SymbolEntry) !void {
@@ -195,7 +274,13 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
         try js.write(entry.ref);
         try js.objectField("hash");
         try js.write(hex[0..]);
-        if (entry.body) |body| {
+        if (entry.folded) |folded| {
+            try writeFoldedFields(&js, folded);
+            try js.objectField("note");
+            try js.write(folded_note);
+            try js.objectField("body");
+            try js.write(folded.view.text);
+        } else if (entry.body) |body| {
             try js.objectField(if (entry.nodes) "nodes" else "body");
             try js.write(body);
         } else {
@@ -215,6 +300,7 @@ pub const RangeEntry = struct {
     text: ?[]const u8,
     start_line: u32,
     end_line: u32,
+    folded: ?Folded = null,
 };
 
 pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32, requested_end: u32, entries: []const RangeEntry) !void {
@@ -235,14 +321,24 @@ pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32,
         try js.write(entry.ref);
         try js.objectField("hash");
         try js.write(hex[0..]);
-        try js.objectField("start_line");
-        try js.write(entry.start_line);
-        try js.objectField("end_line");
-        try js.write(entry.end_line);
-        if (entry.text) |text| {
+        if (entry.folded) |folded| {
+            try writeFoldedFields(&js, folded);
+            try js.objectField("note");
+            try js.write(folded_note);
+            try js.objectField("text");
+            try js.write(folded.view.text);
+        } else if (entry.text) |text| {
+            try js.objectField("start_line");
+            try js.write(entry.start_line);
+            try js.objectField("end_line");
+            try js.write(entry.end_line);
             try js.objectField("text");
             try js.write(text);
         } else {
+            try js.objectField("start_line");
+            try js.write(entry.start_line);
+            try js.objectField("end_line");
+            try js.write(entry.end_line);
             try js.objectField("status");
             try js.write("unchanged");
         }

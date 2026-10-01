@@ -77,6 +77,7 @@ pub const telemetry = src.telemetry;
 pub const handlers = src.handlers;
 pub const run_tool = src.run_tool;
 pub const read_tools = src.read_tools;
+pub const read_budget = src.read_budget;
 pub const mirror = src.mirror;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
@@ -141,6 +142,7 @@ test {
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
     _ = @import("tests/readtools.zig");
+    _ = @import("tests/read_budget.zig");
     _ = @import("tests/search.zig");
     _ = @import("tests/git_tools.zig");
     _ = @import("tests/server.zig");
