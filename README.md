@@ -37,8 +37,8 @@ If a check cannot finish, the change is refused. The model cannot change the tes
 | Tool | What it does |
 |---|---|
 | `emetgate_symbols`, `emetgate_skeleton` | Symbols and signatures with content hashes |
-| `emetgate_read_symbol` | One or more symbol bodies, or a line range widened to whole symbols; `nodes:true` adds a hash to every line that starts a syntax node |
-| `emetgate_read_file` | JSON key tree or one pointer, Markdown headings or one section, text line range |
+| `emetgate_read_symbol` | One or more symbol bodies, or a line range widened to whole symbols; a body over the read budget (8,192 characters) comes back folded, with every elided line range named in place; `nodes:true` adds a hash to every line that starts a syntax node |
+| `emetgate_read_file` | JSON key tree or one pointer, Markdown headings or one section, text line range (also of a source file with `raw:true`) |
 | `emetgate_list`, `emetgate_search` | Files and text search inside the repository |
 | `emetgate_git` | Read-only `status`, `diff`, `log`, `show` |
 | `emetgate_mutate` | Check a proposed body without writing it |

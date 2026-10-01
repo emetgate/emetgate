@@ -376,7 +376,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 |---|---|
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
 | `emetgate_skeleton` | Signatures and structure without bodies, plus every adopted rule that covers the file (read-only) |
-| `emetgate_read_symbol` | The source of one symbol, several symbols at once, or a line range widened to the symbols it overlaps; with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
+| `emetgate_read_symbol` | The source of one symbol, several symbols at once, or a line range widened to the symbols it overlaps; a body over the read budget comes back folded (see Reader); with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
 | `emetgate_mutate` | Verify a proposed body structurally and return the result without writing |
 | `emetgate_try` | Verify, gate and commit a proposed body, or new text for one or more syntax nodes addressed by their hash |
 | `emetgate_try_batch` | Several proposals as one unit |
@@ -384,7 +384,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | `emetgate_move` | Move a top-level declaration to another file; the kernel derives and checks every import and commits source, target and users as one batch |
 | `emetgate_move_file` | Move or rename a file and rewrite every relative import to and from it as one batch |
 | `emetgate_write_doc` | Verify, gate and commit a hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section or a text line range; can commit together with a code edit in `emetgate_try_batch` |
-| `emetgate_read_file` | A JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim; confined to the repository |
+| `emetgate_read_file` | A JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim or a line range of it, source files included; confined to the repository |
 | `emetgate_list`, `emetgate_search` | Reads confined to the repository |
 | `emetgate_scan` | Measure one check expression against the repository, optionally within a `where` scope; writes nothing |
 | `emetgate_git` | Read-only `status`, `diff`, `log` or `show`, with a fixed argument list and safe overrides so nothing configured in the repository (pager, external diff, textconv, fsmonitor, a `clean`/`smudge` filter) can run; output is capped |
@@ -511,7 +511,22 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
   every signature, bodies elided) → body (`emetgate_read_symbol`: one symbol, several at
   once, or a line range widened to the symbols it overlaps, each with its own hash). A
   raw whole-file read of such a file is refused by `emetgate_read_file`
-  (`UseSymbolToolsForSource`) unless `raw:true` is passed explicitly.
+  (`UseSymbolToolsForSource`) unless `raw:true` is passed explicitly; with `raw:true`,
+  `line_start`/`line_end` return just those lines. A range that runs past the end of the
+  file comes back with `status: partial` and the line the file ends at; an inverted range
+  is `InvalidLineRange` and one that starts after the last line is `LineOutOfRange`.
+- **Read budget for long bodies.** A body longer than the read budget (8,192 characters,
+  `emetgate mcp --read-budget <chars>` to change it) comes back with `status: partial`:
+  the signature, an outline of its nested blocks (`if`, `for`, `try`, inner functions, each
+  with a line range), and the body folded from the deepest blocks outwards until it fits,
+  every elided range named in place as `… lines A-B elided (N lines); read them with
+  line_start/line_end` and listed under `elided`. If folding every block is not enough, the
+  tail is cut the same way. A line range inside such a declaration returns the requested
+  lines with the rest named the same way. `detail:"full"` returns every line. Bodies within
+  the budget come back exactly as before. On n8n, `WorkflowExecute.processRunExecutionData`
+  (20 KB body) went from a 25,147-character reply to 10,708, and `addNodeToBeExecuted` from
+  16,519 to 11,591; 4,096 also folded 6 to 8 KB bodies for little gain and 16,384 saved
+  little on the largest one (measured through a direct MCP session on n8n on 2026-10-01).
 - **JSON**: `emetgate_read_file` defaults to a key tree (every JSON pointer, its value
   type and content hash) instead of the raw text; `pointer` reads one subtree.
 - **Markdown**: `emetgate_read_file` defaults to a heading tree (heading, level, line,
