@@ -99,7 +99,7 @@
       "id": "RB4-small-body-folded",
       "file": "src/protocol/handlers.zig",
       "from": "return self.detail == .budgeted and chars > self.budget;",
-      "to": "return self.detail == .budgeted;",
+      "to": "_ = chars;\n        return self.detail == .budgeted;",
       "kills": [
         "a symbol body within the read budget comes back exactly as before",
         "a body exactly at the read budget is not folded and one byte over it is",
