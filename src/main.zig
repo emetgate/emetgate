@@ -16,6 +16,7 @@ const lockdown = emetgate.lockdown;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
 const receipts = emetgate.receipts;
+const facts_command = emetgate.facts_command;
 const verify_run = emetgate.verify_run;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
@@ -36,6 +37,12 @@ const usage =
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
     \\       emetgate lockdown [<claude args>...]
+    \\       emetgate facts build [--threads <n>] [--no-store] [--json]
+    \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
+    \\       emetgate facts defined_at <name> [--file <path>] [--budget <chars>] [--json]
+    \\       emetgate facts bench [--seed <n>] [--samples <n>] [--updates <n>] [--json]
+    \\       emetgate facts modules [--file <prefix>]
+    \\       emetgate facts defs [--file <prefix>]
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.
@@ -134,6 +141,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (std.mem.eql(u8, command, "receipts") and args.len >= 3 and std.mem.eql(u8, args[2], "attach") and args.len <= 4) {
         return attachCmd(init, runtime, if (args.len == 4) args[3] else "HEAD", out);
+    }
+    if (std.mem.eql(u8, command, "facts")) {
+        const options = facts_command.parse(args[2..]) orelse exitWithUsage();
+        return facts_command.run(runtime.gpa, init.io, runtime, options, out);
     }
     if (std.mem.eql(u8, command, "lockdown")) {
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
