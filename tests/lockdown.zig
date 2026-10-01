@@ -237,3 +237,31 @@ test "the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had"
     try parent.put("ENABLE_TOOL_SEARCH", "true");
     try testing.expectEqual(@as(u8, 7), try lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, program, &.{ "-p", "hi" }));
 }
+
+test "lockdown refuses the bypassPermissions mode in both spellings" {
+    try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{ "-p", "hi", "--permission-mode", "bypassPermissions" }));
+    try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{"--permission-mode=bypassPermissions"}));
+    try testing.expectError(error.LockdownFlagOverride, lockdown.buildArgv(testing.allocator, "cfg", allowed, &.{ "--permission-mode", "bypassPermissions", "-p", "hi" }));
+}
+
+test "the other permission modes pass through the lock" {
+    const modes = [_][]const u8{ "acceptEdits", "auto", "manual", "dontAsk", "plan" };
+    for (modes) |mode| {
+        try lockdown.refuseReserved(&.{ "-p", "hi", "--permission-mode", mode });
+        const joined = try std.fmt.allocPrint(testing.allocator, "--permission-mode={s}", .{mode});
+        defer testing.allocator.free(joined);
+        try lockdown.refuseReserved(&.{joined});
+    }
+    try lockdown.refuseReserved(&.{ "-p", "bypassPermissions" });
+    try lockdown.refuseReserved(&.{"--permission-mode"});
+}
+
+test "the bypassPermissions refusal does not depend on letter case" {
+    const spellings = [_][]const u8{ "BypassPermissions", "bypasspermissions", "BYPASSPERMISSIONS" };
+    for (spellings) |mode| {
+        try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{ "--permission-mode", mode }));
+        const joined = try std.fmt.allocPrint(testing.allocator, "--permission-mode={s}", .{mode});
+        defer testing.allocator.free(joined);
+        try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{joined}));
+    }
+}

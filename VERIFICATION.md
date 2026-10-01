@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1148**
-- Mutations declared in `tests/mutations.json`: **658**
-  - killed: **628**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1151**
+- Mutations declared in `tests/mutations.json`: **662**
+  - killed: **632**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -171,7 +171,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-72 mutation(s).
+76 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -197,6 +197,10 @@ python tools/verification_page.py --check
 | `K10-lockdown-second-server-accepted` | `src/platform/lockdown.zig` | `if (found != null) return error.SeveralEmetgateServers;` -> `` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
 | `K11-lockdown-any-program-is-emetgate` | `src/platform/lockdown.zig` | `return std.ascii.eqlIgnoreCase(stem, emetgate_program);` -> `_ = stem;     return true;` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
 | `K12-lockdown-mcp-arg-not-required` | `src/platform/lockdown.zig` | `if (std.mem.eql(u8, first.string, name)) return isEmetgateProgr...` -> `_ = name;         return isEmetgateProgram(command.string);` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
+| `K13-lockdown-bypass-mode-allowed` | `src/platform/lockdown.zig` | `if (std.ascii.eqlIgnoreCase(mode, refused_permission_mode)) ret...` -> `_ = mode;` | lockdown refuses the bypassPermissions mode in both spellings; the bypassPermissions refu... | killed |
+| `K14-lockdown-every-mode-refused` | `src/platform/lockdown.zig` | `if (std.ascii.eqlIgnoreCase(mode, refused_permission_mode)) ret...` -> `_ = mode;             return error.LockdownFlagOverride;` | the other permission modes pass through the lock | killed |
+| `K15-lockdown-bypass-equals-spelling-missed` | `src/platform/lockdown.zig` | `if (std.mem.startsWith(u8, arg, permission_mode_flag ++ "=")) r...` -> `` | lockdown refuses the bypassPermissions mode in both spellings; the bypassPermissions refu... | killed |
+| `K16-lockdown-bypass-case-sensitive` | `src/platform/lockdown.zig` | `std.ascii.eqlIgnoreCase(mode, refused_permission_mode)` -> `std.mem.eql(u8, mode, refused_permission_mode)` | the bypassPermissions refusal does not depend on letter case | killed |
 | `K1e-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "";` -> `pub const allowed_builtin_tools = "default";` |  | verified end-to-end, not by the mutation harness |
 | `K2e-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | only killed on a machine with user-level MCP servers configured | verified end-to-end, not by the mutation harness |
 | `K3e-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools"` |  | verified end-to-end, not by the mutation harness |
