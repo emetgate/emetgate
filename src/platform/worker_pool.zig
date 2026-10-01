@@ -9,7 +9,7 @@ pub const Task = *const fn (ctx: *anyopaque) void;
 pub const Pool = struct {
     threads: [max_threads]std.Thread = undefined,
     go: [max_threads]windows.HANDLE = undefined,
-    done: windows.HANDLE = undefined,
+    done: ?windows.HANDLE = null,
     count: usize = 0,
     pending: std.atomic.Value(usize) = .init(0),
     task: ?Task = null,
@@ -21,7 +21,8 @@ pub const Pool = struct {
         if (builtin.os.tag != .windows) return;
         const cpus = std.Thread.getCpuCount() catch 1;
         const extra = @min(@min(wanted, max_threads), cpus) -| 1;
-        self.done = win.CreateEventW(null, .FALSE, .FALSE, null) orelse return;
+        const done = win.CreateEventW(null, .FALSE, .FALSE, null) orelse return;
+        self.done = done;
         var i: usize = 0;
         while (i < extra) : (i += 1) {
             self.go[i] = win.CreateEventW(null, .FALSE, .FALSE, null) orelse break;
@@ -39,7 +40,8 @@ pub const Pool = struct {
         for (0..self.count) |i| _ = win.SetEvent(self.go[i]);
         for (self.threads[0..self.count]) |t| t.join();
         for (0..self.count) |i| windows.CloseHandle(self.go[i]);
-        windows.CloseHandle(self.done);
+        if (self.done) |done| windows.CloseHandle(done);
+        self.done = null;
         self.count = 0;
     }
 
@@ -58,7 +60,7 @@ pub const Pool = struct {
         self.pending.store(n, .release);
         for (0..n) |i| _ = win.SetEvent(self.go[i]);
         task(ctx);
-        _ = win.WaitForSingleObject(self.done, win.infinite);
+        _ = win.WaitForSingleObject(self.done.?, win.infinite);
         self.task = null;
     }
 
@@ -67,7 +69,7 @@ pub const Pool = struct {
             _ = win.WaitForSingleObject(self.go[i], win.infinite);
             if (self.stop) return;
             if (self.task) |task| task(self.ctx);
-            if (self.pending.fetchSub(1, .acq_rel) == 1) _ = win.SetEvent(self.done);
+            if (self.pending.fetchSub(1, .acq_rel) == 1) _ = win.SetEvent(self.done.?);
         }
     }
 };
@@ -94,6 +96,14 @@ const Counter = struct {
         }
     }
 };
+
+test "a pool that never started is released without closing a handle it does not own" {
+    var pool: Pool = .{};
+    pool.deinit();
+    var counter: Counter = .{};
+    pool.run(4, Counter.work, &counter);
+    for (&counter.seen) |*s| try testing.expectEqual(@as(u8, 1), s.load(.monotonic));
+}
 
 test "a pool runs a task on its helpers and the caller, and every item is done exactly once, round after round" {
     var pool: Pool = undefined;
