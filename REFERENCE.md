@@ -475,7 +475,7 @@ claude --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<serv
 | `emetgate_read_file` | Reads one file inside the repository |
 | `emetgate_list` | Runs `git ls-files` with a fixed argument list |
 | `emetgate_search` | Reads tracked files; its only write is its own index cache under `%LOCALAPPDATA%\emetgate\index` |
-| `emetgate_scan` | Measures one check in memory, writes nothing and does not read the ledger |
+| `emetgate_scan` | Measures one check in memory, writes nothing and does not read the ledger; a `cmd:` check is refused as not static, so no command runs |
 | `emetgate_git` | Runs `status`, `diff`, `log` or `show` with a fixed argument list, `--no-optional-locks` and no pager, external diff, textconv or fsmonitor |
 | `emetgate_mutate` | Builds the changed source in memory; it runs no command and writes nothing |
 
