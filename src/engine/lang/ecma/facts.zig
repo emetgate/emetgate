@@ -19,7 +19,6 @@ const typed_binders = [_]TypedBinder{
     .{ .node = "variable_declarator", .name_field = "name", .type_field = "type" },
     .{ .node = "required_parameter", .name_field = "pattern", .type_field = "type" },
     .{ .node = "optional_parameter", .name_field = "pattern", .type_field = "type" },
-    .{ .node = "public_field_definition", .name_field = "name", .type_field = "type" },
 };
 
 pub const typescript: Facts = .{

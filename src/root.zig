@@ -21,6 +21,7 @@ pub const alpha = @import("engine/alpha.zig");
 pub const declarations = @import("engine/declarations.zig");
 pub const modules = @import("engine/modules.zig");
 pub const facts = @import("engine/facts.zig");
+pub const facts_extract = @import("engine/facts_extract.zig");
 pub const coverage = @import("engine/coverage.zig");
 pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");

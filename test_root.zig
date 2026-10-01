@@ -23,6 +23,7 @@ pub const alpha = src.alpha;
 pub const declarations = src.declarations;
 pub const modules = src.modules;
 pub const facts = src.facts;
+pub const facts_extract = src.facts_extract;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
@@ -116,6 +117,7 @@ test {
     _ = @import("tests/redteam_batch_delete.zig");
     _ = @import("tests/tsserver.zig");
     _ = @import("tests/declarations.zig");
+    _ = @import("tests/facts_extract.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");
