@@ -25,6 +25,8 @@ pub const modules = src.modules;
 pub const facts = src.facts;
 pub const facts_extract = src.facts_extract;
 pub const facts_store = src.facts_store;
+pub const facts_query = src.facts_query;
+pub const facts_evidence = src.facts_evidence;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
@@ -122,6 +124,7 @@ test {
     _ = @import("tests/declarations.zig");
     _ = @import("tests/facts_extract.zig");
     _ = @import("tests/facts_store.zig");
+    _ = @import("tests/facts_query.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");

@@ -641,9 +641,12 @@ const Extractor = struct {
         const start = callee.startByte();
         const from = try self.ownerAt(node.startByte());
         if (std.mem.eql(u8, kind, self.g.subscript)) {
-            const index = callee.childByField(self.g.subscript_index_field);
-            const name = if (index) |ix| (if (oneOf(ix.kind(), self.profile.strings)) try self.keep(unquote(self.raw(ix))) else "") else "";
-            return self.addRef(.{ .from = from, .kind = .call, .name = name, .start = start, .line = lineOf(callee), .target = .{ .unresolved = .dynamic_access } });
+            const index = callee.childByField(self.g.subscript_index_field) orelse return;
+            if (oneOf(index.kind(), self.profile.strings)) {
+                return self.addRef(.{ .from = from, .kind = .call, .name = try self.keep(unquote(self.raw(index))), .start = start, .line = lineOf(callee), .target = .{ .unresolved = .dynamic_access } });
+            }
+            const reason: facts.Reason = if (oneOf(index.kind(), self.g.literal_index_kinds)) .local_value else .dynamic_access;
+            return self.addRef(.{ .from = from, .kind = .call, .name = "", .start = start, .line = lineOf(callee), .target = .{ .unresolved = reason } });
         }
         if (!oneOf(self.raw(callee), self.g.module_callees)) return;
         if (std.mem.eql(u8, kind, self.profile.identifier) and self.binderOfUse(start) != null) return;

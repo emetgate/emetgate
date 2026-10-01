@@ -159,3 +159,41 @@ test "facts store: the snapshot root changes with any file's content and not wit
     try second.store.computeRoot();
     try testing.expect(!std.mem.eql(u8, &first.store.root, &second.store.root));
 }
+
+test "facts store: a member the class does not declare stays unresolved and is never counted as the class" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    _ = try repo.put("a.ts", "export class C {\n  run() { return this.missing(); }\n}\n");
+    try repo.linkAll();
+    try expectUnresolved(try repo.linkOf("a.ts", .call, "missing"), .member_not_found);
+    try testing.expectEqual(@as(usize, 0), repo.incomingCount(try repo.def("a.ts", "C"), null));
+}
+
+test "facts store: an edit that keeps a reference at the same index does not count the old edge twice" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    _ = try repo.put("a.ts", "export function f() { return 1; }\n");
+    const b = try repo.put("b.ts", "import { f } from \"./a\";\nexport function g() { return f(); }\n");
+    try repo.linkAll();
+    const f = try repo.def("a.ts", "f");
+    try testing.expectEqual(@as(usize, 2), repo.incomingCount(f, null));
+    _ = try repo.put("b.ts", "import { f } from \"./a\";\nexport function g() { return f; }\n");
+    _ = try repo.store.relink(&.{b}, &.{}, repo.resolver());
+    try testing.expectEqual(@as(usize, 2), repo.incomingCount(f, null));
+    try testing.expectEqual(@as(usize, 0), repo.incomingCount(f, .call));
+}
+
+test "facts store: linking through a file whose imports are not resolved yet is an error, never an empty answer" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    _ = try repo.put("a.ts", "export function f() { return 1; }\n");
+    _ = try repo.put("index.ts", "export * from \"./a\";\n");
+    const c = try repo.put("c.ts", "import { f } from \"./index\";\nexport function g() { return f(); }\n");
+    try testing.expectError(error.SpecsNotResolved, repo.store.link(c, repo.resolver()));
+}

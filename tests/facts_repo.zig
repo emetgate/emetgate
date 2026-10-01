@@ -46,7 +46,7 @@ pub const Repo = struct {
             return err;
         };
         const id = try self.store.ensureFile(path);
-        _ = try self.store.replace(id, profile, symbol.fileHash(source), arena, kept);
+        _ = try self.store.replace(id, profile, symbol.fileHash(source), arena, kept, &.{});
         try self.remember(path, source);
         return id;
     }

@@ -8,6 +8,8 @@ const none = facts.none;
 
 pub const FileId = u32;
 
+pub const LinkError = Allocator.Error || error{SpecsNotResolved};
+
 pub const DefId = struct {
     file: u32,
     slot: u32,
@@ -48,7 +50,7 @@ pub const Resolver = struct {
     }
 };
 
-pub const Status = enum(u8) { indexed, unindexed, unreadable, removed };
+pub const Status = enum(u8) { indexed, unindexed, unreadable, too_large, removed };
 
 pub const FileState = struct {
     path: []const u8,
@@ -66,6 +68,7 @@ pub const FileState = struct {
     link_gen: u32 = 0,
     facts_gen: u32 = 0,
     tokens: [][]const u8 = &.{},
+    dynamic: []u32 = &.{},
     note: []const u8 = "",
     members: ?std.AutoHashMapUnmanaged(u64, u32) = null,
 
@@ -191,6 +194,8 @@ pub const Store = struct {
         self.gpa.free(state.links);
         self.gpa.free(state.spec_targets);
         self.gpa.free(state.deps);
+        self.gpa.free(state.dynamic);
+        state.dynamic = &.{};
         if (state.members) |*members| members.deinit(self.gpa);
         state.members = null;
         state.slots = &.{};
@@ -234,7 +239,7 @@ pub const Store = struct {
         return .{ .ref = &state.facts.refs[key.index], .link = state.links[key.index] };
     }
 
-    pub fn replace(self: *Store, id: FileId, profile: *const Profile, content_hash: facts.Hash, arena: *std.heap.ArenaAllocator, found: facts.FileFacts) !bool {
+    pub fn replace(self: *Store, id: FileId, profile: *const Profile, content_hash: facts.Hash, arena: *std.heap.ArenaAllocator, found: facts.FileFacts, tokens: []const []const u8) !bool {
         const state = &self.files.items[id];
         const old_signature = state.signature;
         const was_indexed = state.status == .indexed;
@@ -261,13 +266,35 @@ pub const Store = struct {
         state.slot_defs = next_slots;
         state.facts_gen +%= 1;
         state.signature = signatureOf(found);
-        state.tokens = &.{};
+        self.gpa.free(state.links);
+        state.links = &.{};
+        self.gpa.free(state.spec_targets);
+        state.spec_targets = &.{};
+        state.link_gen +%= 1;
+        const kept = try self.paths.allocator().alloc([]const u8, tokens.len);
+        for (tokens, kept) |t, *slot| slot.* = try self.internName(t);
+        state.tokens = kept;
+        self.gpa.free(state.dynamic);
+        state.dynamic = &.{};
         try self.registerFacts(id);
         return !was_indexed or !std.mem.eql(u8, &old_signature, &state.signature);
     }
 
     fn registerFacts(self: *Store, id: FileId) !void {
         const state = &self.files.items[id];
+        var dynamic: std.ArrayList(u32) = .empty;
+        errdefer dynamic.deinit(self.gpa);
+        for (state.facts.refs, 0..) |r, i| {
+            if (!r.kind.invokes()) continue;
+            switch (r.target) {
+                .unresolved => |reason| switch (reason) {
+                    .dynamic_access, .dynamic_call, .computed_import => try dynamic.append(self.gpa, @intCast(i)),
+                    else => {},
+                },
+                else => {},
+            }
+        }
+        state.dynamic = try dynamic.toOwnedSlice(self.gpa);
         for (state.facts.defs, state.slots) |d, slot| {
             if (d.kind == .module) continue;
             try self.addName(d.name, .{ .file = id, .slot = slot });
@@ -409,7 +436,7 @@ pub const Store = struct {
         return null;
     }
 
-    fn resolveExport(self: *Store, id: FileId, name: []const u8, visit: *Visit) Allocator.Error!Resolved {
+    fn resolveExport(self: *Store, id: FileId, name: []const u8, visit: *Visit) LinkError!Resolved {
         if (visit.onPath(id) or visit.path.items.len >= max_chain) return .{ .unresolved = .reexport_cycle };
         try visit.files.append(self.gpa, id);
         try visit.path.append(self.gpa, id);
@@ -427,6 +454,7 @@ pub const Store = struct {
         const default_name = if (state.profile) |p| (if (p.modules) |m| m.default_keyword else "") else "";
         if (std.mem.eql(u8, name, default_name)) return .{ .unresolved = .export_not_found };
         var first_failure: ?facts.Reason = null;
+        if (state.spec_targets.len != state.facts.specs.len) return error.SpecsNotResolved;
         for (state.facts.exports) |e| {
             if (e.kind != .star) continue;
             const target = switch (state.spec_targets[e.index]) {
@@ -455,8 +483,9 @@ pub const Store = struct {
         return .{ .unresolved = first_failure orelse .export_not_found };
     }
 
-    fn resolveBinding(self: *Store, id: FileId, binding_index: u32, visit: *Visit) Allocator.Error!Resolved {
+    fn resolveBinding(self: *Store, id: FileId, binding_index: u32, visit: *Visit) LinkError!Resolved {
         const state = &self.files.items[id];
+        if (state.spec_targets.len != state.facts.specs.len) return error.SpecsNotResolved;
         const binding = state.facts.bindings[binding_index];
         const target = switch (state.spec_targets[binding.spec]) {
             .file => |f| f,
@@ -485,7 +514,7 @@ pub const Store = struct {
         return &state.members.?;
     }
 
-    fn findMember(self: *Store, owner: DefId, name: []const u8, is_static: bool, visit: *Visit) Allocator.Error!Resolved {
+    fn findMember(self: *Store, owner: DefId, name: []const u8, is_static: bool, visit: *Visit) LinkError!Resolved {
         const state = &self.files.items[owner.file];
         const owner_index = state.defIndex(owner.slot) orelse return .{ .unresolved = .member_not_found };
         const owner_def = state.facts.defs[owner_index];
@@ -515,7 +544,7 @@ pub const Store = struct {
         return .{ .unresolved = .member_not_found };
     }
 
-    fn resolveType(self: *Store, id: FileId, type_index: u32, visit: *Visit) Allocator.Error!Resolved {
+    fn resolveType(self: *Store, id: FileId, type_index: u32, visit: *Visit) LinkError!Resolved {
         const state = &self.files.items[id];
         const t = state.facts.types[type_index];
         return switch (t.target) {
@@ -538,7 +567,7 @@ pub const Store = struct {
         return .{ .def = .{ .file = target, .slot = state.slots[0] } };
     }
 
-    fn linkRef(self: *Store, id: FileId, ref: facts.Ref, visit: *Visit) Allocator.Error!Link {
+    fn linkRef(self: *Store, id: FileId, ref: facts.Ref, visit: *Visit) LinkError!Link {
         const state = &self.files.items[id];
         var certainty: facts.Certainty = .proven;
         const found: Resolved = switch (ref.target) {
@@ -582,14 +611,26 @@ pub const Store = struct {
         };
     }
 
-    pub fn link(self: *Store, id: FileId, resolver: Resolver) !void {
+    fn resolveSpecs(self: *Store, id: FileId, resolver: Resolver) !void {
         const state = &self.files.items[id];
         if (state.status != .indexed) return;
         const spec_targets = try self.gpa.alloc(SpecTarget, state.facts.specs.len);
-        @memset(spec_targets, .not_found);
+        errdefer self.gpa.free(spec_targets);
+        for (state.facts.specs, spec_targets) |spec, *slot| slot.* = try resolver.resolve(self, id, spec.text);
         self.gpa.free(state.spec_targets);
         state.spec_targets = spec_targets;
-        for (state.facts.specs, spec_targets) |spec, *slot| slot.* = try resolver.resolve(self, id, spec.text);
+    }
+
+    pub fn link(self: *Store, id: FileId, resolver: Resolver) !void {
+        try self.resolveSpecs(id, resolver);
+        try self.linkRefs(id);
+    }
+
+    fn linkRefs(self: *Store, id: FileId) !void {
+        const state = &self.files.items[id];
+        if (state.status != .indexed) return;
+        const spec_targets = state.spec_targets;
+        if (spec_targets.len != state.facts.specs.len) return error.SpecsNotResolved;
 
         const links = try self.gpa.alloc(Link, state.facts.refs.len);
         errdefer self.gpa.free(links);
@@ -650,7 +691,8 @@ pub const Store = struct {
     }
 
     pub fn linkAll(self: *Store, resolver: Resolver) !void {
-        for (0..self.files.items.len) |i| try self.link(@intCast(i), resolver);
+        for (0..self.files.items.len) |i| try self.resolveSpecs(@intCast(i), resolver);
+        for (0..self.files.items.len) |i| try self.linkRefs(@intCast(i));
         try self.computeRoot();
     }
 
@@ -663,7 +705,8 @@ pub const Store = struct {
             defer self.gpa.free(more);
             for (more) |d| try todo.put(self.gpa, d, {});
         }
-        for (todo.keys()) |id| try self.link(id, resolver);
+        for (todo.keys()) |id| try self.resolveSpecs(id, resolver);
+        for (todo.keys()) |id| try self.linkRefs(id);
         try self.computeRoot();
         return todo.count();
     }
@@ -706,7 +749,7 @@ pub const Store = struct {
                 .removed => continue,
                 .indexed => s.indexed += 1,
                 .unindexed => s.unindexed += 1,
-                .unreadable => s.unreadable += 1,
+                .unreadable, .too_large => s.unreadable += 1,
             }
             s.files += 1;
             if (state.facts.parse_errors) s.parse_errors += 1;
