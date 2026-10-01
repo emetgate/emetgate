@@ -6379,8 +6379,8 @@
     {
       "id": "RS2-built-entry-has-no-read-time",
       "file": "src/platform/search_index.zig",
-      "from": "            .doc = doc_spans.build(a, rel, bytes),\n            .seen_ns = seen_ns,\n",
-      "to": "            .doc = doc_spans.build(a, rel, bytes),\n            .seen_ns = 0,\n",
+      "from": "    const seen_ns = wallClock(io);\n    for (files) |rel| {\n",
+      "to": "    const seen_ns: i96 = 0;\n    for (files) |rel| {\n",
       "kills": [
         "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
       ]
