@@ -9,6 +9,7 @@ const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const read_tools = @import("read_tools.zig");
+const read_budget = @import("read_budget.zig");
 const search_v1 = @import("search_v1.zig");
 const git_tools = @import("git_tools.zig");
 const rename_tool = @import("rename_tool.zig");
@@ -49,7 +50,7 @@ const dupTrim = tool_result.dupTrim;
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache);
-    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache);
+    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
@@ -186,7 +187,7 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, adopted.items);
 }
 
-fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
+fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize) !ToolResult {
     const file = try requireString(args, "file");
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     const nodes = if (args) |a| tool_result.getBool(a, "nodes") orelse false else false;
@@ -195,18 +196,20 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     const arguments = args.?;
+    const detail = read_budget.parseDetail(tool_result.getString(arguments, "detail")) catch |err| return failure(gpa, &buffer, err, event);
+    const reading: Reading = .{ .budget = budget, .detail = detail };
     const line_start = getInt(arguments, "line_start");
     const line_end = getInt(arguments, "line_end");
     const symbols = getStringArray(arguments, "symbols");
     if (line_start != null or line_end != null) {
-        renderSymbolRange(gpa, io, runtime, root, file, line_start, line_end, force, nodes, mirror, tree_cache, &buffer.writer, event) catch |err| {
+        renderSymbolRange(gpa, io, runtime, root, file, line_start, line_end, force, nodes, reading, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return failure(gpa, &buffer, err, event);
         };
         return success(gpa, &buffer);
     }
     if (symbols) |list| {
-        renderSymbolBodies(gpa, io, runtime, root, file, list, force, nodes, mirror, tree_cache, &buffer.writer, event) catch |err| {
+        renderSymbolBodies(gpa, io, runtime, root, file, list, force, nodes, reading, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return failure(gpa, &buffer, err, event);
         };
@@ -214,18 +217,39 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     }
     const sym = try requireString(args, "symbol");
     event.symbol = sym;
-    renderSymbolBody(gpa, io, runtime, root, file, sym, force, nodes, mirror, tree_cache, &buffer.writer, event) catch |err| {
+    renderSymbolBody(gpa, io, runtime, root, file, sym, force, nodes, reading, mirror, tree_cache, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn mirrorKey(gpa: Allocator, file: []const u8, sym: []const u8) ![]u8 {
-    return std.fmt.allocPrint(gpa, "symbol:{s}#{s}", .{ file, sym });
+const Reading = struct {
+    budget: usize,
+    detail: read_budget.Detail,
+
+    fn folds(self: Reading, chars: usize) bool {
+        return self.detail == .budgeted and chars > self.budget;
+    }
+};
+
+fn mirrorKey(gpa: Allocator, file: []const u8, sym: []const u8, folded: bool) ![]u8 {
+    return std.fmt.allocPrint(gpa, "{s}:{s}#{s}", .{ if (folded) "folded" else "symbol", file, sym });
 }
 
-fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, force: bool, nodes: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn signatureOf(snapshot: *const Snapshot, found: *const symbol.Symbol) []const u8 {
+    const start = found.declaration.start;
+    const body_start = found.body.startByte();
+    if (body_start <= start) return "";
+    return std.mem.trim(u8, snapshot.source[start..body_start], " \t\r\n");
+}
+
+fn firstLineOf(text: []const u8) []const u8 {
+    const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+    return std.mem.trim(u8, text[0..end], " \t\r\n");
+}
+
+fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
     const snapshot = loaded.snapshot;
@@ -234,8 +258,10 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     defer ref.deinit(gpa);
     const found = try table.resolve(ref);
     event.hash = found.hash;
+    const body = snapshot.tree.text(found.body);
+    const folds = !nodes and reading.folds(body.len);
     if (!nodes) if (mirror) |m| {
-        const key = try mirrorKey(gpa, file, sym);
+        const key = try mirrorKey(gpa, file, sym, folds);
         defer gpa.free(key);
         if (try m.check(key, found.hash, force) == .unchanged) {
             event.chars_emetgate = 0;
@@ -250,12 +276,20 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
         event.chars_emetgate = annotated.len;
         return wire.writeSymbolNodes(w, file, sym, found.hash, annotated);
     }
-    const body = snapshot.tree.text(found.body);
+    if (folds) {
+        const lines = try read_budget.Lines.init(gpa, snapshot.source);
+        defer lines.deinit(gpa);
+        if (try read_budget.fold(gpa, snapshot.source, lines, found.body, reading.budget)) |view| {
+            defer view.deinit(gpa);
+            event.chars_emetgate = view.text.len;
+            return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
+        }
+    }
     event.chars_emetgate = body.len;
     try wire.writeSymbolBody(w, file, sym, found.hash, body);
 }
 
-fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     if (symbols.len == 0) return error.MissingArgument;
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
@@ -265,6 +299,10 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     defer gpa.free(entries);
     var annotated: usize = 0;
     defer for (entries[0..annotated]) |entry| gpa.free(entry.body.?);
+    var views: usize = 0;
+    defer for (entries[0..views]) |entry| if (entry.folded) |folded| folded.view.deinit(gpa);
+    var lines: ?read_budget.Lines = null;
+    defer if (lines) |l| l.deinit(gpa);
     var chars: usize = 0;
     for (symbols, 0..) |item, i| {
         const sym = switch (item) {
@@ -281,26 +319,33 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
             chars += text.len;
             continue;
         }
+        const body = snapshot.tree.text(found.body);
+        const folds = reading.folds(body.len);
         var unchanged = false;
         if (mirror) |m| {
-            const key = try mirrorKey(gpa, file, sym);
+            const key = try mirrorKey(gpa, file, sym, folds);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
         }
-        if (unchanged) {
-            entries[i] = .{ .ref = sym, .hash = found.hash, .body = null };
-        } else {
-            const body = snapshot.tree.text(found.body);
-            entries[i] = .{ .ref = sym, .hash = found.hash, .body = body };
-            chars += body.len;
+        entries[i] = .{ .ref = sym, .hash = found.hash, .body = if (unchanged) null else body };
+        views = i + 1;
+        if (unchanged) continue;
+        if (folds) {
+            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
+            if (try read_budget.fold(gpa, snapshot.source, lines.?, found.body, reading.budget)) |view| {
+                entries[i].folded = .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget };
+                chars += view.text.len;
+                continue;
+            }
         }
+        chars += body.len;
     }
     event.chars_emetgate = chars;
     event.chars_fullfile = snapshot.source.len;
     try wire.writeSymbolBodies(w, file, entries);
 }
 
-fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, nodes: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     const start = line_start orelse return error.MissingArgument;
     const end = line_end orelse return error.MissingArgument;
     if (start < 1 or end < 1) return error.InvalidLineRange;
@@ -322,36 +367,40 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
     defer gpa.free(matched);
     const entries = try gpa.alloc(wire.RangeEntry, matched.len);
     defer gpa.free(entries);
+    var views: usize = 0;
+    defer for (entries[0..views]) |entry| if (entry.folded) |folded| folded.view.deinit(gpa);
     const ref_text = try gpa.alloc([]u8, matched.len);
+    var named: usize = 0;
     defer {
-        for (ref_text) |t| gpa.free(t);
+        for (ref_text[0..named]) |t| gpa.free(t);
         gpa.free(ref_text);
     }
+    var lines: ?read_budget.Lines = null;
+    defer if (lines) |l| l.deinit(gpa);
     var chars: usize = 0;
     for (matched, 0..) |found, i| {
         ref_text[i] = try std.fmt.allocPrint(gpa, "{f}", .{found.ref});
+        named = i + 1;
+        const text = snapshot.source[found.declaration.start..found.declaration.end];
+        const folds = reading.folds(text.len);
         var unchanged = false;
         if (mirror) |m| {
-            const key = try mirrorKey(gpa, file, ref_text[i]);
+            const key = try mirrorKey(gpa, file, ref_text[i], folds);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
         }
-        if (unchanged) {
-            const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
-            const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
-            entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = null, .start_line = @intCast(start_line), .end_line = @intCast(end_line) };
-            continue;
-        }
-        const text = snapshot.source[found.declaration.start..found.declaration.end];
         const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
         const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
-        entries[i] = .{
-            .ref = ref_text[i],
-            .hash = found.hash,
-            .text = text,
-            .start_line = @intCast(start_line),
-            .end_line = @intCast(end_line),
-        };
+        entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line) };
+        views = i + 1;
+        if (unchanged) continue;
+        if (folds) {
+            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
+            const view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));
+            entries[i].folded = .{ .view = view, .signature = firstLineOf(text), .budget = reading.budget };
+            chars += view.text.len;
+            continue;
+        }
         chars += text.len;
     }
     event.chars_emetgate = chars;

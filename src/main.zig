@@ -26,7 +26,7 @@ const usage =
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory]
+    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--shadow-root <dir>] [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\       emetgate rule add <text> [--check <spec>] [--in <where>] [--enforce]
     \\       emetgate rule list [--all] [--json]

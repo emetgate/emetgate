@@ -4,6 +4,7 @@ const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
 const run_tool = @import("run_tool.zig");
+const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
@@ -48,7 +49,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair. When the server was started with --mirror, a symbol whose hash was already sent unchanged this session comes back as a one-line 'unchanged: <file>#<symbol> #<hash>' instead of its body; pass force:true to always get the full body. Pass nodes:true to get each whole declaration (with symbol or symbols, never shortened to unchanged) or exactly the requested lines, top-level code included (with line_start and line_end, not widened), with every line that starts a syntax node prefixed by that node's short hash and a bar (hash|code); a line without a prefix starts no node of its own or a node whose content occurs twice. Feed such a hash to emetgate_try as node to replace or delete just that node.",
+        .description = "Return the current body of a symbol plus its hash, so you can edit just that function without reading the whole file; feed the hash straight into emetgate_try. Pass symbols (an array of refs) to read several at once, or line_start and line_end to read a line range: the range is widened to the full boundaries of every symbol it overlaps and each one comes back with its own hash. Give exactly one of symbol, symbols, or the line_start/line_end pair. A body (or a widened declaration) longer than the read budget (" ++ std.fmt.comptimePrint("{d}", .{read_budget.default_budget}) ++ " characters unless the server was started with --read-budget) comes back folded with status partial: the signature, an outline of its nested blocks with line ranges, and the text with each elided range named in place as '\u{2026} lines A-B elided (N lines); read them with line_start/line_end'; a line range inside such a declaration returns the requested lines with the rest elided. Pass detail:\"full\" for every line. When the server was started with --mirror, a symbol whose hash was already sent unchanged this session comes back as a one-line 'unchanged: <file>#<symbol> #<hash>' instead of its body; pass force:true to always get the full body. Pass nodes:true to get each whole declaration (with symbol or symbols, never shortened to unchanged) or exactly the requested lines, top-level code included (with line_start and line_end, not widened), with every line that starts a syntax node prefixed by that node's short hash and a bar (hash|code); a line without a prefix starts no node of its own or a node whose content occurs twice. Feed such a hash to emetgate_try as node to replace or delete just that node.",
         .props = &.{
             .{ .name = "file", .desc = "path to a source file in a registered language" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add", .optional = true },
@@ -57,6 +58,7 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_end", .desc = "1-based end line of a range to read, widened to symbol boundaries", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "always return the full body even if it was already sent unchanged this session", .optional = true, .ty = "boolean" },
             .{ .name = "nodes", .desc = "true to return the declaration with node hashes (hash|code) instead of the bare body", .optional = true, .ty = "boolean" },
+            .{ .name = "detail", .desc = "\"full\" to get every line of a body over the read budget instead of the folded text; the default is \"budgeted\"", .optional = true },
         },
     },
     .{
