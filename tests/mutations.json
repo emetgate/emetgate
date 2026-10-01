@@ -30,10 +30,10 @@
     {
       "id": "K1-lockdown-tools-default",
       "file": "src/platform/lockdown.zig",
-      "from": "pub const allowed_builtin_tools = \"ToolSearch\";",
+      "from": "pub const allowed_builtin_tools = \"\";",
       "to": "pub const allowed_builtin_tools = \"default\";",
       "kills": [
-        "lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args"
+        "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args"
       ]
     },
     {
@@ -42,17 +42,17 @@
       "from": ", mcp_config_abs, \"--strict-mcp-config\" };",
       "to": ", mcp_config_abs };",
       "kills": [
-        "lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args",
+        "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args",
         "a positional prompt right after lockdown is not swallowed by a variadic flag"
       ]
     },
     {
       "id": "K3-lockdown-tools-flag-removed",
       "file": "src/platform/lockdown.zig",
-      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--mcp-config\"",
-      "to": "{ claude_program, \"--mcp-config\"",
+      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--allowedTools\"",
+      "to": "{ claude_program, \"--allowedTools\"",
       "kills": [
-        "lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the user's args"
+        "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args"
       ]
     },
     {
@@ -88,8 +88,8 @@
     {
       "id": "F2-lockdown-tools-last",
       "file": "src/platform/lockdown.zig",
-      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--mcp-config\", mcp_config_abs, \"--strict-mcp-config\" }",
-      "to": "{ claude_program, \"--mcp-config\", mcp_config_abs, \"--strict-mcp-config\", \"--tools\", allowed_builtin_tools }",
+      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--allowedTools\", allowed_tools, \"--mcp-config\", mcp_config_abs, \"--strict-mcp-config\" }",
+      "to": "{ claude_program, \"--allowedTools\", allowed_tools, \"--mcp-config\", mcp_config_abs, \"--strict-mcp-config\", \"--tools\", allowed_builtin_tools }",
       "kills": [
         "a user prompt never becomes a --tools or --mcp-config value",
         "a positional prompt right after lockdown is not swallowed by a variadic flag"
@@ -105,9 +105,139 @@
       ]
     },
     {
+      "id": "K6-lockdown-writer-pre-allowed",
+      "file": "src/platform/lockdown.zig",
+      "from": "    \"emetgate_mutate\",\n};",
+      "to": "    \"emetgate_mutate\",\n    \"emetgate_try\",\n};",
+      "kills": [
+        "lockdown pre-allows only emetgate tools that neither write to the repo nor run a command",
+        "every emetgate tool is either pre-allowed by lockdown or left to the permission mode"
+      ]
+    },
+    {
+      "id": "K6b-lockdown-runner-pre-allowed",
+      "file": "src/platform/lockdown.zig",
+      "from": "    \"emetgate_mutate\",\n};",
+      "to": "    \"emetgate_mutate\",\n    \"emetgate_run\",\n};",
+      "kills": [
+        "lockdown pre-allows only emetgate tools that neither write to the repo nor run a command",
+        "every emetgate tool is either pre-allowed by lockdown or left to the permission mode"
+      ]
+    },
+    {
+      "id": "K7-lockdown-tool-search-env-dropped",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try env.put(tool_search_variable, tool_search_value);\n",
+      "to": "",
+      "kills": [
+        "the child environment turns tool search off and keeps the rest",
+        "the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had"
+      ]
+    },
+    {
+      "id": "K7b-lockdown-child-env-not-passed",
+      "file": "src/platform/lockdown.zig",
+      "from": ".{ .argv = argv, .environ_map = &env }",
+      "to": ".{ .argv = argv }",
+      "kills": [
+        "the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had"
+      ]
+    },
+    {
+      "id": "K7c-lockdown-tool-search-left-on",
+      "file": "src/platform/lockdown.zig",
+      "from": "pub const tool_search_value = \"false\";",
+      "to": "pub const tool_search_value = \"true\";",
+      "kills": [
+        "the child environment turns tool search off and keeps the rest",
+        "the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had"
+      ]
+    },
+    {
+      "id": "K8-lockdown-server-key-ignored",
+      "file": "src/platform/lockdown.zig",
+      "from": "    return toolNamePart(gpa, found orelse return error.NoEmetgateServer);",
+      "to": "    _ = found orelse return error.NoEmetgateServer;\n    return gpa.dupe(u8, \"emetgate\");",
+      "kills": [
+        "the allow-list names the emetgate server by its .mcp.json key"
+      ]
+    },
+    {
+      "id": "K8b-lockdown-astral-char-counted-once",
+      "file": "src/platform/lockdown.zig",
+      "from": "if (c > 0xFFFF) 2 else 1",
+      "to": "1",
+      "kills": [
+        "a server key becomes the tool name prefix claude derives from it"
+      ]
+    },
+    {
+      "id": "K8c-lockdown-hyphen-replaced",
+      "file": "src/platform/lockdown.zig",
+      "from": "or c == '_' or c == '-')",
+      "to": "or c == '_')",
+      "kills": [
+        "a server key becomes the tool name prefix claude derives from it"
+      ]
+    },
+    {
+      "id": "K8d-lockdown-claude-ai-collapse-skipped",
+      "file": "src/platform/lockdown.zig",
+      "from": "    if (std.mem.startsWith(u8, name, claude_ai_prefix)) collapseUnderscores(&out);\n",
+      "to": "",
+      "kills": [
+        "a server key becomes the tool name prefix claude derives from it"
+      ]
+    },
+    {
+      "id": "K9-lockdown-allowed-tools-passthrough",
+      "file": "src/platform/lockdown.zig",
+      "from": "    \"--allowedTools\",\n    \"--allowed-tools\",\n",
+      "to": "    \"--allowed-tools\",\n",
+      "kills": [
+        "a passthrough arg that would override the lock is refused in both spellings"
+      ]
+    },
+    {
+      "id": "K9b-lockdown-allowed-tools-dash-passthrough",
+      "file": "src/platform/lockdown.zig",
+      "from": "    \"--allowed-tools\",\n",
+      "to": "",
+      "kills": [
+        "a passthrough arg that would override the lock is refused in both spellings"
+      ]
+    },
+    {
+      "id": "K10-lockdown-second-server-accepted",
+      "file": "src/platform/lockdown.zig",
+      "from": "        if (found != null) return error.SeveralEmetgateServers;\n",
+      "to": "",
+      "kills": [
+        "lockdown refuses a .mcp.json without exactly one emetgate server"
+      ]
+    },
+    {
+      "id": "K11-lockdown-any-program-is-emetgate",
+      "file": "src/platform/lockdown.zig",
+      "from": "    return std.ascii.eqlIgnoreCase(stem, emetgate_program);",
+      "to": "    _ = stem;\n    return true;",
+      "kills": [
+        "lockdown refuses a .mcp.json without exactly one emetgate server"
+      ]
+    },
+    {
+      "id": "K12-lockdown-mcp-arg-not-required",
+      "file": "src/platform/lockdown.zig",
+      "from": "        if (std.mem.eql(u8, first.string, name)) return isEmetgateProgram(command.string);",
+      "to": "        _ = name;\n        return isEmetgateProgram(command.string);",
+      "kills": [
+        "lockdown refuses a .mcp.json without exactly one emetgate server"
+      ]
+    },
+    {
       "id": "K1e-lockdown-tools-default",
       "file": "src/platform/lockdown.zig",
-      "from": "pub const allowed_builtin_tools = \"ToolSearch\";",
+      "from": "pub const allowed_builtin_tools = \"\";",
       "to": "pub const allowed_builtin_tools = \"default\";",
       "expect": "e2e-lockdown"
     },
@@ -122,8 +252,8 @@
     {
       "id": "K3e-lockdown-tools-flag-removed",
       "file": "src/platform/lockdown.zig",
-      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--mcp-config\"",
-      "to": "{ claude_program, \"--mcp-config\"",
+      "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--allowedTools\"",
+      "to": "{ claude_program, \"--allowedTools\"",
       "expect": "e2e-lockdown"
     },
     {

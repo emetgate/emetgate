@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1141**
-- Mutations declared in `tests/mutations.json`: **644**
-  - killed: **614**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1148**
+- Mutations declared in `tests/mutations.json`: **658**
+  - killed: **628**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -171,21 +171,35 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-58 mutation(s).
+72 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
-| `K1-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "ToolSearch";` -> `pub const allowed_builtin_tools = "default";` | lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the... | killed |
-| `K2-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the...; a pos... | killed |
-| `K3-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config"` | lockdown argv allows only ToolSearch and the strict .mcp.json servers, then the... | killed |
+| `K1-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "";` -> `pub const allowed_builtin_tools = "default";` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th... | killed |
+| `K2-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th...; a pos... | killed |
+| `K3-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools"` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th... | killed |
 | `K5-lockdown-reserved-guard-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);` -> `` | a passthrough arg that would override the lock is refused in both spellings | killed |
 | `K5b-lockdown-launch-guard-only-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);     const config_abs` -> `const config_abs` | a lock override is refused before .mcp.json is looked up | killed |
 | `F1-lockdown-mcp-config-last` | `src/platform/lockdown.zig` | `"--mcp-config", mcp_config_abs, "--strict-mcp-config" }` -> `"--strict-mcp-config", "--mcp-config", mcp_config_abs }` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
-| `F2-lockdown-tools-last` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config", mcp_config_abs, "--strict-mcp...` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
+| `F2-lockdown-tools-last` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools", allowed_tools, "--mcp-confi...` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
 | `N1-lockdown-missing-config-guard-removed` | `src/platform/lockdown.zig` | `error.FileNotFound => return error.McpConfigMissing,` -> `error.FileNotFound => return gpa.dupeZ(u8, mcp_config_name),` | lockdown refuses to launch when the directory has no .mcp.json | killed |
-| `K1e-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "ToolSearch";` -> `pub const allowed_builtin_tools = "default";` |  | verified end-to-end, not by the mutation harness |
+| `K6-lockdown-writer-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_try", };` | lockdown pre-allows only emetgate tools that neither write to the repo nor run ...; every... | killed |
+| `K6b-lockdown-runner-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_run", };` | lockdown pre-allows only emetgate tools that neither write to the repo nor run ...; every... | killed |
+| `K7-lockdown-tool-search-env-dropped` | `src/platform/lockdown.zig` | `try env.put(tool_search_variable, tool_search_value);` -> `` | the child environment turns tool search off and keeps the rest; the launched claude gets ... | killed |
+| `K7b-lockdown-child-env-not-passed` | `src/platform/lockdown.zig` | `.{ .argv = argv, .environ_map = &env }` -> `.{ .argv = argv }` | the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had | killed |
+| `K7c-lockdown-tool-search-left-on` | `src/platform/lockdown.zig` | `pub const tool_search_value = "false";` -> `pub const tool_search_value = "true";` | the child environment turns tool search off and keeps the rest; the launched claude gets ... | killed |
+| `K8-lockdown-server-key-ignored` | `src/platform/lockdown.zig` | `return toolNamePart(gpa, found orelse return error.NoEmetgateSe...` -> `_ = found orelse return error.NoEmetgateServer;     return gpa....` | the allow-list names the emetgate server by its .mcp.json key | killed |
+| `K8b-lockdown-astral-char-counted-once` | `src/platform/lockdown.zig` | `if (c > 0xFFFF) 2 else 1` -> `1` | a server key becomes the tool name prefix claude derives from it | killed |
+| `K8c-lockdown-hyphen-replaced` | `src/platform/lockdown.zig` | `or c == '_' or c == '-')` -> `or c == '_')` | a server key becomes the tool name prefix claude derives from it | killed |
+| `K8d-lockdown-claude-ai-collapse-skipped` | `src/platform/lockdown.zig` | `if (std.mem.startsWith(u8, name, claude_ai_prefix)) collapseUnd...` -> `` | a server key becomes the tool name prefix claude derives from it | killed |
+| `K9-lockdown-allowed-tools-passthrough` | `src/platform/lockdown.zig` | `"--allowedTools",     "--allowed-tools",` -> `"--allowed-tools",` | a passthrough arg that would override the lock is refused in both spellings | killed |
+| `K9b-lockdown-allowed-tools-dash-passthrough` | `src/platform/lockdown.zig` | `"--allowed-tools",` -> `` | a passthrough arg that would override the lock is refused in both spellings | killed |
+| `K10-lockdown-second-server-accepted` | `src/platform/lockdown.zig` | `if (found != null) return error.SeveralEmetgateServers;` -> `` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
+| `K11-lockdown-any-program-is-emetgate` | `src/platform/lockdown.zig` | `return std.ascii.eqlIgnoreCase(stem, emetgate_program);` -> `_ = stem;     return true;` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
+| `K12-lockdown-mcp-arg-not-required` | `src/platform/lockdown.zig` | `if (std.mem.eql(u8, first.string, name)) return isEmetgateProgr...` -> `_ = name;         return isEmetgateProgram(command.string);` | lockdown refuses a .mcp.json without exactly one emetgate server | killed |
+| `K1e-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "";` -> `pub const allowed_builtin_tools = "default";` |  | verified end-to-end, not by the mutation harness |
 | `K2e-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | only killed on a machine with user-level MCP servers configured | verified end-to-end, not by the mutation harness |
-| `K3e-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--mcp-conf...` -> `{ claude_program, "--mcp-config"` |  | verified end-to-end, not by the mutation harness |
+| `K3e-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools"` |  | verified end-to-end, not by the mutation harness |
 | `K5e-lockdown-reserved-guard-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);` -> `` |  | verified end-to-end, not by the mutation harness |
 | `MR2-batch-duplicate-file-allowed` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {             _ = p;         }      ...` | a batch cannot edit the same file twice | killed |
 | `SELF-a-compile-error-is-not-a-kill` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {         }         const planned = ...` | control: removing the line leaves an unused capture, which must not count as killed | control |

@@ -1,5 +1,6 @@
 const std = @import("std");
 const lockdown = @import("emetgate").lockdown;
+const server = @import("emetgate").server;
 
 const testing = std.testing;
 
@@ -120,4 +121,119 @@ test "a lock override is refused before .mcp.json is looked up" {
 
 test "ordinary claude args pass through the lock" {
     try lockdown.refuseReserved(&.{ "-p", "hi", "--output-format", "stream-json", "--verbose", "--max-turns", "1", "--toolsy" });
+}
+
+const gated_tools = [_][]const u8{
+    "emetgate_try",
+    "emetgate_try_batch",
+    "emetgate_write_doc",
+    "emetgate_rename",
+    "emetgate_move",
+    "emetgate_move_file",
+    "emetgate_run",
+};
+
+fn listed(list: []const []const u8, name: []const u8) bool {
+    for (list) |item| {
+        if (std.mem.eql(u8, item, name)) return true;
+    }
+    return false;
+}
+
+test "lockdown pre-allows only emetgate tools that neither write to the repo nor run a command" {
+    for (lockdown.read_only_tools) |tool| try testing.expect(!listed(&gated_tools, tool));
+    const value = try lockdown.allowedTools(testing.allocator, "emetgate");
+    defer testing.allocator.free(value);
+    const prefix = "mcp__emetgate__";
+    var names = std.mem.splitScalar(u8, value, ' ');
+    var count: usize = 0;
+    while (names.next()) |name| : (count += 1) {
+        try testing.expect(std.mem.startsWith(u8, name, prefix));
+        try testing.expect(!listed(&gated_tools, name[prefix.len..]));
+        try testing.expect(listed(&lockdown.read_only_tools, name[prefix.len..]));
+    }
+    try testing.expectEqual(lockdown.read_only_tools.len, count);
+}
+
+test "every emetgate tool is either pre-allowed by lockdown or left to the permission mode" {
+    for (server.tool_defs) |tool| try testing.expect(listed(&lockdown.read_only_tools, tool.name) != listed(&gated_tools, tool.name));
+    for (lockdown.read_only_tools) |name| {
+        var served = false;
+        for (server.tool_defs) |tool| served = served or std.mem.eql(u8, tool.name, name);
+        try testing.expect(served);
+    }
+}
+
+const emetgate_config =
+    \\{"mcpServers":{"docs":{"command":"node","args":["docs-server.js"]},"gate":{"command":"C:/tools/Emetgate.EXE","args":["mcp","--test","npm test"]}}}
+;
+
+test "the allow-list names the emetgate server by its .mcp.json key" {
+    const name = try lockdown.emetgateServer(testing.allocator, emetgate_config);
+    defer testing.allocator.free(name);
+    try testing.expectEqualStrings("gate", name);
+    const value = try lockdown.allowedTools(testing.allocator, name);
+    defer testing.allocator.free(value);
+    try testing.expect(std.mem.startsWith(u8, value, "mcp__gate__emetgate_symbols mcp__gate__emetgate_skeleton "));
+    try testing.expect(std.mem.endsWith(u8, value, " mcp__gate__emetgate_mutate"));
+}
+
+test "a server key becomes the tool name prefix claude derives from it" {
+    const cases = [_][2][]const u8{
+        .{ "emetgate", "emetgate" },
+        .{ "emet-gate_2", "emet-gate_2" },
+        .{ "emet.gate dev", "emet_gate_dev" },
+        .{ "g\u{e5}te", "g_te" },
+        .{ "gate\u{1f600}", "gate__" },
+        .{ "claude.ai  Gate!", "claude_ai_Gate" },
+    };
+    for (cases) |case| {
+        const got = try lockdown.toolNamePart(testing.allocator, case[0]);
+        defer testing.allocator.free(got);
+        try testing.expectEqualStrings(case[1], got);
+    }
+}
+
+test "lockdown refuses a .mcp.json without exactly one emetgate server" {
+    const gpa = testing.allocator;
+    try testing.expectError(error.NoEmetgateServer, lockdown.emetgateServer(gpa, "{\"mcpServers\":{}}"));
+    try testing.expectError(error.NoEmetgateServer, lockdown.emetgateServer(gpa, "{}"));
+    try testing.expectError(error.NoEmetgateServer, lockdown.emetgateServer(gpa, "{\"mcpServers\":{\"gate\":{\"command\":\"emetgate\",\"args\":[\"--version\"]}}}"));
+    try testing.expectError(error.NoEmetgateServer, lockdown.emetgateServer(gpa, "{\"mcpServers\":{\"gate\":{\"command\":\"emetgate-old\",\"args\":[\"mcp\"]}}}"));
+    try testing.expectError(error.SeveralEmetgateServers, lockdown.emetgateServer(gpa, "{\"mcpServers\":{\"a\":{\"command\":\"emetgate\",\"args\":[\"mcp\"]},\"b\":{\"command\":\"D:\\\\bin\\\\emetgate.exe\",\"args\":[\"serve\"]}}}"));
+    try testing.expectError(error.McpConfigInvalid, lockdown.emetgateServer(gpa, "{\"mcpServers\":[]}"));
+    try testing.expectError(error.McpConfigInvalid, lockdown.emetgateServer(gpa, "{\"mcpServers\":{\"gate\":{\"command\":\"emetgate\",\"args\":[\"mcp\"]},\"gate\":{\"command\":\"node\",\"args\":[]}}}"));
+    try testing.expectError(error.McpConfigInvalid, lockdown.emetgateServer(gpa, "not json"));
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = "{\"mcpServers\":{\"docs\":{\"command\":\"node\",\"args\":[\"docs-server.js\"]}}}" });
+    var parent: std.process.Environ.Map = .init(gpa);
+    defer parent.deinit();
+    try testing.expectError(error.NoEmetgateServer, lockdown.launchIn(gpa, testing.io, tmp.dir, &parent, lockdown.claude_program, &.{ "-p", "hi" }));
+}
+
+test "the child environment turns tool search off and keeps the rest" {
+    var parent: std.process.Environ.Map = .init(testing.allocator);
+    defer parent.deinit();
+    try parent.put("PATH", "C:\\tools");
+    try parent.put("ENABLE_TOOL_SEARCH", "true");
+    var child = try lockdown.childEnviron(testing.allocator, &parent);
+    defer child.deinit();
+    try testing.expectEqualStrings("false", child.get("ENABLE_TOOL_SEARCH").?);
+    try testing.expectEqualStrings("C:\\tools", child.get("PATH").?);
+    try testing.expectEqualStrings("true", parent.get("ENABLE_TOOL_SEARCH").?);
+}
+
+test "the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = emetgate_config });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "claude-probe.cmd", .data = "@if \"%ENABLE_TOOL_SEARCH%\"==\"false\" exit /b 7\r\n@exit /b 3\r\n" });
+    const program = try tmp.dir.realPathFileAlloc(testing.io, "claude-probe.cmd", testing.allocator);
+    defer testing.allocator.free(program);
+    var parent = try testing.environ.createMap(testing.allocator);
+    defer parent.deinit();
+    try parent.put("ENABLE_TOOL_SEARCH", "true");
+    try testing.expectEqual(@as(u8, 7), try lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, program, &.{ "-p", "hi" }));
 }
