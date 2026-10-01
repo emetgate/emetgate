@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1152**
-- Mutations declared in `tests/mutations.json`: **658**
-  - killed: **628**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1203**
+- Mutations declared in `tests/mutations.json`: **689**
+  - killed: **659**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -532,7 +532,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-222 mutation(s).
+253 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -758,6 +758,37 @@ python tools/verification_page.py --check
 | `IOS12-failed-listing-becomes-empty-repository` | `src/platform/io_seam.zig` | `return shadow.trackedFiles(gpa, of(context).io, root) catch \|e...` -> `return shadow.trackedFiles(gpa, of(context).io, root) catch ret...` | the real file system lists the files a repository tracks | killed |
 | `IOS13-delete-of-missing-file-succeeds` | `src/platform/io_seam.zig` | `return Dir.deleteFileAbsolute(of(context).io, path) catch \|err...` -> `return Dir.deleteFileAbsolute(of(context).io, path) catch {};` | the real file system deletes a file, makes a nested path and resolves a path to... | killed |
 | `IOS14-closed-watch-polled-as-pending` | `src/platform/io_seam.zig` | `const slot = of(context).watchSlot(handle) orelse return .dead;` -> `const slot = of(context).watchSlot(handle) orelse return .pendi...` | polling a handle that was never opened or was closed reports a dead watch | killed |
+| `FCQ1-unresolved-same-name-call-ignored` | `src/engine/facts_query.zig` | `if (!bindable(reason) and !(script_global and reason == .global...` -> `if (true or (!bindable(reason) and !(script_global and reason =...` | facts query: a same-name call on an unknown receiver makes callers partial and ... | killed |
+| `FCQ2-import-reach-not-followed` | `src/engine/facts_query.zig` | `if (still) try self.scope_files.put(self.arena, importer, {});` -> `if (still and false) try self.scope_files.put(self.arena, impor...` | facts query: a dynamic-key call counts only in a file that reaches the subject'... | killed |
+| `FCQ3-computed-import-counted-as-dynamic-key` | `src/engine/facts_query.zig` | `if (reason == .computed_import) continue;` -> `if (reason == .computed_import and false) continue;` | facts query: a dynamic-key call counts only in a file that reaches the subject'... | killed |
+| `FCQ4-unreadable-file-left-out` | `src/engine/facts_query.zig` | `if (state.status == .unreadable or state.status == .too_large) ...` -> `_ = .{ state, id };` | fact store: a file over the size limit is never read as empty, it makes the ans...; fact ... | killed |
+| `FCQ5-unparsed-file-naming-the-subject-left-out` | `src/engine/facts_query.zig` | `if (hides) try self.unread.put(self.arena, key.file, {});` -> `_ = hides;` | facts query: a file that mentions the name but was not parsed is reported as no... | killed |
+| `FCE2-evidence-last-line-dropped` | `src/engine/facts_evidence.zig` | `try out.writeAll(last);` -> `` | facts evidence: a partial answer ends with the not-a-proof line and stays withi...; facts... | killed |
+| `FCS1-typed-edge-labelled-proven` | `src/engine/facts_store.zig` | `certainty = .typed;` -> `certainty = .proven;` | facts store: an inherited method is found through the base class of another fil...; facts... | killed |
+| `FCS2-stale-generation-accepted` | `src/engine/facts_store.zig` | `if (state.status != .indexed or state.link_gen != key.gen or ke...` -> `if (state.status != .indexed or key.index >= state.links.len) r...` | facts store: an edit that keeps a reference at the same index does not count th... | killed |
+| `FCS3-dependents-not-relinked` | `src/engine/facts_store.zig` | `const more = try self.dependents(self.gpa, id);` -> `const more = try self.gpa.dupe(FileId, &.{id});` | facts store: a changed caller leaves no stale edge, a removed export turns the ... | killed |
+| `FCS4-body-edit-relinks-every-importer` | `src/engine/facts_store.zig` | `return !was_indexed or !std.mem.eql(u8, &old_signature, &state....` -> `return true or !was_indexed or !std.mem.eql(u8, &old_signature,...` | facts store: a body edit keeps every definition's identity and does not relink ... | killed |
+| `FCS5-missing-member-counted-as-the-class` | `src/engine/facts_store.zig` | `if (c.base == none) return .{ .unresolved = .member_not_found };` -> `if (c.base == none) return .{ .def = owner };` | facts store: a member the class does not declare stays unresolved and is never ... | killed |
+| `FCS6-reexport-cycle-not-cut` | `src/engine/facts_store.zig` | `if (visit.onPath(id) or visit.path.items.len >= max_chain) retu...` -> `if (false) return .{ .unresolved = .reexport_cycle };` | facts store: a re-export cycle ends as unresolved instead of looping | killed |
+| `FCS7-unresolved-specifiers-read-as-empty` | `src/engine/facts_store.zig` | `if (state.spec_targets.len != state.facts.specs.len) return err...` -> `for (state.facts.exports) \|e\| {` | facts store: linking through a file whose imports are not resolved yet is an er... | killed |
+| `FCX1-name-in-syntax-error-resolved-normally` | `src/engine/facts_extract.zig` | `if (self.inError()) return self.addRef(.{ .from = from, .kind =...` -> `` | facts extract: a name inside a syntax error is unresolved as a parse error, the... | killed |
+| `FCX2-unknown-receiver-call-not-recorded` | `src/engine/facts_extract.zig` | `if (role.invokes()) return self.addRef(.{ .from = from, .kind =...` -> `` | facts extract: a property of an unknown value, a computed callee, eval and a ca...; facts... | killed |
+| `FCX3-class-keyword-token-read-as-a-class` | `src/engine/facts_extract.zig` | `if (node.isNamed() and oneOf(kind, self.f.classes)) try self.cl...` -> `if (oneOf(kind, self.f.classes)) try self.classShape(node);` | facts extract: a JavaScript class records its base class without a type annotat... | killed |
+| `FCX4-typed-constant-read-as-its-variable` | `src/engine/facts_extract.zig` | `if (self.typed_at.get(binder)) \|t\| return .{ .member_of_type ...` -> `` | facts extract: declared parameter types, constructed constants and parameter pr... | killed |
+| `FCX5-numeric-index-call-read-as-dynamic-key` | `src/engine/facts_extract.zig` | `const reason: facts.Reason = if (oneOf(index.kind(), self.g.lit...` -> `const reason: facts.Reason = .dynamic_access;` | facts query: a dynamic-key call counts only in a file that reaches the subject'... | killed |
+| `FCR1-destructured-shorthand-not-a-binder` | `src/engine/lang/ecma/rename.zig` | `.{ .parent = "object_pattern", .field = null, .scope = .pattern...` -> `` | facts extract: a destructured name shadows an outer function, so its call is a ...; scope... | killed |
+| `FCP1-oversized-file-taken-as-unchanged` | `src/platform/fact_store.zig` | `self.outcomes[i] = .{ .failed = .{ .status = .too_large, .note ...` -> `self.outcomes[i] = .same;` | fact store: a file over the size limit is never read as empty, it makes the ans... | killed |
+| `FCP2-failed-listing-not-counted` | `src/platform/fact_store.zig` | `self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit })...` -> `self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit })...` | fact store: a tracked file whose directory is gone is reported unreadable and t... | killed |
+| `FCP3-store-checksum-not-verified` | `src/platform/fact_file.zig` | `if (!std.mem.eql(u8, &sum, bytes[bytes.len - checksum_len ..]))...` -> `_ = &sum;` | fact store: a store whose definition name was altered on disk is refused by its... | killed |
+| `FCP4-corrupt-store-reported-as-absent` | `src/platform/fact_file.zig` | `const body = verified(bytes) catch \|err\| return .{ .rebuilt =...` -> `const body = verified(bytes) catch \|err\| return if (@intFromE...` | fact store: a store file with one flipped byte is rebuilt and says why | killed |
+| `FCP5-invalid-manifest-not-reported` | `src/platform/fact_modules.zig` | `try self.notes.append(a, .{ .path = try a.dupe(u8, rel), .probl...` -> `` | fact store: an invalid package manifest is reported, never skipped in silence | killed |
+| `FCE1-evidence-budget-not-enforced` | `src/engine/facts_evidence.zig` | `return self.used + text.len + 1 + reserve <= self.limit;` -> `return self.used + text.len + 1 + reserve <= self.limit or true;` | facts evidence: a partial answer ends with the not-a-proof line and stays withi...; facts... | killed |
+| `FCE3-elided-range-not-declared` | `src/engine/facts_evidence.zig` | `if (range.first > next) _ = try self.push(try self.elisionLine(...` -> `` | facts evidence: a function over the budget keeps the whole block around each ca... | killed |
+| `FCE4-cut-function-shown-as-whole` | `src/engine/facts_evidence.zig` | `self.body_elided = true;         try self.markElided(subject.pa...` -> `var next = first;` | facts evidence: a function over the budget keeps the whole block around each ca... | killed |
+| `FCE5-cut-sites-leave-answer-complete` | `src/engine/facts_evidence.zig` | `for (value.sites[shown_sites..]) \|site\| {         r.cut += 1;...` -> `for (value.sites[shown_sites..]) \|site\| {         r.cut += 1;...` | facts evidence: a complete answer whose lines do not all fit turns partial and ... | killed |
+| `FCSP1-small-block-not-kept-whole` | `src/engine/facts_spine.zig` | `if (s_last - s_first + 1 <= max_block_lines) {` -> `if (false) {` | spine: the lines around a call keep its whole small if statement and the header...; facts... | killed |
+| `FCM1-stale-merkle-node-kept` | `src/engine/facts_merkle.zig` | `_ = self.nodes.remove(rangeKey(lo, hi));` -> `` | merkle: a cached tree updated one leaf at a time has the same root as the tree ...; fact ... | killed |
+| `FCP6-changed-file-shown-as-current` | `src/platform/fact_store.zig` | `const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.re...` -> `const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.re...` | fact store: evidence never shows a line of a file that changed after the snapsh... | killed |
 
 ## What this system does not prove
 

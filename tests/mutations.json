@@ -6519,6 +6519,308 @@
       "kills": [
         "polling a handle that was never opened or was closed reports a dead watch"
       ]
+    },
+    {
+      "id": "FCQ1-unresolved-same-name-call-ignored",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (!bindable(reason) and !(script_global and reason == .global)) continue;",
+      "to": "if (true or (!bindable(reason) and !(script_global and reason == .global))) continue;",
+      "kills": [
+        "facts query: a same-name call on an unknown receiver makes callers partial and is listed with its place"
+      ],
+      "note": "silent drop: an unresolved reference that could bind to the subject would vanish and the answer would read complete"
+    },
+    {
+      "id": "FCQ2-import-reach-not-followed",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (still) try self.scope_files.put(self.arena, importer, {});",
+      "to": "if (still and false) try self.scope_files.put(self.arena, importer, {});",
+      "kills": [
+        "facts query: a dynamic-key call counts only in a file that reaches the subject's module through imports"
+      ]
+    },
+    {
+      "id": "FCQ3-computed-import-counted-as-dynamic-key",
+      "file": "src/engine/facts_query.zig",
+      "from": "                if (reason == .computed_import) continue;\n",
+      "to": "                if (reason == .computed_import and false) continue;\n",
+      "kills": [
+        "facts query: a dynamic-key call counts only in a file that reaches the subject's module through imports"
+      ]
+    },
+    {
+      "id": "FCQ4-unreadable-file-left-out",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (state.status == .unreadable or state.status == .too_large) try self.unread.put(self.arena, @intCast(id), {});",
+      "to": "_ = .{ state, id };",
+      "kills": [
+        "fact store: a file over the size limit is never read as empty, it makes the answer partial with a declared limit",
+        "fact store: a tracked file whose directory is gone is reported unreadable and the failed listing is counted"
+      ],
+      "note": "silent drop: a file that could not be read would no longer make the answer partial"
+    },
+    {
+      "id": "FCQ5-unparsed-file-naming-the-subject-left-out",
+      "file": "src/engine/facts_query.zig",
+      "from": "if (hides) try self.unread.put(self.arena, key.file, {});",
+      "to": "_ = hides;",
+      "kills": [
+        "facts query: a file that mentions the name but was not parsed is reported as not analyzed"
+      ],
+      "note": "silent drop: a file in an unsupported language that names the subject would count as evaluated"
+    },
+    {
+      "id": "FCE2-evidence-last-line-dropped",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "    try out.writeAll(last);\n",
+      "to": "",
+      "kills": [
+        "facts evidence: a partial answer ends with the not-a-proof line and stays within the budget",
+        "facts evidence: a complete answer says so on its last line and labels each edge"
+      ]
+    },
+    {
+      "id": "FCS1-typed-edge-labelled-proven",
+      "file": "src/engine/facts_store.zig",
+      "from": "certainty = .typed;",
+      "to": "certainty = .proven;",
+      "kills": [
+        "facts store: an inherited method is found through the base class of another file, a typed receiver is labelled typed",
+        "facts evidence: a complete answer says so on its last line and labels each edge"
+      ]
+    },
+    {
+      "id": "FCS2-stale-generation-accepted",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (state.status != .indexed or state.link_gen != key.gen or key.index >= state.links.len) return null;",
+      "to": "if (state.status != .indexed or key.index >= state.links.len) return null;",
+      "kills": [
+        "facts store: an edit that keeps a reference at the same index does not count the old edge twice"
+      ],
+      "note": "an edge recorded before a file changed would keep counting after it changed"
+    },
+    {
+      "id": "FCS3-dependents-not-relinked",
+      "file": "src/engine/facts_store.zig",
+      "from": "            const more = try self.dependents(self.gpa, id);",
+      "to": "            const more = try self.gpa.dupe(FileId, &.{id});",
+      "kills": [
+        "facts store: a changed caller leaves no stale edge, a removed export turns the importer's edge unresolved"
+      ],
+      "note": "an importer would keep its edge to an export that no longer exists"
+    },
+    {
+      "id": "FCS4-body-edit-relinks-every-importer",
+      "file": "src/engine/facts_store.zig",
+      "from": "return !was_indexed or !std.mem.eql(u8, &old_signature, &state.signature);",
+      "to": "return true or !was_indexed or !std.mem.eql(u8, &old_signature, &state.signature);",
+      "kills": [
+        "facts store: a body edit keeps every definition's identity and does not relink the importers"
+      ]
+    },
+    {
+      "id": "FCS5-missing-member-counted-as-the-class",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (c.base == none) return .{ .unresolved = .member_not_found };",
+      "to": "if (c.base == none) return .{ .def = owner };",
+      "kills": [
+        "facts store: a member the class does not declare stays unresolved and is never counted as the class"
+      ],
+      "note": "an unresolved member call would be counted as a resolved reference to the class"
+    },
+    {
+      "id": "FCS6-reexport-cycle-not-cut",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (visit.onPath(id) or visit.path.items.len >= max_chain) return .{ .unresolved = .reexport_cycle };",
+      "to": "if (false) return .{ .unresolved = .reexport_cycle };",
+      "kills": [
+        "facts store: a re-export cycle ends as unresolved instead of looping"
+      ]
+    },
+    {
+      "id": "FCS7-unresolved-specifiers-read-as-empty",
+      "file": "src/engine/facts_store.zig",
+      "from": "        if (state.spec_targets.len != state.facts.specs.len) return error.SpecsNotResolved;\n        for (state.facts.exports) |e| {",
+      "to": "        for (state.facts.exports) |e| {",
+      "kills": [
+        "facts store: linking through a file whose imports are not resolved yet is an error, never an empty answer"
+      ]
+    },
+    {
+      "id": "FCX1-name-in-syntax-error-resolved-normally",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (self.inError()) return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(node), .target = .{ .unresolved = .parse_error } });\n",
+      "to": "",
+      "kills": [
+        "facts extract: a name inside a syntax error is unresolved as a parse error, the rest of the file still resolves"
+      ]
+    },
+    {
+      "id": "FCX2-unknown-receiver-call-not-recorded",
+      "file": "src/engine/facts_extract.zig",
+      "from": "                if (role.invokes()) return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(property), .target = target });\n",
+      "to": "",
+      "kills": [
+        "facts extract: a property of an unknown value, a computed callee, eval and a callback stay unresolved with a reason",
+        "facts query: a same-name call on an unknown receiver makes callers partial and is listed with its place"
+      ],
+      "note": "silent drop: a call on a value of unknown type would leave no trace"
+    },
+    {
+      "id": "FCX3-class-keyword-token-read-as-a-class",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (node.isNamed() and oneOf(kind, self.f.classes)) try self.classShape(node);",
+      "to": "if (oneOf(kind, self.f.classes)) try self.classShape(node);",
+      "kills": [
+        "facts extract: a JavaScript class records its base class without a type annotation table"
+      ]
+    },
+    {
+      "id": "FCX4-typed-constant-read-as-its-variable",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (self.typed_at.get(binder)) |t| return .{ .member_of_type = t };\n",
+      "to": "",
+      "kills": [
+        "facts extract: declared parameter types, constructed constants and parameter properties type a member call"
+      ]
+    },
+    {
+      "id": "FCX5-numeric-index-call-read-as-dynamic-key",
+      "file": "src/engine/facts_extract.zig",
+      "from": "const reason: facts.Reason = if (oneOf(index.kind(), self.g.literal_index_kinds)) .local_value else .dynamic_access;",
+      "to": "const reason: facts.Reason = .dynamic_access;",
+      "kills": [
+        "facts query: a dynamic-key call counts only in a file that reaches the subject's module through imports"
+      ]
+    },
+    {
+      "id": "FCR1-destructured-shorthand-not-a-binder",
+      "file": "src/engine/lang/ecma/rename.zig",
+      "from": "    .{ .parent = \"object_pattern\", .field = null, .scope = .pattern },\n",
+      "to": "",
+      "kills": [
+        "facts extract: a destructured name shadows an outer function, so its call is a local value, never the function",
+        "scope: a destructured shorthand binds its own name, so a use inside its block does not reach the outer function"
+      ]
+    },
+    {
+      "id": "FCP1-oversized-file-taken-as-unchanged",
+      "file": "src/platform/fact_store.zig",
+      "from": "                self.outcomes[i] = .{ .failed = .{ .status = .too_large, .note = \"too_large\" } };",
+      "to": "                self.outcomes[i] = .same;",
+      "kills": [
+        "fact store: a file over the size limit is never read as empty, it makes the answer partial with a declared limit"
+      ],
+      "note": "silent drop: a file over the limit would disappear from the store"
+    },
+    {
+      "id": "FCP2-failed-listing-not-counted",
+      "file": "src/platform/fact_store.zig",
+      "from": "            self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit }) catch {\n                _ = self.failures.fetchAdd(1, .monotonic);\n",
+      "to": "            self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit }) catch {\n",
+      "kills": [
+        "fact store: a tracked file whose directory is gone is reported unreadable and the failed listing is counted"
+      ],
+      "note": "silent degradation: a directory that cannot be listed would be read again with no visible event"
+    },
+    {
+      "id": "FCP3-store-checksum-not-verified",
+      "file": "src/platform/fact_file.zig",
+      "from": "    if (!std.mem.eql(u8, &sum, bytes[bytes.len - checksum_len ..])) return error.Corrupt;\n",
+      "to": "    _ = &sum;\n",
+      "kills": [
+        "fact store: a store whose definition name was altered on disk is refused by its checksum and rebuilt"
+      ]
+    },
+    {
+      "id": "FCP4-corrupt-store-reported-as-absent",
+      "file": "src/platform/fact_file.zig",
+      "from": "    const body = verified(bytes) catch |err| return .{ .rebuilt = switch (err) {",
+      "to": "    const body = verified(bytes) catch |err| return if (@intFromError(err) != 0) .absent else .{ .rebuilt = switch (err) {",
+      "kills": [
+        "fact store: a store file with one flipped byte is rebuilt and says why"
+      ],
+      "note": "silent drop: a corrupt store would be rebuilt with no reason given"
+    },
+    {
+      "id": "FCP5-invalid-manifest-not-reported",
+      "file": "src/platform/fact_modules.zig",
+      "from": "                try self.notes.append(a, .{ .path = try a.dupe(u8, rel), .problem = \"invalid json\" });\n",
+      "to": "",
+      "kills": [
+        "fact store: an invalid package manifest is reported, never skipped in silence"
+      ],
+      "note": "silent drop: a package manifest that cannot be parsed would be skipped with no visible event"
+    },
+    {
+      "id": "FCE1-evidence-budget-not-enforced",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "return self.used + text.len + 1 + reserve <= self.limit;",
+      "to": "return self.used + text.len + 1 + reserve <= self.limit or true;",
+      "kills": [
+        "facts evidence: a partial answer ends with the not-a-proof line and stays within the budget",
+        "facts evidence: a complete answer whose lines do not all fit turns partial and says how many were cut"
+      ]
+    },
+    {
+      "id": "FCE3-elided-range-not-declared",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "            if (range.first > next) _ = try self.push(try self.elisionLine(next, range.first - 1, subject.path, subject.qname));\n",
+      "to": "",
+      "kills": [
+        "facts evidence: a function over the budget keeps the whole block around each call, declares every elided range and turns the answer partial"
+      ],
+      "note": "silent cut: lines of a function would vanish from the evidence without an elision line"
+    },
+    {
+      "id": "FCE4-cut-function-shown-as-whole",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "        self.body_elided = true;\n        try self.markElided(subject.path);\n        var next = first;",
+      "to": "        var next = first;",
+      "kills": [
+        "facts evidence: a function over the budget keeps the whole block around each call, declares every elided range and turns the answer partial"
+      ],
+      "note": "a function shown in part would leave the answer complete as if it were shown whole"
+    },
+    {
+      "id": "FCE5-cut-sites-leave-answer-complete",
+      "file": "src/engine/facts_evidence.zig",
+      "from": "    for (value.sites[shown_sites..]) |site| {\n        r.cut += 1;\n        try r.markElided(site.path);\n    }",
+      "to": "    for (value.sites[shown_sites..]) |site| {\n        r.cut += 1;\n        _ = site;\n    }",
+      "kills": [
+        "facts evidence: a complete answer whose lines do not all fit turns partial and says how many were cut"
+      ],
+      "note": "silent cut: call sites left out by the budget would not make the answer partial"
+    },
+    {
+      "id": "FCSP1-small-block-not-kept-whole",
+      "file": "src/engine/facts_spine.zig",
+      "from": "if (s_last - s_first + 1 <= max_block_lines) {",
+      "to": "if (false) {",
+      "kills": [
+        "spine: the lines around a call keep its whole small if statement and the headers of the large blocks around it",
+        "facts evidence: a function over the budget keeps the whole block around each call, declares every elided range and turns the answer partial"
+      ]
+    },
+    {
+      "id": "FCM1-stale-merkle-node-kept",
+      "file": "src/engine/facts_merkle.zig",
+      "from": "            _ = self.nodes.remove(rangeKey(lo, hi));\n",
+      "to": "",
+      "kills": [
+        "merkle: a cached tree updated one leaf at a time has the same root as the tree hashed from scratch",
+        "fact store: an in-memory edit relinks the file and moves the snapshot root to the value a full recount gives"
+      ]
+    },
+    {
+      "id": "FCP6-changed-file-shown-as-current",
+      "file": "src/platform/fact_store.zig",
+      "from": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash);",
+      "to": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash) or true;",
+      "kills": [
+        "fact store: evidence never shows a line of a file that changed after the snapshot as current"
+      ],
+      "note": "evidence would quote a line that is no longer the line the facts were computed from"
     }
   ]
 }
