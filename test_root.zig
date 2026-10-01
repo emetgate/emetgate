@@ -26,6 +26,8 @@ pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
 pub const regex_hint = src.regex_hint;
+pub const trigram = src.trigram;
+pub const text_query = src.text_query;
 pub const query = src.query;
 pub const lang_registry = src.lang_registry;
 pub const lang_profile = src.lang_profile;
@@ -93,6 +95,7 @@ test {
     _ = @import("tests/scan.zig");
     _ = @import("tests/change_watch.zig");
     _ = @import("tests/search_fresh.zig");
+    _ = @import("tests/search_answers.zig");
     _ = @import("tests/git_index.zig");
     _ = @import("tests/scan_tool.zig");
     _ = @import("tests/redteam_memory.zig");

@@ -9,6 +9,7 @@ const registry = @import("../engine/lang/registry.zig");
 pub const kind_spans = @import("../engine/kind_spans.zig");
 pub const doc_spans = @import("../engine/doc_spans.zig");
 const index_file = @import("search_index_file.zig");
+const trigram = @import("../engine/trigram.zig");
 const worker_pool = @import("worker_pool.zig");
 
 const Allocator = std.mem.Allocator;
@@ -120,29 +121,8 @@ fn looksBinary(bytes: []const u8) bool {
     return std.mem.indexOfScalar(u8, bytes, 0) != null;
 }
 
-pub fn trigramsOfAlloc(gpa: Allocator, text: []const u8) ![]u24 {
-    var set: std.AutoArrayHashMapUnmanaged(u24, void) = .empty;
-    defer set.deinit(gpa);
-    if (text.len >= 3) {
-        var i: usize = 0;
-        while (i + 3 <= text.len) : (i += 1) {
-            const t: u24 = (@as(u24, text[i]) << 16) | (@as(u24, text[i + 1]) << 8) | text[i + 2];
-            try set.put(gpa, t, {});
-        }
-    }
-    const owned = try gpa.dupe(u24, set.keys());
-    std.mem.sort(u24, owned, {}, std.sort.asc(u24));
-    return owned;
-}
-
-pub fn isSupersetSorted(haystack: []const u24, needles: []const u24) bool {
-    var hi: usize = 0;
-    for (needles) |needle| {
-        while (hi < haystack.len and haystack[hi] < needle) hi += 1;
-        if (hi >= haystack.len or haystack[hi] != needle) return false;
-    }
-    return true;
-}
+pub const trigramsOfAlloc = trigram.setOfAlloc;
+pub const isSupersetSorted = trigram.isSupersetSorted;
 
 pub fn build(gpa: Allocator, io: std.Io, root_abs: []const u8, files: []const []const u8) !Index {
     const arena = try gpa.create(std.heap.ArenaAllocator);
@@ -720,23 +700,6 @@ test "an index file larger than 64 MiB is read whole and judged by its bytes, no
     const absent = try std.fmt.allocPrint(testing.allocator, "{s}\\absent", .{root_abs});
     defer testing.allocator.free(absent);
     try testing.expectEqual(Loaded{ .failed = .missing }, load(testing.allocator, testing.io, absent));
-}
-
-test "isSupersetSorted matches a subset regardless of order in the query" {
-    const haystack = [_]u24{ 1, 5, 9, 20 };
-    try testing.expect(isSupersetSorted(&haystack, &.{ 5, 9 }));
-    try testing.expect(!isSupersetSorted(&haystack, &.{ 5, 6 }));
-    try testing.expect(isSupersetSorted(&haystack, &.{}));
-}
-
-test "trigramsOfAlloc is empty for text shorter than three bytes" {
-    const empty = try trigramsOfAlloc(testing.allocator, "ab");
-    defer testing.allocator.free(empty);
-    try testing.expectEqual(@as(usize, 0), empty.len);
-
-    const one = try trigramsOfAlloc(testing.allocator, "abcabc");
-    defer testing.allocator.free(one);
-    try testing.expectEqual(@as(usize, 3), one.len);
 }
 
 test "refresh reuses unchanged entries and recomputes a file that changed" {

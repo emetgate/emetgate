@@ -625,13 +625,32 @@ Unlike a flat grep, hits are grouped so a result can go straight into `emetgate_
   (`json_pointer.pointerAt`); in a `.md` file, by the innermost heading whose section
   contains them (`markdown_heading.sectionAt`). Any other tracked text file is ungrouped
   (line only).
-- `kinds:["code"]` (etc.) filters the kind tag before the hit cap is applied. At most 200
-  hits total, `truncated:true` when cut, matching `emetgate_scan`'s cap style.
+- `kinds:["code"]` (etc.) filters the kind tag before the hit cap is applied; a kind name
+  other than `code`, `comment` or `string` is refused (`UnknownKind`). At most 200 hits
+  total, `truncated:true` when cut, matching `emetgate_scan`'s cap style.
+- `dir` may name a file: the search then covers that one tracked file
+  (`scope.is_file:true`).
+
+Every reply says whether it is **complete** or **partial** and what it covered. `scope`
+counts the tracked files under `dir` (`files`), how many of them were fully evaluated
+(`evaluated`), and the ones left out by a declared rule (`skipped_large` for 1 MiB or more,
+`skipped_binary`, `deleted_on_disk`). A reply is `partial` when the hit cap cut it or a
+file could not be fully evaluated: an unreadable file, or a line on which the regex ran
+past its step budget (2,000,000 steps per line); `missing` names those files and why. A
+reply with no hit carries a `note` that says why the zero can be trusted or what did not
+fit: `no match in 157 file(s)`, `7 matching line(s) (0 code, 0 comment, 7 string) were all
+removed by kinds [code]`, `<path> is not a file git tracks`, or, for a literal that looks
+like a regex, a pointer to `regex:true`. A literal with a `|` whose whole text is not found
+is searched once more as the literal alternatives between the bars, and the reply says so
+(`read_as:"literal alternatives"`): a model that writes `a(|b` without `regex:true` gets
+the hits for `a(` and `b`. Errors (a path outside the repository, a bad regex) are the
+refused answers.
 
 Example reply shape:
 
 ```json
-{"pattern":"loadPending","regex":false,"files_total":42,"files_scanned":3,
+{"status":"complete","pattern":"loadPending","regex":false,
+ "scope":{"path":"src","files":42,"evaluated":42},"matched_files":3,
  "groups":[{"file":"src/index.js","symbol":"loadPending","hash":"…",
             "hits":[{"line":93,"kind":"code","role":"definition","text":"function loadPending() {"},
                      {"line":112,"kind":"code","role":"reference","text":"loadPending();"}]}],
@@ -760,13 +779,17 @@ the script if a different weight function or corpus is worth checking.
 **Regex candidates.** Russ Cox's trigram-index regex matching
 (https://swtch.com/~rsc/regexp/regexp4.html) derives the trigrams every match must contain,
 alternation included, from the regex AST. This regex engine compiles straight to an NFA and
-does not expose that AST, so `regex_hint.longestLiteralChunk` takes the longest literal run
-that every match must contain: text outside any group, with the character before `?`, `*`
-or `{` left out, and nothing at all when the pattern has a `|` outside a group
-(`foo|bar`, `colou?r` and `(ab)?cd` give no hint, `colo` and `cd`). Its grams narrow the
-candidate files when it is at least 3 bytes, and the same text screens lines before the
-regex runs on them. An earlier version took any literal run, so `foo|bar` skipped files
-that only held `bar`; a test and two mutations hold the rule now.
+does not expose that AST, so `regex_hint.requiredLiterals` takes, for each branch of a
+top-level alternation (also inside one group that encloses the whole pattern), the longest
+literal run that every match of that branch must contain: text outside any group, with the
+character before `?`, `*` or `{` left out. A match then holds at least one of those
+literals; a branch with no literal (`foo|.*`) means no hint at all. A file is a candidate
+when its grams cover the grams of one of the literals, a line is handed to the regex only
+when it contains one, and the hit's kind and role are read at that literal's column. Each
+line gets its own step budget, so one long line can make the reply partial but cannot hide
+matches in other lines or files. An earlier version shared one budget per worker thread
+across files and read a spent budget as no match; on n8n that returned 0 for
+`handleNodeExecutionError|continueExecution` where `rg` finds 6.
 
 Measured with `tests/bench/search.py` (ReleaseFast build, 10-run medians, run alone under
 the lock script) against `rg` and `git grep` on `eval/express-test` and

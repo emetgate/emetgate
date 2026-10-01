@@ -5739,8 +5739,8 @@
     {
       "id": "SR5-directory-scope-not-enforced",
       "file": "src/protocol/search_v1.zig",
-      "from": "if (!read_tools.inDirectory(f, place.rel)) continue;",
-      "to": "_ = place.rel;",
+      "from": "        return read_tools.inDirectory(f, self.rel);",
+      "to": "        return true;",
       "kills": [
         "a search scoped to a subdirectory does not return hits from outside it"
       ]
@@ -6285,6 +6285,94 @@
       "to": "    return false;",
       "kills": [
         "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth"
+      ]
+    },
+    {
+      "id": "TQ1-regex-budget-overrun-read-as-no-match",
+      "file": "src/engine/text_query.zig",
+      "from": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .over_budget;",
+      "to": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .none;",
+      "kills": [
+        "a line that exhausts the regex step budget is reported, never read as no match",
+        "search answers: a line that runs out of regex steps makes the answer partial and names the file"
+      ]
+    },
+    {
+      "id": "RH3-required-literals-keep-only-the-first-branch",
+      "file": "src/engine/regex_hint.zig",
+      "from": "    return out[0..n];\n}\n\nfn unwrapGroup",
+      "to": "    return out[0..@min(n, 1)];\n}\n\nfn unwrapGroup",
+      "kills": [
+        "every line a regex matches contains one of its required literals",
+        "requiredLiterals gives one literal per top-level branch, also inside one enclosing group",
+        "search answers: a regex alternation over many files finds every match a line by line scan finds"
+      ]
+    },
+    {
+      "id": "SA1-partial-answer-reported-complete",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        return self.truncated or self.missing.items.len != 0;",
+      "to": "        return false;",
+      "kills": [
+        "search answers: a line that runs out of regex steps makes the answer partial and names the file",
+        "search answers: a capped answer is partial",
+        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+      ]
+    },
+    {
+      "id": "SA2-unreadable-file-skipped-quietly",
+      "file": "src/protocol/search_v1.zig",
+      "from": "                try result.missing.append(gpa, .{ .path = item.rel, .reason = \"unreadable\" });\n",
+      "to": "",
+      "kills": [
+        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+      ]
+    },
+    {
+      "id": "SA3-file-given-as-dir-scoped-as-a-directory",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        if (self.file) return change_watch.samePath(f, self.rel);\n",
+      "to": "",
+      "kills": [
+        "search answers: a file given as dir is searched by itself"
+      ]
+    },
+    {
+      "id": "SA4-literal-alternatives-not-tried",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        alternatives = try Query.alternatives(gpa, pattern);",
+      "to": "        alternatives = null;",
+      "kills": [
+        "search answers: a literal with a bar that is not found is read as literal alternatives and says so"
+      ]
+    },
+    {
+      "id": "SA5-matches-removed-by-kinds-not-counted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "item.filtered.getPtr(pending.kind).* += 1;",
+      "to": "_ = &item.filtered;",
+      "all": true,
+      "kills": [
+        "search answers: kinds that remove every match say how many matches of which kind were removed"
+      ]
+    },
+    {
+      "id": "SA6-unknown-kind-accepted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        set.insert(std.meta.stringToEnum(Kind, v.string) orelse return error.UnknownKind);",
+      "to": "        set.insert(std.meta.stringToEnum(Kind, v.string) orelse continue);",
+      "kills": [
+        "search answers: an unknown kind name is refused instead of filtering everything away"
+      ]
+    },
+    {
+      "id": "SA7-empty-answer-without-a-note",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (result.groups.items.len == 0) {",
+      "to": "    if (false) {",
+      "kills": [
+        "search answers: a complete answer with no match states how many files it evaluated",
+        "search answers: a literal with regex syntax and no match says the pattern looks like a regex"
       ]
     }
   ]

@@ -28,6 +28,7 @@ pub const Report = struct {
     stamp_ns: u64 = 0,
     work_ns: u64 = 0,
     index_load: ?search_index.LoadFailure = null,
+    save_failure: ?anyerror = null,
 };
 
 pub fn rebuildNote(why: search_index.LoadFailure) []const u8 {
@@ -55,6 +56,7 @@ pub const Session = struct {
     index_path: ?[]u8 = null,
     reconcile: bool = false,
     load_failure: ?search_index.LoadFailure = null,
+    save_failure: ?anyerror = null,
     unsaved: bool = false,
     updates_since_full: usize = 0,
     watch_started_ns: i96 = 0,
@@ -83,7 +85,10 @@ pub const Session = struct {
         const path = self.index_path orelse return;
         const index = self.index orelse return;
         const files = self.files orelse return;
-        search_index.save(self.gpa, self.io, path, index, files, self.git_stamp) catch return;
+        search_index.save(self.gpa, self.io, path, index, files, self.git_stamp) catch |err| {
+            self.save_failure = err;
+            return;
+        };
         self.unsaved = false;
     }
 
@@ -212,6 +217,8 @@ pub const Session = struct {
         }
         self.last.reason = reason;
         self.last.refresh_ns = timer.lap();
+        self.last.save_failure = self.save_failure;
+        self.save_failure = null;
     }
 
     fn applyDirty(self: *Session, root: []const u8, dirty: change_watch.Dirty) search_index.UpdateError!void {
