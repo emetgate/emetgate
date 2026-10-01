@@ -6367,7 +6367,7 @@
       "from": "        const list_changed = !(if (self.git_stamp) |saved| sameGitStamp(current, saved) else false);",
       "to": "        const list_changed = self.git_stamp == null;",
       "kills": [
-        "search freshness: a git add that changes the tracked set is picked up without waiting",
+        "search freshness: a git add and a git rm that change the tracked set are picked up without waiting",
         "search freshness: after a committed write and a git commit the file list is listed once and then reused"
       ]
     },
@@ -7809,7 +7809,8 @@
       "to": "    if (!isRacy(stamp, read_ns) or true) return stamp;",
       "kills": [
         "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
-        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp"
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp",
+        "a full refresh re-reads a file the running session read inside the racy window, though it was rewritten with its old size and both of its old times"
       ]
     },
     {
@@ -7819,7 +7820,8 @@
       "to": "prepared.stamp = smudgedIfRacy(prepared.stamp, 0 * wallNow(self.io));",
       "kills": [
         "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
-        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp"
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp",
+        "a full refresh re-reads a file the running session read inside the racy window, though it was rewritten with its old size and both of its old times"
       ]
     },
     {
@@ -7829,7 +7831,8 @@
       "to": "    return .{ .mtime_ns = stamp.mtime_ns, .ctime_ns = stamp.ctime_ns, .size = stamp.size };",
       "kills": [
         "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
-        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp"
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp",
+        "a full refresh re-reads a file the running session read inside the racy window, though it was rewritten with its old size and both of its old times"
       ]
     },
     {
@@ -8112,6 +8115,51 @@
       "to": "    _ = &snapshot.node_hashes;",
       "kills": [
         "a snapshot builds its node index once and annotates from it like a fresh build"
+      ]
+    },
+    {
+      "id": "WP1-unstarted-pool-closes-an-undefined-handle",
+      "file": "src/platform/worker_pool.zig",
+      "from": "        if (self.done) |done| windows.CloseHandle(done);",
+      "to": "        windows.CloseHandle(self.done.?);",
+      "kills": [
+        "a pool that never started is released without closing a handle it does not own"
+      ]
+    },
+    {
+      "id": "CR1-carriage-return-kept-in-the-line",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        const text_end = if (end > start and self.bytes[end - 1] == '\\r') end - 1 else end;",
+      "to": "        const text_end = end;",
+      "kills": [
+        "a regex sees the line of a CRLF file without its carriage return, as rg --crlf does"
+      ]
+    },
+    {
+      "id": "LD1-added-path-not-prepared",
+      "file": "src/platform/search_session.zig",
+      "from": "                .lt => {\n                    try fresh.append(self.gpa, wanted[i]);",
+      "to": "                .lt => {\n                    _ = &fresh;",
+      "kills": [
+        "search freshness: a git add and a git rm that change the tracked set are picked up without waiting"
+      ]
+    },
+    {
+      "id": "LD2-removed-path-kept",
+      "file": "src/platform/search_session.zig",
+      "from": "                .gt => {\n                    try gone.append(self.gpa, try self.gpa.dupe(u8, current.items[j]));",
+      "to": "                .gt => {\n                    _ = &gone;",
+      "kills": [
+        "search freshness: a git add and a git rm that change the tracked set are picked up without waiting"
+      ]
+    },
+    {
+      "id": "BL1-base-leaf-hash-of-another-file",
+      "file": "src/platform/search_session.zig",
+      "from": ".hash = hashes[id], .owned = false",
+      "to": ".hash = hashes[0], .owned = false",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
       ]
     }
   ]
