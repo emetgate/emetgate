@@ -670,55 +670,88 @@ Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the
 
 `emetgate_search` (`src/protocol/search_v1.zig`) finds a literal substring or, with
 `regex:true`, a regular expression (`src/engine/regex.zig`) in the git-tracked text files
-under `dir`, which may name a directory or one file. Unlike a flat grep, hits are grouped
-so a result can go straight into `emetgate_try` or `emetgate_read_symbol` without a second
-lookup:
+under `dir`, which may name a directory or one file.
 
-- In a registered language, hits are grouped by their **enclosing symbol** (ref + content
-  hash), and each hit is tagged **code** / **comment** / **string** from the tree-sitter
-  node at the match (`profile.isComment`, `profile.strings` — data-driven per language,
-  the engine itself names no language). A hit that names a known symbol is further tagged
-  **definition** (inside the symbol's own signature, matching its name) or **reference**
-  (the callee of a call expression, per `profile.call`, or a generic identifier-reference
-  node kind).
-- In a `.json` file, hits are grouped by the JSON pointer of the value they fall in
-  (`json_pointer.pointerAt`); in a `.md` file, by the innermost heading whose section
-  contains them (`markdown_heading.sectionAt`). Any other tracked text file is ungrouped
-  (line only) and its hits count as code.
-- `kinds:["code"]` (etc.) filters the kind tag; a kind name other than `code`, `comment`
-  or `string` is refused (`UnknownKind`).
+**The reply.** Inside `emetgate mcp` the reply is plain text (`src/protocol/search_text.zig`),
+shaped to cost fewer characters than ripgrep's own output for the same pattern:
 
-**The answer.** Every reply starts with `answer`, one line built by `src/engine/answer.zig`
-that says what was covered:
+```
+|1 import { greet } from './greet';
+src/greet.ts
+1*:export function greet(name: string) {
+src/app.ts
+1|1
+4:greet('main');
+src/other.ts
+1|1
+3:export const other = () => greet('other');
+docs/notes.md
+3:Call greet to say hello.
+✓
+```
 
-- `✓ 18 matches in 157 files @3fa2` is complete: every tracked text file in scope was
-  evaluated, at the snapshot whose root starts with `3fa2`.
-- `partial: 31 matches in 120 of 157 files @3fa2; missing 37 match_limit` is partial: the
-  files counted under `missing` were in scope but are not fully in the reply.
-- `; excluded 412 binary, 37 > 1 MiB` follows either form when a declared rule left files
-  out: binary content, files over 1 MiB, and the repository's own `.git` and `.emetgate`
-  paths. Excluded files are counted (and listed with `certificate:true`); they do not make
-  an answer partial.
+- Each file path stands on its own line, followed by its matching lines as `line:text`. A
+  `*` after the line number marks a definition: the symbol's own name in its signature.
+- Leading and trailing spaces are dropped. A line longer than 120 characters is cut to a
+  window around the match, with `…` at each cut end.
+- A text met on two or more lines (an import repeated across files) is written once in a
+  legend line `|N text` at the top, and those lines read `line|N`.
+- Files are ranked: files with a definition first, then those whose enclosing symbol names
+  the pattern, then code before comments and strings, then files with more hits, then path.
+  Lines within a file follow their line numbers.
+- The last line is the status. `✓` means every tracked text file in scope was searched
+  and every match is shown; with no match it says why the zero can be trusted
+  (`✓ no match in 157 file(s)`, `✓ 7 matching line(s) (0 code, 0 comment, 7 string) were
+  all removed by kinds [code]`, `✓ <path> is not a file git tracks, so nothing was
+  searched`, or, for a literal that looks like a regex, a pointer to `regex:true`).
+  Otherwise it starts with `partial:` and lists the matches shown with the exact total
+  (`matches 1-145 of 300`), then each file that could not be read or fully evaluated with
+  its reason, then `; next offset:145` when more matches follow. Other notes join with `; `:
+  `read as literal alternatives: a|b`, `7 hidden by kinds`, `delegated to rg`, `index
+  rebuilt: ...`.
 
-`status` repeats `complete` or `partial`. `missing` names the files and why: `unreadable`
-(could not be opened or read, for example held by another process without sharing, or a
-tracked path that is now a directory or a link), `vanished` (tracked but gone from the work
-tree; only a "not found" from the file system counts, a held file is never taken for gone
-because its size and times are read through attributes alone, and a read that meets a
-sharing or lock violation gives up at once instead of retrying), `budget` (a line
-ran past the regex step budget of 2,000,000 steps), `unclassified` (a `kinds` filter was
-given and the file did not parse cleanly, so its hits cannot be classified), and
-`match_limit` (hits that were found but are not in this reply, counted as files). A reply
-with no hit carries a `note` that says why the zero can be trusted or what did not fit:
-`no match in 157 file(s)`, `7 matching line(s) (0 code, 0 comment, 7 string) were all
-removed by kinds [code]`, `<path> is not a file git tracks`, or, for a literal that looks
-like a regex, a pointer to `regex:true`. A literal with a `|` whose whole text is not found
-is searched once more as the literal alternatives between the bars, and the reply says so
-(`read_as:"literal alternatives"`). An answer whose counts do not add up (evaluated and
-missing files against the scope, a budget overspent, a missing reason with no declared
-limit, excluded paths against their counts) is refused as `InconsistentCertificate`
-instead of being shown. Errors (a path outside the repository, a bad regex, an unknown
-`detail`, a negative `offset`) are the other refused answers.
+The text has one reading on Windows, where `:`, `|` and `*` cannot appear in a file name: a
+line that starts with digits followed by `:`, `|` or `*` is a hit, a line that starts with
+`|` is a legend entry, the last line is the status, and every other line is a path. An
+error reads `error: <Name>` (with a detail after a colon where there is one, such as
+ripgrep's message for a bad pattern).
+
+The reasons a file is named: `unreadable` (could not be opened or read, for example held by
+another process without sharing, or a tracked path that is now a directory or a link),
+`vanished` (tracked but gone from the work tree; only a "not found" from the file system
+counts, a held file is never taken for gone because its size and times are read through
+attributes alone, and a read that meets a sharing or lock violation gives up at once
+instead of retrying), `budget` (a line ran past the regex step budget of 2,000,000 steps)
+and `unclassified` (a `kinds` filter was given and the file did not parse cleanly, so its
+hits cannot be classified). `kinds:["code"]` (etc.) keeps hits of those kinds, judged from
+the tree-sitter node at the match in a registered language; a kind name other than `code`,
+`comment` or `string` is refused (`UnknownKind`). A literal with a `|` whose whole text is
+not found is searched once more as the literal alternatives between the bars.
+
+**Regular expressions the index cannot run.** A pattern the index's engine refuses (word
+boundaries `\b`, counted repetition `{n,m}`, non-capturing groups `(?:...)`, look-around,
+backreferences) is not refused to the model: the same tracked text files in scope, after
+the same refresh, are searched by ripgrep (`src/platform/rg_search.zig`: `rg --json
+--no-config --no-ignore --hidden --crlf -e <pattern> -- <files>`, started by its absolute
+path from a PATH entry outside the repository and the working directory) and the status
+says `delegated to rg`. A pattern ripgrep rejects too answers `error: InvalidRegex:
+<ripgrep's message>`; with no ripgrep on PATH the answer is `error: RegexNeedsRipgrep`.
+`kinds` cannot be applied to a delegated pattern (`KindsNeedAnIndexedPattern`).
+
+**Structured reply.** `format:"json"`, and any call with `certificate:true` or `stats:true`,
+returns the structured reply that the benches, the simulation runner and the certificate
+checker read; outside `emetgate mcp` (library calls and tests) it is the default. It starts
+with `answer`, one line built by `src/engine/answer.zig` (`✓ 18 matches in 157 files @3fa2`
+or `partial: 31 matches in 120 of 157 files @3fa2; missing 37 match_limit`, with `;
+excluded 412 binary, 37 > 1 MiB` when a declared rule left files out), then `status`,
+`groups` (by enclosing symbol with its ref and content hash, by JSON pointer in a `.json`
+file, by heading in a `.md` file; each hit with `line`, `kind`, `role` and `text`),
+`truncated`, `total` (the exact number of matches, with `total_exact:false` when a `kinds`
+filter stopped the count), `delegated:"rg"`, `more`, `missing` (the reasons above plus
+`match_limit`, matches that were found but are not in this reply, counted as files) and
+`note`. An answer whose counts do not add up (evaluated and missing files against the scope,
+a budget overspent, a missing reason with no declared limit, excluded paths against their
+counts) is refused as `InconsistentCertificate` instead of being shown.
 
 `certificate:true` adds the whole certificate: the snapshot (`barrier`, the barriers this
 session has passed, and `root`, the RFC 9162 Merkle root over every in-scope file that was
@@ -730,24 +763,12 @@ keeps one Merkle tree per scope it has answered and updates it from a journal of
 paths, so a write recomputes one path from leaf to root; adding or removing a tracked file
 rebuilds that scope's tree.
 
-**Reply size.** A reply holds about 5,000 characters of groups. Groups are ranked: those
-with a definition hit first, then those whose symbol name contains the pattern, then groups
-with a code hit, then files with more hits, then by path and line. When the size cut
-leaves hits out, `more` says how many hits in how many files were left out and which
-`offset` gives the next page, those files count under `match_limit`, and the answer is
-partial. `offset:N` skips the first N ranked hits; `detail:"full"` lifts the size budget
-(the scan still stops 200 hits past the offset and says `truncated:true`). On the searches
-of the recorded sessions: <!-- generated:search-reply-sizes -->82 distinct searches from the recorded sessions, replayed on n8n: without the budget p50 1,748, p90 7,788, max 35,258 characters; with it p50 1,748, p90 5,293, max 5,727 (201,478 against 394,762 characters in total)<!-- /generated -->.
-
-Example reply shape:
-
-```json
-{"answer":"✓ 3 matches in 42 files @1a2b","status":"complete",
- "groups":[{"file":"src/index.js","symbol":"loadPending","hash":"…",
-            "hits":[{"line":93,"kind":"code","role":"definition","text":"function loadPending() {"},
-                     {"line":112,"kind":"code","role":"reference","text":"loadPending();"}]}],
- "truncated":false}
-```
+**Reply size and paging.** A reply holds about 5,000 characters. When the cut leaves
+matches out, the answer is partial, the status gives the range shown and the exact total,
+and `offset:N` (the number in `next offset:N`) gives the next page; `detail:"full"` lifts
+the size budget. The scan collects at most 200 matches past the offset but keeps counting,
+so the total is exact on every page (with `kinds` a stopped count shows as `300+`). On the
+searches of the recorded sessions: <!-- generated:search-reply-sizes -->82 distinct searches from the recorded sessions, replayed on n8n: without the budget p50 1,748, p90 7,788, max 35,258 characters; with it p50 1,748, p90 5,293, max 5,727 (201,478 against 394,762 characters in total)<!-- /generated -->.
 
 **The index.** One index per repository lives under
 `%LOCALAPPDATA%\emetgate\index\<repo-path-hash>\` (the same hashed-path convention as the
