@@ -340,6 +340,13 @@ test "map terms: the plural stem folds plurals only and keeps agent nouns apart 
     try testing.expectEqualStrings("class", pluralStem("class", &a));
     try testing.expectEqualStrings("status", pluralStem("status", &a));
     try testing.expect(!std.mem.eql(u8, pluralStem("tester", &a), pluralStem("test", &b)));
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var plural: Stems = .{ .arena = arena_state.allocator(), .plural_only = true };
+    try testing.expect(try plural.intern("tester") != try plural.intern("test"));
+    try testing.expectEqual(try plural.intern("testers"), try plural.intern("tester"));
+    var full: Stems = .{ .arena = arena_state.allocator() };
+    try testing.expectEqual(try full.intern("tester"), try full.intern("test"));
 }
 
 test "map terms: mutual information is zero for an independent term and grows with association" {

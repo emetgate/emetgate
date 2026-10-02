@@ -457,9 +457,9 @@ test "map concepts: a word every region holds weighs nothing and a word of one r
     const arena = arena_state.allocator();
     const lines = [_]RegionLine{ .{ .line = "a/", .dir = "a/" }, .{ .line = "b/", .dir = "b/" }, .{ .line = "c/", .dir = "c/" }, .{ .line = null, .dir = "t/" } };
     const files = [_]File{
-        .{ .path = "a/credentials-tester.service.ts", .region = 0, .defs = &.{ def("CredentialsTester.runTest", .method), def("CredentialsTester.handle", .method) } },
-        .{ .path = "b/workflow-diff.ts", .region = 1, .defs = &.{ def("compareWorkflows", .function), def("handleDiff", .function) } },
-        .{ .path = "c/handler.ts", .region = 2, .defs = &.{ def("handleEvent", .function), def("Shape", .interface), def("ShapeKind", .type_alias) } },
+        .{ .path = "a/credentials-tester.service.ts", .region = 0, .defs = &.{ def("CredentialsTester.runTest", .method), def("CredentialsTester.handleOne", .method), def("CredentialsTester.handleTwo", .method) } },
+        .{ .path = "b/workflow-diff.ts", .region = 1, .defs = &.{ def("compareWorkflows", .function), def("handleDiff", .function), def("handleRest", .function) } },
+        .{ .path = "c/router.ts", .region = 2, .defs = &.{ def("handleEvent", .function), def("handleAgain", .function), def("Shape", .interface), def("ShapeKind", .type_alias) } },
         .{ .path = "t/test.ts", .region = 3, .defs = &.{def("handleTest", .function)} },
     };
     const p = try plan(arena, &lines, &files, .{});
@@ -546,7 +546,8 @@ test "map concepts: every region with a candidate gets one item before any regio
     const p = try plan(arena, &lines, &files, .{});
     const small_cost = p.candidates[itemIndex(p, .root, "zeta").?].cost;
     const big_cost = p.candidates[itemIndex(p, .root, "alpha").?].cost;
-    const chosen = try select(arena, &p, small_cost + big_cost);
+    try testing.expect(small_cost < big_cost);
+    const chosen = try select(arena, &p, 2 * big_cost);
     var per_region = [_]u32{ 0, 0, 0 };
     var spent: u64 = 0;
     for (chosen, p.items, p.candidates) |c, item, cand| {
@@ -556,7 +557,7 @@ test "map concepts: every region with a candidate gets one item before any regio
     }
     try testing.expectEqual(@as(u32, 1), per_region[0]);
     try testing.expectEqual(@as(u32, 1), per_region[1]);
-    try testing.expect(spent <= small_cost + big_cost);
+    try testing.expect(spent <= 2 * big_cost);
     for ([_]u64{ 0, 3, 7, 12, 40, 1000 }) |budget| {
         const again = try select(arena, &p, budget);
         var cost: u64 = 0;
