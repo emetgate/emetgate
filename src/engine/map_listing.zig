@@ -2,15 +2,12 @@ const std = @import("std");
 const facts = @import("facts.zig");
 const facts_store = @import("facts_store.zig");
 const answer = @import("answer.zig");
-const facts_evidence = @import("facts_evidence.zig");
-const profile_mod = @import("lang/profile.zig");
 const map = @import("map.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const Store = facts_store.Store;
 const FileState = facts_store.FileState;
-const MapTable = profile_mod.MapTable;
 const none = facts.none;
 
 pub const default_budget: usize = 8_000;
@@ -29,7 +26,6 @@ pub const Context = struct {
 pub const Options = struct {
     budget: usize = default_budget,
     offset: u32 = 0,
-    source: ?facts_evidence.Source = null,
 };
 
 pub const RegionListing = struct {
@@ -51,7 +47,6 @@ const File = struct {
     state: ?*const FileState,
     first_row: u32 = 0,
     rows: u32 = 0,
-    bytes: ?[]const u8 = null,
 };
 
 const Row = struct {
@@ -91,115 +86,35 @@ fn isIdentByte(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c == '$' or c >= 0x80;
 }
 
-fn collapse(arena: Allocator, text: []const u8, limit: usize) ![]const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    var space = false;
-    for (text) |c| {
-        if (std.ascii.isWhitespace(c)) {
-            space = out.items.len != 0;
-            continue;
-        }
-        if (space) try out.append(arena, ' ');
-        space = false;
-        try out.append(arena, c);
-    }
-    if (out.items.len <= limit) return out.items;
+fn clip(text: []const u8, limit: usize) []const u8 {
+    if (text.len <= limit) return text;
     var end = limit;
-    while (end > 0 and (out.items[end] & 0xC0) == 0x80) end -= 1;
-    out.shrinkRetainingCapacity(end);
-    try out.appendSlice(arena, "...");
-    return out.items;
+    while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
+    return text[0..end];
 }
 
-fn isOpen(table: *const MapTable, c: u8) bool {
-    return std.mem.indexOfScalar(u8, table.open_brackets, c) != null;
-}
-
-fn isClose(table: *const MapTable, bytes: []const u8, k: usize) bool {
-    const c = bytes[k];
-    if (std.mem.indexOfScalar(u8, table.close_brackets, c) == null) return false;
-    if (k > 0 and c == '>' and bytes[k - 1] == '=') return false;
-    return true;
-}
-
-fn stopsAt(table: *const MapTable, bytes: []const u8, k: usize) bool {
-    const c = bytes[k];
-    if (c == table.body_open or c == table.statement_end) return true;
-    return std.mem.startsWith(u8, bytes[k..], table.arrow);
-}
-
-pub fn signatureOf(arena: Allocator, bytes: []const u8, d: facts.Def, table: *const MapTable) ![]const u8 {
-    if (!d.kind.callable()) return "";
-    const end_limit = @min(bytes.len, d.span.end);
-    var i: usize = d.name_start;
-    if (i >= end_limit) return "";
-    while (i < end_limit and isIdentByte(bytes[i])) i += 1;
-    const limit = @min(end_limit, i + 600);
-    if (d.kind == .class) {
-        var k = i;
-        while (k < limit and bytes[k] != table.body_open) k += 1;
-        if (k >= limit) return "";
-        return collapse(arena, bytes[i..k], max_detail_chars);
+pub fn paramsOf(signature: []const u8, name: []const u8) []const u8 {
+    if (name.len == 0) return "";
+    var from: usize = 0;
+    while (std.mem.indexOfPos(u8, signature, from, name)) |at| {
+        from = at + 1;
+        if (at > 0 and (isIdentByte(signature[at - 1]) or signature[at - 1] == '"' or signature[at - 1] == '\'')) continue;
+        const end = at + name.len;
+        if (end < signature.len and isIdentByte(signature[end])) continue;
+        var rest = std.mem.trim(u8, signature[end..], " ");
+        if (std.mem.startsWith(u8, rest, "=")) rest = std.mem.trim(u8, rest[1..], " ");
+        if (std.mem.endsWith(u8, rest, "=>")) rest = std.mem.trimEnd(u8, rest[0 .. rest.len - 2], " ");
+        return clip(rest, max_detail_chars);
     }
-    var k = i;
-    while (k < limit and bytes[k] != '(') : (k += 1) {
-        if (stopsAt(table, bytes, k) and bytes[k] != '<') return "";
-    }
-    if (k >= limit) return "";
-    const start = k;
-    var depth: u32 = 0;
-    while (k < limit) : (k += 1) {
-        if (isOpen(table, bytes[k])) depth += 1 else if (isClose(table, bytes, k)) {
-            depth -|= 1;
-            if (depth == 0) {
-                k += 1;
-                break;
-            }
-        }
-    }
-    if (depth != 0) return collapse(arena, bytes[start..limit], max_detail_chars);
-    var end = k;
-    var j = k;
-    while (j < limit and (bytes[j] == ' ' or bytes[j] == '\t' or bytes[j] == '\n' or bytes[j] == '\r')) j += 1;
-    if (j < limit and bytes[j] == ':') {
-        depth = 0;
-        while (j < limit) : (j += 1) {
-            if (depth == 0 and stopsAt(table, bytes, j)) break;
-            if (isOpen(table, bytes[j])) depth += 1 else if (isClose(table, bytes, j)) depth -|= 1;
-        }
-        end = j;
-    }
-    return collapse(arena, bytes[start..end], max_detail_chars);
-}
-
-pub fn docOf(arena: Allocator, bytes: []const u8, d: facts.Def, table: *const MapTable) ![]const u8 {
-    var i: usize = @min(d.span.start, bytes.len);
-    while (i > 0 and std.ascii.isWhitespace(bytes[i - 1])) i -= 1;
-    const before = bytes[0..i];
-    if (std.mem.endsWith(u8, before, table.doc_close)) {
-        const close = i - table.doc_close.len;
-        const open = std.mem.lastIndexOf(u8, before[0..close], table.doc_open) orelse return "";
-        var lines = std.mem.splitScalar(u8, before[open + table.doc_open.len .. close], '\n');
-        while (lines.next()) |raw| {
-            const line = std.mem.trim(u8, raw, " \t\r*");
-            if (line.len == 0 or line[0] == '@') continue;
-            return collapse(arena, line, max_detail_chars);
-        }
-        return "";
-    }
-    var first: ?[]const u8 = null;
-    var end = i;
-    while (end > 0) {
-        const line_start = if (std.mem.lastIndexOfScalar(u8, bytes[0..end], '\n')) |nl| nl + 1 else 0;
-        const line = std.mem.trim(u8, bytes[line_start..end], " \t\r");
-        if (!std.mem.startsWith(u8, line, table.line_comment)) break;
-        const text = std.mem.trim(u8, line[table.line_comment.len..], " \t/");
-        if (text.len != 0) first = text;
-        if (line_start == 0) break;
-        end = line_start - 1;
-    }
-    if (first) |text| return collapse(arena, text, max_detail_chars);
     return "";
+}
+
+fn spaced(signature: []const u8) bool {
+    return signature.len != 0 and signature[0] != '(' and signature[0] != '<';
+}
+
+fn detailChars(signature: []const u8) usize {
+    return signature.len + @intFromBool(spaced(signature));
 }
 
 fn relative(region: *const map.Region, path: []const u8) []const u8 {
@@ -260,8 +175,8 @@ fn rowChars(level: Level, region: *const map.Region, files: []const File, rows: 
     const base = 2 + digitsOf(d.line) + 1 + map.kindTag(d.kind).len + 1 + d.qname.len + 1;
     return head + switch (level) {
         .names => base,
-        .signatures => base + row.signature.len,
-        .full => base + row.signature.len + (if (row.doc.len != 0) row.doc.len + 3 else 0),
+        .signatures => base + detailChars(row.signature),
+        .full => base + detailChars(row.signature) + (if (row.doc.len != 0) row.doc.len + 3 else 0),
     };
 }
 
@@ -311,33 +226,12 @@ fn writeBody(w: *Writer, region: *const map.Region, files: []const File, rows: [
         }
         const d = f.state.?.facts.defs[row.def];
         try w.print("  {d} {s} {s}", .{ d.line, map.kindTag(d.kind), d.qname });
-        if (p.level != .names) try w.writeAll(row.signature);
+        if (p.level != .names and row.signature.len != 0) {
+            if (spaced(row.signature)) try w.writeByte(' ');
+            try w.writeAll(row.signature);
+        }
         if (p.level == .full and row.doc.len != 0) try w.print(" - {s}", .{row.doc});
         try w.writeByte('\n');
-    }
-}
-
-fn fillDetails(arena: Allocator, files: []File, rows: []Row, source: facts_evidence.Source) !void {
-    var r: usize = 0;
-    while (r < rows.len) {
-        const k = rows[r].file;
-        var end = r;
-        while (end < rows.len and rows[end].file == k) end += 1;
-        defer r = end;
-        const f = &files[k];
-        const state = f.state orelse continue;
-        if (rows[r].def == none) continue;
-        const profile = state.profile orelse continue;
-        const table = profile.map orelse continue;
-        const got = source.file(f.path) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.Changed, error.Vanished, error.TooLarge, error.Unreadable => continue,
-        };
-        for (rows[r..end]) |*row| {
-            const d = state.facts.defs[row.def];
-            row.signature = try signatureOf(arena, got.bytes, d, table);
-            row.doc = try docOf(arena, got.bytes, d, table);
-        }
     }
 }
 
@@ -354,7 +248,7 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
             if (state.status == .indexed) {
                 for (state.facts.defs, 0..) |d, di| {
                     if (d.kind == .module) continue;
-                    try rows.append(arena, .{ .file = @intCast(k), .def = @intCast(di) });
+                    try rows.append(arena, .{ .file = @intCast(k), .def = @intCast(di), .signature = if (d.kind.callable()) paramsOf(d.signature, d.name) else "", .doc = clip(d.doc, max_detail_chars) });
                     total_symbols += 1;
                 }
             }
@@ -365,14 +259,7 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     const total: u32 = @intCast(rows.items.len);
     if (options.offset > 0 and options.offset >= total) return ListingAnswer.refuse(error.OffsetOutOfRange, try std.fmt.allocPrint(arena, "offset {d} is past the {d} entries of r{d}", .{ options.offset, total, region_id + 1 }));
     const body = budget -| reserve;
-    var details = false;
-    if (options.source) |source| {
-        if (options.offset == 0 and rangeChars(.names, region, files, rows.items, 0, rows.items.len) <= body) {
-            try fillDetails(arena, files, rows.items, source);
-            details = true;
-        }
-    }
-    const p = plan(region, files, rows.items, body, options.offset, details);
+    const p = plan(region, files, rows.items, body, options.offset, true);
 
     var missing: std.ArrayList(answer.Missing) = .empty;
     var evaluated: u32 = 0;

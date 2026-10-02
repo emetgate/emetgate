@@ -202,12 +202,11 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
             return 0;
         },
         .region => {
-            var lines: fact_store.SourceLines = .{ .repo = repo, .arena = arena };
             const listed = try map_listing.regionListing(arena, &repo.store, &built, options.region.?, .{
                 .snapshot = repo.snapshot(),
                 .max_file_bytes = repo.options.max_file_bytes,
                 .largest_file_bytes = repo.largestFile(),
-            }, .{ .budget = options.budget, .offset = options.offset, .source = lines.source() });
+            }, .{ .budget = options.budget, .offset = options.offset });
             switch (listed) {
                 .complete => |c| try out.writeAll(c.value.text),
                 .partial => |p| try out.writeAll(p.value.text),
@@ -494,9 +493,8 @@ fn bench(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, map_optio
         var scratch = std.heap.ArenaAllocator.init(gpa);
         defer scratch.deinit();
         const region: map.RegionId = random.uintLessThan(u32, @intCast(built.regions.len));
-        var lines: fact_store.SourceLines = .{ .repo = repo, .arena = scratch.allocator() };
         const started = clock.monotonic();
-        const listed = try map_listing.regionListing(scratch.allocator(), &repo.store, &built, region, .{ .snapshot = repo.snapshot(), .max_file_bytes = repo.options.max_file_bytes, .largest_file_bytes = repo.largestFile() }, .{ .budget = options.budget, .source = lines.source() });
+        const listed = try map_listing.regionListing(scratch.allocator(), &repo.store, &built, region, .{ .snapshot = repo.snapshot(), .max_file_bytes = repo.options.max_file_bytes, .largest_file_bytes = repo.largestFile() }, .{ .budget = options.budget });
         slot.* = nanosSince(clock, started);
         switch (listed) {
             .complete => |c| listed_chars += c.value.text.len,

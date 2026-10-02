@@ -1,12 +1,10 @@
 const std = @import("std");
 const emetgate = @import("emetgate");
 const facts = emetgate.facts;
-const facts_evidence = emetgate.facts_evidence;
 const map = emetgate.map;
 const map_listing = emetgate.map_listing;
 const map_delta = emetgate.map_delta;
 const answer = emetgate.answer;
-const registry = emetgate.lang_registry;
 const test_util = emetgate.test_util;
 const Repo = @import("facts_repo.zig").Repo;
 
@@ -100,21 +98,6 @@ fn regionSymbols(arena: Allocator, built: map.Map) ![]u64 {
     std.mem.sort(u64, out.items, {}, std.sort.asc(u64));
     return out.items;
 }
-
-const Sources = struct {
-    repo: *Repo,
-
-    fn source(self: *Sources) facts_evidence.Source {
-        return .{ .ctx = self, .fileFn = fileOf };
-    }
-
-    fn fileOf(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
-        const self: *Sources = @ptrCast(@alignCast(ctx));
-        const bytes = self.repo.sources.get(path) orelse return error.Vanished;
-        const profile = registry.forPath(path) orelse return error.Unreadable;
-        return .{ .bytes = bytes, .profile = profile };
-    }
-};
 
 fn context() map_listing.Context {
     return .{ .snapshot = .{ .barrier = 1, .root = answer.contentDigest("map test") } };
@@ -359,9 +342,8 @@ test "map listing: a region that fits is listed whole with signatures and first 
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const built = try map.buildMap(arena, &repo.store, .{ .region_chars = 100_000 });
-    var sources: Sources = .{ .repo = &repo };
     const region = try regionOf(built, "src/api/users.controller.ts");
-    const listed = try map_listing.regionListing(arena, &repo.store, &built, region, context(), .{ .source = sources.source() });
+    const listed = try map_listing.regionListing(arena, &repo.store, &built, region, context(), .{});
     try testing.expectEqual(answer.Status.complete, listed.status());
     const value = listed.complete.value;
     try testing.expectEqual(map_listing.Level.full, value.level);
@@ -372,6 +354,14 @@ test "map listing: a region that fits is listed whole with signatures and first 
     try testing.expect(std.mem.indexOf(u8, value.text, "  8 method UsersController.list() - Lists every user of the account.\n") != null);
     try testing.expect(std.mem.indexOf(u8, value.text, "UsersController.create(name: string): string - Creates one user.") != null);
     try testing.expect(std.mem.indexOf(u8, value.text, "\u{2713}") != null);
+}
+
+test "map listing: the parameters of a stored signature follow the name, also for arrows and decorated methods" {
+    try testing.expectEqualStrings("(id: string): Promise<void>", map_listing.paramsOf("@Get(\"list\") async list(id: string): Promise<void>", "list"));
+    try testing.expectEqualStrings("(step: string)", map_listing.paramsOf("plannerStep = (step: string) =>", "plannerStep"));
+    try testing.expectEqualStrings("extends Base", map_listing.paramsOf("export class Foo extends Base", "Foo"));
+    try testing.expectEqualStrings("", map_listing.paramsOf("export function other()", "list"));
+    try testing.expectEqualStrings("", map_listing.paramsOf("anything", ""));
 }
 
 test "map listing: a region over the budget is paged, every page declares the cut, and the pages cover it exactly once" {
