@@ -917,6 +917,7 @@ emetgate facts callers WorkflowExecute.processRunExecutionData
 emetgate facts callees WorkflowExecute.processRunExecutionData --depth 2
 emetgate facts refs C.m --file src/a.ts
 emetgate facts defined_at handleNodeExecutionError
+emetgate facts evidence --intent decides --target packages/core/src/execution-engine/workflow-execute.ts#WorkflowExecute.handleNodeExecutionError --term continueOnFail
 emetgate facts bench --samples 200 --updates 50
 ```
 
@@ -930,7 +931,7 @@ A member call binds through `this`, a class used statically, a namespace import,
 type, a constructor parameter property or a constant made with `new`. The last three are
 labelled `typed`, the others `proven`. Everything else stays `unresolved` with its reason.
 
-The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v2`: versioned, with a
+The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v3`: versioned, with a
 BLAKE3 checksum, written to a temporary file and moved into place. A refresh lists the
 tracked files, compares directory stamps, re-reads only changed files (a file stamped within
 2 s of the store's write time is always re-hashed), extracts a file again only when its
@@ -946,11 +947,26 @@ file that names the subject but was not analyzed (another language, syntax error
 unreadable, over the size limit). Calls bind statically: a call on a receiver typed as the
 base class is listed under the base member, not under its overrides.
 
-The evidence shows the subject as a whole function when it fits the budget (default 9,500
-characters, under the 10,000-character limit of a Claude Code hook). When it does not, it
-shows the complete statements around the relevant lines and the headers of the blocks that
-hold them, names every elided range, and turns the answer `partial`. Callers are shown by
-signature and call line. The last line always gives the number of unresolved references.
+`emetgate facts evidence` compiles the evidence for one request: targets in the order given
+(`--target path#symbol`; several share the budget, none is dropped while another is shown
+whole), an intent (`decides`, `callers`, `callees`, `flow`, `where_defined`, `explain`), terms,
+and `--include callers,callees,tests|none` (all three by default, none for `where_defined`). The
+block is plain text: a header line, then each file named once with its lines under it as
+`line  code`, then the certificate line. A target is shown whole when it fits (default 9,500
+characters, under the 10,000-character limit of a Claude Code hook); its body gets room before
+callers and callees fill the rest. A body that does not fit is cut from a statement outline
+kept in the store, so no file is parsed again: the complete statements around the lines that
+hold a term or a call to another target, for `decides` the whole branch that holds a term, the
+full signature and the headers of the blocks around them; every elided range is named and the
+answer turns `partial`. Callers and callees are shown by signature and call line as `proven` or
+`typed`; candidates that could not be resolved are listed and the `Partial because` line names
+why. The tests section lists the `describe`/`it`/`test` titles of the test files (`*.test.*`,
+`*.spec.*`, `__tests__`) that reference a target, resolved or by name in a test file that
+imports the target's module, three per file and a count for the rest. Quoted files are read
+without waiting on another program's lock: a file changed after the snapshot is extracted again
+before it is quoted; a file that is gone or locked is named `vanished` or `unreadable`, and a
+file that grew over the size limit is left out by the declared `too_large` rule, each with its
+own reason line; an older state is never quoted as current.
 
 n8n (2026-10-01, ReleaseFast, 16 logical CPUs, 8 worker threads):
 
@@ -958,12 +974,16 @@ n8n (2026-10-01, ReleaseFast, 16 logical CPUs, 8 worker threads):
 |---|---|
 | files in scope | 22,776: 21,453 parsed (175 with syntax errors), 1,323 not parsed (`.vue` and similar) |
 | definitions, references | 130,040, 1,885,039 (743,276 resolved, 64,458 of them typed) |
-| full build | 91.5 s wall, mostly cold reads on this machine (about 15 ms per file); parse 38 s and extraction 96 s of CPU over 8 threads; link 2.3 s; save 0.9 s |
-| store, memory | 47.8 MB on disk; peak working set 705 MB while building, 412 MB loaded |
+| full build | 91.5 s wall with cold reads on this machine (about 15 ms per file); 16.8 s with the files in the OS cache (store version 3: parse 26.8 s and extraction 85.8 s of CPU over 8 threads, link 0.8 s, save 0.4 s) |
+| store, memory | 54.7 MB on disk with the outline and the test blocks (47.8 MB before them); peak working set 749 MB while building, 410 MB loaded |
 | warm open | load 0.85 s, file listing 0.1 s warm (2.8 s cold), stamps 0.08 s |
-| query p50 / p99, 200 seeded samples | callers 0.28 / 3.9 ms, callees 0.10 / 0.26 ms, defined_at 0.18 / 0.85 ms, refs 0.37 / 3.8 ms |
-| evidence p50 / p99 | 22 / 391 ms (reads and parses the files it quotes) |
-| one-file update p50 / p99 | 9.2 / 37 ms (parse, extract, relink, snapshot root) |
+| query p50 / p99, 200 seeded samples | callers 0.25 / 3.0 ms, callees 0.11 / 0.29 ms, defined_at 0.19 / 0.90 ms, refs 0.24 / 3.0 ms |
+| evidence p50 / p99, 200 seeded samples, callers, callees and tests included | explain 1.4 / 5.6 ms, decides 1.0 / 5.3 ms, callers 1.2 / 5.9 ms, callees 1.3 / 5.7 ms, flow 1.2 / 6.1 ms, two targets 2.0 / 6.9 ms; max 8.4 ms. Before the outline: 22 / 391 ms. A file read for the first time costs about 10 to 15 ms more on this machine |
+| one-file update p50 / p99 | 9.9 / 16.8 ms (parse, extract with the outline, relink, snapshot root) |
+
+`tests/bench/evidence_seen.py` asks for the evidence of the four seen questions (S1, S2, S5 and S6)
+with the gold target given by hand and the default sections: the checklist items found in the
+block are 5/5, 4/5, 4/5 and 5/5, in 3,756 to 8,748 characters, p99 at most 5.7 ms over 50 runs.
 
 `tests/bench/facts_tsserver.py` compares `callers` with tsserver's `findReferences` call
 sites on 30 seeded callables from `packages/core`, `packages/workflow` and six `@n8n`
