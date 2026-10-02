@@ -1,4 +1,5 @@
 const std = @import("std");
+const exe_path = @import("exe_path.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -172,7 +173,12 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     defer gpa.free(allowed);
     const argv = try buildArgv(gpa, config_abs, allowed, passthrough);
     defer gpa.free(argv);
-    argv[0] = program;
+    const resolved = exe_path.resolve(gpa, program, null) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ExecutableNotFound, error.NameInvalid => return error.ClaudeNotFound,
+    };
+    defer gpa.free(resolved);
+    argv[0] = resolved;
     var env = try childEnviron(gpa, parent_env);
     defer env.deinit();
     var child = try std.process.spawn(io, .{ .argv = argv, .environ_map = &env });

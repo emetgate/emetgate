@@ -9,6 +9,7 @@ const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const where_mod = @import("where.zig");
 const repo = @import("repo.zig");
+const exe_path = @import("exe_path.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -458,7 +459,12 @@ fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, file: []const u8, opti
     const head = commandHead(command);
     if (!try resolvable(gpa, io, options.shadow_abs, head)) return failedGate(gpa, rule, file, "command_not_found", head);
 
-    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", command };
+    const cmd = exe_path.system(gpa, "cmd.exe") catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return failedGate(gpa, rule, file, "sandbox_unavailable", @errorName(err));
+    };
+    defer gpa.free(cmd);
+    const argv = [_][]const u8{ cmd, "/d", "/c", command };
     const report = sandbox.run(gpa, io, .{
         .argv = &argv,
         .cwd = options.shadow_abs,

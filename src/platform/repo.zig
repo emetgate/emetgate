@@ -1,6 +1,7 @@
 const std = @import("std");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
+const exe_path = @import("exe_path.zig");
 
 const Allocator = std.mem.Allocator;
 const max_git_output = 64 * 1024;
@@ -106,8 +107,10 @@ pub fn jailNew(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) 
 }
 
 pub fn isIgnored(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8) !bool {
+    const git = try exe_path.git(gpa, root_abs);
+    defer gpa.free(git);
     const result = std.process.run(gpa, io, .{
-        .argv = &.{ "git", "check-ignore", "-q", "--no-index", "--", rel },
+        .argv = &.{ git, "check-ignore", "-q", "--no-index", "--", rel },
         .cwd = .{ .path = root_abs },
         .stdout_limit = .limited(max_git_output),
     }) catch return error.GitFailed;
@@ -124,8 +127,10 @@ pub fn isIgnored(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const 
 }
 
 pub fn filesMentioning(gpa: Allocator, io: std.Io, root_abs: []const u8, word: []const u8) ![]u8 {
+    const git = try exe_path.git(gpa, root_abs);
+    defer gpa.free(git);
     const result = std.process.run(gpa, io, .{
-        .argv = &.{ "git", "grep", "-z", "-l", "-w", "-F", "-e", word, "--" },
+        .argv = &.{ git, "grep", "-z", "-l", "-w", "-F", "-e", word, "--" },
         .cwd = .{ .path = root_abs },
         .stdout_limit = .limited(max_git_output),
     }) catch return error.GitFailed;
@@ -139,8 +144,10 @@ pub fn filesMentioning(gpa: Allocator, io: std.Io, root_abs: []const u8, word: [
 }
 
 pub fn trackedListing(gpa: Allocator, io: std.Io, root_abs: []const u8, pathspec: []const u8) ![]u8 {
+    const git = try exe_path.git(gpa, root_abs);
+    defer gpa.free(git);
     const result = std.process.run(gpa, io, .{
-        .argv = &.{ "git", "ls-files", "-z", "--", pathspec },
+        .argv = &.{ git, "ls-files", "-z", "--", pathspec },
         .cwd = .{ .path = root_abs },
         .stdout_limit = .limited(max_git_output),
     }) catch return error.GitFailed;
@@ -154,11 +161,13 @@ pub fn trackedListing(gpa: Allocator, io: std.Io, root_abs: []const u8, pathspec
 }
 
 pub fn addToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8) !void {
+    const git = try exe_path.git(gpa, root_abs);
+    defer gpa.free(git);
     var attempt: usize = 0;
     while (attempt < index_add_attempts) : (attempt += 1) {
         if (attempt != 0) io.sleep(.fromMilliseconds(index_retry_ms), .awake) catch {};
         const result = std.process.run(gpa, io, .{
-            .argv = &.{ "git", "add", "--", rel },
+            .argv = &.{ git, "add", "--", rel },
             .cwd = .{ .path = root_abs },
             .stdout_limit = .limited(max_git_output),
         }) catch continue;
@@ -173,16 +182,19 @@ pub fn addToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
 }
 
 pub fn addAllToIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
-    return runOnPaths(gpa, io, root_abs, &.{ "git", "-c", "core.longpaths=true", "add", "--" }, paths);
+    return runOnPaths(gpa, io, root_abs, &.{ "-c", "core.longpaths=true", "add", "--" }, paths);
 }
 
 pub fn removeAllFromIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !void {
-    return runOnPaths(gpa, io, root_abs, &.{ "git", "-c", "core.longpaths=true", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, paths);
+    return runOnPaths(gpa, io, root_abs, &.{ "-c", "core.longpaths=true", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, paths);
 }
 
 fn runOnPaths(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const []const u8, paths: []const []const u8) !void {
+    const git = try exe_path.git(gpa, root_abs);
+    defer gpa.free(git);
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
+    try argv.append(gpa, git);
     try argv.appendSlice(gpa, command);
     try argv.appendSlice(gpa, paths);
     var attempt: usize = 0;
@@ -283,8 +295,10 @@ pub fn relativeUnder(gpa: Allocator, root: []const u8, file_abs: []const u8) ![]
 }
 
 pub fn gitToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8) ![]u8 {
+    const git = try exe_path.git(gpa, dir_abs);
+    defer gpa.free(git);
     const result = std.process.run(gpa, io, .{
-        .argv = &.{ "git", "rev-parse", "--show-toplevel" },
+        .argv = &.{ git, "rev-parse", "--show-toplevel" },
         .cwd = .{ .path = dir_abs },
         .stdout_limit = .limited(max_git_output),
     }) catch return error.GitFailed;

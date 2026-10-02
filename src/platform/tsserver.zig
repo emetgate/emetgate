@@ -1,5 +1,6 @@
 const std = @import("std");
 const sandbox = @import("sandbox.zig");
+const exe_path = @import("exe_path.zig");
 const registry = @import("../engine/lang/registry.zig");
 const rename = @import("../engine/rename.zig");
 
@@ -100,7 +101,12 @@ pub const Client = struct {
         const marker = try std.fmt.allocPrint(self.gpa, "{s}\\node_modules\\typescript\\package.json", .{self.root});
         defer self.gpa.free(marker);
         std.Io.Dir.cwd().access(self.io, marker, .{}) catch return error.TypeScriptNotInstalled;
-        const argv = [_][]const u8{ self.options.node, "-e", host_script, self.root };
+        const node = exe_path.resolve(self.gpa, self.options.node, self.root) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ExecutableNotFound, error.NameInvalid => return error.NodeNotFound,
+        };
+        defer self.gpa.free(node);
+        const argv = [_][]const u8{ node, "-e", host_script, self.root };
         self.service = sandbox.spawnService(self.gpa, &argv, self.root) catch |err| switch (err) {
             error.FileNotFound, error.InvalidExe => return error.NodeNotFound,
             else => |e| return e,
@@ -206,8 +212,10 @@ pub const Client = struct {
 };
 
 pub fn programFiles(gpa: Allocator, io: std.Io, root: []const u8) ![][]u8 {
+    const git = try exe_path.git(gpa, root);
+    defer gpa.free(git);
     const result = std.process.run(gpa, io, .{
-        .argv = &.{ "git", "ls-files", "-z" },
+        .argv = &.{ git, "ls-files", "-z" },
         .cwd = .{ .path = root },
         .stdout_limit = .limited(max_listing_bytes),
     }) catch return error.GitFailed;
