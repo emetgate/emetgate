@@ -235,6 +235,35 @@ def report():
     print(json.dumps({"choice": choice and choice["label"], "test": test, "gate": gate, "ledger_usd": round(base.spent(base.M2_LEDGER), 4)}, indent=2))
 
 
+def rank(label):
+    regions, files = base.load_files(label)
+    questions = [dict(q, set="seen") for q in base.seen_questions()] + [dict(q, set="dev") for q in part_questions("dev")]
+    items = []
+    gold_by_id = {}
+    for q in questions:
+        gold = base.gold_of(files, q)
+        gold_by_id[q["id"]] = gold
+        if gold:
+            items.append({"id": q["id"], "text": q["text"], "regions": sorted({g["region"] for g in gold}, key=lambda r: int(r[1:]))})
+    results = base.run_eval_set(label, items, ["--limit", "50"], "m2-rank")
+    rows = []
+    for q in questions:
+        result = results.get(q["id"])
+        by_region = {r["region"]: r for r in result["rankings"]} if result else {}
+        ranks = [base.gold_rank(by_region[g["region"]], g) if g["region"] in by_region else None for g in gold_by_id[q["id"]]]
+        best = min([r for r in ranks if r is not None], default=None)
+        rows.append({"set": q["set"], "id": q["id"], "best": best, "candidates": [by_region[r]["candidates"] for r in by_region]})
+    summary = {}
+    for part in ("seen", "dev"):
+        chunk = [r for r in rows if r["set"] == part]
+        summary[part] = {f"at{k}": sum(r["best"] is not None and r["best"] <= k for r in chunk) for k in (3, 5, 8)}
+        summary[part]["questions"] = len(chunk)
+        sizes = sorted(c for r in chunk for c in r["candidates"])
+        summary[part]["median_candidates"] = sizes[len(sizes) // 2] if sizes else None
+    base.write_json(os.path.join(base.label_dir(label), "m2-rank.json"), {"label": label, "summary": summary, "rows": rows})
+    print(json.dumps(summary))
+
+
 def region_lines(label):
     lines = {}
     heading = ""
@@ -278,7 +307,7 @@ def main():
     p = sub.add_parser("prepare")
     p.add_argument("label")
     p.add_argument("extra", nargs=argparse.REMAINDER)
-    for name in ("seen", "dev", "test", "score", "proxy"):
+    for name in ("seen", "dev", "test", "score", "proxy", "rank", "tokens"):
         c = sub.add_parser(name)
         c.add_argument("label")
     sub.add_parser("base")
@@ -299,6 +328,13 @@ def main():
         score(args.label)
     elif args.command == "proxy":
         proxy(args.label)
+    elif args.command == "rank":
+        rank(args.label)
+    elif args.command == "tokens":
+        tokens = map_tokens(args.label)
+        print(args.label, "map tokens", tokens)
+        if tokens is None or tokens > GATE_MAP_TOKENS:
+            raise SystemExit(1)
     elif args.command == "base":
         run_base()
     elif args.command == "choose":
