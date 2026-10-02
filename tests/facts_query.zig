@@ -35,8 +35,8 @@ const RepoFiles = struct {
 
     fn file(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
         const self: *RepoFiles = @ptrCast(@alignCast(ctx));
-        const bytes = self.repo.sources.get(path) orelse return error.Unavailable;
-        const profile = emetgate.lang_registry.forPath(path) orelse return error.Unavailable;
+        const bytes = self.repo.sources.get(path) orelse return error.Deleted;
+        const profile = emetgate.lang_registry.forPath(path) orelse return error.Deleted;
         return .{ .bytes = bytes, .profile = profile };
     }
 

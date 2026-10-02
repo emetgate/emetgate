@@ -8,13 +8,14 @@ const facts_query = @import("../engine/facts_query.zig");
 const facts_evidence = @import("../engine/facts_evidence.zig");
 const answer = @import("../engine/answer.zig");
 const facts_merkle = @import("../engine/facts_merkle.zig");
-const evidence = @import("../engine/evidence.zig");
+const evidence_api = @import("../engine/evidence.zig");
 const registry = @import("../engine/lang/registry.zig");
 const Profile = @import("../engine/lang/profile.zig").Profile;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const worker_pool = @import("worker_pool.zig");
 const io_seam = @import("io_seam.zig");
+const open_nowait = @import("open_nowait.zig");
 const fact_modules = @import("fact_modules.zig");
 const fact_file = @import("fact_file.zig");
 const shadow_root = @import("shadow_root.zig");
@@ -375,7 +376,7 @@ pub const Repo = struct {
         }, request);
     }
 
-    pub fn factStore(self: *Repo, arena: Allocator) !evidence.FactStore {
+    pub fn factStore(self: *Repo, arena: Allocator) !evidence_api.FactStore {
         const lines = try arena.create(SourceLines);
         lines.* = .{ .repo = self, .arena = arena };
         return .{
@@ -617,10 +618,16 @@ fn leafLess(_: void, a: answer.Leaf, b: answer.Leaf) bool {
     return std.mem.order(u8, a.path, b.path) == .lt;
 }
 
+pub fn readSource(repo: *const Repo, arena: Allocator, abs: []const u8) open_nowait.ReadError![]u8 {
+    return open_nowait.readFileAlloc(arena, abs, repo.options.max_file_bytes);
+}
+
 pub const SourceLines = struct {
     repo: *Repo,
     arena: Allocator,
-    files: std.StringHashMapUnmanaged(?[]const u8) = .empty,
+    files: std.StringArrayHashMapUnmanaged(Cached) = .empty,
+
+    pub const Cached = union(enum) { bytes: []const u8, changed: []const u8, deleted, too_large, unreadable };
 
     pub fn source(self: *SourceLines) facts_evidence.Source {
         return .{ .ctx = self, .fileFn = fileOf };
@@ -628,29 +635,33 @@ pub const SourceLines = struct {
 
     fn fileOf(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
         const self: *SourceLines = @ptrCast(@alignCast(ctx));
-        const bytes = (try self.bytesOf(path)) orelse return error.Unavailable;
-        const id = self.repo.store.fileId(path) orelse return error.Unavailable;
-        const profile = self.repo.store.file(id).profile orelse return error.Unavailable;
-        return .{ .bytes = bytes, .profile = profile };
-    }
-
-    fn bytesOf(self: *SourceLines, path: []const u8) facts_evidence.SourceError!?[]const u8 {
-        if (self.files.get(path)) |cached| return cached;
-        const id = self.repo.store.fileId(path) orelse return null;
-        const abs = try std.fmt.allocPrint(self.arena, "{s}\\{s}", .{ self.repo.options.root_abs, path });
-        const bytes = self.repo.fs.readFile(abs, self.arena, self.repo.options.max_file_bytes) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {
-                try self.files.put(self.arena, path, null);
-                return null;
-            },
+        const id = self.repo.store.fileId(path) orelse return error.Deleted;
+        const profile = self.repo.store.file(id).profile orelse return error.Deleted;
+        const cached = self.files.get(path) orelse blk: {
+            const loaded = try self.load(path, id);
+            try self.files.put(self.arena, path, loaded);
+            break :blk loaded;
         };
-        const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash);
-        const kept: ?[]const u8 = if (fresh) bytes else null;
-        try self.files.put(self.arena, path, kept);
-        return kept;
+        return switch (cached) {
+            .bytes => |bytes| .{ .bytes = bytes, .profile = profile },
+            .changed => error.Changed,
+            .deleted => error.Deleted,
+            .too_large => error.TooLarge,
+            .unreadable => error.Unreadable,
+        };
     }
 
+    fn load(self: *SourceLines, path: []const u8, id: FileId) Allocator.Error!Cached {
+        const abs = try std.fmt.allocPrint(self.arena, "{s}\\{s}", .{ self.repo.options.root_abs, path });
+        const bytes = readSource(self.repo, self.arena, abs) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.FileNotFound, error.IsDir => .deleted,
+            error.StreamTooLong => .too_large,
+            error.FileBusy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,
+        };
+        if (!std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash)) return .{ .changed = bytes };
+        return .{ .bytes = bytes };
+    }
 };
 
 fn sameStamp(a: Stamp, b: Stamp) bool {

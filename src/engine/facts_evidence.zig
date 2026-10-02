@@ -16,7 +16,7 @@ pub const min_budget: usize = 1_000;
 pub const max_code_chars: usize = 160;
 const reserve: usize = 520;
 
-pub const SourceError = error{ OutOfMemory, Unavailable };
+pub const SourceError = error{ OutOfMemory, Changed, Deleted, TooLarge, Unreadable };
 
 pub const File = struct {
     bytes: []const u8,
@@ -86,7 +86,7 @@ const Renderer = struct {
         if (self.files.get(path)) |cached| return cached;
         const got = self.source.file(path) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.Unavailable => {
+            error.Changed, error.Deleted, error.TooLarge, error.Unreadable => {
                 try self.files.put(self.arena, path, null);
                 return null;
             },

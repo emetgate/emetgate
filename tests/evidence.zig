@@ -10,13 +10,14 @@ const testing = std.testing;
 
 const RepoFiles = struct {
     repo: *Repo,
-    gone: []const u8 = "",
+    failing: []const u8 = "",
+    failure: facts_evidence.SourceError = error.Deleted,
 
     fn file(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
         const self: *RepoFiles = @ptrCast(@alignCast(ctx));
-        if (std.mem.eql(u8, path, self.gone)) return error.Unavailable;
-        const bytes = self.repo.sources.get(path) orelse return error.Unavailable;
-        const profile = emetgate.lang_registry.forPath(path) orelse return error.Unavailable;
+        if (std.mem.eql(u8, path, self.failing)) return self.failure;
+        const bytes = self.repo.sources.get(path) orelse return error.Deleted;
+        const profile = emetgate.lang_registry.forPath(path) orelse return error.Deleted;
         return .{ .bytes = bytes, .profile = profile };
     }
 
@@ -303,19 +304,61 @@ test "evidence: a line too long for the evidence is cut with the number of hidde
     try expectLines(text, &.{ " ... (715 more characters on this line)\n", "\na.ts:3    return s;\n" });
 }
 
-test "evidence: a target whose file changed after the snapshot is named, never shown, and the answer is partial" {
+fn askFailing(f: *Fixture, failure: facts_evidence.SourceError) !evidence.EvidenceAnswer {
+    _ = try f.repo.put("a.ts", "export function f() {\n  return 1;\n}\n");
+    try f.repo.linkAll();
+    f.files.failing = "a.ts";
+    f.files.failure = failure;
+    return f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+}
+
+test "evidence: a target whose file changed after the snapshot is named, never shown, and the answer is partial with the change named" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    _ = try f.repo.put("a.ts", "export function f() {\n  return 1;\n}\n");
-    try f.repo.linkAll();
-    f.files.gone = "a.ts";
-    const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    const result = try askFailing(&f, error.Changed);
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.unavailable_note ++ "  [target f ", "\nPartial because: 1 files changed after the snapshot.\n" });
+    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.changed_note ++ "  [target f ", "\nPartial because: 1 files changed after the snapshot and could not be refreshed.\n" });
     try expectNoLine(text, "return 1;");
-    try testing.expect(std.mem.indexOf(u8, lastLine(text), "1 vanished") != null);
+    try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 changed_since_snapshot") != null);
+}
+
+test "evidence: a target whose file was deleted is named, never shown, and the answer is partial with the file deleted" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const result = try askFailing(&f, error.Deleted);
+    try testing.expectEqual(answer.Status.partial, result.status());
+    const text = try textOf(result);
+    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.deleted_note ++ "  [target f ", "\nPartial because: 1 files no longer exist.\n" });
+    try expectNoLine(text, "return 1;");
+    try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 deleted") != null);
+}
+
+test "evidence: a target whose file cannot be read is named, never shown, and the answer is partial with the file unreadable" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const result = try askFailing(&f, error.Unreadable);
+    try testing.expectEqual(answer.Status.partial, result.status());
+    const text = try textOf(result);
+    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.unreadable_note ++ "  [target f ", "\nPartial because: 1 files could not be read (locked or access denied).\n" });
+    try expectNoLine(text, "return 1;");
+    try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 unreadable") != null);
+}
+
+test "evidence: a target whose file grew over the size limit is excluded by the declared rule and the limit is named" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const result = try askFailing(&f, error.TooLarge);
+    try testing.expectEqual(answer.Status.complete, result.status());
+    const text = try textOf(result);
+    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.large_note ++ "  [target f ", "\nExcluded by rule: 1 files over the 1048576-byte size limit are not read.\n" });
+    try expectNoLine(text, "return 1;");
+    try expectNoLine(text, "Partial because");
+    try testing.expect(std.mem.endsWith(u8, lastLine(text), "; skipped 1 too_large"));
 }
 
 test "evidence: a call from one target to another target is kept when the caller does not fit" {

@@ -31,7 +31,10 @@ pub const cut_reserve: usize = 120;
 pub const max_call_lines: usize = 6;
 
 pub const open_note = "an edge not in this list does not mean there is none";
-pub const unavailable_note = "(not shown: the file changed after the snapshot or cannot be read)";
+pub const deleted_note = "(not shown: the file no longer exists)";
+pub const changed_note = "(not shown: the file changed after the snapshot)";
+pub const large_note = "(not shown: the file is over the size limit)";
+pub const unreadable_note = "(not shown: the file cannot be read)";
 
 const target_weight: f64 = 2.0;
 const call_weight: f64 = 0.5;
@@ -89,6 +92,7 @@ const Mode = enum { whole, spine, unavailable, dropped };
 const Plan = struct {
     subject: Subject,
     opened: ?Opened = null,
+    note: []const u8 = "",
     first: u32 = 0,
     last: u32 = 0,
     whole: usize = 0,
@@ -238,7 +242,7 @@ fn elisionLen(p: *const Plan, first: u32, last: u32) usize {
 }
 
 fn unavailableLen(p: *const Plan) usize {
-    return std.fmt.count("{s}:{d}  {s}  [target {s} {s}]", .{ p.subject.path, p.subject.line, unavailable_note, p.subject.qname, &shortHash(p.subject.hash) }) + 1;
+    return std.fmt.count("{s}:{d}  {s}  [target {s} {s}]", .{ p.subject.path, p.subject.line, p.note, p.subject.qname, &shortHash(p.subject.hash) }) + 1;
 }
 
 fn costOf(p: *const Plan, ranges: []const Range) usize {
@@ -269,7 +273,7 @@ const Builder = struct {
     unknown: std.ArrayList(Unknown) = .empty,
     seen_unknown: std.AutoHashMapUnmanaged(u64, void) = .empty,
     unread: std.StringArrayHashMapUnmanaged(answer.Reason) = .empty,
-    vanished: std.StringArrayHashMapUnmanaged(void) = .empty,
+    excluded: std.StringArrayHashMapUnmanaged(void) = .empty,
     drawn: std.StringArrayHashMapUnmanaged(void) = .empty,
     elided_files: std.StringArrayHashMapUnmanaged(void) = .empty,
     elided: std.ArrayList(Elided) = .empty,
@@ -285,17 +289,30 @@ const Builder = struct {
     fn open(self: *Builder, path: []const u8) !?Opened {
         try self.drawn.put(self.arena, path, {});
         if (self.files.get(path)) |cached| return cached;
-        const got = self.fs.source.file(path) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.Unavailable => {
-                try self.files.put(self.arena, path, null);
-                try self.vanished.put(self.arena, path, {});
-                return null;
-            },
+        const got = self.fs.source.file(path) catch |err| {
+            try self.files.put(self.arena, path, null);
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Changed => try self.unread.put(self.arena, path, .changed_since_snapshot),
+                error.Deleted => try self.unread.put(self.arena, path, .deleted),
+                error.Unreadable => try self.unread.put(self.arena, path, .unreadable),
+                error.TooLarge => try self.excluded.put(self.arena, path, {}),
+            }
+            return null;
         };
         const opened: Opened = .{ .file = got, .lines = try facts_spine.Lines.of(self.arena, got.bytes) };
         try self.files.put(self.arena, path, opened);
         return opened;
+    }
+
+    fn missingNote(self: *const Builder, path: []const u8) []const u8 {
+        if (self.excluded.contains(path)) return large_note;
+        const reason = self.unread.get(path) orelse return unreadable_note;
+        return switch (reason) {
+            .deleted => deleted_note,
+            .changed_since_snapshot => changed_note,
+            else => unreadable_note,
+        };
     }
 
     fn markElided(self: *Builder, path: []const u8, first: u32, last: u32) !void {
@@ -371,7 +388,7 @@ const Builder = struct {
     }
 
     fn code(self: *Builder, path: []const u8, line: u32) ![]const u8 {
-        const opened = (try self.open(path)) orelse return unavailable_note;
+        const opened = (try self.open(path)) orelse return self.missingNote(path);
         const raw = opened.lines.text(line) orelse return "(no such line)";
         const clipped = clipCode(std.mem.trimStart(u8, raw, " \t"));
         if (clipped.more == 0) return clipped.text;
@@ -468,7 +485,10 @@ const Builder = struct {
 
     fn plan(self: *Builder, s: Subject) !Plan {
         var p: Plan = .{ .subject = s };
-        const opened = (try self.open(s.path)) orelse return p;
+        const opened = (try self.open(s.path)) orelse {
+            p.note = self.missingNote(s.path);
+            return p;
+        };
         p.opened = opened;
         p.first = opened.lines.lineAt(s.span.start);
         p.last = opened.lines.lineAt(if (s.span.end > s.span.start) s.span.end - 1 else s.span.start);
@@ -628,7 +648,7 @@ const Builder = struct {
                 self.cut_targets += 1;
                 try self.markCut(p.subject.path);
             },
-            .unavailable => try out.append(self.arena, try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [target {s} {s}]", .{ p.subject.path, p.subject.line, unavailable_note, p.subject.qname, &shortHash(p.subject.hash) })),
+            .unavailable => try out.append(self.arena, try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [target {s} {s}]", .{ p.subject.path, p.subject.line, p.note, p.subject.qname, &shortHash(p.subject.hash) })),
             .whole => {
                 var n = p.first;
                 while (n <= p.last) : (n += 1) try out.append(self.arena, try self.lineText(p, n));
@@ -669,13 +689,11 @@ const Builder = struct {
         const listed: u32 = if (wholeRepository(intent)) listedFiles(self.fs.store) else @intCast(self.drawn.count());
         var missing: std.ArrayList(answer.Missing) = .empty;
         var file_level: std.StringArrayHashMapUnmanaged(void) = .empty;
+        for (self.excluded.keys()) |path| try file_level.put(self.arena, path, {});
+        const excluded_files: u32 = @intCast(file_level.count());
         for (self.unread.keys(), self.unread.values()) |path, reason| {
-            try missing.append(self.arena, .{ .path = path, .reason = reason });
-            try file_level.put(self.arena, path, {});
-        }
-        for (self.vanished.keys()) |path| {
             if (file_level.contains(path)) continue;
-            try missing.append(self.arena, .{ .path = path, .reason = .vanished });
+            try missing.append(self.arena, .{ .path = path, .reason = reason });
             try file_level.put(self.arena, path, {});
         }
         var listed_unknown: std.ArrayList(Unknown) = .empty;
@@ -703,9 +721,11 @@ const Builder = struct {
             .flow => self.callers.items.len + self.callees.items.len,
             .decides, .explain, .where_defined => self.subjects.items.len,
         };
+        var excluded = answer.Exclusions.initFill(0);
+        excluded.set(.too_large, excluded_files);
         const cert: answer.Certificate = .{
             .snapshot = self.fs.snapshot,
-            .scope = .{ .listed = listed, .evaluated = listed -| (file_missing + budget_files) },
+            .scope = .{ .listed = listed, .excluded = excluded, .evaluated = listed -| (file_missing + budget_files) },
             .semantics = .{ .facts = .{ .relation = @tagName(intent), .subject = names.written(), .resolved = @intCast(resolved), .unresolved = @intCast(listed_unknown.items.len) } },
             .budgets = budgets.items,
         };
@@ -724,7 +744,14 @@ const Builder = struct {
         return EvidenceAnswer.finish(block, cert, missing.items);
     }
 
-    fn reasonLine(self: *Builder, result: EvidenceAnswer) !?[]const u8 {
+    fn exclusionLine(self: *Builder, result: EvidenceAnswer) !?[]const u8 {
+        const cert = result.certificate() orelse return null;
+        const large = cert.scope.excluded.get(.too_large);
+        if (large == 0) return null;
+        return try std.fmt.allocPrint(self.arena, "Excluded by rule: {d} files over the {d}-byte size limit are not read.", .{ large, self.fs.max_file_bytes });
+    }
+
+    fn reasonLine(self: *Builder, result: EvidenceAnswer, room: usize) !?[]const u8 {
         const partial = switch (result) {
             .partial => |p| p,
             .complete, .refused => return null,
@@ -742,13 +769,14 @@ const Builder = struct {
         if (by_rule.get(.own_body) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} calls in the target body could not be resolved", .{by_rule.get(.own_body)}));
         if (by_reason.get(.unclassified) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files that name it were not analyzed (another language or syntax errors)", .{by_reason.get(.unclassified)}));
         if (by_reason.get(.too_large) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files over the size limit were not read", .{by_reason.get(.too_large)}));
-        if (by_reason.get(.unreadable) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files could not be read", .{by_reason.get(.unreadable)}));
-        if (by_reason.get(.vanished) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files changed after the snapshot", .{by_reason.get(.vanished)}));
+        if (by_reason.get(.unreadable) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files could not be read (locked or access denied)", .{by_reason.get(.unreadable)}));
+        if (by_reason.get(.deleted) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files no longer exist", .{by_reason.get(.deleted)}));
+        if (by_reason.get(.changed_since_snapshot) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files changed after the snapshot and could not be refreshed", .{by_reason.get(.changed_since_snapshot)}));
         if (by_reason.get(.budget) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files not shown in full within the budget, each gap marked", .{by_reason.get(.budget)}));
         var w: Writer.Allocating = .init(self.arena);
         try w.writer.writeAll("Partial because:");
         for (parts.items, 0..) |part, i| {
-            if (w.written().len + part.len + 3 > reason_reserve - 12) {
+            if (w.written().len + part.len + 3 > room -| 12) {
                 try w.writer.writeAll("; and more");
                 break;
             }
@@ -827,7 +855,8 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
     const note = try b.cutNote();
 
     var result = try b.certify(head.len + 1 + body_used + rel.used + status_reserve + reason_reserve + cut_reserve);
-    const reason = try b.reasonLine(result);
+    const exclusion = try b.exclusionLine(result);
+    const reason = try b.reasonLine(result, reason_reserve -| (if (exclusion) |line| line.len + 1 else 0));
     var status: Writer.Allocating = .init(arena);
     try result.writeStatus(&status.writer, b.statusCount(), b.statusNoun());
     if (result == .partial and listsEdges(request.intent)) try status.writer.print("; {s}", .{open_note});
@@ -848,6 +877,10 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
         try text.writer.writeByte('\n');
     }
     if (reason) |line| {
+        try text.writer.writeAll(line);
+        try text.writer.writeByte('\n');
+    }
+    if (exclusion) |line| {
         try text.writer.writeAll(line);
         try text.writer.writeByte('\n');
     }
