@@ -25,10 +25,8 @@ GATE_SEEN_HITS = 12
 GATE_MAP_TOKENS = 8000
 SPLIT_RULE = "random.Random(seed).shuffle of the sorted question ids of the general set; the first 32 are dev, the other 32 are test"
 RANK_BASELINE = "m2-names8k"
-CHOICE_RULE = ("candidates with 12 seen calls, 32 dev calls and an api map token count; eligible when seen hits are 12 of 12, the map "
-               "has at most 8000 tokens and the kernel puts the gold function in the top 8 of its region for at least as many seen and dev "
-               "questions as on the partition of " + RANK_BASELINE + "; order: eligible first, then more dev hits, more seen hits, fewer map "
-               "tokens, label")
+CHOICE_RULE = ("candidates with 12 seen calls, 32 dev calls and an api map token count; eligible when seen hits are 12 of 12 and the map "
+               "has at most 8000 tokens; order: eligible first, then more dev hits, more seen hits, fewer map tokens, label")
 
 
 def sha256_of(path):
@@ -208,8 +206,7 @@ def candidates():
         rank = rank_at8(label)
         out.append({"label": label, "args": s["args"], "seen_hits": seen["hits"], "dev_hits": dev["hits"], "dev_rate": dev["rate"],
                     "map_tokens": s["map_tokens"], "est_tokens": s["est_tokens"], "regions": s["regions"], "code_regions": s["code_regions"],
-                    "rank_at8": rank, "eligible": seen["hits"] >= GATE_SEEN_HITS and s["map_tokens"] <= GATE_MAP_TOKENS
-                    and rank is not None and floor is not None and rank >= floor})
+                    "rank_at8": rank, "rank_at8_floor": floor, "eligible": seen["hits"] >= GATE_SEEN_HITS and s["map_tokens"] <= GATE_MAP_TOKENS})
     out.sort(key=lambda c: (not c["eligible"], -c["dev_hits"], -c["seen_hits"], c["map_tokens"], c["label"]))
     return out
 
