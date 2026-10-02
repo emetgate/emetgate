@@ -49,6 +49,9 @@ const usage =
     \\       emetgate map region <r1> [--offset <n>] [--budget <chars>] [--no-store]
     \\       emetgate map files [--no-store]
     \\       emetgate map bench [--builds <n>] [--samples <n>] [--updates <n>] [--seed <n>] [--no-store]
+    \\       emetgate map rank <r1> --question <text> [--limit <n>] [--no-store]
+    \\       emetgate map explore <r1,r2,r3> --question <text> [--k <n>] [--list <n>] [--explore-budget <chars>] [--no-store]
+    \\       emetgate map eval --set <file.json> [--limit <n>] [--k <n>] [--list <n>] [--explore-budget <chars>] [--with-text] [--no-store]
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.

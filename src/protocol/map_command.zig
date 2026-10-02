@@ -7,12 +7,15 @@ const facts_command = @import("facts_command.zig");
 const map = @import("../engine/map.zig");
 const map_listing = @import("../engine/map_listing.zig");
 const map_delta = @import("../engine/map_delta.zig");
+const map_region_rank = @import("../engine/map_region_rank.zig");
+const map_explore = @import("../engine/map_explore.zig");
+const question_lexicon = @import("../engine/question_lexicon.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
-pub const Command = enum { build, region, files, bench };
+pub const Command = enum { build, region, files, bench, rank, explore, eval };
 
 pub const Options = struct {
     command: Command,
@@ -27,6 +30,15 @@ pub const Options = struct {
     samples: usize = 200,
     builds: usize = 15,
     updates: usize = 50,
+    regions: [map_explore.max_regions]u32 = .{ 0, 0, 0 },
+    region_count: usize = 0,
+    question: ?[]const u8 = null,
+    set: ?[]const u8 = null,
+    limit: usize = 20,
+    k: u32 = 3,
+    list: u32 = 8,
+    explore_budget: usize = map_explore.default_budget,
+    with_text: bool = false,
 };
 
 fn number(comptime T: type, text: []const u8) ?T {
@@ -48,6 +60,16 @@ pub fn regionId(text: []const u8) ?u32 {
     return n - 1;
 }
 
+fn regionList(text: []const u8, options: *Options) bool {
+    var it = std.mem.splitScalar(u8, text, ',');
+    while (it.next()) |piece| {
+        if (options.region_count == options.regions.len) return false;
+        options.regions[options.region_count] = regionId(std.mem.trim(u8, piece, " ")) orelse return false;
+        options.region_count += 1;
+    }
+    return options.region_count != 0;
+}
+
 pub fn parse(args: []const [:0]const u8) ?Options {
     if (args.len == 0) return null;
     var options: Options = .{ .command = std.meta.stringToEnum(Command, args[0]) orelse return null };
@@ -62,9 +84,22 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.map.list_children = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--with-text")) {
+            options.with_text = true;
+            continue;
+        }
         if (!std.mem.startsWith(u8, arg, "--")) {
-            if (options.command != .region or options.region != null) return null;
-            options.region = regionId(arg) orelse return null;
+            switch (options.command) {
+                .region => {
+                    if (options.region != null) return null;
+                    options.region = regionId(arg) orelse return null;
+                },
+                .rank, .explore => {
+                    if (options.region_count != 0) return null;
+                    if (!regionList(arg, &options)) return null;
+                },
+                else => return null,
+            }
             continue;
         }
         i += 1;
@@ -103,9 +138,29 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             if (options.builds == 0) return null;
         } else if (std.mem.eql(u8, arg, "--updates")) {
             options.updates = number(usize, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--question")) {
+            options.question = value;
+        } else if (std.mem.eql(u8, arg, "--set")) {
+            options.set = value;
+        } else if (std.mem.eql(u8, arg, "--limit")) {
+            options.limit = number(usize, value) orelse return null;
+            if (options.limit == 0) return null;
+        } else if (std.mem.eql(u8, arg, "--k")) {
+            options.k = number(u32, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--list")) {
+            options.list = number(u32, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--explore-budget")) {
+            options.explore_budget = number(usize, value) orelse return null;
+            if (options.explore_budget < map_explore.min_budget) return null;
         } else return null;
     }
-    if (options.command == .region and options.region == null) return null;
+    switch (options.command) {
+        .region => if (options.region == null) return null,
+        .rank => if (options.region_count != 1 or options.question == null) return null,
+        .explore => if (options.region_count == 0 or options.question == null) return null,
+        .eval => if (options.set == null) return null,
+        .build, .files, .bench => {},
+    }
     return options;
 }
 
@@ -168,8 +223,155 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
             try writeFiles(arena, out, built);
             return 0;
         },
+        .rank => {
+            const lex = try question_lexicon.Lexicon.parse(gpa, question_lexicon.default_text);
+            defer lex.deinit();
+            const terms = try map_region_rank.Terms.ofQuestion(arena, lex, options.question.?);
+            const region = options.regions[0];
+            if (region >= built.regions.len) {
+                try out.print("refused: UnknownRegion (no region r{d}; the map has r1 to r{d})\n", .{ region + 1, built.regions.len });
+                return 2;
+            }
+            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, &built, region, &terms, .{});
+            try out.print("r{d} {s}: {d} functions in {d} files, {d} match\n", .{ region + 1, built.regions[region].path, ranked.candidates, ranked.files, ranked.matched });
+            for (ranked.hits[0..@min(options.limit, ranked.hits.len)], 0..) |hit, i| {
+                try out.print("{d:>3} {d:.3} {s}  {s}:{d}\n", .{ i + 1, hit.score, hit.qname, hit.path, hit.line });
+            }
+            return 0;
+        },
+        .explore => {
+            const lex = try question_lexicon.Lexicon.parse(gpa, question_lexicon.default_text);
+            defer lex.deinit();
+            const terms = try map_region_rank.Terms.ofQuestion(arena, lex, options.question.?);
+            const fs = try repo.factStore(arena);
+            const explored = try map_explore.explore(&fs, &built, options.regions[0..options.region_count], &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget });
+            switch (explored) {
+                .complete => |c| try out.writeAll(c.value.text),
+                .partial => |p| try out.writeAll(p.value.text),
+                .refused => {
+                    try explored.writeStatus(out, 0, "functions shown");
+                    try out.writeByte('\n');
+                    return 2;
+                },
+            }
+            return 0;
+        },
+        .eval => return evaluate(gpa, io, seam.clock, repo, &built, options, out),
         .bench => unreachable,
     }
+}
+
+const EvalItem = struct {
+    id: []const u8,
+    text: []const u8,
+    regions: []const []const u8 = &.{},
+};
+
+const EvalSet = struct {
+    questions: []const EvalItem,
+};
+
+fn writeExplored(js: *std.json.Stringify, arena: Allocator, explored: map_explore.ExploreAnswer, with_text: bool) !void {
+    try js.objectField("explore_status");
+    try js.write(@tagName(explored.status()));
+    const value = switch (explored) {
+        .complete => |c| c.value,
+        .partial => |p| p.value,
+        .refused => return,
+    };
+    try js.objectField("explore_chars");
+    try js.write(value.text.len);
+    try js.objectField("explore_level");
+    try js.write(@tagName(value.level));
+    try js.objectField("shown");
+    try js.beginArray();
+    for (value.shown) |s| {
+        try js.beginArray();
+        try js.write(try std.fmt.allocPrint(arena, "r{d}", .{s.region + 1}));
+        try js.write(s.rank + 1);
+        try js.write(s.qname);
+        try js.endArray();
+    }
+    try js.endArray();
+    if (with_text) {
+        try js.objectField("explore_text");
+        try js.write(value.text);
+    }
+}
+
+fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.Repo, built: *const map.Map, options: Options, out: *Writer) !u8 {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, options.set.?, gpa, .limited(64 * 1024 * 1024));
+    defer gpa.free(bytes);
+    const parsed = try std.json.parseFromSlice(EvalSet, gpa, bytes, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const lex = try question_lexicon.Lexicon.parse(gpa, question_lexicon.default_text);
+    defer lex.deinit();
+    for (parsed.value.questions) |item| {
+        var scratch = std.heap.ArenaAllocator.init(gpa);
+        defer scratch.deinit();
+        const arena = scratch.allocator();
+        const terms = try map_region_rank.Terms.ofQuestion(arena, lex, item.text);
+        var ids: std.ArrayList(map.RegionId) = .empty;
+        for (item.regions) |text| {
+            const id = regionId(text) orelse continue;
+            if (id < built.regions.len) try ids.append(arena, id);
+        }
+        var js: std.json.Stringify = .{ .writer = out };
+        try js.beginObject();
+        try js.objectField("id");
+        try js.write(item.id);
+        try js.objectField("concepts");
+        try js.beginArray();
+        for (terms.concepts) |c| {
+            try js.beginArray();
+            for (c.alternatives) |alt| try js.write(alt);
+            try js.endArray();
+        }
+        try js.endArray();
+        try js.objectField("rankings");
+        try js.beginArray();
+        for (ids.items) |id| {
+            const started = clock.monotonic();
+            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, built, id, &terms, .{});
+            const spent = nanosSince(clock, started);
+            try js.beginObject();
+            try js.objectField("region");
+            try js.write(try std.fmt.allocPrint(arena, "r{d}", .{id + 1}));
+            try js.objectField("candidates");
+            try js.write(ranked.candidates);
+            try js.objectField("matched");
+            try js.write(ranked.matched);
+            try js.objectField("files");
+            try js.write(ranked.files);
+            try js.objectField("rank_ms");
+            try js.write(@as(f64, @floatFromInt(spent)) / 1e6);
+            try js.objectField("hits");
+            try js.beginArray();
+            for (ranked.hits[0..@min(options.limit, ranked.hits.len)]) |hit| {
+                try js.beginArray();
+                try js.write(hit.qname);
+                try js.write(hit.path);
+                try js.write(hit.line);
+                try js.write(hit.score);
+                try js.endArray();
+            }
+            try js.endArray();
+            try js.endObject();
+        }
+        try js.endArray();
+        if (ids.items.len != 0 and ids.items.len <= map_explore.max_regions) {
+            const fs = try repo.factStore(arena);
+            const started = clock.monotonic();
+            const explored = try map_explore.explore(&fs, built, ids.items, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget });
+            const spent = nanosSince(clock, started);
+            try js.objectField("explore_ms");
+            try js.write(@as(f64, @floatFromInt(spent)) / 1e6);
+            try writeExplored(&js, arena, explored, options.with_text);
+        }
+        try js.endObject();
+        try out.writeByte('\n');
+    }
+    return 0;
 }
 
 fn writeStats(out: *Writer, built: map.Map, refresh_ns: u64, build_ns: u64) !void {
