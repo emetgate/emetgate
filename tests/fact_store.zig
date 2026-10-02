@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const emetgate = @import("emetgate");
 const fact_store = emetgate.fact_store;
 const fact_file = emetgate.fact_file;
+const facts = emetgate.facts;
 const facts_query = emetgate.facts_query;
 const facts_evidence = emetgate.facts_evidence;
 const evidence = emetgate.evidence;
@@ -492,4 +493,63 @@ test "fact store: evidence of a target whose file another handle holds is partia
     try testing.expect(std.mem.indexOf(u8, text, "\nPartial because: 1 files could not be read (locked or access denied).\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "missing 1 unreadable") != null);
     try testing.expect(elapsed < 50 * std.time.ns_per_ms);
+}
+
+fn sameOutline(a: []const facts.Outline, b: []const facts.Outline) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x.start != y.start or x.end != y.end or x.parent != y.parent) return false;
+        if (@as(u8, @bitCast(x.kind)) != @as(u8, @bitCast(y.kind))) return false;
+    }
+    return true;
+}
+
+fn sameTests(a: []const facts.TestBlock, b: []const facts.TestBlock) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x.start != y.start or x.end != y.end or x.line != y.line or x.parent != y.parent) return false;
+        if (!std.mem.eql(u8, x.title, y.title)) return false;
+    }
+    return true;
+}
+
+test "fact store: a saved store opens again with every outline node, test block and body start it was saved with" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f(x: number) {\n  if (x > 1) {\n    // the larger one\n    return 2;\n  }\n  return x;\n}\n" },
+        .{ .path = "a.test.ts", .data = "import { f } from \"./a\";\ndescribe(\"f\", () => {\n  it(\"returns two\", () => {\n    expect(f(2)).toBe(2);\n  });\n});\n" },
+    });
+    defer fixture.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const keep = arena.allocator();
+    var outline: []const facts.Outline = &.{};
+    var blocks: []facts.TestBlock = &.{};
+    var bodies: []u32 = &.{};
+    {
+        const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+        defer repo.deinit();
+        _ = try repo.refresh();
+        const source = repo.store.file(repo.store.fileId("a.ts").?).facts;
+        outline = try keep.dupe(facts.Outline, source.outline);
+        bodies = try keep.alloc(u32, source.defs.len);
+        for (source.defs, bodies) |d, *slot| slot.* = d.body_start;
+        const suite = repo.store.file(repo.store.fileId("a.test.ts").?).facts;
+        blocks = try keep.dupe(facts.TestBlock, suite.tests);
+        for (blocks) |*b| b.title = try keep.dupe(u8, b.title);
+    }
+    try testing.expect(outline.len >= 3);
+    try testing.expectEqual(@as(usize, 2), blocks.len);
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    try testing.expectEqual(fact_store.Load.loaded, repo.load);
+    const report = try repo.refresh();
+    try testing.expectEqual(@as(usize, 0), report.extracted);
+    const source = repo.store.file(repo.store.fileId("a.ts").?).facts;
+    try testing.expect(sameOutline(outline, source.outline));
+    try testing.expectEqual(bodies.len, source.defs.len);
+    for (bodies, source.defs) |body, d| try testing.expectEqual(body, d.body_start);
+    try testing.expect(bodies[1] != facts.none);
+    try testing.expect(sameTests(blocks, repo.store.file(repo.store.fileId("a.test.ts").?).facts.tests));
 }

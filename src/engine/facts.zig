@@ -99,6 +99,7 @@ pub const Def = struct {
     alpha: Hash,
     exported: bool = false,
     is_static: bool = false,
+    body_start: u32 = none,
 };
 
 pub const Ref = struct {
@@ -160,6 +161,29 @@ pub const Loose = struct {
     count: u32,
 };
 
+pub const OutlineKind = packed struct(u8) {
+    statement: bool = false,
+    branch: bool = false,
+    function: bool = false,
+    comment: bool = false,
+    reserved: u4 = 0,
+};
+
+pub const Outline = struct {
+    start: u32,
+    end: u32,
+    parent: u32,
+    kind: OutlineKind,
+};
+
+pub const TestBlock = struct {
+    title: []const u8,
+    start: u32,
+    end: u32,
+    line: u32,
+    parent: u32,
+};
+
 pub const FileFacts = struct {
     defs: []const Def,
     refs: []const Ref,
@@ -173,6 +197,8 @@ pub const FileFacts = struct {
     dynamic_reads: u32,
     module_mode: bool,
     parse_errors: bool,
+    outline: []const Outline = &.{},
+    tests: []const TestBlock = &.{},
 };
 
 const Copier = struct {
@@ -232,6 +258,11 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         slot.* = l;
         slot.name = try c.str(l.name);
     }
+    const tests = try arena.alloc(TestBlock, from.tests.len);
+    for (from.tests, tests) |t, *slot| {
+        slot.* = t;
+        slot.title = try c.str(t.title);
+    }
     c.strings.deinit(arena);
     return .{
         .defs = defs,
@@ -246,6 +277,8 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         .dynamic_reads = from.dynamic_reads,
         .module_mode = from.module_mode,
         .parse_errors = from.parse_errors,
+        .outline = try arena.dupe(Outline, from.outline),
+        .tests = tests,
     };
 }
 
