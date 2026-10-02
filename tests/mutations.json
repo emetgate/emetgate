@@ -8218,6 +8218,33 @@
       ]
     },
     {
+      "id": "SE1-removed-base-file-listed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (corpus.delta.isRemoved(id)) continue;\n            const p = view.path(id);\n            result.listed += 1;",
+      "to": "            const p = view.path(id);\n            result.listed += 1;",
+      "kills": [
+        "search answers: a file deleted or untracked after it was indexed is neither found nor evaluated, in the session, after a restart and when it changed while no session ran"
+      ]
+    },
+    {
+      "id": "SE2-removed-base-file-searched",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (corpus.delta.isRemoved(cid) or view.stateOf(cid) != .indexed) continue;",
+      "to": "            if (view.stateOf(cid) != .indexed) continue;",
+      "kills": [
+        "search answers: a file deleted or untracked after it was indexed is neither found nor evaluated, in the session, after a restart and when it changed while no session ran"
+      ]
+    },
+    {
+      "id": "SE3-untracked-base-file-kept-at-load",
+      "file": "src/platform/search_session.zig",
+      "from": "            if (!matched.isSet(id)) try self.delta.markRemoved(self.gpa, id, v.count(), v.path(id));",
+      "to": "            if (!matched.isSet(id)) continue;",
+      "kills": [
+        "search answers: a file deleted or untracked after it was indexed is neither found nor evaluated, in the session, after a restart and when it changed while no session ran"
+      ]
+    },
+    {
       "id": "LK6-read-file-waits-in-std",
       "file": "src/protocol/read_tools.zig",
       "from": "    const bytes = try open_nowait.readFileAlloc(gpa, place.abs, max_read_source_bytes);",
