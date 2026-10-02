@@ -7343,7 +7343,7 @@
     {
       "id": "EP5-working-directory-entry-searched",
       "file": "src/platform/exe_path.zig",
-      "from": "        if (search.cwd) |cwd| if (within(dir, cwd)) continue;",
+      "from": "        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, cwd_final)) continue;",
       "to": "        if (search.cwd) |cwd| _ = cwd;",
       "kills": [
         "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
@@ -7352,7 +7352,7 @@
     {
       "id": "EP6-repository-entry-searched",
       "file": "src/platform/exe_path.zig",
-      "from": "        if (search.repo_root) |root| if (within(dir, root)) continue;",
+      "from": "        if (search.repo_root) |root| if (inside(dir, dir_final, root, root_final)) continue;",
       "to": "        if (search.repo_root) |root| _ = root;",
       "kills": [
         "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
@@ -7365,6 +7365,15 @@
       "to": "        if (dir.len == 0) continue;",
       "kills": [
         "exe path: a name found nowhere else, a relative name and a relative path entry are refused"
+      ]
+    },
+    {
+      "id": "EP8-junction-entry-compared-as-text",
+      "file": "src/platform/exe_path.zig",
+      "from": "    if (dir_final != null and base_final != null) return withinWide(dir_final.?, base_final.?);",
+      "to": "    _ = dir_final;\n    _ = base_final;",
+      "kills": [
+        "exe path: a PATH entry that reaches the repository or the working directory through a junction is still skipped"
       ]
     }
   ]
