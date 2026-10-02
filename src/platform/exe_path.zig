@@ -55,12 +55,18 @@ pub fn resolveIn(gpa: Allocator, name: []const u8, search: Search) Error![]u8 {
     var scratch: std.ArrayList(u8) = .empty;
     defer scratch.deinit(gpa);
     const own_extension = hasListedExtension(name, search.pathext);
+    var cwd_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    var root_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    var entry_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    const cwd_final = if (search.cwd) |cwd| finalName(&cwd_buf, cwd) else null;
+    const root_final = if (search.repo_root) |root| finalName(&root_buf, root) else null;
     var entries = std.mem.tokenizeScalar(u8, search.path, ';');
     while (entries.next()) |raw| {
         const dir = std.mem.trimEnd(u8, std.mem.trim(u8, raw, " \""), "\\/");
         if (dir.len == 0 or !fullyQualified(dir)) continue;
-        if (search.cwd) |cwd| if (within(dir, cwd)) continue;
-        if (search.repo_root) |root| if (within(dir, root)) continue;
+        const dir_final = finalName(&entry_buf, dir);
+        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, cwd_final)) continue;
+        if (search.repo_root) |root| if (inside(dir, dir_final, root, root_final)) continue;
         if (own_extension) {
             if (try candidate(gpa, &scratch, dir, name, "")) |found| return found;
             continue;
@@ -99,6 +105,47 @@ fn hasListedExtension(name: []const u8, pathext: []const u8) bool {
 fn fullyQualified(path: []const u8) bool {
     if (path.len >= 3 and std.ascii.isAlphabetic(path[0]) and path[1] == ':' and (path[2] == '\\' or path[2] == '/')) return true;
     return path.len > 2 and (path[0] == '\\' or path[0] == '/') and (path[1] == '\\' or path[1] == '/');
+}
+
+pub fn finalName(buf: []u16, path: []const u8) ?[]const u16 {
+    var wide: [windows.PATH_MAX_WIDE:0]u16 = undefined;
+    const prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\");
+    const long = path.len >= long_from and std.ascii.isAlphabetic(path[0]) and path[1] == ':';
+    const offset: usize = if (long) prefix.len else 0;
+    if (offset + path.len >= wide.len) return null;
+    if (long) @memcpy(wide[0..prefix.len], prefix);
+    const len = std.unicode.wtf8ToWtf16Le(wide[offset..], path) catch return null;
+    for (wide[offset .. offset + len]) |*unit| {
+        if (unit.* == '/') unit.* = '\\';
+    }
+    wide[offset + len] = 0;
+    const handle = win.CreateFileW(&wide, win.file_read_attributes, win.file_share_all, null, win.open_existing, win.file_flag_backup_semantics, null);
+    if (handle == windows.INVALID_HANDLE_VALUE) return null;
+    defer windows.CloseHandle(handle);
+    const got = win.GetFinalPathNameByHandleW(handle, buf.ptr, @intCast(buf.len), win.volume_name_nt);
+    if (got == 0 or got >= buf.len) return null;
+    return buf[0..got];
+}
+
+const long_from: usize = 240;
+
+fn inside(dir: []const u8, dir_final: ?[]const u16, base: []const u8, base_final: ?[]const u16) bool {
+    if (dir_final != null and base_final != null) return withinWide(dir_final.?, base_final.?);
+    return within(dir, base);
+}
+
+fn withinWide(dir: []const u16, base_raw: []const u16) bool {
+    var base = base_raw;
+    while (base.len != 0 and base[base.len - 1] == '\\') base = base[0 .. base.len - 1];
+    if (base.len == 0 or dir.len < base.len) return false;
+    for (dir[0..base.len], base) |a, b| {
+        if (foldWide(a) != foldWide(b)) return false;
+    }
+    return dir.len == base.len or dir[base.len] == '\\';
+}
+
+fn foldWide(unit: u16) u16 {
+    return if (unit < 128) std.ascii.toLower(@intCast(unit)) else unit;
 }
 
 fn within(dir: []const u8, base_raw: []const u8) bool {
@@ -142,6 +189,14 @@ fn currentDirectory(arena: Allocator) Error!?[]u8 {
 const win = struct {
     const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
     const file_attribute_directory: windows.DWORD = 0x10;
+    const file_read_attributes: windows.DWORD = 0x0080;
+    const file_share_all: windows.DWORD = 0x00000007;
+    const open_existing: windows.DWORD = 3;
+    const file_flag_backup_semantics: windows.DWORD = 0x02000000;
+    const volume_name_nt: windows.DWORD = 0x2;
+
+    extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: windows.DWORD, share: windows.DWORD, security: ?*anyopaque, disposition: windows.DWORD, flags: windows.DWORD, template: ?windows.HANDLE) callconv(.winapi) windows.HANDLE;
+    extern "kernel32" fn GetFinalPathNameByHandleW(file: windows.HANDLE, buffer: [*]u16, size: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
 
     extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buffer: ?[*]u16, size: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetCurrentDirectoryW(size: windows.DWORD, buffer: [*]u16) callconv(.winapi) windows.DWORD;
@@ -180,7 +235,7 @@ test "exe path: only fully qualified PATH entries outside the working directory 
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var layout = try Layout.init();
     defer layout.deinit();
-    var b: [6][512]u8 = undefined;
+    var b: [6][2048]u8 = undefined;
     const tools = layout.join(&b[0], "tools");
     const later = layout.join(&b[1], "later");
     const repo_root = layout.join(&b[2], "repo");
@@ -205,7 +260,7 @@ test "exe path: only fully qualified PATH entries outside the working directory 
 }
 
 fn expectPath(dir: []const u8, file: []const u8, got: []const u8) !void {
-    var buf: [512]u8 = undefined;
+    var buf: [2048]u8 = undefined;
     const want = try std.fmt.bufPrint(&buf, "{s}\\{s}", .{ dir, file });
     if (std.ascii.eqlIgnoreCase(want, got)) return;
     std.debug.print("want {s}, got {s}\n", .{ want, got });
@@ -216,7 +271,7 @@ test "exe path: a name found nowhere else, a relative name and a relative path e
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var layout = try Layout.init();
     defer layout.deinit();
-    var b: [3][512]u8 = undefined;
+    var b: [3][2048]u8 = undefined;
     const repo_root = layout.join(&b[0], "repo");
     const work = layout.join(&b[1], "work");
     const only_inside = try std.fmt.bufPrint(&b[2], "{s};{s};.;bin", .{ repo_root, work });
@@ -228,9 +283,33 @@ test "exe path: a name found nowhere else, a relative name and a relative path e
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(cwd);
     try testing.expect(within(layout.root, cwd));
-    var rel_buf: [512]u8 = undefined;
+    var rel_buf: [2048]u8 = undefined;
     const relative = try std.fmt.bufPrint(&rel_buf, "{s}\\later", .{layout.root[cwd.len + 1 ..]});
     try testing.expectError(error.ExecutableNotFound, resolveIn(testing.allocator, "tool", .{ .path = relative }));
+}
+
+test "exe path: a PATH entry that reaches the repository or the working directory through a junction is still skipped" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var layout = try Layout.init();
+    defer layout.deinit();
+    var b: [6][2048]u8 = undefined;
+    const repo_root = layout.join(&b[0], "repo");
+    const later = layout.join(&b[1], "later");
+    const alias = layout.join(&b[2], "alias");
+    const work = layout.join(&b[3], "work");
+    const work_alias = layout.join(&b[4], "work_alias");
+    const cmd = try system(testing.allocator, "cmd.exe");
+    defer testing.allocator.free(cmd);
+    for ([_][2][]const u8{ .{ alias, repo_root }, .{ work_alias, work } }) |pair| {
+        const made = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ cmd, "/d", "/c", "mklink", "/J", pair[0], pair[1] } });
+        testing.allocator.free(made.stdout);
+        testing.allocator.free(made.stderr);
+        if (made.term != .exited or made.term.exited != 0) return error.SkipZigTest;
+    }
+    const path_list = try std.fmt.bufPrint(&b[5], "{s}\\bin;{s};{s}", .{ alias, work_alias, later });
+    const found = try resolveIn(testing.allocator, "tool", .{ .path = path_list, .cwd = work, .repo_root = repo_root });
+    defer testing.allocator.free(found);
+    try expectPath(later, "tool.exe", found);
 }
 
 test "exe path: the system directory gives cmd.exe and the live PATH gives a program it holds" {
