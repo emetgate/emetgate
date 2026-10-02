@@ -20,6 +20,11 @@ pub const Range = struct {
 
 pub const Error = Allocator.Error || error{UnsortedItems};
 
+pub const Wide = struct {
+    children: u32 = 0,
+    factor: u64 = 1,
+};
+
 const Child = struct {
     lo: u32,
     hi: u32,
@@ -32,6 +37,7 @@ const Partitioner = struct {
     items: []const Item,
     prefix: []const u64,
     capacity: u64,
+    wide: Wide = .{},
     out: std.ArrayList(Range) = .empty,
 
     fn weightOf(self: *const Partitioner, lo: u32, hi: u32) u64 {
@@ -87,7 +93,7 @@ const Partitioner = struct {
         return groups;
     }
 
-    fn balancedLimit(self: *const Partitioner, run: []const Child) u64 {
+    fn balancedLimit(self: *const Partitioner, run: []const Child, capacity: u64) u64 {
         var total: u64 = 0;
         var largest: u64 = 0;
         for (run) |c| {
@@ -95,9 +101,9 @@ const Partitioner = struct {
             total += w;
             largest = @max(largest, w);
         }
-        const groups = self.groupsWithin(run, self.capacity);
+        const groups = self.groupsWithin(run, capacity);
         var low = @max(largest, std.math.divCeil(u64, total, groups) catch unreachable);
-        var high = self.capacity;
+        var high = capacity;
         while (low < high) {
             const mid = low + (high - low) / 2;
             if (self.groupsWithin(run, mid) <= groups) high = mid else low = mid + 1;
@@ -105,9 +111,9 @@ const Partitioner = struct {
         return low;
     }
 
-    fn flush(self: *Partitioner, dir: []const u8, run: []const Child, all: usize) !void {
+    fn flush(self: *Partitioner, dir: []const u8, run: []const Child, all: usize, capacity: u64) !void {
         if (run.len == 0) return;
-        const limit = self.balancedLimit(run);
+        const limit = self.balancedLimit(run, capacity);
         var start: usize = 0;
         var weight: u64 = 0;
         var made: usize = 0;
@@ -126,13 +132,14 @@ const Partitioner = struct {
 
     fn split(self: *Partitioner, dir: []const u8, lo: u32, hi: u32) Error!void {
         const children = try self.childrenOf(dir, lo, hi);
+        const capacity = if (self.wide.children != 0 and children.len >= self.wide.children) self.capacity * @max(self.wide.factor, 1) else self.capacity;
         var run: std.ArrayList(Child) = .empty;
         for (children) |c| {
-            if (self.weightOf(c.lo, c.hi) <= self.capacity) {
+            if (self.weightOf(c.lo, c.hi) <= capacity) {
                 try run.append(self.arena, c);
                 continue;
             }
-            try self.flush(dir, run.items, children.len);
+            try self.flush(dir, run.items, children.len, capacity);
             run.clearRetainingCapacity();
             if (c.is_dir) {
                 try self.node(try std.mem.concat(self.arena, u8, &.{ dir, c.segment }), c.lo, c.hi);
@@ -140,7 +147,7 @@ const Partitioner = struct {
                 try self.emit(dir, &.{c}, false);
             }
         }
-        try self.flush(dir, run.items, children.len);
+        try self.flush(dir, run.items, children.len, capacity);
     }
 
     fn node(self: *Partitioner, dir: []const u8, lo: u32, hi: u32) Error!void {
@@ -164,6 +171,10 @@ const Partitioner = struct {
 };
 
 pub fn partition(arena: Allocator, items: []const Item, capacity: u64) Error![]Range {
+    return partitionWide(arena, items, capacity, .{});
+}
+
+pub fn partitionWide(arena: Allocator, items: []const Item, capacity: u64, wide: Wide) Error![]Range {
     var i: usize = 1;
     while (i < items.len) : (i += 1) {
         if (std.mem.order(u8, items[i - 1].path, items[i].path) != .lt) return error.UnsortedItems;
@@ -172,7 +183,7 @@ pub fn partition(arena: Allocator, items: []const Item, capacity: u64) Error![]R
     const prefix = try arena.alloc(u64, items.len + 1);
     prefix[0] = 0;
     for (items, 0..) |item, k| prefix[k + 1] = prefix[k] + item.weight;
-    var p: Partitioner = .{ .arena = arena, .items = items, .prefix = prefix, .capacity = @max(capacity, 1) };
+    var p: Partitioner = .{ .arena = arena, .items = items, .prefix = prefix, .capacity = @max(capacity, 1), .wide = wide };
     try p.node("", 0, @intCast(items.len));
     return p.out.items;
 }
@@ -299,6 +310,32 @@ test "map tree: unsorted or repeated paths are refused" {
     try testing.expectError(error.UnsortedItems, partition(arena_state.allocator(), &unsorted, 10));
     const repeated = itemsOf(&.{ .{ "a.ts", 1 }, .{ "a.ts", 1 } });
     try testing.expectError(error.UnsortedItems, partition(arena_state.allocator(), &repeated, 10));
+}
+
+test "map tree: a directory with many children packs them by a wider capacity and others keep theirs" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var paths: std.ArrayList(Item) = .empty;
+    for (0..12) |k| try paths.append(arena, .{ .path = try std.fmt.allocPrint(arena, "nodes/n{d:0>2}/main.ts", .{k}), .weight = 30 });
+    for (0..4) |k| try paths.append(arena, .{ .path = try std.fmt.allocPrint(arena, "z/f{d}.ts", .{k}), .weight = 40 });
+    const narrow = try partition(arena, paths.items, 100);
+    const wide = try partitionWide(arena, paths.items, 100, .{ .children = 10, .factor = 3 });
+    try expectCovers(paths.items, narrow);
+    try expectCovers(paths.items, wide);
+    var narrow_nodes: usize = 0;
+    var wide_nodes: usize = 0;
+    var narrow_z: usize = 0;
+    var wide_z: usize = 0;
+    for (narrow) |r| {
+        if (std.mem.startsWith(u8, r.dir, "nodes/")) narrow_nodes += 1 else narrow_z += 1;
+    }
+    for (wide) |r| {
+        if (std.mem.startsWith(u8, r.dir, "nodes/")) wide_nodes += 1 else wide_z += 1;
+        try testing.expect(r.weight <= 300);
+    }
+    try testing.expect(wide_nodes < narrow_nodes);
+    try testing.expectEqual(narrow_z, wide_z);
 }
 
 test "map tree: the common directory of two paths ends at a slash" {
