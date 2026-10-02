@@ -101,6 +101,7 @@ pub const wire = src.wire;
 pub const scan_command = src.scan_command;
 pub const rule_command = src.rule_command;
 pub const facts_command = src.facts_command;
+pub const map_command = src.map_command;
 pub const diagnostics = src.diagnostics;
 pub const server = src.server;
 pub const telemetry = src.telemetry;

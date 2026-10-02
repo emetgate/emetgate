@@ -99,6 +99,7 @@ pub const wire = @import("protocol/wire.zig");
 pub const scan_command = @import("protocol/scan_command.zig");
 pub const rule_command = @import("protocol/rule_command.zig");
 pub const facts_command = @import("protocol/facts_command.zig");
+pub const map_command = @import("protocol/map_command.zig");
 pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
 pub const telemetry = @import("protocol/telemetry.zig");
