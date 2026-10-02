@@ -379,6 +379,10 @@ pub const Repo = struct {
     pub fn factStore(self: *Repo, arena: Allocator) !evidence_api.FactStore {
         const lines = try arena.create(SourceLines);
         lines.* = .{ .repo = self, .arena = arena };
+        return self.viewWith(arena, lines);
+    }
+
+    fn viewWith(self: *Repo, arena: Allocator, lines: *SourceLines) evidence_api.FactStore {
         return .{
             .arena = arena,
             .store = &self.store,
@@ -387,6 +391,20 @@ pub const Repo = struct {
             .max_file_bytes = self.options.max_file_bytes,
             .largest_file_bytes = self.largestFile(),
         };
+    }
+
+    pub const max_refresh_rounds = 2;
+
+    pub fn evidence(self: *Repo, arena: Allocator, request: evidence_api.EvidenceRequest, budget: usize) !evidence_api.EvidenceAnswer {
+        const lines = try arena.create(SourceLines);
+        lines.* = .{ .repo = self, .arena = arena };
+        var round: usize = 0;
+        while (true) : (round += 1) {
+            const view = self.viewWith(arena, lines);
+            const result = evidence_api.evidence(&view, request, budget);
+            if (round == max_refresh_rounds) return result;
+            if (try lines.refreshChanged() == 0) return result;
+        }
     }
 
     pub fn updateSource(self: *Repo, rel: []const u8, bytes: []const u8) !Update {
@@ -661,6 +679,24 @@ pub const SourceLines = struct {
         };
         if (!std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash)) return .{ .changed = bytes };
         return .{ .bytes = bytes };
+    }
+
+    pub fn refreshChanged(self: *SourceLines) !usize {
+        var refreshed: usize = 0;
+        if (self.repo.workspace == null) return 0;
+        for (self.files.keys(), self.files.values()) |path, *cached| {
+            const bytes = switch (cached.*) {
+                .changed => |b| b,
+                else => continue,
+            };
+            _ = self.repo.updateSource(path, bytes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => continue,
+            };
+            cached.* = .{ .bytes = bytes };
+            refreshed += 1;
+        }
+        return refreshed;
     }
 };
 

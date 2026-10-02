@@ -224,10 +224,9 @@ fn evidenceCommand(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo,
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const store = try repo.factStore(arena);
     const request: evidence.EvidenceRequest = .{ .targets = options.targets[0..options.target_count], .intent = options.intent.?, .terms = options.terms[0..options.term_count] };
     const started = clock.monotonic();
-    const result = evidence.evidence(&store, request, options.budget);
+    const result = try repo.evidence(arena, request, options.budget);
     const elapsed_us = microsSince(clock, started);
     const block: ?evidence.EvidenceBlock = switch (result) {
         .complete => |c| c.value,
@@ -506,8 +505,7 @@ fn evidenceRuns(gpa: Allocator, arena: Allocator, clock: io_seam.Clock, repo: *f
             const terms = [_][]const u8{s.name};
             const request: evidence.EvidenceRequest = .{ .targets = if (pair) both[0..2] else both[0..1], .intent = intent, .terms = if (intent == .decides) terms[0..] else &.{} };
             const started = clock.monotonic();
-            const store = try repo.factStore(scratch.allocator());
-            const result = evidence.evidence(&store, request, evidence.default_budget);
+            const result = try repo.evidence(scratch.allocator(), request, evidence.default_budget);
             const ns: u64 = @intCast(clock.monotonic() - started);
             entry.ns[i] = ns;
             entry.note(ns, s);

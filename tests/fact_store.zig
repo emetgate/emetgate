@@ -1,9 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const emetgate = @import("emetgate");
 const fact_store = emetgate.fact_store;
 const fact_file = emetgate.fact_file;
 const facts_query = emetgate.facts_query;
 const facts_evidence = emetgate.facts_evidence;
+const evidence = emetgate.evidence;
 const io_seam = emetgate.io_seam;
 const answer = emetgate.answer;
 const test_util = emetgate.test_util;
@@ -358,4 +360,136 @@ test "fact store: evidence never shows a line of a file that changed after the s
     _ = try facts_evidence.render(arena.allocator(), &out.writer, result, lines.source(), facts_evidence.default_budget);
     try testing.expect(std.mem.indexOf(u8, out.written(), "return 7") == null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "source unavailable") != null);
+}
+
+fn evidenceText(result: evidence.EvidenceAnswer) ![]const u8 {
+    return switch (result) {
+        .complete => |c| c.value.text,
+        .partial => |p| p.value.text,
+        .refused => error.Refused,
+    };
+}
+
+test "fact store: the evidence view of a repository comes from one call and quotes the current lines" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const view = try repo.factStore(arena.allocator());
+    try testing.expectEqual(repo.snapshot().barrier, view.snapshot.barrier);
+    const result = evidence.evidence(&view, .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.complete, result.status());
+    try testing.expect(std.mem.indexOf(u8, try evidenceText(result), "\na.ts:2    return 1;\n") != null);
+}
+
+test "fact store: evidence refreshes a file changed after the snapshot and quotes its new lines" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const before = repo.snapshot().barrier;
+    try fixture.write(.{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return 7 + f(); }\n" });
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .callers }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.complete, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, "\nb.ts:2  export function g() { return 7 + f(); }  [call proven]\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "return f();") == null);
+    try testing.expect(repo.snapshot().barrier > before);
+}
+
+test "fact store: evidence of a target whose file was deleted on disk is partial and names the file deleted" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try fixture.tmp.dir.deleteFile(testing.io, "repo/a.ts");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.partial, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, evidence.deleted_note) != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\nPartial because: 1 files no longer exist.\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "missing 1 deleted") != null);
+}
+
+test "fact store: evidence of a target whose file grew over the size limit names the declared exclusion and its limit" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, 200);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try fixture.write(.{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" ++ ("// padding to pass the limit\n" ** 10) });
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.complete, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, evidence.large_note) != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\nExcluded by rule: 1 files over the 200-byte size limit are not read.\n") != null);
+    try testing.expect(std.mem.endsWith(u8, text, "; skipped 1 too_large"));
+}
+
+const kernel32 = struct {
+    extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: std.os.windows.DWORD, share: std.os.windows.DWORD, security: ?*anyopaque, disposition: std.os.windows.DWORD, flags: std.os.windows.DWORD, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
+};
+
+fn holdWithoutSharing(path: []const u8) !std.os.windows.HANDLE {
+    const wide = try std.unicode.wtf8ToWtf16LeAllocZ(testing.allocator, path);
+    defer testing.allocator.free(wide);
+    const handle = kernel32.CreateFileW(wide, 0x80000000, 0, null, 3, 0x80, null);
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.HoldFailed;
+    return handle;
+}
+
+test "fact store: evidence of a target whose file another handle holds is partial at once and names the file unreadable" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{fixture.root});
+    defer testing.allocator.free(abs);
+    const holder = try holdWithoutSharing(abs);
+    defer std.os.windows.CloseHandle(holder);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const started = std.Io.Clock.awake.now(testing.io).nanoseconds;
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    const elapsed = std.Io.Clock.awake.now(testing.io).nanoseconds - started;
+    try testing.expectEqual(answer.Status.partial, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, evidence.unreadable_note) != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\nPartial because: 1 files could not be read (locked or access denied).\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "missing 1 unreadable") != null);
+    try testing.expect(elapsed < 50 * std.time.ns_per_ms);
 }
