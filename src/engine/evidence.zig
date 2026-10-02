@@ -225,6 +225,12 @@ fn listedFiles(store: *const facts_store.Store) u32 {
     return n;
 }
 
+const TestKey = struct {
+    file: u32,
+    block: u32,
+    target: u32,
+};
+
 const Caps = struct {
     callers: usize,
     callees: usize,
@@ -324,7 +330,7 @@ const Builder = struct {
     callees: std.ArrayList(Site) = .empty,
     unknown: std.ArrayList(Unknown) = .empty,
     tests: std.ArrayList(TestLine) = .empty,
-    test_index: std.AutoHashMapUnmanaged(u64, usize) = .empty,
+    test_index: std.AutoHashMapUnmanaged(TestKey, usize) = .empty,
     seen_unknown: std.AutoHashMapUnmanaged(u64, void) = .empty,
     unread: std.StringArrayHashMapUnmanaged(answer.Reason) = .empty,
     excluded: std.StringArrayHashMapUnmanaged(void) = .empty,
@@ -540,11 +546,7 @@ const Builder = struct {
         const table = profile.facts orelse return;
         if (!facts_tests.isTestPath(table, state.path)) return;
         const block = facts_tests.innermost(state.facts.tests, start);
-        const block_key: u32 = block orelse facts.none;
-        var h = std.hash.Wyhash.init(file);
-        h.update(std.mem.asBytes(&block_key));
-        h.update(std.mem.asBytes(&target));
-        const entry = try self.test_index.getOrPut(self.arena, h.final());
+        const entry = try self.test_index.getOrPut(self.arena, .{ .file = file, .block = block orelse facts.none, .target = @intCast(target) });
         if (entry.found_existing) {
             const kept = &self.tests.items[entry.value_ptr.*];
             kept.references += 1;
