@@ -1,0 +1,709 @@
+fold ç c
+fold Ç c
+fold ğ g
+fold Ğ g
+fold ı i
+fold İ i
+fold ö o
+fold Ö o
+fold ş s
+fold Ş s
+fold ü u
+fold Ü u
+fold â a
+fold Â a
+fold î i
+fold Î i
+fold û u
+fold Û u
+soften g k
+soften b p
+soften d t
+compound i u si su
+pathext ts tsx js jsx mjs cjs mts cts zig json md py go rs java vue svelte
+suffix n ler lar leri lari lerin larin lerde larda lerden lardan lere lara lerle larla
+suffix n de da te ta nde nda den dan ten tan nden ndan
+suffix n e a ye ya ne na
+suffix n in un nin nun
+suffix n yi yu ni nu
+suffix n le la yle yla ile
+suffix n ce ca
+suffix n ki deki daki teki taki ndeki ndaki
+suffix n si su sini sunu sine suna sinde sunda sinden sundan siyle suyla
+suffix n imiz umuz miz muz iniz unuz niz nuz
+suffix n lik luk ligi lugu likle lukla li lu siz suz ci cu
+suffix x i u im um m n
+suffix x dir dur tir tur
+suffix x di du ti tu ydi ydu
+suffix x mis mus ymis ymus
+suffix x se sa yse ysa
+suffix x ken yken iken
+suffix x me ma mi mu
+suffix v yor iyor uyor
+suffix v mek mak meye maya mesi masi
+suffix v il ul l in un
+suffix v is us yis yus
+suffix v it ut t
+suffix v ir ur er ar r mez maz
+suffix v ecek acak yecek yacak eceg acag yeceg yacag
+suffix v en an yen yan
+suffix v dik duk tik tuk dig dug tig tug
+suffix v ince unca inca unce yince yunca yinca yunce
+suffix v ip up yip yup
+suffix v meden madan erek arak yerek yarak
+suffix v ebil abil yebil yabil
+suffix v meli mali
+suffix v ici ucu yici yucu
+suffix v sin sun siniz sunuz iz uz z k
+stop ve veya ya yada ile bir bu şu o bunu şunu onu bunun şunun onun buna şuna ona bunda onda bundan ondan bunlar onlar
+stop için gibi kadar daha en çok az pek iki üç
+stop mi mı mu mü ne neden niçin niye nasıl nerede nereden nereye nere hangi hangisi kim kimin kime kimi kaç
+stop eğer ise ki ama fakat ancak yine hem her hiç sonra önce iken göre acaba lütfen aslında örneğin yeniden
+stop var yok değil da de
+stop kod fonksiyon işlev metot metod yöntem sınıf dosya satır
+stop yer şey şekil zaman an karar
+stopverb ol et yap ver sağla bulun kullan çağır çağrı tanımla ak geç gel git bak koy kon oluş düş gör belirle
+noun değişken = variable
+noun sabit = constant
+noun parametre = parameter, param, params
+noun argüman = argument, arg, args
+noun tür | tip = type
+noun arayüz = interface
+noun nesne = object
+noun dizi = array, list
+noun liste = list
+noun küme = set, cluster
+noun harita | eşleme = map, mapping
+noun sözlük = dictionary, map
+noun anahtar = key
+noun değer = value
+noun alan = field
+noun özellik = property, feature, attribute
+noun öznitelik = attribute
+noun etiket = label, tag
+noun isim | ism | ad = name
+noun kimlik = id, identity
+noun kimlik bilgisi | kimlik bilgileri = credential, credentials
+noun kimlik doğrulama = auth, authentication, authenticate
+noun yetkilendirme = authorization, authorize
+noun yetki = permission, scope
+noun yetkisiz = unauthorized
+noun yasak = forbidden
+noun izin = permission, allow
+noun rol = role
+noun kullanıcı = user
+noun yönetici = admin, manager
+noun şifre = password, secret
+noun parola = password
+noun gizli anahtar = secret, private
+noun gizli = secret, private, hidden
+noun belirteç | jeton = token
+noun oturum = session
+noun çerez = cookie
+noun başlık = header, title
+noun gövde = body
+noun yük = payload, load
+noun istek = request
+noun yanıt | cevap = response, reply
+noun sunucu = server
+noun istemci = client
+noun tarayıcı = browser
+noun uç nokta = endpoint
+noun bağlantı = connection, link
+noun bağlantı noktası = port
+noun adres = address, url
+noun yol = path, route
+noun rota = route
+noun yönlendirme = redirect, routing
+noun ağ = network
+noun ağ geçidi = gateway
+noun vekil = proxy
+noun aracı = middleware, broker
+noun sağlayıcı = provider
+noun tüketici = consumer
+noun üretici = producer
+noun abone = subscriber
+noun yayıncı = publisher
+noun gözlemci = observer
+noun içerik = content
+noun metin = text
+noun dize = string
+noun karakter = char, character
+noun sütun = column
+noun tablo = table
+noun veritabanı = database, db
+noun sorgu | sorgulama = query
+noun kayıt = record, entry, registration
+noun kayıtlı = stored, saved, registered
+noun kayıt defteri = registry
+noun günlük | loglama = log, logging
+noun hata = error, failure
+noun hata ayıklama = debug
+noun istisna = exception
+noun uyarı = warning, warn
+noun rapor = report
+noun başarısız = fail, failed, failure
+noun başarılı = success, successful
+noun test = test
+noun doğrulama = validation, verification
+noun doğrulayıcı = validator
+noun geçerli = valid
+noun geçersiz = invalid
+noun kontrol = check, control
+noun denetim = check, audit
+noun fark = diff, difference
+noun eşit = equal
+noun aynı = same, identical
+noun farklı = different
+noun benzersiz = unique
+noun kopya = copy, duplicate
+noun iki kez = twice, duplicate
+noun tekrar = repeat, retry
+noun döngü = loop
+noun olay döngüsü = event loop
+noun dal = branch
+noun koşul = condition
+noun seçenek = option
+noun ayar = setting, settings, config
+noun yapılandırma = config, configuration
+noun ortam = environment, env
+noun ortam değişkeni = env
+noun varsayılan = default
+noun zorunlu = required
+noun boş = empty
+noun boş değer = null
+noun sıfır = zero
+noun tanımsız = undefined
+noun doğru = true, correct
+noun yanlış = false, wrong
+noun rastgele = random
+noun yürütme = execution
+noun yürütücü | çalıştırıcı = executor, runner
+noun çalışma zamanı = runtime
+noun işlem = process, operation, transaction
+noun işleyici = handler, processor
+noun işçi = worker
+noun dinleyici = listener
+noun olay = event
+noun tetikleyici = trigger
+noun zamanlayıcı = scheduler, timer
+noun zamanlanmış = scheduled
+noun zaman aşımı = timeout
+noun zaman damgası = timestamp
+noun süre = duration, time
+noun gecikme = delay
+noun yoklama = poll, polling
+noun kuyruk = queue
+noun iş = job, task
+noun görev = task, job
+noun iş akışı = workflow
+noun akış = flow, stream
+noun adım = step
+noun aşama = stage, phase
+noun düğüm = node
+noun kenar = edge
+noun çizge | grafik = graph
+noun ağaç = tree
+noun kök = root
+noun çocuk = child, children
+noun ebeveyn = parent
+noun alt = sub, child
+noun üst = parent, top
+noun ana = main, master
+noun giriş = input, entry, login
+noun çıkış = output, exit
+noun girdi = input
+noun çıktı = output
+noun öğe | eleman = item, element
+noun veri = data
+noun bilgi = info, information
+noun meta veri = metadata
+noun şema = schema
+noun şablon = template
+noun ifade = expression
+noun değerlendirme = evaluation, eval
+noun hesap = account, calculation
+noun hesaplama = computation, calculation
+noun biçim = format
+noun kodlama = encoding, encode
+noun şifreleme = encryption, encrypt
+noun imza = signature, sign
+noun özet | karma = hash, digest
+noun eğik çizgi = slash
+noun ters eğik çizgi = backslash
+noun nokta = dot, point
+noun virgül = comma
+noun boşluk = space, whitespace
+noun tırnak = quote
+noun ayırıcı = separator, delimiter
+noun önek = prefix
+noun sonek = suffix
+noun yer tutucu = placeholder
+noun sahte = mock, fake, dummy, stub
+noun taklit = mock, fake
+noun örnek = example, sample, instance
+noun sürüm | versiyon = version
+noun geçmiş = history
+noun değişiklik = change
+noun önbellek = cache
+noun bellek = memory
+noun depo = store, repository, storage
+noun arşiv = archive
+noun yedek = backup
+noun sıra = order, sequence
+noun filtre = filter
+noun sayı = number, count
+noun sayaç = counter
+noun sınır = limit, boundary
+noun boyut = size
+noun uzunluk = length
+noun genişlik = width
+noun yükseklik = height
+noun renk = color
+noun simge = icon
+noun resim | görsel | görüntü = image
+noun düğme = button
+noun pencere = window
+noun sayfa = page
+noun form = form
+noun menü = menu
+noun ekran = screen
+noun görünüm = view
+noun bileşen = component
+noun eklenti = plugin, extension
+noun kanca = hook
+noun web kancası = webhook
+noun paket = package
+noun modül = module
+noun kütüphane = library, lib
+noun bağımlılık = dependency
+noun sürücü = driver
+noun araç = tool
+noun yardımcı = helper, util
+noun servis | hizmet = service
+noun denetleyici = controller
+noun varlık = entity
+noun ilişki = relation
+noun birincil anahtar = primary key
+noun yabancı anahtar = foreign key
+noun indeks = index
+noun geçiş = migration, transition
+noun proje = project
+noun çalışma alanı = workspace
+noun klasör | dizin = folder, directory, dir
+noun uzantı = extension
+noun takım | ekip = team
+noun kiracı = tenant
+noun sahip = owner
+noun davet = invite, invitation
+noun abonelik = subscription
+noun lisans = license
+noun fatura = invoice, billing
+noun ödeme = payment
+noun bildirim = notification
+noun eposta | e posta = email, mail
+noun posta = mail
+noun mesaj = message
+noun kanal = channel
+noun sohbet = chat
+noun yapay zeka = ai
+noun dil modeli = llm, model
+noun istem = prompt
+noun ajan = agent
+noun vektör = vector
+noun gömme = embedding
+noun benzerlik = similarity
+noun puan | skor = score
+noun sıralama = ranking, sort
+noun öneri = suggestion, recommendation
+noun tahmin = prediction, estimate
+noun eğitim = training
+noun metrik = metric
+noun istatistik = stats, statistics
+noun izleme = monitoring, tracing
+noun iz = trace
+noun telemetri = telemetry
+noun performans = performance
+noun hız = speed
+noun eşzamanlı | senkron = sync, concurrent
+noun eşzamansız | asenkron = async
+noun paralel = parallel
+noun iş parçacığı = thread
+noun süreç = process
+noun sinyal = signal
+noun çökme = crash
+noun güvenlik = security
+noun saldırı = attack
+noun kaçış = escape
+noun enjeksiyon = injection
+noun bölge = region, zone
+noun saat dilimi = timezone
+noun tarih = date
+noun gün = day
+noun ay = month
+noun yıl = year
+noun dakika = minute
+noun saniye = second
+noun milisaniye = ms, millisecond
+noun etkin | aktif = active, enabled
+noun pasif = inactive, disabled
+noun görünür = visible
+noun oluşturucu = builder, generator
+noun ayrıştırıcı = parser
+noun dönüştürücü = converter, transformer
+noun yükleyici = loader
+noun okuyucu = reader
+noun yazıcı = writer
+noun fabrika = factory
+noun yapıcı = constructor
+noun başlatıcı = initializer
+noun tekil = singleton
+noun statik = static
+noun özel = private, custom
+noun genel = public, global
+noun soyut = abstract
+noun uygulama = application, app
+noun yazılım = software
+noun kullanıcı arayüzü = ui
+noun arka uç = backend
+noun ön uç = frontend
+noun konteyner = container
+noun bulut = cloud
+noun durum = state, status
+noun durum kodu = status code
+noun sonuç = result, outcome
+noun hedef = target
+noun kaynak = source, resource
+noun geri çağırma = callback
+noun söz = promise
+noun bekleme = wait
+noun kilit = lock
+noun anlık görüntü = snapshot
+noun yama = patch
+noun birleştirme = merge
+noun çatışma = conflict
+noun özyineleme = recursion
+noun yığın = stack
+noun tampon = buffer
+noun parça = chunk, part
+noun sayfalama = pagination
+noun imleç = cursor
+noun toplu = batch, bulk
+noun alt bilgi = footer
+noun kural = rule
+noun politika = policy
+noun kota = quota
+noun oran = rate, ratio
+noun hız sınırı = rate limit
+noun yeniden deneme = retry
+noun kurtarma = recovery
+noun geri dönüş = fallback
+noun dönüş = return
+noun dönüşüm = conversion, transform
+noun iddia = assertion, assert
+noun kapsam = scope, coverage
+noun ortak = shared, common
+noun yerel = local
+noun uzak = remote
+noun kalıcı = persistent
+noun geçici = temporary, temp
+noun ham = raw
+noun düşük = low
+noun yüksek = high
+noun büyük = large, big
+noun küçük = small
+noun ilk = first, initial
+noun son = last, final, end
+noun önceki = previous, prev
+noun sonraki = next
+noun yeni = new
+noun eski = old, legacy
+noun mevcut = current, existing
+noun eksik = missing
+noun fazla = extra
+noun bağlı = connected, linked
+noun açık = open, explicit
+noun açıklama = description, comment
+noun erişim = access
+noun dağıtım = deployment, distribution
+noun derleme = build, compile
+noun derleyici = compiler
+noun iki faktörlü | çok faktörlü = mfa
+verb değiştir = change, modify, update, replace
+verb değiş = change
+verb döndür = return
+verb dön = return
+verb kaydet | kayded = save, store, persist
+verb doğrula = validate, verify
+verb sına = test
+verb denetle = check, inspect
+verb karşılaştır = compare
+verb kopyala = copy, clone
+verb çoğalt = duplicate, clone
+verb taşı = move
+verb sil = delete, remove
+verb kaldır = remove
+verb ekle = add, insert, append
+verb güncelle = update
+verb yerine koy = replace, substitute
+verb oluştur = create, build, generate
+verb üret = generate, produce
+verb yarat = create
+verb başlat = start, init, initialize, launch
+verb durdur = stop, halt
+verb duraklat = pause
+verb devam et = continue, resume
+noun devam = continue
+noun iptal = cancel
+verb sürdür = continue, resume
+verb bitir = finish, complete
+verb tamamla = complete, finish
+verb iptal et = cancel, abort
+verb yeniden dene | tekrar dene = retry
+verb yinele = repeat, iterate
+verb seç = select, choose, pick
+verb yapılandır = configure
+verb çalıştır = run, execute
+verb çalış = run, work
+verb yürüt = execute, run
+verb işle = process, handle
+verb dinle = listen
+verb tetikle = trigger
+verb zamanla = schedule
+verb bekle = wait
+verb ayrıştır = parse
+verb biçimlendir = format
+verb kodla = encode
+verb kod çöz = decode
+verb şifrele = encrypt
+verb şifre çöz = decrypt
+verb imzala = sign
+verb sıkıştır = compress
+verb sırala = sort, order
+verb filtrele = filter
+verb ara = search, find
+verb bul = find
+verb eşleş = match
+verb eşle = map, match
+verb eşleştir = match, pair
+verb birleştir = merge, join, combine
+verb böl = split, divide
+verb ayır = split, separate
+verb ayırt et = distinguish
+verb grupla = group
+verb topla = sum, collect, aggregate
+verb say = count
+verb hesapla = compute, calculate
+verb dönüştür = convert, transform
+verb çevir = convert, translate
+verb değerlendir = evaluate, eval
+verb yükle = load, upload, install
+verb indir = download
+verb gönder = send, submit
+verb al = get, receive
+verb getir = fetch, get
+verb çek = fetch, pull
+verb oku = read
+verb yaz = write
+verb aç = open
+verb kapat = close
+verb kilitle = lock
+verb depola = store
+verb sakla = store, keep, hide
+verb geri yükle = restore
+verb geri al = undo, revert, rollback
+verb yayınla = publish, release
+verb dağıt = deploy, distribute
+verb derle = compile, build
+verb paylaş = share
+verb etkinleştir = enable, activate
+verb devre dışı bırak = disable
+verb gizle = hide
+verb göster = show, display, render
+verb çiz = draw, render
+verb uygula = apply, implement
+verb temizle = clean, clear, sanitize
+verb sıfırla = reset
+verb yenile = refresh, renew, reload
+verb yeniden başlat = restart
+verb yeniden yükle = reload
+verb gir = enter, input
+verb çık = exit
+verb kal = remain, remaining
+verb atla = skip
+verb engelle = block, prevent
+verb izle = watch, monitor, track
+verb ölç = measure
+verb ölçekle = scale
+verb ayarla = set, configure
+verb bırak = release, drop
+verb içer = contain, include
+verb tut = keep, hold
+verb sun = provide, serve
+verb ulaş = reach, access
+verb eriş = access
+verb bağla = connect, bind, link
+verb bağlan = connect
+verb kes = cut, interrupt
+verb çöz | çözümle = resolve, solve
+verb aktar = transfer
+verb dışa aktar = export
+verb içe aktar = import
+verb yönet = manage
+verb oturum aç = login
+verb kayıt ol = register, signup
+en ies y 2
+en sses ss 2
+en ss ss 2
+en us us 2
+en is is 2
+en s - 2
+en ing - 3
+en ed - 3
+en ions - 3
+en ion - 3
+en ers - 3
+en er - 3
+en ors - 3
+en or - 3
+en ments - 3
+en ment - 3
+en ly - 3
+en e - 3
+enstop a an the is are was were be been being do does did doing done
+enstop of in on at to for from by with about as into through over under
+enstop and or but not no nor this that these those it its there here
+enstop when where which who whom whose what why how if then else than so such
+enstop can could should would will shall may might must has have had having
+enstop i we you he she they me us him her them my our your his their
+enstop code function method class file line lines
+enstop decide decides decided deciding determine determines determined
+enstop call calls called calling caller callers use uses used using
+enstop define defines defined declare declares declared definition
+enstop happen happens happened work works step steps flow flows
+enstop whether any some each every all both either
+testpath test tests __tests__ __mocks__ __fixtures__ fixtures mocks e2e testing .test. .spec.
+intent callers kim çağırıyor*|çağırır*|çağıran*|çağrılıyor*|çağrılır*|çağrıl*
+intent callers kimler çağırıyor*|çağırır*|çağıran*
+intent callers hangi kod* çağırıyor*|çağırır*|çağıran*
+intent callers hangi kod* kullanıyor*|kullanır*|kullanan*|kullanıl*
+intent callers nereden çağırıl*|çağrıl*|çağırıyor*
+intent callers nerede çağrıl*|çağırıl*|kullanıl*
+intent callers nerelerde çağrıl*|çağırıl*|kullanıl*
+intent callers kim kullanıyor*|kullanır*|kullanan*
+intent callers who call|calls|called|calling
+intent callers what calls
+intent callers callers
+intent callers who uses|use|used
+intent callers where is called|used
+intent callers where are called|used
+intent callers which code* uses|use|calls|call
+intent callers used by
+intent callers called by
+intent callees neleri|neler çağırıyor*|çağırır*
+intent callees hangi fonksiyonları*|metotları*|metodları* çağırıyor*|çağırır*
+intent callees what does call
+intent callees callees
+intent callees which functions does call
+intent where_defined nerede tanım*
+intent where_defined hangi dosya* tanım*
+intent where_defined tanım* nerede
+intent where_defined where is defined|declared
+intent where_defined where are defined|declared
+intent where_defined definition of
+intent where_defined which file* defines|declares
+intent decides karar*
+intent decides hangi kod* karar*
+intent decides hangi koşul*
+intent decides belirliyor*|belirlen*|belirleyen*|belirler
+intent decides mi mi
+intent decides mi mu
+intent decides mu mi
+intent decides mu mu
+intent decides olup olmadı*
+intent decides decide*
+intent decides determine|determines|determined|determining
+intent decides whether
+intent decides which condition*
+intent flow nasıl akıyor*|akar|akış*
+intent flow nasıl işleniyor*|işlenir
+intent flow hangi adım*
+intent flow hangi aşama*
+intent flow sırasıyla
+intent flow how flow|flows|flowing
+intent flow what steps
+intent flow which steps
+intent flow sequence of
+intent flow goes through
+template en Which code is responsible for {phrase}?
+template tr {phrase} işini hangi kod yapıyor?
+check stem düğümünde düğüm
+check stem alanları alan
+check stem değerlerin değer
+check stem bağlantıları bağlantı
+check stem parametrelerinde parametre
+check stem kurallarla kural
+check stem verisiyle veri
+check stem verilerle veri
+check stem veriyor ver
+check stem verince ver
+check stem verilen ver
+check stem isteği istek
+check stem hesabı hesap
+check stem kaydedilmeden kaydet
+check stem karşılaştırılırken karşılaştır
+check stem hesaplanıyor hesapla
+check stem eklenen ekle
+check stem silinen sil
+check stem çıkışta çıkış
+check stem sürümü sürüm
+check stem kontrolünde kontrol
+check stem yenileme yenile
+check stem çalıştırılmadan çalıştır
+check stem değerlendirmelerinde değerlendirme
+check stem dosyalarındaki dosya
+check stem kullanıcıların kullanıcı
+check stem tablolarına tablo
+check stem tetikleyicileri tetikleyici
+check stem doğrulanmadan doğrula
+check stem gönderilen gönder
+check stem alınan al
+check stem alanın alan
+check stem oluşturulan oluştur
+check stem bulunuyorsa bulun
+check stem önbelleği önbellek
+check term düğümlerin = node
+check term alanları = field
+check term yer tutucular = placeholder
+check term kimlik bilgilerini = credential
+check term imzayı = sign
+check term kodlamayı = encode
+check term eğik çizgiyi = slash
+check term bağlantıları = connection
+check term hatayı = error
+check term iş akışının = workflow
+check term sürümleri = version
+check term isteği = request
+check term zaman aşımında = timeout
+check term önbelleği = cache
+check term kuyruğa = queue
+check term tetikleyicinin = trigger
+check term şifrelenmiş = encrypt
+check term karşılaştırılırken = compare
+check term silinen = delete
+check term devam edip = continue
+check term iş akışlarında = workflow
+check term web kancalarını = webhook
+check intent callers Bu fonksiyonu kim çağırıyor?
+check intent callers Önbelleği temizleyen metodu hangi kodlar kullanıyor?
+check intent callers Bu yardımcı nerede çağrılıyor?
+check intent callees Bu servis neleri çağırıyor?
+check intent where_defined Varsayılan zaman aşımı nerede tanımlı?
+check intent where_defined Kullanıcı rolü hangi dosyada tanımlanıyor?
+check intent decides Bir istek başarısız olunca yeniden denenip denenmeyeceğine hangi kod karar veriyor?
+check intent decides Önbellek mi kullanılıyor, veritabanı mı sorgulanıyor?
+check intent decides Kuyruğun dolu olup olmadığını hangi koşul belirliyor?
+check intent flow Bir webhook isteği hangi adımlardan geçiyor?
+check intent flow Veri düğümler arasında nasıl akıyor?
+check intent explain Bu sınıf ne işe yarıyor?
+check intent explain Şifreleme anahtarı nasıl üretiliyor?
