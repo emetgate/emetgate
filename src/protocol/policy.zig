@@ -22,6 +22,7 @@ pub const Policy = struct {
     mirror: ?*mirror_mod.Mirror = null,
     tree_cache: ?*tree_cache_mod.TreeCache = null,
     search_session: ?*search_session_mod.Session = null,
+    search_text: bool = false,
     language_service: ?*tsserver.Session = null,
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,

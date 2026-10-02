@@ -74,6 +74,7 @@ pub const fact_modules = src.fact_modules;
 pub const fact_store = src.fact_store;
 pub const fact_file = src.fact_file;
 pub const search_v1 = src.search_v1;
+pub const search_text = src.search_text;
 pub const rg_search = src.rg_search;
 pub const disk = src.disk;
 pub const durability_log = src.durability_log;
@@ -124,6 +125,7 @@ test {
     _ = @import("tests/change_watch.zig");
     _ = @import("tests/search_fresh.zig");
     _ = @import("tests/search_answers.zig");
+    _ = @import("tests/search_text.zig");
     _ = @import("tests/git_index.zig");
     _ = @import("tests/scan_tool.zig");
     _ = @import("tests/redteam_memory.zig");

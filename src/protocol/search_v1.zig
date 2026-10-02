@@ -6,6 +6,8 @@ const search_session = @import("../platform/search_session.zig");
 const change_watch = @import("../platform/change_watch.zig");
 const worker_pool = @import("../platform/worker_pool.zig");
 const open_nowait = @import("../platform/open_nowait.zig");
+const rg_search = @import("../platform/rg_search.zig");
+const search_text = @import("search_text.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const symbol = @import("../engine/symbol.zig");
 const registry = @import("../engine/lang/registry.zig");
@@ -249,6 +251,8 @@ const FileWork = struct {
     corrupt_spans: bool = false,
     unclassified: bool = false,
     most_steps: u64 = 0,
+    extra_matches: u32 = 0,
+    capped: bool = false,
 
     fn deinit(self: *FileWork, gpa: Allocator) void {
         for (self.hits.items) |*h| h.deinit(gpa);
@@ -261,6 +265,8 @@ const Shared = struct {
     query: *const Query,
     kinds: ?KindSet,
     hit_limit: usize,
+    width: usize,
+    count_only: bool = false,
     work: []FileWork,
     next: std.atomic.Value(usize) = .init(0),
     failure: ?anyerror = null,
@@ -334,7 +340,11 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
     var decoded: ?span_codec.Decoded = null;
     var cursor: LineCursor = .{ .bytes = item.content, .query = shared.query };
     while (cursor.next()) |line| {
-        if (item.hits.items.len > shared.hit_limit) return;
+        const counting = shared.count_only or item.hits.items.len > shared.hit_limit;
+        if (counting and shared.kinds != null) {
+            item.capped = true;
+            return;
+        }
         const found = switch (shared.query.matchLineCounting(scratch, line.text, &item.most_steps)) {
             .none => continue,
             .over_budget => {
@@ -344,6 +354,10 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
             .hit => |h| h,
         };
         item.matched_lines += 1;
+        if (counting) {
+            item.extra_matches += 1;
+            continue;
+        }
         if (decoded == null) {
             decoded = if (item.spans.len == 0) .{ .spans = null, .doc = null } else span_codec.decode(arena_state.allocator(), item.spans) catch |err| switch (err) {
                 error.OutOfMemory => return err,
@@ -389,12 +403,12 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
             if (pending.heading) |x| gpa.free(x);
             continue;
         }
-        pending.text = try gpa.dupe(u8, read_tools.utf8Prefix(std.mem.trim(u8, line.text, " \t\r"), max_match_text));
+        pending.text = try search_text.snippet(gpa, line.text, found.col, shared.width);
         try item.hits.append(gpa, pending);
     }
 }
 
-fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_cache_mod.TreeCache, root: []const u8, query: *const Query, kinds: ?KindSet, hit_limit: usize, item: *FileWork) !void {
+fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_cache_mod.TreeCache, root: []const u8, query: *const Query, kinds: ?KindSet, hit_limit: usize, width: usize, item: *FileWork) !void {
     const bytes = item.content;
     const f = item.path;
     const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, f });
@@ -445,7 +459,11 @@ fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_ca
     defer gpa.free(scratch);
     var cursor: LineCursor = .{ .bytes = bytes, .query = query };
     while (cursor.next()) |line| {
-        if (item.hits.items.len > hit_limit) break;
+        const counting = item.hits.items.len > hit_limit;
+        if (counting and kinds != null) {
+            item.capped = true;
+            break;
+        }
         const found = switch (query.matchLineCounting(scratch, line.text, &item.most_steps)) {
             .none => continue,
             .over_budget => {
@@ -455,6 +473,10 @@ fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_ca
             .hit => |h| h,
         };
         item.matched_lines += 1;
+        if (counting) {
+            item.extra_matches += 1;
+            continue;
+        }
         const at = line.start + found.col;
         var pending: Pending = .{ .line = line.number, .text = undefined, .kind = .code, .role = null };
         errdefer {
@@ -489,7 +511,7 @@ fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_ca
             if (pending.heading) |x| gpa.free(x);
             continue;
         }
-        pending.text = try gpa.dupe(u8, read_tools.utf8Prefix(std.mem.trim(u8, line.text, " \t\r"), max_match_text));
+        pending.text = try search_text.snippet(gpa, line.text, found.col, width);
         try item.hits.append(gpa, pending);
     }
 }
@@ -522,8 +544,15 @@ fn addHit(gpa: Allocator, groups: *std.ArrayList(Group), f: []const u8, pending:
     pending.text = pending.text[0..0];
 }
 
+pub const Format = enum { json, text };
+
 pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session) !ToolResult {
-    const pattern = try requireString(args, "pattern");
+    return callSearchAs(gpa, io, runtime, args, event, root, tree_cache, session, .json);
+}
+
+pub fn callSearchAs(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, default_format: Format) !ToolResult {
+    const format = parseFormat(args, default_format) catch |err| return failAs(gpa, default_format, err, event);
+    const pattern = requireString(args, "pattern") catch |err| return failAs(gpa, format, err, event);
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     const is_regex = if (args) |a| getBool(a, "regex") orelse false else false;
     const kinds = if (args) |a| getStringArray(a, "kinds") else null;
@@ -533,18 +562,20 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     event.file = dir;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const full = parseDetail(args) catch |err| return failure(gpa, &buffer, err, event);
-    const offset = parseOffset(args) catch |err| return failure(gpa, &buffer, err, event);
+    const full = parseDetail(args) catch |err| return failAs(gpa, format, err, event);
+    const offset = parseOffset(args) catch |err| return failAs(gpa, format, err, event);
     var stats: Stats = .{};
     if (want_stats) stats_sink = &stats;
     defer if (want_stats) {
         stats_sink = null;
     };
-    var outcome: Outcome = .{};
-    const request: Request = .{ .pattern = pattern, .dir = dir, .is_regex = is_regex, .kinds = kinds, .certificate = want_certificate or want_stats, .full = full, .offset = offset };
+    var outcome: Outcome = .{ .detail = .init(gpa) };
+    defer outcome.detail.deinit();
+    const request: Request = .{ .pattern = pattern, .dir = dir, .is_regex = is_regex, .kinds = kinds, .certificate = want_certificate or want_stats, .full = full, .offset = offset, .format = format };
     renderSearch(gpa, io, runtime, root, tree_cache, session, request, &outcome, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         if (outcome.refusal.len != 0) event.reason = outcome.refusal;
+        if (format == .text) return textFailure(gpa, err, outcome.detail.written(), event);
         return failure(gpa, &buffer, err, event);
     };
     if (outcome.refusal.len != 0) {
@@ -566,7 +597,38 @@ const Request = struct {
     certificate: bool,
     full: bool = false,
     offset: usize = 0,
+    format: Format = .json,
+
+    fn width(self: Request) usize {
+        return if (self.format == .text) search_text.text_width else search_text.json_width;
+    }
 };
+
+fn parseFormat(args: ?Value, default_format: Format) !Format {
+    const a = args orelse return default_format;
+    const field = tool_result.getField(a, "format") orelse {
+        if ((getBool(a, "certificate") orelse false) or (getBool(a, "stats") orelse false)) return .json;
+        return default_format;
+    };
+    if (field != .string) return error.UnknownFormat;
+    return std.meta.stringToEnum(Format, field.string) orelse error.UnknownFormat;
+}
+
+fn failAs(gpa: Allocator, format: Format, err: anyerror, event: *telemetry.Event) !ToolResult {
+    if (format == .text) return textFailure(gpa, err, "", event);
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    return failure(gpa, &buffer, err, event);
+}
+
+fn textFailure(gpa: Allocator, err: anyerror, detail: []const u8, event: *telemetry.Event) !ToolResult {
+    event.fail(@errorName(err));
+    const text = if (detail.len != 0)
+        try std.fmt.allocPrint(gpa, "error: {s}: {s}", .{ @errorName(err), detail })
+    else
+        try std.fmt.allocPrint(gpa, "error: {s}", .{@errorName(err)});
+    return .{ .text = text, .is_error = true };
+}
 
 fn parseDetail(args: ?Value) !bool {
     const a = args orelse return false;
@@ -590,6 +652,7 @@ const Outcome = struct {
     refusal: []const u8 = "",
     events: [4]Event = undefined,
     event_count: usize = 0,
+    detail: std.Io.Writer.Allocating,
 
     const Event = struct { what: []const u8, err: []const u8 };
 
@@ -625,6 +688,9 @@ const Result = struct {
     unrepresented: u32 = 0,
     largest_file: u64 = 0,
     most_steps: u64 = 0,
+    total: usize = 0,
+    total_exact: bool = true,
+    delegated: bool = false,
 
     fn deinit(self: *Result, gpa: Allocator) void {
         for (self.groups.items) |*g| {
@@ -707,6 +773,7 @@ const Corpus = struct {
     kinds: ?KindSet,
     want_paths: bool,
     hit_limit: usize,
+    width: usize,
 };
 
 fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, request: Request, outcome: *Outcome, w: *Writer) !void {
@@ -758,14 +825,17 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         .kinds = kind_set,
         .want_paths = request.certificate,
         .hit_limit = max_matches + request.offset,
+        .width = request.width(),
     };
 
-    var query = if (request.is_regex) Query.regex(gpa, pattern, null) catch |err| switch (err) {
+    var compiled: ?Query = if (request.is_regex) Query.regex(gpa, pattern, null) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => return error.InvalidRegex,
+        else => null,
     } else try Query.literal(gpa, pattern);
-    defer query.deinit(gpa);
-    var result = try runQuery(&corpus, &query, &timer);
+    defer if (compiled) |q| q.deinit(gpa);
+    const delegated: Query = .{ .mode = .regex, .pattern = pattern, .literals = &.{}, .grams = &.{} };
+    const query: *const Query = if (compiled) |*q| q else &delegated;
+    var result = if (compiled != null) try runQuery(&corpus, query, &timer) else try delegateQuery(&corpus, pattern, &outcome.detail.writer);
     defer result.deinit(gpa);
 
     var alternatives: ?Query = null;
@@ -778,7 +848,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
             second.deinit(gpa);
         }
     }
-    const used_query: *const Query = if (alternatives) |*alt| alt else &query;
+    const used_query: *const Query = if (alternatives) |*alt| alt else query;
 
     var root_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     const snapshot_root = try sess.scopeRoot(root_key, place.rel, scope.file);
@@ -794,7 +864,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     try rankGroups(gpa, result.groups.items, used_query);
     var shown: std.ArrayList(Shown) = .empty;
     defer shown.deinit(gpa);
-    const page = try pageGroups(gpa, result.groups.items, request.offset, if (request.full) null else reply_budget, &shown);
+    const page = try pageGroups(gpa, result.groups.items, request.offset, if (request.full) null else reply_budget, request.format, &shown);
     const cut = try cutFiles(gpa, &result, shown.items);
     if (cut != 0) try addMatchLimit(gpa, &result, cut);
 
@@ -831,6 +901,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     switch (verdict) {
         .refused => |r| {
             outcome.refusal = r.detail;
+            if (request.format == .text) {
+                try w.print("refused: {s}", .{line.written()});
+                return;
+            }
             var refusal: std.json.Stringify = .{ .writer = w };
             try refusal.beginObject();
             try refusal.objectField("answer");
@@ -846,6 +920,13 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         .complete, .partial => {},
     }
     outcome.partial = verdict.status() == .partial;
+
+    if (request.format == .text) {
+        var note_buf: [512]u8 = undefined;
+        const note: []const u8 = if (result.groups.items.len == 0) emptyNote(&note_buf, result, scope, place.rel, query.*, request.kinds, alternatives != null) else "";
+        try writeText(gpa, w, &result, shown.items, page, verdict, request, if (alternatives) |alt| alt.literals else null, outcome, note);
+        return;
+    }
 
     var json_timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     defer if (json_timer) |*t| if (stats_sink) |s| {
@@ -867,6 +948,16 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     try writeShown(&js, result.groups.items, shown.items);
     try js.objectField("truncated");
     try js.write(result.truncated or page.hidden != 0 or page.skipped != 0);
+    try js.objectField("total");
+    try js.write(result.total);
+    if (!result.total_exact) {
+        try js.objectField("total_exact");
+        try js.write(false);
+    }
+    if (result.delegated) {
+        try js.objectField("delegated");
+        try js.write("rg");
+    }
     if (page.hidden != 0 or result.truncated) {
         var more_buf: [256]u8 = undefined;
         try js.objectField("more");
@@ -898,7 +989,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     if (result.groups.items.len == 0) {
         var note_buf: [512]u8 = undefined;
         try js.objectField("note");
-        try js.write(emptyNote(&note_buf, result, scope, place.rel, query, request.kinds, alternatives != null));
+        try js.write(emptyNote(&note_buf, result, scope, place.rel, query.*, request.kinds, alternatives != null));
     } else if (shown.items.len == 0) {
         var note_buf: [128]u8 = undefined;
         try js.objectField("note");
@@ -936,6 +1027,111 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
 }
 
 const Shown = struct { group: usize, lo: usize, hi: usize };
+
+fn writeText(gpa: Allocator, w: *Writer, result: *const Result, shown: []const Shown, page: Page, verdict: anytype, request: Request, alternatives: ?[]const []const u8, outcome: *const Outcome, note: []const u8) !void {
+    var lines: std.ArrayList(search_text.Line) = .empty;
+    defer lines.deinit(gpa);
+    for (shown) |s| {
+        const g = result.groups.items[s.group];
+        for (g.hits.items[s.lo..s.hi]) |hit| try lines.append(gpa, .{ .file = g.file, .line = hit.line, .text = hit.text, .definition = hit.role == .definition });
+    }
+    try search_text.writeLines(gpa, w, lines.items);
+
+    const more = page.hidden != 0 or result.truncated;
+    const paged = more or page.skipped != 0;
+    var missing_count: usize = 0;
+    for (verdict.missingList()) |m| {
+        if (m.reason != .match_limit) missing_count += 1;
+    }
+    if (!paged and missing_count == 0 and verdict.status() == .complete) {
+        try w.writeAll("\u{2713}");
+        if (note.len != 0) try w.print(" {s}", .{note});
+    } else {
+        try w.writeAll("partial:");
+        var first = true;
+        if (paged) {
+            const plus: []const u8 = if (result.total_exact) "" else "+";
+            if (page.shown == 0) {
+                try w.print(" offset {d} is past the last of {d}{s} matches", .{ request.offset, result.total, plus });
+            } else {
+                try w.print(" matches {d}-{d} of {d}{s}", .{ page.skipped + 1, page.skipped + page.shown, result.total, plus });
+            }
+            first = false;
+        }
+        var listed: usize = 0;
+        for (verdict.missingList()) |m| {
+            if (m.reason == .match_limit) continue;
+            if (listed == max_missing_listed) {
+                try w.print(", {d} more", .{missing_count - listed});
+                break;
+            }
+            try w.writeAll(if (first) " " else ", ");
+            first = false;
+            if (m.path) |p| {
+                try w.print("{s} {s}", .{ p, @tagName(m.reason) });
+            } else {
+                try w.print("{d} files {s}", .{ m.files, @tagName(m.reason) });
+            }
+            listed += 1;
+        }
+        if (note.len != 0) try w.print("; {s}", .{note});
+    }
+    if (alternatives) |alts| {
+        try w.writeAll("; read as literal alternatives: ");
+        for (alts, 0..) |a, i| try w.print("{s}{s}", .{ if (i == 0) "" else "|", a });
+    }
+    if (result.hidden() != 0) try w.print("; {d} hidden by kinds", .{result.hidden()});
+    if (result.delegated) try w.writeAll("; delegated to rg");
+    if (outcome.index_load) |why| if (why != .missing) try w.print("; index {s}", .{search_session.rebuildNote(why)});
+    for (outcome.events[0..outcome.event_count]) |e| try w.print("; {s} {s}", .{ e.what, e.err });
+    if (more) try w.print("; next offset:{d}", .{page.skipped + page.shown});
+}
+
+fn delegateQuery(corpus: *const Corpus, pattern: []const u8, diagnostic: *Writer) !Result {
+    const gpa = corpus.gpa;
+    if (corpus.kinds != null) return error.KindsNeedAnIndexedPattern;
+    var result: Result = .{ .delegated = true };
+    errdefer result.deinit(gpa);
+    const all: Query = .{ .mode = .literal, .pattern = pattern, .literals = &.{}, .grams = &.{} };
+    var sources: std.ArrayList(Source) = .empty;
+    defer sources.deinit(gpa);
+    try collectSources(corpus, &all, &result, &sources);
+    const paths = try gpa.alloc([]const u8, sources.items.len);
+    defer gpa.free(paths);
+    for (sources.items, paths) |src, *path| path.* = src.path;
+    if (paths.len == 0) return result;
+    const rg = rg_search.find(gpa, corpus.root) catch |err| switch (err) {
+        error.RgNotFound => return error.RegexNeedsRipgrep,
+        else => |e| return e,
+    };
+    defer gpa.free(rg);
+    var found = try rg_search.search(gpa, corpus.io, rg, corpus.root, pattern, paths, diagnostic);
+    defer found.deinit();
+    for (found.failed) |index| {
+        try result.missing.append(gpa, .{ .path = paths[index], .reason = .unreadable });
+        result.indexed -|= 1;
+    }
+    var represented = try std.DynamicBitSetUnmanaged.initEmpty(gpa, paths.len);
+    defer represented.deinit(gpa);
+    var unrepresented = try std.DynamicBitSetUnmanaged.initEmpty(gpa, paths.len);
+    defer unrepresented.deinit(gpa);
+    for (found.hits) |hit| {
+        result.total += 1;
+        result.matched_lines += 1;
+        if (result.hits >= corpus.hit_limit) {
+            result.truncated = true;
+            if (represented.isSet(hit.file)) result.cut_file = paths[hit.file] else unrepresented.set(hit.file);
+            continue;
+        }
+        var pending: Pending = .{ .line = hit.line, .text = try search_text.snippet(gpa, hit.text, hit.col, corpus.width), .kind = .code, .role = null };
+        defer pending.deinit(gpa);
+        try addHit(gpa, &result.groups, paths[hit.file], &pending);
+        result.hits += 1;
+        represented.set(hit.file);
+    }
+    result.unrepresented = @intCast(unrepresented.count());
+    return result;
+}
 
 const Page = struct { shown: usize, hidden: usize, skipped: usize, hidden_files: usize };
 
@@ -1004,7 +1200,7 @@ fn rankGroups(gpa: Allocator, groups: []Group, query: *const Query) !void {
     @memcpy(groups, sorted);
 }
 
-fn pageGroups(gpa: Allocator, groups: []const Group, offset: usize, budget: ?usize, shown: *std.ArrayList(Shown)) !Page {
+fn pageGroups(gpa: Allocator, groups: []const Group, offset: usize, budget: ?usize, format: Format, shown: *std.ArrayList(Shown)) !Page {
     var sizer: std.Io.Writer.Allocating = .init(gpa);
     defer sizer.deinit();
     var hidden_files: std.StringHashMapUnmanaged(void) = .empty;
@@ -1034,9 +1230,10 @@ fn pageGroups(gpa: Allocator, groups: []const Group, offset: usize, budget: ?usi
             continue;
         };
         var hi = lo;
-        var size = try groupSize(&sizer, g, lo, lo) + 1;
+        var size = if (format == .text) g.file.len + 1 else try groupSize(&sizer, g, lo, lo) + 1;
         while (hi < n) {
-            const grown = size + try hitSize(&sizer, g.hits.items[hi]) + @intFromBool(hi != lo);
+            const cost = if (format == .text) textCost(g.hits.items[hi]) else try hitSize(&sizer, g.hits.items[hi]) + @intFromBool(hi != lo);
+            const grown = size + cost;
             if (used + grown > limit and !(page.shown == 0 and hi == lo)) break;
             size = grown;
             hi += 1;
@@ -1061,6 +1258,10 @@ fn groupSize(sizer: *std.Io.Writer.Allocating, g: Group, lo: usize, hi: usize) !
     var js: std.json.Stringify = .{ .writer = &sizer.writer };
     try writeGroupSlice(&js, g, lo, hi);
     return sizer.written().len;
+}
+
+fn textCost(hit: Hit) usize {
+    return search_text.lineCost(.{ .file = "", .line = hit.line, .text = hit.text, .definition = hit.role == .definition }) + 1;
 }
 
 fn hitSize(sizer: *std.Io.Writer.Allocating, hit: Hit) !usize {
@@ -1191,13 +1392,8 @@ fn internalRange(view: *const View, name: []const u8) [2]u32 {
     return view.dirRange(name);
 }
 
-fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Result {
+fn collectSources(corpus: *const Corpus, query: *const Query, result: *Result, sources: *std.ArrayList(Source)) !void {
     const gpa = corpus.gpa;
-    var result: Result = .{};
-    errdefer result.deinit(gpa);
-    var sources: std.ArrayList(Source) = .empty;
-    defer sources.deinit(gpa);
-
     if (corpus.view) |view| {
         const range = baseRange(view, corpus.scope);
         const git_range = internalRange(view, ".git");
@@ -1243,6 +1439,15 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
         }.less);
         mergeSorted(sources.items, base_sources);
     }
+}
+
+fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Result {
+    const gpa = corpus.gpa;
+    var result: Result = .{};
+    errdefer result.deinit(gpa);
+    var sources: std.ArrayList(Source) = .empty;
+    defer sources.deinit(gpa);
+    try collectSources(corpus, query, &result, &sources);
     if (stats_sink) |s| s.files_candidates += sources.items.len;
     if (timer.*) |*t| if (stats_sink) |s| {
         s.filter_ns += t.lap();
@@ -1251,8 +1456,10 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
     var at: usize = 0;
     var unrepresented: u32 = 0;
     while (at < sources.items.len) {
-        if (result.truncated) {
+        const counting = result.truncated;
+        if (counting and corpus.kinds != null) {
             unrepresented += @intCast(sources.items.len - at);
+            result.total_exact = false;
             break;
         }
         const end = @min(sources.items.len, at + chunk_files);
@@ -1267,7 +1474,7 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
             made += 1;
             if (stats_sink) |s| s.candidate_bytes += src.content.len;
         }
-        var shared: Shared = .{ .gpa = gpa, .query = query, .kinds = corpus.kinds, .hit_limit = corpus.hit_limit, .work = work };
+        var shared: Shared = .{ .gpa = gpa, .query = query, .kinds = corpus.kinds, .hit_limit = corpus.hit_limit, .width = corpus.width, .count_only = counting, .work = work };
         const helpers: usize = if (work.len < 4) 0 else worker_pool.max_threads;
         if (corpus.pool) |p| p.run(helpers, workerTask, &shared) else workerTask(&shared);
         if (shared.failure) |err| return err;
@@ -1275,21 +1482,25 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
             s.match_ns += t.lap();
         };
         for (work) |*item| {
-            if (result.truncated) {
-                unrepresented += 1;
-                continue;
-            }
-            if (item.needs_live_parse) {
-                try liveFile(gpa, corpus.io, corpus.runtime, corpus.tree_cache, corpus.root, query, corpus.kinds, corpus.hit_limit, item);
+            if (!counting and item.needs_live_parse) {
+                try liveFile(gpa, corpus.io, corpus.runtime, corpus.tree_cache, corpus.root, query, corpus.kinds, corpus.hit_limit, corpus.width, item);
                 if (stats_sink) |s| s.files_parsed += 1;
             }
             result.most_steps = @max(result.most_steps, item.most_steps);
             result.matched_lines += item.matched_lines;
             for (std.enums.values(Kind)) |k| result.filtered.getPtr(k).* += item.filtered.get(k);
+            const declared = item.over_budget_lines != 0 or (item.unclassified and corpus.kinds != null and item.matched_lines != 0);
             if (item.over_budget_lines != 0) {
                 try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });
             } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {
                 try result.missing.append(gpa, .{ .path = item.path, .reason = .unclassified });
+            }
+            if (item.capped) result.total_exact = false;
+            const found_here = item.hits.items.len + item.extra_matches;
+            result.total += found_here;
+            if (counting or result.truncated) {
+                if (found_here != 0 and !declared) unrepresented += 1;
+                continue;
             }
             var kept: usize = 0;
             for (item.hits.items) |*pending| {
@@ -1301,7 +1512,7 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
                 result.hits += 1;
                 kept += 1;
             }
-            if (result.truncated and kept < item.hits.items.len and item.over_budget_lines == 0 and !(item.unclassified and corpus.kinds != null and item.matched_lines != 0)) {
+            if (kept < found_here and !declared) {
                 if (kept == 0) unrepresented += 1 else result.cut_file = item.path;
             }
         }

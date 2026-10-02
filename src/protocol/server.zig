@@ -137,7 +137,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_search",
-        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in the git-tracked text files under dir, a directory or one file. Hits are grouped by file and, in a registered language, by the enclosing symbol (ref + content hash, ready for emetgate_read_symbol/emetgate_try); in a .json file by JSON pointer, in a .md file by heading. Each hit is tagged code/comment/string and, when it names a known symbol, definition/reference. The first field, answer, says complete (\u{2713}) or partial and what was covered: binary files, files over 1 MiB and internal paths are excluded and counted; a file that could not be read or fully evaluated makes the answer partial and is named in missing. The reply holds about 5000 characters of the best groups (definitions first, then symbol and code hits); more says what was left out; pass offset to page, or detail:\"full\" for up to 200 hits. A write is in the answer once its writer has closed or flushed the file.",
+        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in the git-tracked text files under dir, a directory or one file. The reply is plain text: each file path on its own line, then its matching lines as line:text, with a * after the line number on a definition; leading spaces are dropped and a line over 120 characters is cut around the match with \u{2026} at each cut. A text met on more than one line is written once in a legend line |N text, and those lines read line|N. The last line is \u{2713} when every tracked text file in scope was searched and every match is shown; otherwise it starts with partial: and names the matches shown (matches A-B of T), the files that could not be read or fully evaluated, and next offset:N to page on. Binary files, files over 1 MiB and internal paths are excluded. A regular expression the index cannot run (for example \\b or {n,m}) is searched by ripgrep over the same files and says delegated to rg. The reply holds about 5000 characters; detail:\"full\" lifts that to 200 matches. A write is in the answer once its writer has closed or flushed the file.",
         .props = &.{
             .{ .name = "pattern", .desc = "text or, with regex:true, a regular expression to find" },
             .{ .name = "dir", .desc = "directory or file inside the repo; defaults to the repo root", .optional = true },
@@ -145,7 +145,7 @@ pub const tool_defs = [_]Tool{
             .{ .name = "kinds", .desc = "keep only hits of these kinds, e.g. [\"code\"] to skip comments and strings", .optional = true, .ty = "array" },
             .{ .name = "offset", .desc = "skip this many ranked hits, to page through a long answer", .optional = true, .ty = "integer" },
             .{ .name = "detail", .desc = "\"full\" lifts the reply size budget (up to 200 hits); the default is \"compact\"", .optional = true },
-            .{ .name = "certificate", .desc = "add the answer's certificate: snapshot root, scope counts, excluded paths and budgets", .optional = true, .ty = "boolean" },
+            .{ .name = "certificate", .desc = "reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -206,6 +206,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     session_search.start();
     defer session_search.deinit();
     served.search_session = &session_search;
+    served.search_text = true;
     var language_service: tsserver.Session = .{ .gpa = gpa, .io = io, .root = root };
     defer language_service.deinit();
     served.language_service = &language_service;
