@@ -864,6 +864,85 @@ def run_seen_hook(label, trials):
             print(q["id"], trial, record["result"].get("total_cost_usd"), record["wall_ms"], "ms")
 
 
+PRICE = {"input": 2.0e-6, "output": 10.0e-6, "cache_read": 0.2e-6, "cache_write": 4.0e-6}
+QUESTION_TOKENS = 60
+TOOL_CALL_TOKENS = 80
+ANSWER_TOKENS = 600
+EVIDENCE_TOKENS = round(HOOK_CHARS / 2.02)
+LISTING_TOKENS = round(8000 / 2.02)
+
+
+def first_usage(label, qid="S1"):
+    calls = os.path.join(label_dir(label), "calls")
+    names = sorted(n for n in os.listdir(calls) if n.startswith(qid + "-"))
+    usage = read_json(os.path.join(calls, names[0]))["result"].get("usage") or {}
+    return usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+
+
+class Session:
+    def __init__(self, prefix):
+        self.prefix = prefix
+        self.context = prefix
+        self.cost = 0.0
+        self.tokens = {"cache_write": 0, "cache_read": 0, "output": 0}
+        self.turns = 0
+        self.warm = False
+
+    def turn(self, new_tokens, output_tokens):
+        if self.warm:
+            self.tokens["cache_read"] += self.context
+            self.cost += self.context * PRICE["cache_read"]
+        else:
+            self.tokens["cache_write"] += self.context
+            self.cost += self.context * PRICE["cache_write"]
+            self.warm = True
+        self.tokens["cache_write"] += new_tokens
+        self.cost += new_tokens * PRICE["cache_write"] + output_tokens * PRICE["output"]
+        self.tokens["output"] += output_tokens
+        self.context += new_tokens + output_tokens
+        self.turns += 1
+
+
+def expected_session(prefix, questions, p_one, p_two, hook_tokens):
+    total_cost = 0.0
+    totals = {"cache_write": 0, "cache_read": 0, "output": 0}
+    turns = 0.0
+    for outcome, weight in (("one", p_one), ("two", p_two), ("three", 1 - p_one - p_two)):
+        if weight <= 0:
+            continue
+        s = Session(prefix)
+        for _ in range(questions):
+            if outcome == "one":
+                s.turn(QUESTION_TOKENS + hook_tokens, ANSWER_TOKENS)
+            elif outcome == "two":
+                s.turn(QUESTION_TOKENS + hook_tokens, TOOL_CALL_TOKENS)
+                s.turn(EVIDENCE_TOKENS, ANSWER_TOKENS)
+            else:
+                s.turn(QUESTION_TOKENS + hook_tokens, TOOL_CALL_TOKENS)
+                s.turn(LISTING_TOKENS, TOOL_CALL_TOKENS)
+                s.turn(EVIDENCE_TOKENS, ANSWER_TOKENS)
+        total_cost += weight * s.cost
+        turns += weight * s.turns / questions
+        for k in totals:
+            totals[k] += weight * s.tokens[k]
+    return {"usd": round(total_cost, 4), "turns_per_question": round(turns, 2), **{k: round(v) for k, v in totals.items()}}
+
+
+def cost_model(rows_spec):
+    probe = first_usage("probe", "P")
+    out = []
+    for spec in rows_spec:
+        name, label, p_sym, p_hook, hook = spec
+        prefix = first_usage(label) - QUESTION_TOKENS if label else probe
+        p_one = p_hook
+        p_two = (1 - p_hook) * p_sym
+        row = {"option": name, "prefix_tokens": prefix, "hook_tokens": hook, "p_one_turn": round(p_one, 3), "p_two_turns": round(p_two, 3)}
+        for q in (1, 3, 10):
+            row[f"q{q}"] = expected_session(prefix, q, p_one, p_two, hook)
+        out.append(row)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="M1 map selection gate: the model picks regions and symbols from the map alone")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -891,10 +970,36 @@ def main():
     h = sub.add_parser("seen-hook")
     h.add_argument("label")
     h.add_argument("--trials", type=int, default=1)
+    m = sub.add_parser("cost")
+    m.add_argument("--hook-label", default="v2-24k")
+    m.add_argument("--small-tokens", type=int, default=8000)
     sub.add_parser("spent")
     args = parser.parse_args()
     if args.command == "rank":
         rank_eval(args.label, args.set)
+        return
+    if args.command == "cost":
+        def rate(label, key):
+            s = read_json(os.path.join(label_dir(label), "score.json"))["summary"]["seen"]
+            return s[key] / s["calls"]
+        rank = read_json(os.path.join(label_dir(args.hook_label), "rank.json"))["summary"]
+        hook_tokens = round(rank["seen"]["mean_block_chars"] / 2.02)
+        small_prefix = args.small_tokens + first_usage("probe", "P")
+        rows = cost_model([
+            ("map 16k budget (v1, measured 26k)", "v1", rate("v1", "symbol"), 0.0, 0),
+            ("map 24k", "v2-24k", rate("v2-24k", "symbol"), 0.0, 0),
+            ("map 32k", "v3-32k", rate("v3-32k", "symbol"), 0.0, 0),
+        ])
+        for name, p_hook in (("small map + hook, seen ranker hit", rank["seen"]["code_full"]), ("small map + hook, general ranker hit", rank["general"]["code_full"])):
+            row = {"option": f"{name} ({args.small_tokens} map tokens)", "prefix_tokens": small_prefix, "hook_tokens": hook_tokens, "p_one_turn": p_hook, "p_two_turns": 0.0}
+            for q in (1, 3, 10):
+                row[f"q{q}"] = expected_session(small_prefix, q, p_hook, 0.0, hook_tokens)
+            rows.append(row)
+        write_json(os.path.join(RUNS, "cost-model.json"), {"prices_per_token": PRICE, "assumptions": {"question": QUESTION_TOKENS, "tool_call": TOOL_CALL_TOKENS, "answer": ANSWER_TOKENS, "evidence": EVIDENCE_TOKENS, "listing": LISTING_TOKENS}, "rows": rows})
+        for r in rows:
+            print(r["option"], "prefix", r["prefix_tokens"], "hook", r["hook_tokens"], "1-turn", r["p_one_turn"], "2-turn", r["p_two_turns"])
+            for q in (1, 3, 10):
+                print("   ", q, "questions:", r[f"q{q}"])
         return
     if args.command == "seen-hook":
         run_seen_hook(args.label, args.trials)
