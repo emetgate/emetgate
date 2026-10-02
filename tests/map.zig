@@ -137,7 +137,7 @@ test "map: every symbol of the store is in exactly one region and every region i
         const built = try map.buildMap(arena, &repo.store, .{ .region_chars = capacity, .budget_tokens = 4_000 });
         try testing.expectEqualSlices(u64, try allSymbols(arena, &repo), try regionSymbols(arena, built));
         for (built.regions) |r| {
-            const line = try std.fmt.allocPrint(arena, "r{d} ", .{r.id + 1});
+            const line = try std.fmt.allocPrint(arena, "\nr{d} ", .{r.id + 1});
             try testing.expect(std.mem.indexOf(u8, built.text, line) != null);
             if (r.listing_chars > built.stats.region_chars) try testing.expectEqual(@as(usize, 1), r.files.len);
         }
@@ -260,7 +260,7 @@ test "map: a heavy file that its region path does not show is named on the regio
     try testing.expect(!built.stats.complete);
     const region = built.regions[try regionOf(built, "pkg/gamma.ts")];
     try testing.expect(std.mem.indexOf(u8, region.label, "gamma") == null);
-    const line_start = std.mem.indexOf(u8, built.text, try std.fmt.allocPrint(arena, "r{d} ", .{region.id + 1})).?;
+    const line_start = std.mem.indexOf(u8, built.text, try std.fmt.allocPrint(arena, "\nr{d} ", .{region.id + 1})).? + 1;
     const line_end = std.mem.indexOfScalarPos(u8, built.text, line_start, '\n').?;
     try testing.expect(std.mem.indexOf(u8, built.text[line_start..line_end], "[gamma") != null);
     try testing.expect(built.stats.files_named >= 1);
