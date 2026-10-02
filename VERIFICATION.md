@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1254**
-- Mutations declared in `tests/mutations.json`: **747**
-  - killed: **717**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1255**
+- Mutations declared in `tests/mutations.json`: **748**
+  - killed: **718**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -556,7 +556,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-287 mutation(s).
+288 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -844,9 +844,10 @@ python tools/verification_page.py --check
 | `RS4-racy-entry-saved-with-its-real-stamp` | `src/platform/search_index.zig` | `const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_...` -> `const stamp: Stamp = e.stamp;` | saving smudges the stamp of an entry read inside the racy window, so the next s... | killed |
 | `EP3-git-tool-runs-bare-git` | `src/protocol/git_tools.zig` | `argv[0] = git;` -> `_ = &argv;` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
 | `EP4-program-files-run-bare-git` | `src/platform/tsserver.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
-| `EP5-working-directory-entry-searched` | `src/platform/exe_path.zig` | `if (search.cwd) \|cwd\| if (within(dir, cwd)) continue;` -> `if (search.cwd) \|cwd\| _ = cwd;` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
-| `EP6-repository-entry-searched` | `src/platform/exe_path.zig` | `if (search.repo_root) \|root\| if (within(dir, root)) continue;` -> `if (search.repo_root) \|root\| _ = root;` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
+| `EP5-working-directory-entry-searched` | `src/platform/exe_path.zig` | `if (search.cwd) \|cwd\| if (inside(dir, dir_final, cwd, cwd_fin...` -> `if (search.cwd) \|cwd\| _ = cwd;` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
+| `EP6-repository-entry-searched` | `src/platform/exe_path.zig` | `if (search.repo_root) \|root\| if (inside(dir, dir_final, root,...` -> `if (search.repo_root) \|root\| _ = root;` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
 | `EP7-relative-entry-searched` | `src/platform/exe_path.zig` | `if (dir.len == 0 or !fullyQualified(dir)) continue;` -> `if (dir.len == 0) continue;` | exe path: a name found nowhere else, a relative name and a relative path entry ... | killed |
+| `EP8-junction-entry-compared-as-text` | `src/platform/exe_path.zig` | `if (dir_final != null and base_final != null) return withinWide...` -> `_ = dir_final;     _ = base_final;` | exe path: a PATH entry that reaches the repository or the working directory thr... | killed |
 
 ## What this system does not prove
 
