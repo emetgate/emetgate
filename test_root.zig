@@ -31,6 +31,7 @@ pub const facts_spine = src.facts_spine;
 pub const facts_merkle = src.facts_merkle;
 pub const facts_outline = src.facts_outline;
 pub const facts_tests = src.facts_tests;
+pub const facts_signature = src.facts_signature;
 pub const evidence_request = src.evidence_request;
 pub const evidence = src.evidence;
 pub const coverage = src.coverage;
@@ -146,6 +147,7 @@ test {
     _ = @import("tests/evidence.zig");
     _ = @import("tests/facts_outline.zig");
     _ = @import("tests/facts_tests.zig");
+    _ = @import("tests/facts_signature.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");

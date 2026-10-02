@@ -7512,6 +7512,46 @@
       "note": "a store opened from disk would name no test"
     },
     {
+      "id": "SD1-comment-above-not-read",
+      "file": "src/engine/facts_signature.zig",
+      "from": "if (!profile.isComment(comment.kind())) break;",
+      "to": "if (true) break;",
+      "kills": [
+        "signatures: a definition keeps its signature up to its body and the first line of the comment right above it"
+      ],
+      "note": "no definition would carry the first line of its doc comment"
+    },
+    {
+      "id": "SD2-signature-cut-at-first-line",
+      "file": "src/engine/facts_signature.zig",
+      "from": "if (body_start != none and body_start > start and body_start <= span.end) {",
+      "to": "if (body_start != none and body_start > start and body_start <= span.end and false) {",
+      "kills": [
+        "signatures: a definition keeps its signature up to its body and the first line of the comment right above it"
+      ],
+      "note": "a signature over several lines would lose its parameters and return type"
+    },
+    {
+      "id": "SD3-detached-comment-taken",
+      "file": "src/engine/facts_signature.zig",
+      "from": "if (lines.lineAt(comment.endByte() -| 1) + 1 < next_line) break;",
+      "to": "if (lines.lineAt(comment.endByte() -| 1) + 1 < next_line and false) break;",
+      "kills": [
+        "signatures: a definition keeps its signature up to its body and the first line of the comment right above it"
+      ],
+      "note": "a comment separated by a blank line would be taken as the doc of the next definition"
+    },
+    {
+      "id": "FF4-signature-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "        try e.str(d.signature);\n",
+      "to": "        try e.str(\"\");\n",
+      "kills": [
+        "fact store: a saved store opens again with every outline node, test block and body start it was saved with"
+      ],
+      "note": "a store opened from disk would list definitions without their signatures"
+    },
+    {
       "id": "EV9-long-line-not-cut",
       "file": "src/engine/evidence.zig",
       "from": "if (text.len <= max_line_chars) return",

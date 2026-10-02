@@ -73,7 +73,7 @@ emetgate verify HEAD --test "npm test"
 
 A receipt is an in-toto statement in canonical JSON (RFC 8785). `emetgate verify` checks a commit without trusting the process that wrote it: it recomputes hashes and alpha hashes and reruns the tests in the sandbox. A change with no receipt, or a file edited after the gate, is reported `unverified`, never green.
 
-The checker imports no code that writes. It trusts <!-- generated:verifier-tcb -->2,635 non-blank lines of Zig in 23 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus tree-sitter and the Zig standard library. A second checker in Python, written from the receipt format alone (<!-- generated:python-checker-size -->383 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->), runs on every verify test and must agree with the first.
+The checker imports no code that writes. It trusts <!-- generated:verifier-tcb -->2,639 non-blank lines of Zig in 23 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus tree-sitter and the Zig standard library. A second checker in Python, written from the receipt format alone (<!-- generated:python-checker-size -->383 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->), runs on every verify test and must agree with the first.
 
 ## Measured
 

@@ -234,6 +234,10 @@ fn defs(repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
             try js.write(d.name_start);
             try js.objectField("exported");
             try js.write(d.exported);
+            try js.objectField("signature");
+            try js.write(d.signature);
+            try js.objectField("doc");
+            try js.write(d.doc);
             try js.objectField("parse_errors");
             try js.write(state.facts.parse_errors);
             try js.endObject();
