@@ -458,8 +458,20 @@ test "fact store: evidence of a target whose file grew over the size limit names
 }
 
 const kernel32 = struct {
+    const FileTime = extern struct { low: u32, high: u32 };
+    extern "kernel32" fn SetFileTime(file: std.os.windows.HANDLE, creation: ?*const FileTime, access: ?*const FileTime, write: ?*const FileTime) callconv(.winapi) std.os.windows.BOOL;
     extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: std.os.windows.DWORD, share: std.os.windows.DWORD, security: ?*anyopaque, disposition: std.os.windows.DWORD, flags: std.os.windows.DWORD, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
 };
+
+fn writtenLongAgo(path: []const u8) !void {
+    const wide = try std.unicode.wtf8ToWtf16LeAllocZ(testing.allocator, path);
+    defer testing.allocator.free(wide);
+    const handle = kernel32.CreateFileW(wide, 0x100, 0x7, null, 3, 0x80, null);
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.TouchFailed;
+    defer std.os.windows.CloseHandle(handle);
+    const old: kernel32.FileTime = .{ .low = 0, .high = 30_000_000 };
+    if (kernel32.SetFileTime(handle, null, null, &old) == .FALSE) return error.TouchFailed;
+}
 
 fn holdWithoutSharing(path: []const u8) !std.os.windows.HANDLE {
     const wide = try std.unicode.wtf8ToWtf16LeAllocZ(testing.allocator, path);
@@ -569,6 +581,7 @@ test "fact store: a refresh reads past a file another handle holds at once, name
     defer repo.deinit();
     const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{fixture.root});
     defer testing.allocator.free(abs);
+    try writtenLongAgo(abs);
     const holder = try holdWithoutSharing(abs);
     const held = try repo.refresh();
     std.os.windows.CloseHandle(holder);
