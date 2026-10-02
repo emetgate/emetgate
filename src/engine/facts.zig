@@ -100,6 +100,8 @@ pub const Def = struct {
     exported: bool = false,
     is_static: bool = false,
     body_start: u32 = none,
+    signature: []const u8 = "",
+    doc: []const u8 = "",
 };
 
 pub const Ref = struct {
@@ -221,6 +223,8 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         slot.* = d;
         slot.name = try c.str(d.name);
         slot.qname = try c.str(d.qname);
+        slot.signature = try c.str(d.signature);
+        slot.doc = try c.str(d.doc);
     }
     const refs = try arena.alloc(Ref, from.refs.len);
     for (from.refs, refs) |r, *slot| {

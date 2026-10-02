@@ -197,6 +197,7 @@ pub const Facts = struct {
     test_calls: []const []const u8 = &.{},
     test_file_infixes: []const []const u8 = &.{},
     test_dirs: []const []const u8 = &.{},
+    doc_directives: []const []const u8 = &.{},
 };
 
 pub const Profile = struct {

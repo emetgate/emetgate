@@ -29,6 +29,7 @@ pub const facts_spine = @import("engine/facts_spine.zig");
 pub const facts_merkle = @import("engine/facts_merkle.zig");
 pub const facts_outline = @import("engine/facts_outline.zig");
 pub const facts_tests = @import("engine/facts_tests.zig");
+pub const facts_signature = @import("engine/facts_signature.zig");
 pub const evidence_request = @import("engine/evidence_request.zig");
 pub const evidence = @import("engine/evidence.zig");
 pub const coverage = @import("engine/coverage.zig");

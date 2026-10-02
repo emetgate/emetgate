@@ -23,6 +23,8 @@ const test_file_infixes = [_][]const u8{ ".test.", ".spec." };
 
 const test_dirs = [_][]const u8{"__tests__"};
 
+const doc_directives = [_][]const u8{ "eslint-", "@ts-", "prettier-ignore", "istanbul ignore", "c8 ignore", "biome-ignore", "tslint:", "#region", "#endregion" };
+
 const typed_binders = [_]TypedBinder{
     .{ .node = "variable_declarator", .name_field = "name", .type_field = "type" },
     .{ .node = "required_parameter", .name_field = "pattern", .type_field = "type" },
@@ -34,6 +36,7 @@ pub const typescript: Facts = .{
     .test_calls = &test_calls,
     .test_file_infixes = &test_file_infixes,
     .test_dirs = &test_dirs,
+    .doc_directives = &doc_directives,
     .member = "member_expression",
     .object_field = "object",
     .property_field = "property",
@@ -65,6 +68,7 @@ pub const javascript: Facts = .{
     .test_calls = &test_calls,
     .test_file_infixes = &test_file_infixes,
     .test_dirs = &test_dirs,
+    .doc_directives = &doc_directives,
     .member = "member_expression",
     .object_field = "object",
     .property_field = "property",

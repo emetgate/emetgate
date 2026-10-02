@@ -541,6 +541,8 @@ test "fact store: a saved store opens again with every outline node, test block 
     var outline: []const facts.Outline = &.{};
     var blocks: []facts.TestBlock = &.{};
     var bodies: []u32 = &.{};
+    var signatures: [][]const u8 = &.{};
+    var docs: [][]const u8 = &.{};
     {
         const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
         defer repo.deinit();
@@ -549,6 +551,12 @@ test "fact store: a saved store opens again with every outline node, test block 
         outline = try keep.dupe(facts.Outline, source.outline);
         bodies = try keep.alloc(u32, source.defs.len);
         for (source.defs, bodies) |d, *slot| slot.* = d.body_start;
+        signatures = try keep.alloc([]const u8, source.defs.len);
+        docs = try keep.alloc([]const u8, source.defs.len);
+        for (source.defs, signatures, docs) |d, *signature, *doc| {
+            signature.* = try keep.dupe(u8, d.signature);
+            doc.* = try keep.dupe(u8, d.doc);
+        }
         const suite = repo.store.file(repo.store.fileId("a.test.ts").?).facts;
         blocks = try keep.dupe(facts.TestBlock, suite.tests);
         for (blocks) |*b| b.title = try keep.dupe(u8, b.title);
@@ -564,6 +572,11 @@ test "fact store: a saved store opens again with every outline node, test block 
     try testing.expect(sameOutline(outline, source.outline));
     try testing.expectEqual(bodies.len, source.defs.len);
     for (bodies, source.defs) |body, d| try testing.expectEqual(body, d.body_start);
+    for (signatures, docs, source.defs) |signature, doc, d| {
+        try testing.expectEqualStrings(signature, d.signature);
+        try testing.expectEqualStrings(doc, d.doc);
+    }
+    try testing.expectEqualStrings("export function f(x: number)", signatures[1]);
     try testing.expect(bodies[1] != facts.none);
     try testing.expect(sameTests(blocks, repo.store.file(repo.store.fileId("a.test.ts").?).facts.tests));
 }

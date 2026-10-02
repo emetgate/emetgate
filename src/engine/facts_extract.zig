@@ -10,6 +10,7 @@ const facts = @import("facts.zig");
 const facts_spine = @import("facts_spine.zig");
 const facts_outline = @import("facts_outline.zig");
 const facts_tests = @import("facts_tests.zig");
+const facts_signature = @import("facts_signature.zig");
 const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 
@@ -146,6 +147,13 @@ const Extractor = struct {
         return @intCast(low + 1);
     }
 
+    fn describe(self: *Extractor, def: *facts.Def, node: ts.Node) Error!void {
+        const source = self.snapshot.source;
+        const lines: facts_spine.Lines = .{ .starts = self.line_starts, .bytes = source };
+        def.signature = try facts_signature.signatureOf(self.arena, source, def.span, def.body_start);
+        def.doc = try facts_signature.docOf(self.arena, self.profile, source, lines, node, def.span);
+    }
+
     fn collectDefs(self: *Extractor) Error!void {
         const table = try symbol.Table.buildTolerant(self.arena, self.profile, self.snapshot.tree);
         var drafts: std.ArrayList(Draft) = .empty;
@@ -165,6 +173,7 @@ const Extractor = struct {
                 .is_static = s.ref.is_static,
                 .body_start = bodyStart(s.node),
             } });
+            try self.describe(&drafts.items[drafts.items.len - 1].def, s.node);
         }
         for (table.declarations) |d| {
             try drafts.append(self.arena, .{ .node_start = d.node.startByte(), .def = .{
@@ -180,6 +189,7 @@ const Extractor = struct {
                 .is_static = d.ref.is_static,
                 .body_start = bodyStart(d.node),
             } });
+            try self.describe(&drafts.items[drafts.items.len - 1].def, d.node);
         }
         std.mem.sort(Draft, drafts.items, {}, draftLess);
         const source = self.snapshot.source;
