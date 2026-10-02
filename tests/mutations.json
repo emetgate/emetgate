@@ -8210,8 +8210,8 @@
     {
       "id": "LK5-jail-name-waits-in-std",
       "file": "src/platform/repo.zig",
-      "from": "    const handle = open_nowait.openAttributes(path, true) catch return null;\n    defer windows.CloseHandle(handle);",
-      "to": "    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .allow_directory = true }) catch return null;\n    const handle = file.handle;\n    defer windows.CloseHandle(handle);",
+      "from": "    return exe_path.finalName(buf, path);",
+      "to": "    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .allow_directory = true }) catch return null;\n    defer windows.CloseHandle(file.handle);\n    return std.Io.Threaded.GetFinalPathNameByHandle(file.handle, .{ .volume_name = .Nt }, buf) catch null;",
       "kills": [
         "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms"
       ]

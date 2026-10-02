@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const exe_path = @import("exe_path.zig");
-const open_nowait = @import("open_nowait.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -50,10 +49,8 @@ fn cwdReal(gpa: Allocator, io: std.Io) ![:0]u8 {
     return real;
 }
 
-fn ntName(path: []const u8, buf: []u16) ?[]u16 {
-    const handle = open_nowait.openAttributes(path, true) catch return null;
-    defer windows.CloseHandle(handle);
-    return std.Io.Threaded.GetFinalPathNameByHandle(handle, .{ .volume_name = .Nt }, buf) catch null;
+fn ntName(path: []const u8, buf: []u16) ?[]const u16 {
+    return exe_path.finalName(buf, path);
 }
 
 fn sameWideIgnoreCase(a: []const u16, b: []const u16) bool {
@@ -66,7 +63,7 @@ fn sameWideIgnoreCase(a: []const u16, b: []const u16) bool {
     return true;
 }
 
-fn rootNt(root: []const u8, out: []u16) ?[]u16 {
+fn rootNt(root: []const u8, out: []u16) ?[]const u16 {
     names.guard.lock();
     if (names.root_len == root.len and std.mem.eql(u8, names.root[0..names.root_len], root)) {
         defer names.guard.unlock();
