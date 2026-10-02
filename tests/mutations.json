@@ -7118,7 +7118,7 @@
       "id": "FCSP1-small-block-not-kept-whole",
       "file": "src/engine/facts_spine.zig",
       "from": "if (s_last - s_first + 1 <= max_block_lines) {",
-      "to": "if (false) {",
+      "to": "if (s_last - s_first + 1 <= max_block_lines and false) {",
       "kills": [
         "spine: the lines around a call keep its whole small if statement and the headers of the large blocks around it"
       ]
