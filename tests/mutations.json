@@ -6387,8 +6387,7 @@
       "from": "    if (hasTopLevelAlternation(pattern)) return pattern[0..0];\n",
       "to": "",
       "kills": [
-        "longestLiteralChunk never returns text a match can do without",
-        "a regex whose literal parts are optional or alternatives still finds every file that matches"
+        "longestLiteralChunk never returns text a match can do without"
       ]
     },
     {
