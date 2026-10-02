@@ -243,6 +243,35 @@ test "fact store: a tracked file whose directory is gone is reported unreadable 
     try testing.expectEqualStrings("gone/b.ts", result.missingList()[0].path.?);
 }
 
+test "fact store: a clean refresh keeps the words of files with syntax errors and of unindexed files after the workers free their bytes" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var files: std.ArrayList(File) = .empty;
+    for (0..8) |i| try files.append(arena, .{ .path = try std.fmt.allocPrint(arena, "src/broken{d}.ts", .{i}), .data = try std.fmt.allocPrint(arena, "export function f{d}( {{\n  return brokenWord{d} +;\n}}\n", .{ i, i }) });
+    for (0..2) |i| try files.append(arena, .{ .path = try std.fmt.allocPrint(arena, "src/view{d}.vue", .{i}), .data = try std.fmt.allocPrint(arena, "<script>\nexport default {{ name: vueWord{d} }}\n</script>\n", .{i}) });
+    var fixture = try Fixture.init(files.items);
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    const report = try repo.refresh();
+    try testing.expectEqual(@as(usize, 10), report.extracted);
+    for (files.items, 0..) |f, i| {
+        const word = if (i < 8) try std.fmt.allocPrint(arena, "brokenWord{d}", .{i}) else try std.fmt.allocPrint(arena, "vueWord{d}", .{i - 8});
+        const holders = repo.store.token_files.get(word) orelse {
+            std.debug.print("no file keeps the word {s} of {s}\n", .{ word, f.path });
+            return error.WordLost;
+        };
+        const id = repo.store.fileId(f.path).?;
+        const kept = for (holders.items) |key| {
+            if (key.file == id) break true;
+        } else false;
+        try testing.expect(kept);
+    }
+}
+
 test "fact store: an invalid package manifest is reported, never skipped in silence" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);

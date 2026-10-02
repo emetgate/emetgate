@@ -7055,6 +7055,16 @@
       "note": "silent drop: a corrupt store would be rebuilt with no reason given"
     },
     {
+      "id": "FCP7-worker-words-point-into-freed-bytes",
+      "file": "src/platform/fact_store.zig",
+      "from": "if (!entry.found_existing) entry.key_ptr.* = try arena.dupe(u8, bytes[start..i]);",
+      "to": "if (!entry.found_existing) entry.key_ptr.* = bytes[start..i];",
+      "kills": [
+        "fact store: a clean refresh keeps the words of files with syntax errors and of unindexed files after the workers free their bytes"
+      ],
+      "note": "the words of a file with syntax errors would point into bytes a worker freed before the store copied them"
+    },
+    {
       "id": "FCP5-invalid-manifest-not-reported",
       "file": "src/platform/fact_modules.zig",
       "from": "                try self.notes.append(a, .{ .path = try a.dupe(u8, rel), .problem = \"invalid json\" });\n",

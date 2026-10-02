@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1249**
-- Mutations declared in `tests/mutations.json`: **739**
-  - killed: **709**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1250**
+- Mutations declared in `tests/mutations.json`: **740**
+  - killed: **710**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -554,7 +554,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-281 mutation(s).
+282 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -817,6 +817,7 @@ python tools/verification_page.py --check
 | `FCP2-failed-listing-not-counted` | `src/platform/fact_store.zig` | `self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit })...` -> `self.fs.list(dir, .{ .context = &visit, .visit = Visit.visit })...` | fact store: a tracked file whose directory is gone is reported unreadable and t... | killed |
 | `FCP3-store-checksum-not-verified` | `src/platform/fact_file.zig` | `if (!std.mem.eql(u8, &sum, bytes[bytes.len - checksum_len ..]))...` -> `_ = &sum;` | fact store: a store whose definition name was altered on disk is refused by its... | killed |
 | `FCP4-corrupt-store-reported-as-absent` | `src/platform/fact_file.zig` | `const body = verified(bytes) catch \|err\| return .{ .rebuilt =...` -> `const body = verified(bytes) catch \|err\| return if (@intFromE...` | fact store: a store file with one flipped byte is rebuilt and says why | killed |
+| `FCP7-worker-words-point-into-freed-bytes` | `src/platform/fact_store.zig` | `if (!entry.found_existing) entry.key_ptr.* = try arena.dupe(u8,...` -> `if (!entry.found_existing) entry.key_ptr.* = bytes[start..i];` | fact store: a clean refresh keeps the words of files with syntax errors and of ... | killed |
 | `FCP5-invalid-manifest-not-reported` | `src/platform/fact_modules.zig` | `try self.notes.append(a, .{ .path = try a.dupe(u8, rel), .probl...` -> `` | fact store: an invalid package manifest is reported, never skipped in silence | killed |
 | `FCE1-evidence-budget-not-enforced` | `src/engine/facts_evidence.zig` | `return self.used + text.len + 1 + reserve <= self.limit;` -> `return self.used + text.len + 1 + reserve <= self.limit or true;` | facts evidence: a partial answer ends with the not-a-proof line and stays withi...; facts... | killed |
 | `FCE3-elided-range-not-declared` | `src/engine/facts_evidence.zig` | `if (range.first > next) _ = try self.push(try self.elisionLine(...` -> `` | facts evidence: a function over the budget keeps the whole block around each ca... | killed |
