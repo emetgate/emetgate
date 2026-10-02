@@ -402,11 +402,20 @@ pub fn select(arena: Allocator, p: *const Plan, budget: u64) ![]bool {
             if (list.items.len != 0) total += std.math.pow(f64, m, p.quota_power);
         }
         const pool: f64 = @floatFromInt(budget);
-        for (by_region, 0..) |list, r| {
+        const wanted = try arena.alloc(f64, p.regions);
+        @memset(wanted, 0);
+        var wanted_total: f64 = 0;
+        for (by_region, wanted, 0..) |list, *w, r| {
             if (list.items.len == 0 or total <= 0) continue;
-            const share: u64 = @intFromFloat(@floor(pool * std.math.pow(f64, p.mass[r], p.quota_power) / total));
-            if (share <= region_spent[r] or spent >= budget) continue;
-            const quota = @min(share - region_spent[r], budget - spent);
+            const share = pool * std.math.pow(f64, p.mass[r], p.quota_power) / total;
+            w.* = @max(0, share - @as(f64, @floatFromInt(region_spent[r])));
+            wanted_total += w.*;
+        }
+        const left: f64 = @floatFromInt(budget - spent);
+        const scale = if (wanted_total > left) left / wanted_total else 1;
+        for (by_region, wanted) |list, w| {
+            const quota: u64 = @intFromFloat(@floor(w * scale));
+            if (quota == 0 or spent >= budget) continue;
             const sub = try arena.alloc(map_terms.Candidate, list.items.len);
             for (list.items, sub) |k, *c| c.* = p.candidates[k];
             const picked = try map_terms.greedy(arena, p.weights, current, sub, quota);
