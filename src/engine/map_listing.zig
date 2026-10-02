@@ -331,7 +331,7 @@ fn fillDetails(arena: Allocator, files: []File, rows: []Row, source: facts_evide
         const table = profile.map orelse continue;
         const got = source.file(f.path) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.Unavailable => continue,
+            error.Changed, error.Vanished, error.TooLarge, error.Unreadable => continue,
         };
         for (rows[r..end]) |*row| {
             const d = state.facts.defs[row.def];

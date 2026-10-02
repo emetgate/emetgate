@@ -110,8 +110,8 @@ const Sources = struct {
 
     fn fileOf(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
         const self: *Sources = @ptrCast(@alignCast(ctx));
-        const bytes = self.repo.sources.get(path) orelse return error.Unavailable;
-        const profile = registry.forPath(path) orelse return error.Unavailable;
+        const bytes = self.repo.sources.get(path) orelse return error.Vanished;
+        const profile = registry.forPath(path) orelse return error.Unreadable;
         return .{ .bytes = bytes, .profile = profile };
     }
 };
