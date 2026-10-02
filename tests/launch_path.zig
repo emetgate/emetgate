@@ -92,7 +92,7 @@ fn exercise(planted: *Planted, runtime: *Runtime) !void {
     var line: std.Io.Writer.Allocating = .init(gpa);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
-    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_git", .arguments = .{ .sub = "log", .n = 1 } } });
+    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_git", .arguments = .{ .sub = "log", .n = 1, .path = planted.root } } });
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = planted.root });
