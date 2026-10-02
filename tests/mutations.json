@@ -7344,7 +7344,7 @@
       "id": "EP5-working-directory-entry-searched",
       "file": "src/platform/exe_path.zig",
       "from": "        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, cwd_final)) continue;",
-      "to": "        if (search.cwd) |cwd| _ = cwd;",
+      "to": "        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, cwd_final) and dir.len == 0) continue;",
       "kills": [
         "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
       ]
@@ -7353,7 +7353,7 @@
       "id": "EP6-repository-entry-searched",
       "file": "src/platform/exe_path.zig",
       "from": "        if (search.repo_root) |root| if (inside(dir, dir_final, root, root_final)) continue;",
-      "to": "        if (search.repo_root) |root| _ = root;",
+      "to": "        if (search.repo_root) |root| if (inside(dir, dir_final, root, root_final) and dir.len == 0) continue;",
       "kills": [
         "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
       ]
