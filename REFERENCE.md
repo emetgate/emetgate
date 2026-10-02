@@ -738,9 +738,13 @@ says `delegated to rg`. A pattern ripgrep rejects too answers `error: InvalidReg
 <ripgrep's message>`; with no ripgrep on PATH the answer is `error: RegexNeedsRipgrep`.
 `kinds` cannot be applied to a delegated pattern (`KindsNeedAnIndexedPattern`).
 
-**Structured reply.** `format:"json"`, and any call with `certificate:true` or `stats:true`,
-returns the structured reply that the benches, the simulation runner and the certificate
-checker read; outside `emetgate mcp` (library calls and tests) it is the default. It starts
+**Structured reply.** The model's tool has no `format`, `certificate` or `stats`:
+`emetgate mcp` leaves them out of the tool's schema and ignores them in a call, so the model
+always gets the text above and its tool list carries none of their descriptions. They serve
+the benches, the simulation runner and the certificate checker. In library calls and tests
+the structured reply is the default; `emetgate mcp --search-internals` keeps the text reply
+but obeys `format:"json"` (an unknown format is `UnknownFormat`), and a call there with
+`certificate:true` or `stats:true` gets the structured reply as well. It starts
 with `answer`, one line built by `src/engine/answer.zig` (`✓ 18 matches in 157 files @3fa2`
 or `partial: 31 matches in 120 of 157 files @3fa2; missing 37 match_limit`, with `;
 excluded 412 binary, 37 > 1 MiB` when a declared rule left files out), then `status`,
