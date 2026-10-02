@@ -6709,8 +6709,8 @@
     {
       "id": "IOS1-read-error-becomes-empty-content",
       "file": "src/platform/io_seam.zig",
-      "from": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch |err| return readError(err);",
-      "to": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch return gpa.alloc(u8, 0);",
+      "from": "        return open_nowait.readFileAlloc(gpa, path, limit -| 1) catch |err| return nowaitReadError(err);",
+      "to": "        return open_nowait.readFileAlloc(gpa, path, limit -| 1) catch return gpa.alloc(u8, 0);",
       "kills": [
         "the real file system reads below the limit and refuses a file at the limit as too large"
       ]
@@ -6727,8 +6727,8 @@
     {
       "id": "IOS3-stat-error-becomes-empty-file",
       "file": "src/platform/io_seam.zig",
-      "from": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch |err| return statError(err);",
-      "to": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch return .{ .kind = .file, .size = 0, .mtime_ns = 0, .id = 0 };",
+      "from": "        const handle = open_nowait.openAttributes(path, follow == .follow) catch |err| return nowaitStatError(err);",
+      "to": "        const handle = open_nowait.openAttributes(path, follow == .follow) catch return .{ .kind = .file, .size = 0, .mtime_ns = 0, .id = 0 };",
       "kills": [
         "the real file system stats a file, a directory and a missing path"
       ]
@@ -7065,6 +7065,27 @@
       "note": "the words of a file with syntax errors would point into bytes a worker freed before the store copied them"
     },
     {
+      "id": "FCP8-held-file-waits-in-refresh",
+      "file": "src/platform/io_seam.zig",
+      "from": "        _ = context;\n        return open_nowait.readFileAlloc(gpa, path, limit -| 1) catch |err| return nowaitReadError(err);",
+      "to": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch |err| return readError(err);",
+      "kills": [
+        "the real file system reads a file another handle holds as busy at once and still stats and resolves it",
+        "fact store: a refresh reads past a file another handle holds at once, names it unreadable and reads it again once it is free"
+      ],
+      "note": "a file another program holds would stall every read of the store for seconds"
+    },
+    {
+      "id": "FCP9-unreadable-file-never-retried",
+      "file": "src/platform/fact_store.zig",
+      "from": "                    if (x.status == .unreadable) slot.stamp = .{};\n",
+      "to": "",
+      "kills": [
+        "fact store: a refresh reads past a file another handle holds at once, names it unreadable and reads it again once it is free"
+      ],
+      "note": "a file that was locked once would stay unreadable until it changes"
+    },
+    {
       "id": "FCP5-invalid-manifest-not-reported",
       "file": "src/platform/fact_modules.zig",
       "from": "                try self.notes.append(a, .{ .path = try a.dupe(u8, rel), .problem = \"invalid json\" });\n",
@@ -7118,7 +7139,7 @@
       "id": "FCSP1-small-block-not-kept-whole",
       "file": "src/engine/facts_spine.zig",
       "from": "if (s_last - s_first + 1 <= max_block_lines) {",
-      "to": "if (false) {",
+      "to": "if (s_last - s_first + 1 <= max_block_lines and false) {",
       "kills": [
         "spine: the lines around a call keep its whole small if statement and the headers of the large blocks around it"
       ]
@@ -7136,12 +7157,429 @@
     {
       "id": "FCP6-changed-file-shown-as-current",
       "file": "src/platform/fact_store.zig",
-      "from": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash);",
-      "to": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash) or true;",
+      "from": "if (!std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash)) return .{ .changed = bytes };",
+      "to": "if (std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash) and false) return .{ .changed = bytes };",
       "kills": [
         "fact store: evidence never shows a line of a file that changed after the snapshot as current"
       ],
       "note": "evidence would quote a line that is no longer the line the facts were computed from"
+    },
+    {
+      "id": "EV1-elided-range-not-declared",
+      "file": "src/engine/evidence.zig",
+      "from": "                    if (r.first > next) try out.append(self.arena, try self.elision(p, next, r.first - 1));\n",
+      "to": "",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "silent cut: lines between two kept blocks would vanish without an elision line"
+    },
+    {
+      "id": "EV2-whole-function-shown-half",
+      "file": "src/engine/evidence.zig",
+      "from": "while (n <= p.last) : (n += 1) try out.append(self.arena, try self.lineText(p, n));",
+      "to": "while (n < p.last) : (n += 1) try out.append(self.arena, try self.lineText(p, n));",
+      "kills": [
+        "evidence: a target that fits is shown whole between the header line and the certificate status line"
+      ],
+      "note": "a function shown as whole would lose its last line"
+    },
+    {
+      "id": "EV3-oversized-body-shown-whole",
+      "file": "src/engine/evidence.zig",
+      "from": ".whole => if (p.whole > share) {",
+      "to": ".whole => if (false) {",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a body larger than its share would be printed whole and pass the budget"
+    },
+    {
+      "id": "EV4-relation-lines-not-budgeted",
+      "file": "src/engine/evidence.zig",
+      "from": "if (self.used + text.len + 1 > self.cap) return false;",
+      "to": "if (false) return false;",
+      "kills": [
+        "evidence: the block never passes its budget whatever the budget and the intent",
+        "evidence: callers that do not fit the budget are counted, named as cut and turn the answer partial"
+      ],
+      "note": "caller, callee and unresolved lines would pass the budget"
+    },
+    {
+      "id": "EV5-unresolved-dropped",
+      "file": "src/engine/evidence.zig",
+      "from": "        for (value.unknown) |u| try self.addUnknown(u);\n",
+      "to": "",
+      "kills": [
+        "evidence: callers are shown by signature and call line, every unresolved candidate is listed and the reason is named"
+      ],
+      "note": "an unresolved candidate would vanish and the answer would read complete"
+    },
+    {
+      "id": "EV6-term-branch-not-kept-whole",
+      "file": "src/engine/lang/ecma/facts.zig",
+      "from": "\"if_statement\", \"else_clause\"",
+      "to": "\"else_clause\"",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a decides answer would show only the header of an if statement that holds a term"
+    },
+    {
+      "id": "EV7-cut-call-sites-not-counted",
+      "file": "src/engine/evidence.zig",
+      "from": "        self.cut_sites += rest.len;\n        for (rest) |site| try self.markCut(site.path);\n",
+      "to": "        _ = self;\n        _ = rest;\n",
+      "kills": [
+        "evidence: callers that do not fit the budget are counted, named as cut and turn the answer partial"
+      ],
+      "note": "silent cut: call sites left out by the budget would leave the answer complete"
+    },
+    {
+      "id": "EV8-changed-file-left-complete",
+      "file": "src/engine/evidence.zig",
+      "from": "error.Changed => try self.unread.put(self.arena, path, .changed_since_snapshot),",
+      "to": "error.Changed => {},",
+      "kills": [
+        "evidence: a target whose file changed after the snapshot is named, never shown, and the answer is partial with the change named"
+      ],
+      "note": "a target whose file changed after the snapshot would not make the answer partial"
+    },
+    {
+      "id": "EV16-vanished-file-named-unreadable",
+      "file": "src/engine/evidence.zig",
+      "from": "error.Vanished => try self.unread.put(self.arena, path, .vanished),",
+      "to": "error.Vanished => try self.unread.put(self.arena, path, .unreadable),",
+      "kills": [
+        "evidence: a target whose file was deleted is named, never shown, and the answer is partial with the file vanished"
+      ],
+      "note": "a file gone from disk would be reported as a file that cannot be read"
+    },
+    {
+      "id": "EV17-large-file-not-excluded",
+      "file": "src/engine/evidence.zig",
+      "from": "error.TooLarge => try self.excluded.put(self.arena, path, {}),",
+      "to": "error.TooLarge => try self.unread.put(self.arena, path, .unreadable),",
+      "kills": [
+        "evidence: a target whose file grew over the size limit is excluded by the declared rule and the limit is named"
+      ],
+      "note": "a file over the size limit would read as a failure instead of the declared exclusion rule"
+    },
+    {
+      "id": "EV18-missing-file-read-as-unreadable",
+      "file": "src/platform/fact_store.zig",
+      "from": "error.FileNotFound, error.IsDirectory => .vanished,",
+      "to": "error.FileNotFound, error.IsDirectory => .unreadable,",
+      "kills": [
+        "fact store: evidence of a target whose file was deleted on disk is partial and names the file vanished"
+      ],
+      "note": "a file deleted on disk would be reported as locked"
+    },
+    {
+      "id": "EV19-large-file-read-as-vanished",
+      "file": "src/platform/fact_store.zig",
+      "from": "error.TooLarge => .too_large,",
+      "to": "error.TooLarge => .vanished,",
+      "kills": [
+        "fact store: evidence of a target whose file grew over the size limit names the declared exclusion and its limit"
+      ],
+      "note": "a file over the size limit would be reported as gone"
+    },
+    {
+      "id": "EV20-changed-file-not-refreshed",
+      "file": "src/platform/fact_store.zig",
+      "from": "if (try lines.refreshChanged() == 0) return result;",
+      "to": "if (true) return result;",
+      "kills": [
+        "fact store: evidence refreshes a file changed after the snapshot and quotes its new lines"
+      ],
+      "note": "a file changed after the snapshot would stay partial instead of being refreshed and quoted"
+    },
+    {
+      "id": "EV21-exclusion-not-named",
+      "file": "src/engine/evidence.zig",
+      "from": "const exclusion = try b.exclusionLine(result);",
+      "to": "const exclusion: ?[]const u8 = null;",
+      "kills": [
+        "evidence: a target whose file grew over the size limit is excluded by the declared rule and the limit is named"
+      ],
+      "note": "a file left out by the size rule would not be named with its limit"
+    },
+    {
+      "id": "EV22-locked-file-read-as-vanished",
+      "file": "src/platform/fact_store.zig",
+      "from": "error.Busy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput => .unreadable,",
+      "to": "error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput => .unreadable,\n            error.Busy => .vanished,",
+      "kills": [
+        "fact store: evidence of a target whose file another handle holds is partial at once and names the file unreadable"
+      ],
+      "note": "a file another program holds open would be reported as gone"
+    },
+    {
+      "id": "OL1-single-line-branch-not-kept",
+      "file": "src/engine/facts_outline.zig",
+      "from": "const keep = flags.comment or flags.branch or ((flags.statement or flags.function) and multiline);",
+      "to": "const keep = flags.comment or ((flags.branch or flags.statement or flags.function) and multiline);",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a decides cut would keep a whole large branch where the parse tree keeps the one-line return inside it"
+    },
+    {
+      "id": "OL2-comment-not-kept",
+      "file": "src/engine/facts_outline.zig",
+      "from": "            .comment = comment,\n",
+      "to": "            .comment = false,\n",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a term found in a comment would no longer bring the statement the comment describes"
+    },
+    {
+      "id": "OL3-parent-link-dropped",
+      "file": "src/engine/facts_outline.zig",
+      "from": "const parent = if (open.items.len == 0) none else open.items[open.items.len - 1];",
+      "to": "const parent = if (open.items.len == 0) none else none;",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a cut body would lose the headers of the blocks around a relevant line"
+    },
+    {
+      "id": "OL4-signature-cut-to-one-line",
+      "file": "src/engine/facts_outline.zig",
+      "from": "const body_line = if (def.body_start != none and def.body_start >= def.span.start and def.body_start < def.span.end) lines.lineAt(def.body_start) else first;",
+      "to": "const body_line = first;",
+      "kills": [
+        "outline: a definition keeps its whole signature up to the line where its body opens",
+        "evidence: a function that does not fit keeps its whole signature up to the line where its body opens"
+      ],
+      "note": "a cut function would show only the first line of a signature that spans several"
+    },
+    {
+      "id": "EV10b-outline-comment-not-followed",
+      "file": "src/engine/facts_outline.zig",
+      "from": "if (follow and chain.len != 0 and outline[chain[0]].kind.comment) {",
+      "to": "if (follow and chain.len != 0 and false) {",
+      "kills": [
+        "evidence: a term found in a comment brings the statement the comment describes",
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a term found in a comment would show the comment without the code it describes"
+    },
+    {
+      "id": "EV11b-outline-function-header-dropped",
+      "file": "src/engine/facts_outline.zig",
+      "from": "if (!counts(kind, branches) and !kind.function) continue;",
+      "to": "if (!counts(kind, branches)) continue;",
+      "kills": [
+        "evidence: a cut class keeps the header of the method that holds a relevant line",
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a block inside a method of a cut class would appear without the method it belongs to"
+    },
+    {
+      "id": "TS1-test-file-not-recognized",
+      "file": "src/engine/facts_tests.zig",
+      "from": "if (std.mem.indexOf(u8, name, infix) != null) return true;",
+      "to": "if (std.mem.indexOf(u8, name, infix) != null) return false;",
+      "kills": [
+        "test blocks: test files are the ones the profile names, by test and spec infixes and __tests__ folders",
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "the tests of a target would vanish from the evidence"
+    },
+    {
+      "id": "TS2-by-name-tests-dropped",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!found.ref.kind.invokes() or !facts_query.bindable(reason)) continue;",
+      "to": "if (!found.ref.kind.invokes() or !facts_query.bindable(reason) or true) continue;",
+      "kills": [
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "a test that calls the target on a receiver of unknown type would not be named"
+    },
+    {
+      "id": "TS3-tests-switch-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": ".tests = request.include.tests orelse relations,",
+      "to": ".tests = relations,",
+      "kills": [
+        "evidence: the tests that reference a target are listed by test name with how each was bound",
+        "evidence: an explain answer brings callers, callees and tests unless the include field turns them off"
+      ],
+      "note": "a request that turns the tests off would still get them"
+    },
+    {
+      "id": "TS4-callers-switch-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": ".callers = request.include.callers orelse relations,",
+      "to": ".callers = relations,",
+      "kills": [
+        "evidence: an explain answer brings callers, callees and tests unless the include field turns them off"
+      ],
+      "note": "a request that turns callers off would still get them"
+    },
+    {
+      "id": "TS5-test-title-chain-flattened",
+      "file": "src/engine/facts_tests.zig",
+      "from": "if (i != chain.items.len) try out.appendSlice(arena, \" > \");",
+      "to": "if (i != chain.items.len) try out.appendSlice(arena, \"\");",
+      "kills": [
+        "test blocks: describe, it and test calls become nested blocks with their titles and lines",
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "a test name would run its describe titles together"
+    },
+    {
+      "id": "TS6-curried-inner-call-taken-for-a-test",
+      "file": "src/engine/facts_tests.zig",
+      "from": "if (entry.field) |field| if (std.mem.eql(u8, field, profile.call.function_field)) continue;",
+      "to": "if (entry.field) |field| if (std.mem.eql(u8, field, \"\")) continue;",
+      "kills": [
+        "test blocks: describe, it and test calls become nested blocks with their titles and lines"
+      ],
+      "note": "describe.each would add a block titled with its table"
+    },
+    {
+      "id": "BS1-budget-not-shared",
+      "file": "src/engine/evidence.zig",
+      "from": "const share = remaining / (plans.len - i);",
+      "to": "const share = remaining / @min(plans.len - i, 1);",
+      "kills": [
+        "evidence: two targets that do not fit share the budget in request order and both keep their signature and term lines"
+      ],
+      "note": "the first target would take the whole budget and the next ones would be dropped"
+    },
+    {
+      "id": "BS2-relations-before-body",
+      "file": "src/engine/evidence.zig",
+      "from": "const room = content -| (caps.tests + need);",
+      "to": "const room = content -| (caps.tests + need * 0);",
+      "kills": [
+        "evidence: the body of a flow target that fits is shown whole before its callers take the rest of the budget"
+      ],
+      "note": "callers would take the room a target body that fits needs and the body would be cut"
+    },
+    {
+      "id": "TS7-by-name-test-without-import-kept",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!importsFile(store, key.file, s.id.file)) continue;",
+      "to": "if (!importsFile(store, key.file, s.id.file) and false) continue;",
+      "kills": [
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "a test that calls a method of the same name on an unrelated value would be listed"
+    },
+    {
+      "id": "TS8-tests-per-file-not-capped",
+      "file": "src/engine/evidence.zig",
+      "from": "const shown = @min(end - i, max_tests_per_file);",
+      "to": "const shown = end - i;",
+      "kills": [
+        "evidence: a test file shows three tests of a target and counts the rest"
+      ],
+      "note": "one test file would fill the tests section"
+    },
+    {
+      "id": "FF1-outline-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "try e.varint(f.outline.len);\n    var previous: u32 = 0;\n    for (f.outline, 0..) |o, i| {",
+      "to": "try e.varint(0);\n    var previous: u32 = 0;\n    for (f.outline[0..0], 0..) |o, i| {",
+      "kills": [
+        "fact store: a saved store opens again with every outline node, test block and body start it was saved with"
+      ],
+      "note": "a store opened from disk would cut bodies without their statements"
+    },
+    {
+      "id": "FF2-body-start-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "try e.varint(if (d.body_start == none) 0 else @as(u64, d.body_start - d.span.start) + 1);",
+      "to": "try e.varint(0);",
+      "kills": [
+        "fact store: a saved store opens again with every outline node, test block and body start it was saved with"
+      ],
+      "note": "a store opened from disk would forget where each signature ends"
+    },
+    {
+      "id": "FF3-test-blocks-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "try e.varint(f.tests.len);\n    previous = 0;\n    for (f.tests, 0..) |t, i| {",
+      "to": "try e.varint(0);\n    previous = 0;\n    for (f.tests[0..0], 0..) |t, i| {",
+      "kills": [
+        "fact store: a saved store opens again with every outline node, test block and body start it was saved with"
+      ],
+      "note": "a store opened from disk would name no test"
+    },
+    {
+      "id": "EV9-long-line-not-cut",
+      "file": "src/engine/evidence.zig",
+      "from": "if (text.len <= max_line_chars) return",
+      "to": "if (text.len <= max_line_chars * 1000) return",
+      "kills": [
+        "evidence: a line too long for the evidence is cut with the number of hidden characters and the answer turns partial"
+      ],
+      "note": "one minified line could take the whole budget"
+    },
+    {
+      "id": "EV10-comment-not-followed",
+      "file": "src/engine/facts_spine.zig",
+      "from": "if (follow and oneOf(leaf.kind(), profile.comments)) {",
+      "to": "if (follow and oneOf(leaf.kind(), &.{})) {",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "the parse tree spine would show a comment without the code it describes and part from the outline"
+    },
+    {
+      "id": "EV11-enclosing-function-header-dropped",
+      "file": "src/engine/facts_spine.zig",
+      "from": " and profile.functionKind(outer.kind()) == null) continue;",
+      "to": ") continue;",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "the parse tree spine would drop the header of the method around a block and part from the outline"
+    },
+    {
+      "id": "EV12-partial-reason-not-given",
+      "file": "src/engine/evidence.zig",
+      "from": "const reason = try b.reasonLine(result, reason_reserve -| (if (exclusion) |line| line.len + 1 else 0));",
+      "to": "const reason: ?[]const u8 = null;",
+      "kills": [
+        "evidence: callers are shown by signature and call line, every unresolved candidate is listed and the reason is named"
+      ],
+      "note": "a partial answer would not say why it is partial"
+    },
+    {
+      "id": "EV13-call-to-other-target-not-kept",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!sameDef(other.id, p.subject.id) and sameDef(other.id, d.id)) weight = target_weight;",
+      "to": "if (!sameDef(other.id, p.subject.id) and sameDef(other.id, d.id)) weight = 0;",
+      "kills": [
+        "evidence: a call from one target to another target is kept when the caller does not fit"
+      ],
+      "note": "the line that links two targets would be elided"
+    },
+    {
+      "id": "EV14-term-lines-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": "if (weight != 0) try weights.put(self.arena, n, weight);",
+      "to": "if (false) try weights.put(self.arena, n, weight);",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a cut body would keep no line that holds a term"
+    },
+    {
+      "id": "EV15-cut-body-left-complete",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!file_level.contains(path)) budget_files += 1;",
+      "to": "if (!file_level.contains(path)) budget_files += 0;",
+      "kills": [
+        "evidence: a decides target that does not fit keeps every branch with a term whole and names every elided range"
+      ],
+      "note": "a function shown in part would leave the answer complete as if it were shown whole"
     },
     {
       "id": "IL1-index-load-failure-swallowed",

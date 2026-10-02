@@ -5,13 +5,17 @@ const fact_store = @import("../platform/fact_store.zig");
 const worker_pool = @import("../platform/worker_pool.zig");
 const facts_query = @import("../engine/facts_query.zig");
 const facts_evidence = @import("../engine/facts_evidence.zig");
+const evidence = @import("../engine/evidence.zig");
 const symbol = @import("../engine/symbol.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
-pub const Command = enum { build, callers, callees, defined_at, refs, bench, modules, defs };
+pub const Command = enum { build, callers, callees, defined_at, refs, bench, modules, defs, evidence };
+
+pub const max_targets = 16;
+pub const max_terms = 16;
 
 pub const Options = struct {
     command: Command,
@@ -25,7 +29,35 @@ pub const Options = struct {
     seed: u64 = 1,
     samples: usize = 200,
     updates: usize = 50,
+    intent: ?evidence.Intent = null,
+    targets: [max_targets]evidence.SymbolRef = undefined,
+    target_count: usize = 0,
+    terms: [max_terms][]const u8 = undefined,
+    term_count: usize = 0,
+    include: evidence.Include = .{},
+    repeat: usize = 1,
 };
+
+fn includeOf(text: []const u8) ?evidence.Include {
+    var out: evidence.Include = .{ .callers = false, .callees = false, .tests = false };
+    if (std.mem.eql(u8, text, "none")) return out;
+    var parts = std.mem.splitScalar(u8, text, ',');
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, part, "callers")) {
+            out.callers = true;
+        } else if (std.mem.eql(u8, part, "callees")) {
+            out.callees = true;
+        } else if (std.mem.eql(u8, part, "tests")) {
+            out.tests = true;
+        } else return null;
+    }
+    return out;
+}
+
+fn symbolRef(text: []const u8) evidence.SymbolRef {
+    const hash = std.mem.lastIndexOfScalar(u8, text, '#') orelse return .{ .path = "", .qname = text };
+    return .{ .path = text[0..hash], .qname = text[hash + 1 ..] };
+}
 
 fn number(comptime T: type, text: []const u8) ?T {
     return std.fmt.parseInt(T, text, 10) catch |err| switch (err) {
@@ -72,10 +104,26 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.samples = number(usize, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--updates")) {
             options.updates = number(usize, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--intent")) {
+            options.intent = std.meta.stringToEnum(evidence.Intent, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--target")) {
+            if (options.target_count == max_targets) return null;
+            options.targets[options.target_count] = symbolRef(value);
+            options.target_count += 1;
+        } else if (std.mem.eql(u8, arg, "--include")) {
+            options.include = includeOf(value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--repeat")) {
+            options.repeat = number(usize, value) orelse return null;
+            if (options.repeat == 0) return null;
+        } else if (std.mem.eql(u8, arg, "--term")) {
+            if (options.term_count == max_terms) return null;
+            options.terms[options.term_count] = value;
+            options.term_count += 1;
         } else return null;
     }
     switch (options.command) {
         .build, .bench, .modules, .defs => if (positional != null) return null,
+        .evidence => if (positional != null or options.intent == null or options.target_count == 0) return null,
         else => options.subject = positional orelse return null,
     }
     return options;
@@ -102,6 +150,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
         .bench => return bench(gpa, seam.clock, repo, options, out),
         .modules => return modules(repo, options, out),
         .defs => return defs(repo, options, out),
+        .evidence => return evidenceCommand(gpa, seam.clock, repo, options, out),
         else => return query(gpa, seam.clock, repo, options, refresh_us, out),
     }
 }
@@ -116,7 +165,7 @@ fn relationOf(command: Command) facts_query.Relation {
         .callees => .callees,
         .defined_at => .defined_at,
         .refs => .refs,
-        .build, .bench, .modules, .defs => unreachable,
+        .build, .bench, .modules, .defs, .evidence => unreachable,
     };
 }
 
@@ -192,6 +241,82 @@ fn defs(repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
         }
     }
     return 0;
+}
+
+fn evidenceCommand(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const request: evidence.EvidenceRequest = .{ .targets = options.targets[0..options.target_count], .intent = options.intent.?, .terms = options.terms[0..options.term_count], .include = options.include };
+    const started = clock.monotonic();
+    const result = try repo.evidence(arena, request, options.budget);
+    const elapsed_us = microsSince(clock, started);
+    const repeats = try arena.alloc(u64, options.repeat);
+    repeats[0] = @intCast(clock.monotonic() - started);
+    for (repeats[1..]) |*slot| {
+        var scratch = std.heap.ArenaAllocator.init(gpa);
+        defer scratch.deinit();
+        const again = clock.monotonic();
+        _ = try repo.evidence(scratch.allocator(), request, options.budget);
+        slot.* = @intCast(clock.monotonic() - again);
+    }
+    const spread = Percentiles.of(repeats);
+    const block: ?evidence.EvidenceBlock = switch (result) {
+        .complete => |c| c.value,
+        .partial => |p| p.value,
+        .refused => null,
+    };
+    if (!options.json) {
+        if (block) |b| try out.writeAll(b.text) else try result.writeStatus(out, 0, "targets");
+        try out.writeByte('\n');
+        return if (block == null) 2 else 0;
+    }
+    var js: std.json.Stringify = .{ .writer = out };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write(@tagName(result.status()));
+    try js.objectField("evidence_us");
+    try js.write(elapsed_us);
+    try js.objectField("repeat");
+    try js.write(options.repeat);
+    try writeMicros(&js, "p50_us", spread.p50);
+    try writeMicros(&js, "p99_us", spread.p99);
+    try js.objectField("certificate");
+    try result.writeCertificate(&js);
+    if (block) |b| {
+        try js.objectField("text");
+        try js.write(b.text);
+        try js.objectField("chars");
+        try js.write(b.text.len);
+        try js.objectField("targets");
+        try js.write(b.targets.len);
+        try js.objectField("not_found");
+        try js.write(b.not_found.len);
+        try js.objectField("sites");
+        try js.write(b.sites.len);
+        try js.objectField("unresolved");
+        try js.write(b.unresolved.len);
+        try js.objectField("tests");
+        try js.write(b.tests.len);
+        try js.objectField("cut");
+        try js.write(b.cut);
+        try js.objectField("elided");
+        try js.beginArray();
+        for (b.elided) |e| {
+            try js.beginObject();
+            try js.objectField("path");
+            try js.write(e.path);
+            try js.objectField("first");
+            try js.write(e.first);
+            try js.objectField("last");
+            try js.write(e.last);
+            try js.endObject();
+        }
+        try js.endArray();
+    }
+    try js.endObject();
+    try out.writeByte('\n');
+    return if (block == null) 2 else 0;
 }
 
 fn exitCode(result: facts_query.FactsAnswer) u8 {
@@ -386,11 +511,103 @@ fn writeMicros(js: *std.json.Stringify, field: []const u8, ns: u64) !void {
     try js.write(@as(f64, @floatFromInt(ns)) / 1000.0);
 }
 
+const bench_intents = [_]evidence.Intent{ .explain, .decides, .callers, .callees, .flow };
+
+const Slow = struct { ns: u64 = 0, path: []const u8 = "", qname: []const u8 = "" };
+
+const EvidenceRun = struct {
+    name: []const u8,
+    ns: []u64,
+    chars: []u64,
+    tally: Tally = .{},
+    slowest: [3]Slow = @splat(.{}),
+
+    fn note(self: *EvidenceRun, ns: u64, s: Sampled) void {
+        var slot: Slow = .{ .ns = ns, .path = s.path, .qname = s.qname };
+        for (&self.slowest) |*kept| {
+            if (slot.ns > kept.ns) std.mem.swap(Slow, kept, &slot);
+        }
+    }
+};
+
+fn evidenceRuns(gpa: Allocator, arena: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, subjects: []const Sampled) ![]EvidenceRun {
+    const runs = try arena.alloc(EvidenceRun, bench_intents.len + 1);
+    for (runs, 0..) |*entry, k| {
+        const pair = k == bench_intents.len;
+        const intent: evidence.Intent = if (pair) .explain else bench_intents[k];
+        entry.* = .{ .name = if (pair) "explain_pair" else @tagName(intent), .ns = try arena.alloc(u64, subjects.len), .chars = try arena.alloc(u64, subjects.len) };
+        for (subjects, 0..) |s, i| {
+            var scratch = std.heap.ArenaAllocator.init(gpa);
+            defer scratch.deinit();
+            const other = subjects[(i + 1) % subjects.len];
+            const both = [_]evidence.SymbolRef{ .{ .path = s.path, .qname = s.qname }, .{ .path = other.path, .qname = other.qname } };
+            const terms = [_][]const u8{s.name};
+            const request: evidence.EvidenceRequest = .{ .targets = if (pair) both[0..2] else both[0..1], .intent = intent, .terms = if (intent == .decides) terms[0..] else &.{} };
+            const started = clock.monotonic();
+            const result = try repo.evidence(scratch.allocator(), request, evidence.default_budget);
+            const ns: u64 = @intCast(clock.monotonic() - started);
+            entry.ns[i] = ns;
+            entry.note(ns, s);
+            entry.chars[i] = switch (result) {
+                .complete => |c| c.value.text.len,
+                .partial => |p| p.value.text.len,
+                .refused => 0,
+            };
+            switch (result) {
+                .complete => entry.tally.complete += 1,
+                .partial => entry.tally.partial += 1,
+                .refused => entry.tally.refused += 1,
+            }
+        }
+    }
+    return runs;
+}
+
+fn writeEvidenceRuns(js: *std.json.Stringify, runs: []EvidenceRun) !void {
+    try js.objectField("evidence");
+    try js.beginObject();
+    for (runs) |*entry| {
+        try js.objectField(entry.name);
+        try js.beginObject();
+        const p = Percentiles.of(entry.ns);
+        try writeMicros(js, "p50_us", p.p50);
+        try writeMicros(js, "p99_us", p.p99);
+        try writeMicros(js, "max_us", p.max);
+        const c = Percentiles.of(entry.chars);
+        try js.objectField("chars_p50");
+        try js.write(c.p50);
+        try js.objectField("chars_max");
+        try js.write(c.max);
+        try js.objectField("complete");
+        try js.write(entry.tally.complete);
+        try js.objectField("partial");
+        try js.write(entry.tally.partial);
+        try js.objectField("refused");
+        try js.write(entry.tally.refused);
+        try js.objectField("slowest");
+        try js.beginArray();
+        for (entry.slowest) |slow| {
+            if (slow.ns == 0) continue;
+            try js.beginObject();
+            try writeMicros(js, "us", slow.ns);
+            try js.objectField("path");
+            try js.write(slow.path);
+            try js.objectField("qname");
+            try js.write(slow.qname);
+            try js.endObject();
+        }
+        try js.endArray();
+        try js.endObject();
+    }
+    try js.endObject();
+}
+
 fn bench(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const subjects = try sampleSubjects(arena, repo, options.seed, options.samples);
+    const runs = try evidenceRuns(gpa, arena, clock, repo, subjects);
     const relations = [_]facts_query.Relation{ .callers, .callees, .defined_at, .refs };
     var timings: [relations.len][]u64 = undefined;
     var tallies: [relations.len]Tally = @splat(.{});
@@ -480,6 +697,7 @@ fn bench(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo, options: 
     try writeMicros(&js, "p50_us", rp.p50);
     try writeMicros(&js, "p99_us", rp.p99);
     try js.endObject();
+    try writeEvidenceRuns(&js, runs);
     const up = Percentiles.of(update_ns.items);
     try js.objectField("update");
     try js.beginObject();

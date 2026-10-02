@@ -10,7 +10,7 @@ const Store = facts_store.Store;
 const none = facts.none;
 
 pub const magic = "EMGFACTS";
-pub const version: u32 = 2;
+pub const version: u32 = 3;
 pub const checksum_len = 16;
 pub const max_store_bytes: usize = std.math.maxInt(u32);
 
@@ -170,6 +170,7 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
         try e.raw(&d.hash);
         try e.raw(&d.alpha);
         try e.byte(@as(u8, @intFromBool(d.exported)) | (@as(u8, @intFromBool(d.is_static)) << 1));
+        try e.varint(if (d.body_start == none) 0 else @as(u64, d.body_start - d.span.start) + 1);
     }
     try e.varint(f.refs.len);
     for (f.refs) |r| {
@@ -226,6 +227,25 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
     try e.varint(f.dynamic_reads);
     try e.byte(@intFromBool(f.module_mode));
     try e.byte(@intFromBool(f.parse_errors));
+    try e.varint(f.outline.len);
+    var previous: u32 = 0;
+    for (f.outline, 0..) |o, i| {
+        try e.varint(o.start - previous);
+        try e.varint(o.end - o.start);
+        try e.varint(if (o.parent == none) 0 else i - o.parent);
+        try e.byte(@bitCast(o.kind));
+        previous = o.start;
+    }
+    try e.varint(f.tests.len);
+    previous = 0;
+    for (f.tests, 0..) |t, i| {
+        try e.str(t.title);
+        try e.varint(t.start - previous);
+        try e.varint(t.end - t.start);
+        try e.varint(t.line);
+        try e.varint(if (t.parent == none) 0 else i - t.parent);
+        previous = t.start;
+    }
 }
 
 fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
@@ -244,6 +264,14 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         if (flags > 3) return error.Corrupt;
         def.exported = flags & 1 != 0;
         def.is_static = flags & 2 != 0;
+        const body = try d.varint();
+        if (body == 0) {
+            def.body_start = none;
+        } else {
+            const at = std.math.cast(u32, @as(u64, def.span.start) + body - 1) orelse return error.Corrupt;
+            if (at > def.span.end) return error.Corrupt;
+            def.body_start = at;
+        }
     }
     const refs = try a.alloc(facts.Ref, try d.count(7));
     for (refs) |*r| {
@@ -307,6 +335,32 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         l.name = try d.str();
         l.count = try d.int();
     }
+    const dynamic_reads = try d.int();
+    const module_mode = try d.flag();
+    const parse_errors = try d.flag();
+    const outline = try a.alloc(facts.Outline, try d.count(4));
+    var previous: u32 = 0;
+    for (outline, 0..) |*o, i| {
+        o.start = std.math.cast(u32, @as(u64, previous) + try d.varint()) orelse return error.Corrupt;
+        o.end = std.math.cast(u32, @as(u64, o.start) + try d.varint()) orelse return error.Corrupt;
+        o.parent = try parentOf(d, i);
+        const kind: facts.OutlineKind = @bitCast(try d.byte());
+        if (kind.reserved != 0) return error.Corrupt;
+        o.kind = kind;
+        if (o.parent != none and (outline[o.parent].start > o.start or outline[o.parent].end < o.end)) return error.Corrupt;
+        previous = o.start;
+    }
+    const tests = try a.alloc(facts.TestBlock, try d.count(5));
+    previous = 0;
+    for (tests, 0..) |*t, i| {
+        t.title = try d.str();
+        t.start = std.math.cast(u32, @as(u64, previous) + try d.varint()) orelse return error.Corrupt;
+        t.end = std.math.cast(u32, @as(u64, t.start) + try d.varint()) orelse return error.Corrupt;
+        t.line = try d.int();
+        t.parent = try parentOf(d, i);
+        if (t.parent != none and (tests[t.parent].start > t.start or tests[t.parent].end < t.end)) return error.Corrupt;
+        previous = t.start;
+    }
     const found: facts.FileFacts = .{
         .defs = defs,
         .refs = refs,
@@ -317,12 +371,21 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         .classes = classes,
         .member_types = member_types,
         .loose = loose,
-        .dynamic_reads = try d.int(),
-        .module_mode = try d.flag(),
-        .parse_errors = try d.flag(),
+        .dynamic_reads = dynamic_reads,
+        .module_mode = module_mode,
+        .parse_errors = parse_errors,
+        .outline = outline,
+        .tests = tests,
     };
     try checkTargets(found);
     return found;
+}
+
+fn parentOf(d: *Decoder, index: usize) DecodeError!u32 {
+    const distance = try d.varint();
+    if (distance == 0) return none;
+    if (distance > index) return error.Corrupt;
+    return @intCast(index - distance);
 }
 
 fn checkTarget(found: facts.FileFacts, target: facts.Target) DecodeError!void {

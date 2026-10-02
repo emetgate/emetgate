@@ -92,7 +92,7 @@ pub const Snapshot = struct {
 
 pub const Basis = enum { tracked };
 
-pub const Rule = enum { binary, internal };
+pub const Rule = enum { binary, internal, too_large };
 
 pub const Exclusions = std.EnumArray(Rule, u32);
 
@@ -146,6 +146,7 @@ pub const Reason = enum {
     match_limit,
     unclassified,
     unresolved,
+    changed_since_snapshot,
 
     pub fn fileLevel(self: Reason) bool {
         return self != .unresolved;
@@ -156,7 +157,7 @@ pub const Reason = enum {
             .too_large => .file_bytes,
             .budget => .steps,
             .match_limit => .matches,
-            .unreadable, .vanished, .unclassified, .unresolved => null,
+            .unreadable, .vanished, .unclassified, .unresolved, .changed_since_snapshot => null,
         };
     }
 };

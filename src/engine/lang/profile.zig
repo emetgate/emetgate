@@ -193,6 +193,10 @@ pub const Facts = struct {
     error_node: []const u8,
     export_value_field: []const u8,
     export_declaration_field: []const u8,
+    branch_statements: []const []const u8 = &.{},
+    test_calls: []const []const u8 = &.{},
+    test_file_infixes: []const []const u8 = &.{},
+    test_dirs: []const []const u8 = &.{},
 };
 
 pub const Profile = struct {

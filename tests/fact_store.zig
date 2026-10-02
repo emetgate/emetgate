@@ -1,9 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const emetgate = @import("emetgate");
 const fact_store = emetgate.fact_store;
 const fact_file = emetgate.fact_file;
+const facts = emetgate.facts;
 const facts_query = emetgate.facts_query;
 const facts_evidence = emetgate.facts_evidence;
+const evidence = emetgate.evidence;
 const io_seam = emetgate.io_seam;
 const answer = emetgate.answer;
 const test_util = emetgate.test_util;
@@ -358,4 +361,234 @@ test "fact store: evidence never shows a line of a file that changed after the s
     _ = try facts_evidence.render(arena.allocator(), &out.writer, result, lines.source(), facts_evidence.default_budget);
     try testing.expect(std.mem.indexOf(u8, out.written(), "return 7") == null);
     try testing.expect(std.mem.indexOf(u8, out.written(), "source unavailable") != null);
+}
+
+fn evidenceText(result: evidence.EvidenceAnswer) ![]const u8 {
+    return switch (result) {
+        .complete => |c| c.value.text,
+        .partial => |p| p.value.text,
+        .refused => error.Refused,
+    };
+}
+
+test "fact store: the evidence view of a repository comes from one call and quotes the current lines" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const view = try repo.factStore(arena.allocator());
+    try testing.expectEqual(repo.snapshot().barrier, view.snapshot.barrier);
+    const result = evidence.evidence(&view, .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.complete, result.status());
+    try testing.expect(std.mem.indexOf(u8, try evidenceText(result), "\na.ts\n1  export function f() {  [target f ") != null);
+    try testing.expect(std.mem.indexOf(u8, try evidenceText(result), "\n2    return 1;\n") != null);
+}
+
+test "fact store: evidence refreshes a file changed after the snapshot and quotes its new lines" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const before = repo.snapshot().barrier;
+    try fixture.write(.{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return 7 + f(); }\n" });
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .callers }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.complete, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, "\nb.ts\n2  export function g() { return 7 + f(); }  [caller of f: g ") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\n2  export function g() { return 7 + f(); }  [call proven]\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "return f();") == null);
+    try testing.expect(repo.snapshot().barrier > before);
+}
+
+test "fact store: evidence of a target whose file was deleted on disk is partial and names the file vanished" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try fixture.tmp.dir.deleteFile(testing.io, "repo/a.ts");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.partial, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, evidence.vanished_note) != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\nPartial because: 1 files no longer exist.\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "missing 1 vanished") != null);
+}
+
+test "fact store: evidence of a target whose file grew over the size limit names the declared exclusion and its limit" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, 200);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try fixture.write(.{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" ++ ("// padding to pass the limit\n" ** 10) });
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(answer.Status.complete, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, evidence.large_note) != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\nExcluded by rule: 1 files over the 200-byte size limit are not read.\n") != null);
+    try testing.expect(std.mem.endsWith(u8, text, "; skipped 1 too_large"));
+}
+
+const kernel32 = struct {
+    const FileTime = extern struct { low: u32, high: u32 };
+    extern "kernel32" fn SetFileTime(file: std.os.windows.HANDLE, creation: ?*const FileTime, access: ?*const FileTime, write: ?*const FileTime) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: std.os.windows.DWORD, share: std.os.windows.DWORD, security: ?*anyopaque, disposition: std.os.windows.DWORD, flags: std.os.windows.DWORD, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
+};
+
+fn writtenLongAgo(path: []const u8) !void {
+    const wide = try std.unicode.wtf8ToWtf16LeAllocZ(testing.allocator, path);
+    defer testing.allocator.free(wide);
+    const handle = kernel32.CreateFileW(wide, 0x100, 0x7, null, 3, 0x80, null);
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.TouchFailed;
+    defer std.os.windows.CloseHandle(handle);
+    const old: kernel32.FileTime = .{ .low = 0, .high = 30_000_000 };
+    if (kernel32.SetFileTime(handle, null, null, &old) == .FALSE) return error.TouchFailed;
+}
+
+fn holdWithoutSharing(path: []const u8) !std.os.windows.HANDLE {
+    const wide = try std.unicode.wtf8ToWtf16LeAllocZ(testing.allocator, path);
+    defer testing.allocator.free(wide);
+    const handle = kernel32.CreateFileW(wide, 0x80000000, 0, null, 3, 0x80, null);
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.HoldFailed;
+    return handle;
+}
+
+test "fact store: evidence of a target whose file another handle holds is partial at once and names the file unreadable" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{fixture.root});
+    defer testing.allocator.free(abs);
+    const holder = try holdWithoutSharing(abs);
+    defer std.os.windows.CloseHandle(holder);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const started = std.Io.Clock.awake.now(testing.io).nanoseconds;
+    const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
+    const elapsed = std.Io.Clock.awake.now(testing.io).nanoseconds - started;
+    try testing.expectEqual(answer.Status.partial, result.status());
+    const text = try evidenceText(result);
+    try testing.expect(std.mem.indexOf(u8, text, evidence.unreadable_note) != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\nPartial because: 1 files could not be read (locked or access denied).\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "missing 1 unreadable") != null);
+    try testing.expect(elapsed < 50 * std.time.ns_per_ms);
+}
+
+fn sameOutline(a: []const facts.Outline, b: []const facts.Outline) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x.start != y.start or x.end != y.end or x.parent != y.parent) return false;
+        if (@as(u8, @bitCast(x.kind)) != @as(u8, @bitCast(y.kind))) return false;
+    }
+    return true;
+}
+
+fn sameTests(a: []const facts.TestBlock, b: []const facts.TestBlock) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x.start != y.start or x.end != y.end or x.line != y.line or x.parent != y.parent) return false;
+        if (!std.mem.eql(u8, x.title, y.title)) return false;
+    }
+    return true;
+}
+
+test "fact store: a saved store opens again with every outline node, test block and body start it was saved with" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f(x: number) {\n  if (x > 1) {\n    // the larger one\n    return 2;\n  }\n  return x;\n}\n" },
+        .{ .path = "a.test.ts", .data = "import { f } from \"./a\";\ndescribe(\"f\", () => {\n  it(\"returns two\", () => {\n    expect(f(2)).toBe(2);\n  });\n});\n" },
+    });
+    defer fixture.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const keep = arena.allocator();
+    var outline: []const facts.Outline = &.{};
+    var blocks: []facts.TestBlock = &.{};
+    var bodies: []u32 = &.{};
+    {
+        const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+        defer repo.deinit();
+        _ = try repo.refresh();
+        const source = repo.store.file(repo.store.fileId("a.ts").?).facts;
+        outline = try keep.dupe(facts.Outline, source.outline);
+        bodies = try keep.alloc(u32, source.defs.len);
+        for (source.defs, bodies) |d, *slot| slot.* = d.body_start;
+        const suite = repo.store.file(repo.store.fileId("a.test.ts").?).facts;
+        blocks = try keep.dupe(facts.TestBlock, suite.tests);
+        for (blocks) |*b| b.title = try keep.dupe(u8, b.title);
+    }
+    try testing.expect(outline.len >= 3);
+    try testing.expectEqual(@as(usize, 2), blocks.len);
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    try testing.expectEqual(fact_store.Load.loaded, repo.load);
+    const report = try repo.refresh();
+    try testing.expectEqual(@as(usize, 0), report.extracted);
+    const source = repo.store.file(repo.store.fileId("a.ts").?).facts;
+    try testing.expect(sameOutline(outline, source.outline));
+    try testing.expectEqual(bodies.len, source.defs.len);
+    for (bodies, source.defs) |body, d| try testing.expectEqual(body, d.body_start);
+    try testing.expect(bodies[1] != facts.none);
+    try testing.expect(sameTests(blocks, repo.store.file(repo.store.fileId("a.test.ts").?).facts.tests));
+}
+
+test "fact store: a refresh reads past a file another handle holds at once, names it unreadable and reads it again once it is free" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{fixture.root});
+    defer testing.allocator.free(abs);
+    try writtenLongAgo(abs);
+    const holder = try holdWithoutSharing(abs);
+    const held = try repo.refresh();
+    std.os.windows.CloseHandle(holder);
+    try testing.expect(held.extract_ms < 50);
+    const id = repo.store.fileId("a.ts").?;
+    try testing.expectEqual(emetgate.facts_store.Status.unreadable, repo.store.file(id).status);
+    const free = try repo.refresh();
+    try testing.expectEqual(@as(usize, 1), free.extracted);
+    try testing.expectEqual(emetgate.facts_store.Status.indexed, repo.store.file(id).status);
 }

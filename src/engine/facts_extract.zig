@@ -7,6 +7,9 @@ const modules = @import("modules.zig");
 const alpha = @import("alpha.zig");
 const functions = @import("functions.zig");
 const facts = @import("facts.zig");
+const facts_spine = @import("facts_spine.zig");
+const facts_outline = @import("facts_outline.zig");
+const facts_tests = @import("facts_tests.zig");
 const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 
@@ -28,6 +31,11 @@ fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
 
 fn lineOf(node: ts.Node) u32 {
     return node.startPoint().row + 1;
+}
+
+fn bodyStart(node: ts.Node) u32 {
+    const body = node.childByField("body") orelse return none;
+    return body.startByte();
 }
 
 fn defKindOf(kind: symbol.Kind) facts.DefKind {
@@ -155,6 +163,7 @@ const Extractor = struct {
                 .hash = s.hash,
                 .alpha = try alpha.hash(self.arena, self.snapshot, s.declaration),
                 .is_static = s.ref.is_static,
+                .body_start = bodyStart(s.node),
             } });
         }
         for (table.declarations) |d| {
@@ -169,6 +178,7 @@ const Extractor = struct {
                 .hash = d.hash,
                 .alpha = try alpha.hash(self.arena, self.snapshot, d.declaration),
                 .is_static = d.ref.is_static,
+                .body_start = bodyStart(d.node),
             } });
         }
         std.mem.sort(Draft, drafts.items, {}, draftLess);
@@ -785,5 +795,9 @@ pub fn extract(arena: Allocator, snapshot: *const Snapshot) Error!facts.FileFact
     try self.collectShapes();
     try self.collectExports();
     try self.collectRefs();
-    return self.finish();
+    var found = try self.finish();
+    const lines: facts_spine.Lines = .{ .starts = self.line_starts, .bytes = snapshot.source };
+    found.outline = try facts_outline.collect(arena, profile, snapshot.tree, lines, found.defs);
+    found.tests = try facts_tests.collect(arena, profile, snapshot.tree, lines);
+    return found;
 }
