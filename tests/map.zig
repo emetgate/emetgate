@@ -227,7 +227,7 @@ test "map: a large project stays inside the token budget and names its most call
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const options: map.MapOptions = .{ .budget_tokens = 700, .region_chars = 900 };
+    const options: map.MapOptions = .{ .budget_tokens = 700, .region_chars = 900, .chars_per_token = 3.3 };
     const built = try map.buildMap(arena, &repo.store, options);
     try testing.expect(!built.stats.complete);
     try testing.expect(@as(f64, @floatFromInt(built.text.len)) <= @as(f64, @floatFromInt(options.budget_tokens)) * options.chars_per_token);
@@ -236,8 +236,50 @@ test "map: a large project stays inside the token budget and names its most call
         const hub = try std.fmt.allocPrint(arena, "hub{d}", .{f});
         try testing.expect(std.mem.indexOf(u8, built.text, hub) != null);
     }
-    const tighter = try map.buildMap(arena, &repo.store, .{ .budget_tokens = 450, .region_chars = 900 });
+    const tighter = try map.buildMap(arena, &repo.store, .{ .budget_tokens = 450, .region_chars = 900, .chars_per_token = 3.3 });
     try testing.expect(tighter.text.len < built.text.len);
+}
+
+test "map: a heavy file that its region path does not show is named on the region line" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "alpha", "beta", "delta", "epsilon", "eta", "iota", "kappa" }) |name| {
+        const path = try std.fmt.allocPrint(arena, "pkg/{s}.ts", .{name});
+        _ = try repo.put(path, try std.fmt.allocPrint(arena, "export function {s}Only() {{ return 1; }}\n", .{name}));
+    }
+    var heavy: std.ArrayList(u8) = .empty;
+    for (0..24) |i| try heavy.appendSlice(arena, try std.fmt.allocPrint(arena, "export function step{d}(x: number) {{ const y = x * {d}; const z = y + {d}; return z - x + y * z; }}\n", .{ i, i, i }));
+    _ = try repo.put("pkg/gamma.ts", heavy.items);
+    try repo.linkAll();
+    const built = try map.buildMap(arena, &repo.store, .{ .budget_tokens = 280, .region_chars = 700, .chars_per_token = 3.3 });
+    try testing.expect(!built.stats.complete);
+    const region = built.regions[try regionOf(built, "pkg/gamma.ts")];
+    try testing.expect(std.mem.indexOf(u8, region.label, "gamma") == null);
+    const line_start = std.mem.indexOf(u8, built.text, try std.fmt.allocPrint(arena, "r{d} ", .{region.id + 1})).?;
+    const line_end = std.mem.indexOfScalarPos(u8, built.text, line_start, '\n').?;
+    try testing.expect(std.mem.indexOf(u8, built.text[line_start..line_end], "[gamma") != null);
+    try testing.expect(built.stats.files_named >= 1);
+}
+
+test "map: symbols that share one name in a region are named once" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for (0..5) |i| {
+        _ = try repo.put(try std.fmt.allocPrint(arena, "scripts/task{d}.ts", .{i}), "export function main() { return 1; }\n");
+    }
+    try repo.linkAll();
+    const built = try map.buildMap(arena, &repo.store, .{});
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, built.text, "main"));
 }
 
 test "map: route, command and api entry points come from decorators and cross region calls" {

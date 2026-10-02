@@ -81,6 +81,7 @@ pub const Stats = struct {
     names: u32 = 0,
     terms: u32 = 0,
     entries: u32 = 0,
+    files_named: u32 = 0,
     complete: bool = false,
     pagerank_iterations: u32 = 0,
     fit_rounds: u32 = 0,
@@ -100,8 +101,9 @@ pub const Map = struct {
 pub const MapOptions = struct {
     budget_tokens: u32 = 16_000,
     region_chars: u32 = 8_000,
-    chars_per_token: f64 = 3.3,
+    chars_per_token: f64 = 2.02,
     term_value: f32 = 0.3,
+    file_value: f32 = 0.5,
     terms_per_region: u32 = 40,
     heading_regions: u32 = 24,
     base_share: f64 = 0.6,
@@ -265,7 +267,7 @@ const Builder = struct {
 
     fn baseCost(self: *const Builder) u64 {
         var cost: u64 = 0;
-        for (self.regions.items) |r| cost += 6 + r.path.len + 12;
+        for (self.regions.items) |r| cost += 6 + r.path.len + 4;
         return cost;
     }
 
@@ -567,6 +569,7 @@ const Selection = struct {
     names: []bool,
     terms: []const TermCandidate,
     chosen_terms: []bool,
+    files: []bool,
     forced: []bool,
 };
 
@@ -578,6 +581,7 @@ const Planner = struct {
     term_candidates: []TermCandidate = &.{},
     base_cover: []f32 = &.{},
     forced: []bool = &.{},
+    file_shown: []bool = &.{},
 
     fn init(b: *Builder) !Planner {
         var code: std.ArrayList(u32) = .empty;
@@ -689,6 +693,23 @@ const Planner = struct {
                 if (c.value > self.base_cover[c.element]) self.base_cover[c.element] = c.value;
             }
         }
+        self.file_shown = try b.arena.alloc(bool, b.files.len);
+        @memset(self.file_shown, false);
+        for (b.regions.items) |region| {
+            if (region.family != .code) continue;
+            for (region.files) |k| {
+                const f = b.files[k];
+                const rel = f.state.path[region.dir.len..];
+                const visible = region.files.len == 1 or (std.mem.indexOfScalar(u8, rel, '/') == null and std.mem.indexOf(u8, region.label, rel) != null);
+                if (!visible) continue;
+                self.file_shown[k] = true;
+                var s = f.first_symbol;
+                while (s < f.first_symbol + f.symbol_count) : (s += 1) {
+                    const e = self.element_of[s];
+                    if (e != none and b.options.file_value > self.base_cover[e]) self.base_cover[e] = b.options.file_value;
+                }
+            }
+        }
     }
 
     fn forceEntries(self: *Planner) !void {
@@ -720,33 +741,76 @@ const Planner = struct {
         const weights = try b.arena.alloc(f64, self.code_syms.len);
         for (self.code_syms, weights) |s, *w| w.* = b.weight[s];
         var candidates: std.ArrayList(map_terms.Candidate) = .empty;
-        var name_of: std.ArrayList(u32) = .empty;
+        var groups: std.ArrayList(std.ArrayList(u32)) = .empty;
+        var group_of: std.StringHashMapUnmanaged(u32) = .empty;
+        var group_cost: std.ArrayList(u64) = .empty;
         for (self.code_syms, 0..) |s, e| {
             if (self.forced[e]) continue;
             const sym = b.syms.items[s];
             const f = b.files[sym.file];
             if (!eligibleName(f.state.facts.defs, sym.def)) continue;
             const d = f.state.facts.defs[sym.def];
-            const covers = try b.arena.alloc(map_terms.Cover, 1);
-            covers[0] = .{ .element = @intCast(e), .value = 1 };
-            try candidates.append(b.arena, .{ .cost = @intCast(nameCost(f.state.facts.defs, d)), .covers = covers });
-            try name_of.append(b.arena, @intCast(e));
+            const key = try std.fmt.allocPrint(b.arena, "{d}\x00{s}", .{ f.region, d.qname });
+            const entry = try group_of.getOrPut(b.arena, key);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(groups.items.len);
+                try groups.append(b.arena, .empty);
+                try group_cost.append(b.arena, nameCost(f.state.facts.defs, d));
+            }
+            try groups.items[entry.value_ptr.*].append(b.arena, @intCast(e));
+        }
+        for (groups.items, group_cost.items) |members, cost| {
+            const covers = try b.arena.alloc(map_terms.Cover, members.items.len);
+            for (members.items, covers) |e, *c| c.* = .{ .element = e, .value = 1 };
+            try candidates.append(b.arena, .{ .cost = @intCast(cost), .covers = covers });
         }
         const names_end = candidates.items.len;
         for (self.term_candidates) |t| {
             try candidates.append(b.arena, .{ .cost = @intCast(self.stems.display(t.stem).len + 2), .covers = t.covers });
+        }
+        const terms_end = candidates.items.len;
+        var file_of: std.ArrayList(u32) = .empty;
+        for (b.files, 0..) |f, k| {
+            if (f.family != .code or f.symbol_count == 0 or self.file_shown[k]) continue;
+            const covers = try b.arena.alloc(map_terms.Cover, f.symbol_count);
+            var n: usize = 0;
+            var s = f.first_symbol;
+            while (s < f.first_symbol + f.symbol_count) : (s += 1) {
+                const e = self.element_of[s];
+                if (e == none) continue;
+                covers[n] = .{ .element = e, .value = b.options.file_value };
+                n += 1;
+            }
+            if (n == 0) continue;
+            try candidates.append(b.arena, .{ .cost = @intCast(fileStem(f.state.path).len + 2), .covers = covers[0..n] });
+            try file_of.append(b.arena, @intCast(k));
         }
         const picked = try map_terms.greedy(b.arena, weights, self.base_cover, candidates.items, item_budget);
         const names = try b.arena.alloc(bool, self.code_syms.len);
         @memcpy(names, self.forced);
         const chosen_terms = try b.arena.alloc(bool, self.term_candidates.len);
         @memset(chosen_terms, false);
+        const chosen_files = try b.arena.alloc(bool, b.files.len);
+        @memset(chosen_files, false);
         for (picked.chosen) |c| {
-            if (c < names_end) names[name_of.items[c]] = true else chosen_terms[c - names_end] = true;
+            if (c < names_end) {
+                for (groups.items[c].items) |e| names[e] = true;
+            } else if (c < terms_end) {
+                chosen_terms[c - names_end] = true;
+            } else {
+                chosen_files[file_of.items[c - terms_end]] = true;
+            }
         }
-        return .{ .names = names, .terms = self.term_candidates, .chosen_terms = chosen_terms, .forced = self.forced };
+        return .{ .names = names, .terms = self.term_candidates, .chosen_terms = chosen_terms, .files = chosen_files, .forced = self.forced };
     }
 };
+
+fn fileStem(path: []const u8) []const u8 {
+    const base = basename(path);
+    const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return base;
+    if (dot == 0) return base;
+    return base[0..dot];
+}
 
 fn termValueMore(_: void, a: TermCandidate, b: TermCandidate) bool {
     if (a.value != b.value) return a.value > b.value;
@@ -841,10 +905,20 @@ const Renderer = struct {
         return self.b.symIndex(sym.file, d.parent);
     }
 
-    fn names(self: *Renderer, region: *Region, selected: []const u32) !void {
+    fn names(self: *Renderer, region: *Region, all: []const u32) !void {
         const arena = self.b.arena;
         var groups: std.ArrayList(Group) = .empty;
         var at: std.AutoHashMapUnmanaged(u32, usize) = .empty;
+        var printed: std.StringHashMapUnmanaged(void) = .empty;
+        var unique: std.ArrayList(u32) = .empty;
+        for (all) |s| {
+            const sym = self.b.syms.items[s];
+            const qname = self.b.files[sym.file].state.facts.defs[sym.def].qname;
+            const seen = try printed.getOrPut(arena, qname);
+            if (seen.found_existing) continue;
+            try unique.append(arena, s);
+        }
+        const selected = unique.items;
         for (selected) |s| {
             const owner = self.ownerOf(s);
             const key = owner orelse s;
@@ -910,6 +984,25 @@ fn weightMore(b: *Builder, x: u32, y: u32) bool {
     return x < y;
 }
 
+const FileMass = struct {
+    b: *Builder,
+    planner: *Planner,
+
+    fn mass(self: FileMass, k: u32) f64 {
+        const f = self.b.files[k];
+        var total: f64 = 0;
+        for (self.b.weight[f.first_symbol .. f.first_symbol + f.symbol_count]) |w| total += w;
+        return total;
+    }
+
+    fn more(self: FileMass, x: u32, y: u32) bool {
+        const a = self.mass(x);
+        const c = self.mass(y);
+        if (a != c) return a > c;
+        return x < y;
+    }
+};
+
 fn hexShort(root: []const u8) [16]u8 {
     var out: [16]u8 = undefined;
     const hex = "0123456789abcdef";
@@ -933,9 +1026,10 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         if (reg.family == .code) code += 1 else tests += 1;
     }
     try w.print("# Project map\nsnapshot {s} | {d} files | {d} symbols | {d} regions ({d} code, {d} test){s}\n", .{ &short, b.files.len, b.syms.items.len, b.regions.items.len, code, tests, if (complete) " | every symbol is listed" else "" });
-    try w.writeAll("Every symbol belongs to exactly one region and every region is listed below. A line gives the region id, its path, files (f) and symbols (s), then key symbols ranked by centrality (members grouped as Class{member}; GET/POST/cmd/on mark routes, commands and event handlers) and distinctive terms (#term).\n");
+    try w.writeAll("Every symbol belongs to exactly one region and every region is listed below. A line gives the region id and path ({a .. z} is a run of sibling entries from a to z), then key symbols ranked by centrality (members grouped as Class{member}; GET/POST/cmd/on mark routes, commands and event handlers), [more files of the region] and distinctive terms (#term).\n");
     try w.writeAll("emetgate_region {\"region\":\"r1\"} returns the complete symbol table of a region (path:line kind name(signature) - doc); emetgate_evidence {\"symbols\":[\"Class.method\"]} returns the code, callers, callees and tests of symbols.\n");
     var names_count: u32 = 0;
+    var files_count: u32 = 0;
     var terms_count: u32 = 0;
     var entries_count: u32 = 0;
     const terms_of = try arena.alloc(std.ArrayList(u32), b.regions.items.len);
@@ -956,7 +1050,7 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
             try w.print("## {s}\n", .{if (h.dir.len == 0) "./" else h.dir});
             for (b.regions.items[h.first .. h.first + h.count]) |*reg| {
                 const rel = reg.path[h.dir.len..];
-                try w.print("r{d} {s} {d}f {d}s", .{ reg.id + 1, if (rel.len == 0) "./" else rel, reg.files.len, reg.symbols.len });
+                try w.print("r{d} {s}", .{ reg.id + 1, if (rel.len == 0) "./" else rel });
                 if (family == .code) {
                     var selected: std.ArrayList(u32) = .empty;
                     for (reg.files) |k| {
@@ -976,6 +1070,20 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
                             if (r.tagOf(s) != null) entries_count += 1;
                         }
                     }
+                    var shown_files: std.ArrayList(u32) = .empty;
+                    for (reg.files) |k| {
+                        if (selection.files[k]) try shown_files.append(arena, k);
+                    }
+                    if (shown_files.items.len != 0) {
+                        std.mem.sort(u32, shown_files.items, FileMass{ .b = b, .planner = planner }, FileMass.more);
+                        try w.writeAll(" [");
+                        for (shown_files.items, 0..) |k, n| {
+                            if (n != 0) try w.writeAll(", ");
+                            try w.writeAll(fileStem(b.files[k].state.path));
+                        }
+                        try w.writeByte(']');
+                        files_count += @intCast(shown_files.items.len);
+                    }
                     var concepts: std.ArrayList([]const u8) = .empty;
                     for (terms_of[reg.id].items) |ti| {
                         const t = selection.terms[ti];
@@ -991,6 +1099,7 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         }
     }
     stats.names = names_count;
+    stats.files_named = files_count;
     stats.terms = terms_count;
     stats.entries = entries_count;
     return r.out.written();
@@ -1065,8 +1174,8 @@ pub fn buildMap(arena: Allocator, store: *const Store, options: MapOptions) !Map
     }
     if (!complete and fixed < total_chars) {
         var item_budget: u64 = total_chars - fixed;
-        var best: ?[]const u8 = null;
-        var best_stats = stats;
+        var best: ?Selection = null;
+        var best_len: usize = 0;
         var round: u32 = 0;
         while (round < 6) : (round += 1) {
             const selection = try planner.select(item_budget);
@@ -1074,9 +1183,9 @@ pub fn buildMap(arena: Allocator, store: *const Store, options: MapOptions) !Map
             const candidate = try render(&b, &planner, selection, false, &round_stats);
             stats.fit_rounds = round + 1;
             if (candidate.len <= total_chars) {
-                if (best == null or candidate.len > best.?.len) {
-                    best = candidate;
-                    best_stats = round_stats;
+                if (best == null or candidate.len > best_len) {
+                    best = selection;
+                    best_len = candidate.len;
                 }
                 const slack = total_chars - candidate.len;
                 if (slack < total_chars / 200) break;
@@ -1087,12 +1196,10 @@ pub fn buildMap(arena: Allocator, store: *const Store, options: MapOptions) !Map
                 item_budget -= over + over / 4;
             }
         }
-        if (best) |chosen| {
-            text = chosen;
-            const rounds = stats.fit_rounds;
-            stats = best_stats;
-            stats.fit_rounds = rounds;
-        }
+        const chosen = best orelse empty_selection;
+        const rounds = stats.fit_rounds;
+        text = try render(&b, &planner, chosen, false, &stats);
+        stats.fit_rounds = rounds;
     }
     const snapshot = try snapshotOf(&b);
     stats.files = @intCast(b.files.len);
