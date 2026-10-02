@@ -15,7 +15,6 @@ const Snapshot = @import("../engine/loader.zig").Snapshot;
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const worker_pool = @import("worker_pool.zig");
 const io_seam = @import("io_seam.zig");
-const open_nowait = @import("open_nowait.zig");
 const fact_modules = @import("fact_modules.zig");
 const fact_file = @import("fact_file.zig");
 const shadow_root = @import("shadow_root.zig");
@@ -594,6 +593,7 @@ pub const Repo = struct {
                     report.extracted += 1;
                 },
                 .failed => |x| {
+                    if (x.status == .unreadable) slot.stamp = .{};
                     if (try self.store.markUnindexed(id, x.status, x.note, &.{})) try reshaped.append(arena, id);
                     report.extracted += 1;
                 },
@@ -636,8 +636,8 @@ fn leafLess(_: void, a: answer.Leaf, b: answer.Leaf) bool {
     return std.mem.order(u8, a.path, b.path) == .lt;
 }
 
-pub fn readSource(repo: *const Repo, arena: Allocator, abs: []const u8) open_nowait.ReadError![]u8 {
-    return open_nowait.readFileAlloc(arena, abs, repo.options.max_file_bytes);
+pub fn readSource(repo: *const Repo, arena: Allocator, abs: []const u8) io_seam.ReadError![]u8 {
+    return repo.fs.readFile(abs, arena, repo.options.max_file_bytes);
 }
 
 pub const SourceLines = struct {
@@ -673,9 +673,9 @@ pub const SourceLines = struct {
         const abs = try std.fmt.allocPrint(self.arena, "{s}\\{s}", .{ self.repo.options.root_abs, path });
         const bytes = readSource(self.repo, self.arena, abs) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
-            error.FileNotFound, error.IsDir => .vanished,
-            error.StreamTooLong => .too_large,
-            error.FileBusy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,
+            error.FileNotFound, error.IsDirectory => .vanished,
+            error.TooLarge => .too_large,
+            error.Busy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput => .unreadable,
         };
         if (!std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash)) return .{ .changed = bytes };
         return .{ .bytes = bytes };

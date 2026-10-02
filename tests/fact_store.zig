@@ -555,3 +555,27 @@ test "fact store: a saved store opens again with every outline node, test block 
     try testing.expect(bodies[1] != facts.none);
     try testing.expect(sameTests(blocks, repo.store.file(repo.store.fileId("a.test.ts").?).facts.tests));
 }
+
+test "fact store: a refresh reads past a file another handle holds at once, names it unreadable and reads it again once it is free" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() {\n  return 1;\n}\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    const abs = try std.fmt.allocPrint(testing.allocator, "{s}\\a.ts", .{fixture.root});
+    defer testing.allocator.free(abs);
+    const holder = try holdWithoutSharing(abs);
+    const held = try repo.refresh();
+    std.os.windows.CloseHandle(holder);
+    try testing.expect(held.extract_ms < 50);
+    const id = repo.store.fileId("a.ts").?;
+    try testing.expectEqual(emetgate.facts_store.Status.unreadable, repo.store.file(id).status);
+    const free = try repo.refresh();
+    try testing.expectEqual(@as(usize, 1), free.extracted);
+    try testing.expectEqual(emetgate.facts_store.Status.indexed, repo.store.file(id).status);
+}
