@@ -38,6 +38,7 @@ pub const question_lexicon = src.question_lexicon;
 pub const question_terms = src.question_terms;
 pub const question_intent = src.question_intent;
 pub const map_tree = src.map_tree;
+pub const map_terms = src.map_terms;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
