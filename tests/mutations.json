@@ -8170,6 +8170,61 @@
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
+    },
+    {
+      "id": "LK1-locked-read-waits-in-std",
+      "file": "src/platform/search_index.zig",
+      "from": "    const bytes = open_nowait.readFileAlloc(gpa, abs, max_indexed_file_bytes) catch |err| return .{",
+      "to": "    const bytes = std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), abs, gpa, .limited(max_indexed_file_bytes + 1)) catch |err| return .{",
+      "kills": [
+        "search answers: a changed file another handle holds without sharing is named unreadable within 50 ms, never vanished, and read once released"
+      ]
+    },
+    {
+      "id": "LK2-locked-stat-waits-in-std",
+      "file": "src/platform/search_index.zig",
+      "from": "    const stat = try open_nowait.stat(abs);\n    return .{\n        .stamp = .{ .mtime_ns = stat.mtime_ns, .ctime_ns = stat.ctime_ns, .size = stat.size },\n        .kind = switch (stat.kind) {\n            .file => .file,\n            .directory => .directory,\n            .link => .other,\n        },\n    };",
+      "to": "    const stat = try std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), abs, .{ .follow_symlinks = false });\n    return .{\n        .stamp = .{ .mtime_ns = @intCast(stat.mtime.nanoseconds), .ctime_ns = @intCast(stat.ctime.nanoseconds), .size = stat.size },\n        .kind = switch (stat.kind) {\n            .file => .file,\n            .directory => .directory,\n            else => .other,\n        },\n    };",
+      "kills": [
+        "search answers: a changed file another handle holds without sharing is named unreadable within 50 ms, never vanished, and read once released"
+      ]
+    },
+    {
+      "id": "LK3-busy-file-called-deleted",
+      "file": "src/platform/search_index.zig",
+      "from": "    return if (err == error.FileNotFound) .deleted else .unreadable;",
+      "to": "    if (err == error.FileNotFound) return .deleted;\n    return .deleted;",
+      "kills": [
+        "only a missing file is called deleted; a busy, denied or failing one is unreadable",
+        "search answers: a changed file another handle holds without sharing is named unreadable within 50 ms, never vanished, and read once released"
+      ]
+    },
+    {
+      "id": "LK4-dir-file-stat-waits-in-std",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    const stat = open_nowait.stat(abs) catch return false;",
+      "to": "    const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), abs, .{}) catch return false;",
+      "kills": [
+        "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms"
+      ]
+    },
+    {
+      "id": "LK5-jail-name-waits-in-std",
+      "file": "src/platform/repo.zig",
+      "from": "    const handle = open_nowait.openAttributes(path, true) catch return null;\n    defer windows.CloseHandle(handle);",
+      "to": "    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .allow_directory = true }) catch return null;\n    const handle = file.handle;\n    defer windows.CloseHandle(handle);",
+      "kills": [
+        "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms"
+      ]
+    },
+    {
+      "id": "LK6-read-file-waits-in-std",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    const bytes = try open_nowait.readFileAlloc(gpa, place.abs, max_read_source_bytes);",
+      "to": "    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, place.abs, gpa, .limited(max_read_source_bytes));",
+      "kills": [
+        "read_file on a file another handle holds without sharing fails as busy within 50 ms"
+      ]
     }
   ]
 }
