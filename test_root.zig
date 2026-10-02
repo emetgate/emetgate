@@ -36,6 +36,7 @@ pub const evidence_request = src.evidence_request;
 pub const evidence = src.evidence;
 pub const question_lexicon = src.question_lexicon;
 pub const question_terms = src.question_terms;
+pub const question_intent = src.question_intent;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
