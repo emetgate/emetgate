@@ -9,13 +9,14 @@ const map_listing = @import("../engine/map_listing.zig");
 const map_delta = @import("../engine/map_delta.zig");
 const map_region_rank = @import("../engine/map_region_rank.zig");
 const map_explore = @import("../engine/map_explore.zig");
+const map_pick = @import("../engine/map_pick.zig");
 const question_lexicon = @import("../engine/question_lexicon.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
-pub const Command = enum { build, region, files, bench, rank, explore, eval };
+pub const Command = enum { build, region, files, bench, rank, explore, eval, pick };
 
 pub const Options = struct {
     command: Command,
@@ -38,6 +39,8 @@ pub const Options = struct {
     k: u32 = 3,
     list: u32 = 8,
     explore_budget: usize = map_explore.default_budget,
+    expand_budget: usize = 0,
+    kernel_regions: u32 = 0,
     with_text: bool = false,
     rank: map_region_rank.Params = .{},
 };
@@ -202,6 +205,11 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.k = number(u32, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--list")) {
             options.list = number(u32, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--expand-budget")) {
+            options.expand_budget = number(usize, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--kernel-regions")) {
+            options.kernel_regions = number(u32, value) orelse return null;
+            if (options.kernel_regions > map_explore.max_merged_regions) return null;
         } else if (std.mem.eql(u8, arg, "--explore-budget")) {
             options.explore_budget = number(usize, value) orelse return null;
             if (options.explore_budget < map_explore.min_budget) return null;
@@ -210,7 +218,8 @@ pub fn parse(args: []const [:0]const u8) ?Options {
     switch (options.command) {
         .region => if (options.region == null) return null,
         .rank => if (options.region_count != 1 or options.question == null) return null,
-        .explore => if (options.region_count == 0 or options.question == null) return null,
+        .explore => if (options.question == null or (options.region_count == 0 and options.kernel_regions == 0)) return null,
+        .pick => if (options.question == null) return null,
         .eval => if (options.set == null) return null,
         .build, .files, .bench => {},
     }
@@ -298,7 +307,12 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
             const terms = try map_region_rank.Terms.ofQuestion(arena, lex, options.question.?);
             const fs = try repo.factStore(arena);
             const index = try map_region_rank.Index.build(arena, &repo.store, &built, lex);
-            const explored = try map_explore.explore(&fs, &built, options.regions[0..options.region_count], &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index, .params = options.rank });
+            var regions: []const map.RegionId = options.regions[0..options.region_count];
+            if (options.kernel_regions != 0) {
+                const picked = try map_pick.pick(arena, &repo.store, &built, &terms, options.rank, index, .{ .max_regions = options.kernel_regions });
+                regions = try map_pick.merge(arena, regions, picked.regions, if (regions.len == 0) options.kernel_regions else 1);
+            }
+            const explored = try map_explore.explore(&fs, &built, regions, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index, .params = options.rank, .expand_budget = options.expand_budget, .region_limit = map_explore.max_merged_regions });
             switch (explored) {
                 .complete => |c| try out.writeAll(c.value.text),
                 .partial => |p| try out.writeAll(p.value.text),
@@ -311,6 +325,20 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
             return 0;
         },
         .eval => return evaluate(gpa, io, seam.clock, repo, &built, options, out),
+        .pick => {
+            const lex = try question_lexicon.Lexicon.parse(gpa, question_lexicon.default_text);
+            defer lex.deinit();
+            const terms = try map_region_rank.Terms.ofQuestion(arena, lex, options.question.?);
+            const index = try map_region_rank.Index.build(arena, &repo.store, &built, lex);
+            const picked = try map_pick.pick(arena, &repo.store, &built, &terms, options.rank, index, .{ .max_regions = @max(options.kernel_regions, 3) });
+            for (picked.scored[0..@min(picked.scored.len, options.limit)]) |sc| {
+                try out.print("r{d} {d:.3} {s}\n", .{ sc.region + 1, sc.score, built.regions[sc.region].path });
+            }
+            for (picked.ranking.hits[0..@min(picked.ranking.hits.len, options.limit)], 0..) |hit, i| {
+                try out.print("{d:>3} {d:.3} {s}  {s}:{d}\n", .{ i + 1, hit.score, hit.qname, hit.path, hit.line });
+            }
+            return 0;
+        },
         .bench => unreachable,
     }
 }
@@ -319,6 +347,8 @@ const EvalItem = struct {
     id: []const u8,
     text: []const u8,
     regions: []const []const u8 = &.{},
+    gold_path: []const u8 = "",
+    gold_qname: []const u8 = "",
 };
 
 const EvalSet = struct {
@@ -375,12 +405,38 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
             const id = regionId(text) orelse continue;
             if (id < built.regions.len) try ids.append(arena, id);
         }
+        var global_rank: ?u32 = null;
+        var pick_ms: f64 = 0;
+        if (options.kernel_regions != 0) {
+            const started = clock.monotonic();
+            const picked = try map_pick.pick(arena, &repo.store, built, &terms, options.rank, index, .{ .max_regions = options.kernel_regions });
+            pick_ms = @as(f64, @floatFromInt(nanosSince(clock, started))) / 1e6;
+            const merged = try map_pick.merge(arena, ids.items, picked.regions, if (ids.items.len == 0) options.kernel_regions else 1);
+            ids.clearRetainingCapacity();
+            try ids.appendSlice(arena, merged);
+            if (item.gold_path.len != 0) {
+                for (picked.ranking.hits, 0..) |hit, i| {
+                    if (std.mem.eql(u8, hit.path, item.gold_path) and std.mem.eql(u8, hit.qname, item.gold_qname)) {
+                        global_rank = @intCast(i + 1);
+                        break;
+                    }
+                }
+            }
+        }
         var js: std.json.Stringify = .{ .writer = out };
         try js.beginObject();
         try js.objectField("id");
         try js.write(item.id);
         try js.objectField("index_ms");
         try js.write(@as(f64, @floatFromInt(index_ns)) / 1e6);
+        try js.objectField("explored_regions");
+        try js.beginArray();
+        for (ids.items) |id| try js.write(try std.fmt.allocPrint(arena, "r{d}", .{id + 1}));
+        try js.endArray();
+        try js.objectField("global_rank");
+        try js.write(global_rank);
+        try js.objectField("pick_ms");
+        try js.write(pick_ms);
         try js.objectField("concepts");
         try js.beginArray();
         for (terms.concepts) |c| {
@@ -420,10 +476,10 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
             try js.endObject();
         }
         try js.endArray();
-        if (ids.items.len != 0 and ids.items.len <= map_explore.max_regions) {
+        if (ids.items.len != 0 and ids.items.len <= map_explore.max_merged_regions) {
             const fs = try repo.factStore(arena);
             const started = clock.monotonic();
-            const explored = try map_explore.explore(&fs, built, ids.items, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index, .params = options.rank });
+            const explored = try map_explore.explore(&fs, built, ids.items, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index, .params = options.rank, .expand_budget = options.expand_budget, .region_limit = map_explore.max_merged_regions });
             const spent = nanosSince(clock, started);
             try js.objectField("explore_ms");
             try js.write(@as(f64, @floatFromInt(spent)) / 1e6);

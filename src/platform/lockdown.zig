@@ -11,6 +11,8 @@ pub const tool_search_variable = "ENABLE_TOOL_SEARCH";
 pub const tool_search_value = "false";
 
 pub const read_only_tools = [_][]const u8{
+    "emetgate_explore",
+    "emetgate_evidence",
     "emetgate_symbols",
     "emetgate_skeleton",
     "emetgate_read_symbol",

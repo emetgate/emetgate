@@ -16,6 +16,8 @@ const none = facts.none;
 pub const default_budget: usize = 12_000;
 pub const min_budget: usize = 2_000;
 pub const max_regions: usize = 3;
+pub const max_merged_regions: usize = 4;
+pub const max_expand: usize = 4;
 pub const min_term_len: usize = 3;
 pub const max_doc_chars: usize = 100;
 const reserve: usize = 360;
@@ -31,6 +33,8 @@ pub const Options = struct {
     index: ?*rank.Index = null,
     include: evidence.Include = .{ .callers = false, .callees = false, .tests = false },
     params: rank.Params = .{},
+    expand_budget: usize = 0,
+    region_limit: usize = max_regions,
 };
 
 pub const Shown = struct {
@@ -243,6 +247,21 @@ fn codeLines(text: []const u8) []const u8 {
     return body;
 }
 
+fn cutTargets(arena: Allocator, store: *const Store, code_text: []const u8, targets: []const Target) ![]const evidence.SymbolRef {
+    var out: std.ArrayList(evidence.SymbolRef) = .empty;
+    for (targets) |t| {
+        if (out.items.len >= max_expand) break;
+        const hash = shortHash(store.file(t.hit.file).facts.defs[t.hit.def].hash);
+        const tag = try std.fmt.allocPrint(arena, "[target {s} {s}]", .{ t.hit.qname, &hash });
+        const at = std.mem.indexOf(u8, code_text, tag) orelse continue;
+        const rest = code_text[at + tag.len ..];
+        const next = std.mem.indexOf(u8, rest, "[target ") orelse rest.len;
+        if (std.mem.indexOf(u8, rest[0..next], " lines elided") == null) continue;
+        try out.append(arena, .{ .path = t.hit.path, .qname = t.hit.qname });
+    }
+    return out.items;
+}
+
 pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const map.RegionId, terms: *const rank.Terms, options: Options) !ExploreAnswer {
     const arena = fs.arena;
     const store = fs.store;
@@ -252,7 +271,7 @@ pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const
         if (r >= m.regions.len) return ExploreAnswer.refuse(error.UnknownRegion, try std.fmt.allocPrint(arena, "no region r{d}; the map has r1 to r{d}", .{ r + 1, m.regions.len }));
         if (std.mem.indexOfScalar(map.RegionId, region_ids.items, r) == null) try region_ids.append(arena, r);
     }
-    if (region_ids.items.len > max_regions) return ExploreAnswer.refuse(error.TooManyRegions, "explore takes at most three regions");
+    if (region_ids.items.len > @min(options.region_limit, max_merged_regions)) return ExploreAnswer.refuse(error.TooManyRegions, "explore takes at most three regions");
     const budget = @max(options.budget, min_budget);
     const regions = region_ids.items;
 
@@ -344,6 +363,26 @@ pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const
         for (targets.items) |t| try elided_paths.put(arena, t.hit.path, {});
     }
 
+    var expand_text: []const u8 = "";
+    if (options.expand_budget >= evidence.min_budget and code_text.len != 0) {
+        const cut = try cutTargets(arena, store, code_text, targets.items);
+        if (cut.len != 0) {
+            const bodies = evidence.evidence(fs, .{ .targets = cut, .intent = .explain, .terms = &.{}, .include = .{ .callers = false, .callees = false, .tests = false } }, options.expand_budget);
+            switch (bodies) {
+                .refused => {},
+                .complete, .partial => {
+                    const block = switch (bodies) {
+                        .complete => |c| c.value,
+                        .partial => |p| p.value,
+                        .refused => unreachable,
+                    };
+                    const lines = codeLines(block.text);
+                    if (lines.len != 0) expand_text = try std.fmt.allocPrint(arena, "complete bodies of the functions cut above:\n{s}", .{lines});
+                },
+            }
+        }
+    }
+
     const listing_budget = total -| (fixed + code_text.len + code_note.len);
     var level: Level = .names;
     var listings: std.ArrayList([]const u8) = .empty;
@@ -425,6 +464,7 @@ pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const
     try w.writeAll(code_text);
     try w.writeAll(code_note);
     for (listings.items) |text| try w.writeAll(text);
+    try w.writeAll(expand_text);
     try result.writeStatus(w, shown.items.len, "functions shown");
     try w.writeByte('\n');
     switch (result) {
