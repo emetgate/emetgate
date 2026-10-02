@@ -193,6 +193,7 @@ const Builder = struct {
             const words = try self.stemsOf(root);
             const idf = if (self.options.by_dirs) idfOf(self.dir_ids.count(), self.root_dirs.get(root) orelse 1) else 1;
             const weight = std.math.pow(f64, @floatFromInt(n), self.options.tf_power) * self.options.root_weight * std.math.pow(f64, idf, self.options.idf_power);
+            if (weight <= 0) continue;
             const e = try self.element(weight, allIn(words, self.line_stems[f.region]));
             try self.root_element.put(self.arena, try self.regionKey(f.region, root), e);
         }
