@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1298**
-- Mutations declared in `tests/mutations.json`: **795**
-  - killed: **765**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1311**
+- Mutations declared in `tests/mutations.json`: **808**
+  - killed: **778**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -556,7 +556,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-335 mutation(s).
+348 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -895,6 +895,19 @@ python tools/verification_page.py --check
 | `EP6-repository-entry-searched` | `src/platform/exe_path.zig` | `if (search.repo_root) \|root\| if (inside(dir, dir_final, root,...` -> `if (search.repo_root) \|root\| if (inside(dir, dir_final, root,...` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
 | `EP7-relative-entry-searched` | `src/platform/exe_path.zig` | `if (dir.len == 0 or !fullyQualified(dir)) continue;` -> `if (dir.len == 0) continue;` | exe path: a name found nowhere else, a relative name and a relative path entry ... | killed |
 | `EP8-junction-entry-compared-as-text` | `src/platform/exe_path.zig` | `if (dir_final != null and base_final != null) return withinWide...` -> `_ = dir_final;     _ = base_final;` | exe path: a PATH entry that reaches the repository or the working directory thr... | killed |
+| `QC1-lexicon-word-not-applied` | `src/engine/question_terms.zig` | `if (self.lex.entryOf(found)) \|entry\| return self.lexiconConce...` -> `if (self.lex.entryOf(found)) \|entry\| if (entry.values.len == ...` | question lexicon checks: every term check translates its turkish phrase to the ... | killed |
+| `QC2-lexicon-phrase-not-applied` | `src/engine/question_terms.zig` | `if (!self.options.lexicon) return 0;` -> `if (!self.options.lexicon or self.lex.max_phrase > 0) return 0;` | question lexicon checks: every term check translates its turkish phrase to the ... | killed |
+| `QC3-stemming-off` | `src/engine/question_lexicon.zig` | `if (rest.len > max_word) return null;` -> `if (rest.len > 0) return null;` | question lexicon: a suffix chain costs more for one-letter suffixes and its fir...; quest... | killed |
+| `QC4-intent-mapped-to-flow` | `src/engine/question_intent.zig` | `if (better) best = .{ .intent = pattern.intent, .pattern = i, ....` -> `if (better) best = .{ .intent = .flow, .pattern = i, .length = ...` | question intent: english patterns pick callers, callees, definitions, decisions...; quest... | killed |
+| `QC5-intent-priority-reversed` | `src/engine/question_intent.zig` | `pub const priority = [_]Intent{ .callers, .callees, .where_defi...` -> `pub const priority = [_]Intent{ .flow, .decides, .where_defined...` | question intent: the longer pattern wins and a tie goes to the earlier intent i... | killed |
+| `QC14-apostrophe-suffix-kept` | `src/engine/question_terms.zig` | `if (text[i] == '\'' and i + 1 < text.len) return text[0..i];` -> `if (text[i] == '\'' and i + 1 < text.len and i == 0) return tex...` | question terms: quotes, paths, apostrophe suffixes and numbers become typed tok... | killed |
+| `QC15-turkish-never-detected` | `src/engine/question_terms.zig` | `return tr > en;` -> `return tr > en + tokens.len;` | question lexicon checks: every term check translates its turkish phrase to the ... | killed |
+| `QC16-fold-table-ignored` | `src/engine/question_lexicon.zig` | `if (std.mem.eql(u8, f.from, seq)) break f.to;` -> `if (std.mem.eql(u8, f.from, seq) and f.to.len == 0) break f.to;` | question lexicon checks: every stem check maps its inflected word to the listed...; quest... | killed |
+| `QC17-softening-skipped` | `src/engine/question_lexicon.zig` | `if (s.from != last) continue;` -> `if (s.from != last or s.to != 0) continue;` | question lexicon checks: every stem check maps its inflected word to the listed...; quest... | killed |
+| `QC18-first-suffix-class-unchecked` | `src/engine/question_lexicon.zig` | `if (i == 0 and !compatible(class, stem_class)) continue;` -> `if (i == 0 and !compatible(class, stem_class) and len == 0) con...` | question lexicon: a suffix chain costs more for one-letter suffixes and its fir...; quest... | killed |
+| `QC19-one-letter-suffix-not-dearer` | `src/engine/question_lexicon.zig` | `const step: u8 = if (len == 1) single_cost else suffix_cost;` -> `const step: u8 = if (len == 0) single_cost else suffix_cost;` | question lexicon: a suffix chain costs more for one-letter suffixes and its fir...; quest... | killed |
+| `QC20-duplicate-key-accepted` | `src/engine/question_lexicon.zig` | `if (slot.found_existing) return error.InvalidLexicon;          ...` -> `if (slot.found_existing and index == 0) return error.InvalidLex...` | question lexicon: a duplicate key, an unknown section and a rule without a mini... | killed |
+| `QC21-compound-marker-kept` | `src/engine/question_lexicon.zig` | `if (word.len < marker.len + 3 or !std.mem.endsWith(u8, word, ma...` -> `if (word.len < marker.len + 3 or !std.mem.endsWith(u8, word, ma...` | question lexicon checks: every term check translates its turkish phrase to the ... | killed |
 
 ## What this system does not prove
 

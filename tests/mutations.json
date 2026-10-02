@@ -7853,6 +7853,131 @@
       "kills": [
         "exe path: a PATH entry that reaches the repository or the working directory through a junction is still skipped"
       ]
+    },
+    {
+      "id": "QC1-lexicon-word-not-applied",
+      "file": "src/engine/question_terms.zig",
+      "from": "if (self.lex.entryOf(found)) |entry| return self.lexiconConcept(entry);",
+      "to": "if (self.lex.entryOf(found)) |entry| if (entry.values.len == 0) return self.lexiconConcept(entry);",
+      "kills": [
+        "question lexicon checks: every term check translates its turkish phrase to the listed english term"
+      ]
+    },
+    {
+      "id": "QC2-lexicon-phrase-not-applied",
+      "file": "src/engine/question_terms.zig",
+      "from": "if (!self.options.lexicon) return 0;",
+      "to": "if (!self.options.lexicon or self.lex.max_phrase > 0) return 0;",
+      "kills": [
+        "question lexicon checks: every term check translates its turkish phrase to the listed english term"
+      ]
+    },
+    {
+      "id": "QC3-stemming-off",
+      "file": "src/engine/question_lexicon.zig",
+      "from": "if (rest.len > max_word) return null;",
+      "to": "if (rest.len > 0) return null;",
+      "kills": [
+        "question lexicon: a suffix chain costs more for one-letter suffixes and its first suffix must suit the stem class",
+        "question lexicon checks: every stem check maps its inflected word to the listed key",
+        "question lexicon checks: every term check translates its turkish phrase to the listed english term"
+      ]
+    },
+    {
+      "id": "QC4-intent-mapped-to-flow",
+      "file": "src/engine/question_intent.zig",
+      "from": "if (better) best = .{ .intent = pattern.intent, .pattern = i, .length = pattern.tokens.len };",
+      "to": "if (better) best = .{ .intent = .flow, .pattern = i, .length = pattern.tokens.len };",
+      "kills": [
+        "question intent: english patterns pick callers, callees, definitions, decisions and flow, and the rest is explain",
+        "question intent: the longer pattern wins and a tie goes to the earlier intent in priority order",
+        "question lexicon checks: every intent check sentence is classified to its listed intent"
+      ]
+    },
+    {
+      "id": "QC5-intent-priority-reversed",
+      "file": "src/engine/question_intent.zig",
+      "from": "pub const priority = [_]Intent{ .callers, .callees, .where_defined, .decides, .flow, .explain };",
+      "to": "pub const priority = [_]Intent{ .flow, .decides, .where_defined, .callees, .callers, .explain };",
+      "kills": [
+        "question intent: the longer pattern wins and a tie goes to the earlier intent in priority order"
+      ]
+    },
+    {
+      "id": "QC14-apostrophe-suffix-kept",
+      "file": "src/engine/question_terms.zig",
+      "from": "if (text[i] == '\\'' and i + 1 < text.len) return text[0..i];",
+      "to": "if (text[i] == '\\'' and i + 1 < text.len and i == 0) return text[0..i];",
+      "kills": [
+        "question terms: quotes, paths, apostrophe suffixes and numbers become typed tokens"
+      ]
+    },
+    {
+      "id": "QC15-turkish-never-detected",
+      "file": "src/engine/question_terms.zig",
+      "from": "return tr > en;",
+      "to": "return tr > en + tokens.len;",
+      "kills": [
+        "question lexicon checks: every term check translates its turkish phrase to the listed english term"
+      ]
+    },
+    {
+      "id": "QC16-fold-table-ignored",
+      "file": "src/engine/question_lexicon.zig",
+      "from": "if (std.mem.eql(u8, f.from, seq)) break f.to;",
+      "to": "if (std.mem.eql(u8, f.from, seq) and f.to.len == 0) break f.to;",
+      "kills": [
+        "question lexicon checks: every stem check maps its inflected word to the listed key",
+        "question lexicon checks: every term check translates its turkish phrase to the listed english term"
+      ]
+    },
+    {
+      "id": "QC17-softening-skipped",
+      "file": "src/engine/question_lexicon.zig",
+      "from": "if (s.from != last) continue;",
+      "to": "if (s.from != last or s.to != 0) continue;",
+      "kills": [
+        "question lexicon checks: every stem check maps its inflected word to the listed key",
+        "question lexicon checks: every term check translates its turkish phrase to the listed english term"
+      ]
+    },
+    {
+      "id": "QC18-first-suffix-class-unchecked",
+      "file": "src/engine/question_lexicon.zig",
+      "from": "if (i == 0 and !compatible(class, stem_class)) continue;",
+      "to": "if (i == 0 and !compatible(class, stem_class) and len == 0) continue;",
+      "kills": [
+        "question lexicon: a suffix chain costs more for one-letter suffixes and its first suffix must suit the stem class",
+        "question lexicon checks: every stem check maps its inflected word to the listed key"
+      ]
+    },
+    {
+      "id": "QC19-one-letter-suffix-not-dearer",
+      "file": "src/engine/question_lexicon.zig",
+      "from": "const step: u8 = if (len == 1) single_cost else suffix_cost;",
+      "to": "const step: u8 = if (len == 0) single_cost else suffix_cost;",
+      "kills": [
+        "question lexicon: a suffix chain costs more for one-letter suffixes and its first suffix must suit the stem class",
+        "question lexicon checks: every stem check maps its inflected word to the listed key"
+      ]
+    },
+    {
+      "id": "QC20-duplicate-key-accepted",
+      "file": "src/engine/question_lexicon.zig",
+      "from": "                if (slot.found_existing) return error.InvalidLexicon;\n                slot.value_ptr.* = .{ .class = class, .entry = index };",
+      "to": "                if (slot.found_existing and index == 0) return error.InvalidLexicon;\n                slot.value_ptr.* = .{ .class = class, .entry = index };",
+      "kills": [
+        "question lexicon: a duplicate key, an unknown section and a rule without a minimum stem are refused"
+      ]
+    },
+    {
+      "id": "QC21-compound-marker-kept",
+      "file": "src/engine/question_lexicon.zig",
+      "from": "if (word.len < marker.len + 3 or !std.mem.endsWith(u8, word, marker)) continue;",
+      "to": "if (word.len < marker.len + 3 or !std.mem.endsWith(u8, word, marker) or marker.len > 0) continue;",
+      "kills": [
+        "question lexicon checks: every term check translates its turkish phrase to the listed english term"
+      ]
     }
   ]
 }
