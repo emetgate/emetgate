@@ -352,15 +352,17 @@ def score(label, set_path):
             general[q["id"]] = q
     for name in sorted(os.listdir(calls)) if os.path.isdir(calls) else []:
         record = read_json(os.path.join(calls, name))
-        q = seen.get(record["qid"]) or general.get(record["qid"])
+        hooked = record["qid"].endswith("h")
+        base = record["qid"][:-1] if hooked else record["qid"]
+        q = seen.get(base) or general.get(base)
         if q is None:
             continue
         gold = [resolve_gold(files, g["file"], g["symbol"]) for g in q["gold"]]
         row = score_record(record, gold, regions)
-        row["set"] = "seen" if record["qid"] in seen else "general"
+        row["set"] = ("seen" if base in seen else "general") + ("-hook" if hooked else "")
         rows.append(row)
     summary = {}
-    for name in ("seen", "general"):
+    for name in ("seen", "general", "seen-hook", "general-hook"):
         part = [r for r in rows if r["set"] == name]
         if not part:
             continue
@@ -577,6 +579,291 @@ def probe(label):
     print(json.dumps(record["result"].get("usage"), indent=2), record["result"].get("total_cost_usd"))
 
 
+LEXICON_COMMIT = "0faeaa5"
+LEXICON_PATH = "src/engine/question_lexicon.txt"
+FOLD = str.maketrans("çÇğĞıİöÖşŞüÜâÂîÎûÛ", "ccggiioossuuaaiiuu")
+EN_RULES = sorted([("ies", "y", 2), ("sses", "ss", 2), ("ss", "ss", 2), ("us", "us", 2), ("is", "is", 2), ("s", "", 2),
+                   ("ing", "", 3), ("ed", "", 3), ("ions", "", 3), ("ion", "", 3), ("ers", "", 3), ("er", "", 3),
+                   ("ors", "", 3), ("or", "", 3), ("ments", "", 3), ("ment", "", 3), ("ly", "", 3), ("e", "", 3)], key=lambda r: -len(r[0]))
+EN_STOP = {"a", "an", "and", "any", "are", "as", "at", "be", "by", "can", "do", "does", "for", "from", "get", "has", "have", "if", "in",
+           "into", "is", "it", "its", "no", "not", "of", "on", "or", "set", "so", "than", "that", "the", "then", "this", "to", "too",
+           "up", "was", "were", "will", "with", "all", "new", "use", "out", "via", "per", "one", "two", "my", "we", "our", "you", "your",
+           "ts", "js", "tsx", "jsx", "mjs", "cjs", "src", "lib", "dist", "index", "when", "which", "what", "where", "how", "why", "who",
+           "instead", "only", "also", "more", "than", "after", "before", "should", "would", "could", "make", "keep", "don", "doesn", "isn"}
+HOOK_CHARS = 9500
+BM25_K1 = 1.2
+BM25_B = 0.75
+
+
+def fold(text):
+    return text.translate(FOLD).lower()
+
+
+def en_stem(word):
+    w = word
+    for _ in range(3):
+        for suffix, replacement, min_stem in EN_RULES:
+            if len(w) >= len(suffix) + min_stem and w.endswith(suffix):
+                break
+        else:
+            break
+        if suffix == replacement:
+            break
+        w = w[: len(w) - len(suffix)] + replacement
+    return w
+
+
+def identifier_parts(text):
+    parts = []
+    for run in re.findall(r"[A-Za-z0-9]+", text):
+        pieces = re.findall(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+", run)
+        for p in pieces:
+            low = p.lower()
+            if len(low) >= 2 and not low.isdigit():
+                parts.append(low)
+    return parts
+
+
+def stems_of(text):
+    return [en_stem(p) for p in identifier_parts(text) if p not in EN_STOP]
+
+
+class Lexicon:
+    def __init__(self, text):
+        self.entries = []
+        self.stop = set()
+        for line in text.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            kind, rest = parts
+            if kind in ("stop", "stopverb"):
+                self.stop.update(fold(w) for w in rest.split())
+            elif kind in ("noun", "verb") and "=" in rest:
+                keys, values = rest.split("=", 1)
+                terms = [v.strip() for v in values.split(",") if v.strip()]
+                for key in keys.split("|"):
+                    words = tuple(fold(w) for w in key.split())
+                    if words:
+                        self.entries.append((words, terms))
+        self.entries.sort(key=lambda e: (-len(e[0]), -len(e[0][-1])))
+
+    @staticmethod
+    def matches(word, key):
+        if word == key:
+            return True
+        for marker in ("si", "su", "i", "u"):
+            if key.endswith(marker) and len(key) - len(marker) >= 3 and word.startswith(key[: -len(marker)]) and len(word) - len(key) + len(marker) <= 10:
+                return True
+        return len(key) >= 3 and word.startswith(key) and len(word) - len(key) <= 10
+
+    def query(self, question):
+        raw = re.findall(r"[^\s.,;:!?()\"]+", question)
+        words = [fold(w.split("'")[0].split("’")[0]) for w in raw]
+        terms = {}
+        used = [False] * len(words)
+        for i in range(len(words)):
+            if used[i]:
+                continue
+            for key, values in self.entries:
+                n = len(key)
+                if i + n > len(words):
+                    continue
+                if all(words[i + k] == key[k] for k in range(n - 1)) and self.matches(words[i + n - 1], key[-1]):
+                    for v in values:
+                        for s in stems_of(v):
+                            terms[s] = terms.get(s, 0) + 1
+                    for k in range(n):
+                        used[i + k] = True
+                    break
+        for i, w in enumerate(raw):
+            if used[i] or fold(w) in self.stop:
+                continue
+            base = w.split("'")[0].split("’")[0]
+            if not re.search(r"[A-Za-z]", base) or re.search(r"[^\x00-\x7f]", base):
+                continue
+            for s in stems_of(base):
+                terms[s] = terms.get(s, 0) + 1
+        return terms
+
+
+def load_lexicon():
+    text = subprocess.run(["git", "-C", ROOT, "show", f"{LEXICON_COMMIT}:{LEXICON_PATH}"], capture_output=True, check=True).stdout.decode("utf-8")
+    return Lexicon(text)
+
+
+class Index:
+    def __init__(self, label):
+        self.regions, files = load_files(label)
+        self.files = files
+        self.symbols = []
+        region_terms = {}
+        for path, row in files.items():
+            region = row["region"]
+            if self.regions[region]["family"] != "code":
+                continue
+            stem_terms = stems_of(path.rsplit("/", 1)[-1].split(".")[0])
+            bag = region_terms.setdefault(region, {})
+            for t in stems_of(path):
+                bag[t] = bag.get(t, 0) + 1
+            spans = row.get("spans") or [[0, 0]] * len(row["symbols"])
+            lines = row.get("lines") or [0] * len(row["symbols"])
+            for qname, span, line in zip(row["symbols"], spans, lines):
+                terms = stems_of(qname.split("@")[0]) + stem_terms
+                self.symbols.append({"path": path, "qname": qname, "region": region, "span": span, "line": line, "terms": terms})
+                for t in stems_of(qname.split("@")[0]):
+                    bag[t] = bag.get(t, 0) + 1
+        self.region_terms = region_terms
+        self.region_df = {}
+        for bag in region_terms.values():
+            for t in bag:
+                self.region_df[t] = self.region_df.get(t, 0) + 1
+        self.region_len = {r: sum(b.values()) for r, b in region_terms.items()}
+        self.region_avg = sum(self.region_len.values()) / max(1, len(self.region_len))
+        self.symbol_df = {}
+        for s in self.symbols:
+            for t in set(s["terms"]):
+                self.symbol_df[t] = self.symbol_df.get(t, 0) + 1
+        self.symbol_avg = sum(len(s["terms"]) for s in self.symbols) / max(1, len(self.symbols))
+
+    @staticmethod
+    def bm25(query, tf, length, avg, df, n):
+        score = 0.0
+        for t, q in query.items():
+            f = tf.get(t, 0)
+            if f == 0:
+                continue
+            idf = max(0.0, __import__("math").log((n - df.get(t, 0) + 0.5) / (df.get(t, 0) + 0.5) + 1))
+            score += q * idf * f * (BM25_K1 + 1) / (f + BM25_K1 * (1 - BM25_B + BM25_B * length / avg))
+        return score
+
+    def rank_regions(self, query):
+        n = len(self.region_terms)
+        scored = [(self.bm25(query, bag, self.region_len[r], self.region_avg, self.region_df, n), r) for r, bag in self.region_terms.items()]
+        scored.sort(key=lambda x: (-x[0], int(x[1][1:])))
+        return [r for s, r in scored if s > 0]
+
+    def rank_symbols(self, query, regions):
+        n = len(self.symbols)
+        allowed = set(regions)
+        scored = []
+        for s in self.symbols:
+            if s["region"] not in allowed:
+                continue
+            tf = {}
+            for t in s["terms"]:
+                tf[t] = tf.get(t, 0) + 1
+            score = self.bm25(query, tf, len(s["terms"]), self.symbol_avg, self.symbol_df, n)
+            if score <= 0:
+                continue
+            size = max(1, s["span"][1] - s["span"][0])
+            scored.append((score + 0.15 * __import__("math").log(size), s))
+        scored.sort(key=lambda x: (-x[0], x[1]["path"], x[1]["line"]))
+        return [s for _, s in scored]
+
+
+def source_slice(path, span):
+    with open(os.path.join(N8N, path), "rb") as f:
+        data = f.read()
+    start, end = span
+    first = data.count(b"\n", 0, start) + 1
+    return first, data[start:end].decode("utf-8", "replace")
+
+
+def hook_block(index, question_terms, top_regions=3, top_symbols=12, code_symbols=3):
+    regions = index.rank_regions(question_terms)[:top_regions]
+    symbols = index.rank_symbols(question_terms, regions)
+    lines = ["Kernel guess for this question, made without a model; it can be wrong."]
+    lines.append("likely regions: " + ", ".join(f"{r} {index.regions[r]['path']}" for r in regions))
+    picked = symbols[:top_symbols]
+    lines.append("likely symbols: " + ", ".join(f"{s['qname']} {s['path'].rsplit('/', 1)[-1]}:{s['line']}" for s in picked))
+    used = sum(len(l) + 1 for l in lines)
+    shown = []
+    for s in picked[:code_symbols]:
+        first, body = source_slice(s["path"], s["span"])
+        numbered = "\n".join(f"{first + k} {text}" for k, text in enumerate(body.splitlines()))
+        head = f"code {s['path']}:{first}-{first + body.count(chr(10))} {s['qname']}"
+        room = HOOK_CHARS - used - len(head) - 2
+        if room <= 200:
+            break
+        if len(numbered) > room:
+            numbered = numbered[: room - 60] + "\n... rest not shown (hook budget)"
+            lines.append(head)
+            lines.append(numbered)
+            shown.append((s["qname"], False))
+            used += len(head) + len(numbered) + 2
+            break
+        lines.append(head)
+        lines.append(numbered)
+        shown.append((s["qname"], True))
+        used += len(head) + len(numbered) + 2
+    return "\n".join(lines), regions, [s["qname"] for s in symbols], shown
+
+
+def rank_eval(label, set_path):
+    lexicon = load_lexicon()
+    index = Index(label)
+    rows = []
+    questions = [dict(q, set="seen") for q in seen_questions()]
+    if set_path and os.path.exists(set_path):
+        questions += [dict(q, set="general") for q in read_json(set_path)["questions"]]
+    for q in questions:
+        gold = [resolve_gold(index.files, g["file"], g["symbol"]) for g in q["gold"]]
+        gold = [g for g in gold if g]
+        terms = lexicon.query(q["text"])
+        block, regions, ranked, shown = hook_block(index, terms)
+        gold_regions = {g["region"] for g in gold}
+        def sym_rank():
+            for i, name in enumerate(ranked):
+                if any(symbol_hit([name], g["qname"]) and True for g in gold):
+                    return i
+            return None
+        pos = sym_rank()
+        rows.append({
+            "set": q["set"],
+            "id": q["id"],
+            "region_at1": bool(regions[:1] and regions[0] in gold_regions),
+            "region_at3": bool(gold_regions & set(regions[:3])),
+            "symbol_rank": pos,
+            "code_full": any(full and any(symbol_hit([name], g["qname"]) for g in gold) for name, full in shown),
+            "code_any": any(any(symbol_hit([name], g["qname"]) for g in gold) for name, full in shown),
+            "block_chars": len(block),
+            "terms": sorted(terms),
+        })
+    summary = {}
+    for name in ("seen", "general"):
+        part = [r for r in rows if r["set"] == name]
+        if not part:
+            continue
+        n = len(part)
+        summary[name] = {
+            "questions": n,
+            "region_at1": round(sum(r["region_at1"] for r in part) / n, 3),
+            "region_at3": round(sum(r["region_at3"] for r in part) / n, 3),
+            "symbol_at3": round(sum(r["symbol_rank"] is not None and r["symbol_rank"] < 3 for r in part) / n, 3),
+            "symbol_at12": round(sum(r["symbol_rank"] is not None and r["symbol_rank"] < 12 for r in part) / n, 3),
+            "code_full": round(sum(r["code_full"] for r in part) / n, 3),
+            "code_any": round(sum(r["code_any"] for r in part) / n, 3),
+            "mean_block_chars": round(sum(r["block_chars"] for r in part) / n),
+        }
+    write_json(os.path.join(label_dir(label), "rank.json"), {"summary": summary, "rows": rows})
+    print(json.dumps(summary, indent=2))
+    for r in rows:
+        if r["set"] == "seen":
+            print(r["id"], "region@1" if r["region_at1"] else "-", "region@3" if r["region_at3"] else "-", "symbol rank", r["symbol_rank"], "code" if r["code_full"] else "-", r["terms"])
+
+
+def run_seen_hook(label, trials):
+    lexicon = load_lexicon()
+    index = Index(label)
+    prompt = prompt_file(label)
+    for q in seen_questions():
+        block, _, _, _ = hook_block(index, lexicon.query(q["text"]))
+        for trial in range(1, trials + 1):
+            record = call(label, q["id"] + "h", trial, q["text"] + "\n\n" + block, prompt, RUNS)
+            print(q["id"], trial, record["result"].get("total_cost_usd"), record["wall_ms"], "ms")
+
+
 def main():
     parser = argparse.ArgumentParser(description="M1 map selection gate: the model picks regions and symbols from the map alone")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -598,8 +885,20 @@ def main():
     c.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
     b = sub.add_parser("probe")
     b.add_argument("label")
+    k = sub.add_parser("rank")
+    k.add_argument("label")
+    k.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
+    h = sub.add_parser("seen-hook")
+    h.add_argument("label")
+    h.add_argument("--trials", type=int, default=1)
     sub.add_parser("spent")
     args = parser.parse_args()
+    if args.command == "rank":
+        rank_eval(args.label, args.set)
+        return
+    if args.command == "seen-hook":
+        run_seen_hook(args.label, args.trials)
+        return
     if args.command == "prepare":
         prepare(args.label, args.extra)
     elif args.command == "seen":
