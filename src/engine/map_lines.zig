@@ -39,7 +39,7 @@ pub const WordSet = struct {
     arena: Allocator,
     items: std.ArrayList([]const u8) = .empty,
 
-    fn add(self: *WordSet, raw: []const u8) !void {
+    pub fn add(self: *WordSet, raw: []const u8) !void {
         if (raw.len < min_word) return;
         var buf: [256]u8 = undefined;
         if (raw.len > buf.len) return;
@@ -158,6 +158,16 @@ pub const Index = struct {
             }
         }.less);
         return .{ .lines = lines.items, .df = df, .headings = headings.items };
+    }
+
+    pub fn expandStems(self: *const Index, set: *WordSet, stems: []const []const u8) !void {
+        for (stems) |stem| {
+            if (stem.len < 4) continue;
+            var it = self.df.keyIterator();
+            while (it.next()) |key| {
+                if (std.mem.startsWith(u8, key.*, stem)) try set.add(key.*);
+            }
+        }
     }
 
     pub fn pick(self: *const Index, arena: Allocator, terms: *const WordSet, max: usize) ![]const map.RegionId {

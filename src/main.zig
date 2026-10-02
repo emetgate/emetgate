@@ -18,6 +18,7 @@ const rule_command = emetgate.rule_command;
 const receipts = emetgate.receipts;
 const facts_command = emetgate.facts_command;
 const map_command = emetgate.map_command;
+const hook_command = emetgate.hook_command;
 const verify_run = emetgate.verify_run;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
@@ -156,6 +157,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "facts")) {
         const options = facts_command.parse(args[2..]) orelse exitWithUsage();
         return facts_command.run(runtime.gpa, init.io, runtime, options, out);
+    }
+    if (std.mem.eql(u8, command, "hook") and args.len == 3 and std.mem.eql(u8, args[2], "prompt")) {
+        return hook_command.prompt(runtime.gpa, init.io, runtime, out);
     }
     if (std.mem.eql(u8, command, "map")) {
         const options = map_command.parse(args[2..]) orelse exitWithUsage();

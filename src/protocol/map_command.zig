@@ -10,13 +10,14 @@ const map_delta = @import("../engine/map_delta.zig");
 const map_region_rank = @import("../engine/map_region_rank.zig");
 const map_explore = @import("../engine/map_explore.zig");
 const map_pick = @import("../engine/map_pick.zig");
+const map_tools = @import("map_tools.zig");
 const question_lexicon = @import("../engine/question_lexicon.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
-pub const Command = enum { build, region, files, bench, rank, explore, eval, pick };
+pub const Command = enum { build, region, files, bench, rank, explore, eval, pick, ask };
 
 pub const Options = struct {
     command: Command,
@@ -41,6 +42,7 @@ pub const Options = struct {
     explore_budget: usize = map_explore.default_budget,
     expand_budget: usize = 0,
     kernel_regions: u32 = 0,
+    names: ?[]const u8 = null,
     with_text: bool = false,
     rank: map_region_rank.Params = .{},
 };
@@ -205,6 +207,8 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.k = number(u32, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--list")) {
             options.list = number(u32, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--names")) {
+            options.names = value;
         } else if (std.mem.eql(u8, arg, "--expand-budget")) {
             options.expand_budget = number(usize, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--kernel-regions")) {
@@ -220,6 +224,7 @@ pub fn parse(args: []const [:0]const u8) ?Options {
         .rank => if (options.region_count != 1 or options.question == null) return null,
         .explore => if (options.question == null or (options.region_count == 0 and options.kernel_regions == 0)) return null,
         .pick => if (options.question == null) return null,
+        .ask => if (options.question == null and options.set == null) return null,
         .eval => if (options.set == null) return null,
         .build, .files, .bench => {},
     }
@@ -231,6 +236,7 @@ fn nanosSince(clock: io_seam.Clock, from: i96) u64 {
 }
 
 pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out: *Writer) !u8 {
+    if (options.command == .ask) return ask(gpa, io, runtime, options, out);
     const root = try repo_mod.repoRoot(gpa, io);
     defer gpa.free(root);
     const store_path: ?[]u8 = if (options.persist) try fact_store.defaultStorePath(gpa, root) else null;
@@ -339,13 +345,14 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
             }
             return 0;
         },
-        .bench => unreachable,
+        .bench, .ask => unreachable,
     }
 }
 
 const EvalItem = struct {
     id: []const u8,
     text: []const u8,
+    names: []const []const u8 = &.{},
     regions: []const []const u8 = &.{},
     gold_path: []const u8 = "",
     gold_qname: []const u8 = "",
@@ -354,6 +361,49 @@ const EvalItem = struct {
 const EvalSet = struct {
     questions: []const EvalItem,
 };
+
+fn ask(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out: *Writer) !u8 {
+    const root = try repo_mod.repoRoot(gpa, io);
+    defer gpa.free(root);
+    const session = try map_tools.Session.create(gpa, io, runtime, root);
+    defer session.destroy();
+    try session.build();
+    if (options.set) |set_path| {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, set_path, gpa, .limited(64 * 1024 * 1024));
+        defer gpa.free(bytes);
+        const parsed = try std.json.parseFromSlice(EvalSet, gpa, bytes, .{ .ignore_unknown_fields = true });
+        defer parsed.deinit();
+        for (parsed.value.questions) |item| {
+            var scratch = std.heap.ArenaAllocator.init(gpa);
+            defer scratch.deinit();
+            const text = try session.answer(scratch.allocator(), item.text, item.names);
+            var js: std.json.Stringify = .{ .writer = out };
+            try js.beginObject();
+            try js.objectField("id");
+            try js.write(item.id);
+            try js.objectField("chars");
+            try js.write(text.len);
+            try js.objectField("text");
+            try js.write(text);
+            try js.endObject();
+            try out.writeByte('\n');
+        }
+        return 0;
+    }
+    var scratch = std.heap.ArenaAllocator.init(gpa);
+    defer scratch.deinit();
+    var names: std.ArrayList([]const u8) = .empty;
+    if (options.names) |list| {
+        var it = std.mem.splitScalar(u8, list, ',');
+        while (it.next()) |n| {
+            const t = std.mem.trim(u8, n, " ");
+            if (t.len != 0) try names.append(scratch.allocator(), t);
+        }
+    }
+    try out.writeAll(try session.answer(scratch.allocator(), options.question.?, names.items));
+    try out.writeByte('\n');
+    return 0;
+}
 
 fn writeExplored(js: *std.json.Stringify, arena: Allocator, explored: map_explore.ExploreAnswer, with_text: bool) !void {
     try js.objectField("explore_status");

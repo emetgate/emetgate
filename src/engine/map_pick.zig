@@ -34,6 +34,10 @@ pub fn codeFiles(arena: Allocator, store: *const Store, m: *const map.Map) ![]ra
 }
 
 pub fn globalRanking(arena: Allocator, store: *const Store, m: *const map.Map, terms: *const rank.Terms, params: rank.Params, index: ?*rank.Index) !rank.Ranking {
+    return rankAcross(arena, try codeFiles(arena, store, m), terms, params, index);
+}
+
+pub fn rankAcross(arena: Allocator, files: []const rank.RegionFile, terms: *const rank.Terms, params: rank.Params, index: ?*rank.Index) !rank.Ranking {
     const whole: map.Region = .{
         .id = whole_repo,
         .family = .code,
@@ -48,7 +52,7 @@ pub fn globalRanking(arena: Allocator, store: *const Store, m: *const map.Map, t
         .concepts = &.{},
         .listing_chars = 0,
     };
-    return rank.rankFiles(arena, try codeFiles(arena, store, m), &whole, terms, params, index);
+    return rank.rankFiles(arena, files, &whole, terms, params, index);
 }
 
 fn scoredMore(_: void, a: Scored, b: Scored) bool {
