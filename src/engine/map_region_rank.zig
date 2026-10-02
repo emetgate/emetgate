@@ -32,8 +32,9 @@ const PieceList = struct {
     arena: Allocator,
     items: std.ArrayList([]const u8) = .empty,
 
-    pub fn piece(self: *PieceList, term: []const u8, kind: question_terms.PieceKind) !void {
+    pub fn piece(self: *PieceList, term: []const u8, kind: question_terms.PieceKind, raw: []const u8) !void {
         _ = kind;
+        _ = raw;
         try self.items.append(self.arena, try self.arena.dupe(u8, term));
     }
 };
@@ -150,8 +151,9 @@ const Sink = struct {
     mask: u64 = 0,
     pieces: u32 = 0,
 
-    pub fn piece(self: *Sink, term: []const u8, kind: question_terms.PieceKind) !void {
+    pub fn piece(self: *Sink, term: []const u8, kind: question_terms.PieceKind, raw: []const u8) !void {
         _ = kind;
+        _ = raw;
         self.pieces += 1;
         if (self.terms.by_stem.get(term)) |bits| self.mask |= bits;
     }
@@ -177,8 +179,9 @@ const Counter = struct {
     index: *Index,
     ids: std.ArrayList(u32) = .empty,
 
-    pub fn piece(self: *Counter, term: []const u8, kind: question_terms.PieceKind) !void {
+    pub fn piece(self: *Counter, term: []const u8, kind: question_terms.PieceKind, raw: []const u8) !void {
         _ = kind;
+        _ = raw;
         const entry = try self.index.stems.getOrPut(self.arena, term);
         if (!entry.found_existing) {
             entry.key_ptr.* = try self.arena.dupe(u8, term);
