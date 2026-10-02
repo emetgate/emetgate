@@ -4,6 +4,7 @@ const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
+const open_nowait = @import("../platform/open_nowait.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
 const symbol = @import("../engine/symbol.zig");
 const wire = @import("wire.zig");
@@ -78,7 +79,7 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     const place = try repo.jail(gpa, io, root, file);
     defer place.deinit(gpa);
     if (!raw and lang_registry.forPath(file) != null) return error.UseSymbolToolsForSource;
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, place.abs, gpa, .limited(max_read_source_bytes));
+    const bytes = try open_nowait.readFileAlloc(gpa, place.abs, max_read_source_bytes);
     defer gpa.free(bytes);
     if (looksBinary(bytes)) return error.BinaryFile;
 

@@ -122,6 +122,38 @@ test "read_file returns a JSON key tree by default, and a pointer's subtree with
     try testing.expectEqualStrings("\"^4.0.0\"", value_body.value.object.get("value").?.string);
 }
 
+extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: std.os.windows.DWORD, share: std.os.windows.DWORD, security: ?*anyopaque, disposition: std.os.windows.DWORD, flags: std.os.windows.DWORD, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
+
+fn holdWithoutSharing(path: []const u8) !std.os.windows.HANDLE {
+    var wide: [std.os.windows.PATH_MAX_WIDE:0]u16 = undefined;
+    const len = try std.unicode.wtf8ToWtf16Le(&wide, path);
+    wide[len] = 0;
+    for (0..200) |_| {
+        const handle = CreateFileW(&wide, 0x80000000, 0, null, 3, 0x80, null);
+        if (handle != std.os.windows.INVALID_HANDLE_VALUE) return handle;
+        try std.Io.sleep(testing.io, .fromMilliseconds(5), .awake);
+    }
+    return error.HoldFailed;
+}
+
+test "read_file on a file another handle holds without sharing fails as busy within 50 ms" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "held.txt", .data = "held text\n" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "held.txt", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const holder = try holdWithoutSharing(path);
+    defer std.os.windows.CloseHandle(holder);
+
+    const started = std.Io.Clock.awake.now(testing.io).nanoseconds;
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "FileBusy");
+    const elapsed = std.Io.Clock.awake.now(testing.io).nanoseconds - started;
+    try testing.expect(elapsed < 50 * std.time.ns_per_ms);
+}
+
 test "read_file refuses malformed JSON instead of serving a partial key tree" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
