@@ -6,6 +6,7 @@ const disk = @import("disk.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
+const open_nowait = @import("open_nowait.zig");
 
 pub const Kind = enum { file, directory, link, other };
 
@@ -221,6 +222,41 @@ pub fn readError(err: Dir.ReadFileAllocError) ReadError {
         error.BadPathName => error.BadPathName,
         error.OutOfMemory => error.OutOfMemory,
         else => error.InputOutput,
+    };
+}
+
+pub fn nowaitReadError(err: open_nowait.ReadError) ReadError {
+    return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        error.FileBusy => error.Busy,
+        error.IsDir => error.IsDirectory,
+        error.StreamTooLong => error.TooLarge,
+        error.NameTooLong => error.NameTooLong,
+        error.BadPathName => error.BadPathName,
+        error.OutOfMemory => error.OutOfMemory,
+        error.InputOutput, error.Unexpected => error.InputOutput,
+    };
+}
+
+pub fn nowaitStatError(err: open_nowait.Error) StatError {
+    return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        error.FileBusy => error.Busy,
+        error.NameTooLong => error.NameTooLong,
+        error.BadPathName => error.BadPathName,
+        error.Unexpected => error.InputOutput,
+    };
+}
+
+pub fn nowaitPathError(err: open_nowait.Error) PathError {
+    return switch (err) {
+        error.FileNotFound => error.FileNotFound,
+        error.AccessDenied => error.AccessDenied,
+        error.NameTooLong => error.NameTooLong,
+        error.BadPathName => error.BadPathName,
+        error.FileBusy, error.Unexpected => error.InputOutput,
     };
 }
 
@@ -448,12 +484,27 @@ pub const Real = struct {
     }
 
     fn readFile(context: *anyopaque, path: []const u8, gpa: Allocator, limit: usize) ReadError![]u8 {
-        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch |err| return readError(err);
+        _ = context;
+        return open_nowait.readFileAlloc(gpa, path, limit -| 1) catch |err| return nowaitReadError(err);
     }
 
     fn stat(context: *anyopaque, path: []const u8, follow: Follow) StatError!Stat {
-        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch |err| return statError(err);
-        return .{ .kind = statKind(got.kind), .size = got.size, .mtime_ns = got.mtime.nanoseconds, .id = @intCast(got.inode) };
+        _ = context;
+        const handle = open_nowait.openAttributes(path, follow == .follow) catch |err| return nowaitStatError(err);
+        defer windows.CloseHandle(handle);
+        var info: win.ByHandleFileInformation = undefined;
+        if (win.GetFileInformationByHandle(handle, &info) == .FALSE) return error.InputOutput;
+        var tag: win.FileAttributeTagInfo = .{ .attributes = info.attributes, .reparse_tag = 0 };
+        if (info.attributes & win.file_attribute_reparse_point != 0) {
+            if (win.GetFileInformationByHandleEx(handle, win.file_attribute_tag_info, &tag, @sizeOf(win.FileAttributeTagInfo)) == .FALSE) return error.InputOutput;
+        }
+        const hns: i64 = @bitCast((@as(u64, info.last_write.high) << 32) | info.last_write.low);
+        return .{
+            .kind = entryKind(info.attributes, tag.reparse_tag),
+            .size = (@as(u64, info.size_high) << 32) | info.size_low,
+            .mtime_ns = windows.fromSysTime(hns).nanoseconds,
+            .id = (@as(u64, info.index_high) << 32) | info.index_low,
+        };
     }
 
     fn list(context: *anyopaque, dir: []const u8, visitor: Visitor) ListError!void {
@@ -489,7 +540,22 @@ pub const Real = struct {
     }
 
     fn realPath(context: *anyopaque, path: []const u8, gpa: Allocator) PathError![:0]u8 {
-        return Dir.cwd().realPathFileAlloc(of(context).io, path, gpa) catch |err| return pathError(err);
+        _ = context;
+        const handle = open_nowait.openAttributes(path, true) catch |err| return nowaitPathError(err);
+        defer windows.CloseHandle(handle);
+        var wide: WidePath = undefined;
+        const n = win.GetFinalPathNameByHandleW(handle, &wide, wide.len, 0);
+        if (n == 0) return error.InputOutput;
+        if (n >= wide.len) return error.NameTooLong;
+        const long_prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\");
+        const unc_prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\UNC\\");
+        var units: []u16 = wide[0..n];
+        if (std.mem.startsWith(u16, units, unc_prefix)) {
+            units = units[unc_prefix.len - 2 ..];
+            units[0] = '\\';
+            units[1] = '\\';
+        } else if (std.mem.startsWith(u16, units, long_prefix)) units = units[long_prefix.len..];
+        return std.unicode.wtf16LeToWtf8AllocZ(gpa, units) catch return error.OutOfMemory;
     }
 
     fn tracked(context: *anyopaque, root: []const u8, gpa: Allocator) TrackedError![][]u8 {
@@ -608,6 +674,21 @@ const win = struct {
         hEvent: ?windows.HANDLE,
     };
 
+    const ByHandleFileInformation = extern struct {
+        attributes: u32,
+        creation: FileTime,
+        last_access: FileTime,
+        last_write: FileTime,
+        volume_serial: u32,
+        size_high: u32,
+        size_low: u32,
+        links: u32,
+        index_high: u32,
+        index_low: u32,
+    };
+    const FileAttributeTagInfo = extern struct { attributes: u32, reparse_tag: u32 };
+    const file_attribute_tag_info: c_int = 9;
+
     const find_ex_info_basic: c_int = 1;
     const find_first_ex_large_fetch: windows.DWORD = 2;
     const file_attribute_directory: u32 = 0x10;
@@ -653,6 +734,9 @@ const win = struct {
     extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetFileInformationByHandle(file: windows.HANDLE, info: *ByHandleFileInformation) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn GetFileInformationByHandleEx(file: windows.HANDLE, class: c_int, info: *anyopaque, size: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn GetFinalPathNameByHandleW(file: windows.HANDLE, path: [*]u16, len: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetDriveTypeW(root: [*:0]const u16) callconv(.winapi) c_uint;
 };
 
@@ -698,6 +782,31 @@ test "every read error keeps its meaning when it crosses the seam" {
     try testing.expectEqual(error.GitFailed, trackedError(error.FileNotFound));
     try testing.expectEqual(error.NotDirectory, win32ListError(win.error_directory));
     try testing.expectEqual(error.Busy, win32WriteError(win.error_sharing_violation));
+}
+
+test "the real file system reads a file another handle holds as busy at once and still stats and resolves it" {
+    var t = try TempRoot.init();
+    defer t.deinit();
+    try t.write("held.txt", "held");
+    var real = Real.init(testing.allocator, testing.io);
+    defer real.deinit();
+    const fs = real.seam().fs;
+    const held = try t.path("held.txt");
+    defer testing.allocator.free(held);
+    var wide: WidePath = undefined;
+    const holder = win.CreateFileW(try toWide(&wide, held), 0x80000000, 0, null, win.open_existing, 0x80, null);
+    try testing.expect(holder != windows.INVALID_HANDLE_VALUE);
+    defer windows.CloseHandle(holder);
+    const started = std.Io.Clock.awake.now(testing.io).nanoseconds;
+    try testing.expectError(error.Busy, fs.readFile(held, testing.allocator, 100));
+    const got = try fs.stat(held, .follow);
+    const resolved = try fs.realPath(held, testing.allocator);
+    defer testing.allocator.free(resolved);
+    const elapsed = std.Io.Clock.awake.now(testing.io).nanoseconds - started;
+    try testing.expectEqual(Kind.file, got.kind);
+    try testing.expectEqual(@as(u64, 4), got.size);
+    try testing.expect(std.mem.endsWith(u8, resolved, "\\held.txt"));
+    try testing.expect(elapsed < 50 * std.time.ns_per_ms);
 }
 
 test "the real file system reads below the limit and refuses a file at the limit as too large" {
