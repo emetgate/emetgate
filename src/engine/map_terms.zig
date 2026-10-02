@@ -112,6 +112,20 @@ pub fn stem(word: []const u8, buf: []u8) []const u8 {
     return buf[0..len];
 }
 
+const plural_rules = rules[0..6];
+
+pub fn pluralStem(word: []const u8, buf: []u8) []const u8 {
+    if (word.len > buf.len) return word;
+    @memcpy(buf[0..word.len], word);
+    for (plural_rules) |r| {
+        if (word.len < r.suffix.len + r.min_stem or !std.mem.endsWith(u8, word, r.suffix)) continue;
+        const base = word.len - r.suffix.len;
+        @memcpy(buf[base .. base + r.replacement.len], r.replacement);
+        return buf[0 .. base + r.replacement.len];
+    }
+    return buf[0..word.len];
+}
+
 const stop_words = [_][]const u8{
     "a",     "an",   "and",  "any",  "are",    "as",   "at",    "be",   "by",    "can",  "do",    "does",  "for",
     "from",  "get",  "has",  "have", "if",     "in",   "into",  "is",   "it",    "its",  "no",    "not",   "of",
@@ -126,6 +140,48 @@ pub fn isStop(word: []const u8) bool {
     }
     return false;
 }
+
+pub const Stems = struct {
+    arena: Allocator,
+    plural_only: bool = false,
+    ids: std.StringHashMapUnmanaged(u32) = .empty,
+    names: std.ArrayList([]const u8) = .empty,
+    surface: std.ArrayList(std.StringArrayHashMapUnmanaged(u32)) = .empty,
+
+    pub fn intern(self: *Stems, raw: []const u8) !u32 {
+        var buf: [max_part]u8 = undefined;
+        const key = if (self.plural_only) pluralStem(raw, &buf) else stem(raw, &buf);
+        const entry = try self.ids.getOrPut(self.arena, key);
+        if (!entry.found_existing) {
+            entry.key_ptr.* = try self.arena.dupe(u8, key);
+            entry.value_ptr.* = @intCast(self.names.items.len);
+            try self.names.append(self.arena, entry.key_ptr.*);
+            try self.surface.append(self.arena, .empty);
+        }
+        const id = entry.value_ptr.*;
+        const forms = &self.surface.items[id];
+        const form = try forms.getOrPut(self.arena, raw);
+        if (!form.found_existing) {
+            form.key_ptr.* = try self.arena.dupe(u8, raw);
+            form.value_ptr.* = 0;
+        }
+        form.value_ptr.* += 1;
+        return id;
+    }
+
+    pub fn display(self: *const Stems, id: u32) []const u8 {
+        const forms = &self.surface.items[id];
+        var best: []const u8 = self.names.items[id];
+        var count: u32 = 0;
+        for (forms.keys(), forms.values()) |k, v| {
+            if (v > count or (v == count and (k.len < best.len or (k.len == best.len and std.mem.order(u8, k, best) == .lt)))) {
+                best = k;
+                count = v;
+            }
+        }
+        return best;
+    }
+};
 
 pub fn mutualInformation(n11: f64, n10: f64, n01: f64, n00: f64) f64 {
     const n = n11 + n10 + n01 + n00;
@@ -273,6 +329,17 @@ test "map terms: english suffixes reduce related words to one stem" {
     try testing.expectEqualStrings("execut", stem("execution", &a));
     try testing.expectEqualStrings("class", stem("class", &a));
     try testing.expect(isStop("get") and !isStop("placeholder"));
+}
+
+test "map terms: the plural stem folds plurals only and keeps agent nouns apart from their verbs" {
+    var a: [max_part]u8 = undefined;
+    var b: [max_part]u8 = undefined;
+    try testing.expectEqualStrings(pluralStem("connections", &a), pluralStem("connection", &b));
+    try testing.expectEqualStrings("policy", pluralStem("policies", &a));
+    try testing.expectEqualStrings("tester", pluralStem("testers", &a));
+    try testing.expectEqualStrings("class", pluralStem("class", &a));
+    try testing.expectEqualStrings("status", pluralStem("status", &a));
+    try testing.expect(!std.mem.eql(u8, pluralStem("tester", &a), pluralStem("test", &b)));
 }
 
 test "map terms: mutual information is zero for an independent term and grows with association" {
