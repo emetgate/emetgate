@@ -1461,3 +1461,15 @@ test "map: file names that share a kind are folded under the kind and the rest s
     try writeFolded(arena_state.allocator(), &out.writer, &.{ "import.service", "user.service", "gamma", "role.ee" });
     try testing.expectEqualStrings("service{import, user}, gamma, role.ee", out.written());
 }
+
+test "map: concept items come most telling first and words after the names" {
+    const items = [_]map_concepts.Item{
+        .{ .region = 0, .kind = .term, .text = "queue", .value = 9 },
+        .{ .region = 0, .kind = .root, .text = "small", .value = 1 },
+        .{ .region = 0, .kind = .dir, .text = "nodes/", .value = 5 },
+        .{ .region = 0, .kind = .root, .text = "big", .value = 7 },
+    };
+    var order = [_]u32{ 0, 1, 2, 3 };
+    std.mem.sort(u32, &order, @as([]const map_concepts.Item, &items), conceptMore);
+    try testing.expectEqualSlices(u32, &.{ 3, 2, 1, 0 }, &order);
+}

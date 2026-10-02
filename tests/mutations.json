@@ -8314,6 +8314,106 @@
         "map explore: a function inside another shown function is not shown twice"
       ],
       "note": "a function and the function around it would both take code budget"
+    },
+    {
+      "id": "MC1-concept-spread-ignored",
+      "file": "src/engine/map_concepts.zig",
+      "from": "if (self.options.by_dirs) return idfOf(self.dir_ids.count(), dir_df);",
+      "to": "if (self.options.by_dirs) return idfOf(self.dir_ids.count(), dir_df) * 0 + 1;",
+      "kills": [
+        "map concepts: a word every region holds weighs nothing and a word of one region weighs most"
+      ],
+      "note": "a word that every folder holds would weigh as much as a word of one folder"
+    },
+    {
+      "id": "MC2-concept-region-floor-dropped",
+      "file": "src/engine/map_concepts.zig",
+      "from": "    for (forced.items) |k| {",
+      "to": "    for (forced.items[0..0]) |k| {",
+      "kills": [
+        "map concepts: every region with a candidate gets one item before any region gets a second, and the budget holds"
+      ],
+      "note": "a region whose words are common would get no name while another region gets several"
+    },
+    {
+      "id": "MC3-concept-floor-over-budget",
+      "file": "src/engine/map_concepts.zig",
+      "from": "        if (spent + c.cost > budget) continue;",
+      "to": "        if (spent + c.cost > budget and false) continue;",
+      "kills": [
+        "map concepts: every region with a candidate gets one item before any region gets a second, and the budget holds"
+      ],
+      "note": "the one name per region would be paid even past the budget"
+    },
+    {
+      "id": "MC4-concept-name-words-become-terms",
+      "file": "src/engine/map_concepts.zig",
+      "from": "if (in_names.contains(key(r, s)) or count < options.min_term_count) continue;",
+      "to": "if (count < options.min_term_count) continue;",
+      "kills": [
+        "map concepts: a file root is a candidate only for the words it adds"
+      ],
+      "note": "a word a file or folder name already carries would also be offered as a #word"
+    },
+    {
+      "id": "MC5-concept-types-counted",
+      "file": "src/engine/map_concepts.zig",
+      "from": "            if (d.kind == .module or !d.kind.callable()) continue;",
+      "to": "            if (d.kind == .module) continue;",
+      "kills": [
+        "map concepts: a word every region holds weighs nothing and a word of one region weighs most"
+      ],
+      "note": "interfaces and type aliases would count as code a question can be about"
+    },
+    {
+      "id": "MC6-concept-quota-ignored",
+      "file": "src/engine/map_concepts.zig",
+      "from": "    if (p.quota_power > 0 and p.mass.len == p.regions) {",
+      "to": "    if (p.quota_power > 0 and p.mass.len == p.regions and false) {",
+      "kills": [
+        "map concepts: region quotas give a region with more functions more names than a smaller region with rarer words"
+      ],
+      "note": "the budget would not follow the functions of each region"
+    },
+    {
+      "id": "MC7-concept-order-reversed",
+      "file": "src/engine/map.zig",
+      "from": "    if (a.value != c.value) return a.value > c.value;",
+      "to": "    if (a.value != c.value) return a.value < c.value;",
+      "kills": [
+        "map: concept items come most telling first and words after the names"
+      ],
+      "note": "the least telling names would come first on a region line"
+    },
+    {
+      "id": "MC8-concept-mode-ignored",
+      "file": "src/engine/map.zig",
+      "from": "    if (options.lines == .concepts) {",
+      "to": "    if (options.lines == .concepts and false) {",
+      "kills": [
+        "map concepts: every code region with a word its line does not show names at least one folder, file or word"
+      ],
+      "note": "the concept line mode would fall back to symbol names"
+    },
+    {
+      "id": "MC9-wide-capacity-ignored",
+      "file": "src/engine/map_tree.zig",
+      "from": "        const capacity = if (self.wide.children != 0 and children.len >= self.wide.children) self.capacity * @max(self.wide.factor, 1) else self.capacity;",
+      "to": "        const capacity = self.capacity;",
+      "kills": [
+        "map tree: a directory with many children packs them by a wider capacity and others keep theirs"
+      ],
+      "note": "a directory with many children would be cut by the normal capacity"
+    },
+    {
+      "id": "MC10-plural-stem-replaced-by-full-stem",
+      "file": "src/engine/map_terms.zig",
+      "from": "        const key = if (self.plural_only) pluralStem(raw, &buf) else stem(raw, &buf);",
+      "to": "        const key = stem(raw, &buf);",
+      "kills": [
+        "map terms: the plural stem folds plurals only and keeps agent nouns apart from their verbs"
+      ],
+      "note": "tester and test would be one concept, so a distinctive file name would look common"
     }
   ]
 }
