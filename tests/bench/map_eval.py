@@ -1217,6 +1217,168 @@ def m1p_calibrate(label, qid, k):
     print(json.dumps(result, indent=2))
 
 
+def m1p_speed(label):
+    regions, _ = load_files(label)
+    code = sorted((r for r, row in regions.items() if row["family"] == "code"), key=lambda r: int(r[1:]))
+    items = []
+    for q in seen_questions():
+        for i in range(0, len(code), 3):
+            items.append({"id": f"{q['id']}-{i}", "text": q["text"], "regions": code[i:i + 3]})
+    results = run_eval_set(label, items, ["--limit", "1", "--k", "5"], "m1p-speed")
+    rank_ms = [r["rank_ms"] for x in results.values() for r in x["rankings"]]
+    explore_ms = [x["explore_ms"] for x in results.values() if "explore_ms" in x]
+    candidates = [r["candidates"] for x in results.values() for r in x["rankings"]]
+    summary = {
+        "rankings": len(rank_ms),
+        "rank_ms": {"p50": percentile(rank_ms, 0.5), "p90": percentile(rank_ms, 0.9), "p99": percentile(rank_ms, 0.99), "max": max(rank_ms) if rank_ms else None},
+        "explore_ms": {"count": len(explore_ms), "p50": percentile(explore_ms, 0.5), "p99": percentile(explore_ms, 0.99), "max": max(explore_ms) if explore_ms else None},
+        "candidates": {"p50": percentile(candidates, 0.5), "max": max(candidates) if candidates else None},
+    }
+    write_json(os.path.join(label_dir(label), "m1p-speed.json"), {"label": label, "summary": summary})
+    print(json.dumps(summary, indent=2))
+
+
+SESSIONS = os.path.join(PROJECT, "eval", "session-map-runs")
+OPUS_PRICE = {"cache_read": 0.2e-6, "cache_write": 8.0e-6, "output": 20.0e-6, "input": 4.0e-6}
+TOOL_TOKENS = 300
+
+
+def flat_sessions():
+    import glob
+    rows = []
+    for meta_path in glob.glob(os.path.join(SESSIONS, "**", "*.meta.json"), recursive=True):
+        meta = read_json(meta_path)
+        if meta.get("arm") not in ("A", "Aprime") or not str(meta.get("model_flag", "")).startswith("claude-opus"):
+            continue
+        result = None
+        with open(meta_path.replace(".meta.json", ".jsonl"), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                event = event.get("event", event)
+                if isinstance(event, dict) and event.get("type") == "result":
+                    result = event
+        if not result or not result.get("total_cost_usd"):
+            continue
+        usage = result.get("usage") or {}
+        rows.append({"arm": meta["arm"], "question": meta["question"], "phase": meta["phase"], "turns": result.get("num_turns"),
+                     "usd": result["total_cost_usd"], "api_ms": result.get("duration_api_ms"),
+                     "cache_write": usage.get("cache_creation_input_tokens", 0), "cache_read": usage.get("cache_read_input_tokens", 0),
+                     "output": usage.get("output_tokens", 0), "path": os.path.relpath(meta_path, SESSIONS)})
+    return rows
+
+
+def median(values):
+    values = sorted(values)
+    if not values:
+        return 0
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
+class PricedSession:
+    def __init__(self, prefix, price, warm):
+        self.price = price
+        self.context = prefix
+        self.warm = warm
+        self.cost = 0.0
+        self.tokens = {"cache_write": 0, "cache_read": 0, "output": 0}
+        self.turns = 0
+
+    def turn(self, new_tokens, output_tokens):
+        if self.warm:
+            self.tokens["cache_read"] += self.context
+            self.cost += self.context * self.price["cache_read"]
+        else:
+            self.tokens["cache_write"] += self.context
+            self.cost += self.context * self.price["cache_write"]
+            self.warm = True
+        self.tokens["cache_write"] += new_tokens
+        self.cost += new_tokens * self.price["cache_write"] + output_tokens * self.price["output"]
+        self.tokens["output"] += output_tokens
+        self.context += new_tokens + output_tokens
+        self.turns += 1
+
+
+def flat_model(rows, arm):
+    repeat = [r for r in rows if r["arm"] == arm and r["phase"] == "repeat"]
+    first = [r for r in rows if r["arm"] == arm and r["phase"] == "first"]
+    turns = median([r["turns"] for r in repeat])
+    output = median([r["output"] for r in repeat])
+    growth = median([r["cache_write"] for r in repeat])
+    prefix = round(median([r["cache_write"] for r in first]) - growth)
+    return {"arm": arm, "sessions": len(repeat) + len(first), "turns_per_question": turns, "output_per_question": output,
+            "new_tokens_per_question": growth, "prefix_tokens": prefix,
+            "measured_one_question_warm_usd": round(median([r["usd"] for r in repeat]), 4),
+            "measured_one_question_cold_usd": round(median([r["usd"] for r in first]), 4),
+            "measured_api_ms_warm": median([r["api_ms"] for r in repeat])}
+
+
+def simulate_flat(model, questions, warm):
+    s = PricedSession(model["prefix_tokens"], OPUS_PRICE, warm)
+    turns = max(1, round(model["turns_per_question"]))
+    for _ in range(questions):
+        for _ in range(turns):
+            s.turn(QUESTION_TOKENS / turns + model["new_tokens_per_question"] / turns, model["output_per_question"] / turns)
+    return {"usd": round(s.cost, 4), "turns_per_question": turns, **{k: round(v) for k, v in s.tokens.items()}}
+
+
+def simulate_explore(prefix, questions, p_two, call_out, explore_tokens, answer_tokens, evidence_tokens, warm):
+    total = {"usd": 0.0, "cache_write": 0.0, "cache_read": 0.0, "output": 0.0, "turns": 0.0}
+    for outcome, weight in (("two", p_two), ("three", 1 - p_two)):
+        if weight <= 0:
+            continue
+        s = PricedSession(prefix, PRICE, warm)
+        for _ in range(questions):
+            s.turn(QUESTION_TOKENS, call_out)
+            if outcome == "two":
+                s.turn(explore_tokens, answer_tokens)
+            else:
+                s.turn(explore_tokens, TOOL_CALL_TOKENS)
+                s.turn(evidence_tokens, answer_tokens)
+        total["usd"] += weight * s.cost
+        total["turns"] += weight * s.turns / questions
+        for k in ("cache_write", "cache_read", "output"):
+            total[k] += weight * s.tokens[k]
+    return {"usd": round(total["usd"], 4), "turns_per_question": round(total["turns"], 2), **{k: round(total[k]) for k in ("cache_write", "cache_read", "output")}}
+
+
+def m1p_cost(label, k, explore_tokens):
+    regions_report = read_json(os.path.join(label_dir(label), "m1p-regions.json"))
+    combined = read_json(os.path.join(label_dir(label), "m1p-combined.json"))["summary"]
+    calls = [r for r in regions_report["rows"]]
+    first = min(calls, key=lambda r: (r["set"] != "seen", r["qid"], r["trial"]))
+    map_prefix = first["input_tokens"] + first["cache_creation_input_tokens"] + first["cache_read_input_tokens"] - QUESTION_TOKENS
+    prefix = map_prefix + TOOL_TOKENS
+    call_out = median([r["output_tokens"] for r in calls])
+    rows = flat_sessions()
+    flats = [flat_model(rows, "A"), flat_model(rows, "Aprime")]
+    out = {"assumptions": {"sonnet_price": PRICE, "opus_price": OPUS_PRICE, "question_tokens": QUESTION_TOKENS, "tool_definition_tokens": TOOL_TOKENS,
+                           "turn1_output_tokens_measured_median": call_out, "explore_tokens": explore_tokens, "answer_tokens": ANSWER_TOKENS,
+                           "third_turn_evidence_tokens": EVIDENCE_TOKENS, "map_prefix_tokens_measured": map_prefix, "k": k},
+           "flat": flats, "rows": []}
+    for set_name in ("seen", "general"):
+        if set_name not in combined:
+            continue
+        p_two = combined[set_name][f"combined_at{k}"]
+        for q in (1, 3, 10):
+            for warm in (True, False):
+                row = {"option": f"map + explore (Sonnet), {set_name} combined@{k} = {p_two}", "questions": q, "cache": "warm" if warm else "cold",
+                       **simulate_explore(prefix, q, p_two, call_out, explore_tokens, ANSWER_TOKENS, EVIDENCE_TOKENS, warm)}
+                out["rows"].append(row)
+    for model in flats:
+        for q in (1, 3, 10):
+            for warm in (True, False):
+                out["rows"].append({"option": f"flat Claude {model['arm']} (Opus)", "questions": q, "cache": "warm" if warm else "cold", **simulate_flat(model, q, warm)})
+    write_json(os.path.join(label_dir(label), "m1p-cost.json"), out)
+    for model in flats:
+        print(model)
+    for r in out["rows"]:
+        print(r["option"], r["questions"], r["cache"], r["usd"], r["turns_per_question"])
+
+
 def main():
     parser = argparse.ArgumentParser(description="M1 map selection gate: the model picks regions and symbols from the map alone")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1271,6 +1433,12 @@ def main():
     me.add_argument("--general", action="store_true")
     me.add_argument("--ks", default="3,5,8")
     me.add_argument("--budget", type=int, default=12000)
+    mo = sub.add_parser("m1p-cost")
+    mo.add_argument("label")
+    mo.add_argument("--k", type=int, default=5)
+    mo.add_argument("--explore-tokens", type=int, required=True)
+    mp = sub.add_parser("m1p-speed")
+    mp.add_argument("label")
     mk = sub.add_parser("m1p-calibrate")
     mk.add_argument("label")
     mk.add_argument("--qid", default="S1")
@@ -1293,6 +1461,12 @@ def main():
         return
     if args.command == "m1p-explore":
         m1p_explore(args.label, args.set, args.general, [int(k) for k in args.ks.split(",")], args.budget)
+        return
+    if args.command == "m1p-cost":
+        m1p_cost(args.label, args.k, args.explore_tokens)
+        return
+    if args.command == "m1p-speed":
+        m1p_speed(args.label)
         return
     if args.command == "m1p-calibrate":
         m1p_calibrate(args.label, args.qid, args.k)
