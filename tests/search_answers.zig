@@ -359,6 +359,104 @@ test "search answers: a file locked during one search is read by the next search
     try testing.expectEqual(@as(usize, 2), after.groups().len);
 }
 
+extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: std.os.windows.DWORD, share: std.os.windows.DWORD, security: ?*anyopaque, disposition: std.os.windows.DWORD, flags: std.os.windows.DWORD, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
+
+fn holdWithoutSharing(path: []const u8) !std.os.windows.HANDLE {
+    var wide: [std.os.windows.PATH_MAX_WIDE:0]u16 = undefined;
+    const len = try std.unicode.wtf8ToWtf16Le(&wide, path);
+    wide[len] = 0;
+    for (0..200) |_| {
+        const handle = CreateFileW(&wide, 0x80000000, 0, null, 3, 0x80, null);
+        if (handle != std.os.windows.INVALID_HANDLE_VALUE) return handle;
+        try std.Io.sleep(testing.io, .fromMilliseconds(5), .awake);
+    }
+    return error.HoldFailed;
+}
+
+fn awakeNs() i96 {
+    return std.Io.Clock.awake.now(testing.io).nanoseconds;
+}
+
+test "search answers: a changed file another handle holds without sharing is named unreadable within 50 ms, never vanished, and read once released" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init(&.{
+        .{ "src/held.ts", "export const a = 1;\n" },
+        .{ "src/open.ts", "export const zebra = 2;\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    const src = try repo.path("src");
+    defer gpa.free(src);
+    {
+        var warm = try searchIn(runtime, &session, repo.root, .{ .pattern = "zebra", .dir = src });
+        defer warm.deinit();
+        try testing.expectEqual(@as(usize, 1), warm.groups().len);
+    }
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "src/held.ts", .data = "export const zebra = 3;\n" });
+    const held = try repo.path("src\\held.ts");
+    defer gpa.free(held);
+    const holder = try holdWithoutSharing(held);
+    var released = false;
+    defer if (!released) std.os.windows.CloseHandle(holder);
+
+    for (0..2) |_| {
+        const started = awakeNs();
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "zebra", .dir = src });
+        const elapsed = awakeNs() - started;
+        defer answer.deinit();
+        try testing.expectEqualStrings("partial", answer.status());
+        const missing = answer.get("missing").?.array.items;
+        try testing.expectEqual(@as(usize, 1), missing.len);
+        try testing.expectEqualStrings("src/held.ts", missing[0].object.get("path").?.string);
+        try testing.expectEqualStrings("unreadable", missing[0].object.get("reason").?.string);
+        try testing.expectEqual(@as(usize, 1), answer.groups().len);
+        try testing.expectEqualStrings("src/open.ts", answer.groups()[0].object.get("file").?.string);
+        try testing.expect(elapsed < 50 * std.time.ns_per_ms);
+    }
+
+    std.os.windows.CloseHandle(holder);
+    released = true;
+    var after = try searchIn(runtime, &session, repo.root, .{ .pattern = "zebra", .dir = src });
+    defer after.deinit();
+    try testing.expectEqualStrings("complete", after.status());
+    try testing.expectEqual(@as(usize, 2), after.groups().len);
+}
+
+test "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init(&.{
+        .{ "src/held.ts", "export const zebra = 1;\n" },
+        .{ "src/open.ts", "export const zebra = 2;\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    {
+        var warm = try searchIn(runtime, &session, repo.root, .{ .pattern = "zebra", .dir = repo.root });
+        defer warm.deinit();
+        try testing.expectEqual(@as(usize, 2), warm.groups().len);
+    }
+    const held = try repo.path("src\\held.ts");
+    defer gpa.free(held);
+    const holder = try holdWithoutSharing(held);
+    defer std.os.windows.CloseHandle(holder);
+
+    const started = awakeNs();
+    var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "zebra", .dir = held, .certificate = true });
+    const elapsed = awakeNs() - started;
+    defer answer.deinit();
+    try testing.expect(!answer.is_error);
+    try testing.expectEqualStrings("complete", answer.status());
+    try testing.expectEqual(@as(usize, 1), answer.groups().len);
+    try testing.expectEqualStrings("src/held.ts", answer.groups()[0].object.get("file").?.string);
+    try testing.expect(elapsed < 50 * std.time.ns_per_ms);
+}
+
 test "search answers: a tracked file deleted from the work tree makes the answer partial as vanished" {
     var repo = try Repo.init(&.{
         .{ "a.txt", "goneneedle a\n" },

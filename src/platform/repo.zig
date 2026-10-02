@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const exe_path = @import("exe_path.zig");
+const open_nowait = @import("open_nowait.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -49,10 +50,10 @@ fn cwdReal(gpa: Allocator, io: std.Io) ![:0]u8 {
     return real;
 }
 
-fn ntName(io: std.Io, path: []const u8, buf: []u16) ?[]u16 {
-    var file = std.Io.Dir.cwd().openFile(io, path, .{ .allow_directory = true }) catch return null;
-    defer file.close(io);
-    return std.Io.Threaded.GetFinalPathNameByHandle(file.handle, .{ .volume_name = .Nt }, buf) catch null;
+fn ntName(path: []const u8, buf: []u16) ?[]u16 {
+    const handle = open_nowait.openAttributes(path, true) catch return null;
+    defer windows.CloseHandle(handle);
+    return std.Io.Threaded.GetFinalPathNameByHandle(handle, .{ .volume_name = .Nt }, buf) catch null;
 }
 
 fn sameWideIgnoreCase(a: []const u16, b: []const u16) bool {
@@ -65,7 +66,7 @@ fn sameWideIgnoreCase(a: []const u16, b: []const u16) bool {
     return true;
 }
 
-fn rootNt(io: std.Io, root: []const u8, out: []u16) ?[]u16 {
+fn rootNt(root: []const u8, out: []u16) ?[]u16 {
     names.guard.lock();
     if (names.root_len == root.len and std.mem.eql(u8, names.root[0..names.root_len], root)) {
         defer names.guard.unlock();
@@ -74,7 +75,7 @@ fn rootNt(io: std.Io, root: []const u8, out: []u16) ?[]u16 {
         return out[0..names.root_nt_len];
     }
     names.guard.unlock();
-    const nt = ntName(io, root, out) orelse return null;
+    const nt = ntName(root, out) orelse return null;
     names.guard.lock();
     defer names.guard.unlock();
     if (root.len <= names.root.len and nt.len <= names.root_nt.len) {
@@ -86,12 +87,12 @@ fn rootNt(io: std.Io, root: []const u8, out: []u16) ?[]u16 {
     return nt;
 }
 
-fn fastRealPath(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8) !?[:0]u8 {
+fn fastRealPath(gpa: Allocator, root: []const u8, path: []const u8) !?[:0]u8 {
     if (builtin.os.tag != .windows) return null;
     var target_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
-    const target = ntName(io, path, &target_buf) orelse return null;
+    const target = ntName(path, &target_buf) orelse return null;
     var root_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
-    const root_nt = rootNt(io, root, &root_buf) orelse return null;
+    const root_nt = rootNt(root, &root_buf) orelse return null;
     if (target.len < root_nt.len or !sameWideIgnoreCase(target[0..root_nt.len], root_nt)) return null;
     const rest = target[root_nt.len..];
     const tail_len = std.unicode.calcWtf8Len(rest);
@@ -102,7 +103,7 @@ fn fastRealPath(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8) 
 }
 
 fn realPath(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8) ![:0]u8 {
-    if (try fastRealPath(gpa, io, root, path)) |abs| return abs;
+    if (try fastRealPath(gpa, root, path)) |abs| return abs;
     return std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
 }
 

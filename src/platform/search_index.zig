@@ -10,11 +10,11 @@ const span_codec = @import("../engine/span_codec.zig");
 const trigram = @import("../engine/trigram.zig");
 const index_file = @import("search_index_file.zig");
 const index_map = @import("index_map.zig");
+const open_nowait = @import("open_nowait.zig");
 const stat_scan = @import("stat_scan.zig");
 const worker_pool = @import("worker_pool.zig");
 
 const Allocator = std.mem.Allocator;
-const Dir = std.Io.Dir;
 
 pub const max_indexed_file_bytes: usize = 1 * 1024 * 1024;
 pub const racy_window_ns: i64 = 3 * std.time.ns_per_s;
@@ -95,24 +95,30 @@ fn spansFor(a: Allocator, rel: []const u8, bytes: []const u8) ?kind_spans.FileSp
     return kind_spans.build(a, profile, tree, &table) catch null;
 }
 
-pub fn statOne(io: std.Io, abs: []const u8) ?Seen {
-    const stat = Dir.cwd().statFile(io, abs, .{ .follow_symlinks = false }) catch return null;
+pub fn statOne(abs: []const u8) !Seen {
+    const stat = try open_nowait.stat(abs);
     return .{
-        .stamp = .{ .mtime_ns = @intCast(stat.mtime.nanoseconds), .ctime_ns = @intCast(stat.ctime.nanoseconds), .size = stat.size },
+        .stamp = .{ .mtime_ns = stat.mtime_ns, .ctime_ns = stat.ctime_ns, .size = stat.size },
         .kind = switch (stat.kind) {
             .file => .file,
             .directory => .directory,
-            else => .other,
+            .link => .other,
         },
     };
 }
 
-pub fn prepareOne(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8, seen: ?Seen, want_grams: bool, want_spans: bool) !Prepared {
+pub fn stateAfter(err: anyerror) FileState {
+    return if (err == error.FileNotFound) .deleted else .unreadable;
+}
+
+const no_stamp: Stamp = .{ .mtime_ns = 0, .ctime_ns = 0, .size = 0 };
+
+pub fn prepareOne(gpa: Allocator, root_abs: []const u8, rel: []const u8, seen: ?Seen, want_grams: bool, want_spans: bool) !Prepared {
     const path = try gpa.dupe(u8, rel);
     errdefer gpa.free(path);
     const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root_abs, rel });
     defer gpa.free(abs);
-    const found = seen orelse statOne(io, abs) orelse return .{ .path = path, .stamp = .{ .mtime_ns = 0, .ctime_ns = 0, .size = 0 }, .state = .deleted };
+    const found = seen orelse (statOne(abs) catch |err| return .{ .path = path, .stamp = no_stamp, .state = stateAfter(err) });
     const stamp = found.stamp;
     switch (found.kind) {
         .file => {},
@@ -120,11 +126,10 @@ pub fn prepareOne(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
         .other => return .{ .path = path, .stamp = stamp, .state = .link },
     }
     if (stamp.size > max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };
-    const bytes = Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_indexed_file_bytes + 1)) catch |err| return .{ .path = path, .stamp = stamp, .state = switch (err) {
+    const bytes = open_nowait.readFileAlloc(gpa, abs, max_indexed_file_bytes) catch |err| return .{ .path = path, .stamp = stamp, .state = switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.StreamTooLong => .large,
-        error.FileNotFound => .deleted,
-        else => .unreadable,
+        else => stateAfter(err),
     } };
     errdefer gpa.free(bytes);
     if (looksBinary(bytes)) {
@@ -183,7 +188,7 @@ const PrepareJob = struct {
             if (self.cancel) |c| if (c.load(.acquire)) return;
             const i = self.next.fetchAdd(1, .monotonic);
             if (i >= self.paths.len) return;
-            var prepared = prepareOne(self.gpa, self.io, self.root, self.paths[i], self.seen[i], self.want_grams, self.want_spans) catch |err| {
+            var prepared = prepareOne(self.gpa, self.root, self.paths[i], self.seen[i], self.want_grams, self.want_spans) catch |err| {
                 if (!self.failed.swap(true, .acq_rel)) self.failure = err;
                 return;
             };
@@ -217,7 +222,7 @@ test "prepareOne reads a source file into content, hash, grams and a span blob t
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(root);
 
-    const p = try prepareOne(testing.allocator, testing.io, root, "a.ts", null, true, true);
+    const p = try prepareOne(testing.allocator, root, "a.ts", null, true, true);
     defer p.deinit(testing.allocator);
     try testing.expectEqual(FileState.indexed, p.state);
     try testing.expect(std.mem.indexOf(u8, p.content, "loadPending") != null);
@@ -227,12 +232,19 @@ test "prepareOne reads a source file into content, hash, grams and a span blob t
     const decoded = try span_codec.decode(arena.allocator(), p.spans);
     try testing.expectEqualStrings("loadPending", decoded.spans.?.symbols[0].name);
 
-    const bin = try prepareOne(testing.allocator, testing.io, root, "b.bin", null, false, true);
+    const bin = try prepareOne(testing.allocator, root, "b.bin", null, false, true);
     defer bin.deinit(testing.allocator);
     try testing.expectEqual(FileState.binary, bin.state);
-    const gone = try prepareOne(testing.allocator, testing.io, root, "gone.ts", null, false, true);
+    const gone = try prepareOne(testing.allocator, root, "gone.ts", null, false, true);
     defer gone.deinit(testing.allocator);
     try testing.expectEqual(FileState.deleted, gone.state);
+}
+
+test "only a missing file is called deleted; a busy, denied or failing one is unreadable" {
+    try testing.expectEqual(FileState.deleted, stateAfter(error.FileNotFound));
+    for ([_]anyerror{ error.FileBusy, error.AccessDenied, error.Unexpected, error.InputOutput, error.BadPathName }) |err| {
+        try testing.expectEqual(FileState.unreadable, stateAfter(err));
+    }
 }
 
 test "a stamp within three seconds of the index write time is racy and a later one is not" {

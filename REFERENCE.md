@@ -701,8 +701,11 @@ that says what was covered:
   an answer partial.
 
 `status` repeats `complete` or `partial`. `missing` names the files and why: `unreadable`
-(could not be opened, for example locked by another process, or a tracked path that is now
-a directory or a link), `vanished` (tracked but gone from the work tree), `budget` (a line
+(could not be opened or read, for example held by another process without sharing, or a
+tracked path that is now a directory or a link), `vanished` (tracked but gone from the work
+tree; only a "not found" from the file system counts, a held file is never taken for gone
+because its size and times are read through attributes alone, and a read that meets a
+sharing or lock violation gives up at once instead of retrying), `budget` (a line
 ran past the regex step budget of 2,000,000 steps), `unclassified` (a `kinds` filter was
 given and the file did not parse cleanly, so its hits cannot be classified), and
 `match_limit` (hits that were found but are not in this reply, counted as files). A reply

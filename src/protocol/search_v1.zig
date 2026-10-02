@@ -5,6 +5,7 @@ const index_file = @import("../platform/search_index_file.zig");
 const search_session = @import("../platform/search_session.zig");
 const change_watch = @import("../platform/change_watch.zig");
 const worker_pool = @import("../platform/worker_pool.zig");
+const open_nowait = @import("../platform/open_nowait.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const symbol = @import("../engine/symbol.zig");
 const registry = @import("../engine/lang/registry.zig");
@@ -716,7 +717,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     var timer: ?StageTimer = if (stats_sink != null) StageTimer.start(io) else null;
     const place = try repo.jail(gpa, io, root, request.dir);
     defer place.deinit(gpa);
-    const scope: Scope = .{ .rel = place.rel, .file = isFile(io, place.abs) };
+    const scope: Scope = .{ .rel = place.rel, .file = isFile(place.abs) };
     if (timer) |*t| if (stats_sink) |s| {
         s.jail_ns += t.lap();
     };
@@ -1131,8 +1132,8 @@ fn rootKey(buf: []u8, scope: Scope) ?[]const u8 {
     return buf[0 .. scope.rel.len + 1];
 }
 
-fn isFile(io: std.Io, abs: []const u8) bool {
-    const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch return false;
+fn isFile(abs: []const u8) bool {
+    const stat = open_nowait.stat(abs) catch return false;
     return stat.kind == .file;
 }
 
