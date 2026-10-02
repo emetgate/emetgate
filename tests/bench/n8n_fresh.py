@@ -593,8 +593,9 @@ def main():
     for r in rows:
         print(f"| {r['scenario']} | {r['rounds']} | {r['extra_p50_ms']} | {r['extra_p99_ms']} | {r['e2e_p50_ms']} | {r['e2e_p99_ms']} | {r['misses']} |")
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as out:
-            json.dump(rows, out, indent=2, ensure_ascii=False)
+        with open(args.json, "w", encoding="utf-8", newline="\n") as out:
+            json.dump({"date": time.strftime("%Y-%m-%d"), "repo": "n8n", "rows": rows}, out, indent=2, ensure_ascii=False)
+            out.write("\n")
 
 
 if __name__ == "__main__":
