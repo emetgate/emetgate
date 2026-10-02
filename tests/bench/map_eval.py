@@ -1101,7 +1101,7 @@ def percentile(values, q):
     return values[min(len(values) - 1, int(len(values) * q))]
 
 
-def m1p_rank(label, set_path, include_general, limit):
+def m1p_rank(label, set_path, include_general, limit, rank_args=(), tag=""):
     regions, files = load_files(label)
     questions = [dict(q, set="seen") for q in seen_questions()]
     if include_general:
@@ -1112,7 +1112,8 @@ def m1p_rank(label, set_path, include_general, limit):
         gold = gold_of(files, q)
         gold_by_id[q["id"]] = gold
         items.append({"id": q["id"], "text": q["text"], "regions": sorted({g["region"] for g in gold}, key=lambda r: int(r[1:]))})
-    results = run_eval_set(label, items, ["--limit", str(limit)], "m1p-rank-general" if include_general else "m1p-rank-seen")
+    base_name = ("m1p-rank-general" if include_general else "m1p-rank-seen") + (f"-{tag}" if tag else "")
+    results = run_eval_set(label, items, ["--limit", str(limit), *rank_args], base_name)
     rows = []
     times = []
     for q in questions:
@@ -1139,8 +1140,7 @@ def m1p_rank(label, set_path, include_general, limit):
             summary[part_name][f"at{k}"] = round(sum(r["best"] is not None and r["best"] <= k for r in part) / len(part), 4)
             summary[part_name][f"hits_at{k}"] = sum(r["best"] is not None and r["best"] <= k for r in part)
     summary["rank_ms"] = {"count": len(times), "p50": percentile(times, 0.5), "p99": percentile(times, 0.99), "max": max(times) if times else None}
-    name = "m1p-rank-general.json" if include_general else "m1p-rank-seen.json"
-    write_json(os.path.join(label_dir(label), name), {"label": label, "summary": summary, "rows": rows})
+    write_json(os.path.join(label_dir(label), base_name + ".json"), {"label": label, "rank_args": list(rank_args), "summary": summary, "rows": rows})
     print(json.dumps(summary, indent=2))
     for r in rows:
         if r["set"] == "seen" or r["best"] is None or r["best"] > 5:
@@ -1424,6 +1424,8 @@ def main():
     mr.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
     mr.add_argument("--general", action="store_true")
     mr.add_argument("--limit", type=int, default=50)
+    mr.add_argument("--rank-args", default="")
+    mr.add_argument("--tag", default="")
     mb = sub.add_parser("m1p-combined")
     mb.add_argument("label")
     mb.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
@@ -1454,7 +1456,7 @@ def main():
         m1p_score(args.label, args.set)
         return
     if args.command == "m1p-rank":
-        m1p_rank(args.label, args.set, args.general, args.limit)
+        m1p_rank(args.label, args.set, args.general, args.limit, args.rank_args.split(), args.tag)
         return
     if args.command == "m1p-combined":
         m1p_combined(args.label, args.set)

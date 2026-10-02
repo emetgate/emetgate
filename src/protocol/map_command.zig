@@ -39,6 +39,7 @@ pub const Options = struct {
     list: u32 = 8,
     explore_budget: usize = map_explore.default_budget,
     with_text: bool = false,
+    rank: map_region_rank.Params = .{},
 };
 
 fn number(comptime T: type, text: []const u8) ?T {
@@ -111,6 +112,12 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.map.region_chars = number(u32, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--term-value")) {
             options.map.term_value = @floatCast(real(value) orelse return null);
+        } else if (std.mem.eql(u8, arg, "--region-balance")) {
+            options.map.region_balance = real(value) orelse return null;
+            if (!(options.map.region_balance >= 0 and options.map.region_balance <= 1)) return null;
+        } else if (std.mem.eql(u8, arg, "--rank-idf-power")) {
+            options.rank.idf_power = real(value) orelse return null;
+            if (!(options.rank.idf_power >= 0 and options.rank.idf_power <= 2)) return null;
         } else if (std.mem.eql(u8, arg, "--damping")) {
             options.map.damping = real(value) orelse return null;
             if (!(options.map.damping >= 0 and options.map.damping < 1)) return null;
@@ -232,7 +239,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
                 return 2;
             }
             const index = try map_region_rank.Index.build(arena, &repo.store, &built, lex);
-            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, &built, region, &terms, .{}, index);
+            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, &built, region, &terms, options.rank, index);
             try out.print("r{d} {s}: {d} functions in {d} files, {d} match\n", .{ region + 1, built.regions[region].path, ranked.candidates, ranked.files, ranked.matched });
             for (ranked.hits[0..@min(options.limit, ranked.hits.len)], 0..) |hit, i| {
                 try out.print("{d:>3} {d:.3} {s}  {s}:{d}\n", .{ i + 1, hit.score, hit.qname, hit.path, hit.line });
@@ -245,7 +252,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
             const terms = try map_region_rank.Terms.ofQuestion(arena, lex, options.question.?);
             const fs = try repo.factStore(arena);
             const index = try map_region_rank.Index.build(arena, &repo.store, &built, lex);
-            const explored = try map_explore.explore(&fs, &built, options.regions[0..options.region_count], &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index });
+            const explored = try map_explore.explore(&fs, &built, options.regions[0..options.region_count], &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index, .params = options.rank });
             switch (explored) {
                 .complete => |c| try out.writeAll(c.value.text),
                 .partial => |p| try out.writeAll(p.value.text),
@@ -340,7 +347,7 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
         try js.beginArray();
         for (ids.items) |id| {
             const started = clock.monotonic();
-            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, built, id, &terms, .{}, index);
+            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, built, id, &terms, options.rank, index);
             const spent = nanosSince(clock, started);
             try js.beginObject();
             try js.objectField("region");
@@ -370,7 +377,7 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
         if (ids.items.len != 0 and ids.items.len <= map_explore.max_regions) {
             const fs = try repo.factStore(arena);
             const started = clock.monotonic();
-            const explored = try map_explore.explore(&fs, built, ids.items, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index });
+            const explored = try map_explore.explore(&fs, built, ids.items, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index, .params = options.rank });
             const spent = nanosSince(clock, started);
             try js.objectField("explore_ms");
             try js.write(@as(f64, @floatFromInt(spent)) / 1e6);

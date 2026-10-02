@@ -112,6 +112,7 @@ pub const MapOptions = struct {
     base_share: f64 = 0.35,
     damping: f64 = 0.3,
     list_children: bool = true,
+    region_balance: f64 = 0,
     cert: answer.Snapshot = .{ .barrier = 0, .root = std.mem.zeroes(answer.Digest) },
     fallback: ?*const MapTable = null,
 };
@@ -788,6 +789,15 @@ const Planner = struct {
         const b = self.b;
         const weights = try b.arena.alloc(f64, self.code_syms.len);
         for (self.code_syms, weights) |s, *w| w.* = b.weight[s];
+        if (b.options.region_balance > 0) {
+            const totals = try b.arena.alloc(f64, b.regions.items.len);
+            @memset(totals, 0);
+            for (self.code_syms, weights) |s, w| totals[b.files[b.syms.items[s].file].region] += w;
+            for (self.code_syms, weights) |s, *w| {
+                const total = totals[b.files[b.syms.items[s].file].region];
+                if (total > 0) w.* /= std.math.pow(f64, total, b.options.region_balance);
+            }
+        }
         var candidates: std.ArrayList(map_terms.Candidate) = .empty;
         var groups: std.ArrayList(std.ArrayList(u32)) = .empty;
         var group_of: std.StringHashMapUnmanaged(u32) = .empty;

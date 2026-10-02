@@ -26,6 +26,7 @@ pub const Params = struct {
     proximity: f64 = 1.0,
     size: f64 = 0.25,
     tie: f64 = 0.1,
+    idf_power: f64 = 0,
 };
 
 const PieceList = struct {
@@ -572,7 +573,7 @@ pub fn rankFiles(arena: Allocator, files: []const RegionFile, region: *const map
                 const norm = 1 - params.b[f] + params.b[f] * len / avg[f];
                 pseudo += params.weights[f] * @as(f64, @floatFromInt(tf[f])) / @max(norm, 1e-9);
             }
-            const weight: f64 = terms.concepts[concept].weight;
+            const weight: f64 = terms.concepts[concept].weight * std.math.pow(f64, idf[concept], params.idf_power);
             const part = weight * idf[concept] * pseudo / (params.k1 + pseudo);
             best[g] = @max(best[g], part);
             sum[g] += part;
