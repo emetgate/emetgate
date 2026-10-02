@@ -7136,8 +7136,8 @@
     {
       "id": "FCP6-changed-file-shown-as-current",
       "file": "src/platform/fact_store.zig",
-      "from": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash);",
-      "to": "const fresh = std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash) or true;",
+      "from": "if (!std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash)) return .{ .changed = bytes };",
+      "to": "if (std.mem.eql(u8, &symbol.fileHash(bytes), &self.repo.store.file(id).content_hash) and false) return .{ .changed = bytes };",
       "kills": [
         "fact store: evidence never shows a line of a file that changed after the snapshot as current"
       ],
@@ -7215,14 +7215,84 @@
       "note": "silent cut: call sites left out by the budget would leave the answer complete"
     },
     {
-      "id": "EV8-vanished-file-left-complete",
+      "id": "EV8-changed-file-left-complete",
       "file": "src/engine/evidence.zig",
-      "from": "                try self.vanished.put(self.arena, path, {});\n",
-      "to": "",
+      "from": "error.Changed => try self.unread.put(self.arena, path, .changed_since_snapshot),",
+      "to": "error.Changed => {},",
       "kills": [
-        "evidence: a target whose file changed after the snapshot is named, never shown, and the answer is partial"
+        "evidence: a target whose file changed after the snapshot is named, never shown, and the answer is partial with the change named"
       ],
       "note": "a target whose file changed after the snapshot would not make the answer partial"
+    },
+    {
+      "id": "EV16-deleted-file-named-unreadable",
+      "file": "src/engine/evidence.zig",
+      "from": "error.Deleted => try self.unread.put(self.arena, path, .deleted),",
+      "to": "error.Deleted => try self.unread.put(self.arena, path, .unreadable),",
+      "kills": [
+        "evidence: a target whose file was deleted is named, never shown, and the answer is partial with the file deleted"
+      ],
+      "note": "a deleted file would be reported as a file that cannot be read"
+    },
+    {
+      "id": "EV17-large-file-not-excluded",
+      "file": "src/engine/evidence.zig",
+      "from": "error.TooLarge => try self.excluded.put(self.arena, path, {}),",
+      "to": "error.TooLarge => try self.unread.put(self.arena, path, .unreadable),",
+      "kills": [
+        "evidence: a target whose file grew over the size limit is excluded by the declared rule and the limit is named"
+      ],
+      "note": "a file over the size limit would read as a failure instead of the declared exclusion rule"
+    },
+    {
+      "id": "EV18-missing-file-read-as-unreadable",
+      "file": "src/platform/fact_store.zig",
+      "from": "error.FileNotFound, error.IsDir => .deleted,",
+      "to": "error.FileNotFound, error.IsDir => .unreadable,",
+      "kills": [
+        "fact store: evidence of a target whose file was deleted on disk is partial and names the file deleted"
+      ],
+      "note": "a file deleted on disk would be reported as locked"
+    },
+    {
+      "id": "EV19-large-file-read-as-deleted",
+      "file": "src/platform/fact_store.zig",
+      "from": "error.StreamTooLong => .too_large,",
+      "to": "error.StreamTooLong => .deleted,",
+      "kills": [
+        "fact store: evidence of a target whose file grew over the size limit names the declared exclusion and its limit"
+      ],
+      "note": "a file over the size limit would be reported as deleted"
+    },
+    {
+      "id": "EV20-changed-file-not-refreshed",
+      "file": "src/platform/fact_store.zig",
+      "from": "if (try lines.refreshChanged() == 0) return result;",
+      "to": "if (true) return result;",
+      "kills": [
+        "fact store: evidence refreshes a file changed after the snapshot and quotes its new lines"
+      ],
+      "note": "a file changed after the snapshot would stay partial instead of being refreshed and quoted"
+    },
+    {
+      "id": "EV21-exclusion-not-named",
+      "file": "src/engine/evidence.zig",
+      "from": "const exclusion = try b.exclusionLine(result);",
+      "to": "const exclusion: ?[]const u8 = null;",
+      "kills": [
+        "evidence: a target whose file grew over the size limit is excluded by the declared rule and the limit is named"
+      ],
+      "note": "a file left out by the size rule would not be named with its limit"
+    },
+    {
+      "id": "EV22-locked-file-read-as-deleted",
+      "file": "src/platform/fact_store.zig",
+      "from": "error.FileBusy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,",
+      "to": "error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,\n            error.FileBusy => .deleted,",
+      "kills": [
+        "fact store: evidence of a target whose file another handle holds is partial at once and names the file unreadable"
+      ],
+      "note": "a file another program holds open would be reported as deleted"
     },
     {
       "id": "EV9-long-line-not-cut",
@@ -7257,7 +7327,7 @@
     {
       "id": "EV12-partial-reason-not-given",
       "file": "src/engine/evidence.zig",
-      "from": "const reason = try b.reasonLine(result);",
+      "from": "const reason = try b.reasonLine(result, reason_reserve -| (if (exclusion) |line| line.len + 1 else 0));",
       "to": "const reason: ?[]const u8 = null;",
       "kills": [
         "evidence: callers are shown by signature and call line, every unresolved candidate is listed and the reason is named"
