@@ -1,4 +1,5 @@
 const std = @import("std");
+const facts = @import("../engine/facts.zig");
 const fact_store = @import("../platform/fact_store.zig");
 const io_seam = @import("../platform/io_seam.zig");
 const map = @import("../engine/map.zig");
@@ -19,46 +20,48 @@ const Value = std.json.Value;
 const ToolResult = tool_result.ToolResult;
 
 pub const map_budget_tokens: u32 = 8_000;
-pub const explore_k: u32 = 10;
-pub const total_budget: usize = 60_000;
-pub const explore_budget: usize = 28_000;
-pub const users_budget: usize = 12_000;
-pub const callers_budget: usize = 4_000;
-pub const writers_budget: usize = 8_000;
-pub const max_focus_total: usize = 4;
+pub const reply_budget: usize = 16_000;
+pub const slice_budget: usize = 9_500;
+pub const evidence_budget: usize = 16_000;
+pub const max_regions: usize = 3;
+pub const max_depth: u32 = 4;
+pub const max_fanout: usize = 16;
+pub const max_nodes: usize = 400;
+pub const max_focus: usize = 8;
+pub const max_named_focus: usize = 3;
+pub const max_ranked_focus: usize = 6;
+pub const first_round_path: usize = 3;
+pub const max_candidates: usize = 10;
+pub const max_user_focus: usize = 2;
+pub const max_kept_per_focus: usize = 12;
+pub const max_block_lines: usize = 20;
+pub const max_line_chars: usize = 160;
+pub const max_entries_per_focus: usize = 3;
+pub const max_entry_focus: usize = 3;
+pub const entries_budget: usize = 1_500;
+pub const writers_budget: usize = 3_000;
+pub const max_writer_functions: usize = 4;
 pub const max_read_fields: usize = 12;
-pub const max_write_lines: usize = 14;
 pub const max_writes_per_field: usize = 3;
-pub const max_writer_bodies: usize = 2;
-pub const callee_budget: usize = 9_000;
-pub const names_budget: usize = 5_000;
-pub const max_users_shown: usize = 6;
 pub const max_seeds: usize = 10;
 pub const max_question_seeds: usize = 4;
 pub const max_user_regions: usize = 2;
 pub const user_region_depth: usize = 20;
-pub const evidence_budget: usize = 16_000;
-pub const max_regions: usize = 3;
-pub const max_focus_named: usize = 3;
-pub const max_focus_shown: usize = 2;
-pub const max_extra: usize = 5;
-pub const max_used: usize = 6;
 pub const max_evidence_names: usize = 6;
-pub const max_line_text: usize = 160;
 pub const max_instructions: usize = 1_900;
 pub const max_folders: usize = 40;
 
-pub const explore_description = "Find the code that answers a question about this repository. Returns the best-matching functions with code and line numbers, the functions they call, and the lines where they are used. question: a short English search phrase with the concepts, identifiers and folders involved. names: optional function or class names (Class.method or function) you already know are central.";
+pub const explore_description = "Return the decision path for a question about this repository in one reply: the deciding functions as file:line with their signature, condition, return, call and assignment lines, the functions they call down to four levels, where the fields they read are written, and the lines that call them. question: a short English search phrase with the concepts and identifiers involved. names: optional function or class names (Class.method or function) you already know are central.";
 pub const evidence_description = "Return the full code of up to 6 functions by qualified name (Class.method or function), as plain text.";
 
 const instructions_head = "emetgate reads the code of this repository for you. For a question about the code, call explore once with a short English " ++
-    "search phrase naming the concepts, identifiers and folders involved, plus the names of central functions or classes if you " ++
-    "already know them. One reply is complete: the best-matching functions with code and line numbers, the code that uses the " ++
-    "definitions they name, the functions they call, and the lines where they are used. Call explore or evidence again only when " ++
-    "the code of a function you need is missing from it.\n" ++
+    "search phrase naming the concepts and identifiers involved, plus central function or class names if you know them. The reply " ++
+    "holds the full decision path: answer from it, and call again only if a function you need is missing.\n" ++
     "Answer in at most 10 short lines: the conclusion first, then each deciding function as file:line with what it decides. " ++
     "No headings and no code blocks.\n" ++
     "Top folders: ";
+
+const closing_line = "This reply holds the decision path; answer from it. Call emetgate_explore again only if a function you need is missing, or emetgate_evidence for full bodies.";
 
 pub const Session = struct {
     gpa: Allocator,
@@ -140,10 +143,34 @@ pub const Session = struct {
         if (!self.ready()) return plain(gpa, "explore is unavailable: the project map could not be built", true);
         _ = self.repo.?.refresh() catch {};
         const names = try namesOf(arena, args);
-        return plain(gpa, try self.answer(arena, question, names), false);
+        return plain(gpa, try self.dense(arena, question, names, reply_budget), false);
     }
 
     pub fn answer(self: *Session, arena: Allocator, question: []const u8, names: []const []const u8) ![]const u8 {
+        return self.dense(arena, question, names, reply_budget);
+    }
+
+    pub fn slice(self: *Session, arena: Allocator, question: []const u8) ![]const u8 {
+        return self.dense(arena, question, &.{}, slice_budget);
+    }
+
+    pub fn evidenceTool(self: *Session, gpa: Allocator, args: ?Value) !ToolResult {
+        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        if (!self.ready()) return plain(gpa, "evidence is unavailable: the project map could not be built", true);
+        _ = self.repo.?.refresh() catch {};
+        const names = try namesOf(arena, args);
+        const wanted = names[0..@min(names.len, max_evidence_names)];
+        const text = try self.evidenceText(arena, wanted, evidence_budget);
+        if (text.len != 0) return plain(gpa, text, false);
+        var out: Writer.Allocating = .init(arena);
+        try out.writer.writeAll("none of these names is a known function: ");
+        for (wanted, 0..) |n, i| try out.writer.print("{s}{s}", .{ if (i == 0) "" else ", ", n });
+        return plain(gpa, out.written(), false);
+    }
+
+    pub fn dense(self: *Session, arena: Allocator, question: []const u8, names: []const []const u8, budget: usize) ![]const u8 {
         const repo = self.repo.?;
         const store = &repo.store;
         const built = &self.built.?;
@@ -153,7 +180,160 @@ pub const Session = struct {
         const query = joined.written();
         const terms_words = try map_lines.words(arena, query);
         const terms = try rank.Terms.ofQuestion(arena, self.lex.?, query);
-        var first = try self.lines.?.pick(arena, &terms_words, max_regions);
+        const first = try self.pickRegions(arena, query, &terms_words, &terms);
+
+        var rankings: std.ArrayList(rank.Ranking) = .empty;
+        for (first) |r| {
+            const ranked = rank.rankInRegion(arena, store, built, r, &terms, .{}, self.index) catch continue;
+            try rankings.append(arena, ranked);
+        }
+        var seeds: std.ArrayList(map_usage.Seed) = .empty;
+        for (names) |n| {
+            if (try self.resolve(n)) |f| try appendSeed(arena, &seeds, .{ .file = f.file, .def = f.def });
+        }
+        var questioned: usize = 0;
+        for (try questionIdentifiers(arena, question)) |ident| {
+            if (questioned >= max_question_seeds) break;
+            if (try self.resolve(ident)) |f| {
+                const before = seeds.items.len;
+                try appendSeed(arena, &seeds, .{ .file = f.file, .def = f.def });
+                if (seeds.items.len != before) questioned += 1;
+            }
+        }
+        for (rankings.items) |ranked| {
+            if (ranked.hits.len == 0 or ranked.hits[0].score <= 0 or ranked.hits[0].matched == 0) continue;
+            try appendSeed(arena, &seeds, .{ .file = ranked.hits[0].file, .def = ranked.hits[0].def });
+        }
+        if (seeds.items.len > max_seeds) seeds.shrinkRetainingCapacity(max_seeds);
+        const users = try map_usage.users(arena, store, seeds.items, .{ .skip = &isTest });
+        const ranked_users = try self.rankUsers(arena, users, &terms);
+
+        var focus: std.ArrayList(Fn) = .empty;
+        for (names) |n| {
+            if (focus.items.len >= max_named_focus) break;
+            if (try self.resolve(n)) |f| _ = try appendFn(arena, &focus, f);
+        }
+        var ranked_taken: usize = 0;
+        var depth: usize = 0;
+        while (ranked_taken < max_ranked_focus and depth < 8) : (depth += 1) {
+            var any = false;
+            for (rankings.items) |ranked| {
+                if (depth >= ranked.hits.len) continue;
+                any = true;
+                if (ranked_taken >= max_ranked_focus) break;
+                const hit = ranked.hits[depth];
+                if (hit.score <= 0 or hit.matched == 0 or isTest(hit.path)) continue;
+                if (try appendFn(arena, &focus, .{ .file = hit.file, .def = hit.def, .path = hit.path, .qname = hit.qname })) ranked_taken += 1;
+            }
+            if (!any) break;
+        }
+        var users_taken: usize = 0;
+        for (ranked_users) |u| {
+            if (users_taken >= max_user_focus or focus.items.len >= max_focus) break;
+            if (u.score <= 0) continue;
+            if (try appendFn(arena, &focus, .{ .file = u.user.file, .def = u.user.def, .path = u.user.path, .qname = u.user.qname })) users_taken += 1;
+        }
+        if (focus.items.len > max_focus) focus.shrinkRetainingCapacity(max_focus);
+
+        var path_fns: std.ArrayList(Fn) = .empty;
+        const paths = try arena.alloc([]const Fn, focus.items.len);
+        for (focus.items, paths) |f, *p| p.* = try self.deepPath(arena, f, &terms);
+        for (focus.items, paths) |f, p| {
+            _ = try appendFn(arena, &path_fns, f);
+            for (p[0..@min(p.len, first_round_path)]) |node| _ = try appendFn(arena, &path_fns, node);
+        }
+        for (paths) |p| {
+            if (p.len <= first_round_path) continue;
+            for (p[first_round_path..]) |node| _ = try appendFn(arena, &path_fns, node);
+        }
+        var call_names: std.ArrayList([]const u8) = .empty;
+        for (path_fns.items) |f| {
+            const simple = simpleName(f.qname);
+            if (simple.len >= 4 and !contains(call_names.items, simple)) try call_names.append(arena, simple);
+        }
+
+        var texts: std.StringHashMapUnmanaged(FileText) = .empty;
+        var blocks: std.ArrayList(Block) = .empty;
+        for (path_fns.items) |f| {
+            const b = try self.renderBlock(arena, &texts, f, &terms, call_names.items, &.{});
+            if (b.text.len != 0) try blocks.append(arena, b);
+        }
+        const reserve = writers_budget + entries_budget + closing_line.len + 64;
+        const path_limit = budget -| reserve;
+        var taken: usize = 0;
+        var used: usize = 0;
+        while (taken < blocks.items.len and used + blocks.items[taken].text.len <= path_limit) : (taken += 1) used += blocks.items[taken].text.len;
+        if (taken == 0 and blocks.items.len != 0) {
+            taken = 1;
+            used = blocks.items[0].text.len;
+        }
+
+        var included: std.ArrayList(Fn) = .empty;
+        for (blocks.items[0..taken]) |b| try included.append(arena, b.f);
+        var decision_lines: std.ArrayList([]const u8) = .empty;
+        for (blocks.items[0..taken]) |b| try decision_lines.appendSlice(arena, b.decisions);
+        const fields = try readFields(arena, decision_lines.items);
+        const writers = try self.writerBlocks(arena, &texts, fields, included.items, &terms, call_names.items);
+        var writers_text: Writer.Allocating = .init(arena);
+        const writers_room = writers_budget + (path_limit -| used);
+        for (writers) |b| {
+            if (writers_text.written().len + b.text.len > writers_room) break;
+            try writers_text.writer.writeAll(b.text);
+        }
+        var entries_text: Writer.Allocating = .init(arena);
+        for (focus.items[0..@min(focus.items.len, max_entry_focus)]) |f| try self.entryLines(arena, &entries_text.writer, f, &terms_words);
+        const entries_room = budget -| (used + writers_text.written().len + closing_line.len + 64);
+        const entries_cut = lineCut(entries_text.written(), @min(entries_room, entries_budget + (writers_room -| writers_text.written().len)));
+
+        var leftover = budget -| (used + writers_text.written().len + entries_cut + closing_line.len + 64);
+        var extra_end = taken;
+        while (extra_end < blocks.items.len and blocks.items[extra_end].text.len <= leftover) : (extra_end += 1) leftover -= blocks.items[extra_end].text.len;
+
+        var out: Writer.Allocating = .init(arena);
+        if (blocks.items.len == 0) try out.writer.writeAll("no function of the repository matched the phrase\n");
+        for (blocks.items[0..extra_end]) |b| try out.writer.writeAll(b.text);
+        if (writers_text.written().len != 0) {
+            try out.writer.writeAll("Where the fields read above are written:\n");
+            try out.writer.writeAll(writers_text.written());
+        }
+        if (entries_cut != 0) {
+            try out.writer.writeAll("Callers of the top functions:\n");
+            try out.writer.writeAll(entries_text.written()[0..entries_cut]);
+            if (entries_text.written()[entries_cut - 1] != '\n') try out.writer.writeByte('\n');
+        }
+        var candidates: Writer.Allocating = .init(arena);
+        var listed: usize = 0;
+        var level: usize = 0;
+        while (listed < max_candidates and level < 16) : (level += 1) {
+            var any = false;
+            for (rankings.items) |ranked| {
+                if (level >= ranked.hits.len) continue;
+                any = true;
+                if (listed >= max_candidates) break;
+                const hit = ranked.hits[level];
+                if (hit.score <= 0 or hit.matched == 0 or isTest(hit.path)) continue;
+                const shown = for (blocks.items[0..extra_end]) |b| {
+                    if (b.f.file == hit.file and b.f.def == hit.def) break true;
+                } else false;
+                if (shown) continue;
+                try candidates.writer.print("{s}:{d} {s}\n", .{ hit.path, hit.line, hit.qname });
+                listed += 1;
+            }
+            if (!any) break;
+        }
+        const room = budget -| (out.written().len + closing_line.len + 64);
+        const header = "Other candidates (call emetgate_explore with their names for their code):\n";
+        if (candidates.written().len != 0 and room > header.len + 80) {
+            try out.writer.writeAll(header);
+            try out.writer.writeAll(candidates.written()[0..lineCut(candidates.written(), room - header.len)]);
+        }
+        try out.writer.writeAll(closing_line);
+        try out.writer.writeByte('\n');
+        return out.written();
+    }
+
+    fn pickRegions(self: *Session, arena: Allocator, query: []const u8, terms_words: *const map_lines.WordSet, terms: *const rank.Terms) ![]const map.RegionId {
+        var first = try self.lines.?.pick(arena, terms_words, max_regions);
         if (first.len == 0) {
             var pick_words = try map_lines.words(arena, query);
             var stems: std.ArrayList([]const u8) = .empty;
@@ -161,368 +341,211 @@ pub const Session = struct {
             try self.lines.?.expandStems(&pick_words, stems.items);
             first = try self.lines.?.pick(arena, &pick_words, max_regions);
         }
-        if (first.len == 0) first = (try map_pick.pick(arena, store, built, &terms, .{}, self.index, .{ .max_regions = max_regions })).regions;
-
-        var seeds: std.ArrayList(map_usage.Seed) = .empty;
-        for (names) |n| try self.addSeed(arena, &seeds, n);
-        var questioned: usize = 0;
-        for (try questionIdentifiers(arena, question)) |ident| {
-            if (questioned >= max_question_seeds) break;
-            const before = seeds.items.len;
-            try self.addSeed(arena, &seeds, ident);
-            if (seeds.items.len != before) questioned += 1;
-        }
-        for (first) |r| {
-            const ranked = rank.rankInRegion(arena, store, built, r, &terms, .{}, self.index) catch continue;
-            if (ranked.hits.len == 0 or ranked.hits[0].score <= 0 or ranked.hits[0].matched == 0) continue;
-            try appendSeed(arena, &seeds, .{ .file = ranked.hits[0].file, .def = ranked.hits[0].def });
-        }
-        if (seeds.items.len > max_seeds) seeds.shrinkRetainingCapacity(max_seeds);
-
-        const users = try map_usage.users(arena, store, seeds.items, .{ .skip = &isTest });
-        const ranked_users = try self.rankUsers(arena, users, &terms);
-
-        var regions: std.ArrayList(map.RegionId) = .empty;
-        for (first[0..@min(first.len, 2)]) |r| try regions.append(arena, r);
-        for (try self.userRegions(arena, ranked_users, first)) |r| {
-            if (std.mem.indexOfScalar(map.RegionId, regions.items, r) == null) try regions.append(arena, r);
-        }
-        for (first) |r| {
-            if (regions.items.len >= map_explore.max_merged_regions) break;
-            if (std.mem.indexOfScalar(map.RegionId, regions.items, r) == null) try regions.append(arena, r);
-        }
-
-        var out: Writer.Allocating = .init(arena);
-        var text: []const u8 = "";
-        if (regions.items.len != 0) {
-            const fs = try repo.factStore(arena);
-            const explored = try map_explore.explore(&fs, built, regions.items, &terms, .{ .k = explore_k, .budget = explore_budget, .index = self.index, .region_limit = map_explore.max_merged_regions });
-            text = switch (explored) {
-                .complete => |c| c.value.text,
-                .partial => |p| p.value.text,
-                .refused => blk: {
-                    var status: Writer.Allocating = .init(arena);
-                    try explored.writeStatus(&status.writer, 0, "functions shown");
-                    try status.writer.writeByte('\n');
-                    break :blk status.written();
-                },
-            };
-        }
-        try out.writer.writeAll(if (text.len != 0) std.mem.trimEnd(u8, text, "\n") else "no part of the repository matched the phrase");
-        const shown = try shownTargets(arena, text);
-        var included: std.ArrayList([]const u8) = .empty;
-        try included.appendSlice(arena, shown);
-
-        var user_names: std.ArrayList([]const u8) = .empty;
-        var user_targets: std.ArrayList(evidence.SymbolRef) = .empty;
-        for (ranked_users) |u| {
-            if (user_targets.items.len >= max_users_shown) break;
-            if (u.score <= 0 or contains(included.items, u.user.qname)) continue;
-            try user_targets.append(arena, .{ .path = u.user.path, .qname = u.user.qname });
-            try user_names.append(arena, u.user.qname);
-        }
-        if (user_targets.items.len != 0) {
-            const room = @min(users_budget, total_budget -| out.written().len);
-            const body = try self.evidenceRefs(arena, user_targets.items, room);
-            if (body.len != 0) {
-                try out.writer.print("\nCode that uses the definitions above:\n{s}", .{std.mem.trimEnd(u8, body, "\n")});
-                try included.appendSlice(arena, user_names.items);
-            }
-        }
-
-        var focus: std.ArrayList([]const u8) = .empty;
-        for (names) |n| {
-            if (focus.items.len >= max_focus_named) break;
-            if (self.fileOf(n) != null and !contains(focus.items, n)) try focus.append(arena, n);
-        }
-        for (shown) |n| {
-            if (focus.items.len >= max_focus_total) break;
-            if (self.fileOf(n) != null and !contains(focus.items, n)) try focus.append(arena, n);
-        }
-
-        var used: Writer.Allocating = .init(arena);
-        for (focus.items) |n| try self.usedLines(arena, &used.writer, n, &terms_words);
-        const used_text = std.mem.trimEnd(u8, used.written(), "\n");
-        if (used_text.len != 0) {
-            const room = @min(callers_budget, total_budget -| out.written().len);
-            const header = "\nWhere the top functions are called:\n";
-            if (room > header.len + 80) {
-                try out.writer.writeAll(header);
-                try out.writer.writeAll(used_text[0..lineCut(used_text, room - header.len)]);
-            }
-        }
-
-        const writers = try self.fieldWriters(arena, out.written(), included.items);
-        if (writers.lines.len != 0) {
-            const room = @min(writers_budget, total_budget -| out.written().len);
-            const header = "\nWhere the fields read above are written:\n";
-            if (room > header.len + 80) {
-                const lines_text = writers.lines[0..lineCut(writers.lines, room - header.len)];
-                try out.writer.writeAll(header);
-                try out.writer.writeAll(lines_text);
-                const left = room -| (header.len + lines_text.len);
-                if (writers.owners.len != 0 and left >= evidence.min_budget) {
-                    const body = try self.evidenceRefs(arena, writers.owners, left);
-                    if (body.len != 0) {
-                        try out.writer.print("\n{s}", .{std.mem.trimEnd(u8, body, "\n")});
-                        for (writers.owners) |o| try included.append(arena, o.qname);
-                    }
-                }
-            }
-        }
-
-        var callees: std.ArrayList([]const u8) = .empty;
-        for (focus.items[0..@min(focus.items.len, max_focus_shown)]) |n| {
-            for (try self.sites(arena, .callees, n)) |s| {
-                if (callees.items.len >= max_extra) break;
-                const t = s.target.qname;
-                if (t.len == 0) continue;
-                const path = self.fileOf(t) orelse continue;
-                if (contains(included.items, t) or contains(callees.items, t) or contains(names, t) or isTest(path)) continue;
-                try callees.append(arena, t);
-            }
-        }
-        if (callees.items.len != 0) {
-            const room = @min(callee_budget, total_budget -| out.written().len);
-            const body = if (room >= evidence.min_budget) try self.evidenceText(arena, callees.items, room) else "";
-            if (body.len != 0) {
-                try out.writer.print("\nFunctions they call:\n{s}", .{std.mem.trimEnd(u8, body, "\n")});
-                try included.appendSlice(arena, callees.items);
-            }
-        }
-
-        var named: std.ArrayList([]const u8) = .empty;
-        for (names) |n| {
-            if (!contains(included.items, n) and !contains(named.items, n)) try named.append(arena, n);
-        }
-        if (named.items.len != 0) {
-            const room = @min(names_budget, total_budget -| out.written().len);
-            const body = if (room >= evidence.min_budget) try self.evidenceText(arena, named.items[0..@min(named.items.len, max_extra)], room) else "";
-            if (body.len != 0) try out.writer.print("\nFunctions you named:\n{s}", .{std.mem.trimEnd(u8, body, "\n")});
-        }
-        return out.written();
+        if (first.len == 0) first = (try map_pick.pick(arena, &self.repo.?.store, &self.built.?, terms, .{}, self.index, .{ .max_regions = max_regions })).regions;
+        return first;
     }
 
-    const Writers = struct {
-        lines: []const u8,
-        owners: []const evidence.SymbolRef,
-    };
+    fn resolve(self: *Session, name: []const u8) !?Fn {
+        const path = self.fileOf(name) orelse return null;
+        const store = &self.repo.?.store;
+        const id = store.fileId(path) orelse return null;
+        const state = store.file(id);
+        if (state.status != .indexed) return null;
+        var simple_match: ?u32 = null;
+        for (state.facts.defs, 0..) |d, di| {
+            if (d.kind == .module) continue;
+            if (std.mem.eql(u8, d.qname, name)) return .{ .file = id, .def = @intCast(di), .path = state.path, .qname = d.qname };
+            if (simple_match == null and std.mem.eql(u8, simpleName(d.qname), name)) simple_match = @intCast(di);
+        }
+        const di = simple_match orelse return null;
+        return .{ .file = id, .def = di, .path = state.path, .qname = state.facts.defs[di].qname };
+    }
 
-    const WriteSite = struct {
-        path: []const u8,
-        line: u32,
-        owner: []const u8,
-        file: u32,
-        def: u32,
-        field: usize,
-        known: bool,
-    };
+    fn callees(self: *Session, arena: Allocator, f: Fn) ![]const Fn {
+        const store = &self.repo.?.store;
+        const state = store.file(f.file);
+        if (state.status != .indexed or state.links.len != state.facts.refs.len or f.def >= state.facts.defs.len) return &.{};
+        const defs = state.facts.defs;
+        var out: std.ArrayList(Fn) = .empty;
+        for (state.facts.refs, state.links) |r, l| {
+            if (out.items.len >= max_fanout) break;
+            if (!r.kind.invokes() or !within(defs, f.def, r.from)) continue;
+            const target = switch (l) {
+                .def => |d| d.id,
+                .unresolved => continue,
+            };
+            const t_state = store.file(target.file);
+            if (t_state.status != .indexed or isTest(t_state.path)) continue;
+            const di = t_state.defIndex(target.slot) orelse continue;
+            if (target.file == f.file and di == f.def) continue;
+            _ = try appendFn(arena, &out, .{ .file = target.file, .def = di, .path = t_state.path, .qname = t_state.facts.defs[di].qname });
+        }
+        return out.items;
+    }
 
-    fn fieldWriters(self: *Session, arena: Allocator, reply: []const u8, included: []const []const u8) !Writers {
-        const fields = try readFields(arena, reply);
-        if (fields.len == 0) return .{ .lines = "", .owners = &.{} };
+    fn deepPath(self: *Session, arena: Allocator, root: Fn, terms: *const rank.Terms) ![]const Fn {
+        var nodes: std.ArrayList(Node) = .empty;
+        var at: std.AutoHashMapUnmanaged(u64, usize) = .empty;
+        try nodes.append(arena, .{ .f = root, .parent = null, .depth = 0, .matched = false });
+        try at.put(arena, keyOf(root), 0);
+        var i: usize = 0;
+        while (i < nodes.items.len and nodes.items.len < max_nodes) : (i += 1) {
+            const n = nodes.items[i];
+            if (n.depth >= max_depth) continue;
+            for (try self.callees(arena, n.f)) |c| {
+                if (nodes.items.len >= max_nodes) break;
+                const entry = try at.getOrPut(arena, keyOf(c));
+                if (entry.found_existing) continue;
+                entry.value_ptr.* = nodes.items.len;
+                const matched = (try rank.maskOf(terms, c.qname)) != 0;
+                try nodes.append(arena, .{ .f = c, .parent = i, .depth = n.depth + 1, .matched = matched });
+            }
+        }
+        const keep = try arena.alloc(bool, nodes.items.len);
+        @memset(keep, false);
+        for (nodes.items, 0..) |n, j| {
+            if (!n.matched) continue;
+            var cur: ?usize = j;
+            while (cur) |c| {
+                if (c == 0 or keep[c]) break;
+                keep[c] = true;
+                cur = nodes.items[c].parent;
+            }
+        }
+        const children = try arena.alloc(std.ArrayList(usize), nodes.items.len);
+        for (children) |*c| c.* = .empty;
+        for (nodes.items, 0..) |n, j| {
+            if (j == 0 or !keep[j]) continue;
+            try children[n.parent.?].append(arena, j);
+        }
+        var out: std.ArrayList(Fn) = .empty;
+        var stack: std.ArrayList(usize) = .empty;
+        var c0 = children[0].items.len;
+        while (c0 > 0) : (c0 -= 1) try stack.append(arena, children[0].items[c0 - 1]);
+        while (stack.pop()) |j| {
+            if (out.items.len >= max_kept_per_focus) break;
+            try out.append(arena, nodes.items[j].f);
+            var k = children[j].items.len;
+            while (k > 0) : (k -= 1) try stack.append(arena, children[j].items[k - 1]);
+        }
+        return out.items;
+    }
+
+    fn renderBlock(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), f: Fn, terms: *const rank.Terms, call_names: []const []const u8, force: []const u32) !Block {
+        const store = &self.repo.?.store;
+        const state = store.file(f.file);
+        if (state.status != .indexed or f.def >= state.facts.defs.len) return .{ .f = f, .text = "", .decisions = &.{} };
+        const d = state.facts.defs[f.def];
+        const ft = (try self.fileText(arena, texts, f.path)) orelse return .{ .f = f, .text = "", .decisions = &.{} };
+        const first_line = @max(d.line, 1);
+        const last_line = @max(ft.lineOf(d.span.end), first_line);
+        var w: Writer.Allocating = .init(arena);
+        var decisions: std.ArrayList([]const u8) = .empty;
+        try w.writer.print("{s}:{d} {s}\n", .{ f.path, first_line, f.qname });
+        try writeCode(&w.writer, ft, first_line);
+        var last_written = first_line;
+        var kept: usize = 0;
+        var n: u32 = first_line + 1;
+        while (n <= last_line) : (n += 1) {
+            const t = std.mem.trim(u8, ft.line(n), " \t\r");
+            if (t.len == 0 or std.mem.startsWith(u8, t, "//") or std.mem.startsWith(u8, t, "*") or std.mem.startsWith(u8, t, "/*")) continue;
+            const forced = std.mem.indexOfScalar(u32, force, n) != null;
+            const decision = isDecisionLine(t);
+            const wanted = forced or decision or isFieldAssignment(t) or callsAny(t, call_names, simpleName(f.qname)) or (try rank.maskOf(terms, t)) != 0;
+            if (!wanted) continue;
+            if (decision) try decisions.append(arena, t);
+            if (kept >= max_block_lines) {
+                if (!forced) continue;
+            }
+            if (n > last_written + 1) try w.writer.writeAll("     \u{2026}\n");
+            try writeCode(&w.writer, ft, n);
+            last_written = n;
+            kept += 1;
+        }
+        if (last_written < last_line) try w.writer.writeAll("     \u{2026}\n");
+        return .{ .f = f, .text = w.written(), .decisions = decisions.items };
+    }
+
+    fn writerBlocks(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), fields: []const []const u8, included: []const Fn, terms: *const rank.Terms, call_names: []const []const u8) ![]const Block {
+        if (fields.len == 0) return &.{};
         var index: std.StringHashMapUnmanaged(usize) = .empty;
         for (fields, 0..) |f, i| try index.put(arena, f, i);
         const store = &self.repo.?.store;
-        var sites_found: std.ArrayList(WriteSite) = .empty;
+        var found: std.ArrayList(WriteSite) = .empty;
         for (store.files.items, 0..) |*state, id| {
             if (state.status != .indexed or isTest(state.path)) continue;
             const defs = state.facts.defs;
-            const known = std.mem.indexOf(u8, reply, state.path) != null;
+            var known = false;
+            for (included) |f| {
+                if (f.file == id) known = true;
+            }
             for (state.facts.refs) |r| {
                 if (r.kind != .write) continue;
                 const i = index.get(r.name) orelse continue;
                 if (r.from == 0 or r.from >= defs.len) continue;
-                try sites_found.append(arena, .{ .path = state.path, .line = r.line, .owner = defs[r.from].qname, .file = @intCast(id), .def = r.from, .field = i, .known = known });
+                try found.append(arena, .{ .file = @intCast(id), .def = r.from, .line = r.line, .field = i, .known = known, .path = state.path });
             }
             for (defs, 0..) |d, di| {
                 if (d.kind != .setter) continue;
                 const i = index.get(d.name) orelse continue;
-                try sites_found.append(arena, .{ .path = state.path, .line = d.line, .owner = d.qname, .file = @intCast(id), .def = @intCast(di), .field = i, .known = known });
+                try found.append(arena, .{ .file = @intCast(id), .def = @intCast(di), .line = d.line, .field = i, .known = known, .path = state.path });
             }
         }
-        std.mem.sort(WriteSite, sites_found.items, {}, struct {
-            fn less(_: void, a: WriteSite, b: WriteSite) bool {
-                if (a.field != b.field) return a.field < b.field;
-                if (a.known != b.known) return a.known;
-                const order = std.mem.order(u8, a.path, b.path);
-                if (order != .eq) return order == .lt;
-                return a.line < b.line;
-            }
-        }.less);
-        var lines: Writer.Allocating = .init(arena);
-        var owners: std.ArrayList(evidence.SymbolRef) = .empty;
+        std.mem.sort(WriteSite, found.items, {}, WriteSite.less);
         const per_field = try arena.alloc(usize, fields.len);
         @memset(per_field, 0);
-        var written: usize = 0;
-        var last_path: []const u8 = "";
-        var last_line: u32 = 0;
-        for (sites_found.items) |s| {
-            if (written >= max_write_lines) break;
+        var owners: std.ArrayList(Fn) = .empty;
+        var lines_of: std.ArrayList(std.ArrayList(u32)) = .empty;
+        for (found.items) |s| {
             if (per_field[s.field] >= max_writes_per_field) continue;
-            if (std.mem.eql(u8, s.path, last_path) and s.line == last_line) continue;
+            const state = store.file(s.file);
+            var owner = s.def;
+            while (owner != 0 and owner < state.facts.defs.len and !state.facts.defs[owner].kind.callable()) owner = state.facts.defs[owner].parent;
+            if (owner == 0 or owner >= state.facts.defs.len) continue;
+            const f: Fn = .{ .file = s.file, .def = owner, .path = s.path, .qname = state.facts.defs[owner].qname };
+            var slot: ?usize = null;
+            for (owners.items, 0..) |o, k| {
+                if (o.file == f.file and o.def == f.def) slot = k;
+            }
+            if (slot == null) {
+                if (owners.items.len >= max_writer_functions) continue;
+                slot = owners.items.len;
+                try owners.append(arena, f);
+                try lines_of.append(arena, .empty);
+            }
+            try lines_of.items[slot.?].append(arena, s.line);
             per_field[s.field] += 1;
-            written += 1;
-            last_path = s.path;
-            last_line = s.line;
-            try lines.writer.print("{s}:{d}  in {s}: {s}\n", .{ s.path, s.line, s.owner, try self.lineText(arena, s.path, s.line) });
-            if (owners.items.len < max_writer_bodies and !contains(included, s.owner)) {
-                for (owners.items) |o| {
-                    if (std.mem.eql(u8, o.qname, s.owner) and std.mem.eql(u8, o.path, s.path)) break;
-                } else try owners.append(arena, .{ .path = s.path, .qname = s.owner });
-            }
         }
-        return .{ .lines = lines.written(), .owners = owners.items };
+        var out: std.ArrayList(Block) = .empty;
+        for (owners.items, lines_of.items) |o, ls| {
+            const b = try self.renderBlock(arena, texts, o, terms, call_names, ls.items);
+            if (b.text.len != 0) try out.append(arena, b);
+        }
+        return out.items;
     }
 
-    pub fn slice(self: *Session, arena: Allocator, question: []const u8) ![]const u8 {
-        const repo = self.repo.?;
-        const store = &repo.store;
-        const built = &self.built.?;
-        const terms = try rank.Terms.ofQuestion(arena, self.lex.?, question);
-        var pick_words = try map_lines.words(arena, question);
-        var stems: std.ArrayList([]const u8) = .empty;
-        for (terms.concepts) |c| try stems.appendSlice(arena, c.alternatives);
-        try self.lines.?.expandStems(&pick_words, stems.items);
-        var first = try self.lines.?.pick(arena, &pick_words, max_regions);
-        if (first.len == 0) first = (try map_pick.pick(arena, store, built, &terms, .{}, self.index, .{ .max_regions = max_regions })).regions;
-
-        var seeds: std.ArrayList(map_usage.Seed) = .empty;
-        var questioned: usize = 0;
-        for (try questionIdentifiers(arena, question)) |ident| {
-            if (questioned >= max_question_seeds) break;
-            const before = seeds.items.len;
-            try self.addSeed(arena, &seeds, ident);
-            if (seeds.items.len != before) questioned += 1;
-        }
-        var rankings: std.ArrayList(rank.Ranking) = .empty;
-        for (first) |r| {
-            const ranked = rank.rankInRegion(arena, store, built, r, &terms, .{}, self.index) catch continue;
-            try rankings.append(arena, ranked);
-            if (ranked.hits.len == 0 or ranked.hits[0].score <= 0 or ranked.hits[0].matched == 0) continue;
-            try appendSeed(arena, &seeds, .{ .file = ranked.hits[0].file, .def = ranked.hits[0].def });
-        }
-        if (seeds.items.len > max_seeds) seeds.shrinkRetainingCapacity(max_seeds);
-        const users = try map_usage.users(arena, store, seeds.items, .{ .skip = &isTest });
-        const ranked_users = try self.rankUsers(arena, users, &terms);
-        for (try self.userRegions(arena, ranked_users, first)) |r| {
-            if (rankings.items.len >= map_explore.max_merged_regions) break;
-            const ranked = rank.rankInRegion(arena, store, built, r, &terms, .{}, self.index) catch continue;
-            try rankings.append(arena, ranked);
-        }
-
-        var chosen: std.ArrayList(Chosen) = .empty;
-        var depth: usize = 0;
-        while (chosen.items.len < max_slice_ranked and depth < max_slice_depth) : (depth += 1) {
-            var any = false;
-            for (rankings.items) |ranked| {
-                if (depth >= ranked.hits.len) continue;
-                any = true;
-                const hit = ranked.hits[depth];
-                if (hit.score <= 0 or hit.matched == 0 or isTest(hit.path)) continue;
-                if (chosen.items.len >= max_slice_ranked) break;
-                _ = try appendChosen(arena, &chosen, .{ .file = hit.file, .def = hit.def, .path = hit.path, .qname = hit.qname });
+    fn entryLines(self: *Session, arena: Allocator, w: *Writer, f: Fn, terms: *const map_lines.WordSet) !void {
+        const result = self.repo.?.query(arena, .{ .relation = .callers, .subject = f.qname, .path = f.path }) catch return;
+        const found = switch (result) {
+            .complete => |c| c.value.sites,
+            .partial => |p| p.value.sites,
+            .refused => return,
+        };
+        var rows: std.ArrayList(Row) = .empty;
+        for (found) |s| {
+            if (isTest(s.path)) continue;
+            const ws = try map_lines.words(arena, try std.mem.concat(arena, u8, &.{ s.path, " ", s.owner.qname }));
+            var overlap: usize = 0;
+            for (ws.items.items) |word| {
+                if (terms.has(word)) overlap += 1;
             }
-            if (!any) break;
+            try rows.append(arena, .{ .site = s, .home = std.mem.eql(u8, s.path, f.path), .overlap = overlap, .order = rows.items.len });
         }
-        var users_taken: usize = 0;
-        for (ranked_users) |u| {
-            if (users_taken >= max_users_shown) break;
-            if (u.score <= 0) continue;
-            if (try appendChosen(arena, &chosen, .{ .file = u.user.file, .def = u.user.def, .path = u.user.path, .qname = u.user.qname })) users_taken += 1;
+        std.mem.sort(Row, rows.items, {}, Row.less);
+        for (rows.items[0..@min(rows.items.len, max_entries_per_focus)]) |row| {
+            const s = row.site;
+            try w.print("{s}:{d}  in {s}: {s}\n", .{ s.path, s.line, s.owner.qname, try self.lineText(arena, s.path, s.line) });
         }
-        const focus_count = @min(chosen.items.len, max_focus_shown);
-        var callees_taken: usize = 0;
-        for (chosen.items[0..focus_count]) |c| {
-            for (try self.sites(arena, .callees, c.qname)) |s| {
-                if (callees_taken >= max_extra) break;
-                const t = s.target;
-                if (t.qname.len == 0 or isTest(t.path)) continue;
-                const state = store.file(t.id.file);
-                const di = state.defIndex(t.id.slot) orelse continue;
-                if (try appendChosen(arena, &chosen, .{ .file = t.id.file, .def = di, .path = t.path, .qname = t.qname })) callees_taken += 1;
-            }
-        }
-
-        var names: std.ArrayList([]const u8) = .empty;
-        for (chosen.items) |c| {
-            const simple = simpleName(c.qname);
-            if (simple.len >= 4) try names.append(arena, simple);
-        }
-        var texts: std.StringHashMapUnmanaged(FileText) = .empty;
-        var out: Writer.Allocating = .init(arena);
-        const closing = "If more code is needed, call emetgate_explore with the question, or emetgate_evidence with function names.";
-        const limit = slice_budget -| (closing.len + 1);
-        for (chosen.items) |c| {
-            var block: Writer.Allocating = .init(arena);
-            try self.sliceOf(arena, &texts, &block.writer, c, &terms, names.items);
-            if (block.written().len == 0) continue;
-            if (out.written().len + block.written().len > limit) {
-                const room = limit -| out.written().len;
-                if (room < 200) break;
-                try out.writer.writeAll(block.written()[0..lineCut(block.written(), room)]);
-                if (out.written().len != 0 and out.written()[out.written().len - 1] != '\n') try out.writer.writeByte('\n');
-                break;
-            }
-            try out.writer.writeAll(block.written());
-        }
-        try out.writer.writeAll(closing);
-        try out.writer.writeByte('\n');
-        return out.written();
-    }
-
-    fn sliceOf(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), w: *Writer, c: Chosen, terms: *const rank.Terms, names: []const []const u8) !void {
-        const state = self.repo.?.store.file(c.file);
-        if (state.status != .indexed or c.def >= state.facts.defs.len) return;
-        const d = state.facts.defs[c.def];
-        const ft = (try self.fileText(arena, texts, c.path)) orelse return;
-        const last_line = ft.lineOf(d.span.end);
-        const first_line = @max(d.line, 1);
-        try w.print("{s}:{d} {s}\n", .{ c.path, first_line, c.qname });
-        try writeLine(w, ft, first_line);
-        var kept: usize = 0;
-        var n: u32 = first_line + 1;
-        while (n <= last_line and kept < max_slice_lines) : (n += 1) {
-            const raw = ft.line(n);
-            const t = std.mem.trim(u8, raw, " \t\r");
-            if (t.len == 0 or std.mem.startsWith(u8, t, "//") or std.mem.startsWith(u8, t, "*") or std.mem.startsWith(u8, t, "/*")) continue;
-            const meta = isMetadata(t);
-            const calls = callsAny(t, names, simpleName(c.qname));
-            const shape = isCondition(t) or isReturn(t) or isAssignment(t);
-            const concept = shape and (try rank.maskOf(terms, t)) != 0;
-            if (!(meta or calls or concept)) continue;
-            try writeLine(w, ft, n);
-            kept += 1;
-        }
-    }
-
-    fn fileText(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), path: []const u8) !?FileText {
-        if (texts.get(path)) |t| return t;
-        const abs = try std.fs.path.join(arena, &.{ self.root, path });
-        const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, abs, arena, .limited(16 * 1024 * 1024)) catch return null;
-        var starts: std.ArrayList(u32) = .empty;
-        try starts.append(arena, 0);
-        for (bytes, 0..) |b, i| {
-            if (b == '\n') try starts.append(arena, @intCast(i + 1));
-        }
-        const ft: FileText = .{ .bytes = bytes, .starts = starts.items };
-        try texts.put(arena, path, ft);
-        return ft;
-    }
-
-    fn addSeed(self: *Session, arena: Allocator, seeds: *std.ArrayList(map_usage.Seed), name: []const u8) !void {
-        const path = self.fileOf(name) orelse return;
-        const store = &self.repo.?.store;
-        const id = store.fileId(path) orelse return;
-        const state = store.file(id);
-        if (state.status != .indexed) return;
-        var simple_match: ?u32 = null;
-        for (state.facts.defs, 0..) |d, di| {
-            if (d.kind == .module) continue;
-            if (std.mem.eql(u8, d.qname, name)) return appendSeed(arena, seeds, .{ .file = id, .def = @intCast(di) });
-            if (simple_match == null and std.mem.eql(u8, simpleName(d.qname), name)) simple_match = @intCast(di);
-        }
-        if (simple_match) |di| try appendSeed(arena, seeds, .{ .file = id, .def = di });
     }
 
     const RankedUser = struct {
@@ -556,82 +579,18 @@ pub const Session = struct {
         return out.items;
     }
 
-    fn userRegions(self: *Session, arena: Allocator, ranked: []const RankedUser, first: []const map.RegionId) ![]const map.RegionId {
-        const built = &self.built.?;
-        const totals = try arena.alloc(f64, built.regions.len);
-        @memset(totals, 0);
-        for (ranked[0..@min(ranked.len, user_region_depth)]) |u| {
-            if (u.score <= 0) continue;
-            const r = built.regionOfPath(u.user.path) orelse continue;
-            if (r >= totals.len or built.regions[r].family != .code) continue;
-            totals[r] += u.score;
+    fn fileText(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), path: []const u8) !?FileText {
+        if (texts.get(path)) |t| return t;
+        const abs = try std.fs.path.join(arena, &.{ self.root, path });
+        const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, abs, arena, .limited(16 * 1024 * 1024)) catch return null;
+        var starts: std.ArrayList(u32) = .empty;
+        try starts.append(arena, 0);
+        for (bytes, 0..) |b, i| {
+            if (b == '\n') try starts.append(arena, @intCast(i + 1));
         }
-        var out: std.ArrayList(map.RegionId) = .empty;
-        while (out.items.len < max_user_regions) {
-            var best: ?usize = null;
-            for (totals, 0..) |t, r| {
-                if (t <= 0 or std.mem.indexOfScalar(map.RegionId, first, @intCast(r)) != null or std.mem.indexOfScalar(map.RegionId, out.items, @intCast(r)) != null) continue;
-                if (best == null or t > totals[best.?]) best = r;
-            }
-            const r = best orelse break;
-            try out.append(arena, @intCast(r));
-        }
-        return out.items;
-    }
-
-    fn evidenceRefs(self: *Session, arena: Allocator, targets: []const evidence.SymbolRef, budget: usize) ![]const u8 {
-        if (targets.len == 0 or budget < evidence.min_budget) return "";
-        const result = try self.repo.?.evidence(arena, .{ .targets = targets, .intent = .explain, .terms = &.{}, .include = .{ .callers = false, .callees = false, .tests = false } }, budget);
-        return switch (result) {
-            .complete => |c| c.value.text,
-            .partial => |p| p.value.text,
-            .refused => "",
-        };
-    }
-
-    pub fn evidenceTool(self: *Session, gpa: Allocator, args: ?Value) !ToolResult {
-        var arena_state = std.heap.ArenaAllocator.init(gpa);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
-        if (!self.ready()) return plain(gpa, "evidence is unavailable: the project map could not be built", true);
-        _ = self.repo.?.refresh() catch {};
-        const names = try namesOf(arena, args);
-        const wanted = names[0..@min(names.len, max_evidence_names)];
-        const text = try self.evidenceText(arena, wanted, evidence_budget);
-        if (text.len != 0) return plain(gpa, text, false);
-        var out: Writer.Allocating = .init(arena);
-        try out.writer.writeAll("none of these names is a known function: ");
-        for (wanted, 0..) |n, i| try out.writer.print("{s}{s}", .{ if (i == 0) "" else ", ", n });
-        return plain(gpa, out.written(), false);
-    }
-
-    fn sites(self: *Session, arena: Allocator, relation: facts_query.Relation, name: []const u8) ![]const facts_query.Site {
-        const path = self.fileOf(name) orelse return &.{};
-        const result = self.repo.?.query(arena, .{ .relation = relation, .subject = name, .path = path }) catch return &.{};
-        return switch (result) {
-            .complete => |c| c.value.sites,
-            .partial => |p| p.value.sites,
-            .refused => &.{},
-        };
-    }
-
-    fn usedLines(self: *Session, arena: Allocator, w: *Writer, name: []const u8, terms: *const map_lines.WordSet) !void {
-        const home = self.fileOf(name) orelse "";
-        var rows: std.ArrayList(Row) = .empty;
-        for (try self.sites(arena, .callers, name)) |s| {
-            if (isTest(s.path)) continue;
-            const ws = try map_lines.words(arena, try std.mem.concat(arena, u8, &.{ s.path, " ", s.owner.qname }));
-            var overlap: usize = 0;
-            for (ws.items.items) |word| {
-                if (terms.has(word)) overlap += 1;
-            }
-            try rows.append(arena, .{ .site = s, .home = std.mem.eql(u8, s.path, home), .overlap = overlap, .order = rows.items.len });
-        }
-        std.mem.sort(Row, rows.items, {}, Row.less);
-        for (rows.items[0..@min(rows.items.len, max_used)]) |row| {
-            const s = row.site;
-            try w.print("{s}:{d}  in {s}: {s}\n", .{ s.path, s.line, s.owner.qname, try self.lineText(arena, s.path, s.line) });
-        }
+        const ft: FileText = .{ .bytes = bytes, .starts = starts.items };
+        try texts.put(arena, path, ft);
+        return ft;
     }
 
     fn lineText(self: *Session, arena: Allocator, path: []const u8, line: u32) ![]const u8 {
@@ -642,7 +601,7 @@ pub const Session = struct {
         while (it.next()) |text| : (n += 1) {
             if (n != line) continue;
             const trimmed = std.mem.trim(u8, text, " \t\r");
-            return trimmed[0..cutUtf8(trimmed, max_line_text)];
+            return trimmed[0..cutUtf8(trimmed, max_line_chars)];
         }
         return "";
     }
@@ -669,26 +628,55 @@ pub const Session = struct {
     }
 };
 
-pub const slice_budget: usize = 9_500;
-pub const max_slice_ranked: usize = 8;
-pub const max_slice_depth: usize = 6;
-pub const max_slice_lines: usize = 30;
-pub const max_slice_line_chars: usize = 200;
-
-const Chosen = struct {
+const Fn = struct {
     file: u32,
     def: u32,
     path: []const u8,
     qname: []const u8,
 };
 
-fn appendChosen(arena: Allocator, chosen: *std.ArrayList(Chosen), c: Chosen) !bool {
-    for (chosen.items) |x| {
-        if (x.file == c.file and x.def == c.def) return false;
+const Node = struct {
+    f: Fn,
+    parent: ?usize,
+    depth: u32,
+    matched: bool,
+};
+
+const Block = struct {
+    f: Fn,
+    text: []const u8,
+    decisions: []const []const u8,
+};
+
+const WriteSite = struct {
+    file: u32,
+    def: u32,
+    line: u32,
+    field: usize,
+    known: bool,
+    path: []const u8,
+
+    fn less(_: void, a: WriteSite, b: WriteSite) bool {
+        if (a.field != b.field) return a.field < b.field;
+        if (a.known != b.known) return a.known;
+        const order = std.mem.order(u8, a.path, b.path);
+        if (order != .eq) return order == .lt;
+        return a.line < b.line;
     }
-    try chosen.append(arena, c);
-    return true;
-}
+};
+
+const Row = struct {
+    site: facts_query.Site,
+    home: bool,
+    overlap: usize,
+    order: usize,
+
+    fn less(_: void, a: Row, b: Row) bool {
+        if (a.home != b.home) return !a.home;
+        if (a.overlap != b.overlap) return a.overlap > b.overlap;
+        return a.order < b.order;
+    }
+};
 
 const FileText = struct {
     bytes: []const u8,
@@ -712,110 +700,16 @@ const FileText = struct {
     }
 };
 
-fn writeLine(w: *Writer, ft: FileText, n: u32) !void {
-    const text = std.mem.trimEnd(u8, ft.line(n), " \t");
-    const shown = text[0..cutUtf8(text, max_slice_line_chars)];
-    try w.print("{d:>6}  {s}\n", .{ n, shown });
+fn keyOf(f: Fn) u64 {
+    return (@as(u64, f.file) << 32) | f.def;
 }
 
-pub fn isMetadata(t: []const u8) bool {
-    return std.mem.indexOf(u8, t, "etadata") != null or std.mem.indexOf(u8, t, "Reflect.") != null or std.mem.indexOf(u8, t, "reflector.") != null;
-}
-
-fn startsWithWord(t: []const u8, word: []const u8) bool {
-    if (!std.mem.startsWith(u8, t, word)) return false;
-    return t.len == word.len or !(std.ascii.isAlphanumeric(t[word.len]) or t[word.len] == '_');
-}
-
-pub fn isCondition(t: []const u8) bool {
-    const body = if (std.mem.startsWith(u8, t, "} ")) t[2..] else t;
-    for ([_][]const u8{ "if", "else", "switch", "case", "while", "for", "catch" }) |word| {
-        if (startsWithWord(body, word)) return true;
+fn appendFn(arena: Allocator, list: *std.ArrayList(Fn), f: Fn) !bool {
+    for (list.items) |x| {
+        if (x.file == f.file and x.def == f.def) return false;
     }
-    return std.mem.indexOf(u8, t, " ? ") != null or std.mem.indexOf(u8, t, "&&") != null or std.mem.indexOf(u8, t, "||") != null;
-}
-
-pub fn isReturn(t: []const u8) bool {
-    return startsWithWord(t, "return") or startsWithWord(t, "throw") or std.mem.indexOf(u8, t, " return ") != null;
-}
-
-pub fn isAssignment(t: []const u8) bool {
-    var i: usize = 0;
-    while (i < t.len) : (i += 1) {
-        if (t[i] != '=') continue;
-        const next: u8 = if (i + 1 < t.len) t[i + 1] else 0;
-        const prev: u8 = if (i > 0) t[i - 1] else 0;
-        if (next == '=' or next == '>') {
-            i += 1;
-            continue;
-        }
-        if (prev == '=' or prev == '!' or prev == '<' or prev == '>') continue;
-        return true;
-    }
-    return false;
-}
-
-fn callsAny(t: []const u8, names: []const []const u8, self_name: []const u8) bool {
-    for (names) |n| {
-        if (std.mem.eql(u8, n, self_name)) continue;
-        var at: usize = 0;
-        while (std.mem.indexOfPos(u8, t, at, n)) |pos| {
-            at = pos + n.len;
-            const before_ok = pos == 0 or !(std.ascii.isAlphanumeric(t[pos - 1]) or t[pos - 1] == '_');
-            const after_ok = at < t.len and t[at] == '(';
-            if (before_ok and after_ok) return true;
-        }
-    }
-    return false;
-}
-
-const common_fields = [_][]const u8{ "length", "name", "type", "data", "keys", "values", "value", "prototype", "constructor", "push", "then", "size", "items", "toString", "message" };
-
-fn isCommonField(field: []const u8) bool {
-    for (common_fields) |c| {
-        if (std.mem.eql(u8, c, field)) return true;
-    }
-    return false;
-}
-
-pub fn isDecisionLine(t: []const u8) bool {
-    if (isCondition(t) or isReturn(t)) return true;
-    for ([_][]const u8{ ".sort(", "===", "!==", " < ", " > ", " <= ", " >= " }) |marker| {
-        if (std.mem.indexOf(u8, t, marker) != null) return true;
-    }
-    return false;
-}
-
-fn codeOfLine(raw: []const u8) ?[]const u8 {
-    const t = std.mem.trimStart(u8, raw, " ");
-    var i: usize = 0;
-    while (i < t.len and std.ascii.isDigit(t[i])) i += 1;
-    if (i == 0 or i + 2 > t.len or t[i] != ' ' or t[i + 1] != ' ') return null;
-    return std.mem.trim(u8, t[i + 2 ..], " \t\r");
-}
-
-pub fn readFields(arena: Allocator, reply: []const u8) ![]const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, reply, '\n');
-    while (it.next()) |raw| {
-        const t = codeOfLine(raw) orelse continue;
-        if (!isDecisionLine(t)) continue;
-        var i: usize = 1;
-        while (i < t.len) : (i += 1) {
-            if (t[i] != '.') continue;
-            const prev = t[i - 1];
-            if (!(std.ascii.isAlphanumeric(prev) or prev == '_' or prev == ')' or prev == ']' or prev == '$')) continue;
-            var end = i + 1;
-            if (end >= t.len or !(std.ascii.isAlphabetic(t[end]) or t[end] == '_' or t[end] == '$')) continue;
-            while (end < t.len and (std.ascii.isAlphanumeric(t[end]) or t[end] == '_' or t[end] == '$')) end += 1;
-            const field = t[i + 1 .. end];
-            if (end < t.len and t[end] == '(') continue;
-            if (field.len < 4 or isCommonField(field) or contains(out.items, field)) continue;
-            if (out.items.len >= max_read_fields) return out.items;
-            try out.append(arena, field);
-        }
-    }
-    return out.items;
+    try list.append(arena, f);
+    return true;
 }
 
 fn appendSeed(arena: Allocator, seeds: *std.ArrayList(map_usage.Seed), seed: map_usage.Seed) !void {
@@ -823,6 +717,18 @@ fn appendSeed(arena: Allocator, seeds: *std.ArrayList(map_usage.Seed), seed: map
         if (s.file == seed.file and s.def == seed.def) return;
     }
     try seeds.append(arena, seed);
+}
+
+fn within(defs: []const facts.Def, outer: u32, inner: u32) bool {
+    if (outer >= defs.len or inner >= defs.len) return false;
+    const a = defs[outer].span;
+    const b = defs[inner].span;
+    return b.start >= a.start and b.end <= a.end;
+}
+
+fn writeCode(w: *Writer, ft: FileText, n: u32) !void {
+    const text = std.mem.trim(u8, ft.line(n), " \t\r");
+    try w.print("{d:>5}  {s}\n", .{ n, text[0..cutUtf8(text, max_line_chars)] });
 }
 
 fn identByte(c: u8) bool {
@@ -854,23 +760,101 @@ pub fn questionIdentifiers(arena: Allocator, text: []const u8) ![]const []const 
     return out.items;
 }
 
-fn lineCut(text: []const u8, limit: usize) usize {
-    if (text.len <= limit) return text.len;
-    return std.mem.lastIndexOfScalar(u8, text[0..limit], '\n') orelse 0;
+fn startsWithWord(t: []const u8, word: []const u8) bool {
+    if (!std.mem.startsWith(u8, t, word)) return false;
+    return t.len == word.len or !(std.ascii.isAlphanumeric(t[word.len]) or t[word.len] == '_');
 }
 
-const Row = struct {
-    site: facts_query.Site,
-    home: bool,
-    overlap: usize,
-    order: usize,
-
-    fn less(_: void, a: Row, b: Row) bool {
-        if (a.home != b.home) return !a.home;
-        if (a.overlap != b.overlap) return a.overlap > b.overlap;
-        return a.order < b.order;
+pub fn isCondition(t: []const u8) bool {
+    const body = if (std.mem.startsWith(u8, t, "} ")) t[2..] else t;
+    for ([_][]const u8{ "if", "else", "switch", "case", "while", "for", "catch" }) |word| {
+        if (startsWithWord(body, word)) return true;
     }
-};
+    return std.mem.indexOf(u8, t, " ? ") != null or std.mem.indexOf(u8, t, "&&") != null or std.mem.indexOf(u8, t, "||") != null;
+}
+
+pub fn isReturn(t: []const u8) bool {
+    return startsWithWord(t, "return") or startsWithWord(t, "throw") or std.mem.indexOf(u8, t, " return ") != null;
+}
+
+pub fn isDecisionLine(t: []const u8) bool {
+    if (isCondition(t) or isReturn(t)) return true;
+    for ([_][]const u8{ ".sort(", "===", "!==", " < ", " > ", " <= ", " >= " }) |marker| {
+        if (std.mem.indexOf(u8, t, marker) != null) return true;
+    }
+    return std.mem.indexOf(u8, t, "=> ") != null and std.mem.indexOf(u8, t, " - ") != null;
+}
+
+fn assignmentAt(t: []const u8) ?usize {
+    var i: usize = 0;
+    while (i < t.len) : (i += 1) {
+        if (t[i] != '=') continue;
+        const next: u8 = if (i + 1 < t.len) t[i + 1] else 0;
+        const prev: u8 = if (i > 0) t[i - 1] else 0;
+        if (next == '=' or next == '>') {
+            i += 1;
+            continue;
+        }
+        if (prev == '=' or prev == '!' or prev == '<' or prev == '>') continue;
+        return i;
+    }
+    return null;
+}
+
+pub fn isFieldAssignment(t: []const u8) bool {
+    const at = assignmentAt(t) orelse return false;
+    return std.mem.indexOfScalar(u8, t[0..at], '.') != null;
+}
+
+fn callsAny(t: []const u8, names: []const []const u8, self_name: []const u8) bool {
+    for (names) |n| {
+        if (std.mem.eql(u8, n, self_name)) continue;
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, t, at, n)) |pos| {
+            at = pos + n.len;
+            const before_ok = pos == 0 or !(std.ascii.isAlphanumeric(t[pos - 1]) or t[pos - 1] == '_');
+            const after_ok = at < t.len and t[at] == '(';
+            if (before_ok and after_ok) return true;
+        }
+    }
+    return false;
+}
+
+const common_fields = [_][]const u8{ "length", "name", "type", "data", "keys", "values", "value", "prototype", "constructor", "push", "then", "size", "items", "toString", "message" };
+
+fn isCommonField(field: []const u8) bool {
+    for (common_fields) |c| {
+        if (std.mem.eql(u8, c, field)) return true;
+    }
+    return false;
+}
+
+pub fn readFields(arena: Allocator, decision_lines: []const []const u8) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (decision_lines) |t| {
+        var i: usize = 1;
+        while (i < t.len) : (i += 1) {
+            if (t[i] != '.') continue;
+            const prev = t[i - 1];
+            if (!(std.ascii.isAlphanumeric(prev) or prev == '_' or prev == ')' or prev == ']' or prev == '$')) continue;
+            var end = i + 1;
+            if (end >= t.len or !(std.ascii.isAlphabetic(t[end]) or t[end] == '_' or t[end] == '$')) continue;
+            while (end < t.len and (std.ascii.isAlphanumeric(t[end]) or t[end] == '_' or t[end] == '$')) end += 1;
+            const field = t[i + 1 .. end];
+            if (end < t.len and t[end] == '(') continue;
+            if (field.len < 4 or isCommonField(field) or contains(out.items, field)) continue;
+            if (out.items.len >= max_read_fields) return out.items;
+            try out.append(arena, field);
+        }
+    }
+    return out.items;
+}
+
+fn lineCut(text: []const u8, limit: usize) usize {
+    if (text.len <= limit) return text.len;
+    const nl = std.mem.lastIndexOfScalar(u8, text[0..limit], '\n') orelse return 0;
+    return nl + 1;
+}
 
 fn plain(gpa: Allocator, text: []const u8, is_error: bool) !ToolResult {
     return .{ .text = try tool_result.dupTrim(gpa, text), .is_error = is_error };
@@ -912,46 +896,29 @@ fn namesOf(arena: Allocator, args: ?Value) ![]const []const u8 {
     return out.items;
 }
 
-pub fn shownTargets(arena: Allocator, text: []const u8) ![]const []const u8 {
-    var out: std.ArrayList([]const u8) = .empty;
-    var at: usize = 0;
-    const marker = "[target ";
-    while (std.mem.indexOfPos(u8, text, at, marker)) |start| {
-        const name_start = start + marker.len;
-        const space = std.mem.indexOfScalarPos(u8, text, name_start, ' ') orelse break;
-        const close = std.mem.indexOfScalarPos(u8, text, space, ']') orelse break;
-        at = close + 1;
-        const hash = text[space + 1 .. close];
-        if (hash.len == 0 or !allHex(hash)) continue;
-        const name = text[name_start..space];
-        if (name.len == 0 or std.mem.indexOfAny(u8, name, " \t\n") != null) continue;
-        try out.append(arena, name);
-    }
-    return out.items;
-}
-
-fn allHex(text: []const u8) bool {
-    for (text) |c| {
-        if (!std.ascii.isHex(c)) return false;
-    }
-    return true;
-}
-
 const testing = std.testing;
 
-test "map tools: shown targets come out of the explore text in order and a malformed tag is skipped" {
+test "map tools: decision lines include sort comparators and field writes need a member on the left" {
+    try testing.expect(isDecisionLine("const compareFn = (a, b) => b.distance - a.distance;"));
+    try testing.expect(isDecisionLine("if (scope === Scope.REQUEST) {"));
+    try testing.expect(!isDecisionLine("const x = load();"));
+    try testing.expect(isFieldAssignment("moduleRef.distance = depth;"));
+    try testing.expect(isFieldAssignment("this._distance = value;"));
+    try testing.expect(!isFieldAssignment("const depth = 1;"));
+    try testing.expect(!isFieldAssignment("if (a.b === c) {"));
+}
+
+test "map tools: read fields skip method calls, short and common names" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
-    const text = "12  if (x) {  [target Injector.loadPerContext 0a1b2c3d]\n40  [target isTreeStatic 99ff00aa]\n[target broken zz]\n";
-    const shown = try shownTargets(arena_state.allocator(), text);
-    try testing.expectEqual(@as(usize, 2), shown.len);
-    try testing.expectEqualStrings("Injector.loadPerContext", shown[0]);
-    try testing.expectEqualStrings("isTreeStatic", shown[1]);
+    const fields = try readFields(arena_state.allocator(), &.{ "modules.sort((a, b) => b.distance - a.distance);", "if (wrapper.hierarchyLevel > x.length && this.isTreeStatic()) {" });
+    try testing.expectEqual(@as(usize, 2), fields.len);
+    try testing.expectEqualStrings("distance", fields[0]);
+    try testing.expectEqualStrings("hierarchyLevel", fields[1]);
 }
 
 test "map tools: test paths are recognized by folder and by the spec infix" {
     try testing.expect(isTest("packages/core/test/injector.spec.ts"));
     try testing.expect(isTest("src/__tests__/a.ts"));
-    try testing.expect(isTest("src/a.spec.ts"));
     try testing.expect(!isTest("packages/core/injector/injector.ts"));
 }

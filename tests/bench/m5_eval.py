@@ -7,9 +7,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import map_eval as base
 import m2_eval as m2
 
-OUT = os.path.join(base.PROJECT, "eval", "m3", "m5")
+OUT = os.path.join(base.PROJECT, "eval", "m3", os.environ.get("M_EVAL_DIR", "m5"))
 LABEL = "m2-names8k"
-SECTIONS = ["Code that uses the definitions above:", "Where the top functions are called:", "Where the fields read above are written:", "Functions they call:", "Functions you named:"]
+SECTIONS = ["Code that uses the definitions above:", "Where the top functions are called:", "Where the fields read above are written:", "Functions they call:", "Functions you named:", "Callers of the top functions:"]
 
 
 def questions():
@@ -56,6 +56,14 @@ def main():
         for g in r["gold"]:
             tag = "[target " + g["qname"] + " "
             at = text.find(tag)
+            if at < 0:
+                head = g["file"] + ":"
+                for line_start in [0] + [i + 1 for i, ch in enumerate(text) if ch == "\n"]:
+                    line_end = text.find("\n", line_start)
+                    line = text[line_start:line_end if line_end >= 0 else len(text)]
+                    if line.startswith(head) and line.endswith(" " + g["qname"]):
+                        at = line_start
+                        break
             if at >= 0:
                 shown.append(section_of(text, at))
         row = {"part": r["part"], "id": r["id"], "chars": len(text), "named": bool(named), "shown": bool(shown), "sections": shown,
