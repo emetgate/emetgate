@@ -61,6 +61,7 @@ pub const worker_pool = src.worker_pool;
 pub const io_seam = src.io_seam;
 pub const exe_path = src.exe_path;
 pub const repo = src.repo;
+pub const open_nowait = src.open_nowait;
 pub const fact_modules = src.fact_modules;
 pub const fact_store = src.fact_store;
 pub const fact_file = src.fact_file;
