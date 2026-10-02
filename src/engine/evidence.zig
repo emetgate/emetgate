@@ -1,14 +1,13 @@
 const std = @import("std");
-const ts = @import("tree_sitter.zig");
 const facts = @import("facts.zig");
 const facts_store = @import("facts_store.zig");
 const facts_query = @import("facts_query.zig");
 const facts_spine = @import("facts_spine.zig");
+const facts_outline = @import("facts_outline.zig");
 const facts_evidence = @import("facts_evidence.zig");
 const symbol = @import("symbol.zig");
 const answer = @import("answer.zig");
 const shared = @import("evidence_request.zig");
-const Profile = @import("lang/profile.zig").Profile;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -180,11 +179,6 @@ fn unitBefore(_: void, a: Unit, b: Unit) bool {
     return a.line < b.line;
 }
 
-fn branchKinds(profile: *const Profile) []const []const u8 {
-    const table = profile.facts orelse return &.{};
-    return table.branch_statements;
-}
-
 fn listedFiles(store: *const facts_store.Store) u32 {
     var n: u32 = 0;
     for (store.files.items) |state| {
@@ -265,7 +259,6 @@ const Builder = struct {
     limit: usize,
     terms: []const Term,
     files: std.StringHashMapUnmanaged(?Opened) = .empty,
-    parser: ?ts.Parser = null,
     subjects: std.ArrayList(Subject) = .empty,
     not_found: std.ArrayList(SymbolRef) = .empty,
     callers: std.ArrayList(Site) = .empty,
@@ -281,10 +274,6 @@ const Builder = struct {
     cut_unknown: usize = 0,
     cut_targets: usize = 0,
     too_large: bool = false,
-
-    fn deinit(self: *Builder) void {
-        if (self.parser) |p| p.deinit();
-    }
 
     fn open(self: *Builder, path: []const u8) !?Opened {
         try self.drawn.put(self.arena, path, {});
@@ -541,12 +530,10 @@ const Builder = struct {
     }
 
     fn prepareSpine(self: *Builder, p: *Plan) !void {
-        const opened = p.opened.?;
-        const lines = opened.lines;
-        if (self.parser == null) self.parser = ts.Parser.create();
-        const tree = try self.parser.?.parseIn(opened.file.profile.grammar(), opened.file.bytes);
-        defer tree.deinit();
-        const frame = facts_spine.frameOf(tree, lines, p.subject.span);
+        const lines = p.opened.?.lines;
+        const def = self.fs.store.defOf(p.subject.id) orelse return error.SubjectNotFound;
+        const outline = self.fs.store.file(p.subject.id.file).facts.outline;
+        const frame = facts_outline.frameOf(lines, def.*);
         var base: std.ArrayList(Range) = .empty;
         try base.append(self.arena, .{ .first = frame.first, .last = @max(frame.first, frame.signature_last) });
         try base.append(self.arena, .{ .first = frame.last, .last = frame.last });
@@ -557,10 +544,10 @@ const Builder = struct {
         var weights: std.AutoArrayHashMapUnmanaged(u32, f64) = .empty;
         try self.termWeights(p, &weights);
         try self.relevantRefs(p, &weights);
-        const branches: []const []const u8 = if (self.request.intent == .decides) branchKinds(opened.file.profile) else &.{};
+        const branches = self.request.intent == .decides;
         var units: std.ArrayList(Unit) = .empty;
         for (weights.keys(), weights.values()) |line, weight| {
-            const ranges = try facts_spine.unit(self.arena, opened.file.profile, frame, lines, line, branches);
+            const ranges = try facts_outline.unit(self.arena, outline, frame, lines, line, branches);
             if (ranges.len == 0) continue;
             try units.append(self.arena, .{ .ranges = ranges, .weight = weight, .line = line });
         }
@@ -810,7 +797,6 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
     if (request.targets.len == 0) return EvidenceAnswer.refuse(error.NoTarget, "the request names no target");
     const arena = fs.arena;
     var b: Builder = .{ .arena = arena, .fs = fs, .request = request, .limit = budget, .terms = try termsOf(arena, request.terms) };
-    defer b.deinit();
     try b.resolve();
     if (b.subjects.items.len == 0) return EvidenceAnswer.refuse(error.SubjectNotFound, "no target is an indexed definition");
     for (b.subjects.items) |s| {
