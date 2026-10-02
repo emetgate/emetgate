@@ -3,6 +3,7 @@ const ecma = @import("../ecma/common.zig");
 const profile_mod = @import("../profile.zig");
 const ecma_rename = @import("../ecma/rename.zig");
 const ecma_facts = @import("../ecma/facts.zig");
+const ecma_map = @import("../ecma/map.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -58,6 +59,7 @@ pub const profile: Profile = .{
     .modules = &ecma_rename.modules,
     .declarations = ecma_rename.declarations(.{ .node = field_shape.node, .kind = .field, .name_field = field_shape.name_field }),
     .facts = &ecma_facts.javascript,
+    .map = &ecma_map.table,
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {
