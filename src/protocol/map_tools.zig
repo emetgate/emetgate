@@ -49,6 +49,8 @@ pub const round_cost: f64 = cache_read_price * (prefix_tokens + history_tokens) 
 pub const statement_price: f64 = cache_write_price + cache_read_price;
 pub const chars_per_token_estimate: f64 = 3.5;
 pub const pointer_tokens: f64 = 8;
+pub const header_chars: usize = 16;
+pub const gap_chars: usize = 24;
 pub const evidence_budget: usize = 16_000;
 pub const max_regions: usize = 3;
 pub const max_depth: u32 = 4;
@@ -273,13 +275,19 @@ pub const Session = struct {
             std.mem.sort(usize, order, @as([]const Statement, all.items), Statement.denser);
             const statement_budget = budget -| pointer_budget;
             var used: usize = 0;
+            const opened = try arena.alloc(bool, graph.nodes.items.len);
+            @memset(opened, false);
             for (order) |k| {
                 const st = all.items[k];
                 const size = @as(f64, @floatFromInt(st.chars)) / chars_per_token_estimate;
                 if (st.p * round_cost < statement_price * size) break;
-                if (used + st.chars > statement_budget) continue;
+                const n = graph.nodes.items[st.node];
+                const head: usize = if (opened[st.node]) 0 else n.f.path.len + n.f.qname.len + header_chars + gap_chars;
+                const cost = st.chars + gap_chars + head;
+                if (used + cost > statement_budget) continue;
                 chosen[k] = true;
-                used += st.chars;
+                opened[st.node] = true;
+                used += cost;
             }
         }
 
