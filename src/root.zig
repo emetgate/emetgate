@@ -35,6 +35,7 @@ pub const evidence = @import("engine/evidence.zig");
 pub const question_lexicon = @import("engine/question_lexicon.zig");
 pub const question_terms = @import("engine/question_terms.zig");
 pub const question_intent = @import("engine/question_intent.zig");
+pub const map_tree = @import("engine/map_tree.zig");
 pub const coverage = @import("engine/coverage.zig");
 pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");
