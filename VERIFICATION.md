@@ -7,8 +7,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **1254**
-- Mutations declared in `tests/mutations.json`: **740**
-  - killed: **710**
+- Mutations declared in `tests/mutations.json`: **747**
+  - killed: **717**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -171,7 +171,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-76 mutation(s).
+77 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -251,10 +251,11 @@ python tools/verification_page.py --check
 | `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
 | `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
+| `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
 
 ### Disk, repository boundary and atomic commit
 
-54 mutation(s).
+55 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -312,6 +313,7 @@ python tools/verification_page.py --check
 | `JR1-file-of-a-nested-repository-accepted-under-the-cached-root` | `src/platform/repo.zig` | `if (try entryExists(gpa, io, dir, ".git")) return true;` -> `if (false) return true;` | read tools refuse a file of a nested repository, worktree or bare repository un...; purpl... | killed |
 | `JR2-only-the-file-directory-is-checked-for-a-nested-repository` | `src/platform/repo.zig` | `dir = std.fs.path.dirname(dir) orelse return error.FileOutsideR...` -> `dir = root;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 | `JR3-nested-bare-repository-not-recognized` | `src/platform/repo.zig` | `return try entryExists(gpa, io, dir, "objects") and try entryEx...` -> `return false;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
+| `EP2-ignore-check-runs-bare-git` | `src/platform/repo.zig` | `.argv = &.{ git, "check-ignore", "-q", "--no-index", "--", rel ...` -> `.argv = &.{ "git", "check-ignore", "-q", "--no-index", "--", re...` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
 
 ### Rules and the q: query engine
 
@@ -554,7 +556,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-282 mutation(s).
+287 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -840,6 +842,11 @@ python tools/verification_page.py --check
 | `RS2-built-entry-has-no-read-time` | `src/platform/search_index.zig` | `const seen_ns = wallClock(io);     for (files) \|rel\| {` -> `const seen_ns: i96 = 0;     for (files) \|rel\| {` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
 | `RS3-refreshed-entry-has-no-read-time` | `src/platform/search_index.zig` | `.seen_ns = job.seen_ns,` -> `.seen_ns = 0,` | an index built or refreshed in this process re-reads a file rewritten with the ... | killed |
 | `RS4-racy-entry-saved-with-its-real-stamp` | `src/platform/search_index.zig` | `const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_...` -> `const stamp: Stamp = e.stamp;` | saving smudges the stamp of an entry read inside the racy window, so the next s... | killed |
+| `EP3-git-tool-runs-bare-git` | `src/protocol/git_tools.zig` | `argv[0] = git;` -> `_ = &argv;` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `EP4-program-files-run-bare-git` | `src/platform/tsserver.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `EP5-working-directory-entry-searched` | `src/platform/exe_path.zig` | `if (search.cwd) \|cwd\| if (within(dir, cwd)) continue;` -> `if (search.cwd) \|cwd\| _ = cwd;` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
+| `EP6-repository-entry-searched` | `src/platform/exe_path.zig` | `if (search.repo_root) \|root\| if (within(dir, root)) continue;` -> `if (search.repo_root) \|root\| _ = root;` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
+| `EP7-relative-entry-searched` | `src/platform/exe_path.zig` | `if (dir.len == 0 or !fullyQualified(dir)) continue;` -> `if (dir.len == 0) continue;` | exe path: a name found nowhere else, a relative name and a relative path entry ... | killed |
 
 ## What this system does not prove
 
