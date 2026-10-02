@@ -22,7 +22,14 @@ pub const map_budget_tokens: u32 = 8_000;
 pub const explore_k: u32 = 10;
 pub const total_budget: usize = 60_000;
 pub const explore_budget: usize = 28_000;
-pub const users_budget: usize = 16_000;
+pub const users_budget: usize = 12_000;
+pub const callers_budget: usize = 4_000;
+pub const writers_budget: usize = 8_000;
+pub const max_focus_total: usize = 4;
+pub const max_read_fields: usize = 12;
+pub const max_write_lines: usize = 14;
+pub const max_writes_per_field: usize = 3;
+pub const max_writer_bodies: usize = 2;
 pub const callee_budget: usize = 9_000;
 pub const names_budget: usize = 5_000;
 pub const max_users_shown: usize = 6;
@@ -145,8 +152,16 @@ pub const Session = struct {
         for (names) |n| try joined.writer.print(" {s}", .{n});
         const query = joined.written();
         const terms_words = try map_lines.words(arena, query);
-        const first = try self.lines.?.pick(arena, &terms_words, max_regions);
         const terms = try rank.Terms.ofQuestion(arena, self.lex.?, query);
+        var first = try self.lines.?.pick(arena, &terms_words, max_regions);
+        if (first.len == 0) {
+            var pick_words = try map_lines.words(arena, query);
+            var stems: std.ArrayList([]const u8) = .empty;
+            for (terms.concepts) |c| try stems.appendSlice(arena, c.alternatives);
+            try self.lines.?.expandStems(&pick_words, stems.items);
+            first = try self.lines.?.pick(arena, &pick_words, max_regions);
+        }
+        if (first.len == 0) first = (try map_pick.pick(arena, store, built, &terms, .{}, self.index, .{ .max_regions = max_regions })).regions;
 
         var seeds: std.ArrayList(map_usage.Seed) = .empty;
         for (names) |n| try self.addSeed(arena, &seeds, n);
@@ -218,16 +233,46 @@ pub const Session = struct {
         var focus: std.ArrayList([]const u8) = .empty;
         for (names) |n| {
             if (focus.items.len >= max_focus_named) break;
-            if (self.fileOf(n) != null) try focus.append(arena, n);
+            if (self.fileOf(n) != null and !contains(focus.items, n)) try focus.append(arena, n);
         }
-        if (focus.items.len == 0) {
-            for (shown) |n| {
-                if (focus.items.len >= max_focus_shown) break;
-                if (self.fileOf(n) != null) try focus.append(arena, n);
+        for (shown) |n| {
+            if (focus.items.len >= max_focus_total) break;
+            if (self.fileOf(n) != null and !contains(focus.items, n)) try focus.append(arena, n);
+        }
+
+        var used: Writer.Allocating = .init(arena);
+        for (focus.items) |n| try self.usedLines(arena, &used.writer, n, &terms_words);
+        const used_text = std.mem.trimEnd(u8, used.written(), "\n");
+        if (used_text.len != 0) {
+            const room = @min(callers_budget, total_budget -| out.written().len);
+            const header = "\nWhere the top functions are called:\n";
+            if (room > header.len + 80) {
+                try out.writer.writeAll(header);
+                try out.writer.writeAll(used_text[0..lineCut(used_text, room - header.len)]);
             }
         }
+
+        const writers = try self.fieldWriters(arena, out.written(), included.items);
+        if (writers.lines.len != 0) {
+            const room = @min(writers_budget, total_budget -| out.written().len);
+            const header = "\nWhere the fields read above are written:\n";
+            if (room > header.len + 80) {
+                const lines_text = writers.lines[0..lineCut(writers.lines, room - header.len)];
+                try out.writer.writeAll(header);
+                try out.writer.writeAll(lines_text);
+                const left = room -| (header.len + lines_text.len);
+                if (writers.owners.len != 0 and left >= evidence.min_budget) {
+                    const body = try self.evidenceRefs(arena, writers.owners, left);
+                    if (body.len != 0) {
+                        try out.writer.print("\n{s}", .{std.mem.trimEnd(u8, body, "\n")});
+                        for (writers.owners) |o| try included.append(arena, o.qname);
+                    }
+                }
+            }
+        }
+
         var callees: std.ArrayList([]const u8) = .empty;
-        for (focus.items) |n| {
+        for (focus.items[0..@min(focus.items.len, max_focus_shown)]) |n| {
             for (try self.sites(arena, .callees, n)) |s| {
                 if (callees.items.len >= max_extra) break;
                 const t = s.target.qname;
@@ -255,19 +300,79 @@ pub const Session = struct {
             const body = if (room >= evidence.min_budget) try self.evidenceText(arena, named.items[0..@min(named.items.len, max_extra)], room) else "";
             if (body.len != 0) try out.writer.print("\nFunctions you named:\n{s}", .{std.mem.trimEnd(u8, body, "\n")});
         }
+        return out.written();
+    }
 
-        var used: Writer.Allocating = .init(arena);
-        for (focus.items) |n| try self.usedLines(arena, &used.writer, n, &terms_words);
-        const used_text = std.mem.trimEnd(u8, used.written(), "\n");
-        if (used_text.len != 0) {
-            const room = total_budget -| out.written().len;
-            const header = "\nWhere the top functions are used:\n";
-            if (room > header.len + 80) {
-                try out.writer.writeAll(header);
-                try out.writer.writeAll(used_text[0..lineCut(used_text, room - header.len)]);
+    const Writers = struct {
+        lines: []const u8,
+        owners: []const evidence.SymbolRef,
+    };
+
+    const WriteSite = struct {
+        path: []const u8,
+        line: u32,
+        owner: []const u8,
+        file: u32,
+        def: u32,
+        field: usize,
+        known: bool,
+    };
+
+    fn fieldWriters(self: *Session, arena: Allocator, reply: []const u8, included: []const []const u8) !Writers {
+        const fields = try readFields(arena, reply);
+        if (fields.len == 0) return .{ .lines = "", .owners = &.{} };
+        var index: std.StringHashMapUnmanaged(usize) = .empty;
+        for (fields, 0..) |f, i| try index.put(arena, f, i);
+        const store = &self.repo.?.store;
+        var sites_found: std.ArrayList(WriteSite) = .empty;
+        for (store.files.items, 0..) |*state, id| {
+            if (state.status != .indexed or isTest(state.path)) continue;
+            const defs = state.facts.defs;
+            const known = std.mem.indexOf(u8, reply, state.path) != null;
+            for (state.facts.refs) |r| {
+                if (r.kind != .write) continue;
+                const i = index.get(r.name) orelse continue;
+                if (r.from == 0 or r.from >= defs.len) continue;
+                try sites_found.append(arena, .{ .path = state.path, .line = r.line, .owner = defs[r.from].qname, .file = @intCast(id), .def = r.from, .field = i, .known = known });
+            }
+            for (defs, 0..) |d, di| {
+                if (d.kind != .setter) continue;
+                const i = index.get(d.name) orelse continue;
+                try sites_found.append(arena, .{ .path = state.path, .line = d.line, .owner = d.qname, .file = @intCast(id), .def = @intCast(di), .field = i, .known = known });
             }
         }
-        return out.written();
+        std.mem.sort(WriteSite, sites_found.items, {}, struct {
+            fn less(_: void, a: WriteSite, b: WriteSite) bool {
+                if (a.field != b.field) return a.field < b.field;
+                if (a.known != b.known) return a.known;
+                const order = std.mem.order(u8, a.path, b.path);
+                if (order != .eq) return order == .lt;
+                return a.line < b.line;
+            }
+        }.less);
+        var lines: Writer.Allocating = .init(arena);
+        var owners: std.ArrayList(evidence.SymbolRef) = .empty;
+        const per_field = try arena.alloc(usize, fields.len);
+        @memset(per_field, 0);
+        var written: usize = 0;
+        var last_path: []const u8 = "";
+        var last_line: u32 = 0;
+        for (sites_found.items) |s| {
+            if (written >= max_write_lines) break;
+            if (per_field[s.field] >= max_writes_per_field) continue;
+            if (std.mem.eql(u8, s.path, last_path) and s.line == last_line) continue;
+            per_field[s.field] += 1;
+            written += 1;
+            last_path = s.path;
+            last_line = s.line;
+            try lines.writer.print("{s}:{d}  in {s}: {s}\n", .{ s.path, s.line, s.owner, try self.lineText(arena, s.path, s.line) });
+            if (owners.items.len < max_writer_bodies and !contains(included, s.owner)) {
+                for (owners.items) |o| {
+                    if (std.mem.eql(u8, o.qname, s.owner) and std.mem.eql(u8, o.path, s.path)) break;
+                } else try owners.append(arena, .{ .path = s.path, .qname = s.owner });
+            }
+        }
+        return .{ .lines = lines.written(), .owners = owners.items };
     }
 
     pub fn slice(self: *Session, arena: Allocator, question: []const u8) ![]const u8 {
@@ -279,7 +384,8 @@ pub const Session = struct {
         var stems: std.ArrayList([]const u8) = .empty;
         for (terms.concepts) |c| try stems.appendSlice(arena, c.alternatives);
         try self.lines.?.expandStems(&pick_words, stems.items);
-        const first = try self.lines.?.pick(arena, &pick_words, max_regions);
+        var first = try self.lines.?.pick(arena, &pick_words, max_regions);
+        if (first.len == 0) first = (try map_pick.pick(arena, store, built, &terms, .{}, self.index, .{ .max_regions = max_regions })).regions;
 
         var seeds: std.ArrayList(map_usage.Seed) = .empty;
         var questioned: usize = 0;
@@ -661,6 +767,55 @@ fn callsAny(t: []const u8, names: []const []const u8, self_name: []const u8) boo
         }
     }
     return false;
+}
+
+const common_fields = [_][]const u8{ "length", "name", "type", "data", "keys", "values", "value", "prototype", "constructor", "push", "then", "size", "items", "toString", "message" };
+
+fn isCommonField(field: []const u8) bool {
+    for (common_fields) |c| {
+        if (std.mem.eql(u8, c, field)) return true;
+    }
+    return false;
+}
+
+pub fn isDecisionLine(t: []const u8) bool {
+    if (isCondition(t) or isReturn(t)) return true;
+    for ([_][]const u8{ ".sort(", "===", "!==", " < ", " > ", " <= ", " >= " }) |marker| {
+        if (std.mem.indexOf(u8, t, marker) != null) return true;
+    }
+    return false;
+}
+
+fn codeOfLine(raw: []const u8) ?[]const u8 {
+    const t = std.mem.trimStart(u8, raw, " ");
+    var i: usize = 0;
+    while (i < t.len and std.ascii.isDigit(t[i])) i += 1;
+    if (i == 0 or i + 2 > t.len or t[i] != ' ' or t[i + 1] != ' ') return null;
+    return std.mem.trim(u8, t[i + 2 ..], " \t\r");
+}
+
+pub fn readFields(arena: Allocator, reply: []const u8) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, reply, '\n');
+    while (it.next()) |raw| {
+        const t = codeOfLine(raw) orelse continue;
+        if (!isDecisionLine(t)) continue;
+        var i: usize = 1;
+        while (i < t.len) : (i += 1) {
+            if (t[i] != '.') continue;
+            const prev = t[i - 1];
+            if (!(std.ascii.isAlphanumeric(prev) or prev == '_' or prev == ')' or prev == ']' or prev == '$')) continue;
+            var end = i + 1;
+            if (end >= t.len or !(std.ascii.isAlphabetic(t[end]) or t[end] == '_' or t[end] == '$')) continue;
+            while (end < t.len and (std.ascii.isAlphanumeric(t[end]) or t[end] == '_' or t[end] == '$')) end += 1;
+            const field = t[i + 1 .. end];
+            if (end < t.len and t[end] == '(') continue;
+            if (field.len < 4 or isCommonField(field) or contains(out.items, field)) continue;
+            if (out.items.len >= max_read_fields) return out.items;
+            try out.append(arena, field);
+        }
+    }
+    return out.items;
 }
 
 fn appendSeed(arena: Allocator, seeds: *std.ArrayList(map_usage.Seed), seed: map_usage.Seed) !void {
