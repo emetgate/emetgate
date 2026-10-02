@@ -495,8 +495,8 @@ test "evidence: two targets that do not fit share the budget in request order an
     defer source.deinit(testing.allocator);
     for ([_][]const u8{ "a", "b" }) |tag| {
         try source.print(testing.allocator, "export function {s}Work(x: number) {{\n", .{tag});
-        for (0..100) |i| {
-            if (i % 5 == 0) {
+        for (0..200) |i| {
+            if (i % 2 == 0) {
                 try source.print(testing.allocator, "  if (x > {d}) return \"needle {s}{d}\";\n", .{ i, tag, i });
             } else try source.appendSlice(testing.allocator, "  x = x + 1;\n");
         }
@@ -510,8 +510,8 @@ test "evidence: two targets that do not fit share the budget in request order an
     try expectLines(text, &.{
         "\na.ts\n1  export function aWork(x: number) {  [target aWork ",
         "\n2    if (x > 0) return \"needle a0\";\n",
-        "\n104  export function bWork(x: number) {  [target bWork ",
-        "\n105    if (x > 0) return \"needle b0\";\n",
+        "\n204  export function bWork(x: number) {  [target bWork ",
+        "\n205    if (x > 0) return \"needle b0\";\n",
     });
     try expectNoLine(text, " targets\n");
 }
