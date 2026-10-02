@@ -7303,6 +7303,69 @@
       "kills": [
         "saving smudges the stamp of an entry read inside the racy window, so the next session reads it again"
       ]
+    },
+    {
+      "id": "EP1-tracked-files-run-bare-git",
+      "file": "src/platform/shadow.zig",
+      "from": "        .argv = &.{ git, \"ls-files\", \"-z\" },",
+      "to": "        .argv = &.{ \"git\", \"ls-files\", \"-z\" },",
+      "kills": [
+        "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
+      ]
+    },
+    {
+      "id": "EP2-ignore-check-runs-bare-git",
+      "file": "src/platform/repo.zig",
+      "from": "        .argv = &.{ git, \"check-ignore\", \"-q\", \"--no-index\", \"--\", rel },",
+      "to": "        .argv = &.{ \"git\", \"check-ignore\", \"-q\", \"--no-index\", \"--\", rel },",
+      "kills": [
+        "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
+      ]
+    },
+    {
+      "id": "EP3-git-tool-runs-bare-git",
+      "file": "src/protocol/git_tools.zig",
+      "from": "    argv[0] = git;\n",
+      "to": "    _ = &argv;\n",
+      "kills": [
+        "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
+      ]
+    },
+    {
+      "id": "EP4-program-files-run-bare-git",
+      "file": "src/platform/tsserver.zig",
+      "from": "        .argv = &.{ git, \"ls-files\", \"-z\" },",
+      "to": "        .argv = &.{ \"git\", \"ls-files\", \"-z\" },",
+      "kills": [
+        "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
+      ]
+    },
+    {
+      "id": "EP5-working-directory-entry-searched",
+      "file": "src/platform/exe_path.zig",
+      "from": "        if (search.cwd) |cwd| if (within(dir, cwd)) continue;",
+      "to": "        if (search.cwd) |cwd| _ = cwd;",
+      "kills": [
+        "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
+      ]
+    },
+    {
+      "id": "EP6-repository-entry-searched",
+      "file": "src/platform/exe_path.zig",
+      "from": "        if (search.repo_root) |root| if (within(dir, root)) continue;",
+      "to": "        if (search.repo_root) |root| _ = root;",
+      "kills": [
+        "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
+      ]
+    },
+    {
+      "id": "EP7-relative-entry-searched",
+      "file": "src/platform/exe_path.zig",
+      "from": "        if (dir.len == 0 or !fullyQualified(dir)) continue;",
+      "to": "        if (dir.len == 0) continue;",
+      "kills": [
+        "exe path: a name found nowhere else, a relative name and a relative path entry are refused"
+      ]
     }
   ]
 }
