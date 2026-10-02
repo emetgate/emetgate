@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const link_tree = @import("link_tree.zig");
 const shadow_root = @import("shadow_root.zig");
+const exe_path = @import("exe_path.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -11,8 +12,10 @@ pub const workspace_dir = ".emetgate";
 const max_git_listing = 64 * 1024 * 1024;
 
 pub fn trackedFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
+    const git = try exe_path.git(gpa, root_abs);
+    defer gpa.free(git);
     const result = try std.process.run(gpa, io, .{
-        .argv = &.{ "git", "ls-files", "-z" },
+        .argv = &.{ git, "ls-files", "-z" },
         .cwd = .{ .path = root_abs },
         .stdout_limit = .limited(max_git_listing),
     });

@@ -6,6 +6,7 @@ const rules = @import("rules.zig");
 const runner = @import("runner.zig");
 const sandbox = @import("sandbox.zig");
 const shadow = @import("shadow.zig");
+const exe_path = @import("exe_path.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -98,7 +99,8 @@ const Context = struct {
         const modules = try std.fmt.allocPrint(self.arena, "{s}\\node_modules", .{self.root});
         if (std.Io.Dir.cwd().access(self.io, modules, .{})) |_| {
             const link = try std.fmt.allocPrint(self.arena, "{s}\\node_modules", .{dir});
-            const made = std.process.run(self.arena, self.io, .{ .argv = &.{ "cmd.exe", "/d", "/c", "mklink", "/J", link, modules } }) catch return error.LinkFailed;
+            const cmd = exe_path.system(self.arena, "cmd.exe") catch return error.LinkFailed;
+            const made = std.process.run(self.arena, self.io, .{ .argv = &.{ cmd, "/d", "/c", "mklink", "/J", link, modules } }) catch return error.LinkFailed;
             _ = made;
         } else |_| {}
         try shadow.grantLowIntegrityWrite(dir);

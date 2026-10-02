@@ -7,6 +7,7 @@ const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
+const exe_path = @import("exe_path.zig");
 const test_command_mod = @import("test_command.zig");
 const gate_mod = @import("gate.zig");
 const batch = @import("batch.zig");
@@ -110,7 +111,9 @@ pub fn runStages(gpa: Allocator, io: std.Io, cwd: []const u8, typecheck_command:
 }
 
 pub fn runCommand(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
-    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", command };
+    const cmd = try exe_path.system(gpa, "cmd.exe");
+    defer gpa.free(cmd);
+    const argv = [_][]const u8{ cmd, "/d", "/c", command };
     return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits });
 }
 

@@ -5,6 +5,7 @@ const disk = @import("disk.zig");
 const rules = @import("rules.zig");
 const sandbox = @import("sandbox.zig");
 const shadow = @import("shadow.zig");
+const exe_path = @import("exe_path.zig");
 
 const Allocator = std.mem.Allocator;
 const Hash = receipt.Hash;
@@ -117,7 +118,7 @@ pub fn write(gpa: Allocator, io: std.Io, root: []const u8, record: Record) !Writ
 
 pub fn git(arena: Allocator, io: std.Io, root: []const u8, argv: []const []const u8) !?[]u8 {
     var full: std.ArrayList([]const u8) = .empty;
-    try full.appendSlice(arena, &.{ "git", "-c", "core.longpaths=true" });
+    try full.appendSlice(arena, &.{ try exe_path.git(arena, root), "-c", "core.longpaths=true" });
     try full.appendSlice(arena, argv);
     const result = std.process.run(arena, io, .{ .argv = full.items, .cwd = .{ .path = root }, .stdout_limit = .limited(max_git_output) }) catch return error.GitFailed;
     return switch (result.term) {

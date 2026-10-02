@@ -2,6 +2,7 @@ const std = @import("std");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
+const exe_path = @import("../platform/exe_path.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -100,12 +101,15 @@ fn render(gpa: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: 
     const place = try repo.jail(gpa, io, root, path orelse ".");
     defer place.deinit(gpa);
 
+    const git = try exe_path.git(gpa, place.root);
+    defer gpa.free(git);
     var argv: [max_argv][]const u8 = undefined;
     var n: usize = 0;
     for (safe_prefix) |a| {
         argv[n] = a;
         n += 1;
     }
+    argv[0] = git;
 
     var count_buf: [8]u8 = undefined;
     if (std.mem.eql(u8, sub, "status")) {
