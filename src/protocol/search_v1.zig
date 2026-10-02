@@ -726,7 +726,7 @@ const Result = struct {
         var lost: u32 = 0;
         for (self.missing.items) |m| switch (m.reason) {
             .budget, .match_limit, .unclassified => lost += m.files,
-            .too_large, .unreadable, .vanished, .unresolved => {},
+            .too_large, .unreadable, .vanished, .unresolved, .changed_since_snapshot => {},
         };
         return std.math.sub(u32, self.indexed, lost) catch null;
     }
