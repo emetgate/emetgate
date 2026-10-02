@@ -477,6 +477,67 @@ test "search answers: a tracked file deleted from the work tree makes the answer
     try testing.expectEqual(@as(usize, 1), answer.groups().len);
 }
 
+fn expectNoStale(answer: *Answer, listed: i64, evaluated: i64, vanished: []const []const u8) !void {
+    errdefer std.debug.print("{s}\n", .{answer.line()});
+    try testing.expect(!answer.is_error);
+    try testing.expectEqual(@as(usize, 0), answer.groups().len);
+    try testing.expectEqual(listed, answer.scope("listed"));
+    try testing.expectEqual(evaluated, answer.scope("evaluated"));
+    const missing: []const Value = if (answer.get("missing")) |m| m.array.items else &.{};
+    try testing.expectEqual(vanished.len, missing.len);
+    for (vanished, missing) |path, m| {
+        try testing.expectEqualStrings(path, m.object.get("path").?.string);
+        try testing.expectEqualStrings("vanished", m.object.get("reason").?.string);
+    }
+    try testing.expectEqualStrings(if (vanished.len == 0) "complete" else "partial", answer.status());
+}
+
+test "search answers: a file deleted or untracked after it was indexed is neither found nor evaluated, in the session, after a restart and when it changed while no session ran" {
+    var repo = try Repo.init(&.{
+        .{ "src/deleted.ts", "export const stale_needle = 1;\n" },
+        .{ "src/untracked.ts", "export const stale_needle = 2;\n" },
+        .{ "src/kept.ts", "export const kept = 3;\n" },
+        .{ "src/later_deleted.ts", "export const late_stale_needle = 4;\n" },
+        .{ "src/later_untracked.ts", "export const late_stale_needle = 5;\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const src = try repo.path("src");
+    defer gpa.free(src);
+    {
+        var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+        defer session.deinit();
+        {
+            var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "stale_needle", .dir = src, .certificate = true });
+            defer answer.deinit();
+            try testing.expectEqual(@as(usize, 4), answer.groups().len);
+            try testing.expectEqual(@as(i64, 5), answer.scope("evaluated"));
+        }
+        try repo.tmp.dir.deleteFile(testing.io, "src/deleted.ts");
+        try gitIn(repo.root, &.{ "rm", "-q", "--cached", "src/untracked.ts" });
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "stale_needle = [12];", .regex = true, .dir = src, .certificate = true });
+        defer answer.deinit();
+        try expectNoStale(&answer, 4, 3, &.{"src/deleted.ts"});
+    }
+    {
+        var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+        defer session.deinit();
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "stale_needle = [12];", .regex = true, .dir = src, .certificate = true });
+        defer answer.deinit();
+        try expectNoStale(&answer, 4, 3, &.{"src/deleted.ts"});
+    }
+    try repo.tmp.dir.deleteFile(testing.io, "src/later_deleted.ts");
+    try gitIn(repo.root, &.{ "rm", "-q", "--cached", "src/later_untracked.ts", "src/deleted.ts" });
+    {
+        var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+        defer session.deinit();
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "stale_needle = [1245];", .regex = true, .dir = src, .certificate = true });
+        defer answer.deinit();
+        try expectNoStale(&answer, 2, 1, &.{"src/later_deleted.ts"});
+    }
+}
+
 test "search answers: a tracked path that is now a directory makes the answer partial as unreadable" {
     var repo = try Repo.init(&.{
         .{ "a.txt", "dirneedle a\n" },
