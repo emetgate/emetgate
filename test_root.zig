@@ -74,6 +74,7 @@ pub const fact_modules = src.fact_modules;
 pub const fact_store = src.fact_store;
 pub const fact_file = src.fact_file;
 pub const search_v1 = src.search_v1;
+pub const rg_search = src.rg_search;
 pub const disk = src.disk;
 pub const durability_log = src.durability_log;
 pub const receipts = src.receipts;

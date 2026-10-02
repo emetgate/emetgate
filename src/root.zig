@@ -72,6 +72,7 @@ pub const fact_modules = @import("platform/fact_modules.zig");
 pub const fact_store = @import("platform/fact_store.zig");
 pub const fact_file = @import("platform/fact_file.zig");
 pub const search_v1 = @import("protocol/search_v1.zig");
+pub const rg_search = @import("platform/rg_search.zig");
 pub const disk = @import("platform/disk.zig");
 pub const durability_log = @import("platform/durability_log.zig");
 pub const receipts = @import("platform/receipts.zig");
