@@ -256,7 +256,7 @@ test "map: a heavy file that its region path does not show is named on the regio
     for (0..24) |i| try heavy.appendSlice(arena, try std.fmt.allocPrint(arena, "export function step{d}(x: number) {{ const y = x * {d}; const z = y + {d}; return z - x + y * z; }}\n", .{ i, i, i }));
     _ = try repo.put("pkg/gamma.ts", heavy.items);
     try repo.linkAll();
-    const built = try map.buildMap(arena, &repo.store, .{ .budget_tokens = 280, .region_chars = 700, .chars_per_token = 3.3 });
+    const built = try map.buildMap(arena, &repo.store, .{ .budget_tokens = 200, .region_chars = 700, .chars_per_token = 3.3 });
     try testing.expect(!built.stats.complete);
     const region = built.regions[try regionOf(built, "pkg/gamma.ts")];
     try testing.expect(std.mem.indexOf(u8, region.label, "gamma") == null);
@@ -325,7 +325,10 @@ test "map listing: a region that fits is listed whole with signatures and first 
     const value = listed.complete.value;
     try testing.expectEqual(map_listing.Level.full, value.level);
     try testing.expect(value.next == null);
-    try testing.expect(std.mem.indexOf(u8, value.text, "users.controller.ts:8 method UsersController.list() - Lists every user of the account.") != null);
+    try testing.expect(std.mem.indexOf(u8, value.text, "\napi/\ndecorators.ts\n") != null);
+    try testing.expect(std.mem.indexOf(u8, value.text, "\nusers.controller.ts\n") != null);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, value.text, "api/"));
+    try testing.expect(std.mem.indexOf(u8, value.text, "  8 method UsersController.list() - Lists every user of the account.\n") != null);
     try testing.expect(std.mem.indexOf(u8, value.text, "UsersController.create(name: string): string - Creates one user.") != null);
     try testing.expect(std.mem.indexOf(u8, value.text, "\u{2713}") != null);
 }
@@ -406,10 +409,11 @@ test "map delta: an unchanged store has no delta, and added, removed and changed
     try testing.expectEqual(@as(u32, 1), delta.added);
     try testing.expectEqual(@as(u32, 2), delta.removed);
     try testing.expectEqual(@as(u32, 1), delta.changed);
-    try testing.expect(std.mem.indexOf(u8, delta.text, "+purge src/api/store.ts:2") != null);
+    try testing.expect(std.mem.indexOf(u8, delta.text, " api/store.ts: ") != null);
+    try testing.expect(std.mem.indexOf(u8, delta.text, "+purge 2") != null);
     try testing.expect(std.mem.indexOf(u8, delta.text, "-save") != null);
     try testing.expect(std.mem.indexOf(u8, delta.text, "-reindexEverything") != null);
-    try testing.expect(std.mem.indexOf(u8, delta.text, "~load src/api/store.ts:1") != null);
+    try testing.expect(std.mem.indexOf(u8, delta.text, "~load 1") != null);
     const region = try regionOf(built, "src/api/store.ts");
     for (delta.changes) |c| try testing.expectEqual(@as(?map.RegionId, region), c.region);
 }

@@ -18,7 +18,7 @@ pub const min_budget: usize = 600;
 pub const max_detail_chars: usize = 100;
 const reserve: usize = 360;
 
-pub const Level = enum { full, signatures, names, compact };
+pub const Level = enum { full, signatures, names };
 
 pub const Context = struct {
     snapshot: answer.Snapshot,
@@ -236,19 +236,32 @@ fn startsFile(rows: []const Row, r: usize, first: usize) bool {
     return r == first or rows[r - 1].file != rows[r].file;
 }
 
+fn dirOf(rel: []const u8) []const u8 {
+    const slash = std.mem.lastIndexOfScalar(u8, rel, '/') orelse return "";
+    return rel[0 .. slash + 1];
+}
+
+fn headChars(region: *const map.Region, files: []const File, rows: []const Row, r: usize, first: usize) usize {
+    if (!startsFile(rows, r, first)) return 0;
+    const rel = relative(region, files[rows[r].file].path);
+    const dir = dirOf(rel);
+    var chars: usize = rel.len - dir.len + 1;
+    const new_dir = r == first or !std.mem.eql(u8, dir, dirOf(relative(region, files[rows[r - 1].file].path)));
+    if (new_dir and dir.len != 0) chars += dir.len + 1;
+    return chars;
+}
+
 fn rowChars(level: Level, region: *const map.Region, files: []const File, rows: []const Row, r: usize, first: usize) usize {
     const row = rows[r];
     const f = files[row.file];
-    const rel = relative(region, f.path);
-    if (row.def == none) return rel.len + 4 + whyNot(f.state).len + 1;
-    const head: usize = if (level == .compact and startsFile(rows, r, first)) rel.len + 1 else 0;
+    const head = headChars(region, files, rows, r, first);
+    if (row.def == none) return head + 3 + whyNot(f.state).len;
     const d = f.state.?.facts.defs[row.def];
-    const base = digitsOf(d.line) + 1 + map.kindTag(d.kind).len + 1 + d.qname.len + 1;
+    const base = 2 + digitsOf(d.line) + 1 + map.kindTag(d.kind).len + 1 + d.qname.len + 1;
     return head + switch (level) {
-        .compact => 2 + base,
-        .names => rel.len + 1 + base,
-        .signatures => rel.len + 1 + base + row.signature.len,
-        .full => rel.len + 1 + base + row.signature.len + (if (row.doc.len != 0) row.doc.len + 3 else 0),
+        .names => base,
+        .signatures => base + row.signature.len,
+        .full => base + row.signature.len + (if (row.doc.len != 0) row.doc.len + 3 else 0),
     };
 }
 
@@ -262,7 +275,7 @@ fn rangeChars(level: Level, region: *const map.Region, files: []const File, rows
 fn plan(region: *const map.Region, files: []const File, rows: []const Row, body: usize, offset: u32, details: bool) Plan {
     const total: u32 = @intCast(rows.len);
     if (offset == 0) {
-        const levels: []const Level = if (details) &.{ .full, .signatures, .names, .compact } else &.{ .names, .compact };
+        const levels: []const Level = if (details) &.{ .full, .signatures, .names } else &.{.names};
         for (levels) |level| {
             const chars = rangeChars(level, region, files, rows, 0, rows.len);
             if (chars <= body) return .{ .level = level, .first = 0, .end = total, .chars = chars };
@@ -271,12 +284,12 @@ fn plan(region: *const map.Region, files: []const File, rows: []const Row, body:
     var chars: usize = 0;
     var end: u32 = offset;
     while (end < total) {
-        const line = rowChars(.compact, region, files, rows, end, offset);
+        const line = rowChars(.names, region, files, rows, end, offset);
         if (end > offset and chars + line > body) break;
         chars += line;
         end += 1;
     }
-    return .{ .level = .compact, .first = offset, .end = end, .chars = chars };
+    return .{ .level = .names, .first = offset, .end = end, .chars = chars };
 }
 
 fn writeBody(w: *Writer, region: *const map.Region, files: []const File, rows: []const Row, p: Plan) !void {
@@ -284,23 +297,23 @@ fn writeBody(w: *Writer, region: *const map.Region, files: []const File, rows: [
     while (r < p.end) : (r += 1) {
         const row = rows[r];
         const f = files[row.file];
-        const rel = relative(region, f.path);
-        if (row.def == none) {
-            try w.print("{s}  ({s})\n", .{ rel, whyNot(f.state) });
-            continue;
+        if (startsFile(rows, r, p.first)) {
+            const rel = relative(region, f.path);
+            const dir = dirOf(rel);
+            const new_dir = r == p.first or !std.mem.eql(u8, dir, dirOf(relative(region, files[rows[r - 1].file].path)));
+            if (new_dir and dir.len != 0) try w.print("{s}\n", .{dir});
+            try w.writeAll(rel[dir.len..]);
+            if (row.def == none) {
+                try w.print(" ({s})\n", .{whyNot(f.state)});
+                continue;
+            }
+            try w.writeByte('\n');
         }
-        if (p.level == .compact and startsFile(rows, r, p.first)) try w.print("{s}\n", .{rel});
         const d = f.state.?.facts.defs[row.def];
-        switch (p.level) {
-            .compact => try w.print("  {d} {s} {s}\n", .{ d.line, map.kindTag(d.kind), d.qname }),
-            .names => try w.print("{s}:{d} {s} {s}\n", .{ rel, d.line, map.kindTag(d.kind), d.qname }),
-            .signatures => try w.print("{s}:{d} {s} {s}{s}\n", .{ rel, d.line, map.kindTag(d.kind), d.qname, row.signature }),
-            .full => {
-                try w.print("{s}:{d} {s} {s}{s}", .{ rel, d.line, map.kindTag(d.kind), d.qname, row.signature });
-                if (row.doc.len != 0) try w.print(" - {s}", .{row.doc});
-                try w.writeByte('\n');
-            },
-        }
+        try w.print("  {d} {s} {s}", .{ d.line, map.kindTag(d.kind), d.qname });
+        if (p.level != .names) try w.writeAll(row.signature);
+        if (p.level == .full and row.doc.len != 0) try w.print(" - {s}", .{row.doc});
+        try w.writeByte('\n');
     }
 }
 
@@ -425,7 +438,7 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     try w.writeByte('\n');
     try writeBody(w, region, files, rows.items, p);
     if (value.next) |next| {
-        try w.print("... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate_region {{\"region\":\"r{d}\",\"offset\":{d}}}\n", .{ next + 1, total, total, budget, region_id + 1, next });
+        try w.print("... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate_region r{d} offset {d}\n", .{ next + 1, total, total, budget, region_id + 1, next });
     }
     switch (result) {
         .complete => |*c| c.value.text = out.written(),

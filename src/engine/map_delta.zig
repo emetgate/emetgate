@@ -137,16 +137,28 @@ fn detailed(arena: Allocator, m: *const map.Map, changes: []const SymbolChange, 
     const w = &out.writer;
     try w.writeAll(head);
     var i: usize = 0;
-    var buf: [1024]u8 = undefined;
     while (i < changes.len) {
         var j = i;
         while (j < changes.len and sameGroup(changes[i], changes[j])) j += 1;
-        try w.print("{s}:", .{try regionName(m, changes[i].region, changes[i].path, &buf)});
-        for (changes[i..j], 0..) |c, n| {
-            try w.print("{s}{c}{s}", .{ if (n == 0) " " else ", ", mark(c.change), c.qname });
-            if (c.change != .removed) try w.print(" {s}:{d}", .{ c.path, c.line });
+        const dir = if (changes[i].region) |r| m.regions[r].dir else "";
+        if (changes[i].region) |r| {
+            try w.print("r{d} {s}\n", .{ r + 1, m.regions[r].path });
+        } else {
+            try w.writeAll("outside every region\n");
         }
-        try w.writeByte('\n');
+        var k = i;
+        while (k < j) {
+            var e = k;
+            while (e < j and std.mem.eql(u8, changes[e].path, changes[k].path)) e += 1;
+            const path = changes[k].path;
+            try w.print(" {s}:", .{if (std.mem.startsWith(u8, path, dir)) path[dir.len..] else path});
+            for (changes[k..e], 0..) |c, n| {
+                try w.print("{s}{c}{s}", .{ if (n == 0) " " else ", ", mark(c.change), c.qname });
+                if (c.change != .removed) try w.print(" {d}", .{c.line});
+            }
+            try w.writeByte('\n');
+            k = e;
+        }
         i = j;
     }
     return out.written();
@@ -165,7 +177,7 @@ fn summary(arena: Allocator, m: *const map.Map, changes: []const SymbolChange, h
         while (j < changes.len and sameGroup(changes[i], changes[j])) : (j += 1) counts[@intFromEnum(changes[j].change)] += 1;
         const name = try regionName(m, changes[i].region, changes[i].path, &buf);
         const line = if (changes[i].region) |r|
-            try std.fmt.allocPrint(arena, "{s}: +{d} -{d} ~{d}; read it with emetgate_region {{\"region\":\"r{d}\"}}\n", .{ name, counts[0], counts[1], counts[2], r + 1 })
+            try std.fmt.allocPrint(arena, "{s}: +{d} -{d} ~{d} (emetgate_region r{d})\n", .{ name, counts[0], counts[1], counts[2], r + 1 })
         else
             try std.fmt.allocPrint(arena, "{s}: +{d} -{d} ~{d}\n", .{ name, counts[0], counts[1], counts[2] });
         try lines.append(arena, line);

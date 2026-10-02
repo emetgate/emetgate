@@ -72,6 +72,11 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.map.region_chars = number(u32, value) orelse return null;
         } else if (std.mem.eql(u8, arg, "--term-value")) {
             options.map.term_value = @floatCast(real(value) orelse return null);
+        } else if (std.mem.eql(u8, arg, "--damping")) {
+            options.map.damping = real(value) orelse return null;
+            if (!(options.map.damping >= 0 and options.map.damping < 1)) return null;
+        } else if (std.mem.eql(u8, arg, "--file-value")) {
+            options.map.file_value = @floatCast(real(value) orelse return null);
         } else if (std.mem.eql(u8, arg, "--chars-per-token")) {
             options.map.chars_per_token = real(value) orelse return null;
             if (!(options.map.chars_per_token > 0)) return null;
@@ -212,6 +217,19 @@ fn writeFiles(arena: Allocator, out: *Writer, built: map.Map) !void {
         try js.objectField("symbols");
         try js.beginArray();
         for (f.symbols) |s| try js.write(s.qname);
+        try js.endArray();
+        try js.objectField("lines");
+        try js.beginArray();
+        for (f.symbols) |s| try js.write(s.line);
+        try js.endArray();
+        try js.objectField("spans");
+        try js.beginArray();
+        for (f.symbols) |s| {
+            try js.beginArray();
+            try js.write(s.span.start);
+            try js.write(s.span.end);
+            try js.endArray();
+        }
         try js.endArray();
         try js.endObject();
         try out.writeByte('\n');

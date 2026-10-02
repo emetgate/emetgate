@@ -46,6 +46,7 @@ pub const SymbolSnap = struct {
     qname: []const u8,
     hash: facts.Hash,
     line: u32,
+    span: facts.Span = .{ .start = 0, .end = 0 },
 };
 
 pub const FileSnap = struct {
@@ -106,7 +107,8 @@ pub const MapOptions = struct {
     file_value: f32 = 0.5,
     terms_per_region: u32 = 40,
     heading_regions: u32 = 24,
-    base_share: f64 = 0.6,
+    base_share: f64 = 0.35,
+    damping: f64 = 0.3,
     cert: answer.Snapshot = .{ .barrier = 0, .root = std.mem.zeroes(answer.Digest) },
     fallback: ?*const MapTable = null,
 };
@@ -338,7 +340,7 @@ const Builder = struct {
             }
         }
         const graph = try map_rank.Graph.build(self.arena, nodes, edges.items);
-        const ranked = try map_rank.pagerank(self.arena, graph, teleport, .{});
+        const ranked = try map_rank.pagerank(self.arena, graph, teleport, .{ .damping = self.options.damping });
         iterations.* = ranked.iterations;
         self.weight = try self.arena.alloc(f64, self.syms.items.len);
         for (self.syms.items, self.weight) |*s, *w| {
@@ -1026,8 +1028,8 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         if (reg.family == .code) code += 1 else tests += 1;
     }
     try w.print("# Project map\nsnapshot {s} | {d} files | {d} symbols | {d} regions ({d} code, {d} test){s}\n", .{ &short, b.files.len, b.syms.items.len, b.regions.items.len, code, tests, if (complete) " | every symbol is listed" else "" });
-    try w.writeAll("Every symbol belongs to exactly one region and every region is listed below. A line gives the region id and path ({a .. z} is a run of sibling entries from a to z), then key symbols ranked by centrality (members grouped as Class{member}; GET/POST/cmd/on mark routes, commands and event handlers), [more files of the region] and distinctive terms (#term).\n");
-    try w.writeAll("emetgate_region {\"region\":\"r1\"} returns the complete symbol table of a region (path:line kind name(signature) - doc); emetgate_evidence {\"symbols\":[\"Class.method\"]} returns the code, callers, callees and tests of symbols.\n");
+    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a .. z} = sibling entries a to z), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), [more files], #terms.\n");
+    try w.writeAll("emetgate_region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
     var names_count: u32 = 0;
     var files_count: u32 = 0;
     var terms_count: u32 = 0;
@@ -1116,7 +1118,7 @@ fn snapshotOf(b: *Builder) !Snapshot {
             symbols = try arena.alloc(SymbolSnap, f.symbol_count);
             for (b.syms.items[f.first_symbol .. f.first_symbol + f.symbol_count], symbols) |s, *snap| {
                 const d = f.state.facts.defs[s.def];
-                snap.* = .{ .kind = d.kind, .qname = try arena.dupe(u8, d.qname), .hash = d.hash, .line = d.line };
+                snap.* = .{ .kind = d.kind, .qname = try arena.dupe(u8, d.qname), .hash = d.hash, .line = d.line, .span = d.span };
             }
         }
         slot.* = .{
