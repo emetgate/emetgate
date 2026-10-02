@@ -457,6 +457,70 @@ test "search answers: a file another handle holds without sharing, given as dir,
     try testing.expect(elapsed < 50 * std.time.ns_per_ms);
 }
 
+fn toolText(runtime: *Runtime, root: []const u8, name: []const u8, args: anytype) ![]u8 {
+    var line: std.Io.Writer.Allocating = .init(gpa);
+    defer line.deinit();
+    var js: std.json.Stringify = .{ .writer = &line.writer };
+    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = name, .arguments = args } });
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
+    return gpa.dupe(u8, out.written());
+}
+
+test "search answers: a tracked file whose path runs past 260 characters is searched, read and refreshed like any other" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const segment = "long_directory_name_" ** 3;
+    const rel_dir = segment ++ "/" ++ segment ++ "/" ++ segment ++ "/" ++ segment;
+    const rel = rel_dir ++ "/deep.ts";
+    var tmp = testing.tmpDir(.{});
+    var owned = true;
+    errdefer if (owned) tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, rel_dir);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = rel, .data = "export const longPathNeedle = 1;\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "short.ts", .data = "export const longPathNeedle = 2;\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    owned = false;
+    var repo: Repo = .{ .tmp = tmp, .root = root };
+    defer repo.deinit();
+    try git_fixture.initRepo(repo.root);
+    try gitIn(repo.root, &.{ "config", "core.longpaths", "true" });
+    try gitIn(repo.root, &.{ "add", "." });
+    try gitIn(repo.root, &.{ "commit", "-q", "-m", "init" });
+    const abs = try repo.path(rel);
+    defer gpa.free(abs);
+    try testing.expect(abs.len > 300);
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    {
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "longPathNeedle", .dir = repo.root });
+        defer answer.deinit();
+        try testing.expectEqualStrings("complete", answer.status());
+        try testing.expectEqual(@as(usize, 2), answer.groups().len);
+    }
+    {
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "longPathNeedle", .dir = abs });
+        defer answer.deinit();
+        try testing.expectEqualStrings("complete", answer.status());
+        try testing.expectEqual(@as(usize, 1), answer.groups().len);
+        try testing.expectEqualStrings(rel, answer.groups()[0].object.get("file").?.string);
+    }
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = rel, .data = "export const longPathNeedle = 3;\nexport const freshLongToken = 4;\n" });
+    {
+        var answer = try searchIn(runtime, &session, repo.root, .{ .pattern = "freshLongToken", .dir = repo.root });
+        defer answer.deinit();
+        try testing.expectEqualStrings("complete", answer.status());
+        try testing.expectEqual(@as(usize, 1), answer.groups().len);
+    }
+    const read = try toolText(runtime, repo.root, "emetgate_read_file", .{ .file = abs, .raw = true });
+    defer gpa.free(read);
+    errdefer std.debug.print("{s}\n", .{read});
+    try testing.expect(std.mem.indexOf(u8, read, "freshLongToken") != null);
+    try testing.expect(std.mem.indexOf(u8, read, "isError" ++ "\":true") == null);
+}
+
 test "search answers: a tracked file deleted from the work tree makes the answer partial as vanished" {
     var repo = try Repo.init(&.{
         .{ "a.txt", "goneneedle a\n" },
