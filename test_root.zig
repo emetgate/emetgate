@@ -57,6 +57,7 @@ pub const search_session = src.search_session;
 pub const git_index = src.git_index;
 pub const worker_pool = src.worker_pool;
 pub const io_seam = src.io_seam;
+pub const exe_path = src.exe_path;
 pub const fact_modules = src.fact_modules;
 pub const fact_store = src.fact_store;
 pub const fact_file = src.fact_file;
