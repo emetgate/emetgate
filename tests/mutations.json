@@ -7978,6 +7978,141 @@
       "kills": [
         "question lexicon checks: every term check translates its turkish phrase to the listed english term"
       ]
+    },
+    {
+      "id": "MP1-region-drops-the-last-symbol-of-each-file",
+      "file": "src/engine/map.zig",
+      "from": "                for (self.syms.items[f.first_symbol .. f.first_symbol + f.symbol_count]) |s| {",
+      "to": "                for (self.syms.items[f.first_symbol .. f.first_symbol + f.symbol_count -| 1]) |s| {",
+      "kills": [
+        "map: every symbol of the store is in exactly one region and every region is in the text"
+      ]
+    },
+    {
+      "id": "MP2-map-budget-doubled",
+      "file": "src/engine/map.zig",
+      "from": "    const total_chars: u64 = @intFromFloat(@as(f64, @floatFromInt(options.budget_tokens)) * options.chars_per_token);",
+      "to": "    const total_chars: u64 = @intFromFloat(@as(f64, @floatFromInt(options.budget_tokens)) * options.chars_per_token * 2);",
+      "kills": [
+        "map: a large project stays inside the token budget and names its most called symbols first"
+      ]
+    },
+    {
+      "id": "MP3-name-order-random",
+      "file": "src/engine/map.zig",
+      "from": "    if (b.weight[x] != b.weight[y]) return b.weight[x] > b.weight[y];",
+      "to": "    if (x != y and @intFromPtr(b) != 0) return std.crypto.random.boolean();",
+      "kills": [
+        "map: the text is the same bytes on every build of the same snapshot"
+      ]
+    },
+    {
+      "id": "MP4-delta-drops-removed-symbols",
+      "file": "src/engine/map_delta.zig",
+      "from": "            if (!o.seen) try self.add(.removed, region, path, o.snap.kind, o.snap.qname, o.snap.line);",
+      "to": "            if (!o.seen) _ = self;",
+      "kills": [
+        "map delta: an unchanged store has no delta, and added, removed and changed symbols are reported by region"
+      ]
+    },
+    {
+      "id": "MP5-delta-drops-removed-files",
+      "file": "src/engine/map_delta.zig",
+      "from": "            if (k != none) try d.whole(.removed, snap.files[k].region, snap.files[k].path, snap.files[k].symbols, null);",
+      "to": "            if (k != none) _ = &d;",
+      "kills": [
+        "map delta: a new file and a removed file are both reported"
+      ]
+    },
+    {
+      "id": "MP6-listing-cut-not-in-certificate",
+      "file": "src/engine/map_listing.zig",
+      "from": "    if (cut != 0) {",
+      "to": "    if (cut != 0 and false) {",
+      "kills": [
+        "map listing: a region over the budget is paged, every page declares the cut, and the pages cover it exactly once"
+      ]
+    },
+    {
+      "id": "MP7-listing-next-page-line-missing",
+      "file": "src/engine/map_listing.zig",
+      "from": "        try w.print(\"... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate_region r{d} offset {d}\\n\", .{ next + 1, total, total, budget, region_id + 1, next });",
+      "to": "        _ = next;",
+      "kills": [
+        "map listing: a region over the budget is paged, every page declares the cut, and the pages cover it exactly once"
+      ]
+    },
+    {
+      "id": "MP8-unsorted-paths-accepted",
+      "file": "src/engine/map_tree.zig",
+      "from": "        if (std.mem.order(u8, items[i - 1].path, items[i].path) != .lt) return error.UnsortedItems;",
+      "to": "        _ = i;",
+      "kills": [
+        "map tree: unsorted or repeated paths are refused"
+      ]
+    },
+    {
+      "id": "MP9-unknown-region-not-refused",
+      "file": "src/engine/map_listing.zig",
+      "from": "    if (region_id >= m.regions.len) return ListingAnswer.refuse(error.UnknownRegion, try std.fmt.allocPrint(arena, \"no region r{d}; the map has r1 to r{d}\", .{ region_id + 1, m.regions.len }));",
+      "to": "    if (region_id >= m.regions.len and false) return ListingAnswer.refuse(error.UnknownRegion, \"\");",
+      "kills": [
+        "map listing: an unknown region and an offset past the end are refused"
+      ]
+    },
+    {
+      "id": "MP10-delta-never-summarized",
+      "file": "src/engine/map_delta.zig",
+      "from": "    if (text.len > max_chars) {",
+      "to": "    if (text.len > max_chars and false) {",
+      "kills": [
+        "map delta: a delta over the character limit is summarized by region and points to the region listing"
+      ]
+    },
+    {
+      "id": "MP11-rank-edge-range-unchecked",
+      "file": "src/engine/map_rank.zig",
+      "from": "            if (e.from >= nodes or e.to >= nodes) return error.EdgeOutOfRange;",
+      "to": "            if (e.from >= nodes) return error.EdgeOutOfRange;",
+      "kills": [
+        "map rank: edges outside the graph and negative teleport weights are refused"
+      ]
+    },
+    {
+      "id": "MP12-hidden-files-never-named",
+      "file": "src/engine/map.zig",
+      "from": "            if (f.family != .code or f.symbol_count == 0 or self.file_shown[k]) continue;",
+      "to": "            if (true) continue;",
+      "kills": [
+        "map: a heavy file that its region path does not show is named on the region line"
+      ]
+    },
+    {
+      "id": "MP13-shared-name-printed-twice",
+      "file": "src/engine/map.zig",
+      "from": "            if (seen.found_existing) continue;",
+      "to": "            _ = seen;",
+      "kills": [
+        "map: symbols that share one name in a region are named once"
+      ]
+    },
+    {
+      "id": "MP14-tests-mixed-with-code",
+      "file": "src/engine/map.zig",
+      "from": "            const family: Family = if (isTestPath(table, state.path)) .tests else .code;",
+      "to": "            const family: Family = if (isTestPath(table, state.path) and false) .tests else .code;",
+      "kills": [
+        "map: test files are kept in test regions apart from the code they exercise"
+      ]
+    },
+    {
+      "id": "MP15-entry-decorators-ignored",
+      "file": "src/engine/map.zig",
+      "from": "                    if (decoratorRule(table, r.name)) |rule| {",
+      "to": "                    if (decoratorRule(table, \"\")) |rule| {",
+      "kills": [
+        "map: route, command and api entry points come from decorators and cross region calls"
+      ]
     }
   ]
 }
