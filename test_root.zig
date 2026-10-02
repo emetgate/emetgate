@@ -39,6 +39,7 @@ pub const question_terms = src.question_terms;
 pub const question_intent = src.question_intent;
 pub const map_tree = src.map_tree;
 pub const map_terms = src.map_terms;
+pub const map_concepts = src.map_concepts;
 pub const map_rank = src.map_rank;
 pub const map = src.map;
 pub const map_listing = src.map_listing;

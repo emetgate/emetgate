@@ -491,3 +491,123 @@ test "map delta: a delta over the character limit is summarized by region and po
     try testing.expectEqual(@as(u32, 150), delta.added);
     try testing.expect(std.mem.indexOf(u8, delta.text, "emetgate_region") != null);
 }
+
+fn conceptFixture(repo: *Repo) !void {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const specs = [_]struct { []const u8, []const u8 }{
+        .{ "pkg/services/credentials-tester.service.ts", "CredentialsTester" },
+        .{ "pkg/services/task-broker.service.ts", "TaskBroker" },
+        .{ "pkg/workflow/workflow-diff.ts", "ConnectionsDiff" },
+        .{ "pkg/workflow/expression-sandbox.ts", "ExpressionSandbox" },
+        .{ "pkg/nodes/Hubspot/Hubspot.node.ts", "Hubspot" },
+        .{ "pkg/nodes/Gitlab/Gitlab.node.ts", "Gitlab" },
+        .{ "pkg/nodes/Postgres/Postgres.node.ts", "Postgres" },
+    };
+    for (specs) |spec| {
+        var source: std.ArrayList(u8) = .empty;
+        try source.print(arena, "export class {s} {{\n", .{spec[1]});
+        for ([_][]const u8{ "run", "stop", "check", "load", "save", "open", "close", "send", "read", "write" }) |method| try source.print(arena, "  {s}{s}(x: number) {{ return x + 1; }}\n", .{ method, spec[1] });
+        try source.appendSlice(arena, "}\n");
+        _ = try repo.put(spec[0], source.items);
+    }
+    try repo.linkAll();
+}
+
+fn lineOf(arena: Allocator, built: map.Map, region: map.RegionId) ![]const u8 {
+    const start = (std.mem.indexOf(u8, built.text, try std.fmt.allocPrint(arena, "\nr{d} ", .{region + 1})) orelse return error.NoLine) + 1;
+    const end = std.mem.indexOfScalarPos(u8, built.text, start, '\n') orelse built.text.len;
+    return built.text[start..end];
+}
+
+const fixture_words = [_][]const u8{ "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey", "yankee", "zulu" };
+const fixture_areas = [_][]const u8{ "services", "workflow", "nodes", "editor" };
+
+fn wordFixture(repo: *Repo, count: usize) !void {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for (0..count) |i| {
+        const a = fixture_words[i % fixture_words.len];
+        const b = fixture_words[(i * 7 + 3) % fixture_words.len];
+        var source: std.ArrayList(u8) = .empty;
+        for ([_][]const u8{ "run", "stop", "load", "save", "open", "send" }) |verb| try source.print(arena, "export function {s}_{s}_{s}(x: number) {{ return x + {d}; }}\n", .{ verb, a, b, i });
+        _ = try repo.put(try std.fmt.allocPrint(arena, "pkg/{s}/{s}-{s}-v{d}.ts", .{ fixture_areas[i % fixture_areas.len], a, b, i }), source.items);
+    }
+    try repo.linkAll();
+}
+
+test "map concepts: every code region with a word its line does not show names at least one folder, file or word" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    try wordFixture(&repo, 24);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_]u32{ 700, 2_000 }) |capacity| {
+        const built = try map.buildMap(arena, &repo.store, .{ .lines = .concepts, .list_children = false, .region_chars = capacity, .budget_tokens = 450, .chars_per_token = 3.3 });
+        try testing.expect(!built.stats.complete);
+        var code_regions: usize = 0;
+        for (built.regions) |r| {
+            if (r.family != .code) continue;
+            code_regions += 1;
+            try testing.expect(r.concepts.len >= 1);
+            const line = try lineOf(arena, built, r.id);
+            for (r.concepts) |c| try testing.expect(std.mem.indexOf(u8, line, c) != null);
+        }
+        try testing.expect(code_regions >= 2);
+    }
+}
+
+test "map concepts: the concept map stays inside the token budget and a tighter budget names less" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    try wordFixture(&repo, 60);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_]u32{ 300, 450, 700 }) |budget| {
+        const fitted = try map.buildMap(arena, &repo.store, .{ .lines = .concepts, .budget_tokens = budget, .region_chars = 900, .chars_per_token = 3.3 });
+        try testing.expect(!fitted.stats.complete);
+        try testing.expect(@as(f64, @floatFromInt(fitted.text.len)) <= @as(f64, @floatFromInt(budget)) * 3.3);
+        try testing.expect(fitted.stats.files_named + fitted.stats.terms > 0);
+    }
+    const options: map.MapOptions = .{ .lines = .concepts, .budget_tokens = 600, .region_chars = 900, .chars_per_token = 3.3, .base_share = 1 };
+    const built = try map.buildMap(arena, &repo.store, options);
+    var tighter_options = options;
+    tighter_options.budget_tokens = 450;
+    const tighter = try map.buildMap(arena, &repo.store, tighter_options);
+    try testing.expectEqual(built.regions.len, tighter.regions.len);
+    try testing.expect(@as(f64, @floatFromInt(built.text.len)) <= 600 * 3.3);
+    try testing.expect(@as(f64, @floatFromInt(tighter.text.len)) <= 450 * 3.3);
+    try testing.expect(tighter.stats.files_named + tighter.stats.terms < built.stats.files_named + built.stats.terms);
+}
+
+test "map concepts: the concept map is the same bytes on every build and keeps the regions of the names map" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    try conceptFixture(&repo);
+    var first_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer first_arena.deinit();
+    var second_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer second_arena.deinit();
+    const options: map.MapOptions = .{ .lines = .concepts, .region_chars = 300, .budget_tokens = 450, .chars_per_token = 3.3 };
+    const one = try map.buildMap(first_arena.allocator(), &repo.store, options);
+    const two = try map.buildMap(second_arena.allocator(), &repo.store, options);
+    try testing.expectEqualStrings(one.text, two.text);
+    var names_options = options;
+    names_options.lines = .names;
+    const names = try map.buildMap(second_arena.allocator(), &repo.store, names_options);
+    try testing.expectEqual(names.regions.len, one.regions.len);
+    for (names.regions, one.regions) |a, b| {
+        try testing.expectEqualStrings(a.path, b.path);
+        try testing.expectEqualSlices(u32, a.files, b.files);
+    }
+}

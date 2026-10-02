@@ -37,6 +37,7 @@ pub const question_terms = @import("engine/question_terms.zig");
 pub const question_intent = @import("engine/question_intent.zig");
 pub const map_tree = @import("engine/map_tree.zig");
 pub const map_terms = @import("engine/map_terms.zig");
+pub const map_concepts = @import("engine/map_concepts.zig");
 pub const map_rank = @import("engine/map_rank.zig");
 pub const map = @import("engine/map.zig");
 pub const map_listing = @import("engine/map_listing.zig");

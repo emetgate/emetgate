@@ -6,6 +6,7 @@ const profile_mod = @import("lang/profile.zig");
 const map_tree = @import("map_tree.zig");
 const map_rank = @import("map_rank.zig");
 const map_terms = @import("map_terms.zig");
+const map_concepts = @import("map_concepts.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -20,6 +21,8 @@ pub const RegionId = u32;
 pub const EntryKind = profile_mod.MapEntryKind;
 
 pub const Family = enum { code, tests };
+
+pub const Lines = enum { names, concepts };
 
 pub const Entry = struct {
     symbol: SymbolId,
@@ -115,6 +118,10 @@ pub const MapOptions = struct {
     region_balance: f64 = 0,
     file_specificity: bool = false,
     fold_files: bool = false,
+    lines: Lines = .names,
+    concept: map_concepts.Options = .{},
+    wide_children: u32 = 0,
+    wide_factor: u32 = 1,
     cert: answer.Snapshot = .{ .barrier = 0, .root = std.mem.zeroes(answer.Digest) },
     fallback: ?*const MapTable = null,
 };
@@ -248,7 +255,7 @@ const Builder = struct {
             try items.append(self.arena, .{ .path = f.state.path, .weight = f.weight });
             try index.append(self.arena, @intCast(k));
         }
-        const ranges = try map_tree.partition(self.arena, items.items, capacity);
+        const ranges = try map_tree.partitionWide(self.arena, items.items, capacity, .{ .children = self.options.wide_children, .factor = self.options.wide_factor });
         for (ranges) |r| {
             const id: RegionId = @intCast(self.regions.items.len);
             var members: std.ArrayList(u32) = .empty;
@@ -257,7 +264,8 @@ const Builder = struct {
                 self.files[k].region = id;
             }
             const label = try regionLabel(self.arena, r);
-            const shown = if (self.options.list_children and family == .code) try childrenLabel(self.arena, items.items, r) else label;
+            const separator = if (self.options.lines == .concepts and self.options.concept.space_children) " " else ", ";
+            const shown = if (self.options.list_children and family == .code) try childrenLabel(self.arena, items.items, r, separator) else label;
             try self.regions.append(self.arena, .{
                 .id = id,
                 .family = family,
@@ -493,7 +501,7 @@ fn isDirSegment(segment: []const u8) bool {
     return segment.len != 0 and segment[segment.len - 1] == '/';
 }
 
-fn childrenLabel(arena: Allocator, items: []const map_tree.Item, r: map_tree.Range) ![]const u8 {
+fn childrenLabel(arena: Allocator, items: []const map_tree.Item, r: map_tree.Range, separator: []const u8) ![]const u8 {
     if (r.whole or r.children <= 2) return regionLabel(arena, r);
     var segments: std.ArrayList([]const u8) = .empty;
     for (items[r.first .. r.first + r.count]) |item| {
@@ -506,7 +514,7 @@ fn childrenLabel(arena: Allocator, items: []const map_tree.Item, r: map_tree.Ran
     try out.append(arena, '{');
     var i: usize = 0;
     while (i < segments.items.len) {
-        if (i != 0) try out.appendSlice(arena, ", ");
+        if (i != 0) try out.appendSlice(arena, separator);
         if (isDirSegment(segments.items[i])) {
             try out.appendSlice(arena, segments.items[i]);
             i += 1;
@@ -520,7 +528,7 @@ fn childrenLabel(arena: Allocator, items: []const map_tree.Item, r: map_tree.Ran
             try out.appendSlice(arena, segments.items[j - 1]);
         } else {
             for (segments.items[i..j], 0..) |segment, n| {
-                if (n != 0) try out.appendSlice(arena, ", ");
+                if (n != 0) try out.appendSlice(arena, separator);
                 try out.appendSlice(arena, segment);
             }
         }
@@ -553,46 +561,7 @@ fn termRowLess(_: void, a: TermRow, b: TermRow) bool {
     return a.sym < b.sym;
 }
 
-const Stems = struct {
-    arena: Allocator,
-    ids: std.StringHashMapUnmanaged(u32) = .empty,
-    names: std.ArrayList([]const u8) = .empty,
-    surface: std.ArrayList(std.StringArrayHashMapUnmanaged(u32)) = .empty,
-
-    fn intern(self: *Stems, raw: []const u8) !u32 {
-        var buf: [map_terms.max_part]u8 = undefined;
-        const key = map_terms.stem(raw, &buf);
-        const entry = try self.ids.getOrPut(self.arena, key);
-        if (!entry.found_existing) {
-            entry.key_ptr.* = try self.arena.dupe(u8, key);
-            entry.value_ptr.* = @intCast(self.names.items.len);
-            try self.names.append(self.arena, entry.key_ptr.*);
-            try self.surface.append(self.arena, .empty);
-        }
-        const id = entry.value_ptr.*;
-        const forms = &self.surface.items[id];
-        const form = try forms.getOrPut(self.arena, raw);
-        if (!form.found_existing) {
-            form.key_ptr.* = try self.arena.dupe(u8, raw);
-            form.value_ptr.* = 0;
-        }
-        form.value_ptr.* += 1;
-        return id;
-    }
-
-    fn display(self: *const Stems, id: u32) []const u8 {
-        const forms = &self.surface.items[id];
-        var best: []const u8 = self.names.items[id];
-        var count: u32 = 0;
-        for (forms.keys(), forms.values()) |k, v| {
-            if (v > count or (v == count and (k.len < best.len or (k.len == best.len and std.mem.order(u8, k, best) == .lt)))) {
-                best = k;
-                count = v;
-            }
-        }
-        return best;
-    }
-};
+const Stems = map_terms.Stems;
 
 const PartSink = struct {
     stems: *Stems,
@@ -622,6 +591,7 @@ const Selection = struct {
     chosen_terms: []bool,
     files: []bool,
     forced: []bool,
+    concepts: []const bool = &.{},
 };
 
 const Planner = struct {
@@ -633,6 +603,7 @@ const Planner = struct {
     base_cover: []f32 = &.{},
     forced: []bool = &.{},
     file_shown: []bool = &.{},
+    concept_plan: ?map_concepts.Plan = null,
 
     fn init(b: *Builder) !Planner {
         var code: std.ArrayList(u32) = .empty;
@@ -819,8 +790,27 @@ const Planner = struct {
         return out;
     }
 
+    fn conceptPlan(self: *Planner) !void {
+        const b = self.b;
+        const lines = try b.arena.alloc(map_concepts.RegionLine, b.regions.items.len);
+        for (b.regions.items, lines) |r, *line| line.* = .{ .line = if (r.family == .code) r.line_path else null, .dir = r.dir };
+        var files: std.ArrayList(map_concepts.File) = .empty;
+        for (b.files) |f| {
+            if (f.family != .code or f.state.status != .indexed) continue;
+            try files.append(b.arena, .{ .path = f.state.path, .region = f.region, .defs = f.state.facts.defs });
+        }
+        self.concept_plan = try map_concepts.plan(b.arena, lines, files.items, b.options.concept);
+    }
+
     fn select(self: *Planner, item_budget: u64) !Selection {
         const b = self.b;
+        if (self.concept_plan) |*p| {
+            const none_chosen = try b.arena.alloc(bool, self.code_syms.len);
+            @memset(none_chosen, false);
+            const no_files = try b.arena.alloc(bool, b.files.len);
+            @memset(no_files, false);
+            return .{ .names = none_chosen, .terms = &.{}, .chosen_terms = &.{}, .files = no_files, .forced = none_chosen, .concepts = try map_concepts.select(b.arena, p, item_budget) };
+        }
         const weights = try b.arena.alloc(f64, self.code_syms.len);
         for (self.code_syms, weights) |s, *w| w.* = b.weight[s];
         if (b.options.region_balance > 0) {
@@ -1182,8 +1172,12 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         if (reg.family == .code) code += 1 else tests += 1;
     }
     try w.print("# Project map\nsnapshot {s} | {d} files | {d} symbols | {d} regions ({d} code, {d} test){s}\n", .{ &short, b.files.len, b.syms.items.len, b.regions.items.len, code, tests, if (complete) " | every symbol is listed" else "" });
-    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), ");
-    try w.writeAll(if (b.options.fold_files) "[more files; service{a, b} = a.service and b.service], #terms.\n" else "[more files], #terms.\n");
+    if (planner.concept_plan != null and !complete) {
+        try w.writeAll(if (b.options.concept.space_children) "Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/ b.ts} = these sibling entries; x .. y = sibling entries x to y), then folder/ and file names inside it without extension, most telling first, and #words of its code.\n" else "Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), then folder/ and file names inside it without extension, most telling first, and #words of its code.\n");
+    } else {
+        try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), ");
+        try w.writeAll(if (b.options.fold_files) "[more files; service{a, b} = a.service and b.service], #terms.\n" else "[more files], #terms.\n");
+    }
     try w.writeAll("emetgate_region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
     var names_count: u32 = 0;
     var files_count: u32 = 0;
@@ -1193,6 +1187,13 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
     for (terms_of) |*t| t.* = .empty;
     for (selection.terms, selection.chosen_terms, 0..) |t, chosen, ti| {
         if (chosen) try terms_of[t.region].append(arena, @intCast(ti));
+    }
+    const items_of = try arena.alloc(std.ArrayList(u32), b.regions.items.len);
+    for (items_of) |*t| t.* = .empty;
+    if (planner.concept_plan) |p| {
+        for (selection.concepts, 0..) |chosen, k| {
+            if (chosen) try items_of[p.items[k].region].append(arena, @intCast(k));
+        }
     }
     for ([_]Family{ .code, .tests }) |family| {
         var lo: u32 = 0;
@@ -1255,6 +1256,27 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
                         try concepts.append(arena, display);
                         terms_count += 1;
                     }
+                    if (planner.concept_plan) |p| {
+                        const picked = items_of[reg.id].items;
+                        std.mem.sort(u32, picked, p.items, conceptMore);
+                        var roots: u32 = 0;
+                        for (picked) |k| {
+                            const item = p.items[k];
+                            if (item.kind == .term) continue;
+                            try w.writeAll(if (roots == 0) ": " else if (b.options.concept.space_separated) " " else ", ");
+                            try w.writeAll(item.text);
+                            try concepts.append(arena, item.text);
+                            roots += 1;
+                        }
+                        for (picked) |k| {
+                            const item = p.items[k];
+                            if (item.kind != .term) continue;
+                            try w.print(" #{s}", .{item.text});
+                            try concepts.append(arena, item.text);
+                            terms_count += 1;
+                        }
+                        files_count += roots;
+                    }
                     reg.concepts = concepts.items;
                 }
                 try w.writeByte('\n');
@@ -1266,6 +1288,16 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
     stats.terms = terms_count;
     stats.entries = entries_count;
     return r.out.written();
+}
+
+fn conceptMore(items: []const map_concepts.Item, x: u32, y: u32) bool {
+    const a = items[x];
+    const c = items[y];
+    if ((a.kind == .term) != (c.kind == .term)) return c.kind == .term;
+    if (a.value != c.value) return a.value > c.value;
+    const order = std.mem.order(u8, a.text, c.text);
+    if (order != .eq) return order == .lt;
+    return x < y;
 }
 
 fn snapshotOf(b: *Builder) !Snapshot {
@@ -1316,9 +1348,13 @@ pub fn buildMap(arena: Allocator, store: *const Store, options: MapOptions) !Map
     try b.entries();
     try b.apiEntries();
     var planner = try Planner.init(&b);
-    try planner.terms();
-    try planner.pathCoverage();
-    try planner.forceEntries();
+    if (options.lines == .concepts) {
+        try planner.conceptPlan();
+    } else {
+        try planner.terms();
+        try planner.pathCoverage();
+        try planner.forceEntries();
+    }
     const total_chars: u64 = @intFromFloat(@as(f64, @floatFromInt(options.budget_tokens)) * options.chars_per_token);
     var complete_cost: u64 = 0;
     for (planner.code_syms) |s| {

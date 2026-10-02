@@ -93,6 +93,22 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.map.list_children = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--no-concept-terms")) {
+            options.map.concept.terms = false;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--idf-by-regions")) {
+            options.map.concept.by_dirs = false;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--space-children")) {
+            options.map.concept.space_children = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--space-separated")) {
+            options.map.concept.space_separated = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--with-text")) {
             options.with_text = true;
             continue;
@@ -129,6 +145,28 @@ pub fn parse(args: []const [:0]const u8) ?Options {
         } else if (std.mem.eql(u8, arg, "--damping")) {
             options.map.damping = real(value) orelse return null;
             if (!(options.map.damping >= 0 and options.map.damping < 1)) return null;
+        } else if (std.mem.eql(u8, arg, "--lines")) {
+            options.map.lines = std.meta.stringToEnum(map.Lines, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--concept-tf")) {
+            options.map.concept.tf_power = real(value) orelse return null;
+            if (!(options.map.concept.tf_power >= 0 and options.map.concept.tf_power <= 2)) return null;
+        } else if (std.mem.eql(u8, arg, "--concept-idf")) {
+            options.map.concept.idf_power = real(value) orelse return null;
+            if (!(options.map.concept.idf_power >= 0 and options.map.concept.idf_power <= 4)) return null;
+        } else if (std.mem.eql(u8, arg, "--concept-root")) {
+            options.map.concept.root_weight = real(value) orelse return null;
+            if (!(options.map.concept.root_weight >= 0 and options.map.concept.root_weight <= 100)) return null;
+        } else if (std.mem.eql(u8, arg, "--concept-quota")) {
+            options.map.concept.quota_power = real(value) orelse return null;
+            if (!(options.map.concept.quota_power >= 0 and options.map.concept.quota_power <= 2)) return null;
+        } else if (std.mem.eql(u8, arg, "--wide-children")) {
+            options.map.wide_children = number(u32, value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--wide-factor")) {
+            options.map.wide_factor = number(u32, value) orelse return null;
+            if (options.map.wide_factor == 0) return null;
+        } else if (std.mem.eql(u8, arg, "--base-share")) {
+            options.map.base_share = real(value) orelse return null;
+            if (!(options.map.base_share > 0 and options.map.base_share <= 1)) return null;
         } else if (std.mem.eql(u8, arg, "--file-value")) {
             options.map.file_value = @floatCast(real(value) orelse return null);
         } else if (std.mem.eql(u8, arg, "--chars-per-token")) {
