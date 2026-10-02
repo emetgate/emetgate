@@ -145,7 +145,6 @@ pub const tool_defs = [_]Tool{
             .{ .name = "kinds", .desc = "keep only hits of these kinds, e.g. [\"code\"] to skip comments and strings", .optional = true, .ty = "array" },
             .{ .name = "offset", .desc = "skip this many ranked hits, to page through a long answer", .optional = true, .ty = "integer" },
             .{ .name = "detail", .desc = "\"full\" lifts the reply size budget (up to 200 hits); the default is \"compact\"", .optional = true },
-            .{ .name = "certificate", .desc = "reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -206,7 +205,6 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     session_search.start();
     defer session_search.deinit();
     served.search_session = &session_search;
-    served.search_text = true;
     var language_service: tsserver.Session = .{ .gpa = gpa, .io = io, .root = root };
     defer language_service.deinit();
     served.language_service = &language_service;

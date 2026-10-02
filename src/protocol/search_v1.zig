@@ -546,18 +546,23 @@ fn addHit(gpa: Allocator, groups: *std.ArrayList(Group), f: []const u8, pending:
 
 pub const Format = enum { json, text };
 
+pub const Face = struct {
+    format: Format = .json,
+    internals: bool = true,
+};
+
 pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session) !ToolResult {
-    return callSearchAs(gpa, io, runtime, args, event, root, tree_cache, session, .json);
+    return callSearchAs(gpa, io, runtime, args, event, root, tree_cache, session, .{});
 }
 
-pub fn callSearchAs(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, default_format: Format) !ToolResult {
-    const format = parseFormat(args, default_format) catch |err| return failAs(gpa, default_format, err, event);
+pub fn callSearchAs(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, face: Face) !ToolResult {
+    const format = if (face.internals) parseFormat(args, face.format) catch |err| return failAs(gpa, face.format, err, event) else face.format;
     const pattern = requireString(args, "pattern") catch |err| return failAs(gpa, format, err, event);
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     const is_regex = if (args) |a| getBool(a, "regex") orelse false else false;
     const kinds = if (args) |a| getStringArray(a, "kinds") else null;
-    const want_stats = if (args) |a| getBool(a, "stats") orelse false else false;
-    const want_certificate = if (args) |a| getBool(a, "certificate") orelse false else false;
+    const want_stats = face.internals and flag(args, "stats");
+    const want_certificate = face.internals and flag(args, "certificate");
     event.label = "search";
     event.file = dir;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
@@ -607,11 +612,16 @@ const Request = struct {
 fn parseFormat(args: ?Value, default_format: Format) !Format {
     const a = args orelse return default_format;
     const field = tool_result.getField(a, "format") orelse {
-        if ((getBool(a, "certificate") orelse false) or (getBool(a, "stats") orelse false)) return .json;
+        if (flag(args, "certificate") or flag(args, "stats")) return .json;
         return default_format;
     };
     if (field != .string) return error.UnknownFormat;
     return std.meta.stringToEnum(Format, field.string) orelse error.UnknownFormat;
+}
+
+fn flag(args: ?Value, name: []const u8) bool {
+    const a = args orelse return false;
+    return getBool(a, name) orelse false;
 }
 
 fn failAs(gpa: Allocator, format: Format, err: anyerror, event: *telemetry.Event) !ToolResult {

@@ -69,13 +69,20 @@ const Reply = struct {
 };
 
 fn search(runtime: *Runtime, session: ?*search_session.Session, root: []const u8, args: anytype) !Reply {
+    return searchServed(runtime, session, root, &.{}, args);
+}
+
+fn searchServed(runtime: *Runtime, session: ?*search_session.Session, root: []const u8, flags: []const []const u8, args: anytype) !Reply {
+    var policy = server.parsePolicy(flags) orelse return error.RefusedFlags;
+    policy.root = root;
+    policy.search_session = session;
     var line: std.Io.Writer.Allocating = .init(gpa);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
     try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_search", .arguments = args } });
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root, .search_session = session, .search_text = true });
+    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, policy);
     const parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.written(), .{});
     defer parsed.deinit();
     const result = parsed.value.object.get("result") orelse return error.NotAToolResult;
@@ -354,19 +361,67 @@ test "search text: a file another handle holds without sharing turns the check m
     try testing.expectEqualStrings("src/open.ts\n1:export const heldneedle = 2;\npartial: src/held.ts unreadable", reply.text);
 }
 
-test "search text: an unknown format is refused and certificate:true answers in JSON" {
+fn searchProperties(runtime: *Runtime) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try server.handleMessage(gpa, testing.io, runtime, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", &out.writer);
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.written(), .{});
+    defer parsed.deinit();
+    var names: std.Io.Writer.Allocating = .init(gpa);
+    defer names.deinit();
+    for (parsed.value.object.get("result").?.object.get("tools").?.array.items) |tool| {
+        if (!std.mem.eql(u8, tool.object.get("name").?.string, "emetgate_search")) continue;
+        for (tool.object.get("inputSchema").?.object.get("properties").?.object.keys()) |key| try names.writer.print("{s} ", .{key});
+    }
+    return names.toOwnedSlice();
+}
+
+test "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on" {
     var repo = try Repo.init(&golden_files);
     defer repo.deinit();
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
-    const bad = try search(runtime, null, repo.root, .{ .pattern = "greet", .dir = repo.root, .format = "xml" });
+    const offered = try searchProperties(runtime);
+    defer gpa.free(offered);
+    try testing.expectEqualStrings("pattern dir regex kinds offset detail ", offered);
+
+    const served = server.parsePolicy(&[_][]const u8{}).?;
+    try testing.expect(served.search_text and !served.search_internals);
+    try testing.expect(server.parsePolicy(&[_][]const u8{"--search-internals"}).?.search_internals);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--search-internals", "--search-internals" }) == null);
+
+    const plain = try search(runtime, null, repo.root, .{ .pattern = "greet", .dir = repo.root });
+    defer plain.deinit();
+    try testing.expect(!plain.is_error);
+    try testing.expect(std.mem.endsWith(u8, plain.text, "\n\u{2713}"));
+    inline for (.{
+        .{ .pattern = "greet", .dir = repo.root, .format = "json" },
+        .{ .pattern = "greet", .dir = repo.root, .format = "xml" },
+        .{ .pattern = "greet", .dir = repo.root, .certificate = true },
+        .{ .pattern = "greet", .dir = repo.root, .stats = true },
+    }) |args| {
+        const asked = try search(runtime, null, repo.root, args);
+        defer asked.deinit();
+        try testing.expect(!asked.is_error);
+        try testing.expectEqualStrings(plain.text, asked.text);
+    }
+
+    const internals = &[_][]const u8{"--search-internals"};
+    const same = try searchServed(runtime, null, repo.root, internals, .{ .pattern = "greet", .dir = repo.root });
+    defer same.deinit();
+    try testing.expectEqualStrings(plain.text, same.text);
+    const bad = try searchServed(runtime, null, repo.root, internals, .{ .pattern = "greet", .dir = repo.root, .format = "xml" });
     defer bad.deinit();
     try testing.expect(bad.is_error);
     try testing.expectEqualStrings("error: UnknownFormat", bad.text);
-    const certified = try search(runtime, null, repo.root, .{ .pattern = "greet", .dir = repo.root, .certificate = true });
+    const certified = try searchServed(runtime, null, repo.root, internals, .{ .pattern = "greet", .dir = repo.root, .certificate = true });
     defer certified.deinit();
     try testing.expect(std.mem.startsWith(u8, certified.text, "{\"answer\":"));
-    const json = try search(runtime, null, repo.root, .{ .pattern = "greet", .dir = repo.root, .format = "json" });
+    try testing.expect(std.mem.indexOf(u8, certified.text, "\"certificate\":") != null);
+    const json = try searchServed(runtime, null, repo.root, internals, .{ .pattern = "greet", .dir = repo.root, .format = "json" });
     defer json.deinit();
     try testing.expect(std.mem.indexOf(u8, json.text, "\"total\":6") != null);
+    const timed = try searchServed(runtime, null, repo.root, internals, .{ .pattern = "greet", .dir = repo.root, .stats = true });
+    defer timed.deinit();
+    try testing.expect(std.mem.indexOf(u8, timed.text, "\"stats\":") != null);
 }

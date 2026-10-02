@@ -23,6 +23,7 @@ pub const Policy = struct {
     tree_cache: ?*tree_cache_mod.TreeCache = null,
     search_session: ?*search_session_mod.Session = null,
     search_text: bool = false,
+    search_internals: bool = true,
     language_service: ?*tsserver.Session = null,
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
@@ -47,7 +48,7 @@ pub fn refusedRunEntry(args: anytype) ?RunRefusal {
 }
 
 pub fn parsePolicy(args: anytype) ?Policy {
-    var policy: Policy = .{};
+    var policy: Policy = .{ .search_text = true, .search_internals = false };
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg: []const u8 = args[i];
@@ -72,6 +73,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
                 policy.allow_run[policy.allow_run_len] = command;
                 policy.allow_run_len += 1;
             }
+        } else if (std.mem.eql(u8, arg, "--search-internals")) {
+            if (policy.search_internals) return null;
+            policy.search_internals = true;
         } else if (std.mem.eql(u8, arg, "--mirror")) {
             if (policy.mirror_enabled) return null;
             policy.mirror_enabled = true;
