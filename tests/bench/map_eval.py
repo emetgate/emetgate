@@ -49,6 +49,10 @@ M1P_PREFIX = "m1p"
 M1P_LEDGER = os.path.join(RUNS, "m1p-ledger.jsonl")
 M1P_BUDGET_USD = 3.0
 M1P_CALL_CAP_USD = 0.1
+M2_PREFIX = "m2-"
+M2_LEDGER = os.path.join(RUNS, "m2-ledger.jsonl")
+M2_BUDGET_USD = 5.0
+M2_CALL_CAP_USD = 0.1
 REGION_INSTRUCTION = 'Pick the regions of the map most likely to hold the code that answers the question, at most 3, most likely first. Reply with JSON only: {"regions": ["r1", "r2", "r3"]}'
 
 
@@ -73,10 +77,14 @@ def label_dir(label):
 
 
 def ledger_of(label):
+    if label.startswith(M2_PREFIX):
+        return M2_LEDGER
     return M1P_LEDGER if label.startswith(M1P_PREFIX) else LEDGER
 
 
 def caps_of(label):
+    if label.startswith(M2_PREFIX):
+        return (M2_BUDGET_USD, M2_CALL_CAP_USD)
     return (M1P_BUDGET_USD, M1P_CALL_CAP_USD) if label.startswith(M1P_PREFIX) else (BUDGET_USD, CALL_CAP_USD)
 
 
