@@ -145,8 +145,13 @@ const Partitioner = struct {
 
     fn node(self: *Partitioner, dir: []const u8, lo: u32, hi: u32) Error!void {
         if (self.weightOf(lo, hi) <= self.capacity) {
-            const children = try self.childrenOf(dir, lo, hi);
-            try self.emit(dir, children, true);
+            var at = dir;
+            var children = try self.childrenOf(at, lo, hi);
+            while (children.len == 1 and children[0].is_dir) {
+                at = try std.mem.concat(self.arena, u8, &.{ at, children[0].segment });
+                children = try self.childrenOf(at, lo, hi);
+            }
+            try self.emit(at, children, true);
             return;
         }
         const children = try self.childrenOf(dir, lo, hi);
@@ -236,6 +241,16 @@ test "map tree: a lone chain of directories is entered without making empty leve
     try testing.expectEqualStrings("a/b/c/", ranges[0].dir);
     try testing.expectEqualStrings("a/b/c/", ranges[1].dir);
     try expectCovers(&items, ranges);
+}
+
+test "map tree: a region that fits is named by the deepest directory all its items share" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const items = itemsOf(&.{ .{ "a/b/c/x.ts", 10 }, .{ "a/b/c/y.ts", 10 } });
+    const ranges = try partition(arena_state.allocator(), &items, 100);
+    try testing.expectEqual(@as(usize, 1), ranges.len);
+    try testing.expectEqualStrings("a/b/c/", ranges[0].dir);
+    try testing.expect(ranges[0].whole);
 }
 
 test "map tree: small siblings are packed into balanced groups instead of one full group and a tiny tail" {

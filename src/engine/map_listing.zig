@@ -95,21 +95,19 @@ fn collapse(arena: Allocator, text: []const u8, limit: usize) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     var space = false;
     for (text) |c| {
-        if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+        if (std.ascii.isWhitespace(c)) {
             space = out.items.len != 0;
             continue;
         }
         if (space) try out.append(arena, ' ');
         space = false;
         try out.append(arena, c);
-        if (out.items.len >= limit) break;
     }
-    if (out.items.len >= limit) {
-        var end = limit;
-        while (end > 0 and (out.items[end] & 0xC0) == 0x80) end -= 1;
-        out.shrinkRetainingCapacity(end);
-        try out.appendSlice(arena, "...");
-    }
+    if (out.items.len <= limit) return out.items;
+    var end = limit;
+    while (end > 0 and (out.items[end] & 0xC0) == 0x80) end -= 1;
+    out.shrinkRetainingCapacity(end);
+    try out.appendSlice(arena, "...");
     return out.items;
 }
 
@@ -216,16 +214,6 @@ const Plan = struct {
     chars: usize,
 };
 
-fn lineChars(level: Level, rel: []const u8, d: facts.Def, row: Row) usize {
-    const base = 1 + map.kindTag(d.kind).len + 1 + d.qname.len + 1 + digitsOf(d.line);
-    return switch (level) {
-        .compact => 2 + base,
-        .names => rel.len + 1 + base,
-        .signatures => rel.len + 1 + base + row.signature.len,
-        .full => rel.len + 1 + base + row.signature.len + (if (row.doc.len != 0) row.doc.len + 3 else 0),
-    };
-}
-
 fn digitsOf(value: u64) usize {
     var n: usize = 1;
     var v = value;
@@ -233,38 +221,42 @@ fn digitsOf(value: u64) usize {
     return n;
 }
 
-fn headerChars(level: Level, file: File, rel: []const u8) usize {
-    if (file.rows == 0) return rel.len + 40;
-    return if (level == .compact) rel.len + 1 else 0;
+fn whyNot(state: ?*const FileState) []const u8 {
+    const s = state orelse return "gone since the map was built";
+    return switch (s.status) {
+        .unindexed => "not parsed: unsupported language",
+        .unreadable => "unreadable",
+        .too_large => "over the file size limit",
+        .removed => "gone since the map was built",
+        .indexed => "no symbols",
+    };
 }
 
-fn totalChars(level: Level, region: *const map.Region, files: []const File, rows: []const Row) usize {
+fn startsFile(rows: []const Row, r: usize, first: usize) bool {
+    return r == first or rows[r - 1].file != rows[r].file;
+}
+
+fn rowChars(level: Level, region: *const map.Region, files: []const File, rows: []const Row, r: usize, first: usize) usize {
+    const row = rows[r];
+    const f = files[row.file];
+    const rel = relative(region, f.path);
+    if (row.def == none) return rel.len + 4 + whyNot(f.state).len + 1;
+    const head: usize = if (level == .compact and startsFile(rows, r, first)) rel.len + 1 else 0;
+    const d = f.state.?.facts.defs[row.def];
+    const base = digitsOf(d.line) + 1 + map.kindTag(d.kind).len + 1 + d.qname.len + 1;
+    return head + switch (level) {
+        .compact => 2 + base,
+        .names => rel.len + 1 + base,
+        .signatures => rel.len + 1 + base + row.signature.len,
+        .full => rel.len + 1 + base + row.signature.len + (if (row.doc.len != 0) row.doc.len + 3 else 0),
+    };
+}
+
+fn rangeChars(level: Level, region: *const map.Region, files: []const File, rows: []const Row, first: usize, end: usize) usize {
     var total: usize = 0;
-    for (files) |f| {
-        const rel = relative(region, f.path);
-        total += headerChars(level, f, rel);
-        for (rows[f.first_row .. f.first_row + f.rows]) |row| total += lineChars(level, rel, f.state.?.facts.defs[row.def], row);
-    }
+    var r = first;
+    while (r < end) : (r += 1) total += rowChars(level, region, files, rows, r, first);
     return total;
-}
-
-fn fillDetails(arena: Allocator, files: []File, rows: []Row, source: facts_evidence.Source) !void {
-    for (files) |*f| {
-        const state = f.state orelse continue;
-        if (f.rows == 0) continue;
-        const profile = state.profile orelse continue;
-        const table = profile.map orelse continue;
-        const got = source.file(f.path) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.Unavailable => continue,
-        };
-        f.bytes = got.bytes;
-        for (rows[f.first_row .. f.first_row + f.rows]) |*row| {
-            const d = state.facts.defs[row.def];
-            row.signature = try signatureOf(arena, got.bytes, d, table);
-            row.doc = try docOf(arena, got.bytes, d, table);
-        }
-    }
 }
 
 fn plan(region: *const map.Region, files: []const File, rows: []const Row, body: usize, offset: u32, details: bool) Plan {
@@ -272,66 +264,66 @@ fn plan(region: *const map.Region, files: []const File, rows: []const Row, body:
     if (offset == 0) {
         const levels: []const Level = if (details) &.{ .full, .signatures, .names, .compact } else &.{ .names, .compact };
         for (levels) |level| {
-            const chars = totalChars(level, region, files, rows);
+            const chars = rangeChars(level, region, files, rows, 0, rows.len);
             if (chars <= body) return .{ .level = level, .first = 0, .end = total, .chars = chars };
         }
     }
     var chars: usize = 0;
-    var end = @min(offset, total);
-    for (files) |f| {
-        if (f.first_row + f.rows <= end and f.rows != 0) continue;
-        if (f.rows == 0 and f.first_row < offset) continue;
-        const rel = relative(region, f.path);
-        const head = headerChars(.compact, f, rel);
-        if (chars + head > body and end > offset) break;
-        chars += head;
-        var r = @max(f.first_row, end);
-        while (r < f.first_row + f.rows) : (r += 1) {
-            const line = lineChars(.compact, rel, f.state.?.facts.defs[rows[r].def], rows[r]);
-            if (chars + line > body and end > offset) return .{ .level = .compact, .first = offset, .end = end, .chars = chars };
-            chars += line;
-            end = r + 1;
-        }
+    var end: u32 = offset;
+    while (end < total) {
+        const line = rowChars(.compact, region, files, rows, end, offset);
+        if (end > offset and chars + line > body) break;
+        chars += line;
+        end += 1;
     }
     return .{ .level = .compact, .first = offset, .end = end, .chars = chars };
 }
 
 fn writeBody(w: *Writer, region: *const map.Region, files: []const File, rows: []const Row, p: Plan) !void {
-    for (files) |f| {
+    var r: usize = p.first;
+    while (r < p.end) : (r += 1) {
+        const row = rows[r];
+        const f = files[row.file];
         const rel = relative(region, f.path);
-        const state = f.state orelse {
-            if (p.first == 0) try w.print("{s}  (gone since the map was built)\n", .{rel});
-            continue;
-        };
-        if (f.rows == 0) {
-            if (f.first_row < p.first or f.first_row > p.end) continue;
-            if (f.first_row == p.end and p.end != rows.len) continue;
-            const why: []const u8 = switch (state.status) {
-                .unindexed => "not parsed: unsupported language",
-                .unreadable => "unreadable",
-                .too_large => "over the file size limit",
-                .removed => "removed",
-                .indexed => "no symbols",
-            };
-            try w.print("{s}  ({s})\n", .{ rel, why });
+        if (row.def == none) {
+            try w.print("{s}  ({s})\n", .{ rel, whyNot(f.state) });
             continue;
         }
-        const lo = @max(f.first_row, p.first);
-        const hi = @min(f.first_row + f.rows, p.end);
-        if (lo >= hi) continue;
-        if (p.level == .compact) try w.print("{s}\n", .{rel});
-        for (rows[lo..hi]) |row| {
+        if (p.level == .compact and startsFile(rows, r, p.first)) try w.print("{s}\n", .{rel});
+        const d = f.state.?.facts.defs[row.def];
+        switch (p.level) {
+            .compact => try w.print("  {d} {s} {s}\n", .{ d.line, map.kindTag(d.kind), d.qname }),
+            .names => try w.print("{s}:{d} {s} {s}\n", .{ rel, d.line, map.kindTag(d.kind), d.qname }),
+            .signatures => try w.print("{s}:{d} {s} {s}{s}\n", .{ rel, d.line, map.kindTag(d.kind), d.qname, row.signature }),
+            .full => {
+                try w.print("{s}:{d} {s} {s}{s}", .{ rel, d.line, map.kindTag(d.kind), d.qname, row.signature });
+                if (row.doc.len != 0) try w.print(" - {s}", .{row.doc});
+                try w.writeByte('\n');
+            },
+        }
+    }
+}
+
+fn fillDetails(arena: Allocator, files: []File, rows: []Row, source: facts_evidence.Source) !void {
+    var r: usize = 0;
+    while (r < rows.len) {
+        const k = rows[r].file;
+        var end = r;
+        while (end < rows.len and rows[end].file == k) end += 1;
+        defer r = end;
+        const f = &files[k];
+        const state = f.state orelse continue;
+        if (rows[r].def == none) continue;
+        const profile = state.profile orelse continue;
+        const table = profile.map orelse continue;
+        const got = source.file(f.path) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unavailable => continue,
+        };
+        for (rows[r..end]) |*row| {
             const d = state.facts.defs[row.def];
-            switch (p.level) {
-                .compact => try w.print("  {d} {s} {s}\n", .{ d.line, map.kindTag(d.kind), d.qname }),
-                .names => try w.print("{s}:{d} {s} {s}\n", .{ rel, d.line, map.kindTag(d.kind), d.qname }),
-                .signatures => try w.print("{s}:{d} {s} {s}{s}\n", .{ rel, d.line, map.kindTag(d.kind), d.qname, row.signature }),
-                .full => {
-                    try w.print("{s}:{d} {s} {s}{s}", .{ rel, d.line, map.kindTag(d.kind), d.qname, row.signature });
-                    if (row.doc.len != 0) try w.print(" - {s}", .{row.doc});
-                    try w.writeByte('\n');
-                },
-            }
+            row.signature = try signatureOf(arena, got.bytes, d, table);
+            row.doc = try docOf(arena, got.bytes, d, table);
         }
     }
 }
@@ -342,22 +334,27 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     const region = &m.regions[region_id];
     const files = try currentFiles(arena, store, m, region);
     var rows: std.ArrayList(Row) = .empty;
+    var total_symbols: u32 = 0;
     for (files, 0..) |*f, k| {
         f.first_row = @intCast(rows.items.len);
-        const state = f.state orelse continue;
-        if (state.status != .indexed) continue;
-        for (state.facts.defs, 0..) |d, di| {
-            if (d.kind == .module) continue;
-            try rows.append(arena, .{ .file = @intCast(k), .def = @intCast(di) });
+        if (f.state) |state| {
+            if (state.status == .indexed) {
+                for (state.facts.defs, 0..) |d, di| {
+                    if (d.kind == .module) continue;
+                    try rows.append(arena, .{ .file = @intCast(k), .def = @intCast(di) });
+                    total_symbols += 1;
+                }
+            }
         }
+        if (rows.items.len == f.first_row) try rows.append(arena, .{ .file = @intCast(k), .def = none });
         f.rows = @as(u32, @intCast(rows.items.len)) - f.first_row;
     }
     const total: u32 = @intCast(rows.items.len);
-    if (options.offset > total) return ListingAnswer.refuse(error.OffsetOutOfRange, try std.fmt.allocPrint(arena, "offset {d} is past the {d} symbols of r{d}", .{ options.offset, total, region_id + 1 }));
+    if (options.offset > 0 and options.offset >= total) return ListingAnswer.refuse(error.OffsetOutOfRange, try std.fmt.allocPrint(arena, "offset {d} is past the {d} entries of r{d}", .{ options.offset, total, region_id + 1 }));
     const body = budget -| reserve;
     var details = false;
     if (options.source) |source| {
-        if (options.offset == 0 and totalChars(.names, region, files, rows.items) <= body) {
+        if (options.offset == 0 and rangeChars(.names, region, files, rows.items, 0, rows.items.len) <= body) {
             try fillDetails(arena, files, rows.items, source);
             details = true;
         }
@@ -368,16 +365,20 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     var evaluated: u32 = 0;
     var cut: u32 = 0;
     var too_large = false;
+    var shown_symbols: u32 = 0;
+    for (rows.items[p.first..p.end]) |row| {
+        if (row.def != none) shown_symbols += 1;
+    }
     for (files) |f| {
-        const shown = if (f.rows == 0) (f.first_row >= p.first and (f.first_row < p.end or p.end == total)) else (f.first_row >= p.first and f.first_row + f.rows <= p.end);
-        const state = f.state orelse {
-            try missing.append(arena, .{ .path = f.path, .reason = .vanished });
-            continue;
-        };
+        const shown = f.first_row >= p.first and f.first_row + f.rows <= p.end;
         if (!shown) {
             cut += 1;
             continue;
         }
+        const state = f.state orelse {
+            try missing.append(arena, .{ .path = f.path, .reason = .vanished });
+            continue;
+        };
         switch (state.status) {
             .indexed => {
                 if (state.facts.parse_errors) {
@@ -402,10 +403,10 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     const value: RegionListing = .{
         .region = region_id,
         .path = region.path,
-        .symbols = total,
+        .symbols = total_symbols,
         .files = @intCast(files.len),
         .first = p.first,
-        .shown = p.end - p.first,
+        .shown = shown_symbols,
         .next = if (p.end < total) p.end else null,
         .level = p.level,
         .text = "",
@@ -419,12 +420,12 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     var result = ListingAnswer.finish(value, cert, missing.items);
     var out: Writer.Allocating = .init(arena);
     const w = &out.writer;
-    try w.print("region r{d} {s} ({t}): {d} symbols in {d} files; paths below are relative to {s}\n", .{ region_id + 1, region.path, region.family, total, files.len, if (region.dir.len == 0) "the repository root" else region.dir });
-    try result.writeStatus(w, value.shown, "symbols");
+    try w.print("region r{d} {s} ({t}): {d} symbols in {d} files; paths below are relative to {s}\n", .{ region_id + 1, region.path, region.family, total_symbols, files.len, if (region.dir.len == 0) "the repository root" else region.dir });
+    try result.writeStatus(w, shown_symbols, "symbols");
     try w.writeByte('\n');
     try writeBody(w, region, files, rows.items, p);
     if (value.next) |next| {
-        try w.print("... {d} more symbols not shown (budget {d} characters); next page: emetgate_region {{\"region\":\"r{d}\",\"offset\":{d}}}\n", .{ total - next, budget, region_id + 1, next });
+        try w.print("... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate_region {{\"region\":\"r{d}\",\"offset\":{d}}}\n", .{ next + 1, total, total, budget, region_id + 1, next });
     }
     switch (result) {
         .complete => |*c| c.value.text = out.written(),

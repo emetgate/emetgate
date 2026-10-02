@@ -348,14 +348,10 @@ const Builder = struct {
 
     fn symIndex(self: *const Builder, file_k: u32, def: u32) ?u32 {
         const f = self.files[file_k];
-        if (f.state.status != .indexed or def == 0) return null;
-        const lo = f.first_symbol;
-        const hi = lo + f.symbol_count;
-        var at = lo;
-        while (at < hi) : (at += 1) {
-            if (self.syms.items[at].def == def) return at;
-        }
-        return null;
+        if (f.state.status != .indexed or def == 0 or def > f.symbol_count) return null;
+        const at = f.first_symbol + def - 1;
+        if (self.syms.items[at].def != def) return null;
+        return at;
     }
 
     fn entries(self: *Builder) !void {
@@ -550,7 +546,7 @@ const PartSink = struct {
     out: *std.ArrayList(u32),
     arena: Allocator,
 
-    fn part(self: *PartSink, text: []const u8) !void {
+    pub fn part(self: *PartSink, text: []const u8) !void {
         if (map_terms.isStop(text)) return;
         const id = try self.stems.intern(text);
         for (self.out.items) |existing| {
@@ -623,7 +619,7 @@ const Planner = struct {
             regions_with[rows.items[i].stem] += 1;
             i = j;
         }
-        var region_size = try b.arena.alloc(u32, b.regions.items.len);
+        const region_size = try b.arena.alloc(u32, b.regions.items.len);
         @memset(region_size, 0);
         var code_regions: u32 = 0;
         for (b.regions.items) |r| {
@@ -771,7 +767,7 @@ const Heading = struct {
     count: u32,
 };
 
-fn headings(arena: Allocator, regions: []const Region, lo: u32, hi: u32, limit: u32, prefix: []const u8, out: *std.ArrayList(Heading)) !void {
+fn headings(arena: Allocator, regions: []const Region, lo: u32, hi: u32, limit: u32, prefix: []const u8, out: *std.ArrayList(Heading)) Allocator.Error!void {
     if (lo >= hi) return;
     var common = regions[lo].dir;
     for (regions[lo + 1 .. hi]) |r| common = map_tree.commonDir(common, r.dir);
@@ -875,7 +871,6 @@ const Renderer = struct {
             if (gi != 0) try w.writeAll(", ");
             if (g.owner) |o| {
                 try self.writeName(o, false);
-                if (at.get(o) != null and g.members.items.len == 0) try keys.append(arena, self.b.symbolId(o));
                 if (selectedHas(selected, o)) try keys.append(arena, self.b.symbolId(o));
             }
             if (g.members.items.len != 0) {
@@ -961,9 +956,7 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
             try w.print("## {s}\n", .{if (h.dir.len == 0) "./" else h.dir});
             for (b.regions.items[h.first .. h.first + h.count]) |*reg| {
                 const rel = reg.path[h.dir.len..];
-                var files_n: u32 = 0;
-                files_n = @intCast(reg.files.len);
-                try w.print("r{d} {s} {d}f {d}s", .{ reg.id + 1, if (rel.len == 0) "./" else rel, files_n, reg.symbols.len });
+                try w.print("r{d} {s} {d}f {d}s", .{ reg.id + 1, if (rel.len == 0) "./" else rel, reg.files.len, reg.symbols.len });
                 if (family == .code) {
                     var selected: std.ArrayList(u32) = .empty;
                     for (reg.files) |k| {
