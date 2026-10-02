@@ -45,6 +45,11 @@ SESSION_ENV_VARS = (
 )
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 LEDGER = os.path.join(RUNS, "ledger.jsonl")
+M1P_PREFIX = "m1p"
+M1P_LEDGER = os.path.join(RUNS, "m1p-ledger.jsonl")
+M1P_BUDGET_USD = 3.0
+M1P_CALL_CAP_USD = 0.1
+REGION_INSTRUCTION = 'Pick the regions of the map most likely to hold the code that answers the question, at most 3, most likely first. Reply with JSON only: {"regions": ["r1", "r2", "r3"]}'
 
 
 def now():
@@ -67,11 +72,19 @@ def label_dir(label):
     return os.path.join(RUNS, label)
 
 
-def spent():
-    if not os.path.exists(LEDGER):
+def ledger_of(label):
+    return M1P_LEDGER if label.startswith(M1P_PREFIX) else LEDGER
+
+
+def caps_of(label):
+    return (M1P_BUDGET_USD, M1P_CALL_CAP_USD) if label.startswith(M1P_PREFIX) else (BUDGET_USD, CALL_CAP_USD)
+
+
+def spent(ledger=LEDGER):
+    if not os.path.exists(ledger):
         return 0.0
     total = 0.0
-    with open(LEDGER, encoding="utf-8") as f:
+    with open(ledger, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -144,11 +157,13 @@ def call(label, qid, trial, question, prompt_file, cwd):
     record_path = os.path.join(out_dir, f"{qid}-{trial}.json")
     if os.path.exists(record_path):
         return read_json(record_path)
-    if spent() + CALL_CAP_USD > BUDGET_USD:
-        raise SystemExit(f"model budget reached: spent {spent():.4f} of {BUDGET_USD} USD")
+    ledger = ledger_of(label)
+    budget, cap = caps_of(label)
+    if spent(ledger) + cap > budget:
+        raise SystemExit(f"model budget reached: spent {spent(ledger):.4f} of {budget} USD")
     argv = [CLAUDE, "-p", question, "--model", MODEL, "--tools", "", "--append-system-prompt-file", prompt_file,
             "--output-format", "json", "--no-session-persistence", "--safe-mode", "--strict-mcp-config",
-            "--mcp-config", '{"mcpServers":{}}', "--max-budget-usd", str(CALL_CAP_USD)]
+            "--mcp-config", '{"mcpServers":{}}', "--max-budget-usd", str(cap)]
     started = time.perf_counter()
     proc = subprocess.run(argv, cwd=cwd, env=child_env(), stdin=subprocess.DEVNULL, capture_output=True, timeout=600)
     wall_ms = round((time.perf_counter() - started) * 1000)
@@ -171,7 +186,7 @@ def call(label, qid, trial, question, prompt_file, cwd):
         "result": result,
     }
     write_json(record_path, record)
-    with open(LEDGER, "a", encoding="utf-8", newline="\n") as f:
+    with open(ledger, "a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps({
             "label": label,
             "qid": qid,
@@ -943,6 +958,265 @@ def cost_model(rows_spec):
     return out
 
 
+def region_prompt_file(label):
+    path = os.path.join(label_dir(label), "region-prompt.txt")
+    with open(os.path.join(label_dir(label), "map.txt"), encoding="utf-8") as f:
+        body = f.read()
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(body.rstrip("\n") + "\n\n" + REGION_INSTRUCTION + "\n")
+    return path
+
+
+def general_questions(set_path):
+    return read_json(set_path)["questions"] if set_path and os.path.exists(set_path) else []
+
+
+def m1p_seen(label, trials):
+    prompt = region_prompt_file(label)
+    for q in seen_questions():
+        for trial in range(1, trials + 1):
+            record = call(label, q["id"], trial, q["text"], prompt, RUNS)
+            print(q["id"], trial, record["result"].get("total_cost_usd"), record["wall_ms"], "ms")
+
+
+def m1p_general(label, set_path):
+    prompt = region_prompt_file(label)
+    for q in general_questions(set_path):
+        record = call(label, q["id"], 1, q["text"], prompt, RUNS)
+        print(q["id"], record["result"].get("total_cost_usd"), record["wall_ms"], "ms")
+
+
+REGION_ID = re.compile(r"\b[rR](\d+)\b")
+
+
+def picked_regions(text, known):
+    def take(items):
+        out = []
+        for item in items:
+            if isinstance(item, dict):
+                item = item.get("region") or item.get("id") or ""
+            if not isinstance(item, str):
+                continue
+            m = REGION_ID.search(item)
+            if m and ("r" + m.group(1)) in known and ("r" + m.group(1)) not in out:
+                out.append("r" + m.group(1))
+        return out
+    for parsed in json_spans(text):
+        if isinstance(parsed, dict) and isinstance(parsed.get("regions"), list):
+            return take(parsed["regions"])[:3], "json"
+        if isinstance(parsed, list):
+            return take(parsed)[:3], "json"
+    found = []
+    for m in REGION_ID.finditer(text):
+        r = "r" + m.group(1)
+        if r in known and r not in found:
+            found.append(r)
+    return found[:3], "text"
+
+
+def gold_of(files, q):
+    return [g for g in (resolve_gold(files, x["file"], x["symbol"]) for x in q["gold"]) if g]
+
+
+def m1p_score(label, set_path):
+    regions, files = load_files(label)
+    known = set(regions)
+    calls = os.path.join(label_dir(label), "calls")
+    seen = {q["id"]: q for q in seen_questions()}
+    general = {q["id"]: q for q in general_questions(set_path)}
+    rows = []
+    for name in sorted(os.listdir(calls)) if os.path.isdir(calls) else []:
+        record = read_json(os.path.join(calls, name))
+        q = seen.get(record["qid"]) or general.get(record["qid"])
+        if q is None:
+            continue
+        gold = gold_of(files, q)
+        text = record["result"].get("result") or ""
+        picked, how = picked_regions(text, known)
+        gold_regions = sorted({g["region"] for g in gold})
+        usage = record["result"].get("usage") or {}
+        rows.append({
+            "set": "seen" if record["qid"] in seen else "general",
+            "qid": record["qid"],
+            "trial": record["trial"],
+            "picked": picked,
+            "parsed": how,
+            "gold_regions": gold_regions,
+            "hit": bool(set(picked) & set(gold_regions)),
+            "cost": record["result"].get("total_cost_usd") or 0.0,
+            "duration_api_ms": record["result"].get("duration_api_ms"),
+            "output_tokens": usage.get("output_tokens", 0),
+            "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
+            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
+            "input_tokens": usage.get("input_tokens", 0),
+        })
+    summary = {}
+    for part_name in ("seen", "general"):
+        part = [r for r in rows if r["set"] == part_name]
+        if not part:
+            continue
+        summary[part_name] = {
+            "calls": len(part),
+            "hits": sum(r["hit"] for r in part),
+            "rate": round(sum(r["hit"] for r in part) / len(part), 4),
+            "json_parsed": sum(r["parsed"] == "json" for r in part),
+            "cost_usd": round(sum(r["cost"] for r in part), 4),
+            "median_api_ms": sorted(r["duration_api_ms"] or 0 for r in part)[len(part) // 2],
+            "median_output_tokens": sorted(r["output_tokens"] for r in part)[len(part) // 2],
+        }
+    report = {"label": label, "scored_at": now(), "instruction": REGION_INSTRUCTION, "summary": summary, "rows": rows, "m1p_ledger_usd": round(spent(M1P_LEDGER), 4)}
+    write_json(os.path.join(label_dir(label), "m1p-regions.json"), report)
+    print(json.dumps(summary, indent=2))
+    for r in rows:
+        if r["set"] == "seen" or not r["hit"]:
+            print(r["set"], r["qid"], r["trial"], "hit" if r["hit"] else "MISS", r["picked"], r["gold_regions"])
+
+
+def run_eval_set(label, items, extra, out_name):
+    cfg = read_json(os.path.join(label_dir(label), "config.json"))
+    set_path = os.path.join(label_dir(label), out_name + ".set.json")
+    write_json(set_path, {"questions": items})
+    argv = [EXE, "map", "eval", "--set", set_path, *cfg["args"], *extra]
+    proc = subprocess.run(argv, cwd=N8N, capture_output=True)
+    if proc.returncode != 0:
+        raise SystemExit("map eval failed: " + proc.stderr.decode("utf-8", "replace")[-2000:])
+    out_path = os.path.join(label_dir(label), out_name + ".jsonl")
+    with open(out_path, "wb") as f:
+        f.write(proc.stdout)
+    rows = [json.loads(line) for line in proc.stdout.decode("utf-8").splitlines() if line.strip()]
+    return {r["id"]: r for r in rows}
+
+
+def gold_rank(ranking, gold):
+    for i, (qname, path, line, score) in enumerate(ranking["hits"]):
+        if path == gold["file"] and qname == gold["qname"]:
+            return i + 1
+    return None
+
+
+def percentile(values, q):
+    if not values:
+        return None
+    values = sorted(values)
+    return values[min(len(values) - 1, int(len(values) * q))]
+
+
+def m1p_rank(label, set_path, include_general, limit):
+    regions, files = load_files(label)
+    questions = [dict(q, set="seen") for q in seen_questions()]
+    if include_general:
+        questions += [dict(q, set="general") for q in general_questions(set_path)]
+    items = []
+    gold_by_id = {}
+    for q in questions:
+        gold = gold_of(files, q)
+        gold_by_id[q["id"]] = gold
+        items.append({"id": q["id"], "text": q["text"], "regions": sorted({g["region"] for g in gold}, key=lambda r: int(r[1:]))})
+    results = run_eval_set(label, items, ["--limit", str(limit)], "m1p-rank-general" if include_general else "m1p-rank-seen")
+    rows = []
+    times = []
+    for q in questions:
+        result = results.get(q["id"])
+        if result is None:
+            continue
+        by_region = {r["region"]: r for r in result["rankings"]}
+        for r in result["rankings"]:
+            times.append(r["rank_ms"])
+        ranks = []
+        for g in gold_by_id[q["id"]]:
+            ranking = by_region.get(g["region"])
+            ranks.append(gold_rank(ranking, g) if ranking else None)
+        best = min([r for r in ranks if r is not None], default=None)
+        rows.append({"set": q["set"], "id": q["id"], "gold": [g["qname"] + " @" + g["region"] for g in gold_by_id[q["id"]]], "ranks": ranks, "best": best,
+                     "candidates": [by_region[g["region"]]["candidates"] for g in gold_by_id[q["id"]] if g["region"] in by_region]})
+    summary = {}
+    for part_name in ("seen", "general"):
+        part = [r for r in rows if r["set"] == part_name]
+        if not part:
+            continue
+        summary[part_name] = {"questions": len(part)}
+        for k in (1, 3, 5, 8, 10):
+            summary[part_name][f"at{k}"] = round(sum(r["best"] is not None and r["best"] <= k for r in part) / len(part), 4)
+            summary[part_name][f"hits_at{k}"] = sum(r["best"] is not None and r["best"] <= k for r in part)
+    summary["rank_ms"] = {"count": len(times), "p50": percentile(times, 0.5), "p99": percentile(times, 0.99), "max": max(times) if times else None}
+    name = "m1p-rank-general.json" if include_general else "m1p-rank-seen.json"
+    write_json(os.path.join(label_dir(label), name), {"label": label, "summary": summary, "rows": rows})
+    print(json.dumps(summary, indent=2))
+    for r in rows:
+        if r["set"] == "seen" or r["best"] is None or r["best"] > 5:
+            print(r["set"], r["id"], "best", r["best"], r["ranks"], r["gold"])
+
+
+def m1p_combined(label, set_path):
+    regions_report = read_json(os.path.join(label_dir(label), "m1p-regions.json"))
+    rank_report = read_json(os.path.join(label_dir(label), "m1p-rank-general.json"))
+    ranks = {r["id"]: r for r in rank_report["rows"]}
+    rows = []
+    for r in regions_report["rows"]:
+        rank_row = ranks.get(r["qid"])
+        if rank_row is None:
+            continue
+        per_k = {}
+        for k in (3, 5, 8):
+            ok = False
+            for gold, gr in zip(rank_row["gold"], rank_row["ranks"]):
+                region = gold.rsplit(" @", 1)[1]
+                if region in r["picked"] and gr is not None and gr <= k:
+                    ok = True
+            per_k[k] = ok
+        rows.append({"set": r["set"], "qid": r["qid"], "trial": r["trial"], "region_hit": r["hit"], **{f"at{k}": v for k, v in per_k.items()}})
+    summary = {}
+    for part_name in ("seen", "general"):
+        part = [x for x in rows if x["set"] == part_name]
+        if not part:
+            continue
+        summary[part_name] = {"calls": len(part), "region": round(sum(x["region_hit"] for x in part) / len(part), 4)}
+        for k in (3, 5, 8):
+            summary[part_name][f"combined_at{k}"] = round(sum(x[f"at{k}"] for x in part) / len(part), 4)
+            summary[part_name][f"combined_hits_at{k}"] = sum(x[f"at{k}"] for x in part)
+    write_json(os.path.join(label_dir(label), "m1p-combined.json"), {"label": label, "summary": summary, "rows": rows})
+    print(json.dumps(summary, indent=2))
+
+
+def m1p_explore(label, set_path, include_general, ks, budget):
+    regions_report = read_json(os.path.join(label_dir(label), "m1p-regions.json"))
+    texts = {q["id"]: q["text"] for q in seen_questions()}
+    if include_general:
+        texts.update({q["id"]: q["text"] for q in general_questions(set_path)})
+    items = []
+    for r in regions_report["rows"]:
+        if r["trial"] != 1 or r["qid"] not in texts or not r["picked"]:
+            continue
+        items.append({"id": r["qid"], "text": texts[r["qid"]], "regions": r["picked"]})
+    out = {}
+    for k in ks:
+        results = run_eval_set(label, items, ["--k", str(k), "--explore-budget", str(budget), "--limit", "8", "--with-text"], f"m1p-explore-k{k}")
+        chars = [x.get("explore_chars", 0) for x in results.values()]
+        ms = [x.get("explore_ms", 0) for x in results.values()]
+        shown = [len(x.get("shown", [])) for x in results.values()]
+        out[f"k{k}"] = {"questions": len(results), "chars_p50": percentile(chars, 0.5), "chars_max": max(chars) if chars else None,
+                        "explore_ms_p50": percentile(ms, 0.5), "explore_ms_p99": percentile(ms, 0.99), "shown_mean": round(sum(shown) / max(1, len(shown)), 2),
+                        "partial": sum(x.get("explore_status") == "partial" for x in results.values())}
+    write_json(os.path.join(label_dir(label), "m1p-explore.json"), {"label": label, "budget": budget, "summary": out})
+    print(json.dumps(out, indent=2))
+
+
+def m1p_calibrate(label, qid, k):
+    rows = [json.loads(line) for line in open(os.path.join(label_dir(label), f"m1p-explore-k{k}.jsonl"), encoding="utf-8") if line.strip()]
+    row = next(r for r in rows if r["id"] == qid)
+    path = os.path.join(label_dir(label), f"explore-{qid}-k{k}.txt")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(row["explore_text"])
+    record = call(label, f"X{qid}k{k}", 1, "Reply with the single word ok.", path, RUNS)
+    usage = record["result"].get("usage") or {}
+    total = usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+    base = first_usage("probe", "P")
+    tokens = total - base
+    result = {"qid": qid, "k": k, "chars": len(row["explore_text"]), "tokens": tokens, "chars_per_token": round(len(row["explore_text"]) / max(1, tokens), 3), "probe_base_tokens": base, "cost": record["result"].get("total_cost_usd")}
+    write_json(os.path.join(label_dir(label), f"m1p-calibration-{qid}-k{k}.json"), result)
+    print(json.dumps(result, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description="M1 map selection gate: the model picks regions and symbols from the map alone")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -974,7 +1248,55 @@ def main():
     m.add_argument("--hook-label", default="v2-24k")
     m.add_argument("--small-tokens", type=int, default=8000)
     sub.add_parser("spent")
+    ms = sub.add_parser("m1p-seen")
+    ms.add_argument("label")
+    ms.add_argument("--trials", type=int, default=3)
+    mg = sub.add_parser("m1p-general")
+    mg.add_argument("label")
+    mg.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
+    mc = sub.add_parser("m1p-score")
+    mc.add_argument("label")
+    mc.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
+    mr = sub.add_parser("m1p-rank")
+    mr.add_argument("label")
+    mr.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
+    mr.add_argument("--general", action="store_true")
+    mr.add_argument("--limit", type=int, default=50)
+    mb = sub.add_parser("m1p-combined")
+    mb.add_argument("label")
+    mb.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
+    me = sub.add_parser("m1p-explore")
+    me.add_argument("label")
+    me.add_argument("--set", default=os.path.join(RUNS, "general_set.json"))
+    me.add_argument("--general", action="store_true")
+    me.add_argument("--ks", default="3,5,8")
+    me.add_argument("--budget", type=int, default=12000)
+    mk = sub.add_parser("m1p-calibrate")
+    mk.add_argument("label")
+    mk.add_argument("--qid", default="S1")
+    mk.add_argument("--k", type=int, default=5)
     args = parser.parse_args()
+    if args.command == "m1p-seen":
+        m1p_seen(args.label, args.trials)
+        return
+    if args.command == "m1p-general":
+        m1p_general(args.label, args.set)
+        return
+    if args.command == "m1p-score":
+        m1p_score(args.label, args.set)
+        return
+    if args.command == "m1p-rank":
+        m1p_rank(args.label, args.set, args.general, args.limit)
+        return
+    if args.command == "m1p-combined":
+        m1p_combined(args.label, args.set)
+        return
+    if args.command == "m1p-explore":
+        m1p_explore(args.label, args.set, args.general, [int(k) for k in args.ks.split(",")], args.budget)
+        return
+    if args.command == "m1p-calibrate":
+        m1p_calibrate(args.label, args.qid, args.k)
+        return
     if args.command == "rank":
         rank_eval(args.label, args.set)
         return
@@ -1017,7 +1339,7 @@ def main():
     elif args.command == "probe":
         probe(args.label)
     elif args.command == "spent":
-        print(f"{spent():.4f}")
+        print(f"m1 {spent():.4f} m1p {spent(M1P_LEDGER):.4f}")
 
 
 if __name__ == "__main__":
