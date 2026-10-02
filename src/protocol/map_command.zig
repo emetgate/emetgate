@@ -81,6 +81,10 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.persist = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--fold-files")) {
+            options.map.fold_files = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--file-specificity")) {
             options.map.file_specificity = true;
             continue;

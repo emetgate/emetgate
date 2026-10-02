@@ -114,6 +114,7 @@ pub const MapOptions = struct {
     list_children: bool = true,
     region_balance: f64 = 0,
     file_specificity: bool = false,
+    fold_files: bool = false,
     cert: answer.Snapshot = .{ .barrier = 0, .root = std.mem.zeroes(answer.Digest) },
     fallback: ?*const MapTable = null,
 };
@@ -1181,7 +1182,8 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         if (reg.family == .code) code += 1 else tests += 1;
     }
     try w.print("# Project map\nsnapshot {s} | {d} files | {d} symbols | {d} regions ({d} code, {d} test){s}\n", .{ &short, b.files.len, b.syms.items.len, b.regions.items.len, code, tests, if (complete) " | every symbol is listed" else "" });
-    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), [more files; service{a, b} = a.service and b.service], #terms.\n");
+    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), ");
+    try w.writeAll(if (b.options.fold_files) "[more files; service{a, b} = a.service and b.service], #terms.\n" else "[more files], #terms.\n");
     try w.writeAll("emetgate_region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
     var names_count: u32 = 0;
     var files_count: u32 = 0;
@@ -1234,7 +1236,14 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
                         try w.writeAll(" [");
                         const stems = try arena.alloc([]const u8, shown_files.items.len);
                         for (shown_files.items, stems) |k, *stem| stem.* = fileStem(b.files[k].state.path);
-                        try writeFolded(arena, w, stems);
+                        if (b.options.fold_files) {
+                            try writeFolded(arena, w, stems);
+                        } else {
+                            for (stems, 0..) |stem, n| {
+                                if (n != 0) try w.writeAll(", ");
+                                try w.writeAll(stem);
+                            }
+                        }
                         try w.writeByte(']');
                         files_count += @intCast(shown_files.items.len);
                     }

@@ -33,12 +33,16 @@ def main():
         hits = 0
         for base in ("m1p-12k", "m1p-24k"):
             path = os.path.join(RUNS, base, f"m1p-rank-seen-idf{power}.json")
-            if not os.path.exists(path):
-                sys.exit(f"missing {path}")
-            hits += read(path)["summary"]["seen"]["hits_at5"]
-        powers.append((hits, -float(power), power))
+            if os.path.exists(path):
+                hits += read(path)["summary"]["seen"]["hits_at5"]
+            else:
+                hits = None
+                break
+        if hits is not None:
+            powers.append((hits, -float(power), power))
     powers.sort(reverse=True)
-    choice = {"label": label, "rank_args": f"--rank-idf-power {powers[0][2]}",
+    rank_args = f"--rank-idf-power {powers[0][2]}" if powers else ""
+    choice = {"label": label, "rank_args": rank_args,
               "seen_region_hits": [{"label": s[3], "hits": s[0]} for s in seen],
               "seen_rank_hits_at5_12k_plus_24k": [{"idf_power": p[2], "hits": p[0]} for p in powers]}
     with open(os.path.join(RUNS, "m1p-choice.json"), "w", encoding="utf-8", newline="\n") as f:
