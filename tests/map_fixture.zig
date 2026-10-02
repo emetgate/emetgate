@@ -79,6 +79,19 @@ const pick_ts =
     \\
 ;
 
+const notes_ts =
+    \\/** Sends the weekly digest email to every subscriber. */
+    \\export function dispatchBatch(items: string[]) { return items.length; }
+    \\export function weeklyReport() { return 1; }
+    \\
+;
+
+const auth_ts =
+    \\export function refreshExpiredToken(token: string) { return token.trim(); }
+    \\export function oauth2Client(scope: string) { return scope.trim(); }
+    \\
+;
+
 pub const RepoFiles = struct {
     repo: *Repo,
 
@@ -127,6 +140,8 @@ pub const Fixture = struct {
         _ = try f.repo.put("src/run/near.ts", near_ts);
         _ = try f.repo.put("src/run/outer.ts", outer_ts);
         _ = try f.repo.put("src/run/pick.ts", pick_ts);
+        _ = try f.repo.put("src/run/notes.ts", notes_ts);
+        _ = try f.repo.put("src/run/auth.ts", auth_ts);
         try f.repo.linkAll();
         f.built = try map.buildMap(f.arena(), &f.repo.store, .{});
     }
@@ -142,7 +157,7 @@ pub const Fixture = struct {
     pub fn ranked(f: *Fixture, question: []const u8) !rank.Ranking {
         const t = try f.arena().create(rank.Terms);
         t.* = try f.terms(question);
-        return rank.rankInRegion(f.arena(), &f.repo.store, &f.built, try f.region(), t, .{});
+        return rank.rankInRegion(f.arena(), &f.repo.store, &f.built, try f.region(), t, .{}, null);
     }
 
     pub fn view(f: *Fixture) evidence.FactStore {

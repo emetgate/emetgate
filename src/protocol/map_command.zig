@@ -231,7 +231,8 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
                 try out.print("refused: UnknownRegion (no region r{d}; the map has r1 to r{d})\n", .{ region + 1, built.regions.len });
                 return 2;
             }
-            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, &built, region, &terms, .{});
+            const index = try map_region_rank.Index.build(arena, &repo.store, &built, lex);
+            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, &built, region, &terms, .{}, index);
             try out.print("r{d} {s}: {d} functions in {d} files, {d} match\n", .{ region + 1, built.regions[region].path, ranked.candidates, ranked.files, ranked.matched });
             for (ranked.hits[0..@min(options.limit, ranked.hits.len)], 0..) |hit, i| {
                 try out.print("{d:>3} {d:.3} {s}  {s}:{d}\n", .{ i + 1, hit.score, hit.qname, hit.path, hit.line });
@@ -243,7 +244,8 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, out:
             defer lex.deinit();
             const terms = try map_region_rank.Terms.ofQuestion(arena, lex, options.question.?);
             const fs = try repo.factStore(arena);
-            const explored = try map_explore.explore(&fs, &built, options.regions[0..options.region_count], &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget });
+            const index = try map_region_rank.Index.build(arena, &repo.store, &built, lex);
+            const explored = try map_explore.explore(&fs, &built, options.regions[0..options.region_count], &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index });
             switch (explored) {
                 .complete => |c| try out.writeAll(c.value.text),
                 .partial => |p| try out.writeAll(p.value.text),
@@ -305,6 +307,11 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
     defer parsed.deinit();
     const lex = try question_lexicon.Lexicon.parse(gpa, question_lexicon.default_text);
     defer lex.deinit();
+    var index_arena = std.heap.ArenaAllocator.init(gpa);
+    defer index_arena.deinit();
+    const index_started = clock.monotonic();
+    const index = try map_region_rank.Index.build(index_arena.allocator(), &repo.store, built, lex);
+    const index_ns = nanosSince(clock, index_started);
     for (parsed.value.questions) |item| {
         var scratch = std.heap.ArenaAllocator.init(gpa);
         defer scratch.deinit();
@@ -319,6 +326,8 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
         try js.beginObject();
         try js.objectField("id");
         try js.write(item.id);
+        try js.objectField("index_ms");
+        try js.write(@as(f64, @floatFromInt(index_ns)) / 1e6);
         try js.objectField("concepts");
         try js.beginArray();
         for (terms.concepts) |c| {
@@ -331,7 +340,7 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
         try js.beginArray();
         for (ids.items) |id| {
             const started = clock.monotonic();
-            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, built, id, &terms, .{});
+            const ranked = try map_region_rank.rankInRegion(arena, &repo.store, built, id, &terms, .{}, index);
             const spent = nanosSince(clock, started);
             try js.beginObject();
             try js.objectField("region");
@@ -361,7 +370,7 @@ fn evaluate(gpa: Allocator, io: std.Io, clock: io_seam.Clock, repo: *fact_store.
         if (ids.items.len != 0 and ids.items.len <= map_explore.max_regions) {
             const fs = try repo.factStore(arena);
             const started = clock.monotonic();
-            const explored = try map_explore.explore(&fs, built, ids.items, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget });
+            const explored = try map_explore.explore(&fs, built, ids.items, &terms, .{ .k = options.k, .list = options.list, .budget = options.explore_budget, .index = index });
             const spent = nanosSince(clock, started);
             try js.objectField("explore_ms");
             try js.write(@as(f64, @floatFromInt(spent)) / 1e6);

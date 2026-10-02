@@ -9,6 +9,7 @@ const rank = @import("map_region_rank.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
+const Store = facts_store.Store;
 const FileState = facts_store.FileState;
 const none = facts.none;
 
@@ -16,6 +17,7 @@ pub const default_budget: usize = 12_000;
 pub const min_budget: usize = 2_000;
 pub const max_regions: usize = 3;
 pub const min_term_len: usize = 3;
+pub const max_doc_chars: usize = 100;
 const reserve: usize = 360;
 
 pub const Level = enum { names, files, dirs };
@@ -26,6 +28,7 @@ pub const Options = struct {
     budget: usize = default_budget,
     code_percent: u32 = 70,
     intent: evidence.Intent = .decides,
+    index: ?*rank.Index = null,
     include: evidence.Include = .{ .callers = false, .callees = false, .tests = false },
     params: rank.Params = .{},
 };
@@ -178,12 +181,21 @@ fn truncated(arena: Allocator, region: *const map.Region, files: []const rank.Re
     return .{ .text = out.written(), .level = .dirs, .cut = cut };
 }
 
-fn writeList(w: *Writer, m: *const map.Map, region_id: map.RegionId, ranking: rank.Ranking, list: u32, shown: []const Shown) !void {
+fn clipped(text: []const u8, limit: usize) []const u8 {
+    if (text.len <= limit) return text;
+    var end = limit;
+    while (end > 0 and (text[end] & 0xC0) == 0x80) end -= 1;
+    return text[0..end];
+}
+
+fn writeList(w: *Writer, store: *const Store, m: *const map.Map, region_id: map.RegionId, ranking: rank.Ranking, list: u32, shown: []const Shown) !void {
     const region = &m.regions[region_id];
     const count = @min(list, ranking.hits.len);
     try w.print("r{d} {s}: {d} functions in {d} files, {d} match the terms; top {d}:\n", .{ region_id + 1, region.path, ranking.candidates, ranking.files, ranking.matched, count });
     for (ranking.hits[0..count], 0..) |hit, i| {
         try w.print("{d:>3} {s}  {s}:{d}", .{ i + 1, hit.qname, relative(region, hit.path), hit.line });
+        const doc = store.file(hit.file).facts.defs[hit.def].doc;
+        if (doc.len != 0) try w.print(" - {s}", .{clipped(doc, max_doc_chars)});
         for (shown) |s| {
             if (s.region == region_id and s.rank == i) {
                 try w.writeAll(" *");
@@ -248,7 +260,7 @@ pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const
     const files_of = try arena.alloc([]const rank.RegionFile, regions.len);
     for (regions, rankings, files_of) |r, *ranking, *files| {
         files.* = try rank.regionFiles(arena, store, m, &m.regions[r]);
-        ranking.* = try rank.rankFiles(arena, files.*, &m.regions[r], terms, options.params);
+        ranking.* = try rank.rankFiles(arena, files.*, &m.regions[r], terms, options.params, options.index);
     }
 
     var targets: std.ArrayList(Target) = .empty;
@@ -289,7 +301,7 @@ pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const
     var lists_len: usize = 0;
     for (regions, rankings) |r, ranking| {
         var probe: Writer.Allocating = .init(arena);
-        try writeList(&probe.writer, m, r, ranking, options.list, &.{});
+        try writeList(&probe.writer, store, m, r, ranking, options.list, &.{});
         lists_len += probe.written().len;
     }
     const total = budget -| reserve;
@@ -409,7 +421,7 @@ pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const
     var out: Writer.Allocating = .init(arena);
     const w = &out.writer;
     try w.writeAll(head.written());
-    for (regions, rankings) |r, ranking| try writeList(w, m, r, ranking, options.list, shown.items);
+    for (regions, rankings) |r, ranking| try writeList(w, store, m, r, ranking, options.list, shown.items);
     try w.writeAll(code_text);
     try w.writeAll(code_note);
     for (listings.items) |text| try w.writeAll(text);
