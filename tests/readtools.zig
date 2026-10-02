@@ -143,14 +143,24 @@ test "read_file on a file another handle holds without sharing fails as busy wit
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "held.txt", .data = "held text\n" });
     const path = try tmp.dir.realPathFileAlloc(testing.io, "held.txt", testing.allocator);
     defer testing.allocator.free(path);
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
     const holder = try holdWithoutSharing(path);
     defer std.os.windows.CloseHandle(holder);
 
+    var line: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer line.deinit();
+    var js: std.json.Stringify = .{ .writer = &line.writer };
+    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_read_file", .arguments = .{ .file = path } } });
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
     const started = std.Io.Clock.awake.now(testing.io).nanoseconds;
-    try expectToolError(runtime, "emetgate_read_file", .{ .file = path }, "FileBusy");
+    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
     const elapsed = std.Io.Clock.awake.now(testing.io).nanoseconds - started;
+    errdefer std.debug.print("{s}\n", .{out.written()});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "FileBusy") != null);
     try testing.expect(elapsed < 50 * std.time.ns_per_ms);
 }
 
