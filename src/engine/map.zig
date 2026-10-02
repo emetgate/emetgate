@@ -113,6 +113,7 @@ pub const MapOptions = struct {
     damping: f64 = 0.3,
     list_children: bool = true,
     region_balance: f64 = 0,
+    file_specificity: bool = false,
     cert: answer.Snapshot = .{ .barrier = 0, .root = std.mem.zeroes(answer.Digest) },
     fallback: ?*const MapTable = null,
 };
@@ -785,6 +786,38 @@ const Planner = struct {
         }
     }
 
+    fn stemSpecificity(self: *Planner) ![]f32 {
+        const b = self.b;
+        var df: std.StringHashMapUnmanaged(u32) = .empty;
+        var words: std.ArrayList(std.ArrayList([]const u8)) = .empty;
+        var code_files: u32 = 0;
+        for (b.files) |f| {
+            var list: std.ArrayList([]const u8) = .empty;
+            if (f.family == .code) {
+                code_files += 1;
+                var collect: WordSink = .{ .arena = b.arena, .out = &list };
+                try map_terms.eachPart(fileStem(f.state.path), &collect);
+                for (list.items) |word| {
+                    const entry = try df.getOrPut(b.arena, word);
+                    if (!entry.found_existing) entry.value_ptr.* = 0;
+                    entry.value_ptr.* += 1;
+                }
+            }
+            try words.append(b.arena, list);
+        }
+        const top = @log(@as(f64, @floatFromInt(@max(code_files, 2))));
+        const out = try b.arena.alloc(f32, b.files.len);
+        for (words.items, out) |list, *slot| {
+            var best: f64 = 0;
+            for (list.items) |word| {
+                const count: f64 = @floatFromInt(df.get(word) orelse 1);
+                best = @max(best, @log(@as(f64, @floatFromInt(@max(code_files, 2))) / count));
+            }
+            slot.* = @floatCast(@max(0.05, @min(1.0, best / top)));
+        }
+        return out;
+    }
+
     fn select(self: *Planner, item_budget: u64) !Selection {
         const b = self.b;
         const weights = try b.arena.alloc(f64, self.code_syms.len);
@@ -827,6 +860,7 @@ const Planner = struct {
             try candidates.append(b.arena, .{ .cost = @intCast(self.stems.display(t.stem).len + 2), .covers = t.covers });
         }
         const terms_end = candidates.items.len;
+        const specific = if (b.options.file_specificity) try self.stemSpecificity() else null;
         var file_of: std.ArrayList(u32) = .empty;
         for (b.files, 0..) |f, k| {
             if (f.family != .code or f.symbol_count == 0 or self.file_shown[k]) continue;
@@ -836,7 +870,8 @@ const Planner = struct {
             while (s < f.first_symbol + f.symbol_count) : (s += 1) {
                 const e = self.element_of[s];
                 if (e == none) continue;
-                covers[n] = .{ .element = e, .value = b.options.file_value };
+                const factor: f32 = if (specific) |sp| sp[k] else 1;
+                covers[n] = .{ .element = e, .value = b.options.file_value * factor };
                 n += 1;
             }
             if (n == 0) continue;
@@ -862,6 +897,68 @@ const Planner = struct {
         return .{ .names = names, .terms = self.term_candidates, .chosen_terms = chosen_terms, .files = chosen_files, .forced = self.forced };
     }
 };
+
+const WordSink = struct {
+    arena: Allocator,
+    out: *std.ArrayList([]const u8),
+
+    pub fn part(self: *WordSink, text: []const u8) !void {
+        if (map_terms.isStop(text)) return;
+        var buf: [map_terms.max_part]u8 = undefined;
+        const word = map_terms.stem(text, &buf);
+        for (self.out.items) |seen| {
+            if (std.mem.eql(u8, seen, word)) return;
+        }
+        try self.out.append(self.arena, try self.arena.dupe(u8, word));
+    }
+};
+
+fn stemKind(stem: []const u8) []const u8 {
+    const dot = std.mem.indexOfScalar(u8, stem, '.') orelse return "";
+    return stem[dot + 1 ..];
+}
+
+fn stemBase(stem: []const u8) []const u8 {
+    const dot = std.mem.indexOfScalar(u8, stem, '.') orelse return stem;
+    return stem[0..dot];
+}
+
+fn writeFolded(arena: Allocator, w: *Writer, stems: []const []const u8) !void {
+    var kinds: std.ArrayList([]const u8) = .empty;
+    for (stems) |stem| {
+        const kind = stemKind(stem);
+        for (kinds.items) |k| {
+            if (std.mem.eql(u8, k, kind)) break;
+        } else try kinds.append(arena, kind);
+    }
+    var first = true;
+    for (kinds.items) |kind| {
+        var members: usize = 0;
+        for (stems) |stem| {
+            if (std.mem.eql(u8, stemKind(stem), kind)) members += 1;
+        }
+        if (kind.len == 0 or members < 2) {
+            for (stems) |stem| {
+                if (!std.mem.eql(u8, stemKind(stem), kind)) continue;
+                if (!first) try w.writeAll(", ");
+                first = false;
+                try w.writeAll(stem);
+            }
+            continue;
+        }
+        if (!first) try w.writeAll(", ");
+        first = false;
+        try w.print("{s}{{", .{kind});
+        var n: usize = 0;
+        for (stems) |stem| {
+            if (!std.mem.eql(u8, stemKind(stem), kind)) continue;
+            if (n != 0) try w.writeAll(", ");
+            n += 1;
+            try w.writeAll(stemBase(stem));
+        }
+        try w.writeByte('}');
+    }
+}
 
 fn fileStem(path: []const u8) []const u8 {
     const base = basename(path);
@@ -1084,7 +1181,7 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         if (reg.family == .code) code += 1 else tests += 1;
     }
     try w.print("# Project map\nsnapshot {s} | {d} files | {d} symbols | {d} regions ({d} code, {d} test){s}\n", .{ &short, b.files.len, b.syms.items.len, b.regions.items.len, code, tests, if (complete) " | every symbol is listed" else "" });
-    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), [more files], #terms.\n");
+    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), [more files; service{a, b} = a.service and b.service], #terms.\n");
     try w.writeAll("emetgate_region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
     var names_count: u32 = 0;
     var files_count: u32 = 0;
@@ -1135,10 +1232,9 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
                     if (shown_files.items.len != 0) {
                         std.mem.sort(u32, shown_files.items, FileMass{ .b = b, .planner = planner }, FileMass.more);
                         try w.writeAll(" [");
-                        for (shown_files.items, 0..) |k, n| {
-                            if (n != 0) try w.writeAll(", ");
-                            try w.writeAll(fileStem(b.files[k].state.path));
-                        }
+                        const stems = try arena.alloc([]const u8, shown_files.items.len);
+                        for (shown_files.items, stems) |k, *stem| stem.* = fileStem(b.files[k].state.path);
+                        try writeFolded(arena, w, stems);
                         try w.writeByte(']');
                         files_count += @intCast(shown_files.items.len);
                     }
@@ -1309,4 +1405,14 @@ fn regionByPath(map: *const Map, path: []const u8) ?RegionId {
         }
     }
     return best;
+}
+
+const testing = std.testing;
+
+test "map: file names that share a kind are folded under the kind and the rest stay whole" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var out: Writer.Allocating = .init(arena_state.allocator());
+    try writeFolded(arena_state.allocator(), &out.writer, &.{ "import.service", "user.service", "gamma", "role.ee" });
+    try testing.expectEqualStrings("service{import, user}, gamma, role.ee", out.written());
 }

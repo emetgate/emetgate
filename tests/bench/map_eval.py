@@ -1178,7 +1178,7 @@ def m1p_combined(label, set_path):
     print(json.dumps(summary, indent=2))
 
 
-def m1p_explore(label, set_path, include_general, ks, budget):
+def m1p_explore(label, set_path, include_general, ks, budget, rank_args=()):
     regions_report = read_json(os.path.join(label_dir(label), "m1p-regions.json"))
     texts = {q["id"]: q["text"] for q in seen_questions()}
     if include_general:
@@ -1190,7 +1190,7 @@ def m1p_explore(label, set_path, include_general, ks, budget):
         items.append({"id": r["qid"], "text": texts[r["qid"]], "regions": r["picked"]})
     out = {}
     for k in ks:
-        results = run_eval_set(label, items, ["--k", str(k), "--explore-budget", str(budget), "--limit", "8", "--with-text"], f"m1p-explore-k{k}")
+        results = run_eval_set(label, items, ["--k", str(k), "--explore-budget", str(budget), "--limit", "8", "--with-text", *rank_args], f"m1p-explore-k{k}")
         chars = [x.get("explore_chars", 0) for x in results.values()]
         ms = [x.get("explore_ms", 0) for x in results.values()]
         shown = [len(x.get("shown", [])) for x in results.values()]
@@ -1435,6 +1435,7 @@ def main():
     me.add_argument("--general", action="store_true")
     me.add_argument("--ks", default="3,5,8")
     me.add_argument("--budget", type=int, default=12000)
+    me.add_argument("--rank-args", default="")
     mo = sub.add_parser("m1p-cost")
     mo.add_argument("label")
     mo.add_argument("--k", type=int, default=5)
@@ -1462,7 +1463,7 @@ def main():
         m1p_combined(args.label, args.set)
         return
     if args.command == "m1p-explore":
-        m1p_explore(args.label, args.set, args.general, [int(k) for k in args.ks.split(",")], args.budget)
+        m1p_explore(args.label, args.set, args.general, [int(k) for k in args.ks.split(",")], args.budget, args.rank_args.split())
         return
     if args.command == "m1p-cost":
         m1p_cost(args.label, args.k, args.explore_tokens)
