@@ -7295,6 +7295,172 @@
       "note": "a file another program holds open would be reported as gone"
     },
     {
+      "id": "OL1-single-line-branch-not-kept",
+      "file": "src/engine/facts_outline.zig",
+      "from": "const keep = flags.comment or flags.branch or ((flags.statement or flags.function) and multiline);",
+      "to": "const keep = flags.comment or ((flags.branch or flags.statement or flags.function) and multiline);",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a decides cut would keep a whole large branch where the parse tree keeps the one-line return inside it"
+    },
+    {
+      "id": "OL2-comment-not-kept",
+      "file": "src/engine/facts_outline.zig",
+      "from": "            .comment = comment,\n",
+      "to": "            .comment = false,\n",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a term found in a comment would no longer bring the statement the comment describes"
+    },
+    {
+      "id": "OL3-parent-link-dropped",
+      "file": "src/engine/facts_outline.zig",
+      "from": "const parent = if (open.items.len == 0) none else open.items[open.items.len - 1];",
+      "to": "const parent = if (open.items.len == 0) none else none;",
+      "kills": [
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a cut body would lose the headers of the blocks around a relevant line"
+    },
+    {
+      "id": "OL4-signature-cut-to-one-line",
+      "file": "src/engine/facts_outline.zig",
+      "from": "const body_line = if (def.body_start != none and def.body_start >= def.span.start and def.body_start < def.span.end) lines.lineAt(def.body_start) else first;",
+      "to": "const body_line = first;",
+      "kills": [
+        "outline: a definition keeps its whole signature up to the line where its body opens",
+        "evidence: a function that does not fit keeps its whole signature up to the line where its body opens"
+      ],
+      "note": "a cut function would show only the first line of a signature that spans several"
+    },
+    {
+      "id": "EV10b-outline-comment-not-followed",
+      "file": "src/engine/facts_outline.zig",
+      "from": "if (follow and chain.len != 0 and outline[chain[0]].kind.comment) {",
+      "to": "if (follow and chain.len != 0 and false) {",
+      "kills": [
+        "evidence: a term found in a comment brings the statement the comment describes",
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a term found in a comment would show the comment without the code it describes"
+    },
+    {
+      "id": "EV11b-outline-function-header-dropped",
+      "file": "src/engine/facts_outline.zig",
+      "from": "if (!counts(kind, branches) and !kind.function) continue;",
+      "to": "if (!counts(kind, branches)) continue;",
+      "kills": [
+        "evidence: a cut class keeps the header of the method that holds a relevant line",
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
+      ],
+      "note": "a block inside a method of a cut class would appear without the method it belongs to"
+    },
+    {
+      "id": "TS1-test-file-not-recognized",
+      "file": "src/engine/facts_tests.zig",
+      "from": "if (std.mem.indexOf(u8, name, infix) != null) return true;",
+      "to": "if (std.mem.indexOf(u8, name, infix) != null) return false;",
+      "kills": [
+        "test blocks: test files are the ones the profile names, by test and spec infixes and __tests__ folders",
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "the tests of a target would vanish from the evidence"
+    },
+    {
+      "id": "TS2-by-name-tests-dropped",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!found.ref.kind.invokes() or !facts_query.bindable(reason)) continue;",
+      "to": "if (!found.ref.kind.invokes() or !facts_query.bindable(reason) or true) continue;",
+      "kills": [
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "a test that calls the target on a receiver of unknown type would not be named"
+    },
+    {
+      "id": "TS3-tests-switch-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": ".tests = request.include.tests orelse (intent != .where_defined),",
+      "to": ".tests = intent != .where_defined,",
+      "kills": [
+        "evidence: the tests that reference a target are listed by test name with how each was bound",
+        "evidence: the include field adds the callers to an explain answer and takes the tests away"
+      ],
+      "note": "a request that turns the tests off would still get them"
+    },
+    {
+      "id": "TS4-callers-switch-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": ".callers = request.include.callers orelse (intent == .callers or intent == .flow),",
+      "to": ".callers = intent == .callers or intent == .flow,",
+      "kills": [
+        "evidence: the include field adds the callers to an explain answer and takes the tests away"
+      ],
+      "note": "a request that asks for callers with another intent would not get them"
+    },
+    {
+      "id": "TS5-test-title-chain-flattened",
+      "file": "src/engine/facts_tests.zig",
+      "from": "if (i != chain.items.len) try out.appendSlice(arena, \" > \");",
+      "to": "if (i != chain.items.len) try out.appendSlice(arena, \"\");",
+      "kills": [
+        "test blocks: describe, it and test calls become nested blocks with their titles and lines",
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "a test name would run its describe titles together"
+    },
+    {
+      "id": "TS6-curried-inner-call-taken-for-a-test",
+      "file": "src/engine/facts_tests.zig",
+      "from": "if (entry.field) |field| if (std.mem.eql(u8, field, profile.call.function_field)) continue;",
+      "to": "if (entry.field) |field| if (std.mem.eql(u8, field, \"\")) continue;",
+      "kills": [
+        "test blocks: describe, it and test calls become nested blocks with their titles and lines"
+      ],
+      "note": "describe.each would add a block titled with its table"
+    },
+    {
+      "id": "BS1-budget-not-shared",
+      "file": "src/engine/evidence.zig",
+      "from": "const share = remaining / (plans.len - i);",
+      "to": "const share = remaining / @min(plans.len - i, 1);",
+      "kills": [
+        "evidence: two targets that do not fit share the budget in request order and both keep their signature and term lines"
+      ],
+      "note": "the first target would take the whole budget and the next ones would be dropped"
+    },
+    {
+      "id": "FF1-outline-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "try e.varint(f.outline.len);\n    var previous: u32 = 0;\n    for (f.outline, 0..) |o, i| {",
+      "to": "try e.varint(0);\n    var previous: u32 = 0;\n    for (f.outline[0..0], 0..) |o, i| {",
+      "kills": [
+        "fact store: a saved store opens again with every outline node, test block and body start it was saved with"
+      ],
+      "note": "a store opened from disk would cut bodies without their statements"
+    },
+    {
+      "id": "FF2-body-start-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "try e.varint(if (d.body_start == none) 0 else @as(u64, d.body_start - d.span.start) + 1);",
+      "to": "try e.varint(0);",
+      "kills": [
+        "fact store: a saved store opens again with every outline node, test block and body start it was saved with"
+      ],
+      "note": "a store opened from disk would forget where each signature ends"
+    },
+    {
+      "id": "FF3-test-blocks-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "try e.varint(f.tests.len);\n    previous = 0;\n    for (f.tests, 0..) |t, i| {",
+      "to": "try e.varint(0);\n    previous = 0;\n    for (f.tests[0..0], 0..) |t, i| {",
+      "kills": [
+        "fact store: a saved store opens again with every outline node, test block and body start it was saved with"
+      ],
+      "note": "a store opened from disk would name no test"
+    },
+    {
       "id": "EV9-long-line-not-cut",
       "file": "src/engine/evidence.zig",
       "from": "if (text.len <= max_line_chars) return",
@@ -7310,9 +7476,9 @@
       "from": "if (follow and oneOf(leaf.kind(), profile.comments)) {",
       "to": "if (follow and oneOf(leaf.kind(), &.{})) {",
       "kills": [
-        "evidence: a term found in a comment brings the statement the comment describes"
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
       ],
-      "note": "a term found in a comment would show the comment without the code it describes"
+      "note": "the parse tree spine would show a comment without the code it describes and part from the outline"
     },
     {
       "id": "EV11-enclosing-function-header-dropped",
@@ -7320,9 +7486,9 @@
       "from": " and profile.functionKind(outer.kind()) == null) continue;",
       "to": ") continue;",
       "kills": [
-        "evidence: a cut class keeps the header of the method that holds a relevant line"
+        "outline: every line of every definition gets the same complete unit from the stored outline as from the parse tree"
       ],
-      "note": "a block inside a method of a cut class would appear without the method it belongs to"
+      "note": "the parse tree spine would drop the header of the method around a block and part from the outline"
     },
     {
       "id": "EV12-partial-reason-not-given",
