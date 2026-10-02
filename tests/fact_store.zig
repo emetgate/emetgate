@@ -412,7 +412,7 @@ test "fact store: evidence refreshes a file changed after the snapshot and quote
     try testing.expect(repo.snapshot().barrier > before);
 }
 
-test "fact store: evidence of a target whose file was deleted on disk is partial and names the file deleted" {
+test "fact store: evidence of a target whose file was deleted on disk is partial and names the file vanished" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     var fixture = try Fixture.init(&.{
@@ -428,9 +428,9 @@ test "fact store: evidence of a target whose file was deleted on disk is partial
     const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try evidenceText(result);
-    try testing.expect(std.mem.indexOf(u8, text, evidence.deleted_note) != null);
+    try testing.expect(std.mem.indexOf(u8, text, evidence.vanished_note) != null);
     try testing.expect(std.mem.indexOf(u8, text, "\nPartial because: 1 files no longer exist.\n") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "missing 1 deleted") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "missing 1 vanished") != null);
 }
 
 test "fact store: evidence of a target whose file grew over the size limit names the declared exclusion and its limit" {

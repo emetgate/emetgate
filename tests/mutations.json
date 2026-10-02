@@ -7225,14 +7225,14 @@
       "note": "a target whose file changed after the snapshot would not make the answer partial"
     },
     {
-      "id": "EV16-deleted-file-named-unreadable",
+      "id": "EV16-vanished-file-named-unreadable",
       "file": "src/engine/evidence.zig",
-      "from": "error.Deleted => try self.unread.put(self.arena, path, .deleted),",
-      "to": "error.Deleted => try self.unread.put(self.arena, path, .unreadable),",
+      "from": "error.Vanished => try self.unread.put(self.arena, path, .vanished),",
+      "to": "error.Vanished => try self.unread.put(self.arena, path, .unreadable),",
       "kills": [
-        "evidence: a target whose file was deleted is named, never shown, and the answer is partial with the file deleted"
+        "evidence: a target whose file was deleted is named, never shown, and the answer is partial with the file vanished"
       ],
-      "note": "a deleted file would be reported as a file that cannot be read"
+      "note": "a file gone from disk would be reported as a file that cannot be read"
     },
     {
       "id": "EV17-large-file-not-excluded",
@@ -7247,22 +7247,22 @@
     {
       "id": "EV18-missing-file-read-as-unreadable",
       "file": "src/platform/fact_store.zig",
-      "from": "error.FileNotFound, error.IsDir => .deleted,",
+      "from": "error.FileNotFound, error.IsDir => .vanished,",
       "to": "error.FileNotFound, error.IsDir => .unreadable,",
       "kills": [
-        "fact store: evidence of a target whose file was deleted on disk is partial and names the file deleted"
+        "fact store: evidence of a target whose file was deleted on disk is partial and names the file vanished"
       ],
       "note": "a file deleted on disk would be reported as locked"
     },
     {
-      "id": "EV19-large-file-read-as-deleted",
+      "id": "EV19-large-file-read-as-vanished",
       "file": "src/platform/fact_store.zig",
       "from": "error.StreamTooLong => .too_large,",
-      "to": "error.StreamTooLong => .deleted,",
+      "to": "error.StreamTooLong => .vanished,",
       "kills": [
         "fact store: evidence of a target whose file grew over the size limit names the declared exclusion and its limit"
       ],
-      "note": "a file over the size limit would be reported as deleted"
+      "note": "a file over the size limit would be reported as gone"
     },
     {
       "id": "EV20-changed-file-not-refreshed",
@@ -7285,14 +7285,14 @@
       "note": "a file left out by the size rule would not be named with its limit"
     },
     {
-      "id": "EV22-locked-file-read-as-deleted",
+      "id": "EV22-locked-file-read-as-vanished",
       "file": "src/platform/fact_store.zig",
       "from": "error.FileBusy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,",
-      "to": "error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,\n            error.FileBusy => .deleted,",
+      "to": "error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,\n            error.FileBusy => .vanished,",
       "kills": [
         "fact store: evidence of a target whose file another handle holds is partial at once and names the file unreadable"
       ],
-      "note": "a file another program holds open would be reported as deleted"
+      "note": "a file another program holds open would be reported as gone"
     },
     {
       "id": "EV9-long-line-not-cut",

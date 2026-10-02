@@ -31,7 +31,7 @@ pub const cut_reserve: usize = 120;
 pub const max_call_lines: usize = 6;
 
 pub const open_note = "an edge not in this list does not mean there is none";
-pub const deleted_note = "(not shown: the file no longer exists)";
+pub const vanished_note = "(not shown: the file no longer exists)";
 pub const changed_note = "(not shown: the file changed after the snapshot)";
 pub const large_note = "(not shown: the file is over the size limit)";
 pub const unreadable_note = "(not shown: the file cannot be read)";
@@ -294,7 +294,7 @@ const Builder = struct {
             switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.Changed => try self.unread.put(self.arena, path, .changed_since_snapshot),
-                error.Deleted => try self.unread.put(self.arena, path, .deleted),
+                error.Vanished => try self.unread.put(self.arena, path, .vanished),
                 error.Unreadable => try self.unread.put(self.arena, path, .unreadable),
                 error.TooLarge => try self.excluded.put(self.arena, path, {}),
             }
@@ -309,7 +309,7 @@ const Builder = struct {
         if (self.excluded.contains(path)) return large_note;
         const reason = self.unread.get(path) orelse return unreadable_note;
         return switch (reason) {
-            .deleted => deleted_note,
+            .vanished => vanished_note,
             .changed_since_snapshot => changed_note,
             else => unreadable_note,
         };
@@ -770,7 +770,7 @@ const Builder = struct {
         if (by_reason.get(.unclassified) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files that name it were not analyzed (another language or syntax errors)", .{by_reason.get(.unclassified)}));
         if (by_reason.get(.too_large) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files over the size limit were not read", .{by_reason.get(.too_large)}));
         if (by_reason.get(.unreadable) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files could not be read (locked or access denied)", .{by_reason.get(.unreadable)}));
-        if (by_reason.get(.deleted) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files no longer exist", .{by_reason.get(.deleted)}));
+        if (by_reason.get(.vanished) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files no longer exist", .{by_reason.get(.vanished)}));
         if (by_reason.get(.changed_since_snapshot) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files changed after the snapshot and could not be refreshed", .{by_reason.get(.changed_since_snapshot)}));
         if (by_reason.get(.budget) != 0) try parts.append(self.arena, try std.fmt.allocPrint(self.arena, "{d} files not shown in full within the budget, each gap marked", .{by_reason.get(.budget)}));
         var w: Writer.Allocating = .init(self.arena);

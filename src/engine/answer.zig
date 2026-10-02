@@ -146,7 +146,6 @@ pub const Reason = enum {
     match_limit,
     unclassified,
     unresolved,
-    deleted,
     changed_since_snapshot,
 
     pub fn fileLevel(self: Reason) bool {
@@ -158,7 +157,7 @@ pub const Reason = enum {
             .too_large => .file_bytes,
             .budget => .steps,
             .match_limit => .matches,
-            .unreadable, .vanished, .unclassified, .unresolved, .deleted, .changed_since_snapshot => null,
+            .unreadable, .vanished, .unclassified, .unresolved, .changed_since_snapshot => null,
         };
     }
 };

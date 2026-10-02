@@ -645,7 +645,7 @@ pub const SourceLines = struct {
     arena: Allocator,
     files: std.StringArrayHashMapUnmanaged(Cached) = .empty,
 
-    pub const Cached = union(enum) { bytes: []const u8, changed: []const u8, deleted, too_large, unreadable };
+    pub const Cached = union(enum) { bytes: []const u8, changed: []const u8, vanished, too_large, unreadable };
 
     pub fn source(self: *SourceLines) facts_evidence.Source {
         return .{ .ctx = self, .fileFn = fileOf };
@@ -653,8 +653,8 @@ pub const SourceLines = struct {
 
     fn fileOf(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
         const self: *SourceLines = @ptrCast(@alignCast(ctx));
-        const id = self.repo.store.fileId(path) orelse return error.Deleted;
-        const profile = self.repo.store.file(id).profile orelse return error.Deleted;
+        const id = self.repo.store.fileId(path) orelse return error.Vanished;
+        const profile = self.repo.store.file(id).profile orelse return error.Vanished;
         const cached = self.files.get(path) orelse blk: {
             const loaded = try self.load(path, id);
             try self.files.put(self.arena, path, loaded);
@@ -663,7 +663,7 @@ pub const SourceLines = struct {
         return switch (cached) {
             .bytes => |bytes| .{ .bytes = bytes, .profile = profile },
             .changed => error.Changed,
-            .deleted => error.Deleted,
+            .vanished => error.Vanished,
             .too_large => error.TooLarge,
             .unreadable => error.Unreadable,
         };
@@ -673,7 +673,7 @@ pub const SourceLines = struct {
         const abs = try std.fmt.allocPrint(self.arena, "{s}\\{s}", .{ self.repo.options.root_abs, path });
         const bytes = readSource(self.repo, self.arena, abs) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
-            error.FileNotFound, error.IsDir => .deleted,
+            error.FileNotFound, error.IsDir => .vanished,
             error.StreamTooLong => .too_large,
             error.FileBusy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,
         };

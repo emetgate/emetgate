@@ -11,13 +11,13 @@ const testing = std.testing;
 const RepoFiles = struct {
     repo: *Repo,
     failing: []const u8 = "",
-    failure: facts_evidence.SourceError = error.Deleted,
+    failure: facts_evidence.SourceError = error.Vanished,
 
     fn file(ctx: *anyopaque, path: []const u8) facts_evidence.SourceError!facts_evidence.File {
         const self: *RepoFiles = @ptrCast(@alignCast(ctx));
         if (std.mem.eql(u8, path, self.failing)) return self.failure;
-        const bytes = self.repo.sources.get(path) orelse return error.Deleted;
-        const profile = emetgate.lang_registry.forPath(path) orelse return error.Deleted;
+        const bytes = self.repo.sources.get(path) orelse return error.Vanished;
+        const profile = emetgate.lang_registry.forPath(path) orelse return error.Vanished;
         return .{ .bytes = bytes, .profile = profile };
     }
 
@@ -324,16 +324,16 @@ test "evidence: a target whose file changed after the snapshot is named, never s
     try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 changed_since_snapshot") != null);
 }
 
-test "evidence: a target whose file was deleted is named, never shown, and the answer is partial with the file deleted" {
+test "evidence: a target whose file was deleted is named, never shown, and the answer is partial with the file vanished" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
-    const result = try askFailing(&f, error.Deleted);
+    const result = try askFailing(&f, error.Vanished);
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.deleted_note ++ "  [target f ", "\nPartial because: 1 files no longer exist.\n" });
+    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.vanished_note ++ "  [target f ", "\nPartial because: 1 files no longer exist.\n" });
     try expectNoLine(text, "return 1;");
-    try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 deleted") != null);
+    try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 vanished") != null);
 }
 
 test "evidence: a target whose file cannot be read is named, never shown, and the answer is partial with the file unreadable" {
