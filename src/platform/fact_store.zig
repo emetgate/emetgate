@@ -119,7 +119,8 @@ pub fn tokensOf(arena: Allocator, bytes: []const u8) ![]const []const u8 {
         }
         const start = i;
         while (i < bytes.len and (std.ascii.isAlphanumeric(bytes[i]) or bytes[i] == '_' or bytes[i] == '$')) i += 1;
-        try seen.put(arena, bytes[start..i], {});
+        const entry = try seen.getOrPut(arena, bytes[start..i]);
+        if (!entry.found_existing) entry.key_ptr.* = try arena.dupe(u8, bytes[start..i]);
     }
     return seen.keys();
 }
