@@ -20,7 +20,35 @@ const Value = std.json.Value;
 const ToolResult = tool_result.ToolResult;
 
 pub const map_budget_tokens: u32 = 8_000;
-pub const reply_budget: usize = 16_000;
+pub const reply_budget: usize = 63_000;
+pub const pointer_budget: usize = 3_000;
+pub const max_anchors: usize = 12;
+pub const graph_depth: u32 = 4;
+pub const max_graph_nodes: usize = 400;
+pub const max_users_per_node: usize = 24;
+pub const max_linked_fields: usize = 16;
+pub const callee_weight: f64 = 1.0;
+pub const caller_weight: f64 = 0.7;
+pub const field_weight: f64 = 0.8;
+pub const key_weight: f64 = 0.8;
+pub const walk_continue: f64 = 0.7;
+pub const diffusion_rounds: usize = 25;
+pub const decision_weight: f64 = 1.0;
+pub const node_call_weight: f64 = 0.8;
+pub const term_weight: f64 = 0.6;
+pub const plain_weight: f64 = 0.1;
+pub const expected_needed_statements: f64 = 15;
+pub const prefix_tokens: f64 = 25_000;
+pub const history_tokens: f64 = 10_000;
+pub const fresh_tokens: f64 = 5_000;
+pub const output_tokens: f64 = 100;
+pub const cache_write_price: f64 = 1.25;
+pub const cache_read_price: f64 = 0.1;
+pub const output_price: f64 = 5;
+pub const round_cost: f64 = cache_read_price * (prefix_tokens + history_tokens) + cache_write_price * fresh_tokens + output_price * output_tokens;
+pub const statement_price: f64 = cache_write_price + cache_read_price;
+pub const chars_per_token_estimate: f64 = 3.5;
+pub const pointer_tokens: f64 = 8;
 pub const evidence_budget: usize = 16_000;
 pub const max_regions: usize = 3;
 pub const max_depth: u32 = 4;
@@ -182,225 +210,299 @@ pub const Session = struct {
     }
 
     pub fn dense(self: *Session, arena: Allocator, question: []const u8, names: []const []const u8, budget: usize) ![]const u8 {
-        const repo = self.repo.?;
-        const store = &repo.store;
         var joined: Writer.Allocating = .init(arena);
         try joined.writer.writeAll(question);
         for (names) |n| try joined.writer.print(" {s}", .{n});
         const query = joined.written();
-        const terms_words = try map_lines.words(arena, query);
         const terms = try rank.Terms.ofQuestion(arena, self.lex.?, query);
+
         var notes: Writer.Allocating = .init(arena);
-        var focus: std.ArrayList(Fn) = .empty;
+        const ranked = try self.symbolScores(arena, query);
+        const top_score: f64 = if (ranked.len != 0) ranked[0].score else 1;
+        var graph: Graph = .{};
         var tokens: std.ArrayList([]const u8) = .empty;
         for (names) |n| try tokens.append(arena, n);
         for (try questionIdentifiers(arena, question)) |ident| {
             if (!contains(tokens.items, ident)) try tokens.append(arena, ident);
         }
         for (tokens.items) |token| {
-            if (focus.items.len >= max_named_focus + max_question_seeds) break;
             if (try self.resolve(token)) |f| {
-                _ = try appendFn(arena, &focus, f);
+                try graph.anchor(arena, f, top_score);
                 continue;
             }
-            const near = try self.symbolRank(arena, token);
+            const near = try self.symbolScores(arena, token);
             if (near.len == 0) {
                 try notes.writer.print("No symbol matches {s}.\n", .{token});
                 continue;
             }
-            if (try appendFn(arena, &focus, near[0])) try notes.writer.print("{s} is not a symbol; the closest symbol {s} is used.\n", .{ token, near[0].qname });
+            try notes.writer.print("{s} is not a symbol; the closest symbol {s} is used.\n", .{ token, near[0].f.qname });
+            try graph.anchor(arena, near[0].f, top_score);
         }
-        const ranked_fns = try self.symbolRank(arena, query);
-        var ranked_taken: usize = 0;
-        for (ranked_fns) |f| {
-            if (ranked_taken >= max_ranked_focus) break;
-            if (try appendFn(arena, &focus, f)) ranked_taken += 1;
-        }
-        var seeds: std.ArrayList(map_usage.Seed) = .empty;
-        for (focus.items) |f| try appendSeed(arena, &seeds, .{ .file = f.file, .def = f.def });
-        if (seeds.items.len > max_seeds) seeds.shrinkRetainingCapacity(max_seeds);
-        const users = try map_usage.users(arena, store, seeds.items, .{ .skip = &isTest });
-        const ranked_users = try self.rankUsers(arena, users, &terms);
-        var users_taken: usize = 0;
-        for (ranked_users) |u| {
-            if (users_taken >= max_user_focus or focus.items.len >= max_focus) break;
-            if (u.score <= 0) continue;
-            if (try appendFn(arena, &focus, .{ .file = u.user.file, .def = u.user.def, .path = u.user.path, .qname = u.user.qname })) users_taken += 1;
-        }
-        if (focus.items.len > max_focus) focus.shrinkRetainingCapacity(max_focus);
-
-        var meets: std.AutoHashMapUnmanaged(u64, Meet) = .empty;
-        var meet_order: std.ArrayList(u64) = .empty;
-        for (focus.items) |anchor| {
-            var near: std.ArrayList(Fn) = .empty;
-            for (try self.callees(arena, anchor)) |c| _ = try appendFn(arena, &near, c);
-            for (try self.callerRows(arena, anchor, &terms_words)) |row| {
-                const f = self.fnAt(row.site.path, row.site.owner.qname, row.site.owner.line) orelse continue;
-                _ = try appendFn(arena, &near, f);
-            }
-            for (near.items) |f| {
-                const entry = try meets.getOrPut(arena, keyOf(f));
-                if (!entry.found_existing) {
-                    entry.value_ptr.* = .{ .f = f, .anchors = 0 };
-                    try meet_order.append(arena, keyOf(f));
-                }
-                entry.value_ptr.anchors += 1;
-            }
-        }
-        var bridges: std.ArrayList(Fn) = .empty;
-        for (meet_order.items) |k| {
-            const m = meets.get(k).?;
-            if (m.anchors >= 2) _ = try appendFn(arena, &bridges, m.f);
-        }
-
-        var path_fns: std.ArrayList(Fn) = .empty;
-        const paths = try arena.alloc([]const Fn, focus.items.len);
-        for (focus.items, paths) |f, *p| p.* = try self.deepPath(arena, f, &terms);
-        for (focus.items) |f| _ = try appendFn(arena, &path_fns, f);
-        for (bridges.items) |f| _ = try appendFn(arena, &path_fns, f);
-        for (paths) |p| {
-            for (p[0..@min(p.len, first_round_path)]) |node| _ = try appendFn(arena, &path_fns, node);
-        }
-        for (paths) |p| {
-            if (p.len <= first_round_path) continue;
-            for (p[first_round_path..]) |node| _ = try appendFn(arena, &path_fns, node);
-        }
-        var call_names: std.ArrayList([]const u8) = .empty;
-        for (path_fns.items) |f| {
-            const simple = simpleName(f.qname);
-            if (simple.len >= 4 and !contains(call_names.items, simple)) try call_names.append(arena, simple);
-        }
-
-        var texts: std.StringHashMapUnmanaged(FileText) = .empty;
-        var blocks: std.ArrayList(Block) = .empty;
-        for (path_fns.items) |f| {
-            const b = try self.renderBlock(arena, &texts, f, &terms, call_names.items, &.{});
-            if (b.text.len != 0) try blocks.append(arena, b);
-        }
-        const reserve = writers_budget + entries_budget + 64;
-        const path_limit = budget -| reserve;
-        var taken: usize = 0;
-        var used: usize = 0;
-        while (taken < blocks.items.len and used + blocks.items[taken].text.len <= path_limit) : (taken += 1) used += blocks.items[taken].text.len;
-        if (taken == 0 and blocks.items.len != 0) {
-            taken = 1;
-            used = blocks.items[0].text.len;
-        }
-        var shown: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        for (blocks.items[0..taken]) |b| try shown.put(arena, keyOf(b.f), {});
-
-        var near_callees: std.ArrayList(Fn) = .empty;
-        for (focus.items) |f| {
-            for (try self.callees(arena, f)) |c| _ = try appendFn(arena, &near_callees, c);
-        }
-        var readers: std.ArrayList(Reader) = .empty;
-        for (blocks.items[0..taken]) |b| try appendReader(arena, &readers, b.f, shown_reader_weight);
-        for (path_fns.items) |f| try appendReader(arena, &readers, f, 1);
-        for (ranked_fns[0..@min(ranked_fns.len, max_reader_extra)]) |f| try appendReader(arena, &readers, f, 1);
-        for (near_callees.items[0..@min(near_callees.items.len, max_reader_extra)]) |f| try appendReader(arena, &readers, f, 1);
-        const fields = try self.fieldsRead(arena, &texts, readers.items, &terms);
-        const writers = try self.writerBlocks(arena, &texts, fields, blocks.items[0..taken]);
-        var writers_text: Writer.Allocating = .init(arena);
-        var written_fields: std.ArrayList([]const u8) = .empty;
-        const writers_room = writers_budget + (path_limit -| used);
-        for (writers) |w| {
-            if (writers_text.written().len + w.block.text.len > writers_room) continue;
-            try writers_text.writer.writeAll(w.block.text);
-            try shown.put(arena, keyOf(w.block.f), {});
-            for (w.fields) |name| {
-                if (!contains(written_fields.items, name)) try written_fields.append(arena, name);
-            }
-        }
-        var writers_head: Writer.Allocating = .init(arena);
-        if (writers_text.written().len != 0) {
-            try writers_head.writer.writeAll("Where the fields read above are written: ");
-            for (written_fields.items, 0..) |name, i| try writers_head.writer.print("{s}{s}", .{ if (i == 0) "" else ", ", name });
-            try writers_head.writer.writeByte('\n');
-        }
-        const writers_len = writers_head.written().len + writers_text.written().len;
-
-        var entries_text: Writer.Allocating = .init(arena);
-        var caller_sites: std.ArrayList(facts_query.Site) = .empty;
-        for (focus.items, 0..) |f, fi| {
-            const rows = try self.callerRows(arena, f, &terms_words);
-            for (rows[0..@min(rows.len, max_entries_per_focus)]) |row| {
-                try caller_sites.append(arena, row.site);
-                if (fi >= max_entry_focus) continue;
-                const s = row.site;
-                try entries_text.writer.print("{s}:{d}  in {s}: {s}\n", .{ s.path, s.line, s.owner.qname, try self.lineText(arena, &texts, s.path, s.line) });
-            }
-        }
-        const entries_head = "Callers of the top functions:\n";
-        const entries_room = budget -| (used + writers_len + entries_head.len + 64);
-        const entries_cut = lineCut(entries_text.written(), @min(entries_room, entries_budget + (writers_room -| writers_text.written().len)));
-        const entries_len = if (entries_cut == 0) 0 else entries_head.len + entries_cut + 1;
-
-        var fill: Filler = .{ .room = budget -| (used + notes.written().len + writers_len + entries_len + candidates_reserve + 64), .text = .init(arena) };
-        for (blocks.items[taken..]) |b| try fill.take(arena, &shown, b);
-        for (ranked_fns) |f| {
-            if (fill.done()) break;
-            if (shown.contains(keyOf(f))) continue;
-            fill.renders += 1;
-            try fill.take(arena, &shown, try self.renderBlock(arena, &texts, f, &terms, call_names.items, &.{}));
-        }
-        for (caller_sites.items) |site| {
-            if (fill.done()) break;
-            const f = self.fnAt(site.path, site.owner.qname, site.owner.line) orelse continue;
-            if (shown.contains(keyOf(f))) continue;
-            fill.renders += 1;
-            try fill.take(arena, &shown, try self.renderBlock(arena, &texts, f, &terms, call_names.items, &.{site.line}));
-        }
-        for (near_callees.items) |f| {
-            if (fill.done()) break;
-            if (shown.contains(keyOf(f))) continue;
-            fill.renders += 1;
-            try fill.take(arena, &shown, try self.renderBlock(arena, &texts, f, &terms, call_names.items, &.{}));
-        }
-        for (blocks.items[0..taken]) |b| {
-            if (fill.done()) break;
-            for (try self.callees(arena, b.f)) |f| {
-                if (fill.done()) break;
-                if (shown.contains(keyOf(f))) continue;
-                fill.renders += 1;
-                try fill.take(arena, &shown, try self.renderBlock(arena, &texts, f, &terms, call_names.items, &.{}));
-            }
-        }
+        for (ranked[0..@min(ranked.len, max_anchors)]) |r| try graph.anchor(arena, r.f, r.score);
 
         var out: Writer.Allocating = .init(arena);
         try out.writer.writeAll(notes.written());
-        if (blocks.items.len == 0 and fill.text.written().len == 0) try out.writer.writeAll("no function of the repository matched the phrase\n");
-        for (blocks.items[0..taken]) |b| try out.writer.writeAll(b.text);
-        try out.writer.writeAll(fill.text.written());
-        try out.writer.writeAll(writers_head.written());
-        try out.writer.writeAll(writers_text.written());
-        if (entries_cut != 0) {
-            try out.writer.writeAll(entries_head);
-            try out.writer.writeAll(entries_text.written()[0..entries_cut]);
-            if (entries_text.written()[entries_cut - 1] != '\n') try out.writer.writeByte('\n');
+        if (graph.nodes.items.len == 0) {
+            try out.writer.writeAll("no function of the repository matched the phrase\n");
+            return out.written();
         }
-        var left: Writer.Allocating = .init(arena);
-        var left_keys: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        const groups = [_][]const Fn{ path_fns.items, bridges.items, near_callees.items, ranked_fns[0..@min(ranked_fns.len, max_candidates)] };
-        for (groups) |group| {
-            for (group) |f| {
-                if (shown.contains(keyOf(f)) or left_keys.contains(keyOf(f))) continue;
-                try left_keys.put(arena, keyOf(f), {});
-                try left.writer.print("{s}:{d} {s}\n", .{ f.path, self.defLine(f), f.qname });
+        var texts: std.StringHashMapUnmanaged(FileText) = .empty;
+        try self.expand(arena, &texts, &graph);
+        const scores = try graph.diffuse(arena);
+
+        var node_names: std.ArrayList([]const u8) = .empty;
+        for (graph.nodes.items) |n| {
+            const simple = simpleName(n.f.qname);
+            if (simple.len >= 4 and !contains(node_names.items, simple)) try node_names.append(arena, simple);
+        }
+        var all: std.ArrayList(Statement) = .empty;
+        const first_of = try arena.alloc(usize, graph.nodes.items.len + 1);
+        for (graph.nodes.items, 0..) |n, i| {
+            first_of[i] = all.items.len;
+            try self.statementsOf(arena, &texts, @intCast(i), n.f, &terms, node_names.items, &all);
+        }
+        first_of[graph.nodes.items.len] = all.items.len;
+        var mass: f64 = 0;
+        for (all.items) |st| mass += st.weight * scores[st.node];
+        const chosen = try arena.alloc(bool, all.items.len);
+        @memset(chosen, false);
+        if (mass > 0) {
+            for (all.items) |*st| st.p = expected_needed_statements * st.weight * scores[st.node] / mass;
+            const order = try arena.alloc(usize, all.items.len);
+            for (order, 0..) |*o, k| o.* = k;
+            std.mem.sort(usize, order, @as([]const Statement, all.items), Statement.denser);
+            const statement_budget = budget -| pointer_budget;
+            var used: usize = 0;
+            for (order) |k| {
+                const st = all.items[k];
+                const size = @as(f64, @floatFromInt(st.chars)) / chars_per_token_estimate;
+                if (st.p * round_cost < statement_price * size) break;
+                if (used + st.chars > statement_budget) continue;
+                chosen[k] = true;
+                used += st.chars;
             }
         }
-        for (caller_sites.items) |site| {
-            const f = self.fnAt(site.path, site.owner.qname, site.owner.line) orelse continue;
-            if (shown.contains(keyOf(f)) or left_keys.contains(keyOf(f))) continue;
-            try left_keys.put(arena, keyOf(f), {});
-            try left.writer.print("{s}:{d} {s}\n", .{ f.path, self.defLine(f), f.qname });
+
+        const by_score = try arena.alloc(u32, graph.nodes.items.len);
+        for (by_score, 0..) |*o, i| o.* = @intCast(i);
+        std.mem.sort(u32, by_score, @as([]const f64, scores), scoreGreater);
+        var pointers: Writer.Allocating = .init(arena);
+        const pointer_floor = statement_price * pointer_tokens / round_cost;
+        for (by_score) |i| {
+            const n = graph.nodes.items[i];
+            const shown = for (chosen[first_of[i]..first_of[i + 1]]) |c| {
+                if (c) break true;
+            } else false;
+            if (!shown) {
+                if (expected_needed_statements * scores[i] < pointer_floor) continue;
+                if (pointers.written().len >= pointer_budget) continue;
+                const line = try std.fmt.allocPrint(arena, "{s}:{d} {s}\n", .{ n.f.path, self.defLine(n.f), n.f.qname });
+                if (pointers.written().len + line.len <= pointer_budget) try pointers.writer.writeAll(line);
+                continue;
+            }
+            const ft = (try self.fileText(arena, &texts, n.f.path)) orelse continue;
+            const statements = all.items[first_of[i]..first_of[i + 1]];
+            const first_line = statements[0].start;
+            const last_line = statements[statements.len - 1].end;
+            const base = indentOf(ft.line(first_line));
+            try out.writer.print("{s}:{d} {s}\n", .{ n.f.path, first_line, n.f.qname });
+            var last_written = first_line - 1;
+            for (statements, chosen[first_of[i]..first_of[i + 1]]) |st, c| {
+                if (!c) continue;
+                try writeGap(&out.writer, last_written, st.start);
+                var k = st.start;
+                while (k <= st.end) : (k += 1) try writeCode(&out.writer, ft, k, base);
+                last_written = st.end;
+            }
+            try writeGap(&out.writer, last_written, last_line + 1);
         }
-        const left_head = "Connected functions not shown:\n";
-        const room = budget -| (out.written().len + 8);
-        if (left.written().len != 0 and room > left_head.len + 80) {
-            try out.writer.writeAll(left_head);
-            try out.writer.writeAll(left.written()[0..lineCut(left.written(), room - left_head.len)]);
+        if (pointers.written().len != 0) {
+            try out.writer.writeAll("Connected functions not shown:\n");
+            try out.writer.writeAll(pointers.written());
         }
         return out.written();
+    }
+
+    fn expand(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), graph: *Graph) !void {
+        const store = &self.repo.?.store;
+        var i: usize = 0;
+        while (i < graph.nodes.items.len) : (i += 1) {
+            const n = graph.nodes.items[i];
+            if (n.depth >= graph_depth) continue;
+            const from: u32 = @intCast(i);
+            for (try self.callees(arena, n.f)) |c| {
+                const j = (try graph.node(arena, c, n.depth + 1)) orelse continue;
+                try graph.link(arena, from, j, callee_weight);
+                try graph.link(arena, j, from, caller_weight);
+            }
+            const users = try map_usage.users(arena, store, &.{.{ .file = n.f.file, .def = n.f.def }}, .{ .skip = &isTest });
+            for (users[0..@min(users.len, max_users_per_node)]) |u| {
+                const j = (try graph.node(arena, .{ .file = u.file, .def = u.def, .path = u.path, .qname = u.qname }, n.depth + 1)) orelse continue;
+                if (u.through_key) {
+                    try graph.link(arena, from, j, key_weight);
+                    try graph.link(arena, j, from, key_weight);
+                } else {
+                    try graph.link(arena, from, j, caller_weight);
+                    try graph.link(arena, j, from, callee_weight);
+                }
+            }
+        }
+        try self.linkFields(arena, texts, graph);
+    }
+
+    fn linkFields(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), graph: *Graph) !void {
+        const store = &self.repo.?.store;
+        var readers: std.StringArrayHashMapUnmanaged(std.ArrayList(u32)) = .empty;
+        for (graph.nodes.items, 0..) |n, i| {
+            if (n.depth > 1) continue;
+            const state = store.file(n.f.file);
+            if (state.status != .indexed or n.f.def >= state.facts.defs.len) continue;
+            const d = state.facts.defs[n.f.def];
+            const ft = (try self.fileText(arena, texts, n.f.path)) orelse continue;
+            const first_line = @max(d.line, 1);
+            const last_line = @max(ft.lineOf(d.span.end), first_line);
+            var line = first_line;
+            while (line <= last_line) : (line += 1) {
+                for (try fieldReads(arena, std.mem.trim(u8, ft.line(line), " \t\r"))) |fr| {
+                    const entry = try readers.getOrPut(arena, fr.name);
+                    if (!entry.found_existing) entry.value_ptr.* = .empty;
+                    try addId(arena, entry.value_ptr, @intCast(i));
+                }
+            }
+        }
+        if (readers.count() == 0) return;
+        var fields: std.ArrayList(FieldScore) = .empty;
+        for (readers.keys(), readers.values()) |name, list| try fields.append(arena, .{ .name = name, .score = @floatFromInt(list.items.len) });
+        std.mem.sort(FieldScore, fields.items, {}, FieldScore.greater);
+        if (fields.items.len > max_linked_fields) fields.shrinkRetainingCapacity(max_linked_fields);
+        for (try self.writerSites(arena, texts, fields.items)) |site| {
+            const state = store.file(site.file);
+            const owner: Fn = .{ .file = site.file, .def = site.def, .path = site.path, .qname = state.facts.defs[site.def].qname };
+            const list = readers.get(fields.items[site.field].name) orelse continue;
+            for (list.items) |ri| {
+                const reader = graph.nodes.items[ri];
+                const j = (try graph.node(arena, owner, reader.depth + 1)) orelse continue;
+                try graph.link(arena, ri, j, field_weight);
+                try graph.link(arena, j, ri, field_weight);
+            }
+        }
+    }
+
+    fn writerSites(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), fields: []const FieldScore) ![]const WriteSite {
+        const store = &self.repo.?.store;
+        var index: std.StringHashMapUnmanaged(usize) = .empty;
+        for (fields, 0..) |f, i| try index.put(arena, f.name, i);
+        const files_of = try arena.alloc(std.ArrayList(u32), fields.len);
+        for (files_of) |*l| l.* = .empty;
+        for (store.files.items, 0..) |*state, id| {
+            if (state.status != .indexed or isTest(state.path)) continue;
+            for (state.facts.refs) |r| {
+                if (r.kind != .write) continue;
+                const i = index.get(r.name) orelse continue;
+                try addId(arena, &files_of[i], @intCast(id));
+            }
+        }
+        for (fields, 0..) |f, i| {
+            const list = store.loose_by_name.get(f.name) orelse continue;
+            for (list.items) |k| {
+                if (files_of[i].items.len > max_loose_files) break;
+                const state = store.file(k.file);
+                if (state.status != .indexed or isTest(state.path)) continue;
+                try addId(arena, &files_of[i], k.file);
+            }
+        }
+        var sites: std.ArrayList(WriteSite) = .empty;
+        for (fields, 0..) |f, i| {
+            if (files_of[i].items.len > max_loose_files) continue;
+            const needle = try std.mem.concat(arena, u8, &.{ ".", f.name });
+            for (files_of[i].items) |fid| {
+                const state = store.file(fid);
+                const defs = state.facts.defs;
+                const ft = (try self.fileText(arena, texts, state.path)) orelse continue;
+                var at: usize = 0;
+                var last: u32 = 0;
+                while (std.mem.indexOfPos(u8, ft.bytes, at, needle)) |pos| {
+                    at = pos + needle.len;
+                    const line = ft.lineOf(@intCast(pos));
+                    if (line == last) continue;
+                    const t = std.mem.trim(u8, ft.line(line), " \t\r");
+                    if (!writesField(t, f.name)) continue;
+                    last = line;
+                    const owner = ownerOf(defs, @intCast(pos)) orelse continue;
+                    try sites.append(arena, .{ .file = fid, .def = owner, .line = line, .field = i, .weight = siteWeight(defs[owner].kind, t, f.name), .path = state.path });
+                }
+            }
+        }
+        return sites.items;
+    }
+
+    fn statementsOf(self: *Session, arena: Allocator, texts: *std.StringHashMapUnmanaged(FileText), node: u32, f: Fn, terms: *const rank.Terms, node_names: []const []const u8, out: *std.ArrayList(Statement)) !void {
+        const store = &self.repo.?.store;
+        const state = store.file(f.file);
+        if (state.status != .indexed or f.def >= state.facts.defs.len) return;
+        const d = state.facts.defs[f.def];
+        const ft = (try self.fileText(arena, texts, f.path)) orelse return;
+        const first_line = @max(d.line, 1);
+        const last_line = @max(ft.lineOf(d.span.end), first_line);
+        const base = indentOf(ft.line(first_line));
+        var n = first_line;
+        while (n <= last_line) {
+            const t = std.mem.trim(u8, ft.line(n), " \t\r");
+            if (t.len == 0 or isComment(t)) {
+                n += 1;
+                continue;
+            }
+            const end = statementEnd(ft, n, last_line);
+            var text: Writer.Allocating = .init(arena);
+            var chars: usize = 0;
+            var k = n;
+            while (k <= end) : (k += 1) {
+                const raw = std.mem.trimEnd(u8, ft.line(k), " \t\r");
+                chars += raw.len -| base + 8;
+                try text.writer.writeAll(std.mem.trim(u8, raw, " \t"));
+                try text.writer.writeByte(' ');
+            }
+            const joined = text.written();
+            const weight: f64 = if (n == first_line or isDecisionLine(t) or isDecisionLine(joined) or assignmentAt(joined) != null or isMetadataRead(joined))
+                decision_weight
+            else if (callsAny(joined, node_names, simpleName(f.qname)))
+                node_call_weight
+            else if ((try rank.maskOf(terms, joined)) != 0)
+                term_weight
+            else
+                plain_weight;
+            try out.append(arena, .{ .node = node, .start = n, .end = end, .chars = chars, .weight = weight });
+            n = end + 1;
+        }
+    }
+
+    fn symbolScores(self: *Session, arena: Allocator, text: []const u8) ![]const RankedFn {
+        const ws = try map_lines.words(arena, text);
+        var wanted: std.StringHashMapUnmanaged(void) = .empty;
+        for (ws.items.items) |word| try wanted.put(arena, stem(word), {});
+        if (wanted.count() == 0 or self.symbols.items.len == 0) return &.{};
+        const total: f64 = @floatFromInt(self.symbols.items.len);
+        var scored: std.ArrayList(Scored) = .empty;
+        for (self.symbols.items, 0..) |sym, i| {
+            var score: f64 = 0;
+            var hits: usize = 0;
+            for (sym.parts) |part| {
+                if (!wanted.contains(part)) continue;
+                const df: f64 = @floatFromInt(self.part_df.get(part) orelse 1);
+                score += @log(1 + total / df);
+                hits += 1;
+            }
+            if (hits == 0) continue;
+            const extra: f64 = @floatFromInt(sym.parts.len - hits);
+            try scored.append(arena, .{ .index = i, .score = score / (1 + extra_part_penalty * extra) });
+        }
+        std.mem.sort(Scored, scored.items, {}, Scored.greater);
+        var out: std.ArrayList(RankedFn) = .empty;
+        for (scored.items[0..@min(scored.items.len, max_symbol_rank)]) |sc| {
+            const sym = self.symbols.items[sc.index];
+            try out.append(arena, .{ .f = .{ .file = sym.file, .def = sym.def, .path = sym.path, .qname = sym.qname }, .score = sc.score });
+        }
+        return out.items;
     }
 
     fn symbolRank(self: *Session, arena: Allocator, text: []const u8) ![]const Fn {
@@ -887,6 +989,104 @@ const Scored = struct {
     }
 };
 
+const RankedFn = struct {
+    f: Fn,
+    score: f64,
+};
+
+const GraphNode = struct {
+    f: Fn,
+    depth: u32,
+    prior: f64,
+};
+
+const Graph = struct {
+    nodes: std.ArrayList(GraphNode) = .empty,
+    at: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+    edges: std.AutoArrayHashMapUnmanaged(u64, f64) = .empty,
+
+    fn anchor(self: *Graph, arena: Allocator, f: Fn, weight: f64) !void {
+        if (isTest(f.path)) return;
+        if (self.at.get(keyOf(f))) |i| {
+            self.nodes.items[i].prior = @max(self.nodes.items[i].prior, weight);
+            return;
+        }
+        if (self.nodes.items.len >= max_graph_nodes) return;
+        try self.at.put(arena, keyOf(f), @intCast(self.nodes.items.len));
+        try self.nodes.append(arena, .{ .f = f, .depth = 0, .prior = weight });
+    }
+
+    fn node(self: *Graph, arena: Allocator, f: Fn, depth: u32) !?u32 {
+        if (self.at.get(keyOf(f))) |i| return i;
+        if (isTest(f.path) or self.nodes.items.len >= max_graph_nodes) return null;
+        const i: u32 = @intCast(self.nodes.items.len);
+        try self.at.put(arena, keyOf(f), i);
+        try self.nodes.append(arena, .{ .f = f, .depth = depth, .prior = 0 });
+        return i;
+    }
+
+    fn link(self: *Graph, arena: Allocator, from: u32, to: u32, weight: f64) !void {
+        if (from == to) return;
+        const entry = try self.edges.getOrPut(arena, (@as(u64, from) << 32) | to);
+        if (!entry.found_existing or entry.value_ptr.* < weight) entry.value_ptr.* = weight;
+    }
+
+    fn diffuse(self: *const Graph, arena: Allocator) ![]f64 {
+        const n = self.nodes.items.len;
+        const prior = try arena.alloc(f64, n);
+        var prior_sum: f64 = 0;
+        for (self.nodes.items, prior) |node_, *a| {
+            a.* = node_.prior;
+            prior_sum += node_.prior;
+        }
+        if (prior_sum > 0) {
+            for (prior) |*a| a.* /= prior_sum;
+        }
+        const out_sum = try arena.alloc(f64, n);
+        @memset(out_sum, 0);
+        for (self.edges.keys(), self.edges.values()) |k, w| out_sum[@intCast(k >> 32)] += w;
+        var r = try arena.dupe(f64, prior);
+        var next = try arena.alloc(f64, n);
+        for (0..diffusion_rounds) |_| {
+            for (next, prior) |*x, a| x.* = (1 - walk_continue) * a;
+            for (self.edges.keys(), self.edges.values()) |k, w| {
+                const from: usize = @intCast(k >> 32);
+                const to: usize = @intCast(k & 0xffff_ffff);
+                next[from] += walk_continue * (w / out_sum[from]) * r[to];
+            }
+            const swap = r;
+            r = next;
+            next = swap;
+        }
+        return r;
+    }
+};
+
+const Statement = struct {
+    node: u32,
+    start: u32,
+    end: u32,
+    chars: usize,
+    weight: f64,
+    p: f64 = 0,
+
+    fn denser(all: []const Statement, a: usize, b: usize) bool {
+        const da = all[a].p / @as(f64, @floatFromInt(@max(all[a].chars, 1)));
+        const db = all[b].p / @as(f64, @floatFromInt(@max(all[b].chars, 1)));
+        if (da != db) return da > db;
+        return a < b;
+    }
+};
+
+fn scoreGreater(scores: []const f64, a: u32, b: u32) bool {
+    if (scores[a] != scores[b]) return scores[a] > scores[b];
+    return a < b;
+}
+
+fn isMetadataRead(t: []const u8) bool {
+    return std.mem.indexOf(u8, t, "etMetadata(") != null or std.mem.indexOf(u8, t, "etOwnMetadata(") != null or std.mem.indexOf(u8, t, "eflector.") != null or std.mem.indexOf(u8, t, "Reflect.") != null;
+}
+
 const Meet = struct {
     f: Fn,
     anchors: u32,
@@ -1181,8 +1381,9 @@ fn statementEnd(ft: FileText, start: u32, last: u32) u32 {
     var depth: i32 = 0;
     var n = start;
     while (n <= last) : (n += 1) {
-        depth += bracketDelta(ft.line(n));
-        if (depth <= 0 or n - start + 1 >= max_statement_lines) return n;
+        const line = ft.line(n);
+        depth += bracketDelta(line);
+        if (depth <= 0 or std.mem.endsWith(u8, std.mem.trimEnd(u8, line, " \t\r"), "{") or n - start + 1 >= max_statement_lines) return n;
     }
     return last;
 }

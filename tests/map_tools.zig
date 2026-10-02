@@ -363,7 +363,7 @@ fn expectHas(text: []const u8, part: []const u8) !void {
     return error.TestExpectedEqual;
 }
 
-test "map tools: the explore reply shows the functions that write the fields read on the path and fills its budget" {
+test "map tools: the explore reply reaches the functions that write the fields read by the matching functions" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     var tmp = testing.tmpDir(.{});
@@ -400,14 +400,9 @@ test "map tools: the explore reply shows the functions that write the fields rea
     try expectHas(text, "DependenciesScanner.calculateModulesDistance");
     try expectHas(text, "      moduleRef.distance = depth;");
     try expectHas(text, "    tree.walk((moduleRef, depth) => {");
-    const at = std.mem.indexOf(u8, text, "Where the fields read above are written: ") orelse {
-        std.debug.print("--- reply ---\n{s}\n", .{text});
-        return error.TestExpectedEqual;
-    };
-    const writers = text[at..];
-    try expectHas(writers, "NestContainer.addModule");
-    try expectHas(writers, "moduleRef.distance = Number.MAX_VALUE;");
-    try expectHas(writers, "Injector.loadInstance");
-    try expectHas(writers, "wrapper.level = depth + 1;");
+    try expectHas(text, "NestContainer.addModule");
+    try expectHas(text, "moduleRef.distance = Number.MAX_VALUE;");
+    try expectHas(text, "Injector.loadInstance");
+    try expectHas(text, "wrapper.level = depth + 1;");
     try testing.expect(std.mem.indexOf(u8, text, "emetgate_") == null);
 }
