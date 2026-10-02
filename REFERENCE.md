@@ -764,7 +764,7 @@ by a BLAKE3 hash per 4 MiB chunk and the header by its own hash when a session l
 index of another version is refused by its version byte, any other damage as corrupt, and
 either way it is rebuilt and the reply says so (`index`). A new index goes to a new
 generation file (`index.v4.<tag>`, written durably, then renamed), a pointer file names the
-current generation, and generations older than 60 s are removed. On n8n: <!-- generated:search-n8n-summary -->245.1 MB on disk for 179.0 MB of indexable text (1.37x) across 29,124 tracked files, and a new session loads and checks it in 99 to 127 ms (slowest 136 ms) while the first search can already wait for it (2026-10-01)<!-- /generated -->.
+current generation, and generations older than 60 s are removed. On n8n: <!-- generated:search-n8n-summary -->245.1 MB on disk for 179.0 MB of indexable text (1.37x) across 29,124 tracked files, and a new session loads and checks it in 116 to 134 ms (slowest 143 ms) while the first search can already wait for it (2026-10-02)<!-- /generated -->.
 
 **Freshness.** Inside `emetgate mcp` a session owns the mapped index, an in-memory delta of
 the files that changed since, a change watcher (`src/platform/change_watch.zig`) and a
@@ -800,24 +800,24 @@ trip of that search): <!-- generated:search-fresh-table -->
 
 | Change, then search at once | rounds | barrier + refresh p50 ms | barrier + refresh p99 ms | search p50 ms | search p99 ms | misses |
 |---|---:|---:|---:|---:|---:|---:|
-| baseline: search with no write before it | 200 | 0.43 | 0.67 | 1.73 | 2.52 | 0 |
-| save in place (write + close) | 200 | 0.72 | 1.27 | 3.14 | 6.54 | 0 |
-| save by rename over the file | 200 | 1.08 | 1.72 | 3.45 | 6.90 | 0 |
-| create a file and git add it | 200 | 18.60 | 22.96 | 30.37 | 38.94 | 0 |
-| git rm and delete the file | 200 | 18.32 | 23.14 | 29.71 | 37.57 | 0 |
-| create a file without git add (outside the tracked scope) | 10 | 0.68 | 2.04 | 2.50 | 3.62 | 0 |
-| delete a tracked file from disk | 200 | 0.58 | 1.10 | 10.05 | 13.18 | 0 |
-| put the deleted file back | 200 | 0.86 | 2.99 | 10.85 | 26.82 | 0 |
-| git mv a tracked file | 200 | 20.27 | 25.84 | 35.53 | 70.85 | 0 |
-| rename a tracked file without git (old path vanished, new path untracked) | 20 | 19.86 | 22.56 | 30.41 | 34.30 | 0 |
-| git mv a directory of 15 tracked files | 50 | 24.04 | 30.51 | 28.55 | 36.82 | 0 |
-| git checkout of 59 changed files, first search | 40 | 68.26 | 85.66 | 93.52 | 143.79 | 0 |
-| git checkout of 523 changed files, first search | 40 | 295.39 | 396.82 | 420.01 | 564.38 | 0 |
-| 100 files changed while no server ran, first search right after initialize | 30 | 181.22 | 274.41 | 255.38 | 304.85 | 0 |
-| 100 files changed while no server ran, first search after a 3 s pause | 30 | 61.82 | 82.61 | 170.28 | 211.54 | 0 |
-| save in place while another thread rewrites other tracked files | 200 | 2.39 | 4.78 | 6.18 | 13.14 | 0 |
-| writer keeps its handle open (append), search after close | 40 | 0.71 | 1.47 | 2.81 | 6.36 | 0 |
-| writer keeps its handle open (overwrite), search after close | 40 | 0.69 | 11.50 | 2.82 | 15.80 | 0 |
+| baseline: search with no write before it | 200 | 0.31 | 0.53 | 1.22 | 1.80 | 0 |
+| save in place (write + close) | 200 | 0.51 | 0.93 | 2.15 | 5.23 | 0 |
+| save by rename over the file | 200 | 0.77 | 1.14 | 2.63 | 5.73 | 0 |
+| create a file and git add it | 200 | 14.37 | 25.08 | 24.23 | 40.23 | 0 |
+| git rm and delete the file | 200 | 14.12 | 24.39 | 23.82 | 40.81 | 0 |
+| create a file without git add (outside the tracked scope) | 10 | 0.43 | 2.00 | 1.57 | 3.27 | 0 |
+| delete a tracked file from disk | 200 | 0.35 | 0.55 | 8.39 | 9.41 | 0 |
+| put the deleted file back | 200 | 0.48 | 1.60 | 8.96 | 20.42 | 0 |
+| git mv a tracked file | 200 | 15.25 | 28.07 | 27.89 | 59.63 | 0 |
+| rename a tracked file without git (old path vanished, new path untracked) | 20 | 14.95 | 28.56 | 24.31 | 44.12 | 0 |
+| git mv a directory of 15 tracked files | 50 | 14.96 | 18.92 | 17.07 | 22.88 | 0 |
+| git checkout of 59 changed files, first search | 40 | 34.14 | 46.80 | 51.61 | 89.49 | 0 |
+| git checkout of 523 changed files, first search | 40 | 172.71 | 233.02 | 260.75 | 359.40 | 0 |
+| 100 files changed while no server ran, first search right after initialize | 30 | 233.89 | 277.24 | 152.38 | 174.00 | 0 |
+| 100 files changed while no server ran, first search after a 3 s pause | 30 | 93.63 | 108.15 | 11.28 | 16.17 | 0 |
+| save in place while another thread rewrites other tracked files | 200 | 1.87 | 2.95 | 4.60 | 9.59 | 0 |
+| writer keeps its handle open (append), search after close | 40 | 0.28 | 0.65 | 1.47 | 2.74 | 0 |
+| writer keeps its handle open (overwrite), search after close | 40 | 0.42 | 0.96 | 1.77 | 3.75 | 0 |
 <!-- /generated -->
 
 **What a search does not see.** Three things are outside the snapshot, and each is said
@@ -830,7 +830,7 @@ where the model reads it:
   stat can see the write; the size read through a handle did move (40 of 40 for appends).
   Before the flush the search found the new text in 0 of 40 append rounds and 1 of 40
   overwrite rounds (that file was read again for an earlier change). After
-  `FlushFileBuffers` the notification arrived every time, 0.4 to 0.5 ms later, and the
+  `FlushFileBuffers` the notification arrived every time, 0.3 to 0.5 ms later, and the
   next search found the new text in every round; closing the file has the same effect. The tool description says it ("a write is in the answer once its writer has
   closed or flushed the file"), and with `certificate:true` the reply carries
   `"sees":"writes closed or flushed before this search"`. Closing the gap would mean
@@ -854,13 +854,13 @@ each search): <!-- generated:search-n8n-table -->
 
 | Search | rg ms | git grep ms | new session, at once ms | new session, after 3 s ms | warm p50 ms | warm p99 ms | kernel p50 ms | kernel p99 ms | barrier p50 ms | right after a write ms |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| a rare name in one package | 29.6 | 36.7 | 137.5 | 17.28 | 2.17 | 2.88 | 1.32 | 1.83 | 0.43 | 11.91 |
-| a common name in one package | 30.4 | 38.4 | 123.2 | 15.00 | 3.15 | 4.21 | 2.15 | 3.20 | 0.42 | 12.13 |
-| a regex with four alternatives | 30.4 | 38.2 | 103.1 | 5.03 | 3.50 | 4.85 | 2.52 | 3.90 | 0.39 | 4.47 |
-| a name across the whole repository | 630.9 | 528.5 | 110.5 | 12.77 | 3.64 | 4.87 | 2.14 | 3.17 | 0.64 | 5.73 |
-| a name in one file | 22.2 | 39.7 | 102.6 | 2.94 | 3.10 | 5.59 | 1.73 | 2.94 | 0.69 | 5.51 |
-| read one symbol | - | - | - | - | 2.24 | 5.40 | - | - | - | - |
-| read a line range | - | - | - | - | 2.90 | 3.73 | - | - | - | - |
+| a rare name in one package | 21.3 | 28.0 | 136.3 | 3.02 | 1.43 | 1.65 | 0.89 | 1.03 | 0.28 | 8.60 |
+| a common name in one package | 22.3 | 29.7 | 124.8 | 3.54 | 2.10 | 2.97 | 1.54 | 2.36 | 0.26 | 10.66 |
+| a regex with four alternatives | 22.2 | 30.0 | 120.2 | 3.93 | 2.54 | 2.96 | 2.00 | 2.26 | 0.26 | 3.26 |
+| a name across the whole repository | 477.2 | 382.7 | 125.7 | 11.90 | 1.80 | 2.09 | 1.21 | 1.37 | 0.27 | 2.53 |
+| a name in one file | 13.3 | 27.5 | 117.4 | 2.21 | 1.98 | 3.98 | 1.14 | 2.15 | 0.46 | 2.56 |
+| read one symbol | - | - | - | - | 0.96 | 8.55 | - | - | - | - |
+| read a line range | - | - | - | - | 2.04 | 2.93 | - | - | - | - |
 <!-- /generated -->
 
 **Sparse gram size — measured, not assumed.** GitHub's Blackbird search
