@@ -112,7 +112,7 @@ test "evidence: a target that fits is shown whole between the header line and th
     try testing.expectEqual(answer.Status.complete, result.status());
     const text = try textOf(result);
     try testing.expect(std.mem.startsWith(u8, text, "Evidence (decides) for decide (a.ts); terms: stop."));
-    try expectLines(text, &.{ "\na.ts:1  export function decide(x: number) {  [target decide ", "\na.ts:3      return \"stop\";\n", "\na.ts:5    return \"go\";\n", "\na.ts:6  }\n" });
+    try expectLines(text, &.{ "\na.ts\n1  export function decide(x: number) {  [target decide ", "\n3      return \"stop\";\n", "\n5    return \"go\";\n", "\n6  }\n" });
     try testing.expect(std.mem.startsWith(u8, lastLine(text), "\u{2713} 1 target in 1 file"));
     try expectNoLine(text, " lines elided");
     try expectNoLine(text, "Partial because");
@@ -131,15 +131,15 @@ test "evidence: a decides target that does not fit keeps every branch with a ter
     const text = try textOf(result);
     try testing.expect(text.len <= 3000);
     try expectLines(text, &.{
-        "\na.ts:1  export function decide(x: number, node: any) {  [target decide ",
-        "\na.ts:2-61  ... 60 lines elided\n",
-        "\na.ts:62    if (node.continueOnFail) {\n",
-        "\na.ts:63      x = x * 2;\n",
-        "\na.ts:82      x = x * 2;\n",
-        "\na.ts:83      return \"continue\";\n",
-        "\na.ts:84    }\n",
-        "\na.ts:85-145  ... 61 lines elided\n",
-        "\na.ts:146  }\n",
+        "\na.ts\n1  export function decide(x: number, node: any) {  [target decide ",
+        "\n2-61  ... 60 lines elided\n",
+        "\n62    if (node.continueOnFail) {\n",
+        "\n63      x = x * 2;\n",
+        "\n82      x = x * 2;\n",
+        "\n83      return \"continue\";\n",
+        "\n84    }\n",
+        "\n85-145  ... 61 lines elided\n",
+        "\n146  }\n",
     });
     try expectLines(text, &.{"\nPartial because: 1 files not shown in full within the budget, each gap marked.\n"});
     try testing.expect(std.mem.startsWith(u8, lastLine(text), "partial: 1 target in 0 of 1 file"));
@@ -157,10 +157,10 @@ test "evidence: callers are shown by signature and call line, every unresolved c
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
     try expectLines(text, &.{
-        "\na.ts:2    run() { return 1; }  [target C.run ",
-        "\nb.ts:2  export function use(c: C, x: any) {  [caller of C.run: use ",
-        "\nb.ts:3  return c.run() + x.run();  [call typed]\n",
-        "\nb.ts:3  return c.run() + x.run();  [unresolved property_needs_type in use]\n",
+        "\na.ts\n2    run() { return 1; }  [target C.run ",
+        "\nb.ts\n2  export function use(c: C, x: any) {  [caller of C.run: use ",
+        "\n3  return c.run() + x.run();  [call typed]\n",
+        "\n3  return c.run() + x.run();  [unresolved property_needs_type in use]\n",
         "\nPartial because: 1 references with the same name on receivers of unknown type may also be it.\n",
     });
     try testing.expectEqual(@as(usize, 1), result.partial.value.unresolved.len);
@@ -185,7 +185,7 @@ test "evidence: callers that do not fit the budget are counted, named as cut and
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
     try testing.expect(text.len <= 2000);
-    try expectLines(text, &.{ "\nb.ts:3  decide(n);  [call proven]\n", " call sites\n", "\nPartial because: 1 files not shown in full within the budget, each gap marked.\n" });
+    try expectLines(text, &.{ "\nb.ts\n2  export function many(n: number) {  [caller of decide: many ", "\n3  decide(n);  [call proven]\n", " call sites\n", "\nPartial because: 1 files not shown in full within the budget, each gap marked.\n" });
     try testing.expectEqual(@as(usize, 300), result.partial.value.sites.len);
     try testing.expect(result.partial.value.cut > 250);
 }
@@ -227,10 +227,10 @@ test "evidence: callees are shown by signature with their call lines and an unre
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
     try expectLines(text, &.{
-        "\na.ts:4    return g() + x.m();\n",
-        "\na.ts:1  function g() { return 1; }  [callee of f: g ",
+        "\n4    return g() + x.m();\n",
+        "\na.ts\n1  function g() { return 1; }  [callee of f: g ",
         ", called at line 4, proven]\n",
-        "\na.ts:4  return g() + x.m();  [unresolved property_needs_type in f]\n",
+        "\n4  return g() + x.m();  [unresolved property_needs_type in f]\n",
         "\nPartial because: 1 calls in the target body could not be resolved.\n",
     });
 }
@@ -245,9 +245,9 @@ test "evidence: flow lists both the callers and the callees of the target" {
     try testing.expectEqual(answer.Status.complete, result.status());
     const text = try textOf(result);
     try expectLines(text, &.{
-        "\na.ts:3  export function top() { return mid(); }  [caller of mid: top ",
-        "\na.ts:3  export function top() { return mid(); }  [call proven]\n",
-        "\na.ts:1  export function low() { return 1; }  [callee of mid: low ",
+        "\na.ts\n3  export function top() { return mid(); }  [caller of mid: top ",
+        "\n3  export function top() { return mid(); }  [call proven]\n",
+        "\n1  export function low() { return 1; }  [callee of mid: low ",
     });
     try testing.expect(std.mem.startsWith(u8, lastLine(text), "\u{2713} 2 call edges in 1 file"));
 }
@@ -265,8 +265,8 @@ test "evidence: a cut class keeps the header of the method that holds a relevant
     try f.repo.linkAll();
     const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "Big" }}, .intent = .explain, .terms = &.{"continueOnFail"} }, 1500);
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:1  export class Big {  [target Big ", "\na.ts:5    run(node: any) {\n", "\na.ts:47      if (node.continueOnFail) {\n", "\na.ts:48        x = 2;\n", "\na.ts:51    }\n", "\na.ts:52  }" });
-    try expectNoLine(text, "\na.ts:2    first() {\n");
+    try expectLines(text, &.{ "\na.ts\n1  export class Big {  [target Big ", "\n5    run(node: any) {\n", "\n47      if (node.continueOnFail) {\n", "\n48        x = 2;\n", "\n51    }\n", "\n52  }" });
+    try expectNoLine(text, "\n2    first() {\n");
 }
 
 test "evidence: a term found in a comment brings the statement the comment describes" {
@@ -284,7 +284,7 @@ test "evidence: a term found in a comment brings the statement the comment descr
     try f.repo.linkAll();
     const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "work" }}, .intent = .explain, .terms = &.{"retry"} }, 1500);
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:43    // retry when the node keeps failing\n", "\na.ts:44    const attempts = node.maxTries;\n" });
+    try expectLines(text, &.{ "\n43    // retry when the node keeps failing\n", "\n44    const attempts = node.maxTries;\n" });
 }
 
 test "evidence: a line too long for the evidence is cut with the number of hidden characters and the answer turns partial" {
@@ -301,7 +301,7 @@ test "evidence: a line too long for the evidence is cut with the number of hidde
     const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "long" }}, .intent = .explain }, evidence.default_budget);
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
-    try expectLines(text, &.{ " ... (715 more characters on this line)\n", "\na.ts:3    return s;\n" });
+    try expectLines(text, &.{ " ... (715 more characters on this line)\n", "\n3    return s;\n" });
 }
 
 fn askFailing(f: *Fixture, failure: facts_evidence.SourceError) !evidence.EvidenceAnswer {
@@ -319,7 +319,7 @@ test "evidence: a target whose file changed after the snapshot is named, never s
     const result = try askFailing(&f, error.Changed);
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.changed_note ++ "  [target f ", "\nPartial because: 1 files changed after the snapshot and could not be refreshed.\n" });
+    try expectLines(text, &.{ "\na.ts\n1  " ++ evidence.changed_note ++ "  [target f ", "\nPartial because: 1 files changed after the snapshot and could not be refreshed.\n" });
     try expectNoLine(text, "return 1;");
     try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 changed_since_snapshot") != null);
 }
@@ -331,7 +331,7 @@ test "evidence: a target whose file was deleted is named, never shown, and the a
     const result = try askFailing(&f, error.Vanished);
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.vanished_note ++ "  [target f ", "\nPartial because: 1 files no longer exist.\n" });
+    try expectLines(text, &.{ "\na.ts\n1  " ++ evidence.vanished_note ++ "  [target f ", "\nPartial because: 1 files no longer exist.\n" });
     try expectNoLine(text, "return 1;");
     try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 vanished") != null);
 }
@@ -343,7 +343,7 @@ test "evidence: a target whose file cannot be read is named, never shown, and th
     const result = try askFailing(&f, error.Unreadable);
     try testing.expectEqual(answer.Status.partial, result.status());
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.unreadable_note ++ "  [target f ", "\nPartial because: 1 files could not be read (locked or access denied).\n" });
+    try expectLines(text, &.{ "\na.ts\n1  " ++ evidence.unreadable_note ++ "  [target f ", "\nPartial because: 1 files could not be read (locked or access denied).\n" });
     try expectNoLine(text, "return 1;");
     try testing.expect(std.mem.indexOf(u8, lastLine(text), "missing 1 unreadable") != null);
 }
@@ -355,7 +355,7 @@ test "evidence: a target whose file grew over the size limit is excluded by the 
     const result = try askFailing(&f, error.TooLarge);
     try testing.expectEqual(answer.Status.complete, result.status());
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:1  " ++ evidence.large_note ++ "  [target f ", "\nExcluded by rule: 1 files over the 1048576-byte size limit are not read.\n" });
+    try expectLines(text, &.{ "\na.ts\n1  " ++ evidence.large_note ++ "  [target f ", "\nExcluded by rule: 1 files over the 1048576-byte size limit are not read.\n" });
     try expectNoLine(text, "return 1;");
     try expectNoLine(text, "Partial because");
     try testing.expect(std.mem.endsWith(u8, lastLine(text), "; skipped 1 too_large"));
@@ -376,7 +376,7 @@ test "evidence: a call from one target to another target is kept when the caller
     try f.repo.linkAll();
     const result = f.ask(.{ .targets = &.{ .{ .path = "a.ts", .qname = "big" }, .{ .path = "a.ts", .qname = "helper" } }, .intent = .explain }, 2000);
     const text = try textOf(result);
-    try expectLines(text, &.{ "\na.ts:64    x = x + helper();\n", "\na.ts:1  export function helper() { return 1; }  [target helper " });
+    try expectLines(text, &.{ "\n64    x = x + helper();\n", "\n1  export function helper() { return 1; }  [target helper " });
 }
 
 test "evidence: an unknown target is named in the header and the answer is refused only when no target is known" {
@@ -410,21 +410,22 @@ test "evidence: the tests that reference a target are listed by test name with h
     _ = try f.repo.put("a.ts", "export function decide(x: number) {\n  return x > 1 ? \"stop\" : \"go\";\n}\n");
     _ = try f.repo.put("a.test.ts", "import { decide } from \"./a\";\ndescribe(\"decide\", () => {\n  it(\"stops\", () => {\n    expect(decide(2)).toBe(\"stop\");\n    expect(decide(3)).toBe(\"stop\");\n  });\n  it(\"guesses\", () => {\n    const x: any = {};\n    x.decide(1);\n  });\n});\n");
     _ = try f.repo.put("b.ts", "import { decide } from \"./a\";\nexport function use() { return decide(1); }\n");
+    _ = try f.repo.put("c.test.ts", "describe(\"other\", () => {\n  it(\"calls a decide of its own\", () => {\n    const y: any = {};\n    y.decide(1);\n  });\n});\n");
     try f.repo.linkAll();
     const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain }, evidence.default_budget);
     const text = try textOf(result);
     try expectLines(text, &.{
-        "\na.test.ts:3  decide > stops  [test of decide: 2 references, proven]\n",
-        "\na.test.ts:7  decide > guesses  [test of decide: 1 reference, by name only]\n",
+        "\na.test.ts\n3  decide > stops  [test of decide: 2 references, proven]\n",
+        "\n7  decide > guesses  [test of decide: 1 reference, by name only]\n",
     });
-    try expectNoLine(text, "\nb.ts:");
+    try expectNoLine(text, "calls a decide of its own");
     try testing.expectEqual(@as(usize, 2), testsOf(result).len);
     const off = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain, .include = .{ .tests = false } }, evidence.default_budget);
     try expectNoLine(try textOf(off), "[test of");
     try testing.expectEqual(@as(usize, 0), testsOf(off).len);
 }
 
-test "evidence: the include field adds the callers to an explain answer and takes the tests away" {
+test "evidence: an explain answer brings callers, callees and tests unless the include field turns them off" {
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -433,13 +434,57 @@ test "evidence: the include field adds the callers to an explain answer and take
     _ = try f.repo.put("a.test.ts", "import { decide } from \"./a\";\ntest(\"runs\", () => decide(1));\n");
     try f.repo.linkAll();
     const plain = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain }, evidence.default_budget);
-    try expectNoLine(try textOf(plain), "[caller of");
-    try expectLines(try textOf(plain), &.{"\na.test.ts:2  runs  [test of decide: 1 reference, proven]\n"});
-    const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain, .include = .{ .callers = true, .tests = false } }, evidence.default_budget);
+    const text = try textOf(plain);
+    try expectLines(text, &.{ "\nb.ts\n2  export function use() { return decide(1); }  [caller of decide: use ", "\n2  export function use() { return decide(1); }  [call proven]\n", "\na.test.ts\n2  runs  [test of decide: 1 reference, proven]\n" });
+    try testing.expect(std.mem.startsWith(u8, lastLine(text), "\u{2713} 1 target in 3 files"));
+    const off = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain, .include = .{ .callers = false, .callees = false, .tests = false } }, evidence.default_budget);
+    try expectNoLine(try textOf(off), "[caller of");
+    try expectNoLine(try textOf(off), "[test of");
+    const defined = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .where_defined }, evidence.default_budget);
+    try expectNoLine(try textOf(defined), "[caller of");
+    try expectNoLine(try textOf(defined), "[test of");
+}
+
+test "evidence: a test file shows three tests of a target and counts the rest" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    _ = try f.repo.put("a.ts", "export function decide(x: number) {\n  return x;\n}\n");
+    var suite: std.ArrayList(u8) = .empty;
+    defer suite.deinit(testing.allocator);
+    try suite.appendSlice(testing.allocator, "import { decide } from \"./a\";\n");
+    for (0..5) |i| try suite.print(testing.allocator, "test(\"case {d}\", () => decide({d}));\n", .{ i, i });
+    _ = try f.repo.put("a.test.ts", suite.items);
+    try f.repo.linkAll();
+    const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain, .include = .{ .callers = false } }, evidence.default_budget);
     const text = try textOf(result);
-    try expectLines(text, &.{ "\nb.ts:2  export function use() { return decide(1); }  [caller of decide: use ", "\nb.ts:2  export function use() { return decide(1); }  [call proven]\n" });
-    try expectNoLine(text, "[test of");
-    try testing.expect(std.mem.startsWith(u8, lastLine(text), "\u{2713} 2 callers in 3 files"));
+    try expectLines(text, &.{ "\na.test.ts\n2  case 0  [test of decide: 1 reference, proven]\n", "\n4  case 2  [test of decide: 1 reference, proven]\n", "\n...  2 more tests in this file\n" });
+    try expectNoLine(text, "case 3");
+    try testing.expectEqual(answer.Status.complete, result.status());
+}
+
+test "evidence: the body of a flow target that fits is shown whole before its callers take the rest of the budget" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(testing.allocator);
+    try body.appendSlice(testing.allocator, "export function work(x: number) {\n");
+    for (0..70) |_| try body.appendSlice(testing.allocator, "  x = x + 1;\n");
+    try body.appendSlice(testing.allocator, "  return x;\n}\n");
+    _ = try f.repo.put("a.ts", body.items);
+    var callers: std.ArrayList(u8) = .empty;
+    defer callers.deinit(testing.allocator);
+    try callers.appendSlice(testing.allocator, "import { work } from \"./a\";\n");
+    for (0..60) |i| try callers.print(testing.allocator, "export function caller{d}() {{ return work({d}); }}\n", .{ i, i });
+    _ = try f.repo.put("b.ts", callers.items);
+    try f.repo.linkAll();
+    const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "work" }}, .intent = .flow }, 2500);
+    const text = try textOf(result);
+    try testing.expect(text.len <= 2500);
+    try expectLines(text, &.{ "\na.ts\n1  export function work(x: number) {  [target work ", "\n72    return x;\n", "\n73  }\n", " call sites" });
+    try testing.expectEqual(answer.Status.partial, result.status());
+    for (result.partial.value.elided) |e| try testing.expect(!std.mem.eql(u8, e.path, "a.ts"));
 }
 
 test "evidence: two targets that do not fit share the budget in request order and both keep their signature and term lines" {
@@ -463,10 +508,10 @@ test "evidence: two targets that do not fit share the budget in request order an
     const text = try textOf(result);
     try testing.expect(text.len <= 2500);
     try expectLines(text, &.{
-        "\na.ts:1  export function aWork(x: number) {  [target aWork ",
-        "\na.ts:2    if (x > 0) return \"needle a0\";\n",
-        "\na.ts:104  export function bWork(x: number) {  [target bWork ",
-        "\na.ts:105    if (x > 0) return \"needle b0\";\n",
+        "\na.ts\n1  export function aWork(x: number) {  [target aWork ",
+        "\n2    if (x > 0) return \"needle a0\";\n",
+        "\n104  export function bWork(x: number) {  [target bWork ",
+        "\n105    if (x > 0) return \"needle b0\";\n",
     });
     try expectNoLine(text, " targets\n");
 }
@@ -485,11 +530,11 @@ test "evidence: a function that does not fit keeps its whole signature up to the
     const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "long" }}, .intent = .explain }, 1200);
     const text = try textOf(result);
     try expectLines(text, &.{
-        "\na.ts:1  export function long(  [target long ",
-        "\na.ts:2    first: number,\n",
-        "\na.ts:3    second: number,\n",
-        "\na.ts:4  ): number {\n",
-        "\na.ts:86  }",
+        "\na.ts\n1  export function long(  [target long ",
+        "\n2    first: number,\n",
+        "\n3    second: number,\n",
+        "\n4  ): number {\n",
+        "\n86  }",
     });
     try testing.expectEqual(answer.Status.partial, result.status());
 }

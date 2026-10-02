@@ -32,6 +32,8 @@ pub const cut_reserve: usize = 120;
 pub const max_call_lines: usize = 6;
 pub const max_tests_chars: usize = 1_000;
 pub const max_title_chars: usize = 200;
+pub const max_tests_per_file: usize = 3;
+pub const relation_floor_percent: usize = 50;
 
 pub const open_note = "an edge not in this list does not mean there is none";
 pub const vanished_note = "(not shown: the file no longer exists)";
@@ -75,11 +77,11 @@ pub const Sections = struct {
 };
 
 pub fn sectionsOf(request: EvidenceRequest) Sections {
-    const intent = request.intent;
+    const relations = request.intent != .where_defined;
     return .{
-        .callers = request.include.callers orelse (intent == .callers or intent == .flow),
-        .callees = request.include.callees orelse (intent == .callees or intent == .flow),
-        .tests = request.include.tests orelse (intent != .where_defined),
+        .callers = request.include.callers orelse relations,
+        .callees = request.include.callees orelse relations,
+        .tests = request.include.tests orelse relations,
     };
 }
 
@@ -137,12 +139,21 @@ const Section = struct {
     lines: std.ArrayList([]const u8) = .empty,
     used: usize = 0,
     cap: usize,
+    path: []const u8 = "",
 
     fn push(self: *Section, arena: Allocator, text: []const u8) !bool {
         if (self.used + text.len + 1 > self.cap) return false;
         try self.lines.append(arena, text);
         self.used += text.len + 1;
         return true;
+    }
+
+    fn pushIn(self: *Section, arena: Allocator, path: []const u8, text: []const u8) !bool {
+        if (std.mem.eql(u8, path, self.path)) return self.push(arena, text);
+        if (self.used + path.len + 1 + text.len + 1 > self.cap) return false;
+        _ = try self.push(arena, path);
+        self.path = path;
+        return self.push(arena, text);
     }
 };
 
@@ -252,6 +263,24 @@ fn capsOf(intent: Intent, sections: Sections, budget: usize) Caps {
     return .{ .callers = callers, .callees = callees, .tests = tests };
 }
 
+fn fitCaps(caps: Caps, content: usize, need: usize) Caps {
+    const relations = caps.callers + caps.callees;
+    if (relations == 0) return caps;
+    const floor = relations * relation_floor_percent / 100;
+    const room = content -| (caps.tests + need);
+    const allowed = @max(floor, @min(relations, room));
+    if (allowed >= relations) return caps;
+    return .{ .callers = caps.callers * allowed / relations, .callees = caps.callees * allowed / relations, .tests = caps.tests };
+}
+
+fn importsFile(store: *const facts_store.Store, from: facts_store.FileId, target: facts_store.FileId) bool {
+    for (store.file(from).spec_targets) |spec| switch (spec) {
+        .file => |f| if (f == target) return true,
+        else => {},
+    };
+    return false;
+}
+
 fn certaintyLabel(certainty: TestCertainty) []const u8 {
     return switch (certainty) {
         .proven => "proven",
@@ -260,11 +289,24 @@ fn certaintyLabel(certainty: TestCertainty) []const u8 {
     };
 }
 
-fn testLess(_: void, a: TestLine, b: TestLine) bool {
-    if (a.certainty != b.certainty) return @intFromEnum(a.certainty) < @intFromEnum(b.certainty);
-    const order = std.mem.order(u8, a.path, b.path);
+const TestOrder = struct {
+    file_best: TestCertainty,
+    line: TestLine,
+};
+
+fn testLess(_: void, a: TestOrder, b: TestOrder) bool {
+    if (a.file_best != b.file_best) return @intFromEnum(a.file_best) < @intFromEnum(b.file_best);
+    const order = std.mem.order(u8, a.line.path, b.line.path);
     if (order != .eq) return order == .lt;
-    return a.line < b.line;
+    if (a.line.line != b.line.line) return a.line.line < b.line.line;
+    return @intFromEnum(a.line.certainty) < @intFromEnum(b.line.certainty);
+}
+
+fn calleeLess(_: void, a: Site, b: Site) bool {
+    const order = std.mem.order(u8, a.target.path, b.target.path);
+    if (order != .eq) return order == .lt;
+    if (a.target.line != b.target.line) return a.target.line < b.target.line;
+    return a.start < b.start;
 }
 
 fn calleeKey(site: Site) u64 {
@@ -286,33 +328,37 @@ fn tagLen(p: *const Plan) usize {
     return std.fmt.count("  [target {s} {s}]", .{ p.subject.qname, &shortHash(p.subject.hash) });
 }
 
+fn headingLen(p: *const Plan) usize {
+    return p.subject.path.len + 1;
+}
+
 fn lineLen(p: *const Plan, n: u32) usize {
     const raw = p.opened.?.lines.text(n) orelse "";
     const clipped = clipCode(raw);
-    var len = std.fmt.count("{s}:{d}  {s}", .{ p.subject.path, n, clipped.text }) + 1;
+    var len = std.fmt.count("{d}  {s}", .{ n, clipped.text }) + 1;
     if (clipped.more != 0) len += std.fmt.count(" ... ({d} more characters on this line)", .{clipped.more});
     if (n == tagLine(p)) len += tagLen(p);
     return len;
 }
 
-fn elisionLen(p: *const Plan, first: u32, last: u32) usize {
-    return std.fmt.count("{s}:{d}-{d}  ... {d} lines elided", .{ p.subject.path, first, last, last - first + 1 }) + 1;
+fn elisionLen(first: u32, last: u32) usize {
+    return std.fmt.count("{d}-{d}  ... {d} lines elided", .{ first, last, last - first + 1 }) + 1;
 }
 
 fn unavailableLen(p: *const Plan) usize {
-    return std.fmt.count("{s}:{d}  {s}  [target {s} {s}]", .{ p.subject.path, p.subject.line, p.note, p.subject.qname, &shortHash(p.subject.hash) }) + 1;
+    return headingLen(p) + std.fmt.count("{d}  {s}  [target {s} {s}]", .{ p.subject.line, p.note, p.subject.qname, &shortHash(p.subject.hash) }) + 1;
 }
 
 fn costOf(p: *const Plan, ranges: []const Range) usize {
-    var total: usize = 0;
+    var total: usize = headingLen(p);
     var next = p.first;
     for (ranges) |r| {
-        if (r.first > next) total += elisionLen(p, next, r.first - 1);
+        if (r.first > next) total += elisionLen(next, r.first - 1);
         var n = @max(r.first, next);
         while (n <= r.last) : (n += 1) total += lineLen(p, n);
         next = @max(next, r.last + 1);
     }
-    if (next <= p.last) total += elisionLen(p, next, p.last);
+    if (next <= p.last) total += elisionLen(next, p.last);
     return total;
 }
 
@@ -342,6 +388,7 @@ const Builder = struct {
     cut_targets: usize = 0,
     cut_tests: usize = 0,
     too_large: bool = false,
+    body_path: []const u8 = "",
 
     fn open(self: *Builder, path: []const u8) !?Opened {
         try self.drawn.put(self.arena, path, {});
@@ -474,7 +521,7 @@ const Builder = struct {
             }
             try w.writer.print("{s}{s}#{s}", .{ if (i == 0) "; not found: " else ", ", t.path, t.qname });
         }
-        try w.writer.writeAll(". Lines are path:line  code; every elided range is declared; the last line is the certificate.");
+        try w.writer.writeAll(". Each file is named once and its lines follow as line  code; every elided range is declared; the last line is the certificate.");
         return w.written();
     }
 
@@ -491,19 +538,20 @@ const Builder = struct {
             var j = i + 1;
             while (j < sites.len and std.mem.eql(u8, sites[j].path, site.path) and std.mem.eql(u8, sites[j].owner.qname, site.owner.qname) and sites[j].owner.line == site.owner.line and sameDef(sites[j].target.id, site.target.id)) j += 1;
             if (site.owner.qname.len != 0) {
-                const signature = try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [caller of {s}: {s} {s}]", .{ site.path, site.owner.line, try self.code(site.path, site.owner.line), site.target.qname, site.owner.qname, &shortHash(site.owner.hash) });
-                if (!try sec.push(self.arena, signature)) return self.cutSites(sites[i..]);
+                const signature = try std.fmt.allocPrint(self.arena, "{d}  {s}  [caller of {s}: {s} {s}]", .{ site.owner.line, try self.code(site.path, site.owner.line), site.target.qname, site.owner.qname, &shortHash(site.owner.hash) });
+                if (!try sec.pushIn(self.arena, site.path, signature)) return self.cutSites(sites[i..]);
             }
             for (sites[i..j], i..) |call, k| {
-                const text = try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [{t} {t}{s}]", .{ call.path, call.line, try self.code(call.path, call.line), call.kind, call.certainty, if (call.owner.qname.len == 0) " at module level" else "" });
-                if (!try sec.push(self.arena, text)) return self.cutSites(sites[k..]);
+                const text = try std.fmt.allocPrint(self.arena, "{d}  {s}  [{t} {t}{s}]", .{ call.line, try self.code(call.path, call.line), call.kind, call.certainty, if (call.owner.qname.len == 0) " at module level" else "" });
+                if (!try sec.pushIn(self.arena, call.path, text)) return self.cutSites(sites[k..]);
             }
             i = j;
         }
     }
 
     fn calleeLines(self: *Builder, sec: *Section) !void {
-        const sites = self.callees.items;
+        const sites = try self.arena.dupe(Site, self.callees.items);
+        std.mem.sort(Site, sites, {}, calleeLess);
         var done: std.AutoHashMapUnmanaged(u64, void) = .empty;
         for (sites, 0..) |site, i| {
             const key = calleeKey(site);
@@ -516,8 +564,8 @@ const Builder = struct {
                 count += 1;
             }
             if (count > max_call_lines) try calls.writer.print(" and {d} more", .{count - max_call_lines});
-            const text = try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [callee of {s}: {s} {s}, called at {s} {s}, {t}]", .{ site.target.path, site.target.line, try self.code(site.target.path, site.target.line), ownerName(site.owner.qname), site.target.qname, &shortHash(site.target.hash), if (count == 1) "line" else "lines", calls.written(), site.certainty });
-            if (!try sec.push(self.arena, text)) {
+            const text = try std.fmt.allocPrint(self.arena, "{d}  {s}  [callee of {s}: {s} {s}, called at {s} {s}, {t}]", .{ site.target.line, try self.code(site.target.path, site.target.line), ownerName(site.owner.qname), site.target.qname, &shortHash(site.target.hash), if (count == 1) "line" else "lines", calls.written(), site.certainty });
+            if (!try sec.pushIn(self.arena, site.target.path, text)) {
                 for (sites[i..]) |other| {
                     if (done.contains(calleeKey(other))) continue;
                     self.cut_sites += 1;
@@ -531,8 +579,8 @@ const Builder = struct {
 
     fn unknownLines(self: *Builder, sec: *Section) !void {
         for (self.unknown.items, 0..) |u, i| {
-            const text = try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [unresolved {t} in {s}]", .{ u.path, u.line, try self.code(u.path, u.line), u.reason, ownerName(u.owner.qname) });
-            if (!try sec.push(self.arena, text)) {
+            const text = try std.fmt.allocPrint(self.arena, "{d}  {s}  [unresolved {t} in {s}]", .{ u.line, try self.code(u.path, u.line), u.reason, ownerName(u.owner.qname) });
+            if (!try sec.pushIn(self.arena, u.path, text)) {
                 self.cut_unknown += self.unknown.items.len - i;
                 for (self.unknown.items[i..]) |rest| try self.markCut(rest.path);
                 return;
@@ -588,23 +636,45 @@ const Builder = struct {
                         .def => continue,
                     };
                     if (!found.ref.kind.invokes() or !facts_query.bindable(reason)) continue;
+                    if (!importsFile(store, key.file, s.id.file)) continue;
                     try self.addTestHit(key.file, found.ref.start, found.ref.line, target, .by_name);
                 }
             }
         }
-        std.mem.sort(TestLine, self.tests.items, {}, testLess);
+        var best: std.StringHashMapUnmanaged(TestCertainty) = .empty;
+        for (self.tests.items) |t| {
+            const entry = try best.getOrPut(self.arena, t.path);
+            if (!entry.found_existing or @intFromEnum(t.certainty) < @intFromEnum(entry.value_ptr.*)) entry.value_ptr.* = t.certainty;
+        }
+        const keys = try self.arena.alloc(TestOrder, self.tests.items.len);
+        for (self.tests.items, keys) |t, *k| k.* = .{ .file_best = best.get(t.path).?, .line = t };
+        std.mem.sort(TestOrder, keys, {}, testLess);
+        for (keys, self.tests.items) |k, *t| t.* = k.line;
     }
 
     fn testLines(self: *Builder, sec: *Section) !void {
-        for (self.tests.items, 0..) |t, i| {
-            const title = if (t.title.len == 0) "(outside a test block)" else t.title;
-            const text = try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [test of {s}: {d} {s}, {s}]", .{ t.path, t.line, title, t.target, t.references, if (t.references == 1) "reference" else "references", certaintyLabel(t.certainty) });
-            if (!try sec.push(self.arena, text)) {
-                self.cut_tests += self.tests.items.len - i;
-                for (self.tests.items[i..]) |rest| try self.markCut(rest.path);
-                return;
+        const tests = self.tests.items;
+        var i: usize = 0;
+        while (i < tests.len) {
+            var end = i + 1;
+            while (end < tests.len and std.mem.eql(u8, tests[end].path, tests[i].path)) end += 1;
+            const shown = @min(end - i, max_tests_per_file);
+            for (tests[i .. i + shown], i..) |t, k| {
+                const title = if (t.title.len == 0) "(outside a test block)" else t.title;
+                const text = try std.fmt.allocPrint(self.arena, "{d}  {s}  [test of {s}: {d} {s}, {s}]", .{ t.line, title, t.target, t.references, if (t.references == 1) "reference" else "references", certaintyLabel(t.certainty) });
+                if (!try sec.pushIn(self.arena, t.path, text)) return self.cutTests(k);
             }
+            if (end - i > shown) {
+                const more = try std.fmt.allocPrint(self.arena, "...  {d} more tests in this file", .{end - i - shown});
+                if (!try sec.pushIn(self.arena, tests[i].path, more)) return self.cutTests(i + shown);
+            }
+            i = end;
         }
+    }
+
+    fn cutTests(self: *Builder, from: usize) !void {
+        self.cut_tests += self.tests.items.len - from;
+        for (self.tests.items[from..]) |rest| try self.markCut(rest.path);
     }
 
     fn plan(self: *Builder, s: Subject) !Plan {
@@ -750,7 +820,7 @@ const Builder = struct {
         const raw = p.opened.?.lines.text(n) orelse "";
         const clipped = clipCode(raw);
         var w: Writer.Allocating = .init(self.arena);
-        try w.writer.print("{s}:{d}  {s}", .{ p.subject.path, n, clipped.text });
+        try w.writer.print("{d}  {s}", .{ n, clipped.text });
         if (clipped.more != 0) {
             try w.writer.print(" ... ({d} more characters on this line)", .{clipped.more});
             try self.markElided(p.subject.path, n, n);
@@ -761,16 +831,23 @@ const Builder = struct {
 
     fn elision(self: *Builder, p: *const Plan, first: u32, last: u32) ![]const u8 {
         try self.markElided(p.subject.path, first, last);
-        return std.fmt.allocPrint(self.arena, "{s}:{d}-{d}  ... {d} lines elided", .{ p.subject.path, first, last, last - first + 1 });
+        return std.fmt.allocPrint(self.arena, "{d}-{d}  ... {d} lines elided", .{ first, last, last - first + 1 });
+    }
+
+    fn heading(self: *Builder, out: *std.ArrayList([]const u8), path: []const u8) !void {
+        if (std.mem.eql(u8, path, self.body_path)) return;
+        try out.append(self.arena, path);
+        self.body_path = path;
     }
 
     fn render(self: *Builder, out: *std.ArrayList([]const u8), p: *const Plan) !void {
+        if (p.mode != .dropped) try self.heading(out, p.subject.path);
         switch (p.mode) {
             .dropped => {
                 self.cut_targets += 1;
                 try self.markCut(p.subject.path);
             },
-            .unavailable => try out.append(self.arena, try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [target {s} {s}]", .{ p.subject.path, p.subject.line, p.note, p.subject.qname, &shortHash(p.subject.hash) })),
+            .unavailable => try out.append(self.arena, try std.fmt.allocPrint(self.arena, "{d}  {s}  [target {s} {s}]", .{ p.subject.line, p.note, p.subject.qname, &shortHash(p.subject.hash) })),
             .whole => {
                 var n = p.first;
                 while (n <= p.last) : (n += 1) try out.append(self.arena, try self.lineText(p, n));
@@ -909,18 +986,21 @@ const Builder = struct {
     }
 
     fn statusCount(self: *const Builder) usize {
-        if (!self.sections.callers and !self.sections.callees) return self.subjects.items.len;
-        var n: usize = 0;
-        if (self.sections.callers) n += self.callers.items.len;
-        if (self.sections.callees) n += self.callees.items.len;
-        return n;
+        return switch (self.request.intent) {
+            .callers => self.callers.items.len,
+            .callees => self.callees.items.len,
+            .flow => self.callers.items.len + self.callees.items.len,
+            .decides, .explain, .where_defined => self.subjects.items.len,
+        };
     }
 
     fn statusNoun(self: *const Builder) []const u8 {
-        if (self.sections.callers and self.sections.callees) return "call edges";
-        if (self.sections.callers) return "callers";
-        if (self.sections.callees) return "callees";
-        return if (self.subjects.items.len == 1) "target" else "targets";
+        return switch (self.request.intent) {
+            .callers => "callers",
+            .callees => "callees",
+            .flow => "call edges",
+            .decides, .explain, .where_defined => if (self.subjects.items.len == 1) "target" else "targets",
+        };
     }
 };
 
@@ -940,7 +1020,11 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
 
     const head = try b.header();
     const content = budget -| (head.len + 1 + status_reserve + reason_reserve + cut_reserve);
-    const caps = capsOf(request.intent, sections, budget);
+    const plans = try arena.alloc(Plan, b.subjects.items.len);
+    for (b.subjects.items, plans) |s, *p| p.* = try b.plan(s);
+    var need: usize = 0;
+    for (plans) |*p| need += if (p.mode == .unavailable) unavailableLen(p) else p.whole;
+    const caps = fitCaps(capsOf(request.intent, sections, budget), content, need);
     var rel: Section = .{ .cap = @min(caps.callers, content) };
     if (sections.callers) try b.callerLines(&rel);
     rel.cap = @min(caps.callers + caps.callees, content);
@@ -950,8 +1034,6 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
     if (sections.tests) try b.testLines(&tests);
 
     const body_budget = content -| (rel.used + tests.used);
-    const plans = try arena.alloc(Plan, b.subjects.items.len);
-    for (b.subjects.items, plans) |s, *p| p.* = try b.plan(s);
     try b.allocate(plans, body_budget);
     var body: std.ArrayList([]const u8) = .empty;
     var body_used: usize = 0;

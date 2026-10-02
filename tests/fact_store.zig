@@ -387,7 +387,8 @@ test "fact store: the evidence view of a repository comes from one call and quot
     try testing.expectEqual(repo.snapshot().barrier, view.snapshot.barrier);
     const result = evidence.evidence(&view, .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.default_budget);
     try testing.expectEqual(answer.Status.complete, result.status());
-    try testing.expect(std.mem.indexOf(u8, try evidenceText(result), "\na.ts:2    return 1;\n") != null);
+    try testing.expect(std.mem.indexOf(u8, try evidenceText(result), "\na.ts\n1  export function f() {  [target f ") != null);
+    try testing.expect(std.mem.indexOf(u8, try evidenceText(result), "\n2    return 1;\n") != null);
 }
 
 test "fact store: evidence refreshes a file changed after the snapshot and quotes its new lines" {
@@ -408,7 +409,8 @@ test "fact store: evidence refreshes a file changed after the snapshot and quote
     const result = try repo.evidence(arena.allocator(), .{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .callers }, evidence.default_budget);
     try testing.expectEqual(answer.Status.complete, result.status());
     const text = try evidenceText(result);
-    try testing.expect(std.mem.indexOf(u8, text, "\nb.ts:2  export function g() { return 7 + f(); }  [call proven]\n") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\nb.ts\n2  export function g() { return 7 + f(); }  [caller of f: g ") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "\n2  export function g() { return 7 + f(); }  [call proven]\n") != null);
     try testing.expect(std.mem.indexOf(u8, text, "return f();") == null);
     try testing.expect(repo.snapshot().barrier > before);
 }
