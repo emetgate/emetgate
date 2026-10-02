@@ -45,7 +45,7 @@ const usage =
     \\       emetgate facts modules [--file <prefix>]
     \\       emetgate facts defs [--file <prefix>]
     \\       emetgate facts evidence --intent <decides|callers|callees|flow|where_defined|explain> --target <path>#<symbol>... [--term <text>]... [--include <callers,callees,tests|none>] [--budget <chars>] [--repeat <n>] [--json]
-    \\       emetgate map build [--budget-tokens <n>] [--region-chars <n>] [--term-value <x>] [--chars-per-token <x>] [--out <file>] [--no-store]
+    \\       emetgate map build [--budget-tokens <n>] [--region-chars <n>] [--term-value <x>] [--chars-per-token <x>] [--no-children] [--out <file>] [--no-store]
     \\       emetgate map region <r1> [--offset <n>] [--budget <chars>] [--no-store]
     \\       emetgate map files [--no-store]
     \\       emetgate map bench [--builds <n>] [--samples <n>] [--updates <n>] [--seed <n>] [--no-store]

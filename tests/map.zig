@@ -266,6 +266,47 @@ test "map: a heavy file that its region path does not show is named on the regio
     try testing.expect(built.stats.files_named >= 1);
 }
 
+test "map: a region of a split directory names each sibling directory on its line and folds runs of files" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const names = [_][]const u8{ "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel" };
+    for (names) |name| {
+        var source: std.ArrayList(u8) = .empty;
+        try source.print(arena, "export class {s}Node {{\n", .{name});
+        for (0..5) |m| try source.print(arena, "  step{d}(x: number) {{ return x + {d}; }}\n", .{ m, m });
+        try source.appendSlice(arena, "}\n");
+        _ = try repo.put(try std.fmt.allocPrint(arena, "pkg/nodes/{s}/{s}.node.ts", .{ name, name }), source.items);
+    }
+    for (1..5) |i| _ = try repo.put(try std.fmt.allocPrint(arena, "pkg/nodes/zeta{d}.ts", .{i}), "export const z = 1;\n");
+    try repo.linkAll();
+    const options: map.MapOptions = .{ .budget_tokens = 4_000, .region_chars = 600 };
+    const listed = try map.buildMap(arena, &repo.store, options);
+    var compact_options = options;
+    compact_options.list_children = false;
+    const compact = try map.buildMap(arena, &repo.store, compact_options);
+    var ranges: usize = 0;
+    for (compact.regions) |r| {
+        if (std.mem.startsWith(u8, r.path, "pkg/nodes/{") and std.mem.indexOf(u8, r.path, " .. ") != null) ranges += 1;
+    }
+    try testing.expect(ranges >= 1);
+    try testing.expect(listed.stats.children_chars > 0);
+    try testing.expectEqual(@as(u32, 0), compact.stats.children_chars);
+    var hidden: usize = 0;
+    for (names) |name| {
+        const dir = try std.fmt.allocPrint(arena, "{s}/", .{name});
+        try testing.expect(std.mem.indexOf(u8, listed.text, dir) != null);
+        if (std.mem.indexOf(u8, compact.text, dir) == null) hidden += 1;
+    }
+    try testing.expect(hidden >= 1);
+    try testing.expect(std.mem.indexOf(u8, listed.text, "zeta1.ts .. zeta4.ts") != null);
+    for (listed.regions, compact.regions) |a, b| try testing.expectEqualStrings(b.path, a.path);
+}
+
 test "map: symbols that share one name in a region are named once" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);

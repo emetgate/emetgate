@@ -33,6 +33,7 @@ pub const Region = struct {
     dir: []const u8,
     label: []const u8,
     path: []const u8,
+    line_path: []const u8,
     files: []const u32,
     symbols: []const SymbolId,
     key_symbols: []const SymbolId,
@@ -83,6 +84,7 @@ pub const Stats = struct {
     terms: u32 = 0,
     entries: u32 = 0,
     files_named: u32 = 0,
+    children_chars: u32 = 0,
     complete: bool = false,
     pagerank_iterations: u32 = 0,
     fit_rounds: u32 = 0,
@@ -109,6 +111,7 @@ pub const MapOptions = struct {
     heading_regions: u32 = 24,
     base_share: f64 = 0.35,
     damping: f64 = 0.3,
+    list_children: bool = true,
     cert: answer.Snapshot = .{ .barrier = 0, .root = std.mem.zeroes(answer.Digest) },
     fallback: ?*const MapTable = null,
 };
@@ -251,12 +254,14 @@ const Builder = struct {
                 self.files[k].region = id;
             }
             const label = try regionLabel(self.arena, r);
+            const shown = if (self.options.list_children and family == .code) try childrenLabel(self.arena, items.items, r) else label;
             try self.regions.append(self.arena, .{
                 .id = id,
                 .family = family,
                 .dir = r.dir,
-                .label = label,
+                .label = shown,
                 .path = try std.mem.concat(self.arena, u8, &.{ r.dir, label }),
+                .line_path = try std.mem.concat(self.arena, u8, &.{ r.dir, shown }),
                 .files = members.items,
                 .symbols = &.{},
                 .key_symbols = &.{},
@@ -481,6 +486,47 @@ fn regionLabel(arena: Allocator, r: map_tree.Range) ![]const u8 {
     return std.fmt.allocPrint(arena, "{{{s} .. {s}}}", .{ r.first_child, r.last_child });
 }
 
+fn isDirSegment(segment: []const u8) bool {
+    return segment.len != 0 and segment[segment.len - 1] == '/';
+}
+
+fn childrenLabel(arena: Allocator, items: []const map_tree.Item, r: map_tree.Range) ![]const u8 {
+    if (r.whole or r.children <= 2) return regionLabel(arena, r);
+    var segments: std.ArrayList([]const u8) = .empty;
+    for (items[r.first .. r.first + r.count]) |item| {
+        const rest = item.path[r.dir.len..];
+        const segment = if (std.mem.indexOfScalar(u8, rest, '/')) |slash| rest[0 .. slash + 1] else rest;
+        if (segments.items.len != 0 and std.mem.eql(u8, segments.items[segments.items.len - 1], segment)) continue;
+        try segments.append(arena, segment);
+    }
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(arena, '{');
+    var i: usize = 0;
+    while (i < segments.items.len) {
+        if (i != 0) try out.appendSlice(arena, ", ");
+        if (isDirSegment(segments.items[i])) {
+            try out.appendSlice(arena, segments.items[i]);
+            i += 1;
+            continue;
+        }
+        var j = i;
+        while (j < segments.items.len and !isDirSegment(segments.items[j])) j += 1;
+        if (j - i > 2) {
+            try out.appendSlice(arena, segments.items[i]);
+            try out.appendSlice(arena, " .. ");
+            try out.appendSlice(arena, segments.items[j - 1]);
+        } else {
+            for (segments.items[i..j], 0..) |segment, n| {
+                if (n != 0) try out.appendSlice(arena, ", ");
+                try out.appendSlice(arena, segment);
+            }
+        }
+        i = j;
+    }
+    try out.append(arena, '}');
+    return out.items;
+}
+
 fn eligibleName(defs: []const facts.Def, di: u32) bool {
     const d = defs[di];
     switch (d.kind) {
@@ -686,7 +732,7 @@ const Planner = struct {
         for (self.term_candidates) |t| {
             const region = b.regions.items[t.region];
             scratch.clearRetainingCapacity();
-            try map_terms.eachPart(region.path, &sink);
+            try map_terms.eachPart(region.line_path, &sink);
             const shown = for (scratch.items) |id| {
                 if (id == t.stem) break true;
             } else false;
@@ -1028,7 +1074,7 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         if (reg.family == .code) code += 1 else tests += 1;
     }
     try w.print("# Project map\nsnapshot {s} | {d} files | {d} symbols | {d} regions ({d} code, {d} test){s}\n", .{ &short, b.files.len, b.syms.items.len, b.regions.items.len, code, tests, if (complete) " | every symbol is listed" else "" });
-    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a .. z} = sibling entries a to z), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), [more files], #terms.\n");
+    try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), [more files], #terms.\n");
     try w.writeAll("emetgate_region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
     var names_count: u32 = 0;
     var files_count: u32 = 0;
@@ -1051,7 +1097,7 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         for (heads.items) |h| {
             try w.print("## {s}\n", .{if (h.dir.len == 0) "./" else h.dir});
             for (b.regions.items[h.first .. h.first + h.count]) |*reg| {
-                const rel = reg.path[h.dir.len..];
+                const rel = reg.line_path[h.dir.len..];
                 try w.print("r{d} {s}", .{ reg.id + 1, if (rel.len == 0) "./" else rel });
                 if (family == .code) {
                     var selected: std.ArrayList(u32) = .empty;
@@ -1140,6 +1186,7 @@ fn ownRegions(arena: Allocator, b: *Builder, snapshot: Snapshot) ![]Region {
         r.dir = try arena.dupe(u8, r.dir);
         r.label = try arena.dupe(u8, r.label);
         r.path = try arena.dupe(u8, r.path);
+        r.line_path = try arena.dupe(u8, r.line_path);
     }
     _ = snapshot;
     return regions;
@@ -1212,6 +1259,7 @@ pub fn buildMap(arena: Allocator, store: *const Store, options: MapOptions) !Map
     stats.code_symbols = @intCast(planner.code_syms.len);
     stats.regions = @intCast(b.regions.items.len);
     for (b.regions.items) |r| {
+        stats.children_chars += @intCast(r.line_path.len - r.path.len);
         if (r.family == .code) stats.code_regions += 1 else stats.test_regions += 1;
         stats.max_region_chars = @max(stats.max_region_chars, r.listing_chars);
         if (r.listing_chars > b.capacity) stats.over_capacity_regions += 1;

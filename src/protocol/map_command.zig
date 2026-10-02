@@ -58,6 +58,10 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             options.persist = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--no-children")) {
+            options.map.list_children = false;
+            continue;
+        }
         if (!std.mem.startsWith(u8, arg, "--")) {
             if (options.command != .region or options.region != null) return null;
             options.region = regionId(arg) orelse return null;
