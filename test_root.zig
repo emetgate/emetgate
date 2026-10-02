@@ -44,6 +44,7 @@ pub const map = src.map;
 pub const map_listing = src.map_listing;
 pub const map_delta = src.map_delta;
 pub const map_region_rank = src.map_region_rank;
+pub const map_explore = src.map_explore;
 pub const coverage = src.coverage;
 pub const checks = src.checks;
 pub const regex = src.regex;
@@ -161,6 +162,7 @@ test {
     _ = @import("tests/facts_signature.zig");
     _ = @import("tests/map.zig");
     _ = @import("tests/map_region_rank.zig");
+    _ = @import("tests/map_explore.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");

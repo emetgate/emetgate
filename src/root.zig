@@ -42,6 +42,7 @@ pub const map = @import("engine/map.zig");
 pub const map_listing = @import("engine/map_listing.zig");
 pub const map_delta = @import("engine/map_delta.zig");
 pub const map_region_rank = @import("engine/map_region_rank.zig");
+pub const map_explore = @import("engine/map_explore.zig");
 pub const coverage = @import("engine/coverage.zig");
 pub const checks = @import("engine/checks.zig");
 pub const regex = @import("engine/regex.zig");
