@@ -62,7 +62,7 @@ def new_session(exe, repo, args, delay, sessions):
     warm_wait = []
     warmup = []
     for _ in range(sessions):
-        session = McpSession(exe, repo)
+        session = McpSession(exe, repo, internals=True)
         try:
             if delay:
                 time.sleep(delay)
@@ -151,9 +151,9 @@ def main():
     ap.add_argument("--json")
     args = ap.parse_args()
     repo = os.path.abspath(args.repo)
-    McpSession(args.exe, repo).close()
+    McpSession(args.exe, repo, internals=True).close()
     rows = []
-    session = McpSession(args.exe, repo)
+    session = McpSession(args.exe, repo, internals=True)
     try:
         for name, call, _ in QUERIES:
             session.call("emetgate_search", call)

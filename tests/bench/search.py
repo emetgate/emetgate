@@ -52,7 +52,7 @@ def clear_index(repo):
 class McpSession:
     def __init__(self, cwd, extra=None):
         self.proc = subprocess.Popen(
-            [SYN, "mcp", *(extra or [])],
+            [SYN, "mcp", "--search-internals", *(extra or [])],
             cwd=cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

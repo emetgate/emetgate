@@ -43,7 +43,7 @@ class Result:
 class Probe:
     def __init__(self, exe, repo):
         self.repo = repo
-        self.session = McpSession(exe, repo)
+        self.session = McpSession(exe, repo, internals=True)
 
     def search(self, pattern, where="."):
         text, is_error, ms = self.session.call("emetgate_search", {"pattern": pattern, "dir": where, "stats": True, "detail": "full"})
