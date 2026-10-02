@@ -7381,23 +7381,23 @@
     {
       "id": "TS3-tests-switch-ignored",
       "file": "src/engine/evidence.zig",
-      "from": ".tests = request.include.tests orelse (intent != .where_defined),",
-      "to": ".tests = intent != .where_defined,",
+      "from": ".tests = request.include.tests orelse relations,",
+      "to": ".tests = relations,",
       "kills": [
         "evidence: the tests that reference a target are listed by test name with how each was bound",
-        "evidence: the include field adds the callers to an explain answer and takes the tests away"
+        "evidence: an explain answer brings callers, callees and tests unless the include field turns them off"
       ],
       "note": "a request that turns the tests off would still get them"
     },
     {
       "id": "TS4-callers-switch-ignored",
       "file": "src/engine/evidence.zig",
-      "from": ".callers = request.include.callers orelse (intent == .callers or intent == .flow),",
-      "to": ".callers = intent == .callers or intent == .flow,",
+      "from": ".callers = request.include.callers orelse relations,",
+      "to": ".callers = relations,",
       "kills": [
-        "evidence: the include field adds the callers to an explain answer and takes the tests away"
+        "evidence: an explain answer brings callers, callees and tests unless the include field turns them off"
       ],
-      "note": "a request that asks for callers with another intent would not get them"
+      "note": "a request that turns callers off would still get them"
     },
     {
       "id": "TS5-test-title-chain-flattened",
@@ -7429,6 +7429,36 @@
         "evidence: two targets that do not fit share the budget in request order and both keep their signature and term lines"
       ],
       "note": "the first target would take the whole budget and the next ones would be dropped"
+    },
+    {
+      "id": "BS2-relations-before-body",
+      "file": "src/engine/evidence.zig",
+      "from": "const room = content -| (caps.tests + need);",
+      "to": "const room = content -| (caps.tests + need * 0);",
+      "kills": [
+        "evidence: the body of a flow target that fits is shown whole before its callers take the rest of the budget"
+      ],
+      "note": "callers would take the room a target body that fits needs and the body would be cut"
+    },
+    {
+      "id": "TS7-by-name-test-without-import-kept",
+      "file": "src/engine/evidence.zig",
+      "from": "if (!importsFile(store, key.file, s.id.file)) continue;",
+      "to": "if (!importsFile(store, key.file, s.id.file) and false) continue;",
+      "kills": [
+        "evidence: the tests that reference a target are listed by test name with how each was bound"
+      ],
+      "note": "a test that calls a method of the same name on an unrelated value would be listed"
+    },
+    {
+      "id": "TS8-tests-per-file-not-capped",
+      "file": "src/engine/evidence.zig",
+      "from": "const shown = @min(end - i, max_tests_per_file);",
+      "to": "const shown = end - i;",
+      "kills": [
+        "evidence: a test file shows three tests of a target and counts the rest"
+      ],
+      "note": "one test file would fill the tests section"
     },
     {
       "id": "FF1-outline-not-saved",
