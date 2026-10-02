@@ -39,8 +39,8 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_explore",
         .description = map_tools.explore_description,
         .props = &.{
-            .{ .name = "question", .desc = "a short English search phrase with the concepts, identifiers and folders involved" },
-            .{ .name = "names", .desc = "optional function or class names (Class.method or function) you already know are central", .optional = true, .ty = "array" },
+            .{ .name = "question", .desc = "what you want to know" },
+            .{ .name = "names", .desc = "symbols, strings or files you expect to be involved", .optional = true, .ty = "array" },
         },
     },
     .{
@@ -276,7 +276,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
     const request_id = id.?;
 
     if (std.mem.eql(u8, method, "initialize")) {
-        try writeInitialize(out, request_id, msg, if (policy.map_session) |ms| ms.instructions else null);
+        try writeInitialize(out, request_id, msg);
         return true;
     }
     if (std.mem.eql(u8, method, "ping")) {
@@ -326,7 +326,7 @@ fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, argu
     return if (explore) session.explore(gpa, arguments) else session.evidenceTool(gpa, arguments);
 }
 
-fn writeInitialize(out: *Writer, id: Value, msg: Value, instructions: ?[]const u8) !void {
+fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
     const protocol_version = blk: {
         const params = getField(msg, "params") orelse break :blk default_protocol_version;
         break :blk getString(params, "protocolVersion") orelse default_protocol_version;
@@ -351,10 +351,6 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value, instructions: ?[]const u
     try js.objectField("version");
     try js.write(server_version);
     try js.endObject();
-    if (instructions) |text| {
-        try js.objectField("instructions");
-        try js.write(text);
-    }
     try js.endObject();
     try js.endObject();
 }

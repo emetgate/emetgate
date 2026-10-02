@@ -108,7 +108,7 @@ pub const scan_command = src.scan_command;
 pub const rule_command = src.rule_command;
 pub const facts_command = src.facts_command;
 pub const map_command = src.map_command;
-pub const hook_command = src.hook_command;
+pub const map_tools = src.map_tools;
 pub const diagnostics = src.diagnostics;
 pub const server = src.server;
 pub const telemetry = src.telemetry;
@@ -168,6 +168,7 @@ test {
     _ = @import("tests/map.zig");
     _ = @import("tests/map_region_rank.zig");
     _ = @import("tests/map_explore.zig");
+    _ = @import("tests/map_tools.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");
