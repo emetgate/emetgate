@@ -8113,6 +8113,207 @@
       "kills": [
         "map: route, command and api entry points come from decorators and cross region calls"
       ]
+    },
+    {
+      "id": "MP16-split-directory-children-hidden",
+      "file": "src/engine/map.zig",
+      "from": "const shown = if (self.options.list_children and family == .code) try childrenLabel(self.arena, items.items, r) else label;",
+      "to": "const shown = if (false) try childrenLabel(self.arena, items.items, r) else label;",
+      "kills": [
+        "map: a region of a split directory names each sibling directory on its line and folds runs of files"
+      ],
+      "note": "the sibling directories of a split directory would hide behind a range label again"
+    },
+    {
+      "id": "MP17-file-runs-never-folded",
+      "file": "src/engine/map.zig",
+      "from": "        if (j - i > 2) {\n            try out.appendSlice(arena, segments.items[i]);",
+      "to": "        if (j - i > 2000) {\n            try out.appendSlice(arena, segments.items[i]);",
+      "kills": [
+        "map: a region of a split directory names each sibling directory on its line and folds runs of files"
+      ],
+      "note": "every file of a long run would be named and eat the map budget"
+    },
+    {
+      "id": "MP18-listing-drops-stored-signatures",
+      "file": "src/engine/map_listing.zig",
+      "from": ".signature = if (d.kind.callable()) paramsOf(d.signature, d.name) else \"\"",
+      "to": ".signature = if (d.kind.callable()) \"\" else \"\"",
+      "kills": [
+        "map listing: a region that fits is listed whole with signatures and first doc lines"
+      ],
+      "note": "the listing would lose the signatures it now takes from the fact store"
+    },
+    {
+      "id": "MP19-params-start-inside-a-decorator",
+      "file": "src/engine/map_listing.zig",
+      "from": "if (at > 0 and (isIdentByte(signature[at - 1]) or signature[at - 1] == '\"' or signature[at - 1] == '\\'')) continue;",
+      "to": "if (at > 0 and isIdentByte(signature[at - 1])) continue;",
+      "kills": [
+        "map listing: the parameters of a stored signature follow the name, also for arrows and decorated methods"
+      ],
+      "note": "a name quoted in a decorator would be taken for the declaration"
+    },
+    {
+      "id": "RK1-body-calls-ignored",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "for (state.facts.refs, 0..) |r, ri| {",
+      "to": "for (state.facts.refs[0..0], 0..) |r, ri| {",
+      "kills": [
+        "map rank region: the names a function calls in its body count for it and for the functions around it"
+      ],
+      "note": "the names a function calls would not count for it"
+    },
+    {
+      "id": "RK2-nested-calls-not-lifted",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "                if (mask != 0) try self.mark(doc, mask, .body, r.line);\n                doc = self.docs.items[doc].up;",
+      "to": "                if (mask != 0) try self.mark(doc, mask, .body, r.line);\n                doc = none;",
+      "kills": [
+        "map rank region: the names a function calls in its body count for it and for the functions around it"
+      ],
+      "note": "a call inside a nested function would not count for the function around it"
+    },
+    {
+      "id": "RK3-no-proximity",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "scores[doc] += bm25 + params.proximity * proximity;",
+      "to": "scores[doc] += bm25 + params.proximity * proximity * 0;",
+      "kills": [
+        "map rank region: terms that meet on one line outrank the same terms far apart"
+      ],
+      "note": "terms on one line would weigh the same as terms far apart"
+    },
+    {
+      "id": "RK4-no-idf",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "idf[i] = @log((n - d + 0.5) / (d + 0.5) + 1);",
+      "to": "idf[i] = @log((n - d + 0.5) / (d + 0.5) + 1) * 0 + 1;",
+      "kills": [
+        "map rank region: a term few functions hold weighs more than a term many hold"
+      ],
+      "note": "a term every function holds would weigh as much as a rare one"
+    },
+    {
+      "id": "RK5-worst-first",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "if (a.score != b.score) return a.score > b.score;",
+      "to": "if (a.score != b.score) return a.score < b.score;",
+      "kills": [
+        "map rank region: the function whose name, owner and body hold the question terms ranks first",
+        "map rank region: every function of the region is ranked once, best first, and the order is the same on every run"
+      ],
+      "note": "the ranking would put the weakest function first"
+    },
+    {
+      "id": "RK6-lexicon-off",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "const query = try question_terms.build(arena, lex, question, null, .{});",
+      "to": "const query = try question_terms.build(arena, lex, question, null, .{ .lexicon = false });",
+      "kills": [
+        "map rank region: a turkish question reaches the english code terms through the lexicon"
+      ],
+      "note": "a turkish question would not reach the english names of the code"
+    },
+    {
+      "id": "RK7-file-field-dropped",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "try self.markCounts(@intCast(doc), file_mask, &file_counts);",
+      "to": "try self.markCounts(@intCast(doc), file_mask & 0, &file_counts);",
+      "kills": [
+        "map rank region: the property names a file reads count for the functions of that file"
+      ],
+      "note": "the property names a file reads would not count for its functions"
+    },
+    {
+      "id": "RK8-doc-field-dropped",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "try self.mark(doc, comment.mask, .doc, d.line);",
+      "to": "try self.mark(doc, comment.mask & 0, .doc, d.line);",
+      "kills": [
+        "map rank region: the first doc line of a function counts for it"
+      ],
+      "note": "the first doc line would not count"
+    },
+    {
+      "id": "RK9-identifier-pieces-apart",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "for (together) |pieces| {",
+      "to": "for (together[0..0]) |pieces| {",
+      "kills": [
+        "map rank region: a question identifier counts once however many of its pieces a function holds"
+      ],
+      "note": "one question identifier would count once per piece a function holds"
+    },
+    {
+      "id": "RK10-stale-index-used",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "if (!std.mem.eql(u8, &fi.hash, &state.content_hash)) return null;",
+      "to": "if (!std.mem.eql(u8, &fi.hash, &state.content_hash) and false) return null;",
+      "kills": [
+        "map rank region: the prebuilt index ranks exactly as the store does and a file changed since the index is read from the store"
+      ],
+      "note": "a file changed after the index was built would be ranked by its old names"
+    },
+    {
+      "id": "XP1-explore-budget-ignored",
+      "file": "src/engine/map_explore.zig",
+      "from": "const budget = @max(options.budget, min_budget);",
+      "to": "const budget = @max(options.budget, min_budget) * 8;",
+      "kills": [
+        "map explore: the text stays inside the budget and a cut is declared and certified as partial"
+      ],
+      "note": "the explore answer would pass its budget"
+    },
+    {
+      "id": "XP2-explore-evidence-header-and-status-kept",
+      "file": "src/engine/map_explore.zig",
+      "from": "code_text = codeLines(block.text);",
+      "to": "code_text = block.text;",
+      "kills": [
+        "map explore: the answer ranks the region, shows the code of the best functions, lists the region and ends with one certificate line"
+      ],
+      "note": "the answer would carry two certificate lines"
+    },
+    {
+      "id": "XP3-explore-cut-not-certified",
+      "file": "src/engine/map_explore.zig",
+      "from": "    if (budget_files != 0) {",
+      "to": "    if (budget_files == 0xffffffff) {",
+      "kills": [
+        "map explore: the text stays inside the budget and a cut is declared and certified as partial"
+      ],
+      "note": "a cut would leave files neither evaluated nor missing"
+    },
+    {
+      "id": "XP4-explore-four-regions-accepted",
+      "file": "src/engine/map_explore.zig",
+      "from": "if (region_ids.items.len > max_regions) return",
+      "to": "if (region_ids.items.len > max_regions + 1) return",
+      "kills": [
+        "map explore: no region, an unknown region and more than three regions are refused, and a repeated region is explored once"
+      ],
+      "note": "a fourth region would be explored"
+    },
+    {
+      "id": "XP5-explore-region-explored-twice",
+      "file": "src/engine/map_explore.zig",
+      "from": "if (std.mem.indexOfScalar(map.RegionId, region_ids.items, r) == null) try region_ids.append(arena, r);",
+      "to": "try region_ids.append(arena, r);",
+      "kills": [
+        "map explore: no region, an unknown region and more than three regions are refused, and a repeated region is explored once"
+      ],
+      "note": "a repeated region would be ranked and listed twice"
+    },
+    {
+      "id": "XP6-explore-nested-function-shown-twice",
+      "file": "src/engine/map_explore.zig",
+      "from": "if (inside(hit, t.hit) or inside(t.hit, hit)) break true;",
+      "to": "if ((inside(hit, t.hit) or inside(t.hit, hit)) and false) break true;",
+      "kills": [
+        "map explore: a function inside another shown function is not shown twice"
+      ],
+      "note": "a function and the function around it would both take code budget"
     }
   ]
 }
