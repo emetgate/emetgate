@@ -24,8 +24,11 @@ GATE_TEST_RATE = 0.90
 GATE_SEEN_HITS = 12
 GATE_MAP_TOKENS = 8000
 SPLIT_RULE = "random.Random(seed).shuffle of the sorted question ids of the general set; the first 32 are dev, the other 32 are test"
-CHOICE_RULE = ("candidates with 12 seen calls, 32 dev calls and an api map token count; eligible when seen hits are 12 of 12 and the map "
-               "has at most 8000 tokens; order: eligible first, then more dev hits, more seen hits, fewer map tokens, label")
+RANK_BASELINE = "m2-names8k"
+CHOICE_RULE = ("candidates with 12 seen calls, 32 dev calls and an api map token count; eligible when seen hits are 12 of 12, the map "
+               "has at most 8000 tokens and the kernel puts the gold function in the top 8 of its region for at least as many seen and dev "
+               "questions as on the partition of " + RANK_BASELINE + "; order: eligible first, then more dev hits, more seen hits, fewer map "
+               "tokens, label")
 
 
 def sha256_of(path):
@@ -182,7 +185,16 @@ def score(label):
             print(r["set"], r["qid"], r["trial"], "MISS", r["picked"], r["gold_regions"])
 
 
+def rank_at8(label):
+    path = os.path.join(base.label_dir(label), "m2-rank.json")
+    if not os.path.exists(path):
+        return None
+    summary = base.read_json(path)["summary"]
+    return summary["seen"]["at8"] + summary["dev"]["at8"]
+
+
 def candidates():
+    floor = rank_at8(RANK_BASELINE)
     out = []
     for label in m2_labels():
         path = os.path.join(base.label_dir(label), "m2-score.json")
@@ -193,9 +205,11 @@ def candidates():
         dev = s["summary"].get("dev") or {}
         if seen.get("calls") != SEEN_CALLS or dev.get("calls") != DEV_SIZE or s.get("map_tokens") is None:
             continue
+        rank = rank_at8(label)
         out.append({"label": label, "args": s["args"], "seen_hits": seen["hits"], "dev_hits": dev["hits"], "dev_rate": dev["rate"],
                     "map_tokens": s["map_tokens"], "est_tokens": s["est_tokens"], "regions": s["regions"], "code_regions": s["code_regions"],
-                    "eligible": seen["hits"] >= GATE_SEEN_HITS and s["map_tokens"] <= GATE_MAP_TOKENS})
+                    "rank_at8": rank, "eligible": seen["hits"] >= GATE_SEEN_HITS and s["map_tokens"] <= GATE_MAP_TOKENS
+                    and rank is not None and floor is not None and rank >= floor})
     out.sort(key=lambda c: (not c["eligible"], -c["dev_hits"], -c["seen_hits"], c["map_tokens"], c["label"]))
     return out
 
@@ -228,10 +242,10 @@ def report():
                 and chosen["seen_hits"] >= GATE_SEEN_HITS and chosen["map_tokens"] <= GATE_MAP_TOKENS}
     base.write_json(REPORT, {"reported_at": base.now(), "candidates": pool, "choice": choice and choice["label"], "test": test, "gate": gate,
                              "ledger_usd": round(base.spent(base.M2_LEDGER), 4)})
-    print("| label | args | seen | dev32 | map tokens (api) | est tokens | regions |")
-    print("|---|---|---|---|---|---|---|")
+    print("| label | args | seen | dev32 | map tokens (api) | est tokens | regions | kernel rank@8 seen+dev | eligible |")
+    print("|---|---|---|---|---|---|---|---|---|")
     for c in pool:
-        print(f"| {c['label']} | {' '.join(c['args'])} | {c['seen_hits']}/12 | {c['dev_hits']}/32 ({c['dev_rate']:.2f}) | {c['map_tokens']} | {c['est_tokens']} | {c['regions']} |")
+        print(f"| {c['label']} | {' '.join(c['args'])} | {c['seen_hits']}/12 | {c['dev_hits']}/32 ({c['dev_rate']:.2f}) | {c['map_tokens']} | {c['est_tokens']} | {c['regions']} | {c['rank_at8']} | {c['eligible']} |")
     print(json.dumps({"choice": choice and choice["label"], "test": test, "gate": gate, "ledger_usd": round(base.spent(base.M2_LEDGER), 4)}, indent=2))
 
 
