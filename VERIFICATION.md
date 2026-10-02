@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1296**
-- Mutations declared in `tests/mutations.json`: **791**
-  - killed: **761**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1298**
+- Mutations declared in `tests/mutations.json`: **795**
+  - killed: **765**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -556,7 +556,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-331 mutation(s).
+335 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -864,6 +864,10 @@ python tools/verification_page.py --check
 | `FF1-outline-not-saved` | `src/platform/fact_file.zig` | `try e.varint(f.outline.len);     var previous: u32 = 0;     for...` -> `try e.varint(0);     var previous: u32 = 0;     for (f.outline[...` | fact store: a saved store opens again with every outline node, test block and b... | killed |
 | `FF2-body-start-not-saved` | `src/platform/fact_file.zig` | `try e.varint(if (d.body_start == none) 0 else @as(u64, d.body_s...` -> `try e.varint(0);` | fact store: a saved store opens again with every outline node, test block and b... | killed |
 | `FF3-test-blocks-not-saved` | `src/platform/fact_file.zig` | `try e.varint(f.tests.len);     previous = 0;     for (f.tests, ...` -> `try e.varint(0);     previous = 0;     for (f.tests[0..0], 0..)...` | fact store: a saved store opens again with every outline node, test block and b... | killed |
+| `SD1-comment-above-not-read` | `src/engine/facts_signature.zig` | `if (!profile.isComment(comment.kind())) break;` -> `if (true) break;` | signatures: a definition keeps its signature up to its body and the first line ... | killed |
+| `SD2-signature-cut-at-first-line` | `src/engine/facts_signature.zig` | `if (body_start != none and body_start > start and body_start <=...` -> `if (body_start != none and body_start > start and body_start <=...` | signatures: a definition keeps its signature up to its body and the first line ... | killed |
+| `SD3-detached-comment-taken` | `src/engine/facts_signature.zig` | `if (lines.lineAt(comment.endByte() -\| 1) + 1 < next_line) brea...` -> `if (lines.lineAt(comment.endByte() -\| 1) + 1 < next_line and f...` | signatures: a definition keeps its signature up to its body and the first line ... | killed |
+| `FF4-signature-not-saved` | `src/platform/fact_file.zig` | `try e.str(d.signature);` -> `try e.str("");` | fact store: a saved store opens again with every outline node, test block and b... | killed |
 | `EV9-long-line-not-cut` | `src/engine/evidence.zig` | `if (text.len <= max_line_chars) return` -> `if (text.len <= max_line_chars * 1000) return` | evidence: a line too long for the evidence is cut with the number of hidden cha... | killed |
 | `EV10-comment-not-followed` | `src/engine/facts_spine.zig` | `if (follow and oneOf(leaf.kind(), profile.comments)) {` -> `if (follow and oneOf(leaf.kind(), &.{})) {` | outline: every line of every definition gets the same complete unit from the st... | killed |
 | `EV11-enclosing-function-header-dropped` | `src/engine/facts_spine.zig` | `and profile.functionKind(outer.kind()) == null) continue;` -> `) continue;` | outline: every line of every definition gets the same complete unit from the st... | killed |
