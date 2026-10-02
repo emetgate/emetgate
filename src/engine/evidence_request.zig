@@ -14,10 +14,17 @@ pub const SymbolRef = struct {
     qname: []const u8,
 };
 
+pub const Include = struct {
+    callers: ?bool = null,
+    callees: ?bool = null,
+    tests: ?bool = null,
+};
+
 pub const EvidenceRequest = struct {
     targets: []const SymbolRef,
     intent: Intent,
     terms: []const []const u8 = &.{},
+    include: Include = .{},
 };
 
 const testing = std.testing;

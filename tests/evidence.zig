@@ -394,3 +394,102 @@ test "evidence: an unknown target is named in the header and the answer is refus
     const small = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "f" }}, .intent = .explain }, evidence.min_budget - 1);
     try testing.expectEqual(error.BudgetTooSmall, small.refused.code);
 }
+
+fn testsOf(a: evidence.EvidenceAnswer) []const evidence.TestLine {
+    return switch (a) {
+        .complete => |c| c.value.tests,
+        .partial => |p| p.value.tests,
+        .refused => &.{},
+    };
+}
+
+test "evidence: the tests that reference a target are listed by test name with how each was bound" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    _ = try f.repo.put("a.ts", "export function decide(x: number) {\n  return x > 1 ? \"stop\" : \"go\";\n}\n");
+    _ = try f.repo.put("a.test.ts", "import { decide } from \"./a\";\ndescribe(\"decide\", () => {\n  it(\"stops\", () => {\n    expect(decide(2)).toBe(\"stop\");\n    expect(decide(3)).toBe(\"stop\");\n  });\n  it(\"guesses\", () => {\n    const x: any = {};\n    x.decide(1);\n  });\n});\n");
+    _ = try f.repo.put("b.ts", "import { decide } from \"./a\";\nexport function use() { return decide(1); }\n");
+    try f.repo.linkAll();
+    const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain }, evidence.default_budget);
+    const text = try textOf(result);
+    try expectLines(text, &.{
+        "\na.test.ts:3  decide > stops  [test of decide: 2 references, proven]\n",
+        "\na.test.ts:7  decide > guesses  [test of decide: 1 reference, by name only]\n",
+    });
+    try expectNoLine(text, "\nb.ts:");
+    try testing.expectEqual(@as(usize, 2), testsOf(result).len);
+    const off = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain, .include = .{ .tests = false } }, evidence.default_budget);
+    try expectNoLine(try textOf(off), "[test of");
+    try testing.expectEqual(@as(usize, 0), testsOf(off).len);
+}
+
+test "evidence: the include field adds the callers to an explain answer and takes the tests away" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    _ = try f.repo.put("a.ts", "export function decide(x: number) {\n  return x;\n}\n");
+    _ = try f.repo.put("b.ts", "import { decide } from \"./a\";\nexport function use() { return decide(1); }\n");
+    _ = try f.repo.put("a.test.ts", "import { decide } from \"./a\";\ntest(\"runs\", () => decide(1));\n");
+    try f.repo.linkAll();
+    const plain = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain }, evidence.default_budget);
+    try expectNoLine(try textOf(plain), "[caller of");
+    try expectLines(try textOf(plain), &.{"\na.test.ts:2  runs  [test of decide: 1 reference, proven]\n"});
+    const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "decide" }}, .intent = .explain, .include = .{ .callers = true, .tests = false } }, evidence.default_budget);
+    const text = try textOf(result);
+    try expectLines(text, &.{ "\nb.ts:2  export function use() { return decide(1); }  [caller of decide: use ", "\nb.ts:2  export function use() { return decide(1); }  [call proven]\n" });
+    try expectNoLine(text, "[test of");
+    try testing.expect(std.mem.startsWith(u8, lastLine(text), "\u{2713} 2 callers in 3 files"));
+}
+
+test "evidence: two targets that do not fit share the budget in request order and both keep their signature and term lines" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(testing.allocator);
+    for ([_][]const u8{ "a", "b" }) |tag| {
+        try source.print(testing.allocator, "export function {s}Work(x: number) {{\n", .{tag});
+        for (0..100) |i| {
+            if (i % 5 == 0) {
+                try source.print(testing.allocator, "  if (x > {d}) return \"needle {s}{d}\";\n", .{ i, tag, i });
+            } else try source.appendSlice(testing.allocator, "  x = x + 1;\n");
+        }
+        try source.appendSlice(testing.allocator, "  return x;\n}\n");
+    }
+    _ = try f.repo.put("a.ts", source.items);
+    try f.repo.linkAll();
+    const result = f.ask(.{ .targets = &.{ .{ .path = "a.ts", .qname = "aWork" }, .{ .path = "a.ts", .qname = "bWork" } }, .intent = .decides, .terms = &.{"needle"} }, 2500);
+    const text = try textOf(result);
+    try testing.expect(text.len <= 2500);
+    try expectLines(text, &.{
+        "\na.ts:1  export function aWork(x: number) {  [target aWork ",
+        "\na.ts:2    if (x > 0) return \"needle a0\";\n",
+        "\na.ts:104  export function bWork(x: number) {  [target bWork ",
+        "\na.ts:105    if (x > 0) return \"needle b0\";\n",
+    });
+    try expectNoLine(text, " targets\n");
+}
+
+test "evidence: a function that does not fit keeps its whole signature up to the line where its body opens" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(testing.allocator);
+    try source.appendSlice(testing.allocator, "export function long(\n  first: number,\n  second: number,\n): number {\n");
+    for (0..80) |_| try source.appendSlice(testing.allocator, "  first = first + second;\n");
+    try source.appendSlice(testing.allocator, "  return first;\n}\n");
+    _ = try f.repo.put("a.ts", source.items);
+    try f.repo.linkAll();
+    const result = f.ask(.{ .targets = &.{.{ .path = "a.ts", .qname = "long" }}, .intent = .explain }, 1200);
+    const text = try textOf(result);
+    try expectLines(text, &.{
+        "\na.ts:1  export function long(  [target long ",
+        "\na.ts:2    first: number,\n",
+        "\na.ts:3    second: number,\n",
+        "\na.ts:4  ): number {\n",
+        "\na.ts:86  }",
+    });
+    try testing.expectEqual(answer.Status.partial, result.status());
+}

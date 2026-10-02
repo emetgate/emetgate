@@ -127,7 +127,7 @@ pub fn bindable(reason: facts.Reason) bool {
     return false;
 }
 
-fn simpleName(subject: []const u8) []const u8 {
+pub fn simpleName(subject: []const u8) []const u8 {
     const plain = subject[0 .. std.mem.indexOfScalar(u8, subject, '@') orelse subject.len];
     const dot = std.mem.lastIndexOfScalar(u8, plain, '.') orelse return plain;
     return plain[dot + 1 ..];

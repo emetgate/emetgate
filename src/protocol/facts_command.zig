@@ -34,7 +34,25 @@ pub const Options = struct {
     target_count: usize = 0,
     terms: [max_terms][]const u8 = undefined,
     term_count: usize = 0,
+    include: evidence.Include = .{},
+    repeat: usize = 1,
 };
+
+fn includeOf(text: []const u8) ?evidence.Include {
+    var out: evidence.Include = .{ .callers = false, .callees = false, .tests = false };
+    if (std.mem.eql(u8, text, "none")) return out;
+    var parts = std.mem.splitScalar(u8, text, ',');
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, part, "callers")) {
+            out.callers = true;
+        } else if (std.mem.eql(u8, part, "callees")) {
+            out.callees = true;
+        } else if (std.mem.eql(u8, part, "tests")) {
+            out.tests = true;
+        } else return null;
+    }
+    return out;
+}
 
 fn symbolRef(text: []const u8) evidence.SymbolRef {
     const hash = std.mem.lastIndexOfScalar(u8, text, '#') orelse return .{ .path = "", .qname = text };
@@ -92,6 +110,11 @@ pub fn parse(args: []const [:0]const u8) ?Options {
             if (options.target_count == max_targets) return null;
             options.targets[options.target_count] = symbolRef(value);
             options.target_count += 1;
+        } else if (std.mem.eql(u8, arg, "--include")) {
+            options.include = includeOf(value) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--repeat")) {
+            options.repeat = number(usize, value) orelse return null;
+            if (options.repeat == 0) return null;
         } else if (std.mem.eql(u8, arg, "--term")) {
             if (options.term_count == max_terms) return null;
             options.terms[options.term_count] = value;
@@ -224,10 +247,20 @@ fn evidenceCommand(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo,
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const request: evidence.EvidenceRequest = .{ .targets = options.targets[0..options.target_count], .intent = options.intent.?, .terms = options.terms[0..options.term_count] };
+    const request: evidence.EvidenceRequest = .{ .targets = options.targets[0..options.target_count], .intent = options.intent.?, .terms = options.terms[0..options.term_count], .include = options.include };
     const started = clock.monotonic();
     const result = try repo.evidence(arena, request, options.budget);
     const elapsed_us = microsSince(clock, started);
+    const repeats = try arena.alloc(u64, options.repeat);
+    repeats[0] = @intCast(clock.monotonic() - started);
+    for (repeats[1..]) |*slot| {
+        var scratch = std.heap.ArenaAllocator.init(gpa);
+        defer scratch.deinit();
+        const again = clock.monotonic();
+        _ = try repo.evidence(scratch.allocator(), request, options.budget);
+        slot.* = @intCast(clock.monotonic() - again);
+    }
+    const spread = Percentiles.of(repeats);
     const block: ?evidence.EvidenceBlock = switch (result) {
         .complete => |c| c.value,
         .partial => |p| p.value,
@@ -244,6 +277,10 @@ fn evidenceCommand(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo,
     try js.write(@tagName(result.status()));
     try js.objectField("evidence_us");
     try js.write(elapsed_us);
+    try js.objectField("repeat");
+    try js.write(options.repeat);
+    try writeMicros(&js, "p50_us", spread.p50);
+    try writeMicros(&js, "p99_us", spread.p99);
     try js.objectField("certificate");
     try result.writeCertificate(&js);
     if (block) |b| {
@@ -259,6 +296,8 @@ fn evidenceCommand(gpa: Allocator, clock: io_seam.Clock, repo: *fact_store.Repo,
         try js.write(b.sites.len);
         try js.objectField("unresolved");
         try js.write(b.unresolved.len);
+        try js.objectField("tests");
+        try js.write(b.tests.len);
         try js.objectField("cut");
         try js.write(b.cut);
         try js.objectField("elided");

@@ -43,7 +43,7 @@ const usage =
     \\       emetgate facts bench [--seed <n>] [--samples <n>] [--updates <n>] [--json]
     \\       emetgate facts modules [--file <prefix>]
     \\       emetgate facts defs [--file <prefix>]
-    \\       emetgate facts evidence --intent <decides|callers|callees|flow|where_defined|explain> --target <path>#<symbol>... [--term <text>]... [--budget <chars>] [--json]
+    \\       emetgate facts evidence --intent <decides|callers|callees|flow|where_defined|explain> --target <path>#<symbol>... [--term <text>]... [--include <callers,callees,tests|none>] [--budget <chars>] [--repeat <n>] [--json]
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.

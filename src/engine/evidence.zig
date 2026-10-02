@@ -4,6 +4,7 @@ const facts_store = @import("facts_store.zig");
 const facts_query = @import("facts_query.zig");
 const facts_spine = @import("facts_spine.zig");
 const facts_outline = @import("facts_outline.zig");
+const facts_tests = @import("facts_tests.zig");
 const facts_evidence = @import("facts_evidence.zig");
 const symbol = @import("symbol.zig");
 const answer = @import("answer.zig");
@@ -18,6 +19,7 @@ const Unknown = facts_query.Unknown;
 
 pub const Intent = shared.Intent;
 pub const SymbolRef = shared.SymbolRef;
+pub const Include = shared.Include;
 pub const EvidenceRequest = shared.EvidenceRequest;
 
 pub const default_budget: usize = 9_500;
@@ -28,6 +30,8 @@ pub const status_reserve: usize = 300;
 pub const reason_reserve: usize = 240;
 pub const cut_reserve: usize = 120;
 pub const max_call_lines: usize = 6;
+pub const max_tests_chars: usize = 1_000;
+pub const max_title_chars: usize = 200;
 
 pub const open_note = "an edge not in this list does not mean there is none";
 pub const vanished_note = "(not shown: the file no longer exists)";
@@ -53,6 +57,32 @@ pub const Elided = struct {
     last: u32,
 };
 
+pub const TestCertainty = enum { proven, typed, by_name };
+
+pub const TestLine = struct {
+    path: []const u8,
+    line: u32,
+    title: []const u8,
+    target: []const u8,
+    references: u32,
+    certainty: TestCertainty,
+};
+
+pub const Sections = struct {
+    callers: bool,
+    callees: bool,
+    tests: bool,
+};
+
+pub fn sectionsOf(request: EvidenceRequest) Sections {
+    const intent = request.intent;
+    return .{
+        .callers = request.include.callers orelse (intent == .callers or intent == .flow),
+        .callees = request.include.callees orelse (intent == .callees or intent == .flow),
+        .tests = request.include.tests orelse (intent != .where_defined),
+    };
+}
+
 pub const EvidenceBlock = struct {
     text: []const u8 = "",
     intent: Intent,
@@ -60,6 +90,7 @@ pub const EvidenceBlock = struct {
     not_found: []const SymbolRef = &.{},
     sites: []const Site = &.{},
     unresolved: []const Unknown = &.{},
+    tests: []const TestLine = &.{},
     elided: []const Elided = &.{},
     cut: usize = 0,
 };
@@ -128,6 +159,13 @@ fn clipCode(raw: []const u8) Clipped {
     return .{ .text = text[0..end], .more = text.len - end };
 }
 
+fn clipTitle(title: []const u8) []const u8 {
+    if (title.len <= max_title_chars) return title;
+    var end = max_title_chars;
+    while (end > 0 and (title[end] & 0xC0) == 0x80) end -= 1;
+    return title[0..end];
+}
+
 fn containsFold(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0 or needle.len > haystack.len) return false;
     var i: usize = 0;
@@ -187,20 +225,40 @@ fn listedFiles(store: *const facts_store.Store) u32 {
     return n;
 }
 
-fn relationCap(intent: Intent, budget: usize) usize {
-    return switch (intent) {
-        .callers, .flow => budget * 55 / 100,
+const Caps = struct {
+    callers: usize,
+    callees: usize,
+    tests: usize,
+};
+
+fn capsOf(intent: Intent, sections: Sections, budget: usize) Caps {
+    const callers: usize = if (!sections.callers) 0 else switch (intent) {
+        .callers => budget * 55 / 100,
+        .flow => budget * 33 / 100,
+        .callees, .decides, .explain, .where_defined => budget * 20 / 100,
+    };
+    const callees: usize = if (!sections.callees) 0 else switch (intent) {
         .callees => budget * 35 / 100,
-        .decides, .explain, .where_defined => 0,
+        .flow => budget * 22 / 100,
+        .callers, .decides, .explain, .where_defined => budget * 15 / 100,
+    };
+    const tests: usize = if (!sections.tests) 0 else @min(budget * 10 / 100, max_tests_chars);
+    return .{ .callers = callers, .callees = callees, .tests = tests };
+}
+
+fn certaintyLabel(certainty: TestCertainty) []const u8 {
+    return switch (certainty) {
+        .proven => "proven",
+        .typed => "typed",
+        .by_name => "by name only",
     };
 }
 
-fn wholeRepository(intent: Intent) bool {
-    return intent == .callers or intent == .flow;
-}
-
-fn listsEdges(intent: Intent) bool {
-    return intent == .callers or intent == .callees or intent == .flow;
+fn testLess(_: void, a: TestLine, b: TestLine) bool {
+    if (a.certainty != b.certainty) return @intFromEnum(a.certainty) < @intFromEnum(b.certainty);
+    const order = std.mem.order(u8, a.path, b.path);
+    if (order != .eq) return order == .lt;
+    return a.line < b.line;
 }
 
 fn calleeKey(site: Site) u64 {
@@ -259,11 +317,14 @@ const Builder = struct {
     limit: usize,
     terms: []const Term,
     files: std.StringHashMapUnmanaged(?Opened) = .empty,
+    sections: Sections,
     subjects: std.ArrayList(Subject) = .empty,
     not_found: std.ArrayList(SymbolRef) = .empty,
     callers: std.ArrayList(Site) = .empty,
     callees: std.ArrayList(Site) = .empty,
     unknown: std.ArrayList(Unknown) = .empty,
+    tests: std.ArrayList(TestLine) = .empty,
+    test_index: std.AutoHashMapUnmanaged(u64, usize) = .empty,
     seen_unknown: std.AutoHashMapUnmanaged(u64, void) = .empty,
     unread: std.StringArrayHashMapUnmanaged(answer.Reason) = .empty,
     excluded: std.StringArrayHashMapUnmanaged(void) = .empty,
@@ -273,6 +334,7 @@ const Builder = struct {
     cut_sites: usize = 0,
     cut_unknown: usize = 0,
     cut_targets: usize = 0,
+    cut_tests: usize = 0,
     too_large: bool = false,
 
     fn open(self: *Builder, path: []const u8) !?Opened {
@@ -472,6 +534,77 @@ const Builder = struct {
         }
     }
 
+    fn addTestHit(self: *Builder, file: facts_store.FileId, start: u32, line: u32, target: usize, certainty: TestCertainty) !void {
+        const state = self.fs.store.file(file);
+        const profile = state.profile orelse return;
+        const table = profile.facts orelse return;
+        if (!facts_tests.isTestPath(table, state.path)) return;
+        const block = facts_tests.innermost(state.facts.tests, start);
+        const block_key: u32 = block orelse facts.none;
+        var h = std.hash.Wyhash.init(file);
+        h.update(std.mem.asBytes(&block_key));
+        h.update(std.mem.asBytes(&target));
+        const entry = try self.test_index.getOrPut(self.arena, h.final());
+        if (entry.found_existing) {
+            const kept = &self.tests.items[entry.value_ptr.*];
+            kept.references += 1;
+            if (@intFromEnum(certainty) < @intFromEnum(kept.certainty)) kept.certainty = certainty;
+            return;
+        }
+        entry.value_ptr.* = self.tests.items.len;
+        const title: []const u8 = if (block) |b| try facts_tests.titleChain(self.arena, state.facts.tests, b) else "";
+        try self.tests.append(self.arena, .{
+            .path = state.path,
+            .line = if (block) |b| state.facts.tests[b].line else line,
+            .title = clipTitle(title),
+            .target = self.subjects.items[target].qname,
+            .references = 1,
+            .certainty = certainty,
+        });
+    }
+
+    fn collectTests(self: *Builder) !void {
+        const store = self.fs.store;
+        for (self.subjects.items, 0..) |s, target| {
+            if (store.incoming.get(s.id.key())) |list| {
+                for (list.items) |key| {
+                    const found = store.refAt(key) orelse continue;
+                    const link = switch (found.link) {
+                        .def => |d| d,
+                        .unresolved => continue,
+                    };
+                    if (!sameDef(link.id, s.id)) continue;
+                    if (found.ref.kind == .import or found.ref.kind == .type) continue;
+                    try self.addTestHit(key.file, found.ref.start, found.ref.line, target, if (link.certainty == .proven) .proven else .typed);
+                }
+            }
+            if (store.unresolved_by_name.get(facts_query.simpleName(s.qname))) |list| {
+                for (list.items) |key| {
+                    const found = store.refAt(key) orelse continue;
+                    const reason = switch (found.link) {
+                        .unresolved => |why| why,
+                        .def => continue,
+                    };
+                    if (!found.ref.kind.invokes() or !facts_query.bindable(reason)) continue;
+                    try self.addTestHit(key.file, found.ref.start, found.ref.line, target, .by_name);
+                }
+            }
+        }
+        std.mem.sort(TestLine, self.tests.items, {}, testLess);
+    }
+
+    fn testLines(self: *Builder, sec: *Section) !void {
+        for (self.tests.items, 0..) |t, i| {
+            const title = if (t.title.len == 0) "(outside a test block)" else t.title;
+            const text = try std.fmt.allocPrint(self.arena, "{s}:{d}  {s}  [test of {s}: {d} {s}, {s}]", .{ t.path, t.line, title, t.target, t.references, if (t.references == 1) "reference" else "references", certaintyLabel(t.certainty) });
+            if (!try sec.push(self.arena, text)) {
+                self.cut_tests += self.tests.items.len - i;
+                for (self.tests.items[i..]) |rest| try self.markCut(rest.path);
+                return;
+            }
+        }
+    }
+
     fn plan(self: *Builder, s: Subject) !Plan {
         var p: Plan = .{ .subject = s };
         const opened = (try self.open(s.path)) orelse {
@@ -654,7 +787,7 @@ const Builder = struct {
     }
 
     fn cutNote(self: *Builder) !?[]const u8 {
-        if (self.cut_sites == 0 and self.cut_unknown == 0 and self.cut_targets == 0) return null;
+        if (self.cut_sites == 0 and self.cut_unknown == 0 and self.cut_targets == 0 and self.cut_tests == 0) return null;
         var w: Writer.Allocating = .init(self.arena);
         try w.writer.print("... not shown within the budget of {d} characters:", .{self.limit});
         var first = true;
@@ -666,14 +799,18 @@ const Builder = struct {
             try w.writer.print("{s} {d} unresolved references", .{ if (first) "" else ",", self.cut_unknown });
             first = false;
         }
-        if (self.cut_targets != 0) try w.writer.print("{s} {d} targets", .{ if (first) "" else ",", self.cut_targets });
+        if (self.cut_targets != 0) {
+            try w.writer.print("{s} {d} targets", .{ if (first) "" else ",", self.cut_targets });
+            first = false;
+        }
+        if (self.cut_tests != 0) try w.writer.print("{s} {d} tests", .{ if (first) "" else ",", self.cut_tests });
         return w.written();
     }
 
     fn certify(self: *Builder, used: usize) !EvidenceAnswer {
         const intent = self.request.intent;
         for (self.unknown.items) |u| try self.drawn.put(self.arena, u.path, {});
-        const listed: u32 = if (wholeRepository(intent)) listedFiles(self.fs.store) else @intCast(self.drawn.count());
+        const listed: u32 = if (self.sections.callers) listedFiles(self.fs.store) else @intCast(self.drawn.count());
         var missing: std.ArrayList(answer.Missing) = .empty;
         var file_level: std.StringArrayHashMapUnmanaged(void) = .empty;
         for (self.excluded.keys()) |path| try file_level.put(self.arena, path, {});
@@ -702,12 +839,7 @@ const Builder = struct {
         const file_missing: u32 = @intCast(file_level.count());
         var names: Writer.Allocating = .init(self.arena);
         for (self.subjects.items, 0..) |s, i| try names.writer.print("{s}{s}", .{ if (i == 0) "" else ",", s.qname });
-        const resolved: usize = switch (intent) {
-            .callers => self.callers.items.len,
-            .callees => self.callees.items.len,
-            .flow => self.callers.items.len + self.callees.items.len,
-            .decides, .explain, .where_defined => self.subjects.items.len,
-        };
+        const resolved = self.statusCount();
         var excluded = answer.Exclusions.initFill(0);
         excluded.set(.too_large, excluded_files);
         const cert: answer.Certificate = .{
@@ -725,8 +857,9 @@ const Builder = struct {
             .not_found = self.not_found.items,
             .sites = sites.items,
             .unresolved = listed_unknown.items,
+            .tests = self.tests.items,
             .elided = self.elided.items,
-            .cut = self.cut_sites + self.cut_unknown + self.cut_targets,
+            .cut = self.cut_sites + self.cut_unknown + self.cut_targets + self.cut_tests,
         };
         return EvidenceAnswer.finish(block, cert, missing.items);
     }
@@ -774,21 +907,18 @@ const Builder = struct {
     }
 
     fn statusCount(self: *const Builder) usize {
-        return switch (self.request.intent) {
-            .callers => self.callers.items.len,
-            .callees => self.callees.items.len,
-            .flow => self.callers.items.len + self.callees.items.len,
-            .decides, .explain, .where_defined => self.subjects.items.len,
-        };
+        if (!self.sections.callers and !self.sections.callees) return self.subjects.items.len;
+        var n: usize = 0;
+        if (self.sections.callers) n += self.callers.items.len;
+        if (self.sections.callees) n += self.callees.items.len;
+        return n;
     }
 
     fn statusNoun(self: *const Builder) []const u8 {
-        return switch (self.request.intent) {
-            .callers => "callers",
-            .callees => "callees",
-            .flow => "call edges",
-            .decides, .explain, .where_defined => if (self.subjects.items.len == 1) "target" else "targets",
-        };
+        if (self.sections.callers and self.sections.callees) return "call edges";
+        if (self.sections.callers) return "callers";
+        if (self.sections.callees) return "callees";
+        return if (self.subjects.items.len == 1) "target" else "targets";
     }
 };
 
@@ -796,39 +926,28 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
     if (budget < min_budget) return EvidenceAnswer.refuse(error.BudgetTooSmall, "the budget must be at least 1000 characters");
     if (request.targets.len == 0) return EvidenceAnswer.refuse(error.NoTarget, "the request names no target");
     const arena = fs.arena;
-    var b: Builder = .{ .arena = arena, .fs = fs, .request = request, .limit = budget, .terms = try termsOf(arena, request.terms) };
+    const sections = sectionsOf(request);
+    var b: Builder = .{ .arena = arena, .fs = fs, .request = request, .limit = budget, .terms = try termsOf(arena, request.terms), .sections = sections };
     try b.resolve();
     if (b.subjects.items.len == 0) return EvidenceAnswer.refuse(error.SubjectNotFound, "no target is an indexed definition");
     for (b.subjects.items) |s| {
-        switch (request.intent) {
-            .callers => try b.relate(s, .callers),
-            .callees => try b.relate(s, .callees),
-            .flow => {
-                try b.relate(s, .callers);
-                try b.relate(s, .callees);
-            },
-            .decides, .explain, .where_defined => {},
-        }
+        if (sections.callers) try b.relate(s, .callers);
+        if (sections.callees) try b.relate(s, .callees);
     }
+    if (sections.tests) try b.collectTests();
 
     const head = try b.header();
     const content = budget -| (head.len + 1 + status_reserve + reason_reserve + cut_reserve);
-    var rel: Section = .{ .cap = @min(relationCap(request.intent, budget), content) };
-    switch (request.intent) {
-        .callers => try b.callerLines(&rel),
-        .callees => try b.calleeLines(&rel),
-        .flow => {
-            const all = rel.cap;
-            rel.cap = all * 60 / 100;
-            try b.callerLines(&rel);
-            rel.cap = all;
-            try b.calleeLines(&rel);
-        },
-        .decides, .explain, .where_defined => {},
-    }
+    const caps = capsOf(request.intent, sections, budget);
+    var rel: Section = .{ .cap = @min(caps.callers, content) };
+    if (sections.callers) try b.callerLines(&rel);
+    rel.cap = @min(caps.callers + caps.callees, content);
+    if (sections.callees) try b.calleeLines(&rel);
     try b.unknownLines(&rel);
+    var tests: Section = .{ .cap = @min(caps.tests, content -| rel.used) };
+    if (sections.tests) try b.testLines(&tests);
 
-    const body_budget = content -| rel.used;
+    const body_budget = content -| (rel.used + tests.used);
     const plans = try arena.alloc(Plan, b.subjects.items.len);
     for (b.subjects.items, plans) |s, *p| p.* = try b.plan(s);
     try b.allocate(plans, body_budget);
@@ -840,12 +959,12 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
     }
     const note = try b.cutNote();
 
-    var result = try b.certify(head.len + 1 + body_used + rel.used + status_reserve + reason_reserve + cut_reserve);
+    var result = try b.certify(head.len + 1 + body_used + rel.used + tests.used + status_reserve + reason_reserve + cut_reserve);
     const exclusion = try b.exclusionLine(result);
     const reason = try b.reasonLine(result, reason_reserve -| (if (exclusion) |line| line.len + 1 else 0));
     var status: Writer.Allocating = .init(arena);
     try result.writeStatus(&status.writer, b.statusCount(), b.statusNoun());
-    if (result == .partial and listsEdges(request.intent)) try status.writer.print("; {s}", .{open_note});
+    if (result == .partial and (sections.callers or sections.callees)) try status.writer.print("; {s}", .{open_note});
 
     var text: Writer.Allocating = .init(arena);
     try text.writer.writeAll(head);
@@ -855,6 +974,10 @@ fn build(fs: *const FactStore, request: EvidenceRequest, budget: usize) !Evidenc
         try text.writer.writeByte('\n');
     }
     for (rel.lines.items) |line| {
+        try text.writer.writeAll(line);
+        try text.writer.writeByte('\n');
+    }
+    for (tests.lines.items) |line| {
         try text.writer.writeAll(line);
         try text.writer.writeByte('\n');
     }
