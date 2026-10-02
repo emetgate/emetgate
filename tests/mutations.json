@@ -6709,8 +6709,8 @@
     {
       "id": "IOS1-read-error-becomes-empty-content",
       "file": "src/platform/io_seam.zig",
-      "from": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch |err| return readError(err);",
-      "to": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch return gpa.alloc(u8, 0);",
+      "from": "        return open_nowait.readFileAlloc(gpa, path, limit -| 1) catch |err| return nowaitReadError(err);",
+      "to": "        return open_nowait.readFileAlloc(gpa, path, limit -| 1) catch return gpa.alloc(u8, 0);",
       "kills": [
         "the real file system reads below the limit and refuses a file at the limit as too large"
       ]
@@ -6727,8 +6727,8 @@
     {
       "id": "IOS3-stat-error-becomes-empty-file",
       "file": "src/platform/io_seam.zig",
-      "from": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch |err| return statError(err);",
-      "to": "        const got = Dir.cwd().statFile(of(context).io, path, .{ .follow_symlinks = follow == .follow }) catch return .{ .kind = .file, .size = 0, .mtime_ns = 0, .id = 0 };",
+      "from": "        const handle = open_nowait.openAttributes(path, follow == .follow) catch |err| return nowaitStatError(err);",
+      "to": "        const handle = open_nowait.openAttributes(path, follow == .follow) catch return .{ .kind = .file, .size = 0, .mtime_ns = 0, .id = 0 };",
       "kills": [
         "the real file system stats a file, a directory and a missing path"
       ]
@@ -7065,6 +7065,27 @@
       "note": "the words of a file with syntax errors would point into bytes a worker freed before the store copied them"
     },
     {
+      "id": "FCP8-held-file-waits-in-refresh",
+      "file": "src/platform/io_seam.zig",
+      "from": "        _ = context;\n        return open_nowait.readFileAlloc(gpa, path, limit -| 1) catch |err| return nowaitReadError(err);",
+      "to": "        return Dir.cwd().readFileAlloc(of(context).io, path, gpa, .limited(limit)) catch |err| return readError(err);",
+      "kills": [
+        "the real file system reads a file another handle holds as busy at once and still stats and resolves it",
+        "fact store: a refresh reads past a file another handle holds at once, names it unreadable and reads it again once it is free"
+      ],
+      "note": "a file another program holds would stall every read of the store for seconds"
+    },
+    {
+      "id": "FCP9-unreadable-file-never-retried",
+      "file": "src/platform/fact_store.zig",
+      "from": "                    if (x.status == .unreadable) slot.stamp = .{};\n",
+      "to": "",
+      "kills": [
+        "fact store: a refresh reads past a file another handle holds at once, names it unreadable and reads it again once it is free"
+      ],
+      "note": "a file that was locked once would stay unreadable until it changes"
+    },
+    {
       "id": "FCP5-invalid-manifest-not-reported",
       "file": "src/platform/fact_modules.zig",
       "from": "                try self.notes.append(a, .{ .path = try a.dupe(u8, rel), .problem = \"invalid json\" });\n",
@@ -7247,8 +7268,8 @@
     {
       "id": "EV18-missing-file-read-as-unreadable",
       "file": "src/platform/fact_store.zig",
-      "from": "error.FileNotFound, error.IsDir => .vanished,",
-      "to": "error.FileNotFound, error.IsDir => .unreadable,",
+      "from": "error.FileNotFound, error.IsDirectory => .vanished,",
+      "to": "error.FileNotFound, error.IsDirectory => .unreadable,",
       "kills": [
         "fact store: evidence of a target whose file was deleted on disk is partial and names the file vanished"
       ],
@@ -7257,8 +7278,8 @@
     {
       "id": "EV19-large-file-read-as-vanished",
       "file": "src/platform/fact_store.zig",
-      "from": "error.StreamTooLong => .too_large,",
-      "to": "error.StreamTooLong => .vanished,",
+      "from": "error.TooLarge => .too_large,",
+      "to": "error.TooLarge => .vanished,",
       "kills": [
         "fact store: evidence of a target whose file grew over the size limit names the declared exclusion and its limit"
       ],
@@ -7287,8 +7308,8 @@
     {
       "id": "EV22-locked-file-read-as-vanished",
       "file": "src/platform/fact_store.zig",
-      "from": "error.FileBusy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,",
-      "to": "error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput, error.Unexpected => .unreadable,\n            error.FileBusy => .vanished,",
+      "from": "error.Busy, error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput => .unreadable,",
+      "to": "error.AccessDenied, error.NameTooLong, error.BadPathName, error.InputOutput => .unreadable,\n            error.Busy => .vanished,",
       "kills": [
         "fact store: evidence of a target whose file another handle holds is partial at once and names the file unreadable"
       ],
