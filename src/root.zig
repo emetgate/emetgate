@@ -44,6 +44,7 @@ pub const map_listing = @import("engine/map_listing.zig");
 pub const map_delta = @import("engine/map_delta.zig");
 pub const map_region_rank = @import("engine/map_region_rank.zig");
 pub const map_explore = @import("engine/map_explore.zig");
+pub const term_index = @import("engine/term_index.zig");
 pub const map_pick = @import("engine/map_pick.zig");
 pub const map_lines = @import("engine/map_lines.zig");
 pub const map_usage = @import("engine/map_usage.zig");
