@@ -339,6 +339,8 @@ const handlers = @import("emetgate").handlers;
 const telemetry = @import("emetgate").telemetry;
 
 const served_tools = [_][]const u8{
+    "emetgate_explore",
+    "emetgate_evidence",
     "emetgate_symbols",
     "emetgate_skeleton",
     "emetgate_read_symbol",
