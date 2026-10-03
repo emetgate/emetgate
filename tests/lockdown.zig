@@ -174,7 +174,7 @@ test "the allow-list names the emetgate server by its .mcp.json key" {
     try testing.expectEqualStrings("gate", name);
     const value = try lockdown.allowedTools(testing.allocator, name);
     defer testing.allocator.free(value);
-    try testing.expect(std.mem.startsWith(u8, value, "mcp__gate__emetgate_symbols mcp__gate__emetgate_skeleton "));
+    try testing.expect(std.mem.startsWith(u8, value, "mcp__gate__emetgate_explore mcp__gate__emetgate_evidence mcp__gate__emetgate_symbols mcp__gate__emetgate_skeleton "));
     try testing.expect(std.mem.endsWith(u8, value, " mcp__gate__emetgate_mutate"));
 }
 
