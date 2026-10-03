@@ -94,6 +94,7 @@ pub const max_question_seeds: usize = 4;
 pub const max_user_regions: usize = 2;
 pub const user_region_depth: usize = 20;
 pub const max_evidence_names: usize = 6;
+pub const max_closest: usize = 3;
 
 pub const explore_description = "Returns the decision closure of a question: the code connected to the named or matching symbols through calls, field writes and metadata keys, as complete statements with file:line, and the names of connected functions left out.";
 pub const evidence_description = "Returns the full code of up to 6 functions by qualified name (Class.method or function), as plain text.";
@@ -111,7 +112,7 @@ pub const Session = struct {
     built: ?map.Map = null,
     index: ?*rank.Index = null,
     lines: ?map_lines.Index = null,
-    names: std.StringHashMapUnmanaged([]const u8) = .empty,
+    names: std.StringHashMapUnmanaged(std.ArrayList([]const u8)) = .empty,
     symbols: std.ArrayList(Symbol) = .empty,
     part_df: std.StringHashMapUnmanaged(u32) = .empty,
     store_override: ?[]const u8 = null,
@@ -145,13 +146,11 @@ pub const Session = struct {
         self.lines = try map_lines.Index.build(arena, built.text);
         for (repo.store.files.items) |state| {
             if (state.status != .indexed) continue;
+            const path = try arena.dupe(u8, state.path);
             for (state.facts.defs) |d| {
                 if (d.kind == .module) continue;
-                const path = try arena.dupe(u8, state.path);
-                const full = try self.names.getOrPut(arena, try arena.dupe(u8, d.qname));
-                if (!full.found_existing) full.value_ptr.* = path;
-                const simple = try self.names.getOrPut(arena, try arena.dupe(u8, simpleName(d.qname)));
-                if (!simple.found_existing) simple.value_ptr.* = path;
+                try self.addName(arena, d.qname, path);
+                try self.addName(arena, simpleName(d.qname), path);
             }
         }
         for (repo.store.files.items, 0..) |state, id| {
@@ -176,8 +175,72 @@ pub const Session = struct {
         return self.repo != null and self.built != null and self.lines != null and (self.index != null or !self.with_index);
     }
 
-    fn fileOf(self: *const Session, name: []const u8) ?[]const u8 {
-        return self.names.get(name);
+    fn addName(self: *Session, arena: Allocator, name: []const u8, path: []const u8) !void {
+        const entry = try self.names.getOrPut(arena, name);
+        if (!entry.found_existing) {
+            entry.key_ptr.* = try arena.dupe(u8, name);
+            entry.value_ptr.* = .empty;
+        }
+        for (entry.value_ptr.items) |p| {
+            if (std.mem.eql(u8, p, path)) return;
+        }
+        try entry.value_ptr.append(arena, path);
+    }
+
+    fn definitions(self: *Session, arena: Allocator, name: []const u8) ![]const Fn {
+        var out: std.ArrayList(Fn) = .empty;
+        const paths = self.names.get(name) orelse return out.items;
+        const store = &self.repo.?.store;
+        for (paths.items) |path| {
+            const id = store.fileId(path) orelse continue;
+            const state = store.file(id);
+            if (state.status != .indexed) continue;
+            for (state.facts.defs, 0..) |d, di| {
+                if (d.kind == .module) continue;
+                if (!std.mem.eql(u8, d.qname, name) and !std.mem.eql(u8, simpleName(d.qname), name)) continue;
+                try out.append(arena, .{ .file = id, .def = @intCast(di), .path = state.path, .qname = d.qname });
+            }
+        }
+        return out.items;
+    }
+
+    fn named(self: *Session, arena: Allocator, raw: []const u8) ![]const Fn {
+        const open = std.mem.indexOfScalar(u8, raw, '(') orelse raw.len;
+        const text = std.mem.trim(u8, raw[0..open], " \t");
+        if (text.len == 0) return &.{};
+        const direct = try self.definitions(arena, text);
+        if (direct.len != 0) return direct;
+        var qualifiers: std.ArrayList([]const u8) = .empty;
+        var words = std.mem.tokenizeAny(u8, text, " \t");
+        var last: []const u8 = text;
+        while (words.next()) |word| {
+            if (words.peek() == null) last = word else try qualifiers.append(arena, word);
+        }
+        var found = try self.definitions(arena, last);
+        if (found.len == 0) {
+            const dot = std.mem.lastIndexOfScalar(u8, last, '.') orelse return &.{};
+            if (dot == 0 or dot + 1 >= last.len) return &.{};
+            try qualifiers.append(arena, last[0..dot]);
+            found = try self.definitions(arena, last[dot + 1 ..]);
+        }
+        if (qualifiers.items.len == 0) return found;
+        var out: std.ArrayList(Fn) = .empty;
+        for (found) |f| {
+            const all = for (qualifiers.items) |q| {
+                if (std.mem.indexOf(u8, f.path, q) == null) break false;
+            } else true;
+            if (all) try out.append(arena, f);
+        }
+        return out.items;
+    }
+
+    fn unknown(self: *Session, arena: Allocator, w: *Writer, name: []const u8) !void {
+        try w.print("No symbol named {s}.", .{name});
+        const near = try self.symbolScores(arena, name);
+        for (near[0..@min(near.len, max_closest)], 0..) |r, i| {
+            try w.print("{s}{s} {s}:{d}", .{ if (i == 0) " Closest: " else "; ", r.f.qname, r.f.path, self.defLine(r.f) });
+        }
+        try w.writeByte('\n');
     }
 
     pub fn explore(self: *Session, gpa: Allocator, args: ?Value) !ToolResult {
@@ -202,12 +265,15 @@ pub const Session = struct {
         if (!self.ready()) return plain(gpa, "evidence is unavailable: the project map could not be built", true);
         _ = self.repo.?.refresh() catch {};
         const names = try namesOf(arena, args);
+        if (names.len == 0) return plain(gpa, "no names were given", false);
         const wanted = names[0..@min(names.len, max_evidence_names)];
-        const text = try self.evidenceText(arena, wanted, evidence_budget);
-        if (text.len != 0) return plain(gpa, text, false);
         var out: Writer.Allocating = .init(arena);
-        try out.writer.writeAll("none of these names is a known function: ");
-        for (wanted, 0..) |n, i| try out.writer.print("{s}{s}", .{ if (i == 0) "" else ", ", n });
+        try out.writer.writeAll(try self.evidenceText(arena, wanted, evidence_budget));
+        if (names.len > wanted.len) {
+            try out.writer.print("Not read, the limit is {d} names per call: ", .{max_evidence_names});
+            for (names[wanted.len..], 0..) |n, i| try out.writer.print("{s}{s}", .{ if (i == 0) "" else ", ", n });
+            try out.writer.writeByte('\n');
+        }
         return plain(gpa, out.written(), false);
     }
 
@@ -228,7 +294,7 @@ pub const Session = struct {
             if (!contains(tokens.items, ident)) try tokens.append(arena, ident);
         }
         for (tokens.items) |token| {
-            if (try self.resolve(token)) |f| {
+            if (try self.resolve(arena, token)) |f| {
                 try graph.anchor(arena, f, top_score);
                 continue;
             }
@@ -542,20 +608,9 @@ pub const Session = struct {
         return out.items;
     }
 
-    fn resolve(self: *Session, name: []const u8) !?Fn {
-        const path = self.fileOf(name) orelse return null;
-        const store = &self.repo.?.store;
-        const id = store.fileId(path) orelse return null;
-        const state = store.file(id);
-        if (state.status != .indexed) return null;
-        var simple_match: ?u32 = null;
-        for (state.facts.defs, 0..) |d, di| {
-            if (d.kind == .module) continue;
-            if (std.mem.eql(u8, d.qname, name)) return .{ .file = id, .def = @intCast(di), .path = state.path, .qname = d.qname };
-            if (simple_match == null and std.mem.eql(u8, simpleName(d.qname), name)) simple_match = @intCast(di);
-        }
-        const di = simple_match orelse return null;
-        return .{ .file = id, .def = di, .path = state.path, .qname = state.facts.defs[di].qname };
+    fn resolve(self: *Session, arena: Allocator, name: []const u8) !?Fn {
+        const defs = try self.definitions(arena, name);
+        return if (defs.len == 0) null else defs[0];
     }
 
     fn callees(self: *Session, arena: Allocator, f: Fn) ![]const Fn {
@@ -945,23 +1000,32 @@ pub const Session = struct {
 
     fn evidenceText(self: *Session, arena: Allocator, names: []const []const u8, budget: usize) ![]const u8 {
         var targets: std.ArrayList(evidence.SymbolRef) = .empty;
+        var notes: Writer.Allocating = .init(arena);
         for (names) |n| {
-            const path = self.fileOf(n) orelse continue;
-            for (targets.items) |t| {
-                if (std.mem.eql(u8, t.path, path) and std.mem.eql(u8, t.qname, n)) break;
-            } else try targets.append(arena, .{ .path = path, .qname = n });
+            const defs = try self.named(arena, n);
+            if (defs.len == 0) {
+                try self.unknown(arena, &notes.writer, n);
+                continue;
+            }
+            for (defs) |f| {
+                for (targets.items) |t| {
+                    if (std.mem.eql(u8, t.path, f.path) and std.mem.eql(u8, t.qname, f.qname)) break;
+                } else try targets.append(arena, .{ .path = f.path, .qname = f.qname });
+            }
         }
-        if (targets.items.len == 0) return "";
-        const result = try self.repo.?.evidence(arena, .{ .targets = targets.items, .intent = .explain, .terms = &.{}, .include = .{ .callers = false, .callees = false, .tests = false } }, budget);
-        return switch (result) {
-            .complete => |c| c.value.text,
-            .partial => |p| p.value.text,
-            .refused => blk: {
-                var status: Writer.Allocating = .init(arena);
-                try result.writeStatus(&status.writer, 0, "targets");
-                break :blk status.written();
-            },
-        };
+        var out: Writer.Allocating = .init(arena);
+        if (targets.items.len != 0) {
+            const result = try self.repo.?.evidence(arena, .{ .targets = targets.items, .intent = .explain, .terms = &.{}, .include = .{ .callers = false, .callees = false, .tests = false } }, budget);
+            switch (result) {
+                .complete => |c| try out.writer.writeAll(c.value.text),
+                .partial => |p| try out.writer.writeAll(p.value.text),
+                .refused => try result.writeStatus(&out.writer, 0, "targets"),
+            }
+            const written = out.written();
+            if (written.len != 0 and written[written.len - 1] != '\n') try out.writer.writeByte('\n');
+        }
+        try out.writer.writeAll(notes.written());
+        return out.written();
     }
 };
 
