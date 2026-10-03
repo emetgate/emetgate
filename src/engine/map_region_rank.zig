@@ -147,6 +147,10 @@ pub fn candidate(d: facts.Def) bool {
     };
 }
 
+pub fn topVariable(d: facts.Def) bool {
+    return d.kind == .variable and d.name.len != 0 and std.mem.indexOfScalar(u8, d.qname, '.') == null;
+}
+
 const Sink = struct {
     terms: *const Terms,
     mask: u64 = 0,

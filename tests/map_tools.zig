@@ -330,7 +330,30 @@ const logger_ts =
     \\
 ;
 
+const hooks_runner_ts =
+    \\export function runHooks(names: string[]) {
+    \\  return names.length;
+    \\}
+    \\
+;
+
+const shutdown_runner_ts =
+    \\export const shutdownSignals = {
+    \\  first: 'leftover-signal',
+    \\};
+    \\
+    \\export async function runHooks(signal: string) {
+    \\  if (signal === shutdownSignals.first) {
+    \\    return 'stop';
+    \\  }
+    \\  return 'go';
+    \\}
+    \\
+;
+
 const files = [_]File{
+    .{ .path = "packages/core/hooks/runner.ts", .data = hooks_runner_ts },
+    .{ .path = "packages/core/shutdown/runner.ts", .data = shutdown_runner_ts },
     .{ .path = "packages/core/nest-application-context.ts", .data = nest_application_context_ts },
     .{ .path = "packages/core/hooks/on-module-init.hook.ts", .data = on_module_init_hook_ts },
     .{ .path = "packages/core/hooks/utils/get-instances-grouped-by-level.ts", .data = get_instances_grouped_by_level_ts },
@@ -363,46 +386,101 @@ fn expectHas(text: []const u8, part: []const u8) !void {
     return error.TestExpectedEqual;
 }
 
-test "map tools: the explore reply reaches the functions that write the fields read by the matching functions" {
-    const runtime = try test_util.openRuntime();
-    defer test_util.closeRuntime(runtime);
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.createDirPath(testing.io, "repo");
-    for (files) |f| {
-        const sub = try std.fmt.allocPrint(testing.allocator, "repo/{s}", .{f.path});
-        defer testing.allocator.free(sub);
-        if (std.fs.path.dirnamePosix(sub)) |d| try tmp.dir.createDirPath(testing.io, d);
-        try tmp.dir.writeFile(testing.io, .{ .sub_path = sub, .data = f.data });
-    }
-    const base = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(base);
-    const root = try std.fmt.allocPrint(testing.allocator, "{s}\\repo", .{base});
-    defer testing.allocator.free(root);
-    try git_fixture.initRepo(root);
-    try git(root, &.{ "add", "." });
-    const store_path = try std.fmt.allocPrint(testing.allocator, "{s}\\store\\facts.v{d}", .{ base, fact_file.version });
-    defer testing.allocator.free(store_path);
+const Fixture = struct {
+    runtime: *emetgate.runtime.Runtime,
+    tmp: std.testing.TmpDir,
+    base: [:0]u8,
+    root: []u8,
+    store_path: []u8,
+    session: *map_tools.Session,
 
-    const session = try map_tools.Session.create(testing.allocator, testing.io, runtime, root);
-    defer session.destroy();
-    session.store_override = store_path;
-    try session.build();
+    fn open() !Fixture {
+        const runtime = try test_util.openRuntime();
+        var tmp = testing.tmpDir(.{});
+        try tmp.dir.createDirPath(testing.io, "repo");
+        for (files) |f| {
+            const sub = try std.fmt.allocPrint(testing.allocator, "repo/{s}", .{f.path});
+            defer testing.allocator.free(sub);
+            if (std.fs.path.dirnamePosix(sub)) |d| try tmp.dir.createDirPath(testing.io, d);
+            try tmp.dir.writeFile(testing.io, .{ .sub_path = sub, .data = f.data });
+        }
+        const base = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+        const root = try std.fmt.allocPrint(testing.allocator, "{s}\\repo", .{base});
+        try git_fixture.initRepo(root);
+        try git(root, &.{ "add", "." });
+        const store_path = try std.fmt.allocPrint(testing.allocator, "{s}\\store\\facts.v{d}", .{ base, fact_file.version });
+        const session = try map_tools.Session.create(testing.allocator, testing.io, runtime, root);
+        session.store_override = store_path;
+        try session.build();
+        return .{ .runtime = runtime, .tmp = tmp, .base = base, .root = root, .store_path = store_path, .session = session };
+    }
+
+    fn close(self: *Fixture) void {
+        self.session.destroy();
+        testing.allocator.free(self.store_path);
+        testing.allocator.free(self.root);
+        testing.allocator.free(self.base);
+        self.tmp.cleanup();
+        test_util.closeRuntime(self.runtime);
+    }
+};
+
+fn expectLacks(text: []const u8, part: []const u8) !void {
+    if (std.mem.indexOf(u8, text, part) == null) return;
+    std.debug.print("unexpected: {s}\n--- reply ---\n{s}\n", .{ part, text });
+    return error.TestExpectedEqual;
+}
+
+test "map tools: explore shows every definition of a named symbol whole, numbers each line and names the symbol it does not know" {
+    var f = try Fixture.open();
+    defer f.close();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
-    const text = try session.answer(arena_state.allocator(), "in which order are module init hooks called", &.{});
+    const text = try f.session.answer(arena_state.allocator(), "which hooks run", &.{ "runHooks", "nothingLikeThis" });
 
     try testing.expect(text.len <= map_tools.reply_budget);
-    try expectHas(text, "NestApplicationContext.getModulesToTriggerHooksOn");
-    try expectHas(text, "const compareFn = (a: Module, b: Module) => b.distance - a.distance;");
-    try expectHas(text, "getInstancesGroupedByLevel");
-    try expectHas(text, "const level = wrapper.level;");
+    try expectHas(text, "packages/core/hooks/runner.ts:1 runHooks\n1 export function runHooks(names: string[]) {\n2   return names.length;\n3 }\n");
+    try expectHas(text, "packages/core/shutdown/runner.ts:5 runHooks\n5 export async function runHooks(signal: string) {\n");
+    try expectHas(text, "\n9   return 'go';\n10 }\n");
+    try expectHas(text, "No symbol named nothingLikeThis.");
+    try expectLacks(text, "emetgate_");
+}
+
+test "map tools: explore reaches a function and a top-level constant through words of their bodies" {
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const text = try f.session.answer(arena_state.allocator(), "module distance depth leftover signal", &.{});
+
     try expectHas(text, "DependenciesScanner.calculateModulesDistance");
-    try expectHas(text, "      moduleRef.distance = depth;");
-    try expectHas(text, "    tree.walk((moduleRef, depth) => {");
-    try expectHas(text, "NestContainer.addModule");
-    try expectHas(text, "moduleRef.distance = Number.MAX_VALUE;");
-    try expectHas(text, "Injector.loadInstance");
-    try expectHas(text, "wrapper.level = depth + 1;");
-    try testing.expect(std.mem.indexOf(u8, text, "emetgate_") == null);
+    try expectHas(text, "moduleRef.distance = depth;");
+    try expectHas(text, "packages/core/shutdown/runner.ts:1 shutdownSignals\n1 export const shutdownSignals = {\n2   first: 'leftover-signal',\n3 };\n");
+}
+
+test "map tools: a qualified name picks the definition in the named file and a class is named, not expanded" {
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const text = try f.session.answer(arena_state.allocator(), "how does it stop", &.{ "shutdown.runHooks", "Logger" });
+
+    try expectHas(text, "packages/core/shutdown/runner.ts:5 runHooks\n");
+    const wanted = std.mem.indexOf(u8, text, "packages/core/shutdown/runner.ts:5 runHooks\n") orelse return error.TestExpectedEqual;
+    if (std.mem.indexOf(u8, text, "packages/core/hooks/runner.ts:1 runHooks\n")) |other| try testing.expect(wanted < other);
+    try expectHas(text, "Named classes, shown through their matching members:\npackages/common/services/logger.ts:1 Logger\n");
+}
+
+test "map tools: evidence returns every definition of a name and names the symbols it does not know" {
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const text = try f.session.evidenceText(arena_state.allocator(), &.{ "runHooks", "nothingLikeThis" }, map_tools.evidence_budget);
+
+    try expectHas(text, "packages/core/hooks/runner.ts\n");
+    try expectHas(text, "packages/core/shutdown/runner.ts\n");
+    try expectHas(text, "export function runHooks(names: string[]) {");
+    try expectHas(text, "export async function runHooks(signal: string) {");
+    try expectHas(text, "No symbol named nothingLikeThis.");
 }
