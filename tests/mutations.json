@@ -8478,8 +8478,8 @@
     {
       "id": "ME7-everything-worth-sending",
       "file": "src/protocol/map_tools.zig",
-      "from": "    return @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;",
-      "to": "    return @as(f64, @floatFromInt(size)) * (1 - chance) >= call_chars * chance;",
+      "from": "    return @as(f64, @floatFromInt(size)) * (1 - chance) < saved * chance;",
+      "to": "    return @as(f64, @floatFromInt(size)) * (1 - chance) >= saved * chance;",
       "kills": [
         "map tools: a definition is sent whole only while its size costs less than the model call it may save"
       ],

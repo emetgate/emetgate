@@ -17,7 +17,7 @@ const Value = std.json.Value;
 const ToolResult = tool_result.ToolResult;
 
 pub const reply_budget: usize = 63_000;
-pub const pointer_budget: usize = 3_000;
+pub const pointer_budget: usize = 6_000;
 pub const evidence_budget: usize = 16_000;
 pub const header_chars: usize = 16;
 pub const max_code_chars: usize = 1_000;
@@ -37,7 +37,13 @@ pub const call_cost: f64 = output_price * call_output_tokens + cache_write_price
 pub const char_cost: f64 = (cache_write_price + cache_read_price) / chars_per_token;
 pub const chars_per_token: f64 = 2.67;
 pub const call_chars: f64 = call_cost / char_cost;
-pub const pointer_chance: f64 = 0.05;
+pub const fetch_yield: f64 = 2.7;
+pub const fetch_chars: f64 = call_chars / fetch_yield;
+pub const pointer_chars: f64 = 80;
+pub const pointer_chance: f64 = pointer_chars / fetch_chars;
+pub const min_mention: usize = 3;
+pub const mention_count = [_]u32{ 2, 4 };
+pub const mention_chance = [_]f64{ 0.013, 0.029, 0.044 };
 pub const useful_ratio = [_]f64{ 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30 };
 pub const useful_chance = [_]f64{ 0.009, 0.012, 0.031, 0.045, 0.094, 0.110, 0.199, 0.482, 0.589 };
 
@@ -329,7 +335,7 @@ pub const Session = struct {
             const base = indentOf(ft.line(first));
             const size = blockChars(ft, first, last, base) + pk.f.path.len + pk.f.qname.len + header_chars;
             const chance: f64 = if (pk.whole) 1 else usefulAt(pk.score);
-            const worth = pk.whole or worthSending(size, chance);
+            const worth = pk.whole or worthSending(size, chance, fetch_chars);
             if (worth and used + size <= limit) {
                 try out.writer.print("{s}:{d} {s}\n", .{ pk.f.path, first, pk.f.qname });
                 var k = first;
@@ -344,6 +350,50 @@ pub const Session = struct {
             } else if (usefulAt(pk.score) >= pointer_chance and pointers.written().len + line.len <= pointer_budget) {
                 try pointers.writer.writeAll(line);
             }
+        }
+        var mentions: std.AutoArrayHashMapUnmanaged(u64, Mention) = .empty;
+        for (shown.items) |s| {
+            const ft = (try self.fileText(arena, &texts, store.file(s.file).path)) orelse continue;
+            var words: std.StringArrayHashMapUnmanaged(u32) = .empty;
+            var k = s.first;
+            while (k <= s.last) : (k += 1) try countIdentifiers(arena, &words, ft.line(k));
+            var wi = words.iterator();
+            while (wi.next()) |word| {
+                var only: ?Fn = null;
+                var many = false;
+                for (try self.definitions(arena, word.key_ptr.*)) |f| {
+                    if (f.file != s.file) continue;
+                    if (only != null) many = true;
+                    only = f;
+                }
+                const f = only orelse continue;
+                if (many) continue;
+                const entry = try mentions.getOrPut(arena, keyOf(f));
+                if (!entry.found_existing) entry.value_ptr.* = .{ .f = f, .count = 0 };
+                entry.value_ptr.count += word.value_ptr.*;
+            }
+        }
+        var bound: Writer.Allocating = .init(arena);
+        for (mentions.values()) |m| {
+            const f = m.f;
+            if (self.container(f)) continue;
+            const d = store.file(f.file).facts.defs[f.def];
+            const ft = (try self.fileText(arena, &texts, f.path)) orelse continue;
+            const first = @max(d.line, 1);
+            const last = @max(ft.lineOf(d.span.end), first);
+            if (inside(shown.items, f.file, first, last)) continue;
+            const base = indentOf(ft.line(first));
+            const size = blockChars(ft, first, last, base) + f.path.len + f.qname.len + header_chars;
+            if (!worthSending(size, mentionChance(m.count), call_chars) or used + size > limit) continue;
+            try bound.writer.print("{s}:{d} {s}\n", .{ f.path, first, f.qname });
+            var k = first;
+            while (k <= last) : (k += 1) try writeLine(&bound.writer, ft, k, base);
+            used += size;
+            try shown.append(arena, .{ .file = f.file, .first = first, .last = last });
+        }
+        if (bound.written().len != 0) {
+            try out.writer.writeAll("Definitions of names used above:\n");
+            try out.writer.writeAll(bound.written());
         }
         if (cut.written().len != 0) {
             try out.writer.writeAll("Named definitions not shown, the reply limit was reached:\n");
@@ -455,6 +505,11 @@ const Symbol = struct {
     parts: []const []const u8,
 };
 
+const Mention = struct {
+    f: Fn,
+    count: u32,
+};
+
 const Shown = struct {
     file: u32,
     first: u32,
@@ -468,8 +523,36 @@ fn inside(shown: []const Shown, file: u32, first: u32, last: u32) bool {
     return false;
 }
 
-pub fn worthSending(size: usize, chance: f64) bool {
-    return @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;
+pub fn worthSending(size: usize, chance: f64, saved: f64) bool {
+    return @as(f64, @floatFromInt(size)) * (1 - chance) < saved * chance;
+}
+
+pub fn mentionChance(count: u32) f64 {
+    var i: usize = 0;
+    while (i < mention_count.len and count >= mention_count[i]) i += 1;
+    return mention_chance[i];
+}
+
+fn identifierStart(c: u8) bool {
+    return std.ascii.isAlphabetic(c) or c == '_' or c == '$';
+}
+
+pub fn countIdentifiers(arena: Allocator, counts: *std.StringArrayHashMapUnmanaged(u32), text: []const u8) !void {
+    var i: usize = 0;
+    while (i < text.len) {
+        if (!identifierStart(text[i])) {
+            i += 1;
+            continue;
+        }
+        const start = i;
+        while (i < text.len and (identifierStart(text[i]) or std.ascii.isDigit(text[i]))) i += 1;
+        if (start != 0 and std.ascii.isDigit(text[start - 1])) continue;
+        const word = text[start..i];
+        if (word.len < min_mention) continue;
+        const entry = try counts.getOrPut(arena, word);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        entry.value_ptr.* += 1;
+    }
 }
 
 pub fn usefulAt(ratio: f64) f64 {
@@ -678,10 +761,13 @@ test "map tools: the chance that a definition is useful rises with its score rat
 }
 
 test "map tools: a definition is sent whole only while its size costs less than the model call it may save" {
-    try testing.expect(worthSending(100, 0.25));
-    try testing.expect(!worthSending(40_000, 0.25));
-    try testing.expect(worthSending(40_000, 1));
-    try testing.expect(!worthSending(100, 0));
+    try testing.expect(worthSending(100, 0.25, call_chars));
+    try testing.expect(!worthSending(40_000, 0.25, call_chars));
+    try testing.expect(worthSending(40_000, 1, call_chars));
+    try testing.expect(!worthSending(100, 0, call_chars));
+    try testing.expect(worthSending(900, 0.25, fetch_chars));
+    try testing.expect(!worthSending(1_000, 0.25, fetch_chars));
+    try testing.expect(fetch_chars < call_chars / 2);
     try testing.expect(call_chars > 7_000 and call_chars < 8_500);
 }
 
