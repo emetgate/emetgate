@@ -15,7 +15,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Run one command the user allowed, in a shadow copy of the repository under the same sandbox as the test gate (low-integrity token, job limits, timeout, output cap); nothing is written to the working tree and the shadow copy is thrown away afterwards. The allowlist is fixed by the user who started emetgate (emetgate mcp --allow-run <command>, repeatable, or the run list of .emetgaterc.json with --allow-repo-config). command must equal one allowlist entry byte for byte: no arguments are added, joined or expanded. Call without command to list the allowlist. Output is cut to its last 200 lines and 16 KiB per stream. A call that passes test_cmd, typecheck_cmd, allow_run, allow_repo_config, allow_repo_memory or shadow_root is refused.";
+pub const description = "Runs one command of the allowlist set when the server started, in a sandboxed shadow copy, and returns its exit code and the last 200 lines (16 KiB) of each output stream; the working tree is not changed. Without command, returns the allowlist.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,
