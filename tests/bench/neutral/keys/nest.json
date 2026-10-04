@@ -1,0 +1,134 @@
+{
+  "repo": "nest",
+  "commit": "35142c3eca8edaaf6abc5984d915da2fbd458aa2",
+  "written": "N1 anahtari koordinator mesajindan, N2-N4 eval/neutral-keys/soru2-4*.md dosyalarindan (denetmen/kullanici yazdi); Bench yalniz eslesme dizgilerini ekledi ve biçimi cevirdi.",
+  "rule": "Otomatik puan: maddenin match dizgilerinden biri cevapta geciyorsa (buyuk-kucuk harf duyarsiz) madde karsilanmis sayilir. match listesi bos olan maddeler (sonuc cumleleri) yalniz kor elle kontrolde puanlanir, otomatik puanin paydasina girmez.",
+  "questions": {
+    "N1": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["isDependencyTreeStatic"],
+          "text": "Karari packages/core/injector/instance-wrapper.ts isDependencyTreeStatic veriyor; Scope.REQUEST bagimlilik agacinda yukari yayilir (bir bagimlilik static degilse wrapper da static degildir)."
+        },
+        {
+          "id": 2,
+          "match": ["introspectDepsAttribute", "lookupRegistry"],
+          "text": "Agac introspectDepsAttribute ile dolasilir: constructor dependencies, properties ve enhancers; lookupRegistry donguleri engeller."
+        },
+        {
+          "id": 3,
+          "match": ["createRequestScopedHandler", "isRequestScoped"],
+          "text": "packages/core/router/router-explorer.ts: isRequestScoped = !isDependencyTreeStatic() -> createRequestScopedHandler (her istekte controller yeniden cozulur)."
+        },
+        {
+          "id": 4,
+          "match": ["isDependencyTreeDurable"],
+          "text": "Durable: isDependencyTreeDurable, durable bayragi ve ContextIdStrategy (context id getParent ile ortak/kiraci bazli context) karari degistirir; non-durable tek bir request provider agaci non-durable yapar."
+        },
+        {
+          "id": 5,
+          "match": [],
+          "text": "Sonuc: evet, controller (durable degilse) her istekte yeniden olusturulur."
+        }
+      ]
+    },
+    "N2": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["RouterExceptionFilters", "ContextCreator"],
+          "text": "Sira: ContextCreator.createContext (packages/core/helpers/context-creator.ts:16) global, sinif, metot sirasiyla birlestirir; RouterExceptionFilters.create (packages/core/router/router-exception-filters.ts:25) filters.reverse() ile metot > controller > global yapar (en ozel once). Global: useGlobalFilters (config.getGlobalFilters) ve APP_FILTER (scanner.ts getApplyProvidersMap -> addGlobalFilter; request-scoped olanlar addGlobalRequestFilter ile, getGlobalMetadata'da eklenir)."
+        },
+        {
+          "id": 2,
+          "match": ["selectExceptionFilterMetadata", "invokeCustomFilters"],
+          "text": "Esleme: ExceptionsHandler.next (packages/core/exceptions/exceptions-handler.ts:14) -> invokeCustomFilters -> selectExceptionFilterMetadata (packages/common/utils/select-exception-filter-metadata.util.ts): ilk eslesen filtre (bos exceptionMetatypes = @Catch() hepsini yakalar, ya da exception instanceof); yalniz o calisir."
+        },
+        {
+          "id": 3,
+          "match": [],
+          "text": "Senaryo sonucu: metot filtresi @Catch(BadRequestException) NotFoundException'i yakalamaz (instanceof degil); siradaki controller @Catch() filtresi yakalar ve o calisir; global filtreler (useGlobalFilters ve APP_FILTER) calismaz."
+        },
+        {
+          "id": 4,
+          "match": ["getFilterInstance", "reflectCatchExceptions", "getInstanceByMetatype"],
+          "text": "Sinif olarak verilen filtre: BaseExceptionFilterContext.getFilterInstance (packages/core/exceptions/base-exception-filter-context.ts:41): catch metodu olan nesne oldugu gibi kullanilir; sinif ise modulun injectable'larindan DI ile cozulur (getInstanceByMetatype, context id'ye gore); exceptionMetatypes @Catch metadata'sindan (reflectCatchExceptions)."
+        },
+        {
+          "id": 5,
+          "match": ["BaseExceptionFilter", "handleUnknownError"],
+          "text": "Hic eslesme yoksa: super.catch -> BaseExceptionFilter.catch: HttpException ise kendi status/cevabi (NotFoundException -> 404), degilse handleUnknownError -> 500 'Internal server error'."
+        }
+      ]
+    },
+    "N3": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["getModulesToTriggerHooksOn", "calculateModulesDistance", "MAX_VALUE"],
+          "text": "Moduller arasi sira: NestApplicationContext.getModulesToTriggerHooksOn (packages/core/nest-application-context.ts:502) modulleri distance'a gore buyukten kucuge siralar (b.distance - a.distance); init ve bootstrap bu sirayla, destroy/beforeShutdown/shutdown .reverse() ile ters sirayla calisir. Distance: DependenciesScanner.calculateModulesDistance (scanner.ts:~415-432) TopologyTree ile kok modulden derinlik; global moduller Number.MAX_VALUE (injector/container.ts:182) -> global modullerin init hook'lari once, kapanis hook'lari en son."
+        },
+        {
+          "id": 2,
+          "match": ["callInitHook", "callBootstrapHook", "callDestroyHook", "callBeforeShutdownHook", "callShutdownHook"],
+          "text": "Faz sirasi: init() once tum modullerde callInitHook (onModuleInit), sonra callBootstrapHook (onApplicationBootstrap) (nest-application-context.ts:257). Kapanis: runShutdownSequence -> callDestroyHook -> callBeforeShutdownHook(signal) -> dispose() -> callShutdownHook(signal) (nest-application-context.ts:292-303)."
+        },
+        {
+          "id": 3,
+          "match": ["getInstancesGroupedByHierarchyLevel", "hierarchyLevel", "getSortedHierarchyLevels"],
+          "text": "Modul ici sira: callModuleInitHook (hooks/on-module-init.hook.ts) getInstancesGroupedByHierarchyLevel ile hierarchyLevel'e gore gruplar; init/bootstrap'ta seviyeler artan (getSortedHierarchyLevels ASC), destroy/shutdown'da azalan ('DESC'); ayni seviye Promise.all ile paralel, seviyeler sirayla. hierarchyLevel = bagimliliklarin en buyuk seviyesi + 1 (injector/injector.ts:200, 390-391) -> bagimlilik, kendisine bagimli olandan once baslar."
+        },
+        {
+          "id": 4,
+          "match": ["moduleClassHost", "moduleClassInstance", "providers.shift"],
+          "text": "Modul sinifinin kendi hook'u: providers'in ilk elemani modul sinifidir, shift ile ayrilir; tum provider/controller/injectable hook'larindan SONRA cagrilir (statik ise)."
+        },
+        {
+          "id": 5,
+          "match": ["isDependencyTreeStatic", "getStaticTransientInstances"],
+          "text": "Request-scoped: getInstancesGroupedByHierarchyLevel (hooks/utils/get-instances-grouped-by-hierarchy-level.ts:14) !wrapper.isDependencyTreeStatic() olanlari atlar -> request-scoped (ya da ona bagimli) provider'larin hook'u cagrilmaz. Transient: getStaticTransientInstances ile statik transient ornekleri dahil edilir."
+        },
+        {
+          "id": 6,
+          "match": ["enableShutdownHooks", "listenToShutdownSignals"],
+          "text": "SIGTERM: enableShutdownHooks() cagrilmali (nest-application-context.ts:347) -> listenToShutdownSignals sinyal dinleyicisi kurar (varsayilan tum ShutdownSignal degerleri) -> sinyalde shutdown(signal), sonra process.kill(pid, signal) (useProcessExit ile process.exit(0)). Cagrilmazsa yalniz app.close() kapanis hook'larini tetikler."
+        }
+      ]
+    },
+    "N4": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["handleMessage", "packet.id"],
+          "text": "Mesaj mi event mi: ServerTCP.handleMessage (packages/microservices/server/server-tcp.ts:~124) packet.id undefined ise handleEvent (event), id varsa request-response (mesaj)."
+        },
+        {
+          "id": 2,
+          "match": ["transformPatternToRoute", "normalizePattern", "getRouteFromPattern"],
+          "text": "Esleme: Server.getHandlerByPattern -> getRouteFromPattern -> normalizePattern -> transformPatternToRoute (packages/microservices/utils/transform-pattern.utils.ts): nesne pattern'lerin anahtarlari localeCompare ile siralanip string'e cevrilir (ic ice recursive) -> {cmd, role} ile {role, cmd} ayni route'a doner, ESLESIR. Sinirlar: derinlik > 5 '[MAX_DEPTH_REACHED]', > 20 anahtar '[TOO_MANY_KEYS]'."
+        },
+        {
+          "id": 3,
+          "match": ["addHandler", "messageHandlers"],
+          "text": "Ayni pattern iki @MessagePattern: Server.addHandler (packages/microservices/server/server.ts:150) event degilse messageHandlers.set ile UZERINE YAZAR -> son kaydedilen tek handler calisir."
+        },
+        {
+          "id": 4,
+          "match": ["forkJoinHandlersIfAttached", "tailRef"],
+          "text": "Ayni pattern iki @EventPattern: addHandler event handler'lari zincire ekler (tailRef.next = callback); ListenersController.forkJoinHandlersIfAttached (listeners-controller.ts:~195) handlerRef.next'i cagirip forkJoin ile birlestirir -> IKISI DE calisir."
+        },
+        {
+          "id": 5,
+          "match": ["NO_MESSAGE_HANDLER", "There is no matching message handler"],
+          "text": "Eslesme yoksa mesaj: TCP istemciye status 'error' ve err: NO_MESSAGE_HANDLER \"There is no matching message handler defined in the remote service.\" paketi gonderir (server-tcp.ts:~140, constants.ts:57)."
+        },
+        {
+          "id": 6,
+          "match": ["NO_EVENT_HANDLER"],
+          "text": "Eslesme yoksa event: Server.handleEvent (server.ts:~233) NO_EVENT_HANDLER ile log'a hata yazar; istemciye bir sey donmez."
+        }
+      ]
+    }
+  }
+}

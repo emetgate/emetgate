@@ -1,0 +1,105 @@
+{
+  "repo": "typeorm",
+  "commit": "17e858da8d2becab1ca47826f670a4660da70142",
+  "written": "2026-10-02, kod okunarak, hicbir kol kosmadan once",
+  "rule": "Otomatik puan: maddenin match dizgilerinden biri cevapta geciyorsa (buyuk-kucuk harf duyarsiz) madde karsilanmis sayilir. Dosya yollari packages/typeorm/src altina gore.",
+  "questions": {
+    "T1": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["SubjectDatabaseEntityLoader", "databaseEntity"],
+          "text": "Karar zinciri persistence/EntityPersistExecutor.ts:41 execute ile baslar: her entity icin Subject (save modunda canBeInserted/canBeUpdated = true; hedef repository target'i ya da entity.constructor, findInheritanceMetadata). persistence/SubjectDatabaseEntityLoader.ts:36 load, identifier'i (getEntityIdMap) olan subject'lerin satirlarini whereInIds ile (withDeleted: true) yukler; OrmUtils.compareIds ile eslesen satir subject.databaseEntity olur, databaseEntityLoaded = true."
+        },
+        {
+          "id": 2,
+          "match": ["mustBeInserted"],
+          "text": "INSERT karari persistence/Subject.ts:183 mustBeInserted = canBeInserted && !databaseEntity. id yoksa ya da id dolu ama veritabaninda o id'li satir bulunamazsa kayit (verilen id ile) INSERT edilir; hata ya da UPDATE olmaz."
+        },
+        {
+          "id": 3,
+          "match": ["mustBeUpdated"],
+          "text": "UPDATE karari persistence/Subject.ts:192 mustBeUpdated = canBeUpdated && identifier && (databaseEntityLoaded false ya da databaseEntity var) && changeMaps icinde guncellenebilir kolon (column.isUpdate) ya da iliski degisikligi var."
+        },
+        {
+          "id": 4,
+          "match": ["SubjectChangedColumnsComputer", "computeDiffColumns"],
+          "text": "Kolonlar persistence/SubjectChangedColumnsComputer.ts:38 computeDiffColumns'ta belirlenir: her kolonun entity degeri databaseEntity degeriyle karsilastirilir; undefined ozellikler atlanir, date/time/json/simple-array normalize edilir, transformer uygulanir; farkli olanlar diffColumns ve changeMaps'e eklenir. Iliski (join column) degisiklikleri computeDiffRelationalColumns ile compareIds uzerinden."
+        },
+        {
+          "id": 5,
+          "match": ["hasExecutableOperations", "executorsWithExecutableOperations"],
+          "text": "Hic degisiklik yoksa SubjectExecutor.recompute (persistence/SubjectExecutor.ts:208) insert/update listelerini bos bulur, hasExecutableOperations false olur; EntityPersistExecutor.execute (satir 168) erken doner: UPDATE sorgusu yok, transaction acilmaz, @BeforeUpdate/@AfterUpdate (listener ve subscriber) hic calismaz."
+        },
+        {
+          "id": 6,
+          "match": ["broadcastBeforeEventsForAll", "executeInsertOperations", "executeUpdateOperations"],
+          "text": "Sira persistence/SubjectExecutor.ts:102 execute: once before olaylari (broadcastBeforeEventsForAll), bir listener calistiysa subject'ler recompute edilir (listener'in degistirdigi kolonlar UPDATE'e girer); sonra insert'ler SubjectTopologicalSorter ile siralanip executeInsertOperations, ardindan executeUpdateOperations, remove, soft-remove, recover; en sonda after olaylari. Hepsi (transaction: false degilse) tek transaction icinde."
+        }
+      ]
+    },
+    "T2": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["broadcastBeforeInsertEvent", "beforeInsertListeners"],
+          "text": "subscriber/Broadcaster.ts:132 broadcastBeforeInsertEvent: once entity listener'lari (metadata.beforeInsertListeners, yani @BeforeInsert), sonra dataSource.subscribers sirasiyla subscriber.beforeInsert. Cagrilar senkron baslatilir; donen Promise'ler BroadcasterResult.promises'a toplanip SubjectExecutor.execute'ta Promise.all ile birlikte beklenir (async listener bitmeden subscriber baslar)."
+        },
+        {
+          "id": 2,
+          "match": ["buildSubscribers", "filterSubscribers"],
+          "text": "Subscriber sirasi: DataSource.buildMetadatas -> connection/ConnectionMetadataBuilder.ts:55 buildSubscribers (siniflar + dizinlerden import) -> getMetadataArgsStorage().filterSubscribers: @EventSubscriber decorator'unun kayit (import/tanim) sirasina gore; options.subscribers dizisindeki siraya gore degil. @EventSubscriber'siz sinif hic olusturulmaz."
+        },
+        {
+          "id": 3,
+          "match": ["isAllowedSubscriber"],
+          "text": "Subscriber eslesmesi subscriber/Broadcaster.ts:1004 isAllowedSubscriber: listenTo tanimli degilse ya da Object donerse tum entity'ler; listenTo() === metadata.target ya da listenTo().isPrototypeOf(target) -> ust sinifi dinleyen subscriber alt sinif entity'lerinde de calisir."
+        },
+        {
+          "id": 4,
+          "match": ["EntityListenerMetadata", "inheritanceTree", "filterListeners"],
+          "text": "Listener eslesmesi metadata/EntityListenerMetadata.ts:66 isAllowed: entity.constructor === entityMetadata.target ya da entity.constructor.prototype instanceof target. Listener'lar metadata-builder/EntityMetadataBuilder.ts:747 filterListeners(entityMetadata.inheritanceTree) ile ust siniflardan da toplanir (+ embedded listener'lari); ust siniftaki @BeforeInsert alt sinifta da calisir."
+        },
+        {
+          "id": 5,
+          "match": ["CannotDetermineEntityError", "entity.constructor"],
+          "text": "Duz obje: repository.save({...}) hedefi repository'den alir (EntityPersistExecutor: this.target ?? entity.constructor), subscriber'lar metadata.target uzerinden eslestigi icin calisir; entity listener'i isAllowed'da entity.constructor Object oldugu icin atlanir -> @BeforeInsert calismaz. Hedefsiz manager.save(duzObje) CannotDetermineEntityError atar."
+        }
+      ]
+    },
+    "T3": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["migrationsTransactionMode"],
+          "text": "data-source/DataSource.ts:363 runMigrations: transaction = options.transaction ?? this.options.migrationsTransactionMode ?? 'all'; MigrationExecutor olusturulup executePendingMigrations cagrilir."
+        },
+        {
+          "id": 2,
+          "match": ["getMigrations", "slice(-13)"],
+          "text": "Sira migration/MigrationExecutor.ts:587 getMigrations: dataSource.migrations icin ad = migration.name ?? constructor.name, timestamp = adin son 13 karakteri (slice(-13), parseInt); gecersizse TypeORMError ('migration name is wrong'); checkForDuplicateMigrations; timestamp'e gore artan siralanir."
+        },
+        {
+          "id": 3,
+          "match": ["loadExecutedMigrations", "executePendingMigrations"],
+          "text": "Eslestirme migration/MigrationExecutor.ts:197 executePendingMigrations: loadExecutedMigrations ile migrations tablosu okunur; kaynak koddaki migration, ayni name'e sahip calismis kayit yoksa pending sayilir (yalniz isimle; timestamp'i son calisandan eski olsa da calisir, o kontrol yorum satirinda)."
+        },
+        {
+          "id": 4,
+          "match": ["No migrations are pending"],
+          "text": "Bekleyen yoksa 'No migrations are pending' loglanir, query runner (kendisi olusturduysa) release edilir, [] doner; transaction acilmaz."
+        },
+        {
+          "id": 5,
+          "match": ["ForbiddenTransactionModeOverrideError"],
+          "text": "'all' modunda bekleyen migration'lardan birinin instance.transaction'i tanimliysa (true ya da false) hicbir migration calismadan ForbiddenTransactionModeOverrideError atilir (MigrationExecutor.ts:280)."
+        },
+        {
+          "id": 6,
+          "match": ["txModeDefault", "insertExecutedMigration"],
+          "text": "Varsayilan txModeDefault = {each: true, none: false, all: false} (MigrationExecutor.ts:298); instance.transaction tanimliysa o kullanilir (each/none'da override serbest). 'all' dongu oncesi tek transaction acar (beforeMigration + startTransaction), sonda commit; 'each' her migration icin acar, up + insertExecutedMigration sonrasi commit; hata olursa kendi actigi transaction rollback edilir ve hata yeniden atilir."
+        }
+      ]
+    }
+  }
+}
