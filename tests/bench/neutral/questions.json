@@ -1,0 +1,49 @@
+{
+  "repos": {
+    "typeorm": {
+      "url": "https://github.com/typeorm/typeorm.git",
+      "commit": "17e858da8d2becab1ca47826f670a4660da70142",
+      "ts_js_files": 3611
+    },
+    "actual": {
+      "url": "https://github.com/actualbudget/actual.git",
+      "commit": "954ad61d3c787fab6f92d9d90feec750ef38435d",
+      "ts_js_files": 2121
+    },
+    "nest": {
+      "url": "https://github.com/nestjs/nest.git",
+      "commit": "35142c3eca8edaaf6abc5984d915da2fbd458aa2",
+      "ts_js_files": 2054
+    },
+    "openbot": {
+      "url": "https://github.com/CopilotKit/OpenBot.git",
+      "commit": "cb5dc32a44517622c6db4e527e61d3abb389b43c",
+      "ts_js_files": 1181
+    }
+  },
+  "questions": {
+    "typeorm": {
+      "T1": "TypeORM'de `repository.save(user)` çağrıldığında kaydın INSERT mi UPDATE mi edileceğine hangi kod karar veriyor? `user.id` dolu ama veritabanında bu id'li satır yoksa ne olur? Satır varsa hangi kolonların UPDATE'e gireceği nasıl belirleniyor, hiçbir kolon değişmemişse ne olur ve `@BeforeUpdate` metodu yine de çalışır mı?",
+      "T2": "TypeORM'de bir entity insert edilirken hem entity sınıfında `@BeforeInsert` ile işaretli bir metot hem de DataSource'a kayıtlı birkaç subscriber'ın `beforeInsert` metodu varsa hangisi önce çalışır ve subscriber'lar kendi aralarında hangi sırayla çağrılır? Bir subscriber'ın hangi entity'ler için tetikleneceği nasıl eşleşiyor, kalıtımda ne oluyor? `save`'e sınıf örneği yerine düz bir obje verilirse bu metotlardan hangileri çalışır?",
+      "T3": "TypeORM'de `dataSource.runMigrations()` çağrıldığında hangi migration'ların çalışacağına nasıl karar veriliyor ve çalışma sırası nerede belirleniyor? Daha önce çalışmış migration'larla eşleştirme neye göre yapılıyor? Transaction modu `all` iken bir migration sınıfı kendi `transaction` alanını tanımlarsa ne olur, `each` ve `none` modlarında varsayılan ne? Çalışacak migration yoksa ne olur?"
+    },
+    "actual": {
+      "A1": "Actual'da bir işleme birden fazla kural (rule) uyuyorsa hangisinin sonucu geçerli olur? Kuralların çalışma sırası nerede ve neye göre belirleniyor, 'pre' ve 'post' aşamaları bu sırayı nasıl etkiliyor? Bir kuralın o işlem için aday olup olmadığına ve koşullarının sağlanıp sağlanmadığına nasıl bakılıyor? İşlem bir zamanlanmış ödemeden (schedule) geliyorsa ne değişir, hiçbir kural uymazsa işlem ne olur?",
+      "A2": "Actual'da bankadan senkronize edilen ya da dosyadan içe aktarılan bir işlem, hesapta zaten var olan bir işlemle nasıl eşleştiriliyor? Önce neye bakılıyor, sonra hangi ölçütlerle aday aranıyor ve birden fazla aday varsa hangisi seçiliyor? Eşleşme bulunursa mevcut işlemin hangi alanları güncelleniyor, hiçbir eşleşme yoksa ne oluyor?",
+      "A3": "Actual'ın zarf (envelope) bütçesinde bir gider kategorisi ay sonunda eksiye düşerse sonraki ay ne olur, bu eksi tutar nereden karşılanır? Kategoride taşıma (rollover) seçeneği açıksa ne değişir ve bu seçenek hangi aylara uygulanır? Pozitif kalan bakiye nasıl taşınıyor, 'To Budget' tutarı hangi kalemlerden hesaplanıyor?"
+    },
+    "nest": {
+      "N1": "NestJS'te bir controller'ın kendisi varsayılan (singleton) scope'ta ama bağımlılık zincirinin derinlerinde Scope.REQUEST olan bir provider varsa, controller her istekte yeniden mi oluşturuluyor? Buna hangi kod karar veriyor, bağımlılık zinciri nasıl dolaşılıyor ve durable provider'larda karar nasıl değişiyor?",
+      "N2": "NestJS'te bir HTTP isteğinde NotFoundException fırlatılıyor. Uygulamada useGlobalFilters ile eklenmiş global bir filtre, APP_FILTER ile kayıtlı bir filtre, controller'da @UseFilters ile verilmiş @Catch() (her şeyi yakalayan) bir filtre ve handler metodunda @Catch(BadRequestException) filtresi var. Hangi filtre çalışır ve neden? Filtrelerin sırası nerede belirleniyor, eşleşme nasıl yapılıyor, filtre sınıf olarak verildiğinde örneği nereden geliyor ve hiçbiri eşleşmeseydi ne olurdu?",
+      "N3": "NestJS uygulaması açılırken ve kapanırken onModuleInit, onApplicationBootstrap, onModuleDestroy, beforeApplicationShutdown ve onApplicationShutdown hook'ları hangi sırayla çağrılıyor? Modüller arasındaki sıra neye göre belirleniyor (global modüller dahil), aynı modül içinde birbirine bağımlı provider'lar hangi sırayla çalışıyor, modül sınıfının kendi hook'u ne zaman çağrılıyor, request-scoped ya da transient bir provider'ın hook'u çağrılır mı ve kapanış hook'larının SIGTERM ile tetiklenmesi için ne gerekiyor?",
+      "N4": "NestJS microservices'te TCP transport ile gelen bir paket için sunucu bunun bir mesaj (request-response) mı yoksa event mi olduğuna neye bakarak karar veriyor? @MessagePattern({ cmd: 'sum', role: 'math' }) ile kayıtlı bir handler'a istemci { role: 'math', cmd: 'sum' } gönderirse eşleşir mi, eşleşme nasıl hesaplanıyor? Aynı pattern iki farklı controller'da iki kez @MessagePattern olarak, başka bir pattern de iki kez @EventPattern olarak tanımlanırsa hangileri çalışır? Hiçbir handler eşleşmezse istemciye ne döner, event'te ne olur?"
+    },
+    "openbot": {
+      "O1": "OpenBot'ta bir Bot bir işlem yapmak üzereyken bunun kendiliğinden mi çalışacağına, kullanıcıya mı sorulacağına, yoksa tamamen kullanıcıya mı bırakılacağına hangi kod karar veriyor? Takım kuralı ile kişisel kural aynı işlemle eşleşirse hangisi kazanır? Kullanıcının \"otomatik izin ver\" kuralı varken bile parola değiştirme ya da ödeme gibi işlemler neden yine kullanıcıya bırakılıyor, ve işlemi inceleyen model cevap vermezse ne olur?",
+      "O2": "OpenBot'ta kullanıcı bir mesajda hiçbir çalışma arkadaşını @ ile etiketlemediğinde mesajın hangi Bot'a gideceğine hangi kod karar veriyor? Yönlendirici model ulaşılamazsa, okunamayan bir cevap verirse ya da listede olmayan birini söylerse ne olur? Mesaj \"google drive\" gibi bir sistemin adını içeriyorsa varsayılan çalışma arkadaşı yerine kim seçilir ve bu hangi koşulda olur?",
+      "O3": "OpenBot'ta kimsenin kullanmadığı bir Bot bilgisayarının askıya alınmasına hangi kod karar veriyor ve bilgisayarın boşta olduğu nereden anlaşılıyor? Karar verildikten sonra, askıya alınmadan hemen önce kullanıcı geri dönerse ne olur? Askıya alma başarısız olursa iş ne zaman yeniden denenir ve en çok kaç deneme yapılır?",
+      "O4": "OpenBot'ta kullanıcı başında değilken çalışan arka plan (proaktif) araştırma koşusunun yalnız okuma yapmasını hangi kod sağlıyor? Bir aracın okuma sayılıp sayılmayacağı nasıl belirleniyor ve araç koşu sırasında yeniden etiketlenirse ne olur? Uzak bir Bot'un geri çağrısı bu sınırı aşabilir mi?",
+      "O5": "OpenBot'ta bir rutinin en sık ne aralıkla çalışabileceğine hangi kod karar veriyor ve alt sınır nedir? `45,55 8 * * *` gibi günde yalnız iki kez ama on dakika arayla çalışan bir cron ifadesi kabul edilir mi? Bu kararın, sorunun günün hangi saatinde sorulduğuna göre değişmemesi nasıl sağlanıyor?"
+    }
+  }
+}

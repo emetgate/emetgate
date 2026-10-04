@@ -1,0 +1,254 @@
+{
+ "repo": "openbot",
+ "commit": "cb5dc32a44517622c6db4e527e61d3abb389b43c",
+ "written": "2026-10-04, kod okunarak, hicbir kol kosmadan once",
+ "rule": "Otomatik puan: maddenin match dizgilerinden biri cevapta geciyorsa (buyuk-kucuk harf duyarsiz) madde karsilanmis sayilir.",
+ "questions": {
+  "O1": {
+   "items": [
+    {
+     "id": 1,
+     "match": [
+      "decideAction"
+     ],
+     "text": "server/src/approvals/policy.ts:279 decideAction katman katman karar verir: önce yerleşik güvenlik gereksinimi, sonra en katı kural, sonra inceleyen model, en sonda kullanıcının askBeforeChanges varsayılanı; sonuç allow / ask / hand_off."
+    },
+    {
+     "id": 2,
+     "match": [
+      "safetyRequirement",
+      "SAFETY_REQUIREMENTS"
+     ],
+     "text": "policy.ts:132 safetyRequirement, işlemin ve hedefinin kelimelerini SAFETY_REQUIREMENTS (credentials, security_settings, payments) desenleriyle eşler; eşleşme her kuraldan önce ve kuraldan bağımsız hand_off döner. Okuma (effect read) hiçbir zaman buradan devredilmez."
+    },
+    {
+     "id": 3,
+     "match": [
+      "strictestRule",
+      "RANK"
+     ],
+     "text": "policy.ts:56 strictestRule iki katmanda eşleşen kuralların en katısını seçer: RANK allow 0 < pre_approved 1 < ask 2 < hand_off 3. Takım kuralları önce gezilir ve karşılaştırma katı büyüktür olduğu için eşitlikte takım kuralı kazanır."
+    },
+    {
+     "id": 4,
+     "match": [
+      "reviewAction",
+      "failedClosed"
+     ],
+     "text": "policy.ts:210 reviewAction kapalı başarısız olur: model yoksa, hata ya da zaman aşımı olursa ya da cevap bildirilen şemaya uymuyorsa needs_approval döner (failedClosed), asla proceed dönmez."
+    },
+    {
+     "id": 5,
+     "match": [
+      "preApproved",
+      "pre_approved"
+     ],
+     "text": "pre_approved kuralı ancak inceleme preApproved true dediyse ve failedClosed değilse allow verir; aksi halde ask olur."
+    },
+    {
+     "id": 6,
+     "match": [
+      "reviewable",
+      "NOT_ACCOUNT_ACTIONS"
+     ],
+     "text": "policy.ts:151 reviewable: okuma, memory/ ve bot ayar araçları otomatik incelemeye girmez. NOT_ACCOUNT_ACTIONS (computer_write_file, computer_run_command, host/ ...) güvenlik devrinden muaftır."
+    }
+   ]
+  },
+  "O2": {
+   "items": [
+    {
+     "id": 1,
+     "match": [
+      "createIntentRouter"
+     ],
+     "text": "server/src/routing/classify.ts:187 createIntentRouter içindeki route: model çağrısı dışarıdan verilir, her başarısızlık yolu varsayılana düşer ve hiçbiri hata fırlatmaz."
+    },
+    {
+     "id": 2,
+     "match": [
+      "MIN_CONFIDENCE"
+     ],
+     "text": "classify.ts:84 MIN_CONFIDENCE 0.6; altındaki güven varsayılana düşer (unconfident)."
+    },
+    {
+     "id": 3,
+     "match": [
+      "off-roster",
+      "RoutingUndecided"
+     ],
+     "text": "RoutingUndecided nedenleri: unreachable (çağrı hata verdi), unparsed (cevapta okunabilir JSON yok), off-roster (listede olmayan id), unconfident, one-candidate."
+    },
+    {
+     "id": 4,
+     "match": [
+      "onlyCoworkerReaching"
+     ],
+     "text": "classify.ts:161 onlyCoworkerReaching: mesajın adını andığı sisteme ulaşabilen tam olarak bir çalışma arkadaşı varsa varsayılan yerine o seçilir; bu yalnız fallback yolunda uygulanır, güvenli bir amaç eşleşmesini ezmez. İki sahip varsa varsayılana düşer."
+    },
+    {
+     "id": 5,
+     "match": [
+      "messageNames"
+     ],
+     "text": "classify.ts:139 messageNames: sistem adı kelime sınırında aranır, ayırıcılar gevşetilir (google-drive, 'google drive' ile eşleşir); düz alt dizgi araması değildir."
+    },
+    {
+     "id": 6,
+     "match": [
+      "one-candidate",
+      "defaultId"
+     ],
+     "text": "Tek aday ya da hiç aday yoksa model çağrısı yapılmaz (one-candidate); varsayılan defaultId, listede yoksa ilk aday kullanılır."
+    }
+   ]
+  },
+  "O3": {
+   "items": [
+    {
+     "id": 1,
+     "match": [
+      "offerIdleComputers"
+     ],
+     "text": "server/src/work/culler.ts:82 offerIdleComputers çalışan bilgisayarları listeler ve boşta olanları computer.suspend işi olarak kuyruğa sunar; karar ile eylem ayrıdır."
+    },
+    {
+     "id": 2,
+     "match": [
+      "lastActedAt",
+      "auditEvents"
+     ],
+     "text": "culler.ts:50 lastActedAt: boşta olma denetim kaydından (auditEvents, computer.% olayları) okunur, bilgisayara hiç dokunulmaz; kayıt yoksa startedAt kullanılır, o da yoksa bilgisayar bırakılır."
+    },
+    {
+     "id": 3,
+     "match": [
+      "idleAfterMs"
+     ],
+     "text": "Eşik idleAfterMs: son eylemden bu kadar süre geçmediyse sunulmaz."
+    },
+    {
+     "id": 4,
+     "match": [
+      "suspendClaimedComputers"
+     ],
+     "text": "culler.ts:119 suspendClaimedComputers eylem anında yeniden denetler: bu arada kullanılmışsa iş finish ile düşürülür ('used again before it was suspended'), bilgisayar durdurulmaz. Her öğeden önce kira (lease) yenilenir; yenilenemezse atlanır."
+    },
+    {
+     "id": 5,
+     "match": [
+      "delayMs",
+      "5 * 60_000"
+     ],
+     "text": "Durdurma hata verirse iş release ile bırakılır ve delayMs 5 dakika ertelenir."
+    },
+    {
+     "id": 6,
+     "match": [
+      "DEFAULT_MAX_ATTEMPTS",
+      "computer-cull-gave-up"
+     ],
+     "text": "Deneme sınırı work/queue.ts:88 DEFAULT_MAX_ATTEMPTS 5 (maxAttempts verilmediyse); sınıra varınca computer-cull-gave-up uyarısı yazılır ve öğe artık sunulmaz."
+    }
+   ]
+  },
+  "O4": {
+   "items": [
+    {
+     "id": 1,
+     "match": [
+      "restrictToolsForRun"
+     ],
+     "text": "server/src/proactive/restriction.ts:88 restrictToolsForRun: proaktif koşuda yalnız okuma araçları sunulur ve her biri çalıştırılırken yeniden denetlenir; koşu ortasında yeniden etiketlenen araç sonraki çağrıda reddedilir."
+    },
+    {
+     "id": 2,
+     "match": [
+      "isProactiveInitiator",
+      "PROACTIVE_INITIATOR_PREFIX"
+     ],
+     "text": "Sınır koşunun başlatıcısına (initiator) bakılarak uygulanır: id 'proactive:' ön ekiyle başlar (PROACTIVE_INITIATOR_PREFIX, isProactiveInitiator)."
+    },
+    {
+     "id": 3,
+     "match": [
+      "createReadOnlyClassifier"
+     ],
+     "text": "restriction.ts:65 createReadOnlyClassifier: katalogdaki effect 'read' ve destructive olmayan araçlar okuma sayılır; katalog her soruda yeniden okunur."
+    },
+    {
+     "id": 4,
+     "match": [
+      "PROACTIVE_MEMORY_READS",
+      "recall_personal_memory"
+     ],
+     "text": "Bellek tarafında yalnız recall_personal_memory okuması serbesttir (PROACTIVE_MEMORY_READS)."
+    },
+    {
+     "id": 5,
+     "match": [
+      "guardProactiveCallback"
+     ],
+     "text": "restriction.ts:125 guardProactiveCallback: uzak Bot'un geri çağrı kapısında her şeyden önce çalışır; katalog okunamazsa da reddeder (kapalı başarısız)."
+    },
+    {
+     "id": 6,
+     "match": [
+      "restrictCoordinationForRun",
+      "refusalsFor"
+     ],
+     "text": "restrictCoordinationForRun proaktif koşuya hiçbir devretme / sorma aracı vermez; refusalsFor verilmeyen araçlar için gizli ret tanımları üretir."
+    }
+   ]
+  },
+  "O5": {
+   "items": [
+    {
+     "id": 1,
+     "match": [
+      "nextOccurrence"
+     ],
+     "text": "server/src/routines/schedule.ts:143 nextOccurrence hem kabulü hem zamanlamayı yapar; alt sınır iki kez uygulanır."
+    },
+    {
+     "id": 2,
+     "match": [
+      "MINIMUM_INTERVAL_MS"
+     ],
+     "text": "schedule.ts:4 MINIMUM_INTERVAL_MS 15 dakika."
+    },
+    {
+     "id": 3,
+     "match": [
+      "refuseSubFloorCycle"
+     ],
+     "text": "schedule.ts:100 refuseSubFloorCycle ifadenin kendi döngüsünde 15 dakikadan kısa ardışık çift arar; 45,55 8 * * * reddedilir."
+    },
+    {
+     "id": 4,
+     "match": [
+      "FLOOR_SCAN_START",
+      "FLOOR_SCAN_OCCURRENCES"
+     ],
+     "text": "Tarama sabit bir başlangıçtan (FLOOR_SCAN_START 2024-01-01) 200 ardışık oluşum (FLOOR_SCAN_OCCURRENCES) boyunca yapılır; bu yüzden karar sorulduğu saate bağlı değildir."
+    },
+    {
+     "id": 5,
+     "match": [
+      "hasFiveFields",
+      "isKnownTimeZone"
+     ],
+     "text": "Önce beş alan (hasFiveFields) ve bilinen saat dilimi (isKnownTimeZone) denetlenir."
+    },
+    {
+     "id": 6,
+     "match": [
+      "ScheduleRefusedError",
+      "TOO_FREQUENT_MESSAGE"
+     ],
+     "text": "Ret ScheduleRefusedError ile yapılır; çok sık ifadede ileti 'Routines may run at most every 15 minutes.' (TOO_FREQUENT_MESSAGE). Alttaki çift denetimi çalışma anı yedeğidir."
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,105 @@
+{
+  "repo": "actual",
+  "commit": "954ad61d3c787fab6f92d9d90feec750ef38435d",
+  "written": "2026-10-02, kod okunarak, hicbir kol kosmadan once",
+  "rule": "Otomatik puan: maddenin match dizgilerinden biri cevapta geciyorsa (buyuk-kucuk harf duyarsiz) madde karsilanmis sayilir. Dosya yollari packages/loot-core/src/server altina gore.",
+  "questions": {
+    "A1": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["RuleIndexer", "getApplicableRules", "firstcharIndexer", "payeeIndexer"],
+          "text": "Adaylar transactions/transaction-rules.ts:321 runRules'ta iki RuleIndexer'dan gelir: firstcharIndexer (imported_payee'nin ilk harfi, kucuk harf) ve payeeIndexer (payee id); rules/rule-indexer.ts:75 getApplicableRules islemin anahtarina dusen kurallari + '*' kovasini birlestirir. O alanda is/isNot/oneOf/notOneOf kosulu olmayan kurallar '*' kovasindadir, yani her islem icin adaydir."
+        },
+        {
+          "id": 2,
+          "match": ["rankRules"],
+          "text": "Sira rules/rule-utils.ts:87 rankRules: once 'pre' asamasi, sonra normal (stage null), en son 'post'; her asama kendi icinde _rankRules ile siralanir."
+        },
+        {
+          "id": 3,
+          "match": ["computeScore", "OP_SCORES"],
+          "text": "_rankRules computeScore'a gore ARTAN siralar, esitlikte id'ye gore: OP_SCORES is/isNot 10, oneOf/notOneOf 9, isapprox/isbetween 5, gt/gte/lt/lte 1, contains/matches/... 0; tum kosullar is/isNot/isapprox/oneOf/notOneOf ise skor x2. Dusuk skor once calisir, daha ozel (yuksek skorlu) kural sonra calisir."
+        },
+        {
+          "id": 4,
+          "match": ["evalConditions", "conditionsOp"],
+          "text": "Siradaki her kural icin rules/rule.ts:157 evalConditions o ana kadar degismis islem (finalTrans) uzerinde calisir: conditionsOp 'or' ise some, degilse every; kosulsuz kural hic eslesmez. Eslesen kuralin execActions degisiklikleri Object.assign ile islenir; ayni alani set eden sonraki kural oncekini ezer, yani gecerli olan son calisan (en ozel / post) kuraldir."
+        },
+        {
+          "id": 5,
+          "match": ["scheduleRuleID", "getRuleIdFromScheduleId", "RuleIdsLinkedToSchedules"],
+          "text": "Islem bir schedule'a bagliysa (trans.schedule) o schedule'in kurali kosul kontrolu yapilmadan calistirilir (tarih araliginin disinda olsa bile); baska schedule'lara bagli kurallar atlanir; digerleri normal degerlendirilir."
+        },
+        {
+          "id": 6,
+          "match": ["finalizeTransactionForRules", "prepareTransactionForRules"],
+          "text": "Hic kural uymazsa islem degismeden doner: prepareTransactionForRules'in ekledigi yardimci alanlar (payee_name, balance, _account vb.) finalizeTransactionForRules'ta silinir; kategori vb. atanmaz."
+        }
+      ]
+    },
+    "A2": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["reconcileTransactions", "matchTransactions"],
+          "text": "accounts/sync.ts:635 reconcileTransactions -> 824 matchTransactions: islemler normalize edilir (normalizeBankSyncTransactions / normalizeTransactions), eslesmeden once her isleme runRules uygulanir."
+        },
+        {
+          "id": 2,
+          "match": ["imported_id"],
+          "text": "Once tam eslesme: ayni hesapta ayni imported_id'li islem aranir (SELECT ... WHERE imported_id = ? AND account = ?); sync-reimport-deleted tercihine gore v_transactions (silinenler haric, silinen tekrar eklenir) ya da v_transactions_internal kullanilir."
+        },
+        {
+          "id": 3,
+          "match": ["compareFuzzyMatchCandidates", "fuzzyDataset", "strictIdChecking", "sevenDaysBefore"],
+          "text": "Tam eslesme yoksa bulanik adaylar: ayni hesap, ayni tutar, tarih +-7 gun; strictIdChecking'de yalniz imported_id'si bos olan (ya da gelen islemin imported_id'si olmayan) satirlar. Adaylar compareFuzzyMatchCandidates ile tarihe en yakin once, esitlikte imported_id'si olmayan once siralanir."
+        },
+        {
+          "id": 4,
+          "match": ["transactionsStep2", "transactionsStep3", "hasMatched"],
+          "text": "Iki gecis: transactionsStep2'de adaylardan payee'si ayni olan ilk eslesmemis satir; kalanlar icin transactionsStep3'te ilk eslesmemis aday (en dusuk dogruluk). hasMatched ayni satirin iki kez eslesmesini, exactMatchedParentIds tam eslesen parent'in cocuklarini engeller."
+        },
+        {
+          "id": 5,
+          "match": ["hasFieldsChanged", "match.reconciled", "existing.category"],
+          "text": "Eslesme varsa: mutabakati yapilmis (reconciled) islem atlanir; aksi halde imported_id ve imported_payee gelen islemden, payee/category/notes mevcutta doluysa mevcut korunur (existing || trans), cleared = mevcut || gelen, tarih yalniz updateDates ile; yalniz hasFieldsChanged ise guncellenir, parent'ta cleared/tarih cocuklara da yazilir."
+        },
+        {
+          "id": 6,
+          "match": ["batchUpdateTransactions", "makeSplitTransaction", "defaultCleared", "createNewPayees"],
+          "text": "Eslesme yoksa yeni islem eklenir: uuidv4 id, category || null, cleared ?? defaultCleared; alt islemler varsa makeSplitTransaction; tombstone olanlar atlanir; preview degilse createNewPayees ve batchUpdateTransactions ile yazilir."
+        }
+      ]
+    },
+    "A3": {
+      "items": [
+        {
+          "id": 1,
+          "match": ["leftover-pos", "prevLeftoverPos"],
+          "text": "budget/envelope.ts:33 createCategory: leftover-<kategori> = budget + sum-amount (harcama) + (onceki ay carryover ise onceki leftover, degilse onceki leftover-pos). leftover-pos = leftover < 0 ? 0 : leftover; pozitif bakiye her zaman sonraki aya tasinir."
+        },
+        {
+          "id": 2,
+          "match": ["last-month-overspent"],
+          "text": "Tasima kapaliyken eksi: kategori sonraki aya 0'dan baslar (leftover-pos); createSummary'deki last-month-overspent, carryover'i kapali gider kategorilerinin onceki ay min(0, leftover) toplamini alir ve bu ayin to-budget'ina eklenir, yani eksi 'To Budget'tan dusulur."
+        },
+        {
+          "id": 3,
+          "match": ["setCategoryCarryover", "zero_budgets", "handleBudgetChange", "getAllMonths"],
+          "text": "Tasima aciksa eksi bakiye kategoride kalip sonraki ayin leftover'ina eklenir, To Budget'tan dusulmez. Bayrak budget/actions.ts:704 setCategoryCarryover ile baslangic ayi ve sonraki tum olusturulmus aylar (getAllMonths) icin zero_budgets (tracking'de reflect_budgets) carryover alanina yazilir; base.ts handleBudgetChange carryover-<kategori> hucresine aktarir."
+        },
+        {
+          "id": 4,
+          "match": ["available-funds", "total-budgeted"],
+          "text": "to-budget = available-funds (total-income + from-last-month) + last-month-overspent + total-budgeted (butcelenen toplamin negatifi) - buffered-selected (envelope.ts:193)."
+        },
+        {
+          "id": 5,
+          "match": ["buffered-selected", "from-last-month", "buffered-auto"],
+          "text": "from-last-month = onceki ayin to-budget'i + onceki buffered-selected; buffered-selected = elle ayrilan (buffered, 'hold for next month') sifir degilse o, degilse buffered-auto (carryover isaretli gelir kategorilerinin geliri)."
+        }
+      ]
+    }
+  }
+}
