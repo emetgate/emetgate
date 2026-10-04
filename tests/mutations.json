@@ -8117,8 +8117,8 @@
     {
       "id": "MP16-split-directory-children-hidden",
       "file": "src/engine/map.zig",
-      "from": "const shown = if (self.options.list_children and family == .code) try childrenLabel(self.arena, items.items, r) else label;",
-      "to": "const shown = if (false) try childrenLabel(self.arena, items.items, r) else label;",
+      "from": "const shown = if (self.options.list_children and family == .code) try childrenLabel(self.arena, items.items, r, separator) else label;",
+      "to": "const shown = if (false) try childrenLabel(self.arena, items.items, r, separator) else label;",
       "kills": [
         "map: a region of a split directory names each sibling directory on its line and folds runs of files"
       ],
