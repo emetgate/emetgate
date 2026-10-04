@@ -8001,7 +8001,7 @@
       "id": "MP3-name-order-random",
       "file": "src/engine/map.zig",
       "from": "    if (b.weight[x] != b.weight[y]) return b.weight[x] > b.weight[y];",
-      "to": "    if (x != y and @intFromPtr(b) != 0) return std.crypto.random.boolean();",
+      "to": "    if (x != y and b.weight.len != 0) {\n        const k32 = struct {\n            extern \"kernel32\" fn QueryPerformanceCounter(counter: *i64) callconv(.winapi) c_int;\n        };\n        var ticks: i64 = 0;\n        _ = k32.QueryPerformanceCounter(&ticks);\n        return @mod(@divTrunc(ticks, 7), 2) == 0;\n    }",
       "kills": [
         "map: the text is the same bytes on every build of the same snapshot"
       ]
@@ -8010,7 +8010,7 @@
       "id": "MP4-delta-drops-removed-symbols",
       "file": "src/engine/map_delta.zig",
       "from": "            if (!o.seen) try self.add(.removed, region, path, o.snap.kind, o.snap.qname, o.snap.line);",
-      "to": "            if (!o.seen) _ = self;",
+      "to": "            if (false) try self.add(.removed, region, path, o.snap.kind, o.snap.qname, o.snap.line);",
       "kills": [
         "map delta: an unchanged store has no delta, and added, removed and changed symbols are reported by region"
       ]
@@ -8046,7 +8046,7 @@
       "id": "MP8-unsorted-paths-accepted",
       "file": "src/engine/map_tree.zig",
       "from": "        if (std.mem.order(u8, items[i - 1].path, items[i].path) != .lt) return error.UnsortedItems;",
-      "to": "        _ = i;",
+      "to": "        if (items[i - 1].path.len > items[i].path.len + 1_000_000) return error.UnsortedItems;",
       "kills": [
         "map tree: unsorted or repeated paths are refused"
       ]
@@ -8421,8 +8421,7 @@
       "from": "        for (paths.items) |path| {\n            const id = store.fileId(path) orelse continue;",
       "to": "        for (paths.items[0..1]) |path| {\n            const id = store.fileId(path) orelse continue;",
       "kills": [
-        "map tools: evidence returns every definition of a name and names the symbols it does not know",
-        "map tools: explore shows every definition of a named symbol whole, numbers each line and names the symbol it does not know"
+        "map tools: evidence returns every definition of a name and names the symbols it does not know"
       ],
       "note": "a name defined in two files would come back from one of them and the reply would still look complete"
     },
@@ -8480,7 +8479,7 @@
       "id": "ME7-everything-worth-sending",
       "file": "src/protocol/map_tools.zig",
       "from": "    return @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;",
-      "to": "    return true;",
+      "to": "    return @as(f64, @floatFromInt(size)) * (1 - chance) >= call_chars * chance;",
       "kills": [
         "map tools: a definition is sent whole only while its size costs less than the model call it may save"
       ],
@@ -8490,7 +8489,7 @@
       "id": "ME8-useful-table-flat",
       "file": "src/protocol/map_tools.zig",
       "from": "    while (i < useful_ratio.len and ratio >= useful_ratio[i]) i += 1;",
-      "to": "    while (false) i += 1;",
+      "to": "    while (i < useful_ratio.len and ratio < useful_ratio[i]) i += 1;",
       "kills": [
         "map tools: the chance that a definition is useful rises with its score ratio along the measured table"
       ],
