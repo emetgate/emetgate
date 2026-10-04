@@ -110,6 +110,20 @@ pub const Index = struct {
         return doc;
     }
 
+    pub fn ceiling(self: *const Index, arena: Allocator, query: []const u8) !f64 {
+        const n = self.lengths.items.len;
+        if (n == 0) return 0;
+        var wanted: Wanted = .{ .arena = arena, .index = self };
+        try eachTerm(query, &wanted);
+        const docs: f64 = @floatFromInt(n);
+        var sum: f64 = 0;
+        for (wanted.ids.keys()) |id| {
+            const df: f64 = @floatFromInt(self.postings.items[id].items.len);
+            sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);
+        }
+        return sum;
+    }
+
     pub fn rank(self: *const Index, arena: Allocator, query: []const u8, limit: usize) ![]const Hit {
         const n = self.lengths.items.len;
         if (n == 0) return &.{};
@@ -185,6 +199,25 @@ test "term index: a body that holds the rare query word outranks a body that hol
     try testing.expect(second == hits[1].doc or second == hits[2].doc);
     try testing.expectEqual(@as(usize, 0), (try index.rank(arena, "nothing here matches", 10)).len);
     try testing.expectEqual(@as(usize, 1), (try index.rank(arena, "budget", 1)).len);
+}
+
+test "term index: the ceiling of a query bounds every score, grows with each known word and ignores unknown ones" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var index = Index.init(arena);
+    _ = try index.add("createCategory", "budget/envelope.ts", "createDynamic(sheetName, 'leftover-pos-' + cat.id)");
+    _ = try index.add("BalanceMenu", "components/BalanceMenu.tsx", "return <Menu budget={budget} />");
+    _ = try index.add("openMenu", "components/Menu.tsx", "budget.open()");
+    const one = try index.ceiling(arena, "leftover");
+    const two = try index.ceiling(arena, "budget leftover");
+    const hits = try index.rank(arena, "budget leftover", 10);
+    try testing.expect(one > 0);
+    try testing.expect(two > one);
+    try testing.expect(hits[0].score <= two);
+    try testing.expect(hits[0].score > two / 4);
+    try testing.expectEqual(two, try index.ceiling(arena, "budget leftover zzzunknown"));
+    try testing.expectEqual(@as(f64, 0), try index.ceiling(arena, "nothing here matches"));
 }
 
 test "term index: a definition whose name holds the query word outranks one that only mentions it in its body" {

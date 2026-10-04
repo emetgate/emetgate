@@ -37,10 +37,9 @@ pub const call_cost: f64 = output_price * call_output_tokens + cache_write_price
 pub const char_cost: f64 = (cache_write_price + cache_read_price) / chars_per_token;
 pub const chars_per_token: f64 = 2.67;
 pub const call_chars: f64 = call_cost / char_cost;
-pub const call_share: f64 = 0.5;
 pub const pointer_chance: f64 = 0.05;
-pub const useful_ratio = [_]f64{ 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.80 };
-pub const useful_chance = [_]f64{ 0.001, 0.005, 0.017, 0.051, 0.056, 0.114, 0.138, 0.281, 0.411, 0.554, 0.686 };
+pub const useful_ratio = [_]f64{ 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30 };
+pub const useful_chance = [_]f64{ 0.009, 0.012, 0.031, 0.045, 0.094, 0.110, 0.199, 0.482, 0.589 };
 
 pub const explore_description = "Returns the code that matches a question: every definition of each named symbol, then the functions and top-level constants ranked by term statistics over names, paths and bodies, each one whole with a number on every line, and the addresses of named or matching ones left out.";
 pub const evidence_description = "Returns the full code of up to 6 functions by qualified name (Class.method or function), as plain text.";
@@ -295,7 +294,7 @@ pub const Session = struct {
         }
         try self.freshTerms();
         const hits = try self.terms.?.rank(arena, joined.written(), max_ranked);
-        const top: f64 = if (hits.len != 0) hits[0].score else 1;
+        const top: f64 = @max(try self.terms.?.ceiling(arena, joined.written()), 1e-9);
         for (hits) |hit| {
             const f = self.term_docs.items[hit.doc];
             const state = store.file(f.file);
@@ -329,7 +328,7 @@ pub const Session = struct {
             if (inside(shown.items, pk.f.file, first, last)) continue;
             const base = indentOf(ft.line(first));
             const size = blockChars(ft, first, last, base) + pk.f.path.len + pk.f.qname.len + header_chars;
-            const chance: f64 = if (pk.whole) 1 else call_share * usefulAt(pk.score);
+            const chance: f64 = if (pk.whole) 1 else usefulAt(pk.score);
             const worth = pk.whole or worthSending(size, chance);
             if (worth and used + size <= limit) {
                 try out.writer.print("{s}:{d} {s}\n", .{ pk.f.path, first, pk.f.qname });
@@ -671,11 +670,11 @@ fn namesOf(arena: Allocator, args: ?Value) ![]const []const u8 {
 const testing = std.testing;
 
 test "map tools: the chance that a definition is useful rises with its score ratio along the measured table" {
-    try testing.expectEqual(@as(f64, 0.001), usefulAt(0));
-    try testing.expectEqual(@as(f64, 0.005), usefulAt(0.05));
-    try testing.expectEqual(@as(f64, 0.281), usefulAt(0.45));
-    try testing.expectEqual(@as(f64, 0.686), usefulAt(0.8));
-    try testing.expectEqual(@as(f64, 0.686), usefulAt(1));
+    try testing.expectEqual(@as(f64, 0.009), usefulAt(0));
+    try testing.expectEqual(@as(f64, 0.012), usefulAt(0.02));
+    try testing.expectEqual(@as(f64, 0.199), usefulAt(0.17));
+    try testing.expectEqual(@as(f64, 0.589), usefulAt(0.3));
+    try testing.expectEqual(@as(f64, 0.589), usefulAt(1));
 }
 
 test "map tools: a definition is sent whole only while its size costs less than the model call it may save" {
@@ -686,8 +685,13 @@ test "map tools: a definition is sent whole only while its size costs less than 
     try testing.expect(call_chars > 7_000 and call_chars < 8_500);
 }
 
-test "map tools: test paths are recognized by folder and by the spec infix" {
+test "map tools: test paths are recognized by the folder and file name table of the language profile" {
     try testing.expect(isTest("packages/core/test/injector.spec.ts"));
     try testing.expect(isTest("src/__tests__/a.ts"));
+    try testing.expect(isTest("server/tests/approvals-policy.test.ts"));
+    try testing.expect(isTest("server/src/approvals/policy.test.ts"));
+    try testing.expect(isTest("packages/desktop-client/e2e/page-models/budget-page.ts"));
+    try testing.expect(!isTest("server/src/approvals/policy.ts"));
+    try testing.expect(!isTest("packages/core/contest/latest.ts"));
     try testing.expect(!isTest("packages/core/injector/injector.ts"));
 }
