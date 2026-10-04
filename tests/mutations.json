@@ -8288,8 +8288,8 @@
     {
       "id": "XP4-explore-four-regions-accepted",
       "file": "src/engine/map_explore.zig",
-      "from": "if (region_ids.items.len > max_regions) return",
-      "to": "if (region_ids.items.len > max_regions + 1) return",
+      "from": "if (region_ids.items.len > @min(options.region_limit, max_merged_regions)) return",
+      "to": "if (region_ids.items.len > @min(options.region_limit, max_merged_regions) + 1) return",
       "kills": [
         "map explore: no region, an unknown region and more than three regions are refused, and a repeated region is explored once"
       ],
@@ -8414,6 +8414,107 @@
         "map terms: the plural stem folds plurals only and keeps agent nouns apart from their verbs"
       ],
       "note": "tester and test would be one concept, so a distinctive file name would look common"
+    },
+    {
+      "id": "ME1-first-definition-only",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        for (paths.items) |path| {\n            const id = store.fileId(path) orelse continue;",
+      "to": "        for (paths.items[0..1]) |path| {\n            const id = store.fileId(path) orelse continue;",
+      "kills": [
+        "map tools: evidence returns every definition of a name and names the symbols it does not know",
+        "map tools: explore shows every definition of a named symbol whole, numbers each line and names the symbol it does not know"
+      ],
+      "note": "a name defined in two files would come back from one of them and the reply would still look complete"
+    },
+    {
+      "id": "ME2-evidence-unknown-name-silent",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            if (defs.len == 0) {\n                try self.unknown(arena, &notes.writer, n);\n                continue;\n            }",
+      "to": "            if (defs.len == 0) {\n                continue;\n            }",
+      "kills": [
+        "map tools: evidence returns every definition of a name and names the symbols it does not know"
+      ],
+      "note": "a name that is not a symbol would vanish from the evidence reply without a word"
+    },
+    {
+      "id": "ME3-explore-unknown-name-silent",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            if (!any) try self.unknown(arena, &notes.writer, n);",
+      "to": "            if (false) try self.unknown(arena, &notes.writer, n);",
+      "kills": [
+        "map tools: explore shows every definition of a named symbol whole, numbers each line and names the symbol it does not know"
+      ],
+      "note": "a name that is not a symbol would vanish from the explore reply without a word"
+    },
+    {
+      "id": "ME4-named-class-expanded",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                if (self.container(f)) {\n                    try containers.writer.print(",
+      "to": "                if (false) {\n                    try containers.writer.print(",
+      "kills": [
+        "map tools: a qualified name picks the definition in the named file and a class is named, not expanded"
+      ],
+      "note": "a named class would be sent whole and crowd the matching members out of the reply"
+    },
+    {
+      "id": "ME5-constants-not-ranked",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                if (!rank.candidate(d) and !rank.topVariable(d)) continue;",
+      "to": "                if (!rank.candidate(d)) continue;",
+      "kills": [
+        "map tools: explore reaches a function and a top-level constant through words of their bodies"
+      ],
+      "note": "a top-level constant that holds the words of the question would never be shown"
+    },
+    {
+      "id": "ME6-path-qualifier-ignored",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        if (qualifiers.items.len == 0) return found;",
+      "to": "        if (true) return found;",
+      "kills": [
+        "map tools: a qualified name picks the definition in the named file and a class is named, not expanded"
+      ],
+      "note": "a file-qualified name would bring every definition of the bare name in file order"
+    },
+    {
+      "id": "ME7-everything-worth-sending",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    return @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;",
+      "to": "    return true;",
+      "kills": [
+        "map tools: a definition is sent whole only while its size costs less than the model call it may save"
+      ],
+      "note": "every ranked definition would be sent whole until the reply limit"
+    },
+    {
+      "id": "ME8-useful-table-flat",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    while (i < useful_ratio.len and ratio >= useful_ratio[i]) i += 1;",
+      "to": "    while (false) i += 1;",
+      "kills": [
+        "map tools: the chance that a definition is useful rises with its score ratio along the measured table"
+      ],
+      "note": "every ranked definition would get the lowest chance whatever its score"
+    },
+    {
+      "id": "TI1-identifier-parts-not-indexed",
+      "file": "src/engine/term_index.zig",
+      "from": "                if (start != 0 or k != word.len) try ctx.term(word[start..k]);",
+      "to": "                if (false) try ctx.term(word[start..k]);",
+      "kills": [
+        "term index: an identifier yields itself and its camel, underscore and digit parts"
+      ],
+      "note": "a query word would no longer reach an identifier that holds it as one of its parts"
+    },
+    {
+      "id": "TI2-name-not-weighted",
+      "file": "src/engine/term_index.zig",
+      "from": "        while (i < name_weight) : (i += 1) try eachTerm(name, self);",
+      "to": "        while (i < 0) : (i += 1) try eachTerm(name, self);",
+      "kills": [
+        "term index: a definition whose name holds the query word outranks one that only mentions it in its body"
+      ],
+      "note": "the name of a definition would not count toward its score"
     }
   ]
 }

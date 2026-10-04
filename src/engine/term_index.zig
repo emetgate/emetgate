@@ -186,3 +186,16 @@ test "term index: a body that holds the rare query word outranks a body that hol
     try testing.expectEqual(@as(usize, 0), (try index.rank(arena, "nothing here matches", 10)).len);
     try testing.expectEqual(@as(usize, 1), (try index.rank(arena, "budget", 1)).len);
 }
+
+test "term index: a definition whose name holds the query word outranks one that only mentions it in its body" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var index = Index.init(arena);
+    const mention = try index.add("render", "ui/view.ts", "carryover carryover value shown here");
+    const named = try index.add("carryover", "core/month.ts", "return previous value shown here");
+    const hits = try index.rank(arena, "carryover", 10);
+    try testing.expectEqual(@as(usize, 2), hits.len);
+    try testing.expectEqual(named, hits[0].doc);
+    try testing.expectEqual(mention, hits[1].doc);
+}

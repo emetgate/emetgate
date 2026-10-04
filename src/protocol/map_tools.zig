@@ -328,7 +328,7 @@ pub const Session = struct {
             const base = indentOf(ft.line(first));
             const size = blockChars(ft, first, last, base) + pk.f.path.len + pk.f.qname.len + header_chars;
             const chance: f64 = if (pk.whole) 1 else call_share * usefulAt(pk.score);
-            const worth = pk.whole or @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;
+            const worth = pk.whole or worthSending(size, chance);
             if (worth and used + size <= limit) {
                 try out.writer.print("{s}:{d} {s}\n", .{ pk.f.path, first, pk.f.qname });
                 var k = first;
@@ -465,6 +465,10 @@ fn inside(shown: []const Shown, file: u32, first: u32, last: u32) bool {
         if (s.file == file and s.first <= first and last <= s.last) return true;
     }
     return false;
+}
+
+pub fn worthSending(size: usize, chance: f64) bool {
+    return @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;
 }
 
 pub fn usefulAt(ratio: f64) f64 {
@@ -662,6 +666,22 @@ fn namesOf(arena: Allocator, args: ?Value) ![]const []const u8 {
 }
 
 const testing = std.testing;
+
+test "map tools: the chance that a definition is useful rises with its score ratio along the measured table" {
+    try testing.expectEqual(@as(f64, 0.001), usefulAt(0));
+    try testing.expectEqual(@as(f64, 0.005), usefulAt(0.05));
+    try testing.expectEqual(@as(f64, 0.281), usefulAt(0.45));
+    try testing.expectEqual(@as(f64, 0.686), usefulAt(0.8));
+    try testing.expectEqual(@as(f64, 0.686), usefulAt(1));
+}
+
+test "map tools: a definition is sent whole only while its size costs less than the model call it may save" {
+    try testing.expect(worthSending(100, 0.25));
+    try testing.expect(!worthSending(40_000, 0.25));
+    try testing.expect(worthSending(40_000, 1));
+    try testing.expect(!worthSending(100, 0));
+    try testing.expect(call_chars > 7_000 and call_chars < 8_500);
+}
 
 test "map tools: test paths are recognized by folder and by the spec infix" {
     try testing.expect(isTest("packages/core/test/injector.spec.ts"));
