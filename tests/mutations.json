@@ -8519,7 +8519,7 @@
       "id": "TI3-ceiling-constant",
       "file": "src/engine/term_index.zig",
       "from": "            sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);",
-      "to": "            sum += df * 0;",
+      "to": "            sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1) * 0;",
       "kills": [
         "term index: the ceiling of a query bounds every score, grows with each known word and ignores unknown ones"
       ],

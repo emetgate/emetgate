@@ -963,7 +963,7 @@ python tools/verification_page.py --check
 | `ME8-useful-table-flat` | `src/protocol/map_tools.zig` | `while (i < useful_ratio.len and ratio >= useful_ratio[i]) i += ...` -> `while (i < useful_ratio.len and ratio < useful_ratio[i]) i += 1;` | map tools: the chance that a definition is useful rises with its score ratio al... | killed |
 | `TI1-identifier-parts-not-indexed` | `src/engine/term_index.zig` | `if (start != 0 or k != word.len) try ctx.term(word[start..k]);` -> `if (false) try ctx.term(word[start..k]);` | term index: an identifier yields itself and its camel, underscore and digit par... | killed |
 | `TI2-name-not-weighted` | `src/engine/term_index.zig` | `while (i < name_weight) : (i += 1) try eachTerm(name, self);` -> `while (i < 0) : (i += 1) try eachTerm(name, self);` | term index: a definition whose name holds the query word outranks one that only... | killed |
-| `TI3-ceiling-constant` | `src/engine/term_index.zig` | `sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);` -> `sum += df * 0;` | term index: the ceiling of a query bounds every score, grows with each known wo... | killed |
+| `TI3-ceiling-constant` | `src/engine/term_index.zig` | `sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);` -> `sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1) * 0;` | term index: the ceiling of a query bounds every score, grows with each known wo... | killed |
 | `ME9-test-files-not-recognised` | `src/protocol/map_tools.zig` | `return map.isTestPath(profile.map, path);` -> `return map.isTestPath(profile.map, path) and false;` | map tools: test paths are recognized by the folder and file name table of the l... | killed |
 
 ## What this system does not prove
