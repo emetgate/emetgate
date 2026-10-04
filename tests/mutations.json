@@ -8519,17 +8519,17 @@
       "id": "TI3-ceiling-constant",
       "file": "src/engine/term_index.zig",
       "from": "            sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);",
-      "to": "            sum = 1;",
+      "to": "            sum += df * 0;",
       "kills": [
         "term index: the ceiling of a query bounds every score, grows with each known word and ignores unknown ones"
       ],
-      "note": "every query would have the same ceiling, so a score's share of it would mean nothing"
+      "note": "every query would have a ceiling of zero, so no score could be measured against it"
     },
     {
       "id": "ME9-test-files-not-recognised",
       "file": "src/protocol/map_tools.zig",
       "from": "    return map.isTestPath(profile.map, path);",
-      "to": "    return map.isTestPath(null, path);",
+      "to": "    return map.isTestPath(profile.map, path) and false;",
       "kills": [
         "map tools: test paths are recognized by the folder and file name table of the language profile"
       ],
