@@ -36,6 +36,8 @@ If a check cannot finish, the change is refused. The model cannot change the tes
 
 | Tool | What it does |
 |---|---|
+| `emetgate_explore` | For a question and optional names: every definition of each named symbol, then the functions and top-level constants ranked by term statistics over names, paths and bodies, each one whole with a number on every line; the rest are listed by address |
+| `emetgate_evidence` | The full code of up to 6 names; a name defined in several files returns every definition, and a name that is not a symbol is reported with the closest symbols |
 | `emetgate_symbols`, `emetgate_skeleton` | Symbols and signatures with content hashes |
 | `emetgate_read_symbol` | One or more symbol bodies, or a line range widened to whole symbols; a body over the read budget (8,192 characters) comes back folded, with every elided line range named in place; `nodes:true` adds a hash to every line that starts a syntax node |
 | `emetgate_read_file` | JSON key tree or one pointer, Markdown headings or one section, text line range (also of a source file with `raw:true`) |
@@ -52,7 +54,7 @@ If a check cannot finish, the change is refused. The model cannot change the tes
 
 Reads repeat nothing within a session when `--mirror` is on: an unchanged symbol comes back as one line with its hash.
 
-`emetgate lockdown` starts Claude Code with no built-in tool, only the `.mcp.json` servers and tool search off. It passes the nine tools that neither change the repository nor run a command to `--allowedTools`, so `emetgate_symbols`, `emetgate_skeleton`, `emetgate_read_symbol`, `emetgate_read_file`, `emetgate_list`, `emetgate_search`, `emetgate_scan`, `emetgate_git` and `emetgate_mutate` run without a permission check; the tools that write or run a command keep the permission mode you chose, which lockdown refuses only when it is `bypassPermissions`. On n8n a short read question went from 3 turns to 2 and a warm search call from about 640 ms to about 60 ms. The reason for each tool and the measurement are in [REFERENCE.md](REFERENCE.md#lockdown).
+`emetgate lockdown` starts Claude Code with no built-in tool, only the `.mcp.json` servers and tool search off. It passes the eleven tools that neither change the repository nor run a command to `--allowedTools`, so `emetgate_explore`, `emetgate_evidence`, `emetgate_symbols`, `emetgate_skeleton`, `emetgate_read_symbol`, `emetgate_read_file`, `emetgate_list`, `emetgate_search`, `emetgate_scan`, `emetgate_git` and `emetgate_mutate` run without a permission check; the tools that write or run a command keep the permission mode you chose, which lockdown refuses only when it is `bypassPermissions`. On n8n a short read question went from 3 turns to 2 and a warm search call from about 640 ms to about 60 ms. The reason for each tool and the measurement are in [REFERENCE.md](REFERENCE.md#lockdown).
 
 ## Rules
 

@@ -374,6 +374,8 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 
 | Tool | Purpose |
 |---|---|
+| `emetgate_explore` | For a question and optional names: every definition of each named symbol whole, then the functions and top-level constants ranked by BM25 over names, paths and bodies. A ranked definition is sent whole while its size costs less than the model call it may save; the others are listed by address. A named class is listed and shown through its matching members. Every line carries its number. No call graph is used |
+| `emetgate_evidence` | The full code of up to 6 names. A name defined in several files returns every definition; `file.name` picks the definition in that file; an accessor is found by its bare name. A name that is not a symbol is reported with the closest symbols, and names past the limit are listed |
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
 | `emetgate_skeleton` | Signatures and structure without bodies, plus every adopted rule that covers the file (read-only) |
 | `emetgate_read_symbol` | The source of one symbol, several symbols at once, or a line range widened to the symbols it overlaps; a body over the read budget comes back folded (see Reader); with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
@@ -470,6 +472,8 @@ claude --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<serv
 
 | Tool | Why it is pre-allowed |
 |---|---|
+| `emetgate_explore` | Reads tracked source files; its only write is its own fact store under `%LOCALAPPDATA%\emetgateacts` |
+| `emetgate_evidence` | Reads tracked source files; its only write is its own fact store under `%LOCALAPPDATA%\emetgateacts` |
 | `emetgate_symbols` | Loads one file through the repository jail and the in-memory tree cache and lists its symbols |
 | `emetgate_skeleton` | Same load, plus a read of the rule ledger without taking its lock |
 | `emetgate_read_symbol` | Same load; the session mirror lives in memory |
