@@ -25,7 +25,7 @@ MCP sunucusu olarak çalışır. `emetgate lockdown`, Claude Code'u yalnızca Em
 ## Bir yazma nasıl denetlenir
 
 1. **Adres.** Değişiklik bir sembolü ve dayandığı içeriğin hash'ini belirtir. Dosya o zamandan beri değiştiyse hash eşleşmez ve değişiklik reddedilir. Değişiklik, bir gövdenin içindeki tek bir sözdizimi düğümünü (örneğin bir `if` bloğunu veya bir deyimi) içeriğinin hash'iyle de adresleyebilir ve yalnızca o düğümün yeni metnini gönderir.
-2. **Yerleştirme ve yeniden ayrıştırma.** Yeni gövde, bayt aralığına göre tam olarak eskisinin yerine konur. Dosya tree-sitter ile yeniden ayrıştırılır. Sözdizimi hataları, parantezlerinden taşan gövdeler, yer tutucu gövdeler ve aralığın dışındaki her değişiklik reddedilir.
+2. **Yerleştirme ve yeniden ayrıştırma.** Yeni gövde, bayt aralığına göre tam olarak eskisinin yerine konur. Dosya tree-sitter ile yeniden ayrıştırılır. Sözdizimi hataları, süslü parantezlerinden taşan gövdeler, yer tutucu gövdeler ve aralığın dışındaki her değişiklik reddedilir.
 3. **Kanıt, olduğu yerde.** Yeniden adlandırmalar, adlardan soyutlanmış (alfa) bir hash ve TypeScript dil servisiyle çapraz denetlenen bir kapsam çözücü ile denetlenir. Taşımalar taşınan kodun hash'ini korur ve her import'u türetir. Yeni ve silinen sembollere hiçbir yerden başvurulmamalıdır.
 4. **Kurallar.** CLI'dan eklediğiniz kurallar burada çalışır: yerleşik denetimler, tree-sitter sorguları (`q:`) veya kendi linter'ınız (`cmd:`).
 5. **Korumalı alanda testler.** Değişiklik, deponun dışındaki bir gölge kopyaya uygulanır. Tip denetimi ve test komutlarınız orada, düşük bütünlük seviyeli bir token altında, süre, bellek ve çıktı sınırları olan bir Job Object içinde çalışır.
@@ -121,7 +121,7 @@ Bütün düzenlemeler için token sayıları, Claude Code'un `Read` ve ardından
 
 Son satır daha kötüdür. Dosya zaten bağlamdayken `Edit` değişen satırı gönderir ve tek satır geri alır; emetgate'in başarı durumundaki varsayılan cevabı durum ve yeni hash'lerdir (gölge kopya notu, makbuz kimlikleri ve eski hash için `detail:"full"` gerekir) ve yalnızca argümanları bile en çok 1.9x'e izin verirdi. Emetgate ayrıca her düzenlemede testleri çalıştırır; düzenleme başına 200 ila 420 ms'lik süresinin çoğu budur. Kural, sorgu ve tam yazma ölçümleri [REFERENCE.md](REFERENCE.md) içindedir.
 
-`rg` ve `git grep` ile karşılaştırmalı arama (`python tests/bench/search.py`, ReleaseFast): yeni bir oturumun ilk araması 5.5 ila 22.7 ms, sonraki aramalar 1.9 ila 10.1 ms; rg 27.2 ila 80.9 ms, git grep 29.1 ila 65.7 ms. İndeksin ilk kez kurulması, depo başına bir kez, 91 ila 1,335 ms sürdü (2026-09-27, tarama bant genişliği 3.13 GB/s). Her arama önce bir değişiklik izleme bariyerini bekler; böylece çağrıdan önce kapatılmış veya flush edilmiş bir yazma sonuçta yer alır. Yeni bir oturum kayıtlı indeksi yükler ve yalnızca damgaları değişen dosyaları yeniden okur. Tam tablo ve bu bariyerin kaçırdığı tek durum (dosyasını açık tutan bir yazıcı) [REFERENCE.md](REFERENCE.md#search) içindedir.
+`rg` ve `git grep` ile karşılaştırmalı arama (`python tests/bench/search.py`, ReleaseFast): yeni bir oturumun ilk araması 5.5 ila 22.7 ms, sonraki aramalar 1.9 ila 10.1 ms; rg 27.2 ila 80.9 ms, git grep 29.1 ila 65.7 ms. İndeksin ilk kez kurulması, depo başına bir kez, 91 ila 1,335 ms sürdü (2026-09-27, tarama bant genişliği 3.13 GB/s). Her arama önce bir değişiklik izleme bariyerini bekler; böylece çağrıdan önce kapatılmış veya flush edilmiş bir yazma sonuçta yer alır. Yeni bir oturum kayıtlı indeksi yükler ve yalnızca damgaları değişen dosyaları yeniden okur. Tam tablo ve bu bariyerin kaçırdığı tek durum (dosyasını açık tutarak yazan bir süreç) [REFERENCE.md](REFERENCE.md#search) içindedir.
 
 | Arama | rg | git grep | Emetgate, oturumda ilk | Emetgate, sonraki |
 |---|---:|---:|---:|---:|
@@ -138,7 +138,7 @@ rg ve git grep, bir araç çağrısının başlattığı süreç olarak ölçül
 
 ## Kapının kendisi nasıl test edilir
 
-- **Mutasyon testi.** Korumalar mutasyona uğratılır ve her biri için en az bir testin başarısız olması gerekir. Motor için bugün 64 mutant var: 57 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan yedek korumalar, 1 açık. Kaydedilen her mutant ve onu öldüren test: [VERIFICATION.md](VERIFICATION.md).
+- **Mutasyon testi.** Korumalar mutasyona uğratılır ve her biri için en az bir testin başarısız olması gerekir. Motor için bugün 64 mutant var: 57 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan korumalar, 1 açık. Kaydedilen her mutant ve onu öldüren test: [VERIFICATION.md](VERIFICATION.md).
 - **Model denetimi.** Commit günlüğü TLA+ ile tanımlandı ve iki ve üç dosya için TLC ile denetlendi; kurtarma sırasındaki çökmeler ve kaybolan dizin girdileri dahil.
 - **Çökme testleri.** Toplu işler her adımdan sonra kesilir ve kurtarılır.
 - **Kırmızı takım ve fuzz paketleri**: MCP yüzeyine, korumalı alana, günlüğe ve ayrıştırıcılara karşı.

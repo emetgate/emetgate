@@ -56,7 +56,7 @@
 
 开启 `--mirror` 时，同一会话内的读取不会重复任何内容：未变化的符号只返回带哈希的一行。
 
-`emetgate lockdown` 启动的 Claude Code 不带任何内置工具，只有 `.mcp.json` 中的服务器，并关闭工具搜索。它把既不修改仓库也不运行命令的十一个工具传给 `--allowedTools`，因此 `emetgate_explore`、`emetgate_evidence`、`emetgate_symbols`、`emetgate_skeleton`、`emetgate_read_symbol`、`emetgate_read_file`、`emetgate_list`、`emetgate_search`、`emetgate_scan`、`emetgate_git` 和 `emetgate_mutate` 无需权限检查即可运行；会写入或运行命令的工具保持你选择的权限模式，只有当该模式为 `bypassPermissions` 时 lockdown 才会拒绝。在 n8n 上，一个简短的读取问题从 3 轮降到 2 轮，一次热搜索调用从约 640 ms 降到约 60 ms。每个工具的理由和测量结果见 [REFERENCE.md](REFERENCE.md#lockdown)。
+`emetgate lockdown` 启动的 Claude Code 不带任何内置工具，只有 `.mcp.json` 中的服务器，并关闭工具搜索。它把既不修改仓库也不运行命令的十一个工具传给 `--allowedTools`，因此 `emetgate_explore`、`emetgate_evidence`、`emetgate_symbols`、`emetgate_skeleton`、`emetgate_read_symbol`、`emetgate_read_file`、`emetgate_list`、`emetgate_search`、`emetgate_scan`、`emetgate_git` 和 `emetgate_mutate` 无需权限检查即可运行；会写入或运行命令的工具保持你选择的权限模式，只有当该模式为 `bypassPermissions` 时 lockdown 才会拒绝。在 n8n 上，一个简短的读取问题从 3 轮降到 2 轮，一次预热后的搜索调用从约 640 ms 降到约 60 ms。每个工具的理由和测量结果见 [REFERENCE.md](REFERENCE.md#lockdown)。
 
 ## 规则
 

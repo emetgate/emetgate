@@ -178,7 +178,7 @@ Hallazgos contra la puerta. Detalles en [REFERENCE.md](REFERENCE.md#security-his
 
 **F3: una propuesta rechazada podía escribir en el repositorio real mientras se ejecutaban sus pruebas.** Corregido con el token de integridad baja en v0.1.2.
 
-**Libro del repositorio: las reglas `cmd:` de un libro incluido en un commit se ejecutaban sin consentimiento.** Corregido en el PR #31.
+**Registro de reglas del repositorio: las reglas `cmd:` de un registro incluido en un commit se ejecutaban sin consentimiento.** Corregido en el PR #31.
 
 **F4: una caída durante un lote podía dejarlo aplicado a medias.** Encontrado con TLA+; corregido con un registro de commit del lote.
 
