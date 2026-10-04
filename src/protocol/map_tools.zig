@@ -2,7 +2,9 @@ const std = @import("std");
 const facts = @import("../engine/facts.zig");
 const fact_store = @import("../platform/fact_store.zig");
 const io_seam = @import("../platform/io_seam.zig");
+const map = @import("../engine/map.zig");
 const map_lines = @import("../engine/map_lines.zig");
+const registry = @import("../engine/lang/registry.zig");
 const rank = @import("../engine/map_region_rank.zig");
 const term_index = @import("../engine/term_index.zig");
 const evidence = @import("../engine/evidence.zig");
@@ -642,7 +644,8 @@ fn contains(list: []const []const u8, name: []const u8) bool {
 }
 
 pub fn isTest(path: []const u8) bool {
-    return std.mem.indexOf(u8, path, "/test/") != null or std.mem.indexOf(u8, path, ".spec.") != null or std.mem.indexOf(u8, path, "/__tests__/") != null;
+    const profile = registry.forPath(path) orelse return false;
+    return map.isTestPath(profile.map, path);
 }
 
 fn cutUtf8(text: []const u8, limit: usize) usize {
