@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1359**
-- Mutations declared in `tests/mutations.json`: **843**
-  - killed: **813**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1385**
+- Mutations declared in `tests/mutations.json`: **863**
+  - killed: **833**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -556,7 +556,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-383 mutation(s).
+403 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -940,9 +940,29 @@ python tools/verification_page.py --check
 | `XP1-explore-budget-ignored` | `src/engine/map_explore.zig` | `const budget = @max(options.budget, min_budget);` -> `const budget = @max(options.budget, min_budget) * 8;` | map explore: the text stays inside the budget and a cut is declared and certifi... | killed |
 | `XP2-explore-evidence-header-and-status-kept` | `src/engine/map_explore.zig` | `code_text = codeLines(block.text);` -> `code_text = block.text;` | map explore: the answer ranks the region, shows the code of the best functions,... | killed |
 | `XP3-explore-cut-not-certified` | `src/engine/map_explore.zig` | `if (budget_files != 0) {` -> `if (budget_files == 0xffffffff) {` | map explore: the text stays inside the budget and a cut is declared and certifi... | killed |
-| `XP4-explore-four-regions-accepted` | `src/engine/map_explore.zig` | `if (region_ids.items.len > max_regions) return` -> `if (region_ids.items.len > max_regions + 1) return` | map explore: no region, an unknown region and more than three regions are refus... | killed |
+| `XP4-explore-four-regions-accepted` | `src/engine/map_explore.zig` | `if (region_ids.items.len > @min(options.region_limit, max_merge...` -> `if (region_ids.items.len > @min(options.region_limit, max_merge...` | map explore: no region, an unknown region and more than three regions are refus... | killed |
 | `XP5-explore-region-explored-twice` | `src/engine/map_explore.zig` | `if (std.mem.indexOfScalar(map.RegionId, region_ids.items, r) ==...` -> `try region_ids.append(arena, r);` | map explore: no region, an unknown region and more than three regions are refus... | killed |
 | `XP6-explore-nested-function-shown-twice` | `src/engine/map_explore.zig` | `if (inside(hit, t.hit) or inside(t.hit, hit)) break true;` -> `if ((inside(hit, t.hit) or inside(t.hit, hit)) and false) break...` | map explore: a function inside another shown function is not shown twice | killed |
+| `MC1-concept-spread-ignored` | `src/engine/map_concepts.zig` | `if (self.options.by_dirs) return idfOf(self.dir_ids.count(), di...` -> `if (self.options.by_dirs) return idfOf(self.dir_ids.count(), di...` | map concepts: a word every region holds weighs nothing and a word of one region... | killed |
+| `MC2-concept-region-floor-dropped` | `src/engine/map_concepts.zig` | `for (forced.items) \|k\| {` -> `for (forced.items[0..0]) \|k\| {` | map concepts: every region with a candidate gets one item before any region get... | killed |
+| `MC3-concept-floor-over-budget` | `src/engine/map_concepts.zig` | `if (spent + c.cost > budget) continue;` -> `if (spent + c.cost > budget and false) continue;` | map concepts: every region with a candidate gets one item before any region get... | killed |
+| `MC4-concept-name-words-become-terms` | `src/engine/map_concepts.zig` | `if (in_names.contains(key(r, s)) or count < options.min_term_co...` -> `if (count < options.min_term_count) continue;` | map concepts: a file root is a candidate only for the words it adds | killed |
+| `MC5-concept-types-counted` | `src/engine/map_concepts.zig` | `if (d.kind == .module or !d.kind.callable()) continue;` -> `if (d.kind == .module) continue;` | map concepts: a word every region holds weighs nothing and a word of one region... | killed |
+| `MC6-concept-quota-ignored` | `src/engine/map_concepts.zig` | `if (p.quota_power > 0 and p.mass.len == p.regions) {` -> `if (p.quota_power > 0 and p.mass.len == p.regions and false) {` | map concepts: region quotas give a region with more functions more names than a... | killed |
+| `MC7-concept-order-reversed` | `src/engine/map.zig` | `if (a.value != c.value) return a.value > c.value;` -> `if (a.value != c.value) return a.value < c.value;` | map: concept items come most telling first and words after the names | killed |
+| `MC8-concept-mode-ignored` | `src/engine/map.zig` | `if (options.lines == .concepts) {` -> `if (options.lines == .concepts and false) {` | map concepts: every code region with a word its line does not show names at lea... | killed |
+| `MC9-wide-capacity-ignored` | `src/engine/map_tree.zig` | `const capacity = if (self.wide.children != 0 and children.len >...` -> `const capacity = self.capacity;` | map tree: a directory with many children packs them by a wider capacity and oth... | killed |
+| `MC10-plural-stem-replaced-by-full-stem` | `src/engine/map_terms.zig` | `const key = if (self.plural_only) pluralStem(raw, &buf) else st...` -> `const key = stem(raw, &buf);` | map terms: the plural stem folds plurals only and keeps agent nouns apart from ... | killed |
+| `ME1-first-definition-only` | `src/protocol/map_tools.zig` | `for (paths.items) \|path\| {             const id = store.fileI...` -> `for (paths.items[0..1]) \|path\| {             const id = store...` | map tools: evidence returns every definition of a name and names the symbols it...; map t... | killed |
+| `ME2-evidence-unknown-name-silent` | `src/protocol/map_tools.zig` | `if (defs.len == 0) {                 try self.unknown(arena, &n...` -> `if (defs.len == 0) {                 continue;             }` | map tools: evidence returns every definition of a name and names the symbols it... | killed |
+| `ME3-explore-unknown-name-silent` | `src/protocol/map_tools.zig` | `if (!any) try self.unknown(arena, &notes.writer, n);` -> `if (false) try self.unknown(arena, &notes.writer, n);` | map tools: explore shows every definition of a named symbol whole, numbers each... | killed |
+| `ME4-named-class-expanded` | `src/protocol/map_tools.zig` | `if (self.container(f)) {                     try containers.wri...` -> `if (false) {                     try containers.writer.print(` | map tools: a qualified name picks the definition in the named file and a class ... | killed |
+| `ME5-constants-not-ranked` | `src/protocol/map_tools.zig` | `if (!rank.candidate(d) and !rank.topVariable(d)) continue;` -> `if (!rank.candidate(d)) continue;` | map tools: explore reaches a function and a top-level constant through words of... | killed |
+| `ME6-path-qualifier-ignored` | `src/protocol/map_tools.zig` | `if (qualifiers.items.len == 0) return found;` -> `if (true) return found;` | map tools: a qualified name picks the definition in the named file and a class ... | killed |
+| `ME7-everything-worth-sending` | `src/protocol/map_tools.zig` | `return @as(f64, @floatFromInt(size)) * (1 - chance) < call_char...` -> `return true;` | map tools: a definition is sent whole only while its size costs less than the m... | killed |
+| `ME8-useful-table-flat` | `src/protocol/map_tools.zig` | `while (i < useful_ratio.len and ratio >= useful_ratio[i]) i += ...` -> `while (false) i += 1;` | map tools: the chance that a definition is useful rises with its score ratio al... | killed |
+| `TI1-identifier-parts-not-indexed` | `src/engine/term_index.zig` | `if (start != 0 or k != word.len) try ctx.term(word[start..k]);` -> `if (false) try ctx.term(word[start..k]);` | term index: an identifier yields itself and its camel, underscore and digit par... | killed |
+| `TI2-name-not-weighted` | `src/engine/term_index.zig` | `while (i < name_weight) : (i += 1) try eachTerm(name, self);` -> `while (i < 0) : (i += 1) try eachTerm(name, self);` | term index: a definition whose name holds the query word outranks one that only... | killed |
 
 ## What this system does not prove
 
