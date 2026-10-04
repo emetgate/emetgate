@@ -217,6 +217,45 @@ FACTS = {
 
 FACT_FILES = [README_PATH, os.path.join(ROOT, "REFERENCE.md")]
 
+TRANSLATIONS = ["README.tr.md", "README.ko.md", "README.zh-CN.md", "README.es.md"]
+
+NUMBER = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
+FENCE = re.compile(r"^```.*?^```", re.DOTALL | re.MULTILINE)
+COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def numbers(text):
+    return sorted(NUMBER.findall(COMMENT.sub("", text)))
+
+
+def difference(ours, theirs):
+    left = list(ours)
+    for item in theirs:
+        if item in left:
+            left.remove(item)
+    return left
+
+
+def translation_faults(source, name):
+    path = os.path.join(ROOT, name)
+    if not os.path.exists(path):
+        return [f"{name}: missing"]
+    text = read(path)
+    faults = []
+    if FENCE.findall(text) != FENCE.findall(source):
+        faults.append(f"{name}: code blocks differ from README.md")
+    want, have = numbers(source), numbers(text)
+    missing, extra = difference(want, have), difference(have, want)
+    if missing:
+        faults.append(f"{name}: numbers in README.md and not here: {' '.join(missing)}")
+    if extra:
+        faults.append(f"{name}: numbers here and not in README.md: {' '.join(extra)}")
+    for other in ["README.md"] + TRANSLATIONS:
+        if other != name and f'href="{other}"' not in text:
+            faults.append(f"{name}: no link to {other}")
+    return faults
+
+
 MARKER = re.compile(r"<!-- generated:([a-zA-Z0-9_-]+) -->(.*?)<!-- /generated -->", re.DOTALL)
 
 
@@ -255,7 +294,15 @@ def main():
             print("generated facts are stale in:", ", ".join(stale))
             print("run: python tools/readme_facts.py")
             sys.exit(1)
+        faults = []
+        source = read(README_PATH)
+        for name in TRANSLATIONS:
+            faults.extend(translation_faults(source, name))
+        if faults:
+            print("\n".join(faults))
+            sys.exit(1)
         print("README.md generated facts are up to date")
+        print("translations carry the same numbers and code blocks: " + ", ".join(TRANSLATIONS))
 
 
 if __name__ == "__main__":

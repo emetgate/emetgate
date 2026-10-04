@@ -8,6 +8,8 @@
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
+<p align="center"><b>English</b> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
+
 # Emetgate
 
 **Nothing the model writes reaches disk unverified.**
@@ -78,6 +80,21 @@ A receipt is an in-toto statement in canonical JSON (RFC 8785). `emetgate verify
 The checker imports no code that writes. It trusts <!-- generated:verifier-tcb -->2,731 non-blank lines of Zig in 24 files, 727 of them in the 3 files of `src/verify/`<!-- /generated -->, plus tree-sitter and the Zig standard library. A second checker in Python, written from the receipt format alone (<!-- generated:python-checker-size -->383 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->), runs on every verify test and must agree with the first.
 
 ## Measured
+
+Questions about a codebase, against Serena, codebase-memory-mcp and Claude Code's own tools (`python tests/bench/neutral/laws.py`, 2026-10-04, `claude-sonnet-5-5`, a fresh copy of the repository for every run, no extra prompt, three runs per question). Score is the share of answer-key items found in the answer; the keys were written before any tool ran.
+
+| Repositories | Tool | Score | Tokens | API time | Cost |
+|---|---|---:|---:|---:|---:|
+| nest, typeorm, actual (10 questions) | Emetgate | 0.944 | 133k | 30.0 s | $0.147 |
+| | Serena | 0.963 | 165k | 36.4 s | $0.158 |
+| | Claude Code's own tools | 0.926 | 193k | 35.7 s | $0.168 |
+| | codebase-memory-mcp | 0.975 | 199k | 42.0 s | $0.230 |
+| OpenBot (5 questions) | Emetgate | 0.956 | 97k | 22.7 s | $0.108 |
+| | Serena | 0.956 | 102k | 24.5 s | $0.114 |
+| | Claude Code's own tools | 0.933 | 129k | 24.3 s | $0.114 |
+| | codebase-memory-mcp | 0.978 | 137k | 35.1 s | $0.152 |
+
+Emetgate scores below codebase-memory-mcp on both sets and below Serena on the first. The setup, the 300 recorded sessions and the limits of this comparison are in [tests/bench/neutral](tests/bench/neutral).
 
 Tokens for common reads, against Claude Code's `Read` (o200k_base, `python tests/bench/reader.py`, 2026-09-26):
 
@@ -186,3 +203,5 @@ Findings against the gate. Details in [REFERENCE.md](REFERENCE.md#security-histo
 ## License
 
 MIT. The vendored grammars under `vendor/` keep their own MIT licenses.
+
+<p align="center"><b>English</b> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
