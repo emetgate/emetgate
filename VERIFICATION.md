@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1385**
-- Mutations declared in `tests/mutations.json`: **863**
-  - killed: **833**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1386**
+- Mutations declared in `tests/mutations.json`: **865**
+  - killed: **835**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -556,7 +556,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-403 mutation(s).
+405 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -963,6 +963,8 @@ python tools/verification_page.py --check
 | `ME8-useful-table-flat` | `src/protocol/map_tools.zig` | `while (i < useful_ratio.len and ratio >= useful_ratio[i]) i += ...` -> `while (i < useful_ratio.len and ratio < useful_ratio[i]) i += 1;` | map tools: the chance that a definition is useful rises with its score ratio al... | killed |
 | `TI1-identifier-parts-not-indexed` | `src/engine/term_index.zig` | `if (start != 0 or k != word.len) try ctx.term(word[start..k]);` -> `if (false) try ctx.term(word[start..k]);` | term index: an identifier yields itself and its camel, underscore and digit par... | killed |
 | `TI2-name-not-weighted` | `src/engine/term_index.zig` | `while (i < name_weight) : (i += 1) try eachTerm(name, self);` -> `while (i < 0) : (i += 1) try eachTerm(name, self);` | term index: a definition whose name holds the query word outranks one that only... | killed |
+| `TI3-ceiling-constant` | `src/engine/term_index.zig` | `sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);` -> `sum = 1;` | term index: the ceiling of a query bounds every score, grows with each known wo... | killed |
+| `ME9-test-files-not-recognised` | `src/protocol/map_tools.zig` | `return map.isTestPath(profile.map, path);` -> `return map.isTestPath(null, path);` | map tools: test paths are recognized by the folder and file name table of the l... | killed |
 
 ## What this system does not prove
 
