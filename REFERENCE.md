@@ -472,8 +472,8 @@ claude --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<serv
 
 | Tool | Why it is pre-allowed |
 |---|---|
-| `emetgate_explore` | Reads tracked source files; its only write is its own fact store under `%LOCALAPPDATA%\emetgateacts` |
-| `emetgate_evidence` | Reads tracked source files; its only write is its own fact store under `%LOCALAPPDATA%\emetgateacts` |
+| `emetgate_explore` | Reads tracked source files; its only write is its own fact store under `%LOCALAPPDATA%\emetgate\facts` |
+| `emetgate_evidence` | Reads tracked source files; its only write is its own fact store under `%LOCALAPPDATA%\emetgate\facts` |
 | `emetgate_symbols` | Loads one file through the repository jail and the in-memory tree cache and lists its symbols |
 | `emetgate_skeleton` | Same load, plus a read of the rule ledger without taking its lock |
 | `emetgate_read_symbol` | Same load; the session mirror lives in memory |
