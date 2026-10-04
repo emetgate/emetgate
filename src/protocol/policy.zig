@@ -6,6 +6,7 @@ const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const read_budget_mod = @import("read_budget.zig");
+const map_tools = @import("map_tools.zig");
 
 const Value = std.json.Value;
 
@@ -23,6 +24,7 @@ pub const Policy = struct {
     tree_cache: ?*tree_cache_mod.TreeCache = null,
     search_session: ?*search_session_mod.Session = null,
     language_service: ?*tsserver.Session = null,
+    map_session: ?*map_tools.Session = null,
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
 

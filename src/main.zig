@@ -17,6 +17,7 @@ const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
 const receipts = emetgate.receipts;
 const facts_command = emetgate.facts_command;
+const map_command = emetgate.map_command;
 const verify_run = emetgate.verify_run;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
@@ -44,6 +45,13 @@ const usage =
     \\       emetgate facts modules [--file <prefix>]
     \\       emetgate facts defs [--file <prefix>]
     \\       emetgate facts evidence --intent <decides|callers|callees|flow|where_defined|explain> --target <path>#<symbol>... [--term <text>]... [--include <callers,callees,tests|none>] [--budget <chars>] [--repeat <n>] [--json]
+    \\       emetgate map build [--budget-tokens <n>] [--region-chars <n>] [--term-value <x>] [--chars-per-token <x>] [--no-children] [--out <file>] [--no-store]
+    \\       emetgate map region <r1> [--offset <n>] [--budget <chars>] [--no-store]
+    \\       emetgate map files [--no-store]
+    \\       emetgate map bench [--builds <n>] [--samples <n>] [--updates <n>] [--seed <n>] [--no-store]
+    \\       emetgate map rank <r1> --question <text> [--limit <n>] [--no-store]
+    \\       emetgate map explore <r1,r2,r3> --question <text> [--k <n>] [--list <n>] [--explore-budget <chars>] [--no-store]
+    \\       emetgate map eval --set <file.json> [--limit <n>] [--k <n>] [--list <n>] [--explore-budget <chars>] [--with-text] [--no-store]
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.
@@ -148,6 +156,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "facts")) {
         const options = facts_command.parse(args[2..]) orelse exitWithUsage();
         return facts_command.run(runtime.gpa, init.io, runtime, options, out);
+    }
+    if (std.mem.eql(u8, command, "map")) {
+        const options = map_command.parse(args[2..]) orelse exitWithUsage();
+        return map_command.run(runtime.gpa, init.io, runtime, options, out);
     }
     if (std.mem.eql(u8, command, "lockdown")) {
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);

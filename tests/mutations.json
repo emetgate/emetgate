@@ -7978,6 +7978,542 @@
       "kills": [
         "question lexicon checks: every term check translates its turkish phrase to the listed english term"
       ]
+    },
+    {
+      "id": "MP1-region-drops-the-last-symbol-of-each-file",
+      "file": "src/engine/map.zig",
+      "from": "                for (self.syms.items[f.first_symbol .. f.first_symbol + f.symbol_count]) |s| {",
+      "to": "                for (self.syms.items[f.first_symbol .. f.first_symbol + f.symbol_count -| 1]) |s| {",
+      "kills": [
+        "map: every symbol of the store is in exactly one region and every region is in the text"
+      ]
+    },
+    {
+      "id": "MP2-map-budget-doubled",
+      "file": "src/engine/map.zig",
+      "from": "    const total_chars: u64 = @intFromFloat(@as(f64, @floatFromInt(options.budget_tokens)) * options.chars_per_token);",
+      "to": "    const total_chars: u64 = @intFromFloat(@as(f64, @floatFromInt(options.budget_tokens)) * options.chars_per_token * 2);",
+      "kills": [
+        "map: a large project stays inside the token budget and names its most called symbols first"
+      ]
+    },
+    {
+      "id": "MP3-name-order-random",
+      "file": "src/engine/map.zig",
+      "from": "    if (b.weight[x] != b.weight[y]) return b.weight[x] > b.weight[y];",
+      "to": "    if (x != y and b.weight.len != 0) {\n        const k32 = struct {\n            extern \"kernel32\" fn QueryPerformanceCounter(counter: *i64) callconv(.winapi) c_int;\n        };\n        var ticks: i64 = 0;\n        _ = k32.QueryPerformanceCounter(&ticks);\n        return @mod(@divTrunc(ticks, 7), 2) == 0;\n    }",
+      "kills": [
+        "map: the text is the same bytes on every build of the same snapshot"
+      ]
+    },
+    {
+      "id": "MP4-delta-drops-removed-symbols",
+      "file": "src/engine/map_delta.zig",
+      "from": "            if (!o.seen) try self.add(.removed, region, path, o.snap.kind, o.snap.qname, o.snap.line);",
+      "to": "            if (false) try self.add(.removed, region, path, o.snap.kind, o.snap.qname, o.snap.line);",
+      "kills": [
+        "map delta: an unchanged store has no delta, and added, removed and changed symbols are reported by region"
+      ]
+    },
+    {
+      "id": "MP5-delta-drops-removed-files",
+      "file": "src/engine/map_delta.zig",
+      "from": "            if (k != none) try d.whole(.removed, snap.files[k].region, snap.files[k].path, snap.files[k].symbols, null);",
+      "to": "            if (k != none) _ = &d;",
+      "kills": [
+        "map delta: a new file and a removed file are both reported"
+      ]
+    },
+    {
+      "id": "MP6-listing-cut-not-in-certificate",
+      "file": "src/engine/map_listing.zig",
+      "from": "    if (cut != 0) {",
+      "to": "    if (cut != 0 and false) {",
+      "kills": [
+        "map listing: a region over the budget is paged, every page declares the cut, and the pages cover it exactly once"
+      ]
+    },
+    {
+      "id": "MP7-listing-next-page-line-missing",
+      "file": "src/engine/map_listing.zig",
+      "from": "        try w.print(\"... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate_region r{d} offset {d}\\n\", .{ next + 1, total, total, budget, region_id + 1, next });",
+      "to": "        _ = next;",
+      "kills": [
+        "map listing: a region over the budget is paged, every page declares the cut, and the pages cover it exactly once"
+      ]
+    },
+    {
+      "id": "MP8-unsorted-paths-accepted",
+      "file": "src/engine/map_tree.zig",
+      "from": "        if (std.mem.order(u8, items[i - 1].path, items[i].path) != .lt) return error.UnsortedItems;",
+      "to": "        if (items[i - 1].path.len > items[i].path.len + 1_000_000) return error.UnsortedItems;",
+      "kills": [
+        "map tree: unsorted or repeated paths are refused"
+      ]
+    },
+    {
+      "id": "MP9-unknown-region-not-refused",
+      "file": "src/engine/map_listing.zig",
+      "from": "    if (region_id >= m.regions.len) return ListingAnswer.refuse(error.UnknownRegion, try std.fmt.allocPrint(arena, \"no region r{d}; the map has r1 to r{d}\", .{ region_id + 1, m.regions.len }));",
+      "to": "    if (region_id >= m.regions.len and false) return ListingAnswer.refuse(error.UnknownRegion, \"\");",
+      "kills": [
+        "map listing: an unknown region and an offset past the end are refused"
+      ]
+    },
+    {
+      "id": "MP10-delta-never-summarized",
+      "file": "src/engine/map_delta.zig",
+      "from": "    if (text.len > max_chars) {",
+      "to": "    if (text.len > max_chars and false) {",
+      "kills": [
+        "map delta: a delta over the character limit is summarized by region and points to the region listing"
+      ]
+    },
+    {
+      "id": "MP11-rank-edge-range-unchecked",
+      "file": "src/engine/map_rank.zig",
+      "from": "            if (e.from >= nodes or e.to >= nodes) return error.EdgeOutOfRange;",
+      "to": "            if (e.from >= nodes) return error.EdgeOutOfRange;",
+      "kills": [
+        "map rank: edges outside the graph and negative teleport weights are refused"
+      ]
+    },
+    {
+      "id": "MP12-hidden-files-never-named",
+      "file": "src/engine/map.zig",
+      "from": "            if (f.family != .code or f.symbol_count == 0 or self.file_shown[k]) continue;",
+      "to": "            if (true) continue;",
+      "kills": [
+        "map: a heavy file that its region path does not show is named on the region line"
+      ]
+    },
+    {
+      "id": "MP13-shared-name-printed-twice",
+      "file": "src/engine/map.zig",
+      "from": "            if (seen.found_existing) continue;",
+      "to": "            _ = seen;",
+      "kills": [
+        "map: symbols that share one name in a region are named once"
+      ]
+    },
+    {
+      "id": "MP14-tests-mixed-with-code",
+      "file": "src/engine/map.zig",
+      "from": "            const family: Family = if (isTestPath(table, state.path)) .tests else .code;",
+      "to": "            const family: Family = if (isTestPath(table, state.path) and false) .tests else .code;",
+      "kills": [
+        "map: test files are kept in test regions apart from the code they exercise"
+      ]
+    },
+    {
+      "id": "MP15-entry-decorators-ignored",
+      "file": "src/engine/map.zig",
+      "from": "                    if (decoratorRule(table, r.name)) |rule| {",
+      "to": "                    if (decoratorRule(table, \"\")) |rule| {",
+      "kills": [
+        "map: route, command and api entry points come from decorators and cross region calls"
+      ]
+    },
+    {
+      "id": "MP16-split-directory-children-hidden",
+      "file": "src/engine/map.zig",
+      "from": "const shown = if (self.options.list_children and family == .code) try childrenLabel(self.arena, items.items, r, separator) else label;",
+      "to": "const shown = if (false) try childrenLabel(self.arena, items.items, r, separator) else label;",
+      "kills": [
+        "map: a region of a split directory names each sibling directory on its line and folds runs of files"
+      ],
+      "note": "the sibling directories of a split directory would hide behind a range label again"
+    },
+    {
+      "id": "MP17-file-runs-never-folded",
+      "file": "src/engine/map.zig",
+      "from": "        if (j - i > 2) {\n            try out.appendSlice(arena, segments.items[i]);",
+      "to": "        if (j - i > 2000) {\n            try out.appendSlice(arena, segments.items[i]);",
+      "kills": [
+        "map: a region of a split directory names each sibling directory on its line and folds runs of files"
+      ],
+      "note": "every file of a long run would be named and eat the map budget"
+    },
+    {
+      "id": "MP18-listing-drops-stored-signatures",
+      "file": "src/engine/map_listing.zig",
+      "from": ".signature = if (d.kind.callable()) paramsOf(d.signature, d.name) else \"\"",
+      "to": ".signature = if (d.kind.callable()) \"\" else \"\"",
+      "kills": [
+        "map listing: a region that fits is listed whole with signatures and first doc lines"
+      ],
+      "note": "the listing would lose the signatures it now takes from the fact store"
+    },
+    {
+      "id": "MP19-params-start-inside-a-decorator",
+      "file": "src/engine/map_listing.zig",
+      "from": "if (at > 0 and (isIdentByte(signature[at - 1]) or signature[at - 1] == '\"' or signature[at - 1] == '\\'')) continue;",
+      "to": "if (at > 0 and isIdentByte(signature[at - 1])) continue;",
+      "kills": [
+        "map listing: the parameters of a stored signature follow the name, also for arrows and decorated methods"
+      ],
+      "note": "a name quoted in a decorator would be taken for the declaration"
+    },
+    {
+      "id": "RK1-body-calls-ignored",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "for (state.facts.refs, 0..) |r, ri| {",
+      "to": "for (state.facts.refs[0..0], 0..) |r, ri| {",
+      "kills": [
+        "map rank region: the names a function calls in its body count for it and for the functions around it"
+      ],
+      "note": "the names a function calls would not count for it"
+    },
+    {
+      "id": "RK2-nested-calls-not-lifted",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "                if (mask != 0) try self.mark(doc, mask, .body, r.line);\n                doc = self.docs.items[doc].up;",
+      "to": "                if (mask != 0) try self.mark(doc, mask, .body, r.line);\n                doc = none;",
+      "kills": [
+        "map rank region: the names a function calls in its body count for it and for the functions around it"
+      ],
+      "note": "a call inside a nested function would not count for the function around it"
+    },
+    {
+      "id": "RK3-no-proximity",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "scores[doc] += bm25 + params.proximity * proximity;",
+      "to": "scores[doc] += bm25 + params.proximity * proximity * 0;",
+      "kills": [
+        "map rank region: terms that meet on one line outrank the same terms far apart"
+      ],
+      "note": "terms on one line would weigh the same as terms far apart"
+    },
+    {
+      "id": "RK4-no-idf",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "idf[i] = @log((n - d + 0.5) / (d + 0.5) + 1);",
+      "to": "idf[i] = @log((n - d + 0.5) / (d + 0.5) + 1) * 0 + 1;",
+      "kills": [
+        "map rank region: a term few functions hold weighs more than a term many hold"
+      ],
+      "note": "a term every function holds would weigh as much as a rare one"
+    },
+    {
+      "id": "RK5-worst-first",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "if (a.score != b.score) return a.score > b.score;",
+      "to": "if (a.score != b.score) return a.score < b.score;",
+      "kills": [
+        "map rank region: the function whose name, owner and body hold the question terms ranks first",
+        "map rank region: every function of the region is ranked once, best first, and the order is the same on every run"
+      ],
+      "note": "the ranking would put the weakest function first"
+    },
+    {
+      "id": "RK6-lexicon-off",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "const query = try question_terms.build(arena, lex, question, null, .{});",
+      "to": "const query = try question_terms.build(arena, lex, question, null, .{ .lexicon = false });",
+      "kills": [
+        "map rank region: a turkish question reaches the english code terms through the lexicon"
+      ],
+      "note": "a turkish question would not reach the english names of the code"
+    },
+    {
+      "id": "RK7-file-field-dropped",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "try self.markCounts(@intCast(doc), file_mask, &file_counts);",
+      "to": "try self.markCounts(@intCast(doc), file_mask & 0, &file_counts);",
+      "kills": [
+        "map rank region: the property names a file reads count for the functions of that file"
+      ],
+      "note": "the property names a file reads would not count for its functions"
+    },
+    {
+      "id": "RK8-doc-field-dropped",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "try self.mark(doc, comment.mask, .doc, d.line);",
+      "to": "try self.mark(doc, comment.mask & 0, .doc, d.line);",
+      "kills": [
+        "map rank region: the first doc line of a function counts for it"
+      ],
+      "note": "the first doc line would not count"
+    },
+    {
+      "id": "RK9-identifier-pieces-apart",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "for (together) |pieces| {",
+      "to": "for (together[0..0]) |pieces| {",
+      "kills": [
+        "map rank region: a question identifier counts once however many of its pieces a function holds"
+      ],
+      "note": "one question identifier would count once per piece a function holds"
+    },
+    {
+      "id": "RK10-stale-index-used",
+      "file": "src/engine/map_region_rank.zig",
+      "from": "if (!std.mem.eql(u8, &fi.hash, &state.content_hash)) return null;",
+      "to": "if (!std.mem.eql(u8, &fi.hash, &state.content_hash) and false) return null;",
+      "kills": [
+        "map rank region: the prebuilt index ranks exactly as the store does and a file changed since the index is read from the store"
+      ],
+      "note": "a file changed after the index was built would be ranked by its old names"
+    },
+    {
+      "id": "XP1-explore-budget-ignored",
+      "file": "src/engine/map_explore.zig",
+      "from": "const budget = @max(options.budget, min_budget);",
+      "to": "const budget = @max(options.budget, min_budget) * 8;",
+      "kills": [
+        "map explore: the text stays inside the budget and a cut is declared and certified as partial"
+      ],
+      "note": "the explore answer would pass its budget"
+    },
+    {
+      "id": "XP2-explore-evidence-header-and-status-kept",
+      "file": "src/engine/map_explore.zig",
+      "from": "code_text = codeLines(block.text);",
+      "to": "code_text = block.text;",
+      "kills": [
+        "map explore: the answer ranks the region, shows the code of the best functions, lists the region and ends with one certificate line"
+      ],
+      "note": "the answer would carry two certificate lines"
+    },
+    {
+      "id": "XP3-explore-cut-not-certified",
+      "file": "src/engine/map_explore.zig",
+      "from": "    if (budget_files != 0) {",
+      "to": "    if (budget_files == 0xffffffff) {",
+      "kills": [
+        "map explore: the text stays inside the budget and a cut is declared and certified as partial"
+      ],
+      "note": "a cut would leave files neither evaluated nor missing"
+    },
+    {
+      "id": "XP4-explore-four-regions-accepted",
+      "file": "src/engine/map_explore.zig",
+      "from": "if (region_ids.items.len > @min(options.region_limit, max_merged_regions)) return",
+      "to": "if (region_ids.items.len > @min(options.region_limit, max_merged_regions) + 1) return",
+      "kills": [
+        "map explore: no region, an unknown region and more than three regions are refused, and a repeated region is explored once"
+      ],
+      "note": "a fourth region would be explored"
+    },
+    {
+      "id": "XP5-explore-region-explored-twice",
+      "file": "src/engine/map_explore.zig",
+      "from": "if (std.mem.indexOfScalar(map.RegionId, region_ids.items, r) == null) try region_ids.append(arena, r);",
+      "to": "try region_ids.append(arena, r);",
+      "kills": [
+        "map explore: no region, an unknown region and more than three regions are refused, and a repeated region is explored once"
+      ],
+      "note": "a repeated region would be ranked and listed twice"
+    },
+    {
+      "id": "XP6-explore-nested-function-shown-twice",
+      "file": "src/engine/map_explore.zig",
+      "from": "if (inside(hit, t.hit) or inside(t.hit, hit)) break true;",
+      "to": "if ((inside(hit, t.hit) or inside(t.hit, hit)) and false) break true;",
+      "kills": [
+        "map explore: a function inside another shown function is not shown twice"
+      ],
+      "note": "a function and the function around it would both take code budget"
+    },
+    {
+      "id": "MC1-concept-spread-ignored",
+      "file": "src/engine/map_concepts.zig",
+      "from": "if (self.options.by_dirs) return idfOf(self.dir_ids.count(), dir_df);",
+      "to": "if (self.options.by_dirs) return idfOf(self.dir_ids.count(), dir_df) * 0 + 1;",
+      "kills": [
+        "map concepts: a word every region holds weighs nothing and a word of one region weighs most"
+      ],
+      "note": "a word that every folder holds would weigh as much as a word of one folder"
+    },
+    {
+      "id": "MC2-concept-region-floor-dropped",
+      "file": "src/engine/map_concepts.zig",
+      "from": "    for (forced.items) |k| {",
+      "to": "    for (forced.items[0..0]) |k| {",
+      "kills": [
+        "map concepts: every region with a candidate gets one item before any region gets a second, and the budget holds"
+      ],
+      "note": "a region whose words are common would get no name while another region gets several"
+    },
+    {
+      "id": "MC3-concept-floor-over-budget",
+      "file": "src/engine/map_concepts.zig",
+      "from": "        if (spent + c.cost > budget) continue;",
+      "to": "        if (spent + c.cost > budget and false) continue;",
+      "kills": [
+        "map concepts: every region with a candidate gets one item before any region gets a second, and the budget holds"
+      ],
+      "note": "the one name per region would be paid even past the budget"
+    },
+    {
+      "id": "MC4-concept-name-words-become-terms",
+      "file": "src/engine/map_concepts.zig",
+      "from": "if (in_names.contains(key(r, s)) or count < options.min_term_count) continue;",
+      "to": "if (count < options.min_term_count) continue;",
+      "kills": [
+        "map concepts: a file root is a candidate only for the words it adds"
+      ],
+      "note": "a word a file or folder name already carries would also be offered as a #word"
+    },
+    {
+      "id": "MC5-concept-types-counted",
+      "file": "src/engine/map_concepts.zig",
+      "from": "            if (d.kind == .module or !d.kind.callable()) continue;",
+      "to": "            if (d.kind == .module) continue;",
+      "kills": [
+        "map concepts: a word every region holds weighs nothing and a word of one region weighs most"
+      ],
+      "note": "interfaces and type aliases would count as code a question can be about"
+    },
+    {
+      "id": "MC6-concept-quota-ignored",
+      "file": "src/engine/map_concepts.zig",
+      "from": "    if (p.quota_power > 0 and p.mass.len == p.regions) {",
+      "to": "    if (p.quota_power > 0 and p.mass.len == p.regions and false) {",
+      "kills": [
+        "map concepts: region quotas give a region with more functions more names than a smaller region with rarer words"
+      ],
+      "note": "the budget would not follow the functions of each region"
+    },
+    {
+      "id": "MC7-concept-order-reversed",
+      "file": "src/engine/map.zig",
+      "from": "    if (a.value != c.value) return a.value > c.value;",
+      "to": "    if (a.value != c.value) return a.value < c.value;",
+      "kills": [
+        "map: concept items come most telling first and words after the names"
+      ],
+      "note": "the least telling names would come first on a region line"
+    },
+    {
+      "id": "MC8-concept-mode-ignored",
+      "file": "src/engine/map.zig",
+      "from": "    if (options.lines == .concepts) {",
+      "to": "    if (options.lines == .concepts and false) {",
+      "kills": [
+        "map concepts: every code region with a word its line does not show names at least one folder, file or word"
+      ],
+      "note": "the concept line mode would fall back to symbol names"
+    },
+    {
+      "id": "MC9-wide-capacity-ignored",
+      "file": "src/engine/map_tree.zig",
+      "from": "        const capacity = if (self.wide.children != 0 and children.len >= self.wide.children) self.capacity * @max(self.wide.factor, 1) else self.capacity;",
+      "to": "        const capacity = self.capacity;",
+      "kills": [
+        "map tree: a directory with many children packs them by a wider capacity and others keep theirs"
+      ],
+      "note": "a directory with many children would be cut by the normal capacity"
+    },
+    {
+      "id": "MC10-plural-stem-replaced-by-full-stem",
+      "file": "src/engine/map_terms.zig",
+      "from": "        const key = if (self.plural_only) pluralStem(raw, &buf) else stem(raw, &buf);",
+      "to": "        const key = stem(raw, &buf);",
+      "kills": [
+        "map terms: the plural stem folds plurals only and keeps agent nouns apart from their verbs"
+      ],
+      "note": "tester and test would be one concept, so a distinctive file name would look common"
+    },
+    {
+      "id": "ME1-first-definition-only",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        for (paths.items) |path| {\n            const id = store.fileId(path) orelse continue;",
+      "to": "        for (paths.items[0..1]) |path| {\n            const id = store.fileId(path) orelse continue;",
+      "kills": [
+        "map tools: evidence returns every definition of a name and names the symbols it does not know"
+      ],
+      "note": "a name defined in two files would come back from one of them and the reply would still look complete"
+    },
+    {
+      "id": "ME2-evidence-unknown-name-silent",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            if (defs.len == 0) {\n                try self.unknown(arena, &notes.writer, n);\n                continue;\n            }",
+      "to": "            if (defs.len == 0) {\n                continue;\n            }",
+      "kills": [
+        "map tools: evidence returns every definition of a name and names the symbols it does not know"
+      ],
+      "note": "a name that is not a symbol would vanish from the evidence reply without a word"
+    },
+    {
+      "id": "ME3-explore-unknown-name-silent",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            if (!any) try self.unknown(arena, &notes.writer, n);",
+      "to": "            if (false) try self.unknown(arena, &notes.writer, n);",
+      "kills": [
+        "map tools: explore shows every definition of a named symbol whole, numbers each line and names the symbol it does not know"
+      ],
+      "note": "a name that is not a symbol would vanish from the explore reply without a word"
+    },
+    {
+      "id": "ME4-named-class-expanded",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                if (self.container(f)) {\n                    try containers.writer.print(",
+      "to": "                if (false) {\n                    try containers.writer.print(",
+      "kills": [
+        "map tools: a qualified name picks the definition in the named file and a class is named, not expanded"
+      ],
+      "note": "a named class would be sent whole and crowd the matching members out of the reply"
+    },
+    {
+      "id": "ME5-constants-not-ranked",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                if (!rank.candidate(d) and !rank.topVariable(d)) continue;",
+      "to": "                if (!rank.candidate(d)) continue;",
+      "kills": [
+        "map tools: explore reaches a function and a top-level constant through words of their bodies"
+      ],
+      "note": "a top-level constant that holds the words of the question would never be shown"
+    },
+    {
+      "id": "ME6-path-qualifier-ignored",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        if (qualifiers.items.len == 0) return found;",
+      "to": "        if (true) return found;",
+      "kills": [
+        "map tools: a qualified name picks the definition in the named file and a class is named, not expanded"
+      ],
+      "note": "a file-qualified name would bring every definition of the bare name in file order"
+    },
+    {
+      "id": "ME7-everything-worth-sending",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    return @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;",
+      "to": "    return @as(f64, @floatFromInt(size)) * (1 - chance) >= call_chars * chance;",
+      "kills": [
+        "map tools: a definition is sent whole only while its size costs less than the model call it may save"
+      ],
+      "note": "every ranked definition would be sent whole until the reply limit"
+    },
+    {
+      "id": "ME8-useful-table-flat",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    while (i < useful_ratio.len and ratio >= useful_ratio[i]) i += 1;",
+      "to": "    while (i < useful_ratio.len and ratio < useful_ratio[i]) i += 1;",
+      "kills": [
+        "map tools: the chance that a definition is useful rises with its score ratio along the measured table"
+      ],
+      "note": "every ranked definition would get the lowest chance whatever its score"
+    },
+    {
+      "id": "TI1-identifier-parts-not-indexed",
+      "file": "src/engine/term_index.zig",
+      "from": "                if (start != 0 or k != word.len) try ctx.term(word[start..k]);",
+      "to": "                if (false) try ctx.term(word[start..k]);",
+      "kills": [
+        "term index: an identifier yields itself and its camel, underscore and digit parts"
+      ],
+      "note": "a query word would no longer reach an identifier that holds it as one of its parts"
+    },
+    {
+      "id": "TI2-name-not-weighted",
+      "file": "src/engine/term_index.zig",
+      "from": "        while (i < name_weight) : (i += 1) try eachTerm(name, self);",
+      "to": "        while (i < 0) : (i += 1) try eachTerm(name, self);",
+      "kills": [
+        "term index: a definition whose name holds the query word outranks one that only mentions it in its body"
+      ],
+      "note": "the name of a definition would not count toward its score"
     }
   ]
 }

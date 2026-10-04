@@ -200,6 +200,37 @@ pub const Facts = struct {
     doc_directives: []const []const u8 = &.{},
 };
 
+pub const MapEntryKind = enum { route, command, event, api };
+
+pub const MapDecorator = struct {
+    name: []const u8,
+    kind: MapEntryKind,
+    tag: []const u8,
+    prefix: bool = false,
+};
+
+pub const MapCallForm = struct {
+    modules: []const []const u8,
+    methods: []const []const u8,
+    kind: MapEntryKind,
+    tag: []const u8,
+};
+
+pub const MapTable = struct {
+    test_segments: []const []const u8,
+    test_infixes: []const []const u8,
+    decorators: []const MapDecorator,
+    call_forms: []const MapCallForm,
+    doc_open: []const u8,
+    doc_close: []const u8,
+    line_comment: []const u8,
+    body_open: u8,
+    arrow: []const u8,
+    statement_end: u8,
+    open_brackets: []const u8,
+    close_brackets: []const u8,
+};
+
 pub const Profile = struct {
     name: []const u8,
     extensions: []const []const u8,
@@ -240,6 +271,7 @@ pub const Profile = struct {
     modules: ?*const Modules = null,
     declarations: Declarations = .{},
     facts: ?*const Facts = null,
+    map: ?*const MapTable = null,
 
     pub fn hasVisibilityKeyword(self: *const Profile, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;

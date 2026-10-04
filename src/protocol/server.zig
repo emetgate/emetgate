@@ -12,6 +12,7 @@ const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const tsserver = @import("../platform/tsserver.zig");
+const map_tools = @import("map_tools.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -34,6 +35,19 @@ pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = f
 pub const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
 
 pub const tool_defs = [_]Tool{
+    .{
+        .name = "emetgate_explore",
+        .description = map_tools.explore_description,
+        .props = &.{
+            .{ .name = "question", .desc = "what you want to know" },
+            .{ .name = "names", .desc = "symbols, strings or files you expect to be involved", .optional = true, .ty = "array" },
+        },
+    },
+    .{
+        .name = "emetgate_evidence",
+        .description = map_tools.evidence_description,
+        .props = &.{.{ .name = "names", .desc = "qualified names, Class.method or function", .ty = "array" }},
+    },
     .{
         .name = "emetgate_symbols",
         .description = "List addressable function symbols in a source file of a registered language with their content hashes.",
@@ -205,6 +219,10 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     var language_service: tsserver.Session = .{ .gpa = gpa, .io = io, .root = root };
     defer language_service.deinit();
     served.language_service = &language_service;
+    const map_session: ?*map_tools.Session = if (root) |r| map_tools.Session.create(gpa, io, runtime, r) catch null else null;
+    defer if (map_session) |ms| ms.destroy();
+    if (map_session) |ms| ms.build() catch {};
+    served.map_session = map_session;
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);
@@ -283,7 +301,7 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     const arguments = getField(params, "arguments");
 
     var event: telemetry.Event = .{ .tool = name };
-    const result = handlers.callTool(gpa, io, runtime, name, arguments, &event, policy) catch |err| {
+    const result = callAny(gpa, io, runtime, name, arguments, &event, policy) catch |err| {
         if (observer) |obs| {
             event.fail(@errorName(err));
             obs.record(gpa, io, event);
@@ -298,6 +316,14 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     const decorated: ?[]u8 = if (observer) |obs| telemetry.observe(gpa, io, obs, event, result.text) else null;
     defer if (decorated) |d| gpa.free(d);
     try writeToolResult(out, id, decorated orelse result.text, result.is_error);
+}
+
+fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
+    const explore = std.mem.eql(u8, name, "emetgate_explore");
+    const evidence = std.mem.eql(u8, name, "emetgate_evidence");
+    if (!explore and !evidence) return handlers.callTool(gpa, io, runtime, name, arguments, event, policy);
+    const session = policy.map_session orelse return .{ .text = try gpa.dupe(u8, "the project map is not available outside a git repository"), .is_error = true };
+    return if (explore) session.explore(gpa, arguments) else session.evidenceTool(gpa, arguments);
 }
 
 fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
