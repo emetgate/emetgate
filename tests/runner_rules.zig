@@ -72,6 +72,36 @@ test "rules: an enforced no_comment rule rejects a commented body before the tes
     try expectPristineRepo(&repo);
 }
 
+test "rules: an enforced added rule lets a comment that was already there stay and rejects only the new one" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const seeded = try tryAdd(&repo, runtime, commented_body, "exit 0");
+    defer seeded.deinit(testing.allocator);
+    errdefer diagnostics.printResult(seeded);
+    try testing.expect(seeded == .committed);
+
+    const id = try memory.remember(testing.allocator, testing.io, repo.root_abs, .global, "no new comments", true, "added:no_comment", null);
+    defer testing.allocator.free(id);
+
+    const kept = try tryAdd(&repo, runtime, "{\n  // why\n  return b - a;\n}", "exit 0");
+    defer kept.deinit(testing.allocator);
+    errdefer diagnostics.printResult(kept);
+    try testing.expect(kept == .committed);
+
+    const more = try tryAdd(&repo, runtime, "{\n  // why\n  // more\n  return a - b;\n}", "exit 0");
+    defer more.deinit(testing.allocator);
+    try testing.expect(more == .rule_violation);
+    const violations = more.rule_violation.violations;
+    try testing.expectEqual(@as(usize, 1), violations.len);
+    try testing.expectEqualStrings(id, violations[0].rule);
+    try testing.expectEqualStrings("added:no_comment", violations[0].check);
+    try testing.expectEqualStrings("// more", violations[0].text);
+}
+
 test "rules: a clean body still commits under an enforced rule" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
