@@ -1,6 +1,6 @@
 # Neutral runs: what a code question costs an agent
 
-300 recorded Claude Code sessions, the questions and answer keys they were scored with, and one script that turns them into the numbers quoted in the release notes of v0.3.0.
+345 recorded Claude Code sessions, the questions and answer keys they were scored with, and one script that turns them into the numbers quoted in the README and the release notes.
 
 ```
 python laws.py
@@ -20,14 +20,15 @@ It needs Python 3 and nothing else, and it makes no network call.
 | `claude-code` | Claude Code's own tools |
 | `serena` | Serena 1.7.0 |
 | `codebase-memory-mcp` | codebase-memory-mcp 0.9.0 |
-| `emetgate` | emetgate at `f9f26bf`, the build released as v0.3.0 |
+| `emetgate` | emetgate at `f616d99`, the code released as v0.4.0 |
+| `emetgate-v0.3.0` | emetgate at `f9f26bf`, the build released as v0.3.0 |
 | `emetgate-prototype-1`, `-2`, `-3` | three Python prototypes of the read tools, first set only |
 | `emetgate-9236f27-instructed` | an earlier build whose server told the model to answer in ten lines, first set only; left out of every fit |
 
 | Set | Repositories | Questions | Sessions |
 |---|---|---|---|
-| first | nest `35142c3`, typeorm `17e858d`, actual `954ad61` | 10 | 240 |
-| OpenBot | CopilotKit/OpenBot `cb5dc32`, a repository created on 2026-08-17 | 5 | 60 |
+| first | nest `35142c3`, typeorm `17e858d`, actual `954ad61` | 10 | 270 |
+| OpenBot | CopilotKit/OpenBot `cb5dc32`, a repository created on 2026-08-17 | 5 | 75 |
 
 ## What a session record holds
 
@@ -40,8 +41,8 @@ Removed from the raw transcripts: session, request and message identifiers, rate
 - One model, 15 questions, four repositories. The fits are correlations.
 - A score counts names in the answer. It does not judge the explanation.
 - "In the context" means a key item's name appeared in a tool reply.
-- The author of emetgate wrote the questions and the keys, and the send rule of the `emetgate` arm was fitted on the first set. The OpenBot set was not used to fit anything.
-- The first set's rival sessions were recorded on 2 and 3 October 2026, the `emetgate` and OpenBot sessions on 4 October.
+- The author of emetgate wrote the questions and the keys. The send rule of the `emetgate` arm was fitted on the first set, and the quantity it reads was chosen after looking at both sets, so neither set is unseen for it.
+- The first set's rival sessions were recorded on 2 and 3 October 2026, the `emetgate-v0.3.0` and the other OpenBot sessions on 4 October, the `emetgate` sessions on 4 and 5 October. The rival sessions were not rerun.
 
 ## Code quoted in the sessions
 
