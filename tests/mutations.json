@@ -8534,6 +8534,36 @@
         "map tools: test paths are recognized by the folder and file name table of the language profile"
       ],
       "note": "test files would be ranked and sent as if they were product code"
+    },
+    {
+      "id": "MB1-bound-from-any-file",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                    if (f.file != s.file) continue;",
+      "to": "                    if (f.file != s.file and false) continue;",
+      "kills": [
+        "map tools: explore adds a small definition of the same file that the sent code uses and none from another file"
+      ],
+      "note": "a name used in the sent code would be bound to an unrelated definition of another file"
+    },
+    {
+      "id": "MB2-small-definitions-not-bound",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            if (!worthSending(size, mentionChance(m.count), call_chars) or used + size > limit) continue;",
+      "to": "            if (worthSending(size, mentionChance(m.count), call_chars) or used + size > limit) continue;",
+      "kills": [
+        "map tools: explore adds a small definition of the same file that the sent code uses and none from another file"
+      ],
+      "note": "small definitions that the sent code uses would be left out and large ones added"
+    },
+    {
+      "id": "MB3-mention-chance-flat",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    while (i < mention_count.len and count >= mention_count[i]) i += 1;",
+      "to": "    while (i < mention_count.len and count < mention_count[i]) i += 1;",
+      "kills": [
+        "map tools: identifiers of three or more characters are counted and a name used more often has a higher chance of being asked for"
+      ],
+      "note": "a name used once would get the highest chance and a name used often the lowest"
     }
   ]
 }

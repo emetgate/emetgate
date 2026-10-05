@@ -771,6 +771,22 @@ test "map tools: a definition is sent whole only while its size costs less than 
     try testing.expect(call_chars > 7_000 and call_chars < 8_500);
 }
 
+test "map tools: identifiers of three or more characters are counted and a name used more often has a higher chance of being asked for" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var counts: std.StringArrayHashMapUnmanaged(u32) = .empty;
+    try countIdentifiers(arena_state.allocator(), &counts, "if (active >= maxDevices) return maxDevices - 12ab + $x1 + ok;");
+    try testing.expectEqual(@as(u32, 2), counts.get("maxDevices").?);
+    try testing.expectEqual(@as(u32, 1), counts.get("active").?);
+    try testing.expectEqual(@as(u32, 1), counts.get("$x1").?);
+    try testing.expect(counts.get("ok") == null);
+    try testing.expect(counts.get("ab") == null);
+    try testing.expectEqual(@as(f64, 0.013), mentionChance(1));
+    try testing.expectEqual(@as(f64, 0.029), mentionChance(2));
+    try testing.expectEqual(@as(f64, 0.029), mentionChance(3));
+    try testing.expectEqual(@as(f64, 0.044), mentionChance(4));
+}
+
 test "map tools: test paths are recognized by the folder and file name table of the language profile" {
     try testing.expect(isTest("packages/core/test/injector.spec.ts"));
     try testing.expect(isTest("src/__tests__/a.ts"));

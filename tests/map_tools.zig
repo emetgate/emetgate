@@ -351,7 +351,26 @@ const shutdown_runner_ts =
     \\
 ;
 
+const admission_ts =
+    \\const maxDevices = 3;
+    \\
+    \\export function admitDevice(active: number) {
+    \\  if (active >= maxDevices) {
+    \\    return graceMs;
+    \\  }
+    \\  return maxDevices - active + graceMs;
+    \\}
+    \\
+;
+
+const grace_ts =
+    \\export const graceMs = 5;
+    \\
+;
+
 const files = [_]File{
+    .{ .path = "packages/core/limits/admission.ts", .data = admission_ts },
+    .{ .path = "packages/core/limits/grace.ts", .data = grace_ts },
     .{ .path = "packages/core/hooks/runner.ts", .data = hooks_runner_ts },
     .{ .path = "packages/core/shutdown/runner.ts", .data = shutdown_runner_ts },
     .{ .path = "packages/core/nest-application-context.ts", .data = nest_application_context_ts },
@@ -469,6 +488,18 @@ test "map tools: a qualified name picks the definition in the named file and a c
     const wanted = std.mem.indexOf(u8, text, "packages/core/shutdown/runner.ts:5 runHooks\n") orelse return error.TestExpectedEqual;
     if (std.mem.indexOf(u8, text, "packages/core/hooks/runner.ts:1 runHooks\n")) |other| try testing.expect(wanted < other);
     try expectHas(text, "Named classes, shown through their matching members:\npackages/common/services/logger.ts:1 Logger\n");
+}
+
+test "map tools: explore adds a small definition of the same file that the sent code uses and none from another file" {
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const text = try f.session.answer(arena_state.allocator(), "which function admits", &.{"admitDevice"});
+
+    try expectHas(text, "packages/core/limits/admission.ts:3 admitDevice\n3 export function admitDevice(active: number) {\n");
+    try expectHas(text, "Definitions of names used above:\npackages/core/limits/admission.ts:1 maxDevices\n1 const maxDevices = 3;\n");
+    try expectLacks(text, "packages/core/limits/grace.ts:1 graceMs\n1 export const graceMs = 5;");
 }
 
 test "map tools: evidence returns every definition of a name and names the symbols it does not know" {
