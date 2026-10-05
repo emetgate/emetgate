@@ -83,10 +83,27 @@ pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, 
     if (!allow_repo_memory and anyQuery(applicable)) {
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
     }
-    if (!anyAdded(applicable)) return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, .unknown);
-    const old = try beforeOf(gpa, io, root_abs, file);
+    var old: ?[]u8 = null;
     defer if (old) |bytes| gpa.free(bytes);
-    return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, .{ .source = old orelse "" });
+    var before: Before = .unknown;
+    if (anyAdded(applicable)) {
+        old = try beforeOf(gpa, io, root_abs, file);
+        before = .{ .source = old orelse "" };
+    }
+    return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, before);
+}
+
+const Counted = union(enum) {
+    hits: []checks.Violation,
+    unrunnable: []const u8,
+};
+
+fn count(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, check: []const u8, limits: query.Limits) checks.Error!Counted {
+    const hits = checks.runLimited(gpa, profile, tree, span, &.{check}, limits) catch |err| return switch (err) {
+        error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| .{ .unrunnable = unrunnableDetail(e) },
+        else => |e| e,
+    };
+    return .{ .hits = hits };
 }
 
 pub fn isCommand(rule: Rule) bool {
@@ -185,16 +202,16 @@ pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile
                 old_tree = parser.?.parseIn(profile.grammar(), old_source) catch return error.OutOfMemory;
             }
             const whole: Span = .{ .start = 0, .end = @intCast(old_source.len) };
-            const was = checks.runLimited(gpa, profile, old_tree.?, whole, &.{checks.innerOf(rule.check)}, limits) catch |err| switch (err) {
-                error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), ""),
-                else => |e| return e,
+            const was = switch (try count(gpa, profile, old_tree.?, whole, checks.innerOf(rule.check), limits)) {
+                .hits => |hits| hits,
+                .unrunnable => |detail| return failedGate(gpa, rule, file, detail, ""),
             };
             defer gpa.free(was);
             for (was) |hit| try old_texts.append(gpa, old_source[hit.span.start..hit.span.end]);
             const all: Span = .{ .start = 0, .end = @intCast(tree.source.len) };
-            const now = checks.runLimited(gpa, profile, tree, all, &.{checks.innerOf(rule.check)}, limits) catch |err| switch (err) {
-                error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), ""),
-                else => |e| return e,
+            const now = switch (try count(gpa, profile, tree, all, checks.innerOf(rule.check), limits)) {
+                .hits => |hits| hits,
+                .unrunnable => |detail| return failedGate(gpa, rule, file, detail, ""),
             };
             defer gpa.free(now);
             for (now) |hit| {

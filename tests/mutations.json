@@ -2409,8 +2409,8 @@
     {
       "id": "SP19-gate-evaluates-all-rules",
       "file": "src/platform/rules.zig",
-      "from": "return evaluate(gpa, file, profile, tree, span, applicable);",
-      "to": "return evaluate(gpa, file, profile, tree, span, enforced.rules);",
+      "from": "return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, before);",
+      "to": "return evaluateLimited(gpa, file, profile, tree, span, enforced.rules, .{}, before);",
       "kills": [
         "scope: a rule whose where names another file does not block the proposal",
         "scope: a symbol-scoped rule blocks only a proposal to that symbol",
@@ -8588,8 +8588,8 @@
     {
       "id": "AD3-gate-never-reads-the-file-before",
       "file": "src/platform/rules.zig",
-      "from": "    return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, .{ .source = old orelse \"\" });",
-      "to": "    return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, .unknown);",
+      "from": "        before = .{ .source = old orelse \"\" };",
+      "to": "        before = .unknown;",
       "kills": [
         "rules: an enforced added rule lets a comment that was already there stay and rejects only the new one"
       ],
