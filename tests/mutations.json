@@ -2409,8 +2409,8 @@
     {
       "id": "SP19-gate-evaluates-all-rules",
       "file": "src/platform/rules.zig",
-      "from": "return evaluate(gpa, file, profile, tree, span, applicable);",
-      "to": "return evaluate(gpa, file, profile, tree, span, enforced.rules);",
+      "from": "return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, before);",
+      "to": "return evaluateLimited(gpa, file, profile, tree, span, enforced.rules, .{}, before);",
       "kills": [
         "scope: a rule whose where names another file does not block the proposal",
         "scope: a symbol-scoped rule blocks only a proposal to that symbol",
@@ -8564,6 +8564,46 @@
         "map tools: identifiers of three or more characters are counted and a name used more often has a higher chance of being asked for"
       ],
       "note": "a name used once would get the highest chance and a name used often the lowest"
+    },
+    {
+      "id": "AD1-added-counts-what-was-there",
+      "file": "src/platform/rules.zig",
+      "from": "            if (isAdded(rule) and takeText(&old_texts, tree.source[hit.span.start..hit.span.end])) continue;",
+      "to": "            if (isAdded(rule) and false) continue;",
+      "kills": [
+        "an added rule counts only what the change adds: a kept comment passes and a new one is the single violation"
+      ],
+      "note": "an added rule would reject code that only keeps what was already there"
+    },
+    {
+      "id": "AD2-added-masked-by-a-copy-elsewhere",
+      "file": "src/platform/rules.zig",
+      "from": "                _ = takeText(&old_texts, tree.source[hit.span.start..hit.span.end]);",
+      "to": "                _ = tree.source[hit.span.start..hit.span.end];",
+      "kills": [
+        "an added rule counts copies: a second copy of a text that the file already holds elsewhere is added"
+      ],
+      "note": "a new copy of a text would pass when the same text already stood elsewhere in the file"
+    },
+    {
+      "id": "AD3-gate-never-reads-the-file-before",
+      "file": "src/platform/rules.zig",
+      "from": "        before = .{ .source = old orelse \"\" };",
+      "to": "        before = .unknown;",
+      "kills": [
+        "rules: an enforced added rule lets a comment that was already there stay and rejects only the new one"
+      ],
+      "note": "an added rule would never be measured at the write gate and every added violation would pass"
+    },
+    {
+      "id": "AD4-added-accepts-a-command",
+      "file": "src/engine/checks.zig",
+      "from": "        if (commandOf(inner) != null) return error.CommandCheckNotStatic;",
+      "to": "        if (commandOf(inner) != null) return;",
+      "kills": [
+        "a static-only caller refuses a command check by its own name"
+      ],
+      "note": "a rule could be adopted whose added form wraps a command, which has no before and after to compare"
     }
   ]
 }

@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1388**
-- Mutations declared in `tests/mutations.json`: **868**
-  - killed: **838**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1392**
+- Mutations declared in `tests/mutations.json`: **872**
+  - killed: **842**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -47,7 +47,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-117 mutation(s).
+118 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -168,6 +168,7 @@ python tools/verification_page.py --check
 | `KD5-function-hash-takes-declaration-domain` | `src/engine/symbol.zig` | `var hasher = std.crypto.hash.Blake3.init(.{});         hasher.u...` -> `var hasher = std.crypto.hash.Blake3.init(.{});         hasher.u...` | declarations: the function and method hashes of the fixture are the ones main c... | killed |
 | `CR1-create-ignores-declarations` | `src/engine/cas.zig` | `for (table.declarations) \|candidate\| {         if (candidate....` -> `` | insert and create accept a variable, class, interface, type alias or enum as th...; creat... | killed |
 | `CR2-existing-declaration-overwritten` | `src/engine/cas.zig` | `if (before.hasDeclaration(insertion.ref)) return error.SymbolEx...` -> `` | insert and create accept a variable, class, interface, type alias or enum as th... | killed |
+| `AD4-added-accepts-a-command` | `src/engine/checks.zig` | `if (commandOf(inner) != null) return error.CommandCheckNotStati...` -> `if (commandOf(inner) != null) return;` | a static-only caller refuses a command check by its own name | killed |
 
 ### Sandbox and the test/typecheck gate
 
@@ -317,7 +318,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-98 mutation(s).
+101 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -347,7 +348,7 @@ python tools/verification_page.py --check
 | `SP16-where-symbol-ignores-ref` | `src/platform/where.zig` | `return scoped.eql(ref);` -> `return scoped.eql(ref) or true;` | a symbol where covers only proposals to that symbol; scope: a symbol-scoped rule blocks o... | killed |
 | `SP17-where-file-match-ignored` | `src/platform/where.zig` | `.file => \|p\| samePath(p, rel),` -> `.file => \|p\| p.len != 0,` | a file where covers only that file and a directory where covers what is under it; scope: ... | killed |
 | `SP18-gate-where-ignored` | `src/platform/rules.zig` | `if (try covers(rule, file, ref)) try list.append(gpa, rule);` -> `if (try covers(rule, file, ref) or true) try list.append(gpa, r...` | scope: a rule whose where names another file does not block the proposal; scope: a symbol... | killed |
-| `SP19-gate-evaluates-all-rules` | `src/platform/rules.zig` | `return evaluate(gpa, file, profile, tree, span, applicable);` -> `return evaluate(gpa, file, profile, tree, span, enforced.rules);` | scope: a rule whose where names another file does not block the proposal; scope: a symbol... | killed |
+| `SP19-gate-evaluates-all-rules` | `src/platform/rules.zig` | `return evaluateLimited(gpa, file, profile, tree, span, applicab...` -> `return evaluateLimited(gpa, file, profile, tree, span, enforced...` | scope: a rule whose where names another file does not block the proposal; scope: a symbol... | killed |
 | `SP20-ledger-rule-drops-where` | `src/platform/rules.zig` | `, .where = decision.where });` -> `});` | scope: a rule whose where names another file does not block the proposal; scope: a rule s... | killed |
 | `EX1-exclusions-ignored` | `src/platform/where.zig` | `return self.base.coversFile(rel) and !self.excludes(rel);` -> `return self.base.coversFile(rel);` | exclusion: src/ !__tests__/ drops the test directories and keeps production code; exclusi... | killed |
 | `EX2-dir-name-only-first-component` | `src/platform/where.zig` | `start = i + 1;` -> `start = i;` | exclusion: src/ !__tests__/ drops the test directories and keeps production code; exclusi... | killed |
@@ -419,6 +420,9 @@ python tools/verification_page.py --check
 | `QD7-depth-detail-misnamed` | `src/platform/rules.zig` | `error.QueryDepthExceeded => "query_depth_exceeded",` -> `error.QueryDepthExceeded => "query_budget_exceeded",` | scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded; scan tool: a mod... | killed |
 | `QD8-depth-refusal-escapes-the-gate` | `src/platform/rules.zig` | `error.CallBudgetExceeded, error.QueryDepthExceeded => \|e\| ret...` -> `error.CallBudgetExceeded => \|e\| return failedGate(` | scan tool: a chain 6,100 levels deep comes back as query_depth_exceeded; scan tool: a mod... | killed |
 | `SR3-model-picks-the-shadow-root` | `src/protocol/policy.zig` | `or tool_result.getField(a, "shadow_root") != null` -> `` | purple C7: a shadow root supplied by the model is refused and nothing is create... | killed |
+| `AD1-added-counts-what-was-there` | `src/platform/rules.zig` | `if (isAdded(rule) and takeText(&old_texts, tree.source[hit.span...` -> `if (isAdded(rule) and false) continue;` | an added rule counts only what the change adds: a kept comment passes and a new... | killed |
+| `AD2-added-masked-by-a-copy-elsewhere` | `src/platform/rules.zig` | `_ = takeText(&old_texts, tree.source[hit.span.start..hit.span.e...` -> `_ = tree.source[hit.span.start..hit.span.end];` | an added rule counts copies: a second copy of a text that the file already hold... | killed |
+| `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = old orelse "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
 
 ### Scan
 

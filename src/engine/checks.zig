@@ -75,6 +75,17 @@ fn resolve(checks: []const Check, spec: []const u8) Error!struct { check: Check,
     return .{ .check = check, .arg = invocation.arg };
 }
 
+pub const added_prefix = "added:";
+
+pub fn addedOf(spec: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, spec, added_prefix)) return null;
+    return spec[added_prefix.len..];
+}
+
+pub fn innerOf(spec: []const u8) []const u8 {
+    return addedOf(spec) orelse spec;
+}
+
 pub fn validate(gpa: Allocator, spec: []const u8) Error!void {
     if (commandOf(spec)) |command| return validateCommand(command);
     return validateStatic(gpa, spec);
@@ -82,6 +93,11 @@ pub fn validate(gpa: Allocator, spec: []const u8) Error!void {
 
 pub fn validateStatic(gpa: Allocator, spec: []const u8) Error!void {
     if (commandOf(spec) != null) return error.CommandCheckNotStatic;
+    if (addedOf(spec)) |inner| {
+        if (commandOf(inner) != null) return error.CommandCheckNotStatic;
+        if (addedOf(inner) != null) return error.UnknownCheck;
+        return validateStatic(gpa, inner);
+    }
     const resolved = try resolve(&registry, spec);
     if (std.mem.eql(u8, resolved.check.name, query_name)) {
         var results: [lang.profiles.len]Compiled = undefined;
@@ -597,4 +613,11 @@ test "a static-only caller refuses a command check by its own name" {
     try testing.expectError(error.CommandCheckNotStatic, validateStatic(testing.allocator, "cmd:exit 0"));
     try testing.expectError(error.CommandCheckNotStatic, validateStatic(testing.allocator, "cmd:"));
     try testing.expectError(error.UnknownCheck, validateStatic(testing.allocator, "frbid:x"));
+    try validateStatic(testing.allocator, "added:no_comment");
+    try validateStatic(testing.allocator, "added:forbid:x");
+    try testing.expectError(error.CommandCheckNotStatic, validateStatic(testing.allocator, "added:cmd:exit 0"));
+    try testing.expectError(error.UnknownCheck, validateStatic(testing.allocator, "added:added:no_comment"));
+    try testing.expectError(error.UnknownCheck, validateStatic(testing.allocator, "added:frbid:x"));
+    try testing.expectEqualStrings("forbid:x", innerOf("added:forbid:x"));
+    try testing.expectEqualStrings("forbid:x", innerOf("forbid:x"));
 }

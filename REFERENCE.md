@@ -82,7 +82,14 @@ at all.
 |---|---|
 | `no_comment`, `forbid:<text>`, `no_literal:<option>` | Built-in AST checks, run against the proposed body in memory |
 | `q:<tree-sitter query>` | A tree-sitter query, run in process against the parsed file; see [The `q:` query predicate](#the-q-query-predicate) |
+| `added:<check>` | A built-in check or a `q:` query, counted only where the change adds it; see below |
 | `cmd:<command line>` | A command, run in the shadow copy inside the sandbox |
+
+`added:` in front of a built-in check or a query makes the rule judge the change, not the code: its violations are those of the file after the change minus those of the file on disk, matched by their text. Under `added:no_comment` a body that keeps a comment that was already there passes and a body that adds one is refused with that one comment as the violation; a second copy of a text the file already holds counts as added, and every violation of a new file is added. `added:` does not take a `cmd:` check. `emetgate scan` and `emetgate_scan` measure code, not a change, and report nothing for an `added:` rule.
+
+```
+emetgate rule add "no new comments" --check added:no_comment --enforce
+```
 
 Anything without the `cmd:` prefix is looked up in the built-in registry. An unknown name
 returns `UnknownCheck`; it is not interpreted as a shell command.
