@@ -5,7 +5,7 @@ import json
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CURRENT = ['emetgate', 'serena', 'claude-code', 'codebase-memory-mcp']
+CURRENT = ['emetgate', 'emetgate-v0.3.0', 'serena', 'claude-code', 'codebase-memory-mcp']
 INSTRUCTED = 'emetgate-9236f27-instructed'
 FIRST_SET = ('nest', 'typeorm', 'actual')
 WRITE, READ, OUTPUT = 2.0, 0.1, 5.0
@@ -178,7 +178,7 @@ def main():
     print(f'   same item, both ways: {a[0]} of {a[1]} = {a[0] / a[1]:.3f} against {b[0]} of {b[1]} = {b[0] / b[1]:.3f}')
 
     print('\n6. arm | sessions | score | tokens | API s | USD | model calls')
-    for name, pick in (('nest, typeorm, actual', lambda r: r in FIRST_SET), ('openbot', lambda r: r == 'openbot')):
+    for name, pick in (('nest, typeorm, actual', lambda r: r in FIRST_SET), ('openbot', lambda r: r == 'openbot'), ('all four repositories', lambda r: True)):
         print('  ', name)
         for arm in CURRENT:
             rows = [s for s in sessions if s['arm'] == arm and pick(s['repo'])]
