@@ -93,9 +93,9 @@ def count_redteam_tests():
 
 
 def security_findings():
-    with open(README_PATH, encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "REFERENCE.md"), encoding="utf-8") as f:
         text = f.read()
-    section = text.split("## Security history", 1)[1].split("## Limits", 1)[0]
+    section = text.split("## Security history", 1)[1].split("## Nightly attacker", 1)[0]
     return re.findall(r"\*\*(F\d[^*]*|Repository ledger[^*]*)\*\*", section)
 
 
