@@ -83,7 +83,10 @@ pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, 
     if (!allow_repo_memory and anyQuery(applicable)) {
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
     }
-    return evaluate(gpa, file, profile, tree, span, applicable);
+    if (!anyAdded(applicable)) return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, .unknown);
+    const old = try beforeOf(gpa, io, root_abs, file);
+    defer if (old) |bytes| gpa.free(bytes);
+    return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, .{ .source = old orelse "" });
 }
 
 pub fn isCommand(rule: Rule) bool {
@@ -91,7 +94,43 @@ pub fn isCommand(rule: Rule) bool {
 }
 
 pub fn isQuery(rule: Rule) bool {
-    return std.mem.eql(u8, checks.parse(rule.check).name, checks.query_name);
+    return std.mem.eql(u8, checks.parse(checks.innerOf(rule.check)).name, checks.query_name);
+}
+
+pub fn isAdded(rule: Rule) bool {
+    return checks.addedOf(rule.check) != null;
+}
+
+fn anyAdded(list: []const Rule) bool {
+    for (list) |rule| {
+        if (isAdded(rule)) return true;
+    }
+    return false;
+}
+
+pub const max_before_bytes = 8 * 1024 * 1024;
+
+pub const Before = union(enum) {
+    unknown,
+    source: []const u8,
+};
+
+fn beforeOf(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8) !?[]u8 {
+    const abs = try std.fs.path.join(gpa, &.{ root_abs, file });
+    defer gpa.free(abs);
+    return std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_before_bytes)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => |e| return e,
+    };
+}
+
+fn takeText(texts: *std.ArrayList([]const u8), text: []const u8) bool {
+    for (texts.items, 0..) |old, i| {
+        if (!std.mem.eql(u8, old, text)) continue;
+        _ = texts.swapRemove(i);
+        return true;
+    }
+    return false;
 }
 
 fn anyQuery(list: []const Rule) bool {
@@ -118,24 +157,59 @@ pub fn applicableTo(gpa: Allocator, all: []const Rule, file: []const u8, ref: sy
 }
 
 pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!Gate {
-    return evaluateLimited(gpa, file, profile, tree, span, rules, .{});
+    return evaluateLimited(gpa, file, profile, tree, span, rules, .{}, .unknown);
 }
 
-pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule, limits: query.Limits) checks.Error!Gate {
+pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule, limits: query.Limits, before: Before) checks.Error!Gate {
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
     defer for (list.items) |v| freeViolation(gpa, v);
     var lines: ?Lines = null;
     defer if (lines) |l| l.deinit(gpa);
 
+    var old_tree: ?ts.Tree = null;
+    defer if (old_tree) |t| t.deinit();
+    var parser: ?ts.Parser = null;
+    defer if (parser) |p| p.deinit();
+
     for (rules) |rule| {
-        const found = checks.runLimited(gpa, profile, tree, span, &.{rule.check}, limits) catch |err| switch (err) {
+        var old_texts: std.ArrayList([]const u8) = .empty;
+        defer old_texts.deinit(gpa);
+        if (isAdded(rule)) {
+            const old_source = switch (before) {
+                .unknown => continue,
+                .source => |bytes| bytes,
+            };
+            if (old_tree == null) {
+                parser = ts.Parser.create();
+                old_tree = parser.?.parseIn(profile.grammar(), old_source) catch return error.OutOfMemory;
+            }
+            const whole: Span = .{ .start = 0, .end = @intCast(old_source.len) };
+            const was = checks.runLimited(gpa, profile, old_tree.?, whole, &.{checks.innerOf(rule.check)}, limits) catch |err| switch (err) {
+                error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), ""),
+                else => |e| return e,
+            };
+            defer gpa.free(was);
+            for (was) |hit| try old_texts.append(gpa, old_source[hit.span.start..hit.span.end]);
+            const all: Span = .{ .start = 0, .end = @intCast(tree.source.len) };
+            const now = checks.runLimited(gpa, profile, tree, all, &.{checks.innerOf(rule.check)}, limits) catch |err| switch (err) {
+                error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), ""),
+                else => |e| return e,
+            };
+            defer gpa.free(now);
+            for (now) |hit| {
+                if (hit.span.start >= span.start and hit.span.end <= span.end) continue;
+                _ = takeText(&old_texts, tree.source[hit.span.start..hit.span.end]);
+            }
+        }
+        const found = checks.runLimited(gpa, profile, tree, span, &.{checks.innerOf(rule.check)}, limits) catch |err| switch (err) {
             error.QueryMalformed, error.QueryNotForLanguage, error.QueryBudgetExceeded, error.QueryMatchLimitExceeded, error.CallBudgetExceeded, error.QueryDepthExceeded => |e| return failedGate(gpa, rule, file, unrunnableDetail(e), profile.name),
             else => |e| return e,
         };
         defer gpa.free(found);
         if (found.len > 0 and lines == null) lines = try Lines.init(gpa, tree.source);
         for (found) |hit| {
+            if (isAdded(rule) and takeText(&old_texts, tree.source[hit.span.start..hit.span.end])) continue;
             const start = lines.?.position(hit.span.start);
             const end = lines.?.position(hit.span.end);
             const owned = try ownViolation(gpa, rule, file, start, end, shown(tree.source[hit.span.start..hit.span.end]));
@@ -617,6 +691,59 @@ pub fn reportOf(gated: Gate) !?Report {
             return error.TestUnexpectedCheckFailure;
         },
     };
+}
+
+fn addedIn(source: []const u8, span: Span, check: []const u8, before: Before) !?Report {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const t = try test_util.TestTree.init(source);
+    defer t.deinit();
+    return reportOf(try evaluateLimited(testing.allocator, "src/a.ts", test_util.language, t.tree, span, &.{.{ .id = "r1", .check = check }}, .{}, before));
+}
+
+fn bodyOf(source: []const u8) Span {
+    const open = std.mem.indexOfScalar(u8, source, '{').?;
+    const close = std.mem.lastIndexOfScalar(u8, source, '}').?;
+    return .{ .start = @intCast(open), .end = @intCast(close + 1) };
+}
+
+test "an added rule counts only what the change adds: a kept comment passes and a new one is the single violation" {
+    const old = "function f() {\n  // kept\n  return 1;\n}\n";
+    const kept = "function f() {\n  // kept\n  return 2;\n}\n";
+    const more = "function f() {\n  // kept\n  // new\n  return 2;\n}\n";
+
+    try testing.expect((try addedIn(kept, bodyOf(kept), "added:no_comment", .{ .source = old })) == null);
+    const report = (try addedIn(more, bodyOf(more), "added:no_comment", .{ .source = old })).?;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    try testing.expectEqualStrings("// new", report.violations[0].text);
+    try testing.expectEqualStrings("added:no_comment", report.violations[0].check);
+    try testing.expectEqual(@as(u32, 3), report.violations[0].line);
+}
+
+test "an added rule treats a new file as all added, and is not measured when there is no change to measure" {
+    const source = "function f() {\n  // one\n  return 1;\n}\n";
+    const report = (try addedIn(source, bodyOf(source), "added:no_comment", .{ .source = "" })).?;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    try testing.expect((try addedIn(source, bodyOf(source), "added:no_comment", .unknown)) == null);
+}
+
+test "an added rule counts copies: a second copy of a text that the file already holds elsewhere is added" {
+    const old = "// note\nfunction f() {\n  return 1;\n}\n";
+    const copy = "// note\nfunction f() {\n  // note\n  return 1;\n}\n";
+    const report = (try addedIn(copy, bodyOf(copy), "added:no_comment", .{ .source = old })).?;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    try testing.expectEqual(@as(u32, 3), report.violations[0].line);
+
+    const was = "function f() {\n  log(1);\n}\n";
+    const twice = "function f() {\n  log(1);\n  log(2);\n}\n";
+    const same = "function f() {\n  log(3);\n}\n";
+    const grown = (try addedIn(twice, bodyOf(twice), "added:forbid:log(", .{ .source = was })).?;
+    defer grown.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), grown.violations.len);
+    try testing.expect((try addedIn(same, bodyOf(same), "added:forbid:log(", .{ .source = was })) == null);
 }
 
 test "every violation names its rule, check, file, line, column and offending text" {

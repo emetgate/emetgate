@@ -228,7 +228,7 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
                     else => {},
                 }
             }
-            const report = switch (try rules.evaluateLimited(gpa, file, snapshot.profile, snapshot.tree, span, rule[0..1], limits)) {
+            const report = switch (try rules.evaluateLimited(gpa, file, snapshot.profile, snapshot.tree, span, rule[0..1], limits, .unknown)) {
                 .ok => continue,
                 .violated => |report| report,
                 .failed => |failure| {
