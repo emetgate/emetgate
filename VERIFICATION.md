@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1385**
-- Mutations declared in `tests/mutations.json`: **863**
-  - killed: **833**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1388**
+- Mutations declared in `tests/mutations.json`: **868**
+  - killed: **838**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -556,7 +556,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-403 mutation(s).
+408 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -959,10 +959,15 @@ python tools/verification_page.py --check
 | `ME4-named-class-expanded` | `src/protocol/map_tools.zig` | `if (self.container(f)) {                     try containers.wri...` -> `if (false) {                     try containers.writer.print(` | map tools: a qualified name picks the definition in the named file and a class ... | killed |
 | `ME5-constants-not-ranked` | `src/protocol/map_tools.zig` | `if (!rank.candidate(d) and !rank.topVariable(d)) continue;` -> `if (!rank.candidate(d)) continue;` | map tools: explore reaches a function and a top-level constant through words of... | killed |
 | `ME6-path-qualifier-ignored` | `src/protocol/map_tools.zig` | `if (qualifiers.items.len == 0) return found;` -> `if (true) return found;` | map tools: a qualified name picks the definition in the named file and a class ... | killed |
-| `ME7-everything-worth-sending` | `src/protocol/map_tools.zig` | `return @as(f64, @floatFromInt(size)) * (1 - chance) < call_char...` -> `return @as(f64, @floatFromInt(size)) * (1 - chance) >= call_cha...` | map tools: a definition is sent whole only while its size costs less than the m... | killed |
+| `ME7-everything-worth-sending` | `src/protocol/map_tools.zig` | `return @as(f64, @floatFromInt(size)) * (1 - chance) < saved * c...` -> `return @as(f64, @floatFromInt(size)) * (1 - chance) >= saved * ...` | map tools: a definition is sent whole only while its size costs less than the m... | killed |
 | `ME8-useful-table-flat` | `src/protocol/map_tools.zig` | `while (i < useful_ratio.len and ratio >= useful_ratio[i]) i += ...` -> `while (i < useful_ratio.len and ratio < useful_ratio[i]) i += 1;` | map tools: the chance that a definition is useful rises with its score ratio al... | killed |
 | `TI1-identifier-parts-not-indexed` | `src/engine/term_index.zig` | `if (start != 0 or k != word.len) try ctx.term(word[start..k]);` -> `if (false) try ctx.term(word[start..k]);` | term index: an identifier yields itself and its camel, underscore and digit par... | killed |
 | `TI2-name-not-weighted` | `src/engine/term_index.zig` | `while (i < name_weight) : (i += 1) try eachTerm(name, self);` -> `while (i < 0) : (i += 1) try eachTerm(name, self);` | term index: a definition whose name holds the query word outranks one that only... | killed |
+| `TI3-ceiling-constant` | `src/engine/term_index.zig` | `sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);` -> `sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1) * 0;` | term index: the ceiling of a query bounds every score, grows with each known wo... | killed |
+| `ME9-test-files-not-recognised` | `src/protocol/map_tools.zig` | `return map.isTestPath(profile.map, path);` -> `return map.isTestPath(profile.map, path) and false;` | map tools: test paths are recognized by the folder and file name table of the l... | killed |
+| `MB1-bound-from-any-file` | `src/protocol/map_tools.zig` | `if (f.file != s.file) continue;` -> `if (f.file != s.file and false) continue;` | map tools: explore adds a small definition of the same file that the sent code ... | killed |
+| `MB2-small-definitions-not-bound` | `src/protocol/map_tools.zig` | `if (!worthSending(size, mentionChance(m.count), call_chars) or ...` -> `if (worthSending(size, mentionChance(m.count), call_chars) or u...` | map tools: explore adds a small definition of the same file that the sent code ... | killed |
+| `MB3-mention-chance-flat` | `src/protocol/map_tools.zig` | `while (i < mention_count.len and count >= mention_count[i]) i +...` -> `while (i < mention_count.len and count < mention_count[i]) i +=...` | map tools: identifiers of three or more characters are counted and a name used ... | killed |
 
 ## What this system does not prove
 

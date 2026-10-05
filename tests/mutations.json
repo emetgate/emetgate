@@ -8478,8 +8478,8 @@
     {
       "id": "ME7-everything-worth-sending",
       "file": "src/protocol/map_tools.zig",
-      "from": "    return @as(f64, @floatFromInt(size)) * (1 - chance) < call_chars * chance;",
-      "to": "    return @as(f64, @floatFromInt(size)) * (1 - chance) >= call_chars * chance;",
+      "from": "    return @as(f64, @floatFromInt(size)) * (1 - chance) < saved * chance;",
+      "to": "    return @as(f64, @floatFromInt(size)) * (1 - chance) >= saved * chance;",
       "kills": [
         "map tools: a definition is sent whole only while its size costs less than the model call it may save"
       ],
@@ -8514,6 +8514,56 @@
         "term index: a definition whose name holds the query word outranks one that only mentions it in its body"
       ],
       "note": "the name of a definition would not count toward its score"
+    },
+    {
+      "id": "TI3-ceiling-constant",
+      "file": "src/engine/term_index.zig",
+      "from": "            sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1);",
+      "to": "            sum += @log(1 + (docs - df + 0.5) / (df + 0.5)) * (k1 + 1) * 0;",
+      "kills": [
+        "term index: the ceiling of a query bounds every score, grows with each known word and ignores unknown ones"
+      ],
+      "note": "every query would have a ceiling of zero, so no score could be measured against it"
+    },
+    {
+      "id": "ME9-test-files-not-recognised",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    return map.isTestPath(profile.map, path);",
+      "to": "    return map.isTestPath(profile.map, path) and false;",
+      "kills": [
+        "map tools: test paths are recognized by the folder and file name table of the language profile"
+      ],
+      "note": "test files would be ranked and sent as if they were product code"
+    },
+    {
+      "id": "MB1-bound-from-any-file",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                    if (f.file != s.file) continue;",
+      "to": "                    if (f.file != s.file and false) continue;",
+      "kills": [
+        "map tools: explore adds a small definition of the same file that the sent code uses and none from another file"
+      ],
+      "note": "a name used in the sent code would be bound to an unrelated definition of another file"
+    },
+    {
+      "id": "MB2-small-definitions-not-bound",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            if (!worthSending(size, mentionChance(m.count), call_chars) or used + size > limit) continue;",
+      "to": "            if (worthSending(size, mentionChance(m.count), call_chars) or used + size > limit) continue;",
+      "kills": [
+        "map tools: explore adds a small definition of the same file that the sent code uses and none from another file"
+      ],
+      "note": "small definitions that the sent code uses would be left out and large ones added"
+    },
+    {
+      "id": "MB3-mention-chance-flat",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    while (i < mention_count.len and count >= mention_count[i]) i += 1;",
+      "to": "    while (i < mention_count.len and count < mention_count[i]) i += 1;",
+      "kills": [
+        "map tools: identifiers of three or more characters are counted and a name used more often has a higher chance of being asked for"
+      ],
+      "note": "a name used once would get the highest chance and a name used often the lowest"
     }
   ]
 }
