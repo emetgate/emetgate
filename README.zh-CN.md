@@ -17,7 +17,7 @@
 它作为 Claude Code 的 MCP 服务器运行，支持 Windows 上的 TypeScript 和 JavaScript 项目。
 
 <p align="center">
-  <img src="assets/demo.gif" alt="The gate refusing a placeholder and a test-breaking body and committing a correct one; a search against rg; a node edit against Read and Edit" width="900">
+  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
 </p>
 
 ## 它做什么

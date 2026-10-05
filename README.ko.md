@@ -17,7 +17,7 @@
 Claude Code용 MCP 서버로 실행되며, Windows에서 TypeScript와 JavaScript 프로젝트를 지원합니다.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="The gate refusing a placeholder and a test-breaking body and committing a correct one; a search against rg; a node edit against Read and Edit" width="900">
+  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
 </p>
 
 ## 하는 일
