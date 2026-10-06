@@ -764,7 +764,7 @@ pub fn acquireHeld(gpa: Allocator, io: std.Io, head: Head, staged_abs: []const u
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const lock = try std.fmt.allocPrint(arena, "{s}.lock", .{head.index});
-    const guard = disk.Guard.open(staged_abs) catch return error.GitFailed;
+    const guard = disk.Guard.freeze(staged_abs) catch return error.GitFailed;
     errdefer guard.close();
     guard.renameTo(gpa, lock) catch |err| switch (err) {
         error.PathAlreadyExists => return error.IndexLocked,

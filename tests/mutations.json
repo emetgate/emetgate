@@ -5236,8 +5236,8 @@
     {
       "id": "JV3-guard-lets-a-writer-in",
       "file": "src/platform/disk.zig",
-      "from": "            win.generic_read | win.delete,\n            win.file_share_read,\n",
-      "to": "            win.generic_read | win.delete,\n            win.file_share_read | win.file_share_write,\n",
+      "from": "        return shared(path_abs, win.file_share_read);\n",
+      "to": "        return shared(path_abs, win.file_share_read | win.file_share_write);\n",
       "kills": [
         "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole"
       ],
@@ -9982,8 +9982,8 @@
     {
       "id": "P1a-guard-lets-a-file-be-renamed-over-the-target",
       "file": "src/platform/disk.zig",
-      "from": "            win.generic_read | win.delete,\n            win.file_share_read,\n",
-      "to": "            win.generic_read | win.delete,\n            win.file_share_read | win.file_share_delete,\n",
+      "from": "        return shared(path_abs, win.file_share_read);\n",
+      "to": "        return shared(path_abs, win.file_share_read | win.file_share_delete);\n",
       "kills": [
         "journal base: a file renamed over the target between the check and the write is refused, and the write lands whole"
       ]

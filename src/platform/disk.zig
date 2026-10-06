@@ -32,11 +32,19 @@ pub const Guard = struct {
     handle: windows.HANDLE,
 
     pub fn open(path_abs: []const u8) !Guard {
+        return shared(path_abs, win.file_share_read | win.file_share_delete);
+    }
+
+    pub fn freeze(path_abs: []const u8) !Guard {
+        return shared(path_abs, win.file_share_read);
+    }
+
+    fn shared(path_abs: []const u8, share: windows.DWORD) !Guard {
         var wide: WidePath = undefined;
         const handle = win.CreateFileW(
             try toWide(&wide, path_abs),
             win.generic_read | win.delete,
-            win.file_share_read,
+            share,
             null,
             win.open_existing,
             win.file_attribute_normal,
@@ -478,7 +486,7 @@ fn plan(gpa: Allocator, io: std.Io, kind: Pending.Kind, path_abs: []const u8, da
 fn openBase(gpa: Allocator, io: std.Io, path_abs: []const u8, expected_base: symbol.Hash) !struct { guard: Guard, attributes: windows.DWORD } {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
-    const guard = try Guard.open(path_abs);
+    const guard = try Guard.freeze(path_abs);
     errdefer guard.close();
     if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &expected_base)) return error.BaseChanged;
     const attributes = try guard.attributes();
