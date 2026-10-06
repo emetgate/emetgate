@@ -5129,9 +5129,11 @@
       "file": "src/platform/shadow.zig",
       "from": "Links(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
       "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
-      "kills": [
+      "expect_status": "survived",
+      "filter": [
         "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
-      ]
+      ],
+      "note": "the workspace is opened through own_dir.hold before this check and a linked workspace is refused there, and unlinkAll repeats the check before anything is removed; no test can tell this second check from its mutant"
     },
     {
       "id": "SR2-shadow-key-ignores-the-path",
@@ -5157,7 +5159,7 @@
       "from": "return hasDotSegment(self.shadow);",
       "to": "return hasDotSegment(self.shadow[0..0]);",
       "kills": [
-        "redteam sandbox: the shadow lives under the operator's shadow root, outside the repository, flags a dot segment and is gone afterwards"
+        "redteam sandbox: the shadow lives under the operator's shadow root, outside the repository, flags a dot segment and is gone afterwards under a full copy and holds only the tree when kept"
       ]
     },
     {
@@ -9377,6 +9379,43 @@
       "to": "try js.write(\"none\");",
       "kills": [
         "a result says which tree the gate used: kept with its private copies, or a full copy with the reason"
+      ]
+    },
+    {
+      "id": "KT9-other-volume-not-detected",
+      "file": "src/platform/shadow.zig",
+      "from": "if (try dir_scan.volumeOf(root) != try treeVolume(tree)) {",
+      "to": "if (false) {",
+      "kills": [
+        "gate tree replies: a repository on another volume, or a volume without hard links, gets a full copy and the reply gives the reason"
+      ]
+    },
+    {
+      "id": "KT10-missing-hard-links-not-detected",
+      "file": "src/platform/shadow.zig",
+      "from": "if (!try linksSupported(root)) {",
+      "to": "if (false) {",
+      "kills": [
+        "gate tree replies: a repository on another volume, or a volume without hard links, gets a full copy and the reply gives the reason"
+      ]
+    },
+    {
+      "id": "KT11-run-ignores-the-tree-choice",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        .gate_tree = policy.treeChoice(),\n        .used = &used,",
+      "to": "        .used = &used,",
+      "kills": [
+        "gate tree replies: a run reply says which tree was used, and two servers in one process keep their own choice"
+      ]
+    },
+    {
+      "id": "KT12-doc-write-reply-without-the-tree",
+      "file": "src/protocol/handlers.zig",
+      "from": "const doc_note = wire.treeNote(doc_trace.gate);",
+      "to": "const doc_note: ?wire.ShadowNote = null;",
+      "kills": [
+        "gate tree replies: a rejected doc write says which tree was used, for each server's own choice",
+        "gate tree replies: a repository on another volume, or a volume without hard links, gets a full copy and the reply gives the reason"
       ]
     }
   ]
