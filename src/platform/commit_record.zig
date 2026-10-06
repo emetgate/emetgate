@@ -1,6 +1,7 @@
 const std = @import("std");
 const disk = @import("disk.zig");
 const durability_log = @import("durability_log.zig");
+const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -55,11 +56,9 @@ pub fn remove(gpa: Allocator, io: std.Io, journal_dir: []const u8, tag: []const 
 }
 
 pub fn removeAll(gpa: Allocator, io: std.Io, journal_dir: []const u8, keep: []const []const u8) !void {
-    var dir = std.Io.Dir.openDirAbsolute(io, journal_dir, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => |e| return e,
-    };
-    defer dir.close(io);
+    const held = (try own_dir.hold(io, journal_dir, .existing)) orelse return;
+    defer held.close();
+    const dir = held.dir;
 
     var names: std.ArrayList([]u8) = .empty;
     defer {
@@ -69,7 +68,7 @@ pub fn removeAll(gpa: Allocator, io: std.Io, journal_dir: []const u8, keep: []co
     var it = dir.iterate();
     while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.mem.endsWith(u8, entry.name, staged_suffix) and !std.mem.endsWith(u8, entry.name, staged_journal_suffix)) continue;
+        if (own_dir.tagOf(entry.name, &.{ record_suffix, staged_suffix, staged_journal_suffix }) == null) continue;
         if (kept(entry.name, keep)) continue;
         try names.append(gpa, try gpa.dupe(u8, entry.name));
     }

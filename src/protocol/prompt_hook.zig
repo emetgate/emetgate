@@ -14,6 +14,7 @@ pub const blocking_exit_code: u8 = 2;
 pub const max_input_bytes = 4 * 1024 * 1024;
 
 const whitespace = " \t\r\n";
+const byte_order_mark = "\xef\xbb\xbf";
 
 pub fn ruleText(arena: Allocator, input: []const u8) error{ HookInputInvalid, OutOfMemory }!?[]const u8 {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, input, .{}) catch |err| switch (err) {
@@ -27,10 +28,17 @@ pub fn ruleText(arena: Allocator, input: []const u8) error{ HookInputInvalid, Ou
 }
 
 pub fn argumentsOf(prompt: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, prompt, command)) return null;
-    const rest = prompt[command.len..];
+    const typed = withoutLead(prompt);
+    if (!std.mem.startsWith(u8, typed, command)) return null;
+    const rest = typed[command.len..];
     if (rest.len != 0 and std.mem.indexOfScalar(u8, whitespace, rest[0]) == null) return null;
     return rest;
+}
+
+fn withoutLead(prompt: []const u8) []const u8 {
+    var rest = std.mem.trimStart(u8, prompt, whitespace);
+    if (std.mem.startsWith(u8, rest, byte_order_mark)) rest = rest[byte_order_mark.len..];
+    return std.mem.trimStart(u8, rest, whitespace);
 }
 
 pub fn respond(gpa: Allocator, io: std.Io, root: anyerror![]const u8, text: []const u8, out: *Writer) !void {

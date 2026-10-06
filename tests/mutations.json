@@ -5876,8 +5876,8 @@
     {
       "id": "VR1-before-digest-not-chained",
       "file": "src/verify/checker.zig",
-      "from": "        if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch, \"the before digest does not match the parent commit or the previous receipt\");\n",
-      "to": "",
+      "from": "        } else if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch, \"the before digest does not match the parent commit or the previous receipt\");\n",
+      "to": "        }\n",
       "kills": [
         "verify: a forged digest, a non-canonical note, an added and a removed receipt are caught"
       ]
@@ -8875,6 +8875,287 @@
       "to": "    const passthrough = args;",
       "kills": [
         "lockdown marks: with --no-marks claude gets no plugin directory, no plugin file is written and the hook stays"
+      ]
+    },
+    {
+      "id": "OD1-own-directory-link-not-refused",
+      "file": "src/platform/own_dir.zig",
+      "from": "    if (!try plainDirectory(handle)) return error.WorkspaceIsLink;\n",
+      "to": "    if (false and !try plainDirectory(handle)) return error.WorkspaceIsLink;\n",
+      "kills": [
+        "own dir: a directory that is a junction is refused by name, and so is one under a junction",
+        "own dir: receipts are not read or moved through a receipts directory that is a junction",
+        "own dir: a receipt is not written through a receipts directory that is a junction",
+        "own dir: recover leaves the files of a directory that .emetgate/journal links to and refuses by name",
+        "own dir: recover leaves the files of a directory that .emetgate itself links to",
+        "own dir: a gated write is refused by name when .emetgate/journal is a junction, and nothing is written through it",
+        "verify merge: a work directory that is a junction is refused by name and nothing is written through it"
+      ]
+    },
+    {
+      "id": "OD2-held-directory-shares-delete",
+      "file": "src/platform/own_dir.zig",
+      "from": "        win.file_share_read | win.file_share_write,\n",
+      "to": "        win.file_share_read | win.file_share_write | win.file_share_delete,\n",
+      "kills": [
+        "own dir: a held directory cannot be renamed away or replaced until it is released"
+      ]
+    },
+    {
+      "id": "OD3-removal-takes-a-junction",
+      "file": "src/platform/own_dir.zig",
+      "from": "    if (!(plainDirectory(handle) catch false)) return false;\n",
+      "to": "",
+      "kills": [
+        "own dir: only an empty plain directory is removed, never a junction and never a directory with a file",
+        "own dir: releasing the workspace lock leaves a junction that stands where the journal directory would be"
+      ]
+    },
+    {
+      "id": "OD4-lock-taken-through-a-linked-workspace",
+      "file": "src/platform/shadow.zig",
+      "from": "        if (isReparsePoint(workspace) catch true) return error.WorkspaceIsLink;\n",
+      "to": "",
+      "kills": [
+        "own dir: the workspace lock refuses a workspace that is a junction and leaves the junction in place"
+      ]
+    },
+    {
+      "id": "OD5-lock-release-removes-what-it-did-not-verify",
+      "file": "src/platform/shadow.zig",
+      "from": "            _ = own_dir.removeEmpty(journal);\n",
+      "to": "            Dir.cwd().deleteDir(self.io, journal) catch {};\n",
+      "kills": [
+        "own dir: releasing the workspace lock leaves a junction that stands where the journal directory would be"
+      ]
+    },
+    {
+      "id": "OD6-batch-journal-written-without-holding-its-directory",
+      "file": "src/platform/disk.zig",
+      "from": "    const held: ?own_dir.Held = if (batch) |b| own_dir.hold(b.io, b.journal_dir, .create) catch |err| {\n        abort(pendings, leftover, null, null);\n        return err;\n    } else null;\n",
+      "to": "    const held: ?own_dir.Held = null;\n    if (batch) |b| std.Io.Dir.cwd().createDirPath(b.io, b.journal_dir) catch {};\n",
+      "kills": [
+        "own dir: a gated write is refused by name when .emetgate/journal is a junction, and nothing is written through it"
+      ]
+    },
+    {
+      "id": "OD8-any-json-is-applied-as-a-journal",
+      "file": "src/platform/disk.zig",
+      "from": "        if (own_dir.tagOf(entry.name, &.{\".json\"}) == null) {\n            report.failed += 1;\n            continue;\n        }\n",
+      "to": "",
+      "kills": [
+        "own dir: recover leaves a journal and a commit record it did not name, and reports the journal"
+      ]
+    },
+    {
+      "id": "OD9-commit-records-removed-by-ending",
+      "file": "src/platform/commit_record.zig",
+      "from": "        if (own_dir.tagOf(entry.name, &.{ record_suffix, staged_suffix, staged_journal_suffix }) == null) continue;\n",
+      "to": "        if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.mem.endsWith(u8, entry.name, staged_suffix) and !std.mem.endsWith(u8, entry.name, staged_journal_suffix)) continue;\n",
+      "kills": [
+        "own dir: recover leaves a journal and a commit record it did not name, and reports the journal"
+      ]
+    },
+    {
+      "id": "OD11-shadow-workspace-not-held",
+      "file": "src/platform/shadow.zig",
+      "from": "    const held = try holdWorkspace(io, shadow_abs);\n",
+      "to": "    const held: ?own_dir.Held = null;\n",
+      "kills": [
+        "own dir: a shadow workspace that another handle holds alone is not cleaned"
+      ]
+    },
+    {
+      "id": "HK1-hook-keeps-the-blanks-before-the-command",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "    const typed = withoutLead(prompt);\n",
+      "to": "    const typed = if (false) withoutLead(prompt) else prompt;\n",
+      "kills": [
+        "prompt hook: blanks, line breaks and one byte order mark before /rule are dropped and the line is taken",
+        "prompt hook: a /rule line typed after a blank or a line break is answered and reaches the ledger"
+      ]
+    },
+    {
+      "id": "HK2-hook-keeps-a-byte-order-mark",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "    if (std.mem.startsWith(u8, rest, byte_order_mark)) rest = rest[byte_order_mark.len..];\n",
+      "to": "    if (false and std.mem.startsWith(u8, rest, byte_order_mark)) rest = rest[byte_order_mark.len..];\n",
+      "kills": [
+        "prompt hook: blanks, line breaks and one byte order mark before /rule are dropped and the line is taken"
+      ]
+    },
+    {
+      "id": "HK3-hook-drops-every-byte-order-mark",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "    if (std.mem.startsWith(u8, rest, byte_order_mark)) rest = rest[byte_order_mark.len..];\n",
+      "to": "    while (std.mem.startsWith(u8, rest, byte_order_mark)) rest = rest[byte_order_mark.len..];\n",
+      "kills": [
+        "prompt hook: a line that only resembles /rule is handed on, whatever stands before it"
+      ]
+    },
+    {
+      "id": "HK4-hook-keeps-blanks-after-a-byte-order-mark",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "    return std.mem.trimStart(u8, rest, whitespace);\n",
+      "to": "    return rest;\n",
+      "kills": [
+        "prompt hook: blanks, line breaks and one byte order mark before /rule are dropped and the line is taken"
+      ]
+    },
+    {
+      "id": "HK5-hook-counts-a-vertical-tab-as-a-blank",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "const whitespace = \" \\t\\r\\n\";\n",
+      "to": "const whitespace = \" \\t\\r\\n\\x0b\";\n",
+      "kills": [
+        "prompt hook: a line that only resembles /rule is handed on, whatever stands before it"
+      ]
+    },
+    {
+      "id": "VF1-verify-reads-the-stored-form-of-a-filtered-file",
+      "file": "src/platform/verify_run.zig",
+      "from": "        if (!try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;\n",
+      "to": "        if (true or !try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;\n",
+      "kills": [
+        "verify filtered: a commit whose stored form is not source is verified over what its filter checks out",
+        "verify filtered: without the filter that checks the file out the verdict is unverified by name, not mismatch",
+        "verify filtered: a filter that fails gives unverified by name for the receipt and the file, not mismatch",
+        "verify filtered: a rename under a filter is verified by the alpha hash of what the filter checks out",
+        "verify filtered: a rename whose files cannot be checked out is unverified by name, not mismatch"
+      ]
+    },
+    {
+      "id": "VF2-filtered-file-that-is-not-reproduced-is-called-a-mismatch",
+      "file": "src/verify/checker.zig",
+      "from": "        if (st.driven and (!st.known or !eqlOptional(st.digest, f.before))) {\n",
+      "to": "        if (false and st.driven and (!st.known or !eqlOptional(st.digest, f.before))) {\n",
+      "kills": [
+        "verify filtered: without the filter that checks the file out the verdict is unverified by name, not mismatch",
+        "verify filtered: a filter that fails gives unverified by name for the receipt and the file, not mismatch",
+        "verify filtered: a rename whose files cannot be checked out is unverified by name, not mismatch"
+      ]
+    },
+    {
+      "id": "VF3-missing-filter-output-after-the-change-is-not-named",
+      "file": "src/verify/checker.zig",
+      "from": "            if (!form.available) {\n",
+      "to": "            if (false and !form.available) {\n",
+      "kills": [
+        "verify filtered: a filter that fails gives unverified by name for the receipt and the file, not mismatch"
+      ]
+    },
+    {
+      "id": "VF4-absent-claim-trusted-when-the-file-cannot-be-checked-out",
+      "file": "src/verify/checker.zig",
+      "from": "        if (st.driven and (!st.known or !eqlOptional(st.digest, f.before))) {\n",
+      "to": "        if (st.driven and (!eqlOptional(st.digest, f.before))) {\n",
+      "kills": [
+        "verify filtered: a receipt that calls a filtered file absent is not taken on trust when the file cannot be checked out"
+      ]
+    },
+    {
+      "id": "VF5-symbols-hashed-over-a-form-the-receipt-did-not-measure",
+      "file": "src/verify/checker.zig",
+      "from": "            entry.before_known = false;\n",
+      "to": "",
+      "kills": [
+        "verify filtered: a working file its filter does not give back before the change leaves the change unverified, not mismatch"
+      ]
+    },
+    {
+      "id": "VF6-python-reads-the-stored-form-of-a-filtered-file",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "        if stored is None or not self.filtered(rev, path):\n",
+      "to": "        if True or stored is None or not self.filtered(rev, path):\n",
+      "kills": [
+        "verify filtered: a commit whose stored form is not source is verified over what its filter checks out"
+      ]
+    },
+    {
+      "id": "VM1-merge-commit-checked-as-an-ordinary-commit",
+      "file": "src/platform/verify_run.zig",
+      "from": "    if (parents.len > 1) return ",
+      "to": "    if (false and parents.len > 1) return ",
+      "kills": [
+        "verify merge: a merge commit that carries a hand edit is unverified and names the path",
+        "verify merge: a merge commit whose tree is what git merges from its two parents is merged, with its own exit code"
+      ]
+    },
+    {
+      "id": "VM2-more-than-two-parents-merged-as-two",
+      "file": "src/platform/verify_merge.zig",
+      "from": "    if (of.len != 2) return told(.unverified, many_parents);\n",
+      "to": "    if (false and of.len != 2) return told(.unverified, many_parents);\n",
+      "kills": [
+        "verify merge: a commit with three parents is unverified because what it adds cannot be told"
+      ]
+    },
+    {
+      "id": "VM3-merge-tree-not-compared-with-the-commit",
+      "file": "src/platform/verify_merge.zig",
+      "from": "    if (std.mem.eql(u8, tree, want)) return .same;\n",
+      "to": "    if (true or std.mem.eql(u8, tree, want)) return .same;\n",
+      "kills": [
+        "verify merge: a merge commit that carries a hand edit is unverified and names the path",
+        "verify merge: a hand edit made while two real sides are merged is named, and the repository's object store stays byte for byte",
+        "verify merge: a conflict resolved by hand is named, and the repository's object store stays byte for byte"
+      ]
+    },
+    {
+      "id": "VM4-merge-tree-written-into-the-repository",
+      "file": "src/platform/verify_merge.zig",
+      "from": "    try env.put(object_directory, scratch.dir_abs);\n",
+      "to": "    if (false) try env.put(object_directory, scratch.dir_abs);\n",
+      "kills": [
+        "verify merge: a hand edit made while two real sides are merged is named, and the repository's object store stays byte for byte",
+        "verify merge: a conflict resolved by hand is named, and the repository's object store stays byte for byte"
+      ]
+    },
+    {
+      "id": "VM5-conflicting-merge-not-compared",
+      "file": "src/platform/verify_merge.zig",
+      "from": "    if (merged.code != 0 and merged.code != 1) return null;\n",
+      "to": "    if (merged.code != 0) return null;\n",
+      "kills": [
+        "verify merge: a conflict resolved by hand is named, and the repository's object store stays byte for byte"
+      ]
+    },
+    {
+      "id": "VM6-work-directory-emptied-of-any-file",
+      "file": "src/platform/verify_merge.zig",
+      "from": "            if (entry.kind != .file or !objectName(entry.name)) continue;\n",
+      "to": "            if (entry.kind != .file) continue;\n",
+      "kills": [
+        "verify merge: the work directory is emptied of git's object files only"
+      ]
+    },
+    {
+      "id": "VM7-work-directory-emptied-under-any-two-letter-name",
+      "file": "src/platform/verify_merge.zig",
+      "from": "        if (entry.kind != .directory or entry.name.len != 2 or !lowerHex(entry.name)) continue;\n",
+      "to": "        if (entry.kind != .directory or entry.name.len != 2) continue;\n",
+      "kills": [
+        "verify merge: the work directory is emptied of git's object files only"
+      ]
+    },
+    {
+      "id": "VM8-python-checks-a-merge-as-an-ordinary-commit",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "    if len(parents) > 1:\n",
+      "to": "    if False and len(parents) > 1:\n",
+      "kills": [
+        "verify merge: a merge commit that carries a hand edit is unverified and names the path",
+        "verify merge: a merge commit whose tree is what git merges from its two parents is merged, with its own exit code"
+      ]
+    },
+    {
+      "id": "VM9-python-writes-the-merge-tree-into-the-repository",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "            env[\"GIT_OBJECT_DIRECTORY\"] = scratch\n",
+      "to": "",
+      "kills": [
+        "verify merge: a hand edit made while two real sides are merged is named, and the repository's object store stays byte for byte",
+        "verify merge: a conflict resolved by hand is named, and the repository's object store stays byte for byte"
       ]
     }
   ]
