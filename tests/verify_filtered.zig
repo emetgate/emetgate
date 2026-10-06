@@ -11,6 +11,7 @@ const telemetry = emetgate.telemetry;
 const receipts = emetgate.receipts;
 const verify_run = emetgate.verify_run;
 const checker = emetgate.checker;
+const jcs = emetgate.jcs;
 const Runtime = emetgate.runtime.Runtime;
 const Verdict = checker.Verdict;
 
@@ -24,6 +25,8 @@ const marker = "@@@ wrapped {{{";
 const green = "cmd /c exit 0";
 const keep_all = "printf '%s\\n' '" ++ marker ++ "'\ncat\n";
 const drop_padding = "printf '%s\\n' '" ++ marker ++ "'\nsed 's/ + 0//'\n";
+const padded_src = "export function add(a: number, b: number): number {\n  return a + b + 0;\n}\n";
+const padded_files = [_]fixture.File{ .{ .rel = "src/util.ts", .text = padded_src }, .{ .rel = ".gitignore", .text = ".emetgate/\n" } };
 const files = [_]fixture.File{ .{ .rel = "src/util.ts", .text = util_src }, .{ .rel = ".gitignore", .text = ".emetgate/\n" } };
 const local_src = "function add1(x: number): number {\n  return x + 1;\n}\nexport function twice(x: number): number {\n  return add1(add1(x));\n}\n";
 const local_files = [_]fixture.File{ .{ .rel = "src/local.ts", .text = local_src }, .{ .rel = ".gitignore", .text = ".emetgate/\n" } };
@@ -193,6 +196,50 @@ test "verify filtered: a filter that does not give back the file the gate tested
     try testing.expectEqual(Verdict.unverified, report.verdict);
     try testing.expectEqual(@as(usize, 1), report.files.len);
     try testing.expectEqual(Verdict.unverified, report.files[0].outcome.verdict);
+}
+
+test "verify filtered: a working file its filter does not give back before the change leaves the change unverified, not mismatch" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&padded_files);
+    defer case.deinit();
+    try case.wrap("src/util.ts", drop_padding);
+    try testing.expect(!contains(try case.git(&.{ "cat-file", "blob", "HEAD:src/util.ts" }), "+ 0"));
+    try case.swap();
+    try expectNotCheckedOut(try case.verify());
+}
+
+test "verify filtered: a receipt that calls a filtered file absent is not taken on trust when the file cannot be checked out" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    try case.wrap("src/util.ts", keep_all);
+    try case.repo.write(".gitattributes", "*.ts -text\n");
+    try case.call("emetgate_try", "src/util.ts", "add", "body", swapped_body);
+    _ = try case.git(&.{ "add", "-A" });
+    _ = try case.git(&.{ "commit", "-q", "-m", "gated, filter dropped" });
+    try testing.expect(!contains(try case.git(&.{ "cat-file", "blob", "HEAD:src/util.ts" }), marker));
+    try testing.expectEqual(@as(usize, 1), (try receipts.attach(testing.allocator, testing.io, case.repo.root_abs, "HEAD")).count);
+    {
+        const honest = try case.verify();
+        errdefer explain(honest);
+        try testing.expectEqual(Verdict.verified, honest.receipts[0].outcome.verdict);
+    }
+
+    const note = (try receipts.noteBytes(case.arena(), testing.io, case.repo.root_abs, "HEAD")).?;
+    const parsed = try jcs.parse(case.arena(), note);
+    const predicate = parsed.value.array.items[0].object.getPtr("predicate").?;
+    try predicate.object.getPtr("files").?.array.items[0].object.put(case.arena(), "before", .null);
+    try predicate.object.put(case.arena(), "symbols", .{ .array = std.json.Array.init(case.arena()) });
+    try case.repo.write(".git/forged-note", try jcs.canonicalize(case.arena(), parsed.value));
+    _ = try case.git(&.{ "notes", "--ref=emetgate", "add", "-f", "-F", try case.repo.abs(case.arena(), ".git/forged-note"), "HEAD" });
+    try case.failSmudge();
+
+    const report = try case.verify();
+    errdefer explain(report);
+    try testing.expectEqual(Verdict.unverified, report.receipts[0].outcome.verdict);
+    try testing.expectEqualStrings(checker.not_checked_out, report.receipts[0].outcome.reason);
 }
 
 test "verify filtered: a hand edit under the same filter is still unverified, as a control" {
