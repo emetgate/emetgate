@@ -256,7 +256,7 @@ test "redteam sandbox: an unavailable sandbox rejects the proposal and leaves th
     try expectOnlyTargetChanged(&victim, before, math_src);
 }
 
-test "redteam sandbox: the shadow lives under the operator's shadow root, outside the repository, flags a dot segment and is gone afterwards" {
+test "redteam sandbox: the shadow lives under the operator's shadow root, outside the repository, flags a dot segment and is gone afterwards under a full copy and holds only the tree when kept" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var victim = try Victim.init();
     defer victim.deinit();
@@ -265,7 +265,7 @@ test "redteam sandbox: the shadow lives under the operator's shadow root, outsid
     const file = try std.fmt.allocPrint(gpa, "{s}\\src\\math.ts", .{victim.root_abs});
     defer gpa.free(file);
 
-    for ([_]struct { dir: []const u8, dotted: bool }{ .{ .dir = "shadows", .dotted = false }, .{ .dir = ".dotted\\shadows", .dotted = true } }) |case| {
+    for ([_]shadow.TreeMode{ .full_copy, .kept }) |tree| for ([_]struct { dir: []const u8, dotted: bool }{ .{ .dir = "shadows", .dotted = false }, .{ .dir = ".dotted\\shadows", .dotted = true } }) |case| {
         const base = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ victim.top_abs, case.dir });
         defer gpa.free(base);
         const location = try shadow_root.locate(gpa, victim.root_abs, base);
@@ -279,6 +279,7 @@ test "redteam sandbox: the shadow lives under the operator's shadow root, outsid
             .new_body = "{\n  return a - b;\n}",
             .test_command = "cd & exit 1",
             .shadow_root = base,
+            .gate_tree = .{ .tree = tree },
             .trace = &trace,
         });
         defer result.deinit(gpa);
@@ -289,6 +290,19 @@ test "redteam sandbox: the shadow lives under the operator's shadow root, outsid
         try testing.expectEqual(location.dotted(), trace.shadow_dotted);
         if (case.dotted) try testing.expect(trace.shadow_dotted);
         try testing.expectEqual(@as(usize, 1), trace.linked_files);
-        try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, location.workspace, .{}));
-    }
+        if (tree == .full_copy) {
+            try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, location.workspace, .{}));
+        } else {
+            defer shadow.remove(testing.io, location.base, location.shadow) catch {};
+            var workspace = try std.Io.Dir.openDirAbsolute(testing.io, location.workspace, .{ .iterate = true });
+            defer workspace.close(testing.io);
+            var it = workspace.iterate();
+            var names: usize = 0;
+            while (try it.next(testing.io)) |entry| {
+                try testing.expect(std.mem.eql(u8, entry.name, shadow_root.marker_name) or std.mem.eql(u8, entry.name, "shadow"));
+                names += 1;
+            }
+            try testing.expectEqual(@as(usize, 2), names);
+        }
+    };
 }
