@@ -115,8 +115,8 @@ test "a lock override is refused before .mcp.json is looked up" {
     defer tmp.cleanup();
     var parent: std.process.Environ.Map = .init(testing.allocator);
     defer parent.deinit();
-    try testing.expectError(error.LockdownFlagOverride, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, &.{ "--tools", "default" }));
-    try testing.expectError(error.McpConfigMissing, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, &.{ "-p", "hi" }));
+    try testing.expectError(error.LockdownFlagOverride, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, "C:/tools/emetgate.exe", &.{ "--tools", "default" }));
+    try testing.expectError(error.McpConfigMissing, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
 }
 
 test "ordinary claude args pass through the lock" {
@@ -210,7 +210,7 @@ test "lockdown refuses a .mcp.json without exactly one emetgate server" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = "{\"mcpServers\":{\"docs\":{\"command\":\"node\",\"args\":[\"docs-server.js\"]}}}" });
     var parent: std.process.Environ.Map = .init(gpa);
     defer parent.deinit();
-    try testing.expectError(error.NoEmetgateServer, lockdown.launchIn(gpa, testing.io, tmp.dir, &parent, lockdown.claude_program, &.{ "-p", "hi" }));
+    try testing.expectError(error.NoEmetgateServer, lockdown.launchIn(gpa, testing.io, tmp.dir, &parent, lockdown.claude_program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
 }
 
 test "the child environment turns tool search off and keeps the rest" {
@@ -235,7 +235,10 @@ test "the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had"
     var parent = try testing.environ.createMap(testing.allocator);
     defer parent.deinit();
     try parent.put("ENABLE_TOOL_SEARCH", "true");
-    try testing.expectEqual(@as(u8, 7), try lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, program, &.{ "-p", "hi" }));
+    const local = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(local);
+    try parent.put("LOCALAPPDATA", local);
+    try testing.expectEqual(@as(u8, 7), try lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
 }
 
 test "lockdown refuses the bypassPermissions mode in both spellings" {
