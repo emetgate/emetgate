@@ -2,6 +2,7 @@ const std = @import("std");
 const ts = @import("../engine/tree_sitter.zig");
 const symbol = @import("../engine/symbol.zig");
 const checks = @import("../engine/checks.zig");
+const text_checks = @import("../engine/text_checks.zig");
 const query = @import("../engine/query.zig");
 const Profile = @import("../engine/lang/profile.zig").Profile;
 const memory = @import("memory.zig");
@@ -118,6 +119,40 @@ pub fn isAdded(rule: Rule) bool {
     return checks.addedOf(rule.check) != null;
 }
 
+pub fn isMessage(rule: Rule) bool {
+    return text_checks.of(rule.check) != null;
+}
+
+pub const message_label = "commit message";
+
+pub fn messageGate(gpa: Allocator, io: std.Io, root_abs: []const u8, message: []const u8) !Gate {
+    const enforced = try load(gpa, io, root_abs);
+    defer enforced.deinit();
+    return evaluateMessage(gpa, enforced.rules, message);
+}
+
+pub fn evaluateMessage(gpa: Allocator, rules: []const Rule, message: []const u8) !Gate {
+    var list: std.ArrayList(Violation) = .empty;
+    defer list.deinit(gpa);
+    defer for (list.items) |v| freeViolation(gpa, v);
+    for (rules) |rule| {
+        const inner = text_checks.of(rule.check) orelse continue;
+        const hits = try text_checks.run(gpa, inner, message);
+        defer gpa.free(hits);
+        for (hits) |hit| {
+            const start = position(message, @intCast(hit.start));
+            const end = position(message, @intCast(hit.end));
+            const owned = try ownViolation(gpa, rule, message_label, start, end, shown(message[hit.start..hit.end]));
+            list.append(gpa, owned) catch |err| {
+                freeViolation(gpa, owned);
+                return err;
+            };
+        }
+    }
+    if (list.items.len != 0) return .{ .violated = .{ .violations = try list.toOwnedSlice(gpa) } };
+    return .ok;
+}
+
 fn anyAdded(list: []const Rule) bool {
     for (list) |rule| {
         if (isAdded(rule)) return true;
@@ -190,6 +225,7 @@ pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile
     defer if (parser) |p| p.deinit();
 
     for (rules) |rule| {
+        if (isMessage(rule)) continue;
         var old_texts: std.ArrayList([]const u8) = .empty;
         defer old_texts.deinit(gpa);
         if (isAdded(rule)) {
@@ -348,6 +384,9 @@ pub fn adoptedFor(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
     errdefer list.deinit(gpa);
     for (recall.decisions) |decision| {
         if (decision.status != .active) continue;
+        if (decision.check) |spec| {
+            if (text_checks.of(spec) != null) continue;
+        }
         if (decision.where) |text| {
             const scope = try where_mod.parse(text);
             if (!scope.coversFile(rel)) continue;
@@ -904,3 +943,52 @@ test "a command rule is kept out of the ast gate, which would otherwise fail clo
     try testing.expect(!try covers(scoped[0], "src/a.ts", ref));
     try testing.expect(try covers(.{ .id = "command", .check = "cmd:exit 0" }, "src/a.ts", ref));
 }
+
+test "a message rule is kept out of the code gate, which would otherwise fail closed on it" {
+    const source = "function f() { /* forbid me */ }\n";
+    const report = try evaluateSource(source, .{ .start = 0, .end = 32 }, &.{
+        .{ .id = "message", .check = "message:forbid:forbid me" },
+    });
+    try testing.expectEqual(@as(?Report, null), report);
+    try testing.expect(isMessage(.{ .id = "m", .check = "message:max_lines:1" }));
+    try testing.expect(!isMessage(.{ .id = "c", .check = "forbid:x" }));
+    try testing.expect(!isMessage(.{ .id = "a", .check = "added:no_comment" }));
+}
+
+test "a commit message is judged only by the message rules, and each violation carries its rule and place" {
+    const all = [_]Rule{
+        .{ .id = "code", .check = "forbid:Signed-off-by" },
+        .{ .id = "one-line", .check = "message:max_lines:1" },
+        .{ .id = "no-wip", .check = "message:forbid:WIP" },
+    };
+    const clean = try evaluateMessage(testing.allocator, &all, "fix: Signed-off-by is only a word here");
+    try testing.expect(clean == .ok);
+
+    const gated = try evaluateMessage(testing.allocator, &all, "WIP: half\n\nbody");
+    const report = (try reportOf(gated)).?;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), report.violations.len);
+    try testing.expectEqualStrings("one-line", report.violations[0].rule);
+    try testing.expectEqualStrings("message:max_lines:1", report.violations[0].check);
+    try testing.expectEqualStrings(message_label, report.violations[0].file);
+    try testing.expectEqual(@as(u32, 2), report.violations[0].line);
+    try testing.expectEqualStrings("\nbody", report.violations[0].text);
+    try testing.expectEqualStrings("no-wip", report.violations[1].rule);
+    try testing.expectEqual(@as(u32, 1), report.violations[1].line);
+    try testing.expectEqual(@as(u32, 1), report.violations[1].col);
+    try testing.expectEqual(@as(u32, 4), report.violations[1].end_col);
+    try testing.expectEqualStrings("WIP", report.violations[1].text);
+}
+
+test "a missing required text is reported at the start of the message" {
+    const all = [_]Rule{.{ .id = "dco", .check = "message:require:Signed-off-by:" }};
+    const gated = try evaluateMessage(testing.allocator, &all, "fix: one");
+    const report = (try reportOf(gated)).?;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    try testing.expectEqual(@as(u32, 1), report.violations[0].line);
+    try testing.expectEqual(@as(u32, 1), report.violations[0].col);
+    try testing.expectEqualStrings("", report.violations[0].text);
+    try testing.expect(try evaluateMessage(testing.allocator, &all, "fix: one\n\nSigned-off-by: A <a@example.com>") == .ok);
+}
+

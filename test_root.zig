@@ -95,6 +95,7 @@ pub const checker = src.checker;
 pub const runner = src.runner;
 pub const run_command = src.run_command;
 pub const commit_message = src.commit_message;
+pub const text_checks = src.text_checks;
 pub const batch_plan = src.batch_plan;
 pub const doc_writer = src.doc_writer;
 pub const rules = src.rules;

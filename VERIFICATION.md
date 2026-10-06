@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1392**
-- Mutations declared in `tests/mutations.json`: **872**
-  - killed: **842**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1412**
+- Mutations declared in `tests/mutations.json`: **886**
+  - killed: **856**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -47,7 +47,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-118 mutation(s).
+119 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -169,6 +169,7 @@ python tools/verification_page.py --check
 | `CR1-create-ignores-declarations` | `src/engine/cas.zig` | `for (table.declarations) \|candidate\| {         if (candidate....` -> `` | insert and create accept a variable, class, interface, type alias or enum as th...; creat... | killed |
 | `CR2-existing-declaration-overwritten` | `src/engine/cas.zig` | `if (before.hasDeclaration(insertion.ref)) return error.SymbolEx...` -> `` | insert and create accept a variable, class, interface, type alias or enum as th... | killed |
 | `AD4-added-accepts-a-command` | `src/engine/checks.zig` | `if (commandOf(inner) != null) return error.CommandCheckNotStati...` -> `if (commandOf(inner) != null) return;` | a static-only caller refuses a command check by its own name | killed |
+| `MR3-added-wraps-a-message-check` | `src/engine/checks.zig` | `if (text_checks.of(inner) != null) return error.UnknownCheck;` -> `` | rule: a message check is adopted, and a bad one or one with --in is refused and... | killed |
 
 ### Sandbox and the test/typecheck gate
 
@@ -318,7 +319,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-101 mutation(s).
+107 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -371,7 +372,7 @@ python tools/verification_page.py --check
 | `CMD6-crash-counted-as-a-violation` | `src/platform/rules.zig` | `.crashed, .timed_out, .output_limit => .crashed,     }; }  pub ...` -> `.crashed => .violated,         .timed_out, .output_limit => .cr...` | a command verdict has three outcomes: pass, violation, and no verdict at all; cmd rule: a... | killed |
 | `CMD8-command-not-found-called-a-violation` | `src/platform/rules.zig` | `if (!try resolvable(gpa, io, options.shadow_abs, head))` -> `if (false and !try resolvable(gpa, io, options.shadow_abs, head...` | cmd rule: a command that does not exist is not a verdict either | killed |
 | `RO4-skeleton-shows-rules-scoped-elsewhere` | `src/platform/rules.zig` | `if (!scope.coversFile(rel)) continue;` -> `if (!scope.coversFile(rel) and false) continue;` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
-| `RO5-skeleton-shows-forgotten-rules` | `src/platform/rules.zig` | `if (decision.status != .active) continue;         if (decision....` -> `if (decision.where) \|text\| {` | memory.peek already folds the ledger down to active decisions, so the status guard in ado... | defense in depth |
+| `RO5-skeleton-shows-forgotten-rules` | `src/platform/rules.zig` | `if (decision.status != .active) continue;         if (decision....` -> `if (decision.check) \|spec\| {` | memory.peek already folds the ledger down to active decisions, so the status guard in ado... | defense in depth |
 | `RM1-gate-skips-the-ledger-trust-check` | `src/platform/rules.zig` | `if (try ledgerTracked(gpa, io, root_abs)) return error.Untruste...` -> `` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep...; redte... | killed |
 | `RM2-trust-check-pathspec-case-sensitive` | `src/platform/rules.zig` | `":(icase,literal)"` -> `":(literal)"` | redteam ledger: a committed ledger spelled in another case is still untrusted | killed |
 | `RM3-ledger-listing-compared-case-sensitively` | `src/platform/rules.zig` | `std.ascii.eqlIgnoreCase(entry, ledger_rel)` -> `std.mem.eql(u8, entry, ledger_rel)` | a tracked ledger, under any spelling or as a tracked workspace entry, is recogn...; redte... | killed |
@@ -423,6 +424,12 @@ python tools/verification_page.py --check
 | `AD1-added-counts-what-was-there` | `src/platform/rules.zig` | `if (isAdded(rule) and takeText(&old_texts, tree.source[hit.span...` -> `if (isAdded(rule) and false) continue;` | an added rule counts only what the change adds: a kept comment passes and a new... | killed |
 | `AD2-added-masked-by-a-copy-elsewhere` | `src/platform/rules.zig` | `_ = takeText(&old_texts, tree.source[hit.span.start..hit.span.e...` -> `_ = tree.source[hit.span.start..hit.span.end];` | an added rule counts copies: a second copy of a text that the file already hold... | killed |
 | `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = old orelse "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
+| `CP1-message-accepted-with-commits-off` | `src/protocol/policy.zig` | `if (given != null) return error.CommitNotEnabled;` -> `if (given != null) return null;` | commit policy: with commits off a call without a message passes and a call with... | killed |
+| `CP2-missing-message-accepted-with-commits-on` | `src/protocol/policy.zig` | `const value = given orelse return error.MissingCommitMessage;` -> `const value = given orelse return null;` | commit policy: with commits on every call needs a message, and the message is c... | killed |
+| `CP3-commit-message-not-checked` | `src/protocol/policy.zig` | `try commit_message.check(value.string);` -> `` | commit policy: with commits on every call needs a message, and the message is c... | killed |
+| `MR1-message-rule-reaches-the-code-gate` | `src/platform/rules.zig` | `if (isMessage(rule)) continue;` -> `` | a message rule is kept out of the code gate, which would otherwise fail closed ... | killed |
+| `MR4-message-rule-takes-a-scope` | `src/protocol/rule_command.zig` | `if (text_checks.of(spec) != null and decided.where != null) ret...` -> `` | rule: a message check is adopted, and a bad one or one with --in is refused and... | killed |
+| `MR7-skeleton-lists-message-rules` | `src/platform/rules.zig` | `if (text_checks.of(spec) != null) continue;` -> `` | rule: a message rule covers no file, so the skeleton does not list it | killed |
 
 ### Scan
 
@@ -560,7 +567,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-408 mutation(s).
+415 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -972,6 +979,13 @@ python tools/verification_page.py --check
 | `MB1-bound-from-any-file` | `src/protocol/map_tools.zig` | `if (f.file != s.file) continue;` -> `if (f.file != s.file and false) continue;` | map tools: explore adds a small definition of the same file that the sent code ... | killed |
 | `MB2-small-definitions-not-bound` | `src/protocol/map_tools.zig` | `if (!worthSending(size, mentionChance(m.count), call_chars) or ...` -> `if (worthSending(size, mentionChance(m.count), call_chars) or u...` | map tools: explore adds a small definition of the same file that the sent code ... | killed |
 | `MB3-mention-chance-flat` | `src/protocol/map_tools.zig` | `while (i < mention_count.len and count >= mention_count[i]) i +...` -> `while (i < mention_count.len and count < mention_count[i]) i +=...` | map tools: identifiers of three or more characters are counted and a name used ... | killed |
+| `CM1-blank-commit-message-accepted` | `src/platform/commit_message.zig` | `return error.CommitMessageEmpty;` -> `return;` | commit message: an empty or blank message is refused | killed |
+| `CM2-oversized-commit-message-accepted` | `src/platform/commit_message.zig` | `return error.CommitMessageTooLong;` -> `return;` | commit message: a message over the byte limit is refused and one at the limit p... | killed |
+| `CM3-nul-in-commit-message-accepted` | `src/platform/commit_message.zig` | `return error.CommitMessageNul;` -> `return;` | commit message: a NUL byte is refused | killed |
+| `CM4-non-utf8-commit-message-accepted` | `src/platform/commit_message.zig` | `return error.CommitMessageNotUtf8;` -> `return;` | commit message: bytes that are not UTF-8 are refused | killed |
+| `MR2-message-prefix-not-recognized` | `src/engine/text_checks.zig` | `if (!std.mem.startsWith(u8, spec, prefix)) return null;` -> `if (std.mem.startsWith(u8, spec, prefix)) return null;` | text checks: the message prefix marks a rule that judges a commit message | killed |
+| `MR5-zero-limit-accepted` | `src/engine/text_checks.zig` | `if (limit == 0) return error.UnexpectedCheckArgument;` -> `` | text checks: an unknown name, a missing or empty argument and a bad number are ... | killed |
+| `MR6-empty-text-argument-accepted` | `src/engine/text_checks.zig` | `if (arg.len == 0) return error.EmptyCheckArgument;` -> `` | text checks: an unknown name, a missing or empty argument and a bad number are ... | killed |
 
 ## What this system does not prove
 

@@ -1032,7 +1032,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.WrittenButNotIndexed => 30,
         error.ScopeUnresolved => 31,
         error.NothingInScope => 32,
-        error.EnforceWithoutCheck => 33,
+        error.EnforceWithoutCheck, error.MessageRuleWithScope => 33,
         error.InvalidDecision => 34,
         error.DecisionNotActive => 35,
         error.MemoryBusy => 36,

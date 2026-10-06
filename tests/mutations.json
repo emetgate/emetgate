@@ -3495,8 +3495,8 @@
     {
       "id": "RO5-skeleton-shows-forgotten-rules",
       "file": "src/platform/rules.zig",
-      "from": "        if (decision.status != .active) continue;\n        if (decision.where) |text| {",
-      "to": "        if (decision.where) |text| {",
+      "from": "        if (decision.status != .active) continue;\n        if (decision.check) |spec| {",
+      "to": "        if (decision.check) |spec| {",
       "expect_status": "survived",
       "filter": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
@@ -8604,6 +8604,146 @@
         "a static-only caller refuses a command check by its own name"
       ],
       "note": "a rule could be adopted whose added form wraps a command, which has no before and after to compare"
+    },
+    {
+      "id": "CM1-blank-commit-message-accepted",
+      "file": "src/platform/commit_message.zig",
+      "from": "return error.CommitMessageEmpty;",
+      "to": "return;",
+      "kills": [
+        "commit message: an empty or blank message is refused"
+      ],
+      "note": "a write could be recorded under a commit with no subject"
+    },
+    {
+      "id": "CM2-oversized-commit-message-accepted",
+      "file": "src/platform/commit_message.zig",
+      "from": "return error.CommitMessageTooLong;",
+      "to": "return;",
+      "kills": [
+        "commit message: a message over the byte limit is refused and one at the limit passes"
+      ],
+      "note": "the message a model sends would have no size bound"
+    },
+    {
+      "id": "CM3-nul-in-commit-message-accepted",
+      "file": "src/platform/commit_message.zig",
+      "from": "return error.CommitMessageNul;",
+      "to": "return;",
+      "kills": [
+        "commit message: a NUL byte is refused"
+      ],
+      "note": "git cuts a message at a NUL byte, so the stored message would differ from the checked one"
+    },
+    {
+      "id": "CM4-non-utf8-commit-message-accepted",
+      "file": "src/platform/commit_message.zig",
+      "from": "return error.CommitMessageNotUtf8;",
+      "to": "return;",
+      "kills": [
+        "commit message: bytes that are not UTF-8 are refused"
+      ],
+      "note": "the character counts of the message rules assume valid UTF-8"
+    },
+    {
+      "id": "CP1-message-accepted-with-commits-off",
+      "file": "src/protocol/policy.zig",
+      "from": "        if (given != null) return error.CommitNotEnabled;",
+      "to": "        if (given != null) return null;",
+      "kills": [
+        "commit policy: with commits off a call without a message passes and a call with one is refused"
+      ],
+      "note": "a message the operator did not ask for would be dropped without a word"
+    },
+    {
+      "id": "CP2-missing-message-accepted-with-commits-on",
+      "file": "src/protocol/policy.zig",
+      "from": "    const value = given orelse return error.MissingCommitMessage;",
+      "to": "    const value = given orelse return null;",
+      "kills": [
+        "commit policy: with commits on every call needs a message, and the message is checked"
+      ],
+      "note": "a write would reach disk without the commit the operator turned on"
+    },
+    {
+      "id": "CP3-commit-message-not-checked",
+      "file": "src/protocol/policy.zig",
+      "from": "    try commit_message.check(value.string);\n",
+      "to": "",
+      "kills": [
+        "commit policy: with commits on every call needs a message, and the message is checked"
+      ],
+      "note": "a blank or malformed message would reach git"
+    },
+    {
+      "id": "MR1-message-rule-reaches-the-code-gate",
+      "file": "src/platform/rules.zig",
+      "from": "        if (isMessage(rule)) continue;\n",
+      "to": "",
+      "kills": [
+        "a message rule is kept out of the code gate, which would otherwise fail closed on it"
+      ],
+      "note": "every edit would be refused with UnknownCheck once a message rule is adopted"
+    },
+    {
+      "id": "MR2-message-prefix-not-recognized",
+      "file": "src/engine/text_checks.zig",
+      "from": "    if (!std.mem.startsWith(u8, spec, prefix)) return null;",
+      "to": "    if (std.mem.startsWith(u8, spec, prefix)) return null;",
+      "kills": [
+        "text checks: the message prefix marks a rule that judges a commit message"
+      ],
+      "note": "no rule would be seen as a message rule, so none would judge a commit message"
+    },
+    {
+      "id": "MR3-added-wraps-a-message-check",
+      "file": "src/engine/checks.zig",
+      "from": "        if (text_checks.of(inner) != null) return error.UnknownCheck;\n",
+      "to": "",
+      "kills": [
+        "rule: a message check is adopted, and a bad one or one with --in is refused and writes nothing"
+      ],
+      "note": "a commit message has no before and after, so an added message rule could never be measured"
+    },
+    {
+      "id": "MR4-message-rule-takes-a-scope",
+      "file": "src/protocol/rule_command.zig",
+      "from": "        if (text_checks.of(spec) != null and decided.where != null) return error.MessageRuleWithScope;\n",
+      "to": "",
+      "kills": [
+        "rule: a message check is adopted, and a bad one or one with --in is refused and writes nothing"
+      ],
+      "note": "a scope on a message rule would be stored and silently ignored"
+    },
+    {
+      "id": "MR5-zero-limit-accepted",
+      "file": "src/engine/text_checks.zig",
+      "from": "    if (limit == 0) return error.UnexpectedCheckArgument;\n",
+      "to": "",
+      "kills": [
+        "text checks: an unknown name, a missing or empty argument and a bad number are refused"
+      ],
+      "note": "a limit of zero would refuse every message"
+    },
+    {
+      "id": "MR6-empty-text-argument-accepted",
+      "file": "src/engine/text_checks.zig",
+      "from": "    if (arg.len == 0) return error.EmptyCheckArgument;\n",
+      "to": "",
+      "kills": [
+        "text checks: an unknown name, a missing or empty argument and a bad number are refused"
+      ],
+      "note": "an empty forbidden text matches at every position and never ends the scan"
+    },
+    {
+      "id": "MR7-skeleton-lists-message-rules",
+      "file": "src/platform/rules.zig",
+      "from": "            if (text_checks.of(spec) != null) continue;\n",
+      "to": "",
+      "kills": [
+        "rule: a message rule covers no file, so the skeleton does not list it"
+      ],
+      "note": "every skeleton would carry rules that say nothing about the file"
     }
   ]
 }

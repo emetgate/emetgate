@@ -7,6 +7,7 @@ const Profile = profile_mod.Profile;
 const isOneOf = @import("functions.zig").isOneOf;
 const query = @import("query.zig");
 const lang = @import("lang/registry.zig");
+const text_checks = @import("text_checks.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -93,9 +94,11 @@ pub fn validate(gpa: Allocator, spec: []const u8) Error!void {
 
 pub fn validateStatic(gpa: Allocator, spec: []const u8) Error!void {
     if (commandOf(spec) != null) return error.CommandCheckNotStatic;
+    if (text_checks.of(spec)) |inner| return text_checks.validate(inner);
     if (addedOf(spec)) |inner| {
         if (commandOf(inner) != null) return error.CommandCheckNotStatic;
         if (addedOf(inner) != null) return error.UnknownCheck;
+        if (text_checks.of(inner) != null) return error.UnknownCheck;
         return validateStatic(gpa, inner);
     }
     const resolved = try resolve(&registry, spec);
