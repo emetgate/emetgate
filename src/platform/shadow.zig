@@ -554,6 +554,15 @@ test "prepare copies tracked files, rebuilds heavy directories as hardlink trees
     try testing.expectEqual(link_tree.Stats{ .dirs = 2, .linked = 1 }, shadow.link_stats);
 }
 
+test "a tracked file that is missing from the working tree fails the whole shadow" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    try project.tmp.dir.deleteFile(testing.io, "project/src/b.ts");
+
+    try testing.expectError(error.FileNotFound, Shadow.prepare(testing.io, try project.options()));
+}
+
 test "writing into the shadow never touches the project" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var project = try Project.init();
