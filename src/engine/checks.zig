@@ -49,6 +49,10 @@ pub fn commandOf(spec: []const u8) ?[]const u8 {
     return spec[command_prefix.len..];
 }
 
+pub fn messageCommandOf(spec: []const u8) ?[]const u8 {
+    return commandOf(text_checks.of(spec) orelse return null);
+}
+
 pub fn validateCommand(command: []const u8) Error!void {
     if (std.mem.trim(u8, command, command_whitespace).len == 0) return error.EmptyCommandCheck;
     if (command.len > max_command_bytes) return error.CommandCheckTooLong;
@@ -94,6 +98,7 @@ pub fn validate(gpa: Allocator, spec: []const u8) Error!void {
 
 pub fn validateStatic(gpa: Allocator, spec: []const u8) Error!void {
     if (commandOf(spec) != null) return error.CommandCheckNotStatic;
+    if (messageCommandOf(spec)) |command| return validateCommand(command);
     if (text_checks.of(spec)) |inner| return text_checks.validate(inner);
     if (addedOf(spec)) |inner| {
         if (commandOf(inner) != null) return error.CommandCheckNotStatic;
@@ -585,6 +590,18 @@ test "only a cmd: prefix names a command predicate, and every other spec stays a
     try testing.expect(commandOf("Cmd:x") == null);
     try testing.expect(commandOf("cmd") == null);
     try testing.expect(commandOf("xcmd:x") == null);
+}
+
+test "a message command is a command behind the message prefix, validated for shape and never looked up as a text check" {
+    try testing.expectEqualStrings("npx commitlint", messageCommandOf("message:cmd:npx commitlint").?);
+    try testing.expect(messageCommandOf("cmd:npx commitlint") == null);
+    try testing.expect(messageCommandOf("message:forbid:cmd:x") == null);
+    try testing.expect(messageCommandOf("added:message:cmd:x") == null);
+    try validate(testing.allocator, "message:cmd:npx commitlint");
+    try validateStatic(testing.allocator, "message:cmd:npx commitlint");
+    try testing.expectError(error.EmptyCommandCheck, validate(testing.allocator, "message:cmd: "));
+    try testing.expectError(error.CommandCheckTooLong, validate(testing.allocator, "message:cmd:" ++ "a" ** (max_command_bytes + 1)));
+    try testing.expectError(error.UnknownCheck, validate(testing.allocator, "added:message:cmd:x"));
 }
 
 test "an unknown check name is still refused instead of being run as a command" {

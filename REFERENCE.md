@@ -336,6 +336,17 @@ emetgate rule add "short subject" --check message:max_subject:72 --enforce
 
 A message rule takes no `--in` scope (`MessageRuleWithScope`) and no `added:` form. It is not listed in a file's skeleton and `emetgate scan` reports nothing for it. A violation comes back as `rule_violation` with the rule id, the check, the line and column in the message and the text, before any test runs.
 
+`message:cmd:<command line>` hands the message to a checker of your own. The message is written, as git will store it, to the file `.emetgate\COMMIT_EDITMSG` in the shadow copy, and the command runs there like any `cmd:` rule: same sandbox, same limits, same outcomes table, the shadow copy as its working directory. The command names that file itself, as an argument or redirected to standard input. That is the contract of git's own `commit-msg` hook, which passes the path of the message file, and both forms below are the ones the two tools document:
+
+```
+emetgate rule add "gitlint" --check "message:cmd:gitlint --msg-filename .emetgate\COMMIT_EDITMSG" --enforce
+emetgate rule add "commitlint" --check "message:cmd:npx commitlint < .emetgate\COMMIT_EDITMSG" --enforce
+```
+
+commitlint's `--edit <file>` resolves the path against the git top-level it finds above its working directory, which from a shadow copy is not the shadow copy; its standard input has no such step. Neither line above is run by emetgate's own tests, which use `findstr` in both forms.
+
+A message command runs with the other command rules, after the text rules and the repository checks and before the typecheck and the tests, and the file is removed before those start. Exit code 0 passes; any other exit is a `rule_violation` whose text is what the command printed, with no position; a command that cannot run is `rule_check_crashed`. A command from a ledger committed to the repository does not run without `--allow-repo-memory` (`UntrustedRepoMemory`), exactly as a `cmd:` rule. Without `--commit` there is no message and the command does not run. A repository that tracks a file at `.emetgate\COMMIT_EDITMSG` is refused (`MessageFileInTheWay`). Today the message reaches the command on `emetgate_try` on a symbol and on `emetgate_write_doc`.
+
 ### Rules are readable by the model, never writable
 
 `emetgate_skeleton` returns, beside the outline, every adopted rule that covers that file:

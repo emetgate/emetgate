@@ -11,6 +11,7 @@ const sandbox = @import("sandbox.zig");
 const where_mod = @import("where.zig");
 const repo = @import("repo.zig");
 const exe_path = @import("exe_path.zig");
+const commit_message = @import("commit_message.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -141,6 +142,7 @@ pub fn evaluateMessage(gpa: Allocator, rules: []const Rule, message: []const u8)
     defer for (list.items) |v| freeViolation(gpa, v);
     for (rules) |rule| {
         const inner = text_checks.of(rule.check) orelse continue;
+        if (checks.commandOf(inner) != null) continue;
         const hits = try text_checks.run(gpa, inner, message);
         defer gpa.free(hits);
         for (hits) |hit| {
@@ -444,6 +446,49 @@ pub const CommandOptions = struct {
     shadow_abs: []const u8,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
+    message: ?[]const u8 = null,
+};
+
+pub const message_file = shadow.workspace_dir ++ "\\COMMIT_EDITMSG";
+
+const MessageFile = struct {
+    dir_abs: []u8,
+    file_abs: []u8,
+    made_dir: bool,
+
+    fn stage(gpa: Allocator, io: std.Io, shadow_abs: []const u8, message: []const u8) !MessageFile {
+        const dir_abs = try std.fs.path.join(gpa, &.{ shadow_abs, shadow.workspace_dir });
+        errdefer gpa.free(dir_abs);
+        const file_abs = try std.fs.path.join(gpa, &.{ shadow_abs, message_file });
+        errdefer gpa.free(file_abs);
+        const made_dir = if (std.Io.Dir.cwd().access(io, dir_abs, .{})) |_| false else |err| switch (err) {
+            error.FileNotFound => true,
+            else => |e| return e,
+        };
+        if (made_dir) try std.Io.Dir.cwd().createDirPath(io, dir_abs);
+        if (std.Io.Dir.cwd().access(io, file_abs, .{})) |_| return error.MessageFileInTheWay else |err| switch (err) {
+            error.FileNotFound => {},
+            else => |e| return e,
+        }
+        const stored = try commit_message.stored(gpa, message);
+        defer gpa.free(stored);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_abs, .data = stored });
+        return .{ .dir_abs = dir_abs, .file_abs = file_abs, .made_dir = made_dir };
+    }
+
+    fn remove(self: MessageFile, io: std.Io) !void {
+        try std.Io.Dir.deleteFileAbsolute(io, self.file_abs);
+        if (!self.made_dir) return;
+        std.Io.Dir.cwd().deleteDir(io, self.dir_abs) catch |err| switch (err) {
+            error.DirNotEmpty => {},
+            else => |e| return e,
+        };
+    }
+
+    fn deinit(self: MessageFile, gpa: Allocator) void {
+        gpa.free(self.dir_abs);
+        gpa.free(self.file_abs);
+    }
 };
 
 pub const ledger_pathspec = ":(icase,literal)" ++ shadow.workspace_dir;
@@ -563,18 +608,47 @@ pub fn resolvable(gpa: Allocator, io: std.Io, cwd: []const u8, head: []const u8)
 pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const Target, options: CommandOptions) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
+    var staged: ?MessageFile = null;
+    defer if (staged) |file| file.deinit(gpa);
+    const gated = commandRules(gpa, io, root_abs, enforced.rules, targets, options, &staged);
+    if (staged) |file| file.remove(io) catch |err| {
+        if (gated) |verdict| verdict.deinit(gpa) else |_| {}
+        return err;
+    };
+    return gated;
+}
+
+fn commandRules(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []const Rule, targets: []const Target, options: CommandOptions, staged: *?MessageFile) !Gate {
     var trusted = options.allow_repo_memory;
-    for (enforced.rules) |rule| {
-        if (!isCommand(rule)) continue;
-        const scoped = try firstCovered(rule, targets) orelse continue;
+    for (list) |rule| {
+        const due = try commandDue(rule, targets, options.message) orelse continue;
         if (!trusted) {
             if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
             trusted = true;
         }
-        const gated = try runCommandRule(gpa, io, rule, scoped, options);
+        if (due.message) |message| {
+            if (staged.* == null) staged.* = try MessageFile.stage(gpa, io, options.shadow_abs, message);
+        }
+        const gated = try runCommandRule(gpa, io, rule, due.command, due.file, options);
         if (gated != .ok) return gated;
     }
     return .ok;
+}
+
+const Due = struct {
+    command: []const u8,
+    file: []const u8,
+    message: ?[]const u8 = null,
+};
+
+fn commandDue(rule: Rule, targets: []const Target, message: ?[]const u8) !?Due {
+    if (checks.messageCommandOf(rule.check)) |command| {
+        const text = message orelse return null;
+        return .{ .command = command, .file = message_label, .message = text };
+    }
+    const command = checks.commandOf(rule.check) orelse return null;
+    const scoped = try firstCovered(rule, targets) orelse return null;
+    return .{ .command = command, .file = scoped };
 }
 
 fn firstCovered(rule: Rule, targets: []const Target) !?[]const u8 {
@@ -584,8 +658,7 @@ fn firstCovered(rule: Rule, targets: []const Target) !?[]const u8 {
     return null;
 }
 
-fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, file: []const u8, options: CommandOptions) !Gate {
-    const command = checks.commandOf(rule.check).?;
+fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, command: []const u8, file: []const u8, options: CommandOptions) !Gate {
     checks.validateCommand(command) catch return failedGate(gpa, rule, file, "malformed", "");
 
     const head = commandHead(command);
@@ -980,6 +1053,21 @@ test "a commit message is judged only by the message rules, and each violation c
     try testing.expectEqual(@as(u32, 1), report.violations[1].col);
     try testing.expectEqual(@as(u32, 4), report.violations[1].end_col);
     try testing.expectEqualStrings("WIP", report.violations[1].text);
+}
+
+test "a message command is left to the command gate: the text rules pass over it and it is due only when there is a message" {
+    const all = [_]Rule{
+        .{ .id = "lint", .check = "message:cmd:exit 1" },
+        .{ .id = "code", .check = "cmd:exit 1", .where = "src/other.ts" },
+    };
+    try testing.expect(try evaluateMessage(testing.allocator, &all, "fix: one") == .ok);
+
+    try testing.expectEqual(@as(?Due, null), try commandDue(all[0], &.{}, null));
+    const due = (try commandDue(all[0], &.{}, "fix: one")) orelse return error.TestExpectedDue;
+    try testing.expectEqualStrings("exit 1", due.command);
+    try testing.expectEqualStrings(message_label, due.file);
+    try testing.expectEqualStrings("fix: one", due.message.?);
+    try testing.expectEqual(@as(?Due, null), try commandDue(all[1], &.{}, "fix: one"));
 }
 
 test "a missing required text is reported at the start of the message" {

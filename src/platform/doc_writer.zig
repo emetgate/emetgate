@@ -108,7 +108,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     }
     try workspace.writeFile(rel, applied.source);
 
-    if (try runner.runCommandRules(gpa, io, root, location.shadow, &.{}, options.limits, options.allow_repo_memory)) |gated| {
+    if (try runner.runCommandRulesFor(gpa, io, root, location.shadow, &.{}, runner.messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| {
         return switch (gated) {
             .rule_violation => |report| .{ .rule_violation = report },
             .rule_check_failed => |failure| .{ .rule_check_failed = failure },

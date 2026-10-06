@@ -105,7 +105,7 @@ test "commit write_doc: an accepted write is one commit with the given message a
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(!reply.is_error);
     try testing.expectEqualStrings("committed", reply.value.object.get("status").?.string);
-    const commit = reply.value.object.get("commit").?.string;
+    const commit = (reply.value.object.get("commit") orelse return error.TestExpectedCommit).string;
 
     try testing.expectEqualStrings(commit, try case.git(&.{ "rev-parse", "HEAD" }));
     try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD^" }));
@@ -143,7 +143,7 @@ test "commit write_doc: a message that breaks a message rule is refused with the
     const reply = try case.writeBuild("build: typecheck\n\nA body.", committing);
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(reply.is_error);
-    try testing.expectEqualStrings("rule_violation", reply.value.object.get("reason").?.string);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"reason\":\"rule_violation\"") != null);
     try testing.expect(std.mem.indexOf(u8, reply.text, id) != null);
     try case.expectUntouched(before);
 

@@ -3402,8 +3402,8 @@
     {
       "id": "CMD3-command-cwd-is-the-real-repo",
       "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRules(gpa, io, root, location.shadow, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
-      "to": "if (try runCommandRules(gpa, io, root, root, targets, options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "from": "if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "to": "if (try runCommandRulesFor(gpa, io, root, root, targets, messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| return gated;",
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
       ]
@@ -3604,8 +3604,8 @@
     {
       "id": "RM10-command-gate-forces-trust",
       "file": "src/platform/runner.zig",
-      "from": ".allow_repo_memory = allow_repo_memory });",
-      "to": ".allow_repo_memory = allow_repo_memory or true });",
+      "from": ".allow_repo_memory = allow_repo_memory, .message = message });",
+      "to": ".allow_repo_memory = allow_repo_memory or true, .message = message });",
       "kills": [
         "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -8878,6 +8878,154 @@
         "commit on write: a write tool that cannot commit yet refuses while commits are on"
       ],
       "note": "a tool that cannot commit would write to the tree and leave work outside any commit"
+    },
+    {
+      "id": "DC1-write-doc-message-rules-skipped",
+      "file": "src/platform/doc_writer.zig",
+      "from": "            .violated => |report| return .{ .rule_violation = report },\n",
+      "to": "            .violated => |report| report.deinit(gpa),\n",
+      "kills": [
+        "commit write_doc: a message that breaks a message rule is refused with the rule, and nothing is written"
+      ],
+      "note": "a write_doc commit would carry a message the message rules refuse"
+    },
+    {
+      "id": "DC2-write-doc-commits-the-old-bytes",
+      "file": "src/platform/doc_writer.zig",
+      "from": ".content = applied.source }};",
+      "to": ".content = source }};",
+      "kills": [
+        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
+      ],
+      "note": "the commit would not hold the bytes the gate tested"
+    },
+    {
+      "id": "DC3-write-doc-written-but-not-published",
+      "file": "src/platform/doc_writer.zig",
+      "from": "                try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);\n",
+      "to": "",
+      "kills": [
+        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
+      ],
+      "note": "the file would be written and the branch left where it was"
+    },
+    {
+      "id": "DC4-write-doc-handler-drops-the-commit",
+      "file": "src/protocol/handlers.zig",
+      "from": "        .commit = if (policy.commit) &plan else null,\n    }, null);",
+      "to": "        .commit = if (false and policy.commit) &plan else null,\n    }, null);",
+      "kills": [
+        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
+      ],
+      "note": "with commits on write_doc would write to the tree and commit nothing"
+    },
+    {
+      "id": "DC5-write-doc-message-kept-from-the-command-gate",
+      "file": "src/platform/doc_writer.zig",
+      "from": "&.{}, runner.messageOf(options.commit), options.limits",
+      "to": "&.{}, null, options.limits",
+      "kills": [
+        "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
+        "message command: the same file redirected to standard input serves a checker that reads the message there",
+        "message command: a command that cannot be found is a failed check, not a verdict, and nothing is written",
+        "message command: from a committed ledger it never runs without --allow-repo-memory, and runs with it",
+        "message command: a tracked file where the message file goes is refused by name and stays as it was"
+      ],
+      "note": "a write_doc commit would never be shown to the user's message checker"
+    },
+    {
+      "id": "MC1-try-message-kept-from-the-command-gate",
+      "file": "src/platform/runner.zig",
+      "from": "targets, messageOf(options.commit), options.limits",
+      "to": "targets, null, options.limits",
+      "kills": [
+        "commit on write: a message command judges the message of a try, and a refusal writes nothing"
+      ],
+      "note": "a try commit would never be shown to the user's message checker"
+    },
+    {
+      "id": "MC2-message-command-run-as-a-text-check",
+      "file": "src/platform/rules.zig",
+      "from": "        if (checks.commandOf(inner) != null) continue;\n",
+      "to": "",
+      "kills": [
+        "a message command is left to the command gate: the text rules pass over it and it is due only when there is a message",
+        "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
+        "message command: the same file redirected to standard input serves a checker that reads the message there",
+        "message command: the message file is gone before the tests run",
+        "message command: a command that cannot be found is a failed check, not a verdict, and nothing is written",
+        "message command: from a committed ledger it never runs without --allow-repo-memory, and runs with it",
+        "message command: a tracked file where the message file goes is refused by name and stays as it was",
+        "commit on write: a message command judges the message of a try, and a refusal writes nothing"
+      ],
+      "note": "every commit would fail with UnknownCheck once a message command is adopted"
+    },
+    {
+      "id": "MC3-message-command-runs-without-a-message",
+      "file": "src/platform/rules.zig",
+      "from": "        const text = message orelse return null;",
+      "to": "        const text = message orelse \"\";",
+      "kills": [
+        "a message command is left to the command gate: the text rules pass over it and it is due only when there is a message",
+        "message command: with commits off there is no message and the command does not run"
+      ],
+      "note": "with commits off a message checker would judge an empty message and block every write"
+    },
+    {
+      "id": "MC4-message-file-not-written",
+      "file": "src/platform/rules.zig",
+      "from": "            if (staged.* == null) staged.* = try MessageFile.stage(",
+      "to": "            if (false and staged.* == null) staged.* = try MessageFile.stage(",
+      "kills": [
+        "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
+        "message command: the same file redirected to standard input serves a checker that reads the message there",
+        "message command: the message file is gone before the tests run",
+        "message command: from a committed ledger it never runs without --allow-repo-memory, and runs with it",
+        "commit on write: a message command judges the message of a try, and a refusal writes nothing",
+        "message command: a tracked file where the message file goes is refused by name and stays as it was"
+      ],
+      "note": "the checker would be started with no message to read"
+    },
+    {
+      "id": "MC5-message-file-left-for-the-tests",
+      "file": "src/platform/rules.zig",
+      "from": "        try std.Io.Dir.deleteFileAbsolute(io, self.file_abs);",
+      "to": "        if (false) try std.Io.Dir.deleteFileAbsolute(io, self.file_abs);",
+      "kills": [
+        "message command: the message file is gone before the tests run"
+      ],
+      "note": "the tests would run in a tree that holds a file the commit does not"
+    },
+    {
+      "id": "MC6-tracked-message-file-overwritten",
+      "file": "src/platform/rules.zig",
+      "from": "|_| return error.MessageFileInTheWay else |err|",
+      "to": "|_| {} else |err|",
+      "kills": [
+        "message command: a tracked file where the message file goes is refused by name and stays as it was"
+      ],
+      "note": "a tracked file would be replaced and then deleted in the tree the tests run in"
+    },
+    {
+      "id": "MC7-message-command-refused-as-an-unknown-check",
+      "file": "src/engine/checks.zig",
+      "from": "    if (messageCommandOf(spec)) |command| return validateCommand(command);\n",
+      "to": "",
+      "kills": [
+        "a message command is a command behind the message prefix, validated for shape and never looked up as a text check",
+        "rule: a message command is adopted, and an empty one or one with --in is refused and writes nothing"
+      ],
+      "note": "a message command could not be adopted, and an empty one would not be named"
+    },
+    {
+      "id": "CM5-stored-message-without-its-line-end",
+      "file": "src/platform/commit_message.zig",
+      "from": "    return std.mem.concat(gpa, u8, &.{ message, \"\\n\" });",
+      "to": "    return gpa.dupe(u8, message);",
+      "kills": [
+        "commit message: the stored form ends with the line end git would add, and a message that has one is kept"
+      ],
+      "note": "the checker and git would be handed a message without its final line end"
     }
   ]
 }

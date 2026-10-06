@@ -266,6 +266,20 @@ test "rule: a message check is adopted, and a bad one or one with --in is refuse
     try testing.expect(id.len > 0);
 }
 
+test "rule: a message command is adopted, and an empty one or one with --in is refused and writes nothing" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    try testing.expectError(error.EmptyCommandCheck, runRule(&repo, &.{ "add", "lint", "--check", "message:cmd: ", "--enforce" }));
+    try testing.expectError(error.MessageRuleWithScope, runRule(&repo, &.{ "add", "lint", "--check", "message:cmd:exit 0", "--in", "src/", "--enforce" }));
+    try expectLedgerUntouched(&repo);
+
+    const id = try addRule(&repo, &.{ "add", "lint", "--check", "message:cmd:exit 0", "--enforce" });
+    defer testing.allocator.free(id);
+    try testing.expect(id.len > 0);
+}
+
 test "rule: an invalid --in is refused by name and writes nothing" {
     try skipOffWindows();
     var repo = try Repo.init(&.{});

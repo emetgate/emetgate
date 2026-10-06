@@ -199,6 +199,26 @@ test "commit on write: a new file is created and committed in the same call" {
     try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
 }
 
+test "commit on write: a message command judges the message of a try, and a refusal writes nothing" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    const before = try case.git(&.{ "rev-parse", "HEAD" });
+    const id = try memory.remember(testing.allocator, testing.io, case.repo.root_abs, .project, "starts with fix", true, "message:cmd:findstr /b fix: .emetgate\\COMMIT_EDITMSG", null);
+    defer testing.allocator.free(id);
+
+    const refused = try case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", try case.addHash() }, .{ "body", new_body }, .{ "message", "feat: swap" } }, committing);
+    errdefer std.debug.print("{s}\n", .{refused.text});
+    try testing.expect(refused.is_error);
+    try testing.expect(std.mem.indexOf(u8, refused.text, "\"reason\":\"rule_violation\"") != null);
+    try testing.expect(std.mem.indexOf(u8, refused.text, id) != null);
+    try case.expectUntouched(before);
+
+    const accepted = try case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", try case.addHash() }, .{ "body", new_body }, .{ "message", "fix: swap" } }, committing);
+    try testing.expect(!accepted.is_error);
+}
+
 test "commit on write: a write tool that cannot commit yet refuses while commits are on" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

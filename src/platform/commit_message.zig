@@ -16,7 +16,21 @@ pub fn check(message: []const u8) Error!void {
     if (!std.unicode.utf8ValidateSlice(message)) return error.CommitMessageNotUtf8;
 }
 
+pub fn stored(gpa: std.mem.Allocator, message: []const u8) std.mem.Allocator.Error![]u8 {
+    if (std.mem.endsWith(u8, message, "\n")) return gpa.dupe(u8, message);
+    return std.mem.concat(gpa, u8, &.{ message, "\n" });
+}
+
 const testing = std.testing;
+
+test "commit message: the stored form ends with the line end git would add, and a message that has one is kept" {
+    const added = try stored(testing.allocator, "fix: one");
+    defer testing.allocator.free(added);
+    try testing.expectEqualStrings("fix: one\n", added);
+    const kept = try stored(testing.allocator, "fix: one\n\nbody\n");
+    defer testing.allocator.free(kept);
+    try testing.expectEqualStrings("fix: one\n\nbody\n", kept);
+}
 
 test "commit message: any text git can store passes, whatever its shape" {
     try check("fix(gate): refuse a stale hash before the tests start");

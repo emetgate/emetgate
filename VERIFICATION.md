@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1432**
-- Mutations declared in `tests/mutations.json`: **899**
-  - killed: **868**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1452**
+- Mutations declared in `tests/mutations.json`: **912**
+  - killed: **881**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -47,7 +47,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-119 mutation(s).
+120 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -170,10 +170,11 @@ python tools/verification_page.py --check
 | `CR2-existing-declaration-overwritten` | `src/engine/cas.zig` | `if (before.hasDeclaration(insertion.ref)) return error.SymbolEx...` -> `` | insert and create accept a variable, class, interface, type alias or enum as th... | killed |
 | `AD4-added-accepts-a-command` | `src/engine/checks.zig` | `if (commandOf(inner) != null) return error.CommandCheckNotStati...` -> `if (commandOf(inner) != null) return;` | a static-only caller refuses a command check by its own name | killed |
 | `MR3-added-wraps-a-message-check` | `src/engine/checks.zig` | `if (text_checks.of(inner) != null) return error.UnknownCheck;` -> `` | rule: a message check is adopted, and a bad one or one with --in is refused and... | killed |
+| `MC7-message-command-refused-as-an-unknown-check` | `src/engine/checks.zig` | `if (messageCommandOf(spec)) \|command\| return validateCommand(...` -> `` | a message command is a command behind the message prefix, validated for shape a...; rule:... | killed |
 
 ### Sandbox and the test/typecheck gate
 
-79 mutation(s).
+80 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -230,12 +231,12 @@ python tools/verification_page.py --check
 | `CR10-typecheck-stage-swallows-crash` | `src/platform/runner.zig` | `if (!checked.passed()) return .{ .typecheck = checked };` -> `if (!checked.passed() and checked.outcome != .crashed) return ....` | crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk un...; crash... | killed |
 | `CR11-fail-fast-read-as-exit` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return if (code >= ntstatus_error_floor and code != 0xC0000409)...` | a fail-fast in the command is a crash with its own code, reported at once, with... | killed |
 | `RC4-prepare-swallows-stale-shadow-removal-error` | `src/platform/shadow.zig` | `try remove(io, options.base_abs, options.shadow_abs);` -> `remove(io, options.base_abs, options.shadow_abs) catch {};` | prepare fails instead of carrying on when a stale shadow cannot be removed | killed |
-| `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRules(gpa, io, root, location.shadow, targets...` -> `if (try runCommandRules(gpa, io, root, root, targets, options.l...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
+| `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRulesFor(gpa, io, root, location.shadow, targ...` -> `if (try runCommandRulesFor(gpa, io, root, root, targets, messag...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
 | `CMD5-ntstatus-floor-broken` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | cmd rule: a crashing command is not a verdict, it is rule_check_crashed | killed |
 | `CMD7-spawned-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | cmd rule: a sandbox that cannot be built refuses the command instead of running...; redte... | killed |
 | `RM8-runner-forces-trust` | `src/platform/runner.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, true)) \|gated\|` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
 | `RM9-runner-drops-the-flag` | `src/platform/runner.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, false)) \|gated\|` | redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run | killed |
-| `RM10-command-gate-forces-trust` | `src/platform/runner.zig` | `.allow_repo_memory = allow_repo_memory });` -> `.allow_repo_memory = allow_repo_memory or true });` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
+| `RM10-command-gate-forces-trust` | `src/platform/runner.zig` | `.allow_repo_memory = allow_repo_memory, .message = message });` -> `.allow_repo_memory = allow_repo_memory or true, .message = mess...` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
 | `RM11-batch-forces-trust` | `src/platform/batch.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, true)) \|gated\|` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
 | `RM12-batch-drops-the-flag` | `src/platform/batch.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, false)) \|gated\|` | redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run in a... | killed |
 | `Q22-batch-trusts-a-committed-query-rule` | `src/platform/batch.zig` | `p.body, options.allow_repo_memory)) {` -> `p.body, true)) {` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
@@ -256,6 +257,7 @@ python tools/verification_page.py --check
 | `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
 | `RC1-edit-written-but-not-published` | `src/platform/runner.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `plan.oid = prepared;     }     return .{ .committed = applied.h...` | commit on write: an accepted try is one commit with the given message and bytes... | killed |
 | `RC2-created-file-written-but-not-published` | `src/platform/runner.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `plan.oid = prepared;         return .{ .committed = created.has...` | commit on write: a new file is created and committed in the same call | killed |
+| `MC1-try-message-kept-from-the-command-gate` | `src/platform/runner.zig` | `targets, messageOf(options.commit), options.limits` -> `targets, null, options.limits` | commit on write: a message command judges the message of a try, and a refusal w... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -321,7 +323,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-110 mutation(s).
+115 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -435,6 +437,11 @@ python tools/verification_page.py --check
 | `MR8-message-violations-dropped` | `src/platform/rules.zig` | `if (list.items.len != 0) return .{ .violated` -> `if (list.items.len == 99999) return .{ .violated` | a commit message is judged only by the message rules, and each violation carrie...; commi... | killed |
 | `CP4-commit-flag-ignored` | `src/protocol/policy.zig` | `policy.commit = true;` -> `` | commit policy: --commit turns commits on, and giving it twice is refused | killed |
 | `CP5-uncommitting-tool-runs-with-commits-on` | `src/protocol/policy.zig` | `if (policy.commit) return error.CommitNotSupportedByTool;` -> `if (false and policy.commit) return error.CommitNotSupportedByT...` | commit policy: --commit turns commits on, and giving it twice is refused; commit on write... | killed |
+| `MC2-message-command-run-as-a-text-check` | `src/platform/rules.zig` | `if (checks.commandOf(inner) != null) continue;` -> `` | a message command is left to the command gate: the text rules pass over it and ...; messa... | killed |
+| `MC3-message-command-runs-without-a-message` | `src/platform/rules.zig` | `const text = message orelse return null;` -> `const text = message orelse "";` | a message command is left to the command gate: the text rules pass over it and ...; messa... | killed |
+| `MC4-message-file-not-written` | `src/platform/rules.zig` | `if (staged.* == null) staged.* = try MessageFile.stage(` -> `if (false and staged.* == null) staged.* = try MessageFile.stag...` | message command: the command reads the message from the file named on its comma...; messa... | killed |
+| `MC5-message-file-left-for-the-tests` | `src/platform/rules.zig` | `try std.Io.Dir.deleteFileAbsolute(io, self.file_abs);` -> `if (false) try std.Io.Dir.deleteFileAbsolute(io, self.file_abs);` | message command: the message file is gone before the tests run | killed |
+| `MC6-tracked-message-file-overwritten` | `src/platform/rules.zig` | `\|_\| return error.MessageFileInTheWay else \|err\|` -> `\|_\| {} else \|err\|` | message command: a tracked file where the message file goes is refused by name ... | killed |
 
 ### Scan
 
@@ -572,7 +579,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-423 mutation(s).
+429 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -999,6 +1006,12 @@ python tools/verification_page.py --check
 | `GC6-empty-commit-made` | `src/platform/git_commit.zig` | `if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCom...` -> `` | git commit: a change that leaves the tree as it is has nothing to commit | killed |
 | `GC7-failed-branch-update-reported-as-a-commit` | `src/platform/git_commit.zig` | `"HEAD", commit, head.oid }) == null) return error.WrittenButNot...` -> `"HEAD", commit, head.oid }) == null) return;` | git commit: when HEAD moved after the commit was prepared, publish refuses and ... | killed |
 | `GC8-no-identity-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) re...` -> `` | no test can take the identity away: git falls back to the user's global configuration and... | control |
+| `DC1-write-doc-message-rules-skipped` | `src/platform/doc_writer.zig` | `.violated => \|report\| return .{ .rule_violation = report },` -> `.violated => \|report\| report.deinit(gpa),` | commit write_doc: a message that breaks a message rule is refused with the rule... | killed |
+| `DC2-write-doc-commits-the-old-bytes` | `src/platform/doc_writer.zig` | `.content = applied.source }};` -> `.content = source }};` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
+| `DC3-write-doc-written-but-not-published` | `src/platform/doc_writer.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
+| `DC4-write-doc-handler-drops-the-commit` | `src/protocol/handlers.zig` | `.commit = if (policy.commit) &plan else null,     }, null);` -> `.commit = if (false and policy.commit) &plan else null,     }, ...` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
+| `DC5-write-doc-message-kept-from-the-command-gate` | `src/platform/doc_writer.zig` | `&.{}, runner.messageOf(options.commit), options.limits` -> `&.{}, null, options.limits` | message command: the command reads the message from the file named on its comma...; messa... | killed |
+| `CM5-stored-message-without-its-line-end` | `src/platform/commit_message.zig` | `return std.mem.concat(gpa, u8, &.{ message, "\n" });` -> `return gpa.dupe(u8, message);` | commit message: the stored form ends with the line end git would add, and a mes... | killed |
 
 ## What this system does not prove
 

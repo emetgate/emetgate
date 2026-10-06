@@ -2,6 +2,7 @@ const std = @import("std");
 const exe_path = @import("exe_path.zig");
 const shadow = @import("shadow.zig");
 const disk = @import("disk.zig");
+const commit_message = @import("commit_message.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -156,8 +157,7 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, changes
     if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCommit;
 
     const message_path = try std.fs.path.join(arena, &.{ dir, "message" });
-    const stored = if (std.mem.endsWith(u8, message, "\n")) message else try std.mem.concat(arena, u8, &.{ message, "\n" });
-    try disk.writeDurably(io, message_path, stored);
+    try disk.writeDurably(io, message_path, try commit_message.stored(arena, message));
     const commit = try git.need(&.{ "commit-tree", tree, "-p", head.oid, "-F", message_path });
     return gpa.dupe(u8, commit);
 }

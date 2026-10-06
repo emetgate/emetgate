@@ -104,7 +104,15 @@ pub const ShadowRun = union(enum) {
 };
 
 pub fn runCommandRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
-    const gated = try rules.commandGate(gpa, io, root, targets, .{ .shadow_abs = shadow_abs, .limits = limits, .allow_repo_memory = allow_repo_memory });
+    return runCommandRulesFor(gpa, io, root, shadow_abs, targets, null, limits, allow_repo_memory);
+}
+
+pub fn messageOf(commit: ?*const GitCommit) ?[]const u8 {
+    return if (commit) |plan| plan.message else null;
+}
+
+pub fn runCommandRulesFor(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, message: ?[]const u8, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
+    const gated = try rules.commandGate(gpa, io, root, targets, .{ .shadow_abs = shadow_abs, .limits = limits, .allow_repo_memory = allow_repo_memory, .message = message });
     return switch (gated) {
         .ok => null,
         .violated => |report| .{ .rule_violation = report },
@@ -278,7 +286,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     }
     try workspace.writeFile(rel, patched);
 
-    if (try runCommandRules(gpa, io, root, location.shadow, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
+    if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| return gated;
     return runStages(gpa, io, location.shadow, options.typecheck_command, command, options.limits);
 }
 
