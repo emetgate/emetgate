@@ -183,6 +183,7 @@ test "verify merge: a hand edit made while two real sides are merged is named, a
     _ = try case.git(&.{ "add", "src/lines.ts" });
     _ = try case.git(&.{ "commit", "-q", "-m", "merge side" });
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, try case.git(&.{ "rev-list", "--parents", "-n", "1", "HEAD" }), " ") + 1);
+    _ = try case.git(&.{ "prune", "--expire=now" });
 
     try expectNamed(try case.verify(), &.{"src/lines.ts"});
 }
