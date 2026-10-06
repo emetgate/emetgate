@@ -6,21 +6,21 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1519**
-- Mutations declared in `tests/mutations.json`: **934**
-  - killed: **903**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1552**
+- Mutations declared in `tests/mutations.json`: **963**
+  - killed: **930**
   - equivalent: **7**
-  - defense in depth: **7**
+  - defense in depth: **8**
   - open: **4**
   - control: **3**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
-  - survives, not yet classified: **5** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create)
-- Red-team suites: **14** files, **151** tests total
+  - survives, not yet classified: **6** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit)
+- Red-team suites: **14** files, **152** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
-  - `tests/redteam_commit.zig`: 48
+  - `tests/redteam_commit.zig`: 49
   - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
@@ -175,7 +175,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-87 mutation(s).
+90 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -232,7 +232,7 @@ python tools/verification_page.py --check
 | `CR10-typecheck-stage-swallows-crash` | `src/platform/runner.zig` | `if (!checked.passed()) return .{ .typecheck = checked };` -> `if (!checked.passed() and checked.outcome != .crashed) return ....` | crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk un...; crash... | killed |
 | `CR11-fail-fast-read-as-exit` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return if (code >= ntstatus_error_floor and code != 0xC0000409)...` | a fail-fast in the command is a crash with its own code, reported at once, with... | killed |
 | `RC4-prepare-swallows-stale-shadow-removal-error` | `src/platform/shadow.zig` | `try remove(io, options.base_abs, options.shadow_abs);` -> `remove(io, options.base_abs, options.shadow_abs) catch {};` | prepare fails instead of carrying on when a stale shadow cannot be removed | killed |
-| `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRulesFor(gpa, io, root, location.shadow, targ...` -> `if (try runCommandRulesFor(gpa, io, root, root, targets, messag...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
+| `CMD3-command-cwd-is-the-real-repo` | `src/platform/runner.zig` | `if (try runCommandRulesFor(gpa, io, root, location.shadow, targ...` -> `if (try runCommandRulesFor(gpa, io, root, root, targets, sessio...` | cmd rule: the command runs in the shadow copy, so its writes never reach the re... | killed |
 | `CMD5-ntstatus-floor-broken` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | cmd rule: a crashing command is not a verdict, it is rule_check_crashed | killed |
 | `CMD7-spawned-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | cmd rule: a sandbox that cannot be built refuses the command instead of running...; redte... | killed |
 | `RM8-runner-forces-trust` | `src/platform/runner.zig` | `options.limits, options.allow_repo_memory)) \|gated\|` -> `options.limits, true)) \|gated\|` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
@@ -247,8 +247,8 @@ python tools/verification_page.py --check
 | `LW4-slice-kills-without-grace` | `src/platform/sandbox.zig` | `drain_end = graceEnd(io, deadline);` -> `drain_end = std.Io.Clock.Timestamp.now(io, .awake);` | a worker that holds the pipe and ends within the grace is waited for, not repor... | killed |
 | `LW5-grace-past-deadline` | `src/platform/sandbox.zig` | `return if (end.compare(.lt, deadline)) end else deadline;` -> `return if (end.compare(.lt, deadline) or true) end else deadlin...` | the leftover wait ends at the command's deadline, not after the full grace | killed |
 | `LW6-stop-does-not-wait` | `src/platform/sandbox.zig` | `if (win.WaitForSingleObject(handle, left) == win.wait_object_0)...` -> `if (win.WaitForSingleObject(handle, left * 0) == win.wait_objec...` | a timed out run returns only after every process in its job has exited | killed |
-| `TB2-try-batch-commits-without-record` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, null, options.commit...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
-| `TB3-try-batch-drops-commit-step` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, &batch, null);` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
+| `TB2-try-batch-commits-without-record` | `src/platform/batch.zig` | `try session.land(gpa, io, root, changes, pendings, &batch, opti...` -> `try session.land(gpa, io, root, changes, pendings, null, option...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
+| `TB3-try-batch-drops-commit-step` | `src/platform/batch.zig` | `try session.land(gpa, io, root, changes, pendings, &batch, opti...` -> `try session.land(gpa, io, root, changes, pendings, &batch, null...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
 | `LT1-linked-dir-junctioned-again` | `src/platform/shadow.zig` | `try link_tree.build(io, target, link_path, &stats);` -> `_ = &stats; try createJunction(io, link_path, target);` | prepare copies tracked files, rebuilds heavy directories as hardlink trees and ... | killed |
 | `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
@@ -256,16 +256,19 @@ python tools/verification_page.py --check
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
 | `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 | `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
-| `RC1-edit-written-but-not-published` | `src/platform/runner.zig` | `try session.publish(gpa, io, root, &change);     return .{ .com...` -> `return .{ .committed = applied.hash };` | commit on write: an accepted try is one commit with the given message and bytes... | killed |
-| `RC2-created-file-written-but-not-published` | `src/platform/runner.zig` | `try session.publish(gpa, io, root, &change);     if (options.co...` -> `if (options.commit != null) return .{ .committed = created.hash...` | commit on write: a new file is created and committed in the same call | killed |
-| `MC1-try-message-kept-from-the-command-gate` | `src/platform/runner.zig` | `targets, messageOf(options.commit), options.limits` -> `targets, null, options.limits` | commit on write: a message command judges the message of a try, and a refusal w... | killed |
-| `BC1-batch-written-but-not-published` | `src/platform/batch.zig` | `try session.publish(gpa, io, root, changes);` -> `` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ...; commi... | killed |
+| `RC1-edit-written-but-not-published` | `src/platform/runner.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `for (&pendings) \|*p\| p.discard(null);     if (false) try sess...` | commit on write: an accepted try is one commit with the given message and bytes... | killed |
+| `RC2-created-file-written-but-not-published` | `src/platform/runner.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `for (&pendings) \|*p\| p.discard(null);         if (false) try ...` | commit on write: a new file is created and committed in the same call | killed |
+| `MC1-try-message-kept-from-the-command-gate` | `src/platform/runner.zig` | `location.shadow, targets, session.message(), options.limits` -> `location.shadow, targets, null, options.limits` | commit on write: a message command judges the message of a try, and a refusal w... | killed |
+| `BC1-batch-written-but-not-published` | `src/platform/batch.zig` | `try session.land(gpa, io, root, changes, pendings, &batch, opti...` -> `for (pendings) \|*p\| p.discard(null);     if (false) try sessi...` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ...; commi... | killed |
 | `BC2-moved-source-not-checked-for-hand-edits` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try rels.append(arena, from);` -> `` | commit batch: a file move refuses when the file to move was edited by hand | killed |
 | `BC3-doc-target-not-checked-for-hand-edits` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | commit batch: try_batch refuses a doc target edited by hand outside the rewritt... | killed |
 | `BC4-moved-source-stays-in-the-commit` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try changes.append(gpa, .{ .rel = fr...` -> `` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
 | `BC5-deleted-file-committed-as-empty` | `src/platform/batch.zig` | `if (p.action == .delete_file) null else p.source()` -> `if (false and p.action == .delete_file) null else p.source()` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
 | `BC6-doc-edit-left-out-of-the-commit` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| try changes.append(gpa, .{ .rel = p.re...` -> `for (doc_prepared) \|p\| if (false) try changes.append(gpa, .{ ...` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
-| `BC7-index-sync-of-the-journal-runs-before-the-commit` | `src/platform/batch.zig` | `if (options.commit == null) batch.root = root;` -> `batch.root = root;` | commit batch: a locked index does not keep a written batch out of its commit | killed |
+| `BC7-index-sync-of-the-journal-runs-before-the-commit` | `src/platform/batch.zig` | `if (options.commit == null) batch.root = root;` -> `batch.root = root;` | since protocol v2 the index is published from the locked copy before the files are writte... | survives (unclassified) |
+| `PV19-shadow-keeps-hand-edits-out-but-does-not-restore-head` | `src/platform/runner.zig` | `try git_commit.checkoutInto(gpa, io, root, head, restore.items,...` -> `` | commit protocol: the gate tests the tree the commit will hold, not a hand edit ... | killed |
+| `PV25-moved-file-loses-its-mode` | `src/platform/batch.zig` | `, .mode_from = p.source_rel });` -> `});` | commit batch: a moved file keeps its executable bit at the new path | killed |
+| `PV26-batch-message-kept-from-the-command-gate` | `src/platform/batch.zig` | `targets[0..built], session.message(), options.limits` -> `targets[0..built], null, options.limits` | commit batch: a message command judges the message of a try_batch, refuses one ...; commi... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -586,7 +589,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-445 mutation(s).
+471 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -754,7 +757,7 @@ python tools/verification_page.py --check
 | `DW1-splice-hash-check-removed` | `src/engine/docnode.zig` | `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` -> `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` | applyJsonPointer refuses a stale hash and refuses a value that is not valid json; applyLi... | killed |
 | `DW2-doc-size-cap-removed` | `src/engine/docnode.zig` | `if (source.len > max_bytes) return error.DocTooLarge;` -> `` | defense in depth: both callers (doc_writer.tryWriteDoc and batch_plan.planDoc) already re... | defense in depth |
 | `DW3-doc-binary-check-removed` | `src/engine/docnode.zig` | `if (looksBinary(source)) return error.BinaryFile;` -> `` | doc_writer: a binary file is refused before any parse or sandbox run | killed |
-| `DW4-doc-write-skips-journal` | `src/platform/doc_writer.zig` | `try disk.replaceReporting(gpa, io, options.file_abs, applied.so...` -> `try disk.replaceReporting(gpa, io, options.file_abs, applied.so...` | doc_writer: a crash right after the journal is written leaves a journal entry, ... | killed |
+| `DW4-doc-write-skips-journal` | `src/platform/doc_writer.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `try session.land(gpa, io, root, &change, &pendings, null, optio...` | doc_writer: a crash right after the journal is written leaves a journal entry, ... | killed |
 | `DW5-json-pointer-post-write-check-removed` | `src/engine/docnode.zig` | `if (!std.mem.eql(u8, reparsed.text(verify.node), new_value)) re...` -> `` | applyJsonPointer refuses a value that reparses to something other than exactly ... | killed |
 | `DW6-markdown-outer-region-check-removed` | `src/engine/docnode.zig` | `found = candidate.node.endByte() == span.start + new_section.le...` -> `found = true;` | applyMarkdownHeading refuses a replacement whose unclosed code fence swallows t...; apply... | killed |
 | `DW7-write-doc-jail-dropped` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = repo.Jailed{ .root = try gpa.dupe(u8, policy.root...` | write_doc refuses a path outside the repo, leaves the target untouched; write_doc refuses... | killed |
@@ -789,7 +792,7 @@ python tools/verification_page.py --check
 | `PF1-directory-stamp-reads-the-creation-time` | `src/platform/search_index.zig` | `const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32...` -> `const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) ...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `WR1-compact-reply-drops-new-hash` | `src/protocol/wire.zig` | `try js.objectField("new_hash");     try js.write(new_hex[0..]);...` -> `if (full) {         try js.objectField("new_hash");         try...` | compact committed payload drops the old hash and the shadow note | killed |
 | `WR2-detail-full-ignored` | `src/protocol/wire.zig` | `if (full) {         try js.objectField("old_hash");         try...` -> `if (false) {         try js.objectField("old_hash");         tr...` | committed payload names the symbol and both hashes | killed |
-| `WR3-receipt-note-always-full` | `src/protocol/receipt_note.zig` | `const written = receipts.write(gpa, io, root, rec);     if (!fu...` -> `const written = receipts.write(gpa, io, root, rec);     if (ful...` | node edit: read_symbol with nodes gives hash\\|code lines and a node try commits... | killed |
+| `WR3-receipt-note-always-full` | `src/protocol/receipt_note.zig` | `if (!full) {         if (written) \|ok\| gpa.free(ok.batch) els...` -> `if (full and false) {         if (written) \|ok\| gpa.free(ok.b...` | node edit: read_symbol with nodes gives hash\\|code lines and a node try commits... | killed |
 | `SW7-file-list-change-forces-a-full-refresh` | `src/platform/search_session.zig` | `if (listed and reason.len == 0 and dirty == null) reason = "fil...` -> `if (listed and reason.len == 0) reason = "file_list_changed";` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `SW8-git-index-stamp-never-trusted` | `src/platform/search_session.zig` | `return c.mtime_ns == saved.mtime_ns and c.size == saved.size an...` -> `return false and c.mtime_ns == saved.mtime_ns and c.size == sav...` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `GI1-git-index-checksum-not-verified` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;` -> `_ = &sha1;         return 20;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
@@ -1005,19 +1008,18 @@ python tools/verification_page.py --check
 | `MR2-message-prefix-not-recognized` | `src/engine/text_checks.zig` | `if (!std.mem.startsWith(u8, spec, prefix)) return null;` -> `if (std.mem.startsWith(u8, spec, prefix)) return null;` | text checks: the message prefix marks a rule that judges a commit message | killed |
 | `MR5-zero-limit-accepted` | `src/engine/text_checks.zig` | `if (limit == 0) return error.UnexpectedCheckArgument;` -> `` | text checks: an unknown name, a missing or empty argument and a bad number are ... | killed |
 | `MR6-empty-text-argument-accepted` | `src/engine/text_checks.zig` | `if (arg.len == 0) return error.EmptyCheckArgument;` -> `` | text checks: an unknown name, a missing or empty argument and a bad number are ... | killed |
-| `GC1-detached-head-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "symbolic-ref", "-q", "HEAD" }) == null) re...` -> `` | git commit: a detached HEAD is refused | killed |
+| `GC1-detached-head-accepted` | `src/platform/git_commit.zig` | `const ref = (try git.run(&.{ "symbolic-ref", "-q", "HEAD" })) o...` -> `const ref = (try git.run(&.{ "symbolic-ref", "-q", "HEAD" })) o...` | git commit: a detached HEAD is refused | killed |
 | `GC2-unborn-branch-accepted` | `src/platform/git_commit.zig` | `orelse return error.NoCommitYet;` -> `orelse "HEAD";` | git commit: a repository with no commit yet is refused | killed |
-| `GC3-operation-in-progress-accepted` | `src/platform/git_commit.zig` | `return error.OperationInProgress;` -> `continue;` | git commit: a merge in progress is refused | killed |
-| `GC4-signing-repository-accepted` | `src/platform/git_commit.zig` | `std.mem.eql(u8, value, "true")` -> `std.mem.eql(u8, value, "never")` | git commit: a repository that signs its commits is refused | killed |
-| `GC5-hand-edited-target-accepted` | `src/platform/git_commit.zig` | `if ((try git.need(status.items)).len != 0) return error.TargetH...` -> `` | git commit: a target edited by hand is refused, and an edit to another file is ...; commi... | killed |
+| `GC3-operation-in-progress-accepted` | `src/platform/git_commit.zig` | `if (try exists(io, path)) return error.OperationInProgress;` -> `if (false and try exists(io, path)) return error.OperationInPro...` | git commit: a merge in progress is refused | killed |
+| `GC4-signing-repository-accepted` | `src/platform/git_commit.zig` | `if (std.mem.eql(u8, value, "true")) return error.SigningNotSupp...` -> `if (std.mem.eql(u8, value, "never")) return error.SigningNotSup...` | git commit: a repository that signs its commits is refused | killed |
+| `GC5-hand-edited-target-accepted` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, inTree(tree, path).?.oid, oid)) return err...` -> `if (false and !std.mem.eql(u8, inTree(tree, path).?.oid, oid)) ...` | git commit: a target edited by hand is refused, and an edit to another file is ...; commi... | killed |
 | `GC6-empty-commit-made` | `src/platform/git_commit.zig` | `if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCom...` -> `` | git commit: a change that leaves the tree as it is has nothing to commit | killed |
-| `GC7-failed-branch-update-reported-as-a-commit` | `src/platform/git_commit.zig` | `"HEAD", commit, head.oid }) == null) return error.WrittenButNot...` -> `"HEAD", commit, head.oid }) == null) return;` | git commit: when HEAD moved after the commit was prepared, publish refuses and ... | killed |
+| `GC7-failed-branch-update-reported-as-a-commit` | `src/platform/git_commit.zig` | `return if (std.mem.eql(u8, now, base)) error.BranchUpdateRefuse...` -> `if (now.len != 0) return;     return error.BranchMoved;` | git commit: when HEAD moved after the commit was prepared, publish refuses and ...; redte... | killed |
 | `GC8-no-identity-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) re...` -> `` | no test can take the identity away: git falls back to the user's global configuration and... | control |
-| `DC1-write-doc-message-rules-skipped` | `src/platform/doc_writer.zig` | `.violated => \|report\| return .{ .rule_violation = report },` -> `.violated => \|report\| report.deinit(gpa),` | commit write_doc: a message that breaks a message rule is refused with the rule... | killed |
 | `DC2-write-doc-commits-the-old-bytes` | `src/platform/doc_writer.zig` | `.content = applied.source }};` -> `.content = source }};` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
-| `DC3-write-doc-written-but-not-published` | `src/platform/doc_writer.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
-| `DC4-write-doc-handler-drops-the-commit` | `src/protocol/handlers.zig` | `.commit = if (policy.commit) &plan else null,     }, null);` -> `.commit = if (false and policy.commit) &plan else null,     }, ...` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
-| `DC5-write-doc-message-kept-from-the-command-gate` | `src/platform/doc_writer.zig` | `&.{}, runner.messageOf(options.commit), options.limits` -> `&.{}, null, options.limits` | message command: the command reads the message from the file named on its comma...; messa... | killed |
+| `DC3-write-doc-written-but-not-published` | `src/platform/doc_writer.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `for (&pendings) \|*p\| p.discard(null);             if (false) ...` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
+| `DC4-write-doc-handler-drops-the-commit` | `src/protocol/handlers.zig` | `.commit = if (commit) \|*request\| request else null,     }, nu...` -> `.commit = if (commit) \|*request\| if (false) request else null...` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
+| `DC5-write-doc-message-kept-from-the-command-gate` | `src/platform/doc_writer.zig` | `&.{}, session.message(), options.limits` -> `&.{}, null, options.limits` | message command: the command reads the message from the file named on its comma...; messa... | killed |
 | `CM5-stored-message-without-its-line-end` | `src/platform/commit_message.zig` | `return std.mem.concat(gpa, u8, &.{ message, "\n" });` -> `return gpa.dupe(u8, message);` | commit message: the stored form ends with the line end git would add, and a mes... | killed |
 | `BC8-rename-drops-the-commit-request` | `src/platform/rename_batch.zig` | `.commit = options.commit,` -> `` | commit batch: a rename across three files is one commit of the three files | killed |
 | `BC9-move-drops-the-commit-request` | `src/platform/move_batch.zig` | `.commit = options.commit,` -> `` | commit batch: a move into a new file is one commit of the source, the new file ... | killed |
@@ -1035,6 +1037,33 @@ python tools/verification_page.py --check
 | `BC21-move-receipt-not-attached` | `src/protocol/move_tool.zig` | `try receipt_note.commit(gpa, io, place.root, commit, w);` -> `` | commit batch: a move into a new file is one commit of the source, the new file ... | killed |
 | `BC22-file-move-receipt-not-attached` | `src/protocol/move_file_tool.zig` | `try receipt_note.commit(gpa, io, place.root, commit, w);` -> `` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
 | `BC23-message-rules-skipped-by-the-shared-session` | `src/platform/commit_plan.zig` | `.violated => \|report\| return .{ .violated = report },` -> `.violated => \|report\| report.deinit(gpa),` | commit on write: a message that breaks a message rule is refused with the rule,...; commi... | killed |
+| `PV1-skip-worktree-target-accepted` | `src/platform/git_commit.zig` | `if (entry.tag == 'S' or entry.tag == 's') return error.TargetSk...` -> `if (false and (entry.tag == 'S' or entry.tag == 's')) return er...` | git commit: a target the user keeps out of the working tree with skip-worktree ... | killed |
+| `PV2-staged-target-accepted` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.m...` -> `if (false and (!std.mem.eql(u8, index_entry.oid, head_entry.oid...` | git commit: a target whose staged entry differs from HEAD is refused though the... | killed |
+| `PV3-untracked-target-accepted` | `src/platform/git_commit.zig` | `const head_entry = in_head orelse return error.TargetNotInHead;` -> `const head_entry = in_head orelse continue;` | redteam commit: a file the user keeps ignored is not put into history by a try ...; commi... | killed |
+| `PV4-deleted-tracked-path-accepted-as-new` | `src/platform/git_commit.zig` | `} else if (in_head != null or in_index != null) return error.Ta...` -> `} else if (false and (in_head != null or in_index != null)) ret...` | git commit: a tracked file deleted by hand is not a free path to create on | killed |
+| `PV5-head-on-a-tag-accepted` | `src/platform/git_commit.zig` | `if (!std.mem.startsWith(u8, ref, branch_prefix)) return error.D...` -> `if (false and !std.mem.startsWith(u8, ref, branch_prefix)) retu...` | redteam commit: a HEAD that points at a tag is refused and the tag does not move | killed |
+| `PV6-locked-index-found-after-the-gate` | `src/platform/git_commit.zig` | `if (try exists(io, try lockPath(git))) return error.IndexLocked;` -> `if (false and try exists(io, try lockPath(git))) return error.I...` | commit protocol: an index lock is refused before the gate runs, so a failing te... | killed |
+| `PV7-commit-encoding-taken-from-config` | `src/platform/git_commit.zig` | `"-c", "i18n.commitEncoding=UTF-8",` -> `` | redteam commit: a commit encoding setting does not mislabel the UTF-8 message | killed |
+| `PV8-any-index-lock-treated-as-ours` | `src/platform/git_commit.zig` | `return if (std.mem.eql(u8, &found, &digest)) .ours else .foreig...` -> `return if (std.mem.eql(u8, &found, &digest) or true) .ours else...` | commit protocol: recover never removes or replaces an index lock it does not ow...; git c... | killed |
+| `PV9-index-lock-taken-over` | `src/platform/git_commit.zig` | `disk.moveExclusive(gpa, staged_abs, lock) catch \|err\| switch ...` -> `disk.moveOver(gpa, staged_abs, lock) catch \|err\| switch (err)...` | git commit: an index lock held by another process is never taken over, and it s... | killed |
+| `PV10-changed-index-replaced` | `src/platform/git_commit.zig` | `if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {` -> `if (false and (now == null or !std.mem.eql(u8, &now.?, &staged....` | git commit: an index that changed after it was copied is not replaced, and what... | killed |
+| `PV11-intent-record-not-written` | `src/platform/commit_intent.zig` | `try disk.moveOver(gpa, staged, final);     commit_record.flushD...` -> `if (false) try disk.moveOver(gpa, staged, final);     commit_re...` | redteam commit: a process that dies between the write and the branch move is ro...; commi... | killed |
+| `PV12-recover-writes-what-head-does-not-hold` | `src/platform/commit_intent.zig` | `if (!wanted) continue;         const outcome = forwardOne(` -> `if (false and !wanted) continue;         const outcome = forwar...` | commit protocol: the user removes the lock and commits before the index was pub... | killed |
+| `PV13-recover-overwrites-a-hand-edit` | `src/platform/commit_intent.zig` | `if (!same(now, base)) return .left;` -> `if (false and !same(now, base)) return .left;` | commit protocol: a target the user edited after the crash is left as found, nam... | killed |
+| `PV14-targets-not-measured-again-before-the-branch-moves` | `src/platform/commit_plan.zig` | `try git_commit.remeasure(gpa, io, root, head, changes);` -> `` | commit protocol: a change the user stages on the target while the tests run is ... | killed |
+| `PV15-unpublished-index-not-reported` | `src/platform/commit_plan.zig` | `plan.unfinished = commit_intent.index_not_published;` -> `` | commit protocol: a publish that is refused a few times is retried, and one that... | killed |
+| `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe... | killed |
+| `PV18-pending-commit-not-finished-before-the-next` | `src/platform/commit_plan.zig` | `try recoverPending(gpa, io, root);` -> `` | commit protocol: recover never removes or replaces an index lock it does not ow... | killed |
+| `PV20-staged-files-reach-the-gate` | `src/platform/git_commit.zig` | `while (staged.next()) \|_\| try differs.put(arena, staged.next(...` -> `while (staged.next()) \|_\| _ = staged.next();` | redteam commit: the gate runs on the tree the commit will hold, so a test that ... | killed |
+| `PV21-flagged-files-not-measured-for-the-shadow` | `src/platform/git_commit.zig` | `if (entry.tag != 'S' and !std.ascii.isLower(entry.tag)) continu...` -> `if (entry.stage == 0) continue;` | commit protocol: the gate tests the tree the commit will hold, not a hand edit ... | killed |
+| `PV22-receipt-digests-taken-from-the-working-tree` | `src/protocol/receipt_note.zig` | `if (made.oid) \|oid\| bound.commit = .{ .base = made.base.?, .o...` -> `if (made.oid) \|oid\| bound.commit = if (oid.len == 0) .{ .base...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
+| `PV23-receipt-symbol-hashes-taken-from-the-working-tree` | `src/platform/receipts.zig` | `const runtime = made.runtime orelse return claimed;` -> `const runtime = made.runtime orelse return claimed;     if (rev...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
+| `PV24-another-pending-receipt-attached` | `src/platform/receipts.zig` | `if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, su...` -> `if (entry.kind != .file or name != null or !std.mem.endsWith(u8...` | redteam commit: verify accepts a commit made after a discarded earlier write | killed |
+| `PV27-server-start-leaves-a-pending-commit` | `src/protocol/server.zig` | `commit_plan.recoverPending(gpa, io, root) catch {}; }` -> `}` | commit protocol: the server finishes a pending commit when it starts | killed |
+| `PV28-lock-published-though-the-branch-moved-away` | `src/platform/commit_intent.zig` | `if (now.on_commit) {` -> `if (now.on_commit or true) {` | commit protocol: a soft reset while the lock is held undoes the commit, and rec... | killed |
+| `PV16-staged-bytes-hash-unchecked` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, &symbol.hashOf(bytes), &new.?)) return err...` -> `` | defense in depth: the check against the blob right after it (PV17) refuses the same tampe... | defense in depth |
+| `PV29-recover-deletes-a-file-the-replaced-commit-does-not-hold` | `src/platform/commit_intent.zig` | `const before = (try git_commit.blobAt(gpa, io, root, base_commi...` -> `if (base_commit.len == 0) return error.CorruptIntent;` | commit protocol: a record that did not come from a commit cannot delete a file ... | killed |
+| `PV30-record-ids-not-validated` | `src/platform/commit_intent.zig` | `if (!isObjectId(record.commit) or !isObjectId(record.base)) ret...` -> `` | commit protocol: a record with a commit id or a branch that is not one is dropp... | killed |
 
 ## What this system does not prove
 

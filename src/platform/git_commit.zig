@@ -565,6 +565,16 @@ pub fn storesAs(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8, 
     return std.mem.eql(u8, try git.need(&.{ "hash-object", path_arg, "--", file_abs }), blob);
 }
 
+pub fn blobAt(gpa: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !?[]u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const git = try Git.init(arena, io, root);
+    const paths = [_][]const u8{path};
+    const found = inTree(try treeEntries(git, rev, &paths), path) orelse return null;
+    return try gpa.dupe(u8, found.oid);
+}
+
 pub const Standing = struct {
     on_commit: bool,
     wanted: []bool,

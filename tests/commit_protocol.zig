@@ -525,9 +525,10 @@ test "commit protocol: staged bytes that were tampered with are never written, w
         try cutAt(&case, after_index);
         try case.repo.write(try firstIntent(&case, ".0.new"), tampered);
         const report = try recover(&case);
-        try testing.expectEqual(@as(usize, 1), report.commits.pending);
-        try testing.expectEqualStrings("FileNotWritten", report.commits.reason.?);
+        try testing.expectEqual(@as(usize, 1), report.commits.failed);
+        try testing.expectEqualStrings("CorruptIntent", report.commits.reason.?);
         try testing.expectEqualStrings(util_src, try case.env.read("src/util.ts"));
+        try testing.expect(!case.repo.exists(".emetgate/intents"));
     }
     {
         var case: Plain = undefined;
@@ -545,7 +546,8 @@ test "commit protocol: staged bytes that were tampered with are never written, w
         try case.repo.write(record, changed);
         try case.repo.write(staged, tampered);
         const report = try recover(&case);
-        try testing.expectEqual(@as(usize, 1), report.commits.pending);
+        try testing.expectEqual(@as(usize, 1), report.commits.failed);
+        try testing.expectEqualStrings("CorruptIntent", report.commits.reason.?);
         try testing.expectEqualStrings(util_src, try env.read("src/util.ts"));
     }
 }
@@ -581,4 +583,44 @@ test "commit protocol: without commits the gate still tests the working tree as 
     const reply = try env.call("emetgate_try", .{ .file = try env.abs("src/util.ts"), .symbol = "add", .hash = try env.hashOf("src/util.ts", "add"), .body = new_body }, needs_good, false);
     try testing.expect(reply.is_error);
     try testing.expectEqualStrings(util_src, try env.read("src/util.ts"));
+}
+
+test "commit protocol: a record that did not come from a commit cannot delete a file the replaced commit does not hold" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    const local = "kept by the user\n";
+    try case.repo.write("local.txt", local);
+    const head = try env.head();
+    const record = try std.fmt.allocPrint(env.arena(), "{{\"version\":1,\"commit\":\"{s}\",\"base\":\"{s}\",\"branch\":\"{s}\",\"lock\":\"{s}\",\"items\":[{{\"path\":\"local.txt\",\"mode\":\"100644\",\"blob\":\"\",\"base\":\"{s}\",\"new\":\"\"}}]}}", .{
+        head,
+        head,
+        try env.git(&.{ "symbolic-ref", "HEAD" }),
+        "00" ** 32,
+        &symbol.formatHash(symbol.hashOf(local)),
+    });
+    try case.repo.write(".emetgate/intents/0123456789abcdef.json", record);
+
+    const report = try recover(&case);
+    try testing.expectEqual(@as(usize, 1), report.commits.failed);
+    try testing.expectEqualStrings("CorruptIntent", report.commits.reason.?);
+    try testing.expectEqualStrings(local, try env.read("local.txt"));
+    try testing.expect(!case.repo.exists(".emetgate/intents"));
+}
+
+test "commit protocol: a record with a commit id or a branch that is not one is dropped without a git call on it" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    const head = try env.head();
+    const record = try std.fmt.allocPrint(env.arena(), "{{\"version\":1,\"commit\":\"{s}\",\"base\":\"--output=owned.txt\",\"branch\":\"refs/heads/main\",\"lock\":\"{s}\",\"items\":[]}}", .{ head, "00" ** 32 });
+    try case.repo.write(".emetgate/intents/0123456789abcdef.json", record);
+    const report = try recover(&case);
+    try testing.expectEqual(@as(usize, 1), report.commits.failed);
+    try testing.expect(!case.repo.exists("owned.txt"));
+    try testing.expect(!case.repo.exists(".emetgate/intents"));
 }

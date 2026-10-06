@@ -141,6 +141,12 @@ pub fn discard(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, lo
     removeDir(io, dir);
 }
 
+fn isObjectId(text: []const u8) bool {
+    if (text.len != 40 and text.len != 64) return false;
+    for (text) |c| if (!std.ascii.isHex(c)) return false;
+    return true;
+}
+
 fn parseDigest(hex: []const u8) !git_commit.Digest {
     var out: git_commit.Digest = undefined;
     if (hex.len != out.len * 2) return error.CorruptIntent;
@@ -167,7 +173,7 @@ fn same(a: ?symbol.Hash, b: ?symbol.Hash) bool {
 
 const Forward = enum { kept, written, left };
 
-fn forwardOne(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, dir: []const u8, tag: []const u8, index: usize, item: Item) !Forward {
+fn forwardOne(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, dir: []const u8, tag: []const u8, base_commit: []const u8, index: usize, item: Item) !Forward {
     try shadow.validateRelative(item.path);
     const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, item.path });
     std.mem.replaceScalar(u8, abs, '/', '\\');
@@ -179,6 +185,9 @@ fn forwardOne(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, di
     const journal_dir = try std.fmt.allocPrint(arena, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
 
     if (new == null) {
+        const before = (try git_commit.blobAt(gpa, io, root, base_commit, item.path)) orelse return error.CorruptIntent;
+        defer gpa.free(before);
+        if (!try git_commit.storesAs(gpa, io, root, item.path, abs, before)) return error.CorruptIntent;
         var pendings = [1]disk.Pending{try disk.stageDelete(gpa, io, abs, base.?)};
         try disk.commitBatch(&pendings, null, null, null, null);
         return .written;
@@ -207,11 +216,15 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
     const bytes = try Dir.cwd().readFileAlloc(io, try recordPath(arena, dir, tag), arena, .limited(max_bytes));
     const record = std.json.parseFromSliceLeaky(Record, arena, bytes, .{ .ignore_unknown_fields = true }) catch return error.CorruptIntent;
     if (record.version != version) return error.CorruptIntent;
+    if (!isObjectId(record.commit) or !isObjectId(record.base)) return error.CorruptIntent;
+    if (!std.mem.startsWith(u8, record.branch, git_commit.branch_prefix)) return error.CorruptIntent;
     const lock = try parseDigest(record.lock);
 
     const entries = try arena.alloc(git_commit.Entry, record.items.len);
     for (record.items, entries) |item, *slot| {
         if (item.mode.len != 6) return error.CorruptIntent;
+        for (item.mode) |c| if (!std.ascii.isDigit(c)) return error.CorruptIntent;
+        if (item.blob.len != 0 and !isObjectId(item.blob)) return error.CorruptIntent;
         slot.* = .{ .path = try arena.dupe(u8, item.path), .mode = item.mode[0..6].*, .blob = if (item.blob.len == 0) null else try arena.dupe(u8, item.blob) };
     }
     const now = try git_commit.standing(gpa, io, root, record.branch, record.commit, entries);
@@ -253,8 +266,8 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
 
     for (record.items, now.wanted, 0..) |item, wanted, i| {
         if (!wanted) continue;
-        const outcome = forwardOne(gpa, arena, io, root, dir, tag, i, item) catch |err| {
-            if (err == error.Crashed or err == error.OutOfMemory) return err;
+        const outcome = forwardOne(gpa, arena, io, root, dir, tag, record.base, i, item) catch |err| {
+            if (err == error.Crashed or err == error.OutOfMemory or err == error.CorruptIntent) return err;
             report.pending = 1;
             report.reason = file_not_written;
             return report;
@@ -300,15 +313,14 @@ pub fn recoverAll(gpa: Allocator, io: std.Io, root: []const u8) !Report {
     for (tags.items) |tag| {
         const one = complete(gpa, io, root, tag, null) catch |err| {
             if (err == error.Crashed or err == error.OutOfMemory) return err;
+            if (err == error.CorruptIntent) removeFiles(arena, io, dir_abs, tag) catch {};
             total.failed += 1;
             total.reason = @errorName(err);
             continue;
         };
         total.add(one);
     }
-    if (total.pending == 0 and total.failed == 0) {
-        removeFiles(arena, io, dir_abs, null) catch {};
-        removeDir(io, dir_abs);
-    }
+    if (total.pending == 0 and total.failed == 0) removeFiles(arena, io, dir_abs, null) catch {};
+    removeDir(io, dir_abs);
     return total;
 }

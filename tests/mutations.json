@@ -9530,6 +9530,26 @@
         "commit protocol: staged bytes that were tampered with are never written, whether or not the record was changed to match"
       ],
       "note": "defense in depth: the check against the blob right after it (PV17) refuses the same tampered bytes; this one refuses them without a git call and also refuses bytes of the same stored form that are not the tested ones"
+    },
+    {
+      "id": "PV29-recover-deletes-a-file-the-replaced-commit-does-not-hold",
+      "file": "src/platform/commit_intent.zig",
+      "from": "        const before = (try git_commit.blobAt(gpa, io, root, base_commit, item.path)) orelse return error.CorruptIntent;\n        defer gpa.free(before);\n        if (!try git_commit.storesAs(gpa, io, root, item.path, abs, before)) return error.CorruptIntent;\n",
+      "to": "        if (base_commit.len == 0) return error.CorruptIntent;\n",
+      "kills": [
+        "commit protocol: a record that did not come from a commit cannot delete a file the replaced commit does not hold"
+      ],
+      "note": "a crafted record could delete an untracked file whose content it knows"
+    },
+    {
+      "id": "PV30-record-ids-not-validated",
+      "file": "src/platform/commit_intent.zig",
+      "from": "    if (!isObjectId(record.commit) or !isObjectId(record.base)) return error.CorruptIntent;\n",
+      "to": "",
+      "kills": [
+        "commit protocol: a record with a commit id or a branch that is not one is dropped without a git call on it"
+      ],
+      "note": "text from a record would reach a git command line as a revision"
     }
   ]
 }
