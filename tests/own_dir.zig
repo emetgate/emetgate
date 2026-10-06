@@ -264,3 +264,24 @@ test "own dir: a shadow workspace that another handle holds alone is not cleaned
     try std.Io.Dir.cwd().access(testing.io, try std.fmt.bufPrint(&probe, "{s}\\a.ts", .{shadow_abs}), .{});
     try shadow.remove(testing.io, base, shadow_abs);
 }
+
+test "own dir: a shadow directory that is itself a junction is refused and what it points to stays" {
+    try skipOffWindows();
+    var tree = try Tree.init();
+    defer tree.deinit();
+    try tree.tmp.dir.createDirPath(testing.io, "vault");
+    try tree.tmp.dir.writeFile(testing.io, .{ .sub_path = "vault/kept.txt", .data = "kept\n" });
+    var a: [std.fs.max_path_bytes]u8 = undefined;
+    var b: [std.fs.max_path_bytes]u8 = undefined;
+    var c: [std.fs.max_path_bytes]u8 = undefined;
+    const base = try tree.abs(&a, "shadows");
+    const key = emetgate.shadow_root.repoKey(base);
+    const shadow_abs = try std.fmt.bufPrint(&c, "{s}\\{s}\\shadow", .{ base, &key });
+    try std.Io.Dir.cwd().createDirPath(testing.io, std.fs.path.dirname(shadow_abs).?);
+    try shadow.createJunction(testing.io, shadow_abs, try tree.abs(&b, "vault"));
+    defer std.Io.Dir.cwd().deleteDir(testing.io, shadow_abs) catch {};
+
+    try testing.expectError(error.WorkspaceIsLink, shadow.remove(testing.io, base, shadow_abs));
+    try testing.expect(try shadow.isReparsePoint(shadow_abs));
+    try tree.tmp.dir.access(testing.io, "vault/kept.txt", .{});
+}

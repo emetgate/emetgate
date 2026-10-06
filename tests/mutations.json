@@ -5129,7 +5129,8 @@
       "from": "Links(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
       "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
       "kills": [
-        "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
+        "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched",
+        "own dir: a shadow directory that is itself a junction is refused and what it points to stays"
       ]
     },
     {
