@@ -304,13 +304,15 @@ on a body 4,000 levels deep and 6.3 s on one 16,000 levels deep (ReleaseSafe, no
 
 ### A write that is also a commit
 
-`emetgate mcp --commit` makes every accepted `emetgate_try` on a symbol one git commit. The model sends the commit message in the same call, as `message`; the tool list shows that argument, and marks it required, only when `--commit` is on. Without `--commit` a call that carries a `message` is refused (`CommitNotEnabled`), and with it a call without one is refused (`MissingCommitMessage`).
+`emetgate mcp --commit` makes every accepted `emetgate_try` on a symbol, and every accepted `emetgate_write_doc`, one git commit. The model sends the commit message in the same call, as `message`; the tool list shows that argument, and marks it required, only when `--commit` is on. Without `--commit` a call that carries a `message` is refused (`CommitNotEnabled`), and with it a call without one is refused (`MissingCommitMessage`).
 
 The order is fixed. Before anything runs, the message is checked against the message rules below and the repository is checked: `HEAD` is on a branch (`DetachedHead`), the branch has a commit (`NoCommitYet`), no merge, rebase, cherry-pick, revert or bisect is in progress (`OperationInProgress`), the repository does not ask for signed commits (`SigningNotSupported`), and the target file has no uncommitted change of its own (`TargetHasUncommittedChanges`), so a hand edit is never committed under the model's message. Then the rules, the typecheck and the tests run as they always do. When they pass, the commit object is built from the bytes that were tested, with `git hash-object`, a private index file and `git commit-tree`; the working tree, the index and the branch are untouched until then. A change that leaves the tree as it was is refused (`NothingToCommit`). Only then is the file written, the branch moved with `git update-ref` from the commit it was on (`WrittenButNotCommitted` when someone moved it in between), the index updated and the receipt attached to the new commit. The reply carries the commit id as `commit`.
 
 Emetgate builds the commit with git's plumbing commands, so `pre-commit` and `commit-msg` hooks do not run and the commit is not signed. A check a hook did belongs in the test command or in a rule. A hand edit to another file stays in the working tree and out of the commit.
 
-The node form of `emetgate_try`, `emetgate_try_batch`, `emetgate_write_doc`, `emetgate_rename`, `emetgate_move` and `emetgate_move_file` do not commit yet. With `--commit` on they refuse (`CommitNotSupportedByTool`) and write nothing.
+`emetgate_write_doc` has no receipt, with or without `--commit`, so its commit carries no receipt note; the reply still carries `commit`.
+
+The node form of `emetgate_try`, `emetgate_try_batch`, `emetgate_rename`, `emetgate_move` and `emetgate_move_file` do not commit yet. With `--commit` on they refuse (`CommitNotSupportedByTool`) and write nothing.
 
 ### Rules for a commit message
 

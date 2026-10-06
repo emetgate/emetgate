@@ -365,7 +365,14 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
     try js.endObject();
 }
 
-const commit_tool = "emetgate_try";
+const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_write_doc" };
+
+fn takesMessage(tool: []const u8) bool {
+    for (commit_tools) |name| {
+        if (std.mem.eql(u8, name, tool)) return true;
+    }
+    return false;
+}
 const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
 
 fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
@@ -397,7 +404,7 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
             try js.write(prop.desc);
             try js.endObject();
         }
-        const with_message = commit and std.mem.eql(u8, tool.name, commit_tool);
+        const with_message = commit and takesMessage(tool.name);
         if (with_message) {
             try js.objectField(commit_prop.name);
             try js.beginObject();

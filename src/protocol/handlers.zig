@@ -69,10 +69,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
         try policy_mod.refuseWithoutCommit(policy);
         return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
     }
-    if (std.mem.eql(u8, name, "emetgate_write_doc")) {
-        try policy_mod.refuseWithoutCommit(policy);
-        return callWriteDoc(gpa, io, args, event, policy);
-    }
+    if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror);
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearch(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session);
@@ -602,7 +599,11 @@ fn callWriteDoc(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
-        try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        if (err == error.WrittenButNotIndexed) {
+            try wire.writeNotIndexed(&buffer.writer, file);
+        } else {
+            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        }
         break :blk true;
     };
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
@@ -610,6 +611,8 @@ fn callWriteDoc(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
 
 fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const u8, new_text: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
+    var plan: runner.GitCommit = .{ .message = (try policy_mod.commitMessage(args, policy)) orelse "" };
+    defer plan.deinit(gpa);
     const arguments = args orelse return error.MissingArgument;
     const picked = try docSelector(arguments);
     const expected_hash = try symbol.parseHash(hash_hex);
@@ -628,6 +631,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
         .shadow_root = policy.shadow_root,
+        .commit = if (policy.commit) &plan else null,
     }, null);
     defer result.deinit(gpa);
     const expected: symbol.Expected = .{ .present = expected_hash };
@@ -638,6 +642,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
             event.edits = 1;
             event.hash = new_hash;
             try wire.writeCommitted(w, picked.label, expected, new_hash, null, full);
+            if (plan.oid) |oid| try receipt_note.commit(gpa, io, place.root, oid, w);
             return false;
         },
         .rejected => |report| {
