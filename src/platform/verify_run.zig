@@ -2,6 +2,7 @@ const std = @import("std");
 const checker = @import("../verify/checker.zig");
 const receipt = @import("../verify/receipt.zig");
 const receipts = @import("receipts.zig");
+const verify_merge = @import("verify_merge.zig");
 const rules = @import("rules.zig");
 const runner = @import("runner.zig");
 const sandbox = @import("sandbox.zig");
@@ -130,6 +131,8 @@ const Context = struct {
 pub fn run(gpa: Allocator, arena: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, options: Options) !Result {
     _ = gpa;
     const commit = try receipts.resolveCommit(arena, io, root, options.commit);
+    const parents = try verify_merge.parents(arena, io, root, commit);
+    if (parents.len > 1) return .{ .commit = commit, .parent = parents[0], .report = try verify_merge.judge(arena, io, root, commit, parents) };
     const parent_spec = try std.fmt.allocPrint(arena, "{s}^", .{commit});
     const parent: ?[]const u8 = receipts.resolveCommit(arena, io, root, parent_spec) catch null;
     const changed = try receipts.changedPaths(arena, io, root, commit);
@@ -160,6 +163,10 @@ pub fn writeJson(w: *std.Io.Writer, result: Result) !void {
     try js.write(result.commit);
     try js.objectField("verdict");
     try js.write(@tagName(result.report.verdict));
+    if (result.report.reason.len != 0) {
+        try js.objectField("reason");
+        try js.write(result.report.reason);
+    }
     try js.objectField("files");
     try js.beginArray();
     for (result.report.files) |f| {
@@ -199,7 +206,9 @@ pub fn writeJson(w: *std.Io.Writer, result: Result) !void {
 }
 
 pub fn writeText(w: *std.Io.Writer, result: Result) !void {
-    try w.print("commit {s}: {t}\n", .{ result.commit, result.report.verdict });
+    try w.print("commit {s}: {t}", .{ result.commit, result.report.verdict });
+    if (result.report.reason.len != 0) try w.print("  ({s})", .{result.report.reason});
+    try w.writeByte('\n');
     for (result.report.files) |f| {
         try w.print("  {t: <10} {s}", .{ f.outcome.verdict, f.path });
         if (f.outcome.reason.len != 0) try w.print("  ({s})", .{f.outcome.reason});
@@ -215,6 +224,7 @@ pub fn writeText(w: *std.Io.Writer, result: Result) !void {
 pub fn exitCode(verdict: checker.Verdict) u8 {
     return switch (verdict) {
         .verified => 0,
+        .merged => 58,
         .unverified => 53,
         .mismatch => 54,
     };

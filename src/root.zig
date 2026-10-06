@@ -87,6 +87,7 @@ pub const disk = @import("platform/disk.zig");
 pub const durability_log = @import("platform/durability_log.zig");
 pub const receipts = @import("platform/receipts.zig");
 pub const verify_run = @import("platform/verify_run.zig");
+pub const verify_merge = @import("platform/verify_merge.zig");
 pub const jcs = @import("verify/jcs.zig");
 pub const receipt = @import("verify/receipt.zig");
 pub const checker = @import("verify/checker.zig");

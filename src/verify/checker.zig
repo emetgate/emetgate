@@ -13,6 +13,7 @@ const Hash = receipt.Hash;
 
 pub const Verdict = enum {
     verified,
+    merged,
     unverified,
     mismatch,
 
@@ -75,6 +76,7 @@ pub const Report = struct {
     files: []const FileResult,
     receipts: []const ReceiptResult,
     verdict: Verdict,
+    reason: []const u8 = "",
 };
 
 const State = struct {

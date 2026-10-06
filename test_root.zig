@@ -89,6 +89,7 @@ pub const disk = src.disk;
 pub const durability_log = src.durability_log;
 pub const receipts = src.receipts;
 pub const verify_run = src.verify_run;
+pub const verify_merge = src.verify_merge;
 pub const jcs = src.jcs;
 pub const receipt = src.receipt;
 pub const checker = src.checker;
@@ -194,6 +195,7 @@ test {
     _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/verify_receipts.zig");
     _ = @import("tests/verify_filtered.zig");
+    _ = @import("tests/verify_merge.zig");
     _ = @import("tests/verify_tcb.zig");
     _ = @import("tests/verify_n_version.zig");
     _ = @import("tests/query.zig");

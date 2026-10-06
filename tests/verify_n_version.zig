@@ -66,7 +66,7 @@ pub fn run(arena: Allocator, root: []const u8, commit: []const u8) !Python {
         .exited => |c| @intCast(c),
         else => return error.PythonCheckerCrashed,
     };
-    if (code != 0 and code != 53 and code != 54 and code != 55) {
+    if (code != 0 and code != 53 and code != 54 and code != 55 and code != 58) {
         std.debug.print("python checker failed: {s}\n", .{result.stderr});
         return error.PythonCheckerFailed;
     }
@@ -74,9 +74,30 @@ pub fn run(arena: Allocator, root: []const u8, commit: []const u8) !Python {
     return .{ .exit = code, .report = parsed.value };
 }
 
+fn compareMerge(zig: verify_run.Result, py: Python) !void {
+    const report = py.report.object;
+    const reason = report.get("reason") orelse return error.NVersionDisagreement;
+    if (!std.mem.eql(u8, reason.string, zig.report.reason)) return error.NVersionDisagreement;
+    if (!std.mem.eql(u8, report.get("verdict").?.string, @tagName(zig.report.verdict))) return error.NVersionDisagreement;
+    if (py.exit != verify_run.exitCode(zig.report.verdict)) return error.NVersionDisagreement;
+    if (report.get("receipts").?.array.items.len != zig.report.receipts.len) return error.NVersionDisagreement;
+    const files = report.get("files").?.array.items;
+    if (files.len != zig.report.files.len) return error.NVersionDisagreement;
+    for (zig.report.files, files) |f, item| {
+        const o = item.object;
+        if (!std.mem.eql(u8, o.get("path").?.string, f.path)) return error.NVersionDisagreement;
+        if (!std.mem.eql(u8, o.get("verdict").?.string, @tagName(f.outcome.verdict))) return error.NVersionDisagreement;
+        if (!std.mem.eql(u8, o.get("reason").?.string, f.outcome.reason)) return error.NVersionDisagreement;
+    }
+}
+
 pub fn compare(arena: Allocator, root: []const u8, zig: verify_run.Result) !void {
     const py = try run(arena, root, zig.commit);
     const report = py.report.object;
+    if (zig.report.reason.len != 0 or report.get("reason") != null) {
+        errdefer std.debug.print("zig {t} ({s})\npython: {f}\n", .{ zig.report.verdict, zig.report.reason, std.json.fmt(py.report, .{}) });
+        return compareMerge(zig, py);
+    }
     const not_checked = report.get("not_checked").?.array.items;
     errdefer {
         std.debug.print("zig verdict {t}\n", .{zig.report.verdict});
