@@ -475,3 +475,23 @@ test "commit window: an entry staged on another file between the index copy and 
     try testing.expectEqualStrings("M  src/other.ts", try env.git(&.{ "status", "--porcelain" }));
     try testing.expect(!case.repo.exists(".git/index.lock"));
 }
+
+test "commit window: after a soft reset to the commit before, recover writes no file though the index still holds the new entry" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&.{ two_file, ignore });
+    defer case.deinit();
+    const env = &case.env;
+    const before = try env.head();
+    try cutAfterIndex(&case);
+    const staged = try env.git(&.{ "rev-parse", ":src/util.ts" });
+    _ = try env.git(&.{ "reset", "-q", "--soft", "HEAD^" });
+    try testing.expectEqualStrings(before, try env.head());
+
+    const report = try disk.recover(testing.allocator, testing.io, case.repo.root_abs);
+    try testing.expectEqual(@as(usize, 0), report.commits.written + report.commits.left + report.commits.pending + report.commits.failed);
+    try testing.expectEqual(@as(usize, 1), report.commits.dropped);
+    try testing.expectEqualStrings(two_src, try env.read("src/util.ts"));
+    try testing.expectEqualStrings(staged, try env.git(&.{ "rev-parse", ":src/util.ts" }));
+    try testing.expect(!case.repo.exists(".emetgate/intents"));
+}

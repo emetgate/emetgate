@@ -9364,7 +9364,7 @@
       "from": "        if (!wanted or !has) continue;\n        const outcome = forwardOne(",
       "to": "        if ((false and !wanted) or !has) continue;\n        const outcome = forwardOne(",
       "kills": [
-        "commit protocol: the user removes the lock and commits before the index was published, and recover writes nothing and leaves a clean tree"
+        "commit window: after a soft reset to the commit before, recover writes no file though the index still holds the new entry"
       ],
       "note": "recover would write a file the checked out commit does not hold"
     },
