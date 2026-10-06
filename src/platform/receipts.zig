@@ -47,8 +47,27 @@ pub const Commit = struct {
 fn storedSymbol(arena: Allocator, io: std.Io, root: []const u8, made: Commit, rev: []const u8, path: []const u8, ref: []const u8, claimed: ?Hash) !?Hash {
     if (claimed == null) return null;
     const runtime = made.runtime orelse return claimed;
-    const bytes = (try blob(arena, io, root, rev, path)) orelse return claimed;
+    const bytes = (if (try filtered(arena, io, root, rev, path)) try checkedOut(arena, io, root, rev, path) else try blob(arena, io, root, rev, path)) orelse return claimed;
     return (try checker.symbolHashIn(arena, runtime, path, bytes, ref)) orelse claimed;
+}
+
+pub fn filtered(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !bool {
+    const out = (try git(arena, io, root, &.{ "check-attr", "-z", "--source", rev, "filter", "--", path })) orelse
+        (try git(arena, io, root, &.{ "check-attr", "-z", "filter", "--", path })) orelse return false;
+    var fields = std.mem.splitScalar(u8, out, 0);
+    _ = fields.next() orelse return false;
+    _ = fields.next() orelse return false;
+    const value = fields.next() orelse return false;
+    for ([_][]const u8{ "unspecified", "unset", "set", "" }) |none| {
+        if (std.mem.eql(u8, value, none)) return false;
+    }
+    return true;
+}
+
+pub fn checkedOut(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !?[]u8 {
+    const source = try std.fmt.allocPrint(arena, "--attr-source={s}", .{rev});
+    const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ rev, path });
+    return git(arena, io, root, &.{ source, "cat-file", "--filters", spec });
 }
 
 fn blob(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !?[]u8 {

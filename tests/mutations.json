@@ -9825,6 +9825,62 @@
       "kills": [
         "own dir: a shadow workspace that another handle holds alone is not cleaned"
       ]
+    },
+    {
+      "id": "VF1-verify-hashes-symbols-over-the-stored-form-of-a-filtered-file",
+      "file": "src/platform/verify_run.zig",
+      "from": "        if (!try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;\n",
+      "to": "        if (true or !try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;\n",
+      "kills": [
+        "verify filtered: a commit whose stored form is not source is verified over what its filter checks out",
+        "verify filtered: without the filter that checks the file out the verdict is unverified by name, not mismatch",
+        "verify filtered: a rename under a filter is verified by the alpha hash of what the filter checks out"
+      ]
+    },
+    {
+      "id": "VF2-filter-output-that-does-not-parse-is-called-a-mismatch",
+      "file": "src/verify/checker.zig",
+      "from": "                        if (form.driven) outcome.raise(.unverified, not_checked_out) else",
+      "to": "                        if (false and form.driven) outcome.raise(.unverified, not_checked_out) else",
+      "kills": [
+        "verify filtered: without the filter that checks the file out the verdict is unverified by name, not mismatch"
+      ]
+    },
+    {
+      "id": "VF3-missing-filter-output-is-called-a-mismatch",
+      "file": "src/verify/checker.zig",
+      "from": "            } else if (!form.available) {\n",
+      "to": "            } else if (false and !form.available) {\n",
+      "kills": [
+        "verify filtered: a filter that fails gives unverified by name, not mismatch"
+      ]
+    },
+    {
+      "id": "VF4-receipt-hashes-symbols-over-the-working-file-of-a-filtered-path",
+      "file": "src/platform/receipts.zig",
+      "from": "(if (try filtered(arena, io, root, rev, path)) try checkedOut",
+      "to": "(if (false and try filtered(arena, io, root, rev, path)) try checkedOut",
+      "kills": [
+        "verify filtered: a commit whose stored form is not source is verified over what its filter checks out"
+      ]
+    },
+    {
+      "id": "VF5-symmetry-check-runs-without-the-checked-out-form",
+      "file": "src/verify/checker.zig",
+      "from": "            if (!form.available) return outcome.raise(.unverified, not_checked_out);\n",
+      "to": "",
+      "kills": [
+        "verify filtered: a rename whose files cannot be checked out is unverified by name, not mismatch"
+      ]
+    },
+    {
+      "id": "VF6-symmetry-check-calls-unparsed-filter-output-a-mismatch",
+      "file": "src/verify/checker.zig",
+      "from": "            if (!form.driven) continue;\n",
+      "to": "            if (true or !form.driven) continue;\n",
+      "kills": [
+        "verify filtered: a rename whose files cannot be checked out is unverified by name, not mismatch"
+      ]
     }
   ]
 }

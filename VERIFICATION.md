@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1616**
-- Mutations declared in `tests/mutations.json`: **992**
-  - killed: **959**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1622**
+- Mutations declared in `tests/mutations.json`: **998**
+  - killed: **965**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **4**
@@ -598,7 +598,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-492 mutation(s).
+498 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1094,6 +1094,12 @@ python tools/verification_page.py --check
 | `OD6-intents-cleanup-takes-any-file` | `src/platform/commit_intent.zig` | `const owner = ownTag(entry.name) orelse continue;` -> `const owner = ownTag(entry.name) orelse entry.name;` | own dir: recover leaves a file it did not write in the intents directory, whate... | killed |
 | `OD7-any-json-is-read-as-an-intent-record` | `src/platform/commit_intent.zig` | `const tag = own_dir.tagOf(entry.name, &.{record_suffix}) orelse...` -> `const tag = if (std.mem.endsWith(u8, entry.name, record_suffix)...` | own dir: recover leaves a file it did not write in the intents directory, whate... | killed |
 | `OD10-commit-work-directory-emptied` | `src/platform/git_commit.zig` | `if (entry.kind != .file or !ours(entry.name)) continue;` -> `if (entry.kind != .file) continue;` | own dir: a commit call leaves a file it did not write in the commit work direct... | killed |
+| `VF1-verify-hashes-symbols-over-the-stored-form-of-a-filtered-file` | `src/platform/verify_run.zig` | `if (!try receipts.filtered(self.arena, self.io, self.root, r, p...` -> `if (true or !try receipts.filtered(self.arena, self.io, self.ro...` | verify filtered: a commit whose stored form is not source is verified over what...; verif... | killed |
+| `VF2-filter-output-that-does-not-parse-is-called-a-mismatch` | `src/verify/checker.zig` | `if (form.driven) outcome.raise(.unverified, not_checked_out) el...` -> `if (false and form.driven) outcome.raise(.unverified, not_check...` | verify filtered: without the filter that checks the file out the verdict is unv... | killed |
+| `VF3-missing-filter-output-is-called-a-mismatch` | `src/verify/checker.zig` | `} else if (!form.available) {` -> `} else if (false and !form.available) {` | verify filtered: a filter that fails gives unverified by name, not mismatch | killed |
+| `VF4-receipt-hashes-symbols-over-the-working-file-of-a-filtered-path` | `src/platform/receipts.zig` | `(if (try filtered(arena, io, root, rev, path)) try checkedOut` -> `(if (false and try filtered(arena, io, root, rev, path)) try ch...` | verify filtered: a commit whose stored form is not source is verified over what... | killed |
+| `VF5-symmetry-check-runs-without-the-checked-out-form` | `src/verify/checker.zig` | `if (!form.available) return outcome.raise(.unverified, not_chec...` -> `` | verify filtered: a rename whose files cannot be checked out is unverified by na... | killed |
+| `VF6-symmetry-check-calls-unparsed-filter-output-a-mismatch` | `src/verify/checker.zig` | `if (!form.driven) continue;` -> `if (true or !form.driven) continue;` | verify filtered: a rename whose files cannot be checked out is unverified by na... | killed |
 
 ## What this system does not prove
 
