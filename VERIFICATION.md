@@ -372,7 +372,7 @@ python tools/verification_page.py --check
 | `CMD6-crash-counted-as-a-violation` | `src/platform/rules.zig` | `.crashed, .timed_out, .output_limit => .crashed,     }; }  pub ...` -> `.crashed => .violated,         .timed_out, .output_limit => .cr...` | a command verdict has three outcomes: pass, violation, and no verdict at all; cmd rule: a... | killed |
 | `CMD8-command-not-found-called-a-violation` | `src/platform/rules.zig` | `if (!try resolvable(gpa, io, options.shadow_abs, head))` -> `if (false and !try resolvable(gpa, io, options.shadow_abs, head...` | cmd rule: a command that does not exist is not a verdict either | killed |
 | `RO4-skeleton-shows-rules-scoped-elsewhere` | `src/platform/rules.zig` | `if (!scope.coversFile(rel)) continue;` -> `if (!scope.coversFile(rel) and false) continue;` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
-| `RO5-skeleton-shows-forgotten-rules` | `src/platform/rules.zig` | `if (decision.status != .active) continue;         if (decision....` -> `if (decision.check) \|spec\| {` | memory.peek already folds the ledger down to active decisions, so the status guard in ado... | defense in depth |
+| `RO5-skeleton-shows-forgotten-rules` | `src/platform/rules.zig` | `if (decision.status != .active) continue;         if (isMessage...` -> `if (isMessageCheck(decision.check)) continue;` | memory.peek already folds the ledger down to active decisions, so the status guard in ado... | defense in depth |
 | `RM1-gate-skips-the-ledger-trust-check` | `src/platform/rules.zig` | `if (try ledgerTracked(gpa, io, root_abs)) return error.Untruste...` -> `` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep...; redte... | killed |
 | `RM2-trust-check-pathspec-case-sensitive` | `src/platform/rules.zig` | `":(icase,literal)"` -> `":(literal)"` | redteam ledger: a committed ledger spelled in another case is still untrusted | killed |
 | `RM3-ledger-listing-compared-case-sensitively` | `src/platform/rules.zig` | `std.ascii.eqlIgnoreCase(entry, ledger_rel)` -> `std.mem.eql(u8, entry, ledger_rel)` | a tracked ledger, under any spelling or as a tracked workspace entry, is recogn...; redte... | killed |
@@ -429,7 +429,7 @@ python tools/verification_page.py --check
 | `CP3-commit-message-not-checked` | `src/protocol/policy.zig` | `try commit_message.check(value.string);` -> `` | commit policy: with commits on every call needs a message, and the message is c... | killed |
 | `MR1-message-rule-reaches-the-code-gate` | `src/platform/rules.zig` | `if (isMessage(rule)) continue;` -> `` | a message rule is kept out of the code gate, which would otherwise fail closed ... | killed |
 | `MR4-message-rule-takes-a-scope` | `src/protocol/rule_command.zig` | `if (text_checks.of(spec) != null and decided.where != null) ret...` -> `` | rule: a message check is adopted, and a bad one or one with --in is refused and... | killed |
-| `MR7-skeleton-lists-message-rules` | `src/platform/rules.zig` | `if (text_checks.of(spec) != null) continue;` -> `` | rule: a message rule covers no file, so the skeleton does not list it | killed |
+| `MR7-skeleton-lists-message-rules` | `src/platform/rules.zig` | `if (isMessageCheck(decision.check)) continue;` -> `` | rule: a message rule covers no file, so the skeleton does not list it | killed |
 
 ### Scan
 

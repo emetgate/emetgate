@@ -123,6 +123,10 @@ pub fn isMessage(rule: Rule) bool {
     return text_checks.of(rule.check) != null;
 }
 
+fn isMessageCheck(check: ?[]const u8) bool {
+    return text_checks.of(check orelse return false) != null;
+}
+
 pub const message_label = "commit message";
 
 pub fn messageGate(gpa: Allocator, io: std.Io, root_abs: []const u8, message: []const u8) !Gate {
@@ -384,9 +388,7 @@ pub fn adoptedFor(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
     errdefer list.deinit(gpa);
     for (recall.decisions) |decision| {
         if (decision.status != .active) continue;
-        if (decision.check) |spec| {
-            if (text_checks.of(spec) != null) continue;
-        }
+        if (isMessageCheck(decision.check)) continue;
         if (decision.where) |text| {
             const scope = try where_mod.parse(text);
             if (!scope.coversFile(rel)) continue;

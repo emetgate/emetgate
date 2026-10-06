@@ -3495,8 +3495,8 @@
     {
       "id": "RO5-skeleton-shows-forgotten-rules",
       "file": "src/platform/rules.zig",
-      "from": "        if (decision.status != .active) continue;\n        if (decision.check) |spec| {",
-      "to": "        if (decision.check) |spec| {",
+      "from": "        if (decision.status != .active) continue;\n        if (isMessageCheck(decision.check)) continue;",
+      "to": "        if (isMessageCheck(decision.check)) continue;",
       "expect_status": "survived",
       "filter": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
@@ -8738,7 +8738,7 @@
     {
       "id": "MR7-skeleton-lists-message-rules",
       "file": "src/platform/rules.zig",
-      "from": "            if (text_checks.of(spec) != null) continue;\n",
+      "from": "        if (isMessageCheck(decision.check)) continue;\n",
       "to": "",
       "kills": [
         "rule: a message rule covers no file, so the skeleton does not list it"
