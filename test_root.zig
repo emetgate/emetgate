@@ -220,6 +220,7 @@ test {
     _ = @import("tests/redteam_write_doc.zig");
     _ = @import("tests/batch_crash_doc.zig");
     _ = @import("tests/commit_batch.zig");
+    _ = @import("tests/commit_batch_crash.zig");
     _ = @import("tests/commit_on_write.zig");
     _ = @import("tests/git_commit.zig");
     _ = @import("tests/git_fixture_test.zig");
