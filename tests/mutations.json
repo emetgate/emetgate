@@ -3402,8 +3402,8 @@
     {
       "id": "CMD3-command-cwd-is-the-real-repo",
       "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;",
-      "to": "if (try runCommandRulesFor(gpa, io, root, root, targets, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "from": "if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "to": "if (try runCommandRulesFor(gpa, io, root, root, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;",
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
       ]
@@ -3586,8 +3586,8 @@
     {
       "id": "RM8-runner-forces-trust",
       "file": "src/platform/runner.zig",
-      "from": "options.limits, options.allow_repo_memory)) |gated|",
-      "to": "options.limits, true)) |gated|",
+      "from": "targets, null, options.limits, options.allow_repo_memory)) |gated|",
+      "to": "targets, null, options.limits, true)) |gated|",
       "kills": [
         "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -3595,8 +3595,8 @@
     {
       "id": "RM9-runner-drops-the-flag",
       "file": "src/platform/runner.zig",
-      "from": "options.limits, options.allow_repo_memory)) |gated|",
-      "to": "options.limits, false)) |gated|",
+      "from": "targets, null, options.limits, options.allow_repo_memory)) |gated|",
+      "to": "targets, null, options.limits, false)) |gated|",
       "kills": [
         "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run"
       ]
@@ -3613,8 +3613,8 @@
     {
       "id": "RM11-batch-forces-trust",
       "file": "src/platform/batch.zig",
-      "from": "options.limits, options.allow_repo_memory)) |gated|",
-      "to": "options.limits, true)) |gated|",
+      "from": "targets[0..built], null, options.limits, options.allow_repo_memory)) |gated|",
+      "to": "targets[0..built], null, options.limits, true)) |gated|",
       "kills": [
         "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -3622,8 +3622,8 @@
     {
       "id": "RM12-batch-drops-the-flag",
       "file": "src/platform/batch.zig",
-      "from": "options.limits, options.allow_repo_memory)) |gated|",
-      "to": "options.limits, false)) |gated|",
+      "from": "targets[0..built], null, options.limits, options.allow_repo_memory)) |gated|",
+      "to": "targets[0..built], null, options.limits, false)) |gated|",
       "kills": [
         "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run in a batch"
       ]
@@ -5234,13 +5234,14 @@
       ]
     },
     {
-      "id": "JV3-replace-back-to-two-renames",
+      "id": "JV3-guard-lets-a-writer-in",
       "file": "src/platform/disk.zig",
-      "from": "        try writeDurably(self.io, self.backup, bytes);",
-      "to": "        try guard.renameTo(self.gpa, self.backup);",
+      "from": "            win.generic_read | win.delete,\n            win.file_share_read,\n",
+      "to": "            win.generic_read | win.delete,\n            win.file_share_read | win.file_share_write,\n",
       "kills": [
         "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole"
-      ]
+      ],
+      "note": "the write is two renames by handle now; what keeps a writer out between the check and the first rename is the share mode of the guard"
     },
     {
       "id": "JV4-delete-before-commit-record",
@@ -5724,8 +5725,8 @@
     {
       "id": "FM2-placement-replaces-the-target",
       "file": "src/platform/disk.zig",
-      "from": "        self.replacement.?.renameTo(self.gpa, self.path) catch |err| switch (err) {",
-      "to": "        self.replacement.?.renameReplacing(self.gpa, self.path) catch |err| switch (err) {",
+      "from": "        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.?.renameTo(self.gpa, self.path) catch |err| switch (err) {",
+      "to": "        if (in_gap) |hook| try hook.run(hook.context);\n        self.replacement.?.renameReplacing(self.gpa, self.path) catch |err| switch (err) {",
       "kills": [
         "file move crash: a file another process puts at the target before the placement is never replaced"
       ]
@@ -5956,8 +5957,8 @@
     {
       "id": "DF2-backup-delete-flush-dropped",
       "file": "src/platform/disk.zig",
-      "from": "                } else flushParent(self.backup) catch {\n                    if (leftover) |out| out.record(self.backup);\n                };\n",
-      "to": "                }\n",
+      "from": "                flushParent(self.backup) catch {\n                    if (leftover) |out| out.record(self.backup);\n                };\n",
+      "to": "",
       "kills": [
         "dir flush fin: a power loss after a finished batch does not bring a deleted backup back"
       ]
@@ -8677,8 +8678,8 @@
     {
       "id": "MR1-message-rule-reaches-the-code-gate",
       "file": "src/platform/rules.zig",
-      "from": "        if (isMessage(rule)) continue;\n",
-      "to": "",
+      "from": "        if (isMessage(rule) or isFrozen(rule)) continue;\n",
+      "to": "        if (isFrozen(rule)) continue;\n",
       "kills": [
         "a message rule is kept out of the code gate, which would otherwise fail closed on it"
       ],
@@ -8757,8 +8758,8 @@
     {
       "id": "GC2-unborn-branch-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "orelse return error.NoCommitYet;",
-      "to": "orelse \"HEAD\";",
+      "from": "        if (try git.run(&.{ \"rev-parse\", \"--verify\", \"-q\", \"HEAD^{commit}\" }) == null) return error.NoCommitYet;\n",
+      "to": "",
       "kills": [
         "git commit: a repository with no commit yet is refused"
       ],
@@ -8777,8 +8778,8 @@
     {
       "id": "GC4-signing-repository-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "if (std.mem.eql(u8, value, \"true\")) return error.SigningNotSupported;",
-      "to": "if (std.mem.eql(u8, value, \"never\")) return error.SigningNotSupported;",
+      "from": "    if (set.signing) return error.SigningNotSupported;\n",
+      "to": "    if (false and set.signing) return error.SigningNotSupported;\n",
       "kills": [
         "git commit: a repository that signs its commits is refused"
       ],
@@ -8787,8 +8788,8 @@
     {
       "id": "GC5-hand-edited-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "        if (!std.mem.eql(u8, inTree(tree, path).?.oid, oid)) return error.TargetHasUncommittedChanges;\n",
-      "to": "        if (false and !std.mem.eql(u8, inTree(tree, path).?.oid, oid)) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and !std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "git commit: a target edited by hand is refused, and an edit to another file is not in the way",
         "commit on write: a target edited by hand is refused and keeps the hand edit",
@@ -8902,8 +8903,8 @@
     {
       "id": "DC5-write-doc-message-kept-from-the-command-gate",
       "file": "src/platform/doc_writer.zig",
-      "from": "&.{}, session.message(), options.limits",
-      "to": "&.{}, null, options.limits",
+      "from": "runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits",
+      "to": "runner.runMessageRules(gpa, io, root, location.shadow, null, options.limits",
       "kills": [
         "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
         "message command: the same file redirected to standard input serves a checker that reads the message there",
@@ -8916,8 +8917,8 @@
     {
       "id": "MC1-try-message-kept-from-the-command-gate",
       "file": "src/platform/runner.zig",
-      "from": "location.shadow, targets, session.message(), options.limits",
-      "to": "location.shadow, targets, null, options.limits",
+      "from": "if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits",
+      "to": "if (try runMessageRules(gpa, io, root, location.shadow, null, options.limits",
       "kills": [
         "commit on write: a message command judges the message of a try, and a refusal writes nothing"
       ],
@@ -9298,8 +9299,8 @@
     {
       "id": "PV6-locked-index-found-after-the-gate",
       "file": "src/platform/git_commit.zig",
-      "from": "    if (try exists(io, try lockPath(git))) return error.IndexLocked;\n",
-      "to": "    if (false and try exists(io, try lockPath(git))) return error.IndexLocked;\n",
+      "from": "    if (try exists(io, try std.fmt.allocPrint(arena, \"{s}.lock\", .{known.index}))) return error.IndexLocked;\n",
+      "to": "    if (false and try exists(io, try std.fmt.allocPrint(arena, \"{s}.lock\", .{known.index}))) return error.IndexLocked;\n",
       "kills": [
         "commit protocol: an index lock is refused before the gate runs, so a failing test is never reached"
       ],
@@ -9339,8 +9340,8 @@
     {
       "id": "PV10-changed-index-replaced",
       "file": "src/platform/git_commit.zig",
-      "from": "    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {",
-      "to": "    if (false and (now == null or !std.mem.eql(u8, &now.?, &staged.base))) {",
+      "from": "    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {\n        guard.deleteSelf() catch {};",
+      "to": "    if (false and (now == null or !std.mem.eql(u8, &now.?, &staged.base))) {\n        guard.deleteSelf() catch {};",
       "kills": [
         "git commit: an index that changed after it was copied is not replaced, and what the user staged meanwhile stays staged"
       ],
@@ -9360,8 +9361,8 @@
     {
       "id": "PV12-recover-writes-what-head-does-not-hold",
       "file": "src/platform/commit_intent.zig",
-      "from": "        if (!wanted) continue;\n        const outcome = forwardOne(",
-      "to": "        if (false and !wanted) continue;\n        const outcome = forwardOne(",
+      "from": "        if (!wanted or !has) continue;\n        const outcome = forwardOne(",
+      "to": "        if (!has) continue;\n        const outcome = forwardOne(",
       "kills": [
         "commit protocol: the user removes the lock and commits before the index was published, and recover writes nothing and leaves a clean tree"
       ],
@@ -9370,20 +9371,20 @@
     {
       "id": "PV13-recover-overwrites-a-hand-edit",
       "file": "src/platform/commit_intent.zig",
-      "from": "    if (!same(now, base)) return .left;\n",
-      "to": "    if (false and !same(now, base)) return .left;\n",
+      "from": "    if (base != null and !same(now, base)) return .left;\n",
+      "to": "    if (false and base != null and !same(now, base)) return .left;\n",
       "kills": [
-        "commit protocol: a target the user edited after the crash is left as found, named in the report, and shows as their change"
+        "commit window: recover leaves a file whose line ends the user changed after the crash, though git stores it the same"
       ],
       "note": "a file edited after the crash would not be reported as left"
     },
     {
       "id": "PV14-targets-not-measured-again-before-the-branch-moves",
       "file": "src/platform/commit_plan.zig",
-      "from": "    try git_commit.remeasure(gpa, io, root, head, changes);\n",
+      "from": "            if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUncommittedChanges;\n",
       "to": "",
       "kills": [
-        "commit protocol: a change the user stages on the target while the tests run is not overwritten in the index"
+        "commit window: a file renamed over the target after its measurement is kept, and the user's change is not committed under the call's message"
       ],
       "note": "a change staged while the tests ran would be replaced in the index"
     },
@@ -9410,8 +9411,8 @@
     {
       "id": "PV18-pending-commit-not-finished-before-the-next",
       "file": "src/platform/commit_plan.zig",
-      "from": "        try recoverPending(gpa, io, root);\n",
-      "to": "",
+      "from": "        const found = try recoverFound(gpa, io, root);\n",
+      "to": "        const found: commit_intent.Report = .{};\n",
       "kills": [
         "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after"
       ],
@@ -9460,8 +9461,8 @@
     {
       "id": "PV23-receipt-symbol-hashes-taken-from-the-working-tree",
       "file": "src/platform/receipts.zig",
-      "from": "    const runtime = made.runtime orelse return claimed;\n",
-      "to": "    const runtime = made.runtime orelse return claimed;\n    if (rev.len != 0) return claimed;\n",
+      "from": "        const runtime = self.made.runtime orelse return claimed;\n",
+      "to": "        const runtime = self.made.runtime orelse return claimed;\n        if (path.len != 0) return claimed;\n",
       "kills": [
         "redteam commit: with autocrlf on verify accepts the commit emetgate just made"
       ],
@@ -9490,8 +9491,8 @@
     {
       "id": "PV26-batch-message-kept-from-the-command-gate",
       "file": "src/platform/batch.zig",
-      "from": "targets[0..built], session.message(), options.limits",
-      "to": "targets[0..built], null, options.limits",
+      "from": "runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits",
+      "to": "runner.runMessageRules(gpa, io, root, location.shadow, null, options.limits",
       "kills": [
         "commit batch: a message command judges the message of a try_batch, refuses one and accepts another",
         "commit batch: a message command judges the message of a node try",
@@ -9502,8 +9503,8 @@
     {
       "id": "PV27-server-start-leaves-a-pending-commit",
       "file": "src/protocol/server.zig",
-      "from": "    commit_plan.recoverPending(gpa, io, root) catch {};\n}",
-      "to": "}",
+      "from": "    const found = commit_plan.recoverFound(gpa, io, root) catch return;\n",
+      "to": "    const found: commit_intent.Report = .{};\n",
       "kills": [
         "commit protocol: the server finishes a pending commit when it starts"
       ],
@@ -9532,9 +9533,9 @@
     },
     {
       "id": "PV29-recover-deletes-a-file-the-replaced-commit-does-not-hold",
-      "file": "src/platform/commit_intent.zig",
-      "from": "        const before = (try git_commit.blobAt(gpa, io, root, base_commit, item.path)) orelse return error.CorruptIntent;\n        defer gpa.free(before);\n        if (!try git_commit.storesAs(gpa, io, root, item.path, abs, before)) return error.CorruptIntent;\n",
-      "to": "        if (base_commit.len == 0) return error.CorruptIntent;\n",
+      "file": "src/platform/git_commit.zig",
+      "from": "    const parent = ids.next() orelse return null;\n    if (ids.next() != null) return null;\n",
+      "to": "    const parent = ids.next() orelse base;\n    if (ids.next() != null) return null;\n",
       "kills": [
         "commit protocol: a record that did not come from a commit cannot delete a file the replaced commit does not hold"
       ],
@@ -9858,8 +9859,8 @@
     {
       "id": "VF4-receipt-hashes-symbols-over-the-working-file-of-a-filtered-path",
       "file": "src/platform/receipts.zig",
-      "from": "(if (try filtered(arena, io, root, rev, path)) try checkedOut",
-      "to": "(if (false and try filtered(arena, io, root, rev, path)) try checkedOut",
+      "from": "(if (slot.*.?[i]) try checkedOut",
+      "to": "(if (false and slot.*.?[i]) try checkedOut",
       "kills": [
         "verify filtered: a commit whose stored form is not source is verified over what its filter checks out"
       ]
@@ -9976,6 +9977,126 @@
       "to": "        if (isMessage(rule)) continue;\n",
       "kills": [
         "frozen: the code rules that read a tree take a frozen rule as nothing to check"
+      ]
+    },
+    {
+      "id": "P1a-guard-lets-a-file-be-renamed-over-the-target",
+      "file": "src/platform/disk.zig",
+      "from": "            win.generic_read | win.delete,\n            win.file_share_read,\n",
+      "to": "            win.generic_read | win.delete,\n            win.file_share_read | win.file_share_delete,\n",
+      "kills": [
+        "journal base: a file renamed over the target between the check and the write is refused, and the write lands whole"
+      ]
+    },
+    {
+      "id": "P1b-new-file-placed-over-whatever-is-at-the-path",
+      "file": "src/platform/disk.zig",
+      "from": "        if (crashBetweenMoves()) return error.Crashed;\n        self.replacement.?.renameTo(self.gpa, self.path) catch |err| switch (err) {",
+      "to": "        if (crashBetweenMoves()) return error.Crashed;\n        self.replacement.?.renameReplacing(self.gpa, self.path) catch |err| switch (err) {",
+      "kills": [
+        "journal base: a file created at the path between the two moves is kept, the write is refused by name and the old bytes are named as left over",
+        "commit window: a file created at the path between the two moves is kept, the commit stands, the reply names the path and no backup is left"
+      ]
+    },
+    {
+      "id": "P1c-backup-removed-though-its-bytes-are-in-no-commit",
+      "file": "src/platform/disk.zig",
+      "from": "            if (err == error.PathAlreadyExists and self.base_in_history) {",
+      "to": "            if (err == error.PathAlreadyExists) {",
+      "kills": [
+        "journal base: a file created at the path between the two moves is kept, the write is refused by name and the old bytes are named as left over"
+      ]
+    },
+    {
+      "id": "P1d-backup-of-committed-bytes-left-behind",
+      "file": "src/platform/disk.zig",
+      "from": "            if (err == error.PathAlreadyExists and self.base_in_history) {",
+      "to": "            if (false and err == error.PathAlreadyExists and self.base_in_history) {",
+      "kills": [
+        "commit window: a file created at the path between the two moves is kept, the commit stands, the reply names the path and no backup is left"
+      ]
+    },
+    {
+      "id": "P1e-journal-recover-restores-over-any-target",
+      "file": "src/platform/disk.zig",
+      "from": "    const ours = new_hash orelse return guard.renameReplacing(gpa, target_abs);\n",
+      "to": "    if (true) return guard.renameReplacing(gpa, target_abs);\n    const ours = new_hash orelse return;\n",
+      "kills": [
+        "journal base: recover does not put the old bytes back over a file the user edited after the crash",
+        "journal base: recover does not put the old bytes back over a file the user created where the crash left none"
+      ]
+    },
+    {
+      "id": "P1f-staged-entry-in-the-index-copy-not-compared",
+      "file": "src/platform/git_commit.zig",
+      "from": "            if (!std.mem.eql(u8, found.oid, oid) or !std.mem.eql(u8, found.mode, &mode)) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and (!std.mem.eql(u8, found.oid, oid) or !std.mem.eql(u8, found.mode, &mode))) return error.TargetHasUncommittedChanges;\n",
+      "kills": [
+        "redteam2 commit: a change staged on the target between its last measurement and the lock is still staged afterwards"
+      ]
+    },
+    {
+      "id": "P1g-commit-lands-on-the-branch-that-was-measured",
+      "file": "src/platform/commit_plan.zig",
+      "from": "    const branch = try git_commit.branchNow(arena, io, root, head);\n",
+      "to": "    const branch = head.branch;\n",
+      "kills": [
+        "commit window: a HEAD that was pointed at another branch after the measurement puts the commit on that branch and leaves the first alone",
+        "redteam commit: a branch switch made while the tests run puts the commit on the branch now checked out and leaves the first branch alone"
+      ]
+    },
+    {
+      "id": "P1h-recover-advances-an-entry-on-a-rewritten-index",
+      "file": "src/platform/commit_intent.zig",
+      "from": "                break :untouched std.mem.eql(u8, &current, &base_digest);\n",
+      "to": "                break :untouched std.mem.eql(u8, &current, &base_digest) or true;\n",
+      "kills": [
+        "commit window: an entry staged after the crash on an index that was never published is left, named by recover, and the file is not written"
+      ]
+    },
+    {
+      "id": "P1i-recover-writes-over-bytes-the-parent-does-not-hold",
+      "file": "src/platform/commit_intent.zig",
+      "from": "        if (!std.mem.eql(u8, stored, base_oid)) return .left;\n",
+      "to": "",
+      "kills": [
+        "commit window: a record that names the hash of the user's uncommitted edit as its base cannot write over that edit"
+      ]
+    },
+    {
+      "id": "P1j-next-call-skips-the-journal",
+      "file": "src/platform/disk.zig",
+      "from": "    var report: RecoverReport = .{};\n    try recoverJournaled(gpa, io, root_abs, &report);\n    return report;\n",
+      "to": "    const report: RecoverReport = .{};\n    if (false) try recoverJournaled(gpa, io, root_abs, @constCast(&report));\n    return report;\n",
+      "kills": [
+        "commit window: a crash between the two moves of the file write recovers to the whole commit, by recover and by the next call"
+      ]
+    },
+    {
+      "id": "P1k-what-an-implicit-recover-left-is-not-reported",
+      "file": "src/platform/commit_plan.zig",
+      "from": "        if (found.left != 0) {\n            plan.recovered = found.reason;",
+      "to": "        if (false and found.left != 0) {\n            plan.recovered = found.reason;",
+      "kills": [
+        "commit window: what an implicit recover left as found is named in the reply of the call that ran it"
+      ]
+    },
+    {
+      "id": "P1l-left-paths-not-named-in-the-reply",
+      "file": "src/platform/commit_plan.zig",
+      "from": "        plan.left_names_len = report.names().len;\n",
+      "to": "        plan.left_names_len = 0;\n",
+      "kills": [
+        "commit window: a file created at the path between the two moves is kept, the commit stands, the reply names the path and no backup is left"
+      ]
+    },
+    {
+      "id": "P1m-record-blob-not-checked-against-the-commit",
+      "file": "src/platform/commit_intent.zig",
+      "from": "        if (!std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;\n",
+      "to": "",
+      "kills": [
+        "commit window: a record whose blob is not the one its commit holds at that path is refused whole"
       ]
     }
   ]
