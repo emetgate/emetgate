@@ -335,8 +335,9 @@ pub const Shadow = struct {
     }
 };
 
-fn unlinkAll(shadow_abs: []const u8) !void {
+fn unlinkAll(base_abs: []const u8, shadow_abs: []const u8) !void {
     if (builtin.os.tag != .windows) return;
+    try ensureNoLinks(base_abs, shadow_abs);
     const tree = (try dir_scan.openRoot(shadow_abs)) orelse return;
     defer dir_scan.close(tree);
     _ = try gate_tree.removeAll(tree);
@@ -346,8 +347,8 @@ pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     try ensureInsideWorkspace(base_abs, shadow_abs);
     const held = try holdWorkspace(io, shadow_abs);
     errdefer if (held) |h| h.close();
+    try unlinkAll(base_abs, shadow_abs);
     try ensureNoLinks(base_abs, shadow_abs);
-    try unlinkAll(shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
     if (held) |h| h.close();
 

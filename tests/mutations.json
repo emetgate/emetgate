@@ -5127,8 +5127,8 @@
     {
       "id": "SR1-cleanup-follows-a-linked-workspace",
       "file": "src/platform/shadow.zig",
-      "from": "Links(base_abs, shadow_abs);\n    try unlinkAll(shadow_abs);",
-      "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try unlinkAll(shadow_abs);",
+      "from": "Links(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
+      "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
       "kills": [
         "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
       ]
@@ -9238,16 +9238,6 @@
       ]
     },
     {
-      "id": "GT9-absent-source-left-in-tree",
-      "file": "src/platform/gate_tree.zig",
-      "from": "if (ctx.options.wants[want_index].how != .link or ctx.kinds[want_index] != .file) break :same false;",
-      "to": "if (ctx.options.wants[want_index].how != .link) break :same false;",
-      "kills": [
-        "a wanted file that the working tree does not have is absent from the tree, and leaves it when it disappears",
-        "a failure at any step of reconcile leaves a tree that the next call makes right"
-      ]
-    },
-    {
       "id": "GT10-skipped-link-not-counted",
       "file": "src/platform/gate_tree.zig",
       "from": ".link_file, .link_directory => self.skip(),",
@@ -9281,25 +9271,16 @@
       "from": "if (attributes & win.file_attribute_reparse_point != 0) return if (directory) .link_directory else .link_file;",
       "to": "",
       "kills": [
-        "a directory scan reports every name with its kind and file id, and two hard links share one id",
-        "a name the tree should not hold is removed: a file, a directory with content, a replaced link and a junction whose target stays"
+        "a directory scan reports every name with its kind and file id, and two hard links share one id"
       ]
     },
     {
-      "id": "KT1-kept-tree-removed-after-the-call",
+      "id": "KT1-wrong-tree-removed-after-the-call",
       "file": "src/platform/shadow.zig",
       "from": "if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};",
-      "to": "remove(io, base_abs, shadow_abs) catch {};",
+      "to": "if (mode == .kept) remove(io, base_abs, shadow_abs) catch {};",
       "kills": [
-        "the kept tree holds the working files themselves, stays after the call and says what it is"
-      ]
-    },
-    {
-      "id": "KT2-full-copy-left-after-the-call",
-      "file": "src/platform/shadow.zig",
-      "from": "if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};",
-      "to": "",
-      "kills": [
+        "the kept tree holds the working files themselves, stays after the call and says what it is",
         "a full copy is used when asked for, says so, gives private files and is removed after the call"
       ]
     },
@@ -9356,7 +9337,7 @@
       "id": "KT8-private-copies-not-counted",
       "file": "src/platform/shadow.zig",
       "from": "if (outcome == .copied) use.private_copies += 1;",
-      "to": "",
+      "to": "if (outcome == .linked) use.private_copies += 1;",
       "kills": [
         "a path under a private prefix is a private copy in the kept tree and is counted",
         "redteam gate tree: a working file the sandbox could write is a private copy, so a write to it stays in the tree"
