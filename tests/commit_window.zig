@@ -428,3 +428,50 @@ test "commit window: a record whose blob is not the one its commit holds at that
     try testing.expectEqualStrings(committed, try env.read("src/util.ts"));
     try testing.expectEqualStrings("", try status(env));
 }
+
+const Stager = struct {
+    case: *Plain,
+    at: usize,
+    seen: usize = 0,
+    staged: bool = false,
+
+    fn reached(context: *anyopaque) bool {
+        const self: *Stager = @ptrCast(@alignCast(context));
+        self.seen += 1;
+        if (self.seen != self.at) return false;
+        self.case.repo.write("src/other.ts", "export function sub(a: number, b: number): number {\n  return a - b - 0;\n}\n") catch return false;
+        _ = self.case.env.git(&.{ "add", "src/other.ts" }) catch return false;
+        self.staged = true;
+        return false;
+    }
+};
+
+test "commit window: an entry staged on another file between the index copy and the lock is still staged after the commit lands" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&.{ two_file, ignore, .{ .rel = "src/other.ts", .text = other_src } });
+    defer case.deinit();
+    const env = &case.env;
+    const before = try env.head();
+    var stager: Stager = .{ .case = &case, .at = 2 };
+    const step: disk.Step = .{ .context = &stager, .reached = Stager.reached };
+    var plan = request();
+    defer plan.deinit(testing.allocator);
+    const file = try env.abs("src/util.ts");
+    const result = try runner.tryMutate(testing.allocator, testing.io, case.runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = .{ .present = try support.hashOfRef(testing.allocator, testing.io, case.runtime, file, "add") },
+        .new_body = new_body,
+        .test_command = common.green,
+        .commit = &plan,
+        .commit_step = &step,
+    });
+    result.deinit(testing.allocator);
+    try testing.expect(stager.staged);
+    try testing.expectEqualStrings(before, try env.git(&.{ "rev-parse", "HEAD^" }));
+    try testing.expect(contains(try env.read("src/util.ts"), mark));
+    try testing.expectEqualStrings("src/other.ts", try env.git(&.{ "diff", "--cached", "--name-only" }));
+    try testing.expectEqualStrings("M  src/other.ts", try env.git(&.{ "status", "--porcelain" }));
+    try testing.expect(!case.repo.exists(".git/index.lock"));
+}

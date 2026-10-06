@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1655**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1656**
 - Mutations declared in `tests/mutations.json`: **1021**
   - killed: **988**
   - equivalent: **7**
@@ -1069,11 +1069,11 @@ python tools/verification_page.py --check
 | `PV7-commit-encoding-taken-from-config` | `src/platform/git_commit.zig` | `"-c", "i18n.commitEncoding=UTF-8",` -> `` | redteam commit: a commit encoding setting does not mislabel the UTF-8 message | killed |
 | `PV8-any-index-lock-treated-as-ours` | `src/platform/git_commit.zig` | `return if (std.mem.eql(u8, &found, &digest)) .ours else .foreig...` -> `return if (std.mem.eql(u8, &found, &digest) or true) .ours else...` | commit protocol: recover never removes or replaces an index lock it does not ow...; git c... | killed |
 | `PV9-index-lock-taken-over` | `src/platform/git_commit.zig` | `disk.moveExclusive(gpa, staged_abs, lock) catch \|err\| switch ...` -> `disk.moveOver(gpa, staged_abs, lock) catch \|err\| switch (err)...` | git commit: an index lock held by another process is never taken over, and it s... | killed |
-| `PV10-changed-index-replaced` | `src/platform/git_commit.zig` | `if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {   ...` -> `if (false and (now == null or !std.mem.eql(u8, &now.?, &staged....` | git commit: an index that changed after it was copied is not replaced, and what... | killed |
+| `PV10-changed-index-replaced` | `src/platform/git_commit.zig` | `if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {   ...` -> `if (false and (now == null or !std.mem.eql(u8, &now.?, &staged....` | commit window: an entry staged on another file between the index copy and the l... | killed |
 | `PV11-intent-record-not-written` | `src/platform/commit_intent.zig` | `try disk.moveOver(gpa, staged, final);     commit_record.flushD...` -> `if (false) try disk.moveOver(gpa, staged, final);     commit_re...` | redteam commit: a process that dies between the write and the branch move is ro...; commi... | killed |
-| `PV12-recover-writes-what-head-does-not-hold` | `src/platform/commit_intent.zig` | `if (!wanted or !has) continue;         const outcome = forwardO...` -> `if (!has) continue;         const outcome = forwardOne(` | commit protocol: the user removes the lock and commits before the index was pub... | killed |
+| `PV12-recover-writes-what-head-does-not-hold` | `src/platform/commit_intent.zig` | `if (!wanted or !has) continue;         const outcome = forwardO...` -> `if ((false and !wanted) or !has) continue;         const outcom...` | commit protocol: the user removes the lock and commits before the index was pub... | killed |
 | `PV13-recover-overwrites-a-hand-edit` | `src/platform/commit_intent.zig` | `if (base != null and !same(now, base)) return .left;` -> `if (false and base != null and !same(now, base)) return .left;` | commit window: recover leaves a file whose line ends the user changed after the... | killed |
-| `PV14-targets-not-measured-again-before-the-branch-moves` | `src/platform/commit_plan.zig` | `if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUnco...` -> `` | commit window: a file renamed over the target after its measurement is kept, an... | killed |
+| `PV14-targets-not-measured-again-before-the-branch-moves` | `src/platform/commit_plan.zig` | `if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUnco...` -> `if (false and !sameHash(was.raw, p.base_hash)) return error.Tar...` | commit window: a file renamed over the target after its measurement is kept, an... | killed |
 | `PV15-unpublished-index-not-reported` | `src/platform/commit_plan.zig` | `plan.unfinished = commit_intent.index_not_published;` -> `` | commit protocol: a publish that is refused a few times is retried, and one that... | killed |
 | `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe... | killed |
 | `PV18-pending-commit-not-finished-before-the-next` | `src/platform/commit_plan.zig` | `const found = try recoverFound(gpa, io, root);` -> `const found: commit_intent.Report = .{};` | commit protocol: recover never removes or replaces an index lock it does not ow... | killed |
@@ -1122,7 +1122,7 @@ python tools/verification_page.py --check
 | `P1i-recover-writes-over-bytes-the-parent-does-not-hold` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, stored, base_oid)) return .left;` -> `` | commit window: a record that names the hash of the user's uncommitted edit as i... | killed |
 | `P1k-what-an-implicit-recover-left-is-not-reported` | `src/platform/commit_plan.zig` | `if (found.left != 0) {             plan.recovered = found.reaso...` -> `if (false and found.left != 0) {             plan.recovered = f...` | commit window: what an implicit recover left as found is named in the reply of ... | killed |
 | `P1l-left-paths-not-named-in-the-reply` | `src/platform/commit_plan.zig` | `plan.left_names_len = report.names().len;` -> `plan.left_names_len = 0;` | commit window: a file created at the path between the two moves is kept, the co... | killed |
-| `P1m-record-blob-not-checked-against-the-commit` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, item.blob, after)) return error.CorruptInt...` -> `` | commit window: a record whose blob is not the one its commit holds at that path... | killed |
+| `P1m-record-blob-not-checked-against-the-commit` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, item.blob, after)) return error.CorruptInt...` -> `if (false and !std.mem.eql(u8, item.blob, after)) return error....` | commit window: a record whose blob is not the one its commit holds at that path... | killed |
 
 ## What this system does not prove
 

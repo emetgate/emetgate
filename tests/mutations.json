@@ -9343,7 +9343,7 @@
       "from": "    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {\n        guard.deleteSelf() catch {};",
       "to": "    if (false and (now == null or !std.mem.eql(u8, &now.?, &staged.base))) {\n        guard.deleteSelf() catch {};",
       "kills": [
-        "git commit: an index that changed after it was copied is not replaced, and what the user staged meanwhile stays staged"
+        "commit window: an entry staged on another file between the index copy and the lock is still staged after the commit lands"
       ],
       "note": "what the user staged between the copy and the lock would be lost"
     },
@@ -9362,7 +9362,7 @@
       "id": "PV12-recover-writes-what-head-does-not-hold",
       "file": "src/platform/commit_intent.zig",
       "from": "        if (!wanted or !has) continue;\n        const outcome = forwardOne(",
-      "to": "        if (!has) continue;\n        const outcome = forwardOne(",
+      "to": "        if ((false and !wanted) or !has) continue;\n        const outcome = forwardOne(",
       "kills": [
         "commit protocol: the user removes the lock and commits before the index was published, and recover writes nothing and leaves a clean tree"
       ],
@@ -9382,7 +9382,7 @@
       "id": "PV14-targets-not-measured-again-before-the-branch-moves",
       "file": "src/platform/commit_plan.zig",
       "from": "            if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUncommittedChanges;\n",
-      "to": "",
+      "to": "            if (false and !sameHash(was.raw, p.base_hash)) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "commit window: a file renamed over the target after its measurement is kept, and the user's change is not committed under the call's message"
       ],
@@ -10094,7 +10094,7 @@
       "id": "P1m-record-blob-not-checked-against-the-commit",
       "file": "src/platform/commit_intent.zig",
       "from": "        if (!std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;\n",
-      "to": "",
+      "to": "        if (false and !std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;\n",
       "kills": [
         "commit window: a record whose blob is not the one its commit holds at that path is refused whole"
       ]
