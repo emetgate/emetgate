@@ -150,8 +150,9 @@ pub fn evaluateFrozen(gpa: Allocator, rules: []const Rule, paths: []const []cons
             };
         }
     }
-    if (list.items.len != 0) return .{ .violated = .{ .violations = try list.toOwnedSlice(gpa) } };
-    return .ok;
+    const found = try list.toOwnedSlice(gpa);
+    if (found.len == 0) return .ok;
+    return .{ .violated = .{ .violations = found } };
 }
 
 pub fn isMessage(rule: Rule) bool {

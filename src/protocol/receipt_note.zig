@@ -48,8 +48,18 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_pla
     try buffer.writer.print(",\"commit\":\"{s}\"", .{oid});
     if (made.unfinished) |name| try buffer.writer.print(",\"commit_unfinished\":\"{s}\"", .{name});
     if (made.left != 0) try buffer.writer.print(",\"files_left_as_found\":{d}", .{made.left});
+    if (made.left_names_len != 0) {
+        try buffer.writer.writeAll(",\"left_as_found\":");
+        var js: std.json.Stringify = .{ .writer = &buffer.writer };
+        try js.write(made.left_names[0..made.left_names_len]);
+    }
+    if (made.recovered) |reason| {
+        try buffer.writer.print(",\"recovered\":\"{s}\",\"recovered_left_as_found\":", .{reason});
+        var js: std.json.Stringify = .{ .writer = &buffer.writer };
+        try js.write(made.recovered_names[0..made.recovered_names_len]);
+    }
     if (made.receipt) |batch| {
-        if (receipts.attachOne(gpa, io, root, oid, &batch)) |_| {} else |err| try buffer.writer.print(",\"receipt_attach_error\":\"{t}\"", .{err});
+        if (receipts.attachNew(gpa, io, root, oid, &batch)) |_| {} else |err| try buffer.writer.print(",\"receipt_attach_error\":\"{t}\"", .{err});
     }
     try insert(gpa, w, buffer.written());
 }

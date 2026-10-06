@@ -689,7 +689,7 @@ const tap_script =
     \\if [ -f .git/tap-armed ] && [ ! -f .git/tap-fired ]; then
     \\  case "$data" in
     \\    *"b + a"*) : > .git/tap-seen ;;
-    \\    *) if [ -f .git/tap-seen ]; then
+    \\    *) if [ -f .git/tap-armed ]; then
     \\         : > .git/tap-fired
     \\         if [ -f .git/tap-index ]; then
     \\           git update-index --cacheinfo 100644,$(git hash-object -w .git/tap-user),src/util.ts

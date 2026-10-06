@@ -206,7 +206,8 @@ pub fn finishPendingCommits(gpa: Allocator, io: std.Io, root: []const u8) void {
     std.Io.Dir.cwd().access(io, dir, .{}) catch return;
     const lock = shadow.Lock.acquire(io, root) catch return;
     defer lock.release();
-    commit_plan.recoverPending(gpa, io, root) catch {};
+    const found = commit_plan.recoverFound(gpa, io, root) catch return;
+    if (found.left != 0) std.debug.print("emetgate: recover left as found ({s}): {s}\n", .{ found.reason orelse "", found.names() });
 }
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {

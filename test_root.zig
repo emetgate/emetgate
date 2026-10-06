@@ -157,6 +157,7 @@ test {
     _ = @import("tests/redteam_commit.zig");
     _ = @import("tests/redteam_commit2.zig");
     _ = @import("tests/own_dir.zig");
+    _ = @import("tests/commit_window.zig");
     _ = @import("tests/journal_base.zig");
     _ = @import("tests/frozen.zig");
     _ = @import("tests/message_base.zig");

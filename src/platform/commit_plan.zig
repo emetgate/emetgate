@@ -19,6 +19,11 @@ pub const Request = struct {
     base: ?[]u8 = null,
     unfinished: ?[]const u8 = null,
     left: usize = 0,
+    left_names: [commit_intent.Report.named_bytes]u8 = undefined,
+    left_names_len: usize = 0,
+    recovered: ?[]const u8 = null,
+    recovered_names: [commit_intent.Report.named_bytes]u8 = undefined,
+    recovered_names_len: usize = 0,
     receipt: ?[16]u8 = null,
     runtime: ?*Runtime = null,
 
@@ -35,8 +40,17 @@ pub const Opened = union(enum) {
 };
 
 pub fn recoverPending(gpa: Allocator, io: std.Io, root: []const u8) !void {
-    const pending = try commit_intent.recoverAll(gpa, io, root);
-    if (pending.pending != 0 or pending.failed != 0) return error.CommitStillPending;
+    _ = try recoverFound(gpa, io, root);
+}
+
+pub fn recoverFound(gpa: Allocator, io: std.Io, root: []const u8) !commit_intent.Report {
+    _ = disk.recoverJournal(gpa, io, root) catch |err| switch (err) {
+        error.OutOfMemory, error.Crashed, error.WorkspaceIsLink => |e| return e,
+        else => {},
+    };
+    const found = try commit_intent.recoverAll(gpa, io, root);
+    if (found.pending != 0 or found.failed != 0) return error.CommitStillPending;
+    return found;
 }
 
 pub const Session = struct {
@@ -47,8 +61,8 @@ pub const Session = struct {
     pub fn open(gpa: Allocator, io: std.Io, root: []const u8, request: ?*Request, rels: []const []const u8) !Opened {
         switch (try rules.frozenGate(gpa, io, root, rels)) {
             .ok => {},
-            .violated => |report| return .{ .violated = report },
-            .failed => |failure| return .{ .failed = failure },
+            .violated => |touched| return .{ .violated = touched },
+            .failed => |unrunnable| return .{ .failed = unrunnable },
         }
         const plan = request orelse return .{ .ok = .{} };
         switch (try rules.messageGate(gpa, io, root, plan.message)) {
@@ -56,7 +70,12 @@ pub const Session = struct {
             .violated => |report| return .{ .violated = report },
             .failed => |failure| return .{ .failed = failure },
         }
-        try recoverPending(gpa, io, root);
+        const found = try recoverFound(gpa, io, root);
+        if (found.left != 0) {
+            plan.recovered = found.reason;
+            plan.recovered_names_len = found.names().len;
+            @memcpy(plan.recovered_names[0..plan.recovered_names_len], found.names());
+        }
         return .{ .ok = .{ .request = plan, .head = try git_commit.preflight(gpa, io, root, rels) } };
     }
 
@@ -78,24 +97,35 @@ pub const Session = struct {
         const prepared = self.prepared.?;
         const head = self.head.?;
         const tag = commit_record.newTag(io);
-        var lock: ?git_commit.Digest = null;
-        decide(gpa, io, root, head, prepared, changes, &tag, &lock, step) catch |err| {
+        var lock: ?disk.Guard = null;
+        defer if (lock) |guard| guard.close();
+        var staged = false;
+        decide(gpa, io, root, head, prepared, changes, pendings, &tag, &lock, &staged, step) catch |err| {
             for (pendings) |*p| p.discard(null);
-            if (err != error.Crashed) commit_intent.discard(gpa, io, root, &tag, lock);
+            if (err == error.Crashed) return err;
+            if (lock) |guard| guard.deleteSelf() catch {};
+            if (staged) commit_intent.discard(gpa, io, root, &tag, null);
             return err;
         };
         plan.oid = try gpa.dupe(u8, prepared.commit);
         plan.base = try gpa.dupe(u8, head.oid);
         if (disk.Step.stops(step)) return abandon(pendings);
-        if (!try git_commit.publishIndex(gpa, io, root, lock.?)) {
+        if (!git_commit.publishHeld(gpa, io, head, lock.?)) {
             for (pendings) |*p| p.discard(null);
             plan.unfinished = commit_intent.index_not_published;
             return;
         }
+        lock.?.close();
+        lock = null;
         if (disk.Step.stops(step)) return abandon(pendings);
-        disk.commitBatch(pendings, null, null, batch, step) catch |err| {
+        if (disk.commitBatch(pendings, null, null, batch, step)) |_| {
+            commit_intent.finish(gpa, io, root, &tag) catch {
+                plan.unfinished = commit_intent.file_not_written;
+            };
+            return;
+        } else |err| {
             if (err == error.Crashed or err == error.OutOfMemory) return err;
-        };
+        }
         const report = commit_intent.complete(gpa, io, root, &tag, step) catch |err| {
             if (err == error.Crashed or err == error.OutOfMemory) return err;
             plan.unfinished = commit_intent.file_not_written;
@@ -103,6 +133,8 @@ pub const Session = struct {
         };
         plan.unfinished = report.reason;
         plan.left = report.left;
+        plan.left_names_len = report.names().len;
+        @memcpy(plan.left_names[0..plan.left_names_len], report.names());
     }
 
     pub fn deinit(self: Session, gpa: Allocator) void {
@@ -121,55 +153,82 @@ fn hex(arena: Allocator, hash: ?symbol.Hash) ![]const u8 {
     return arena.dupe(u8, &std.fmt.bytesToHex(h, .lower));
 }
 
-fn decide(gpa: Allocator, io: std.Io, root: []const u8, head: git_commit.Head, prepared: git_commit.Prepared, changes: []const Change, tag: []const u8, lock: *?git_commit.Digest, step: ?*const disk.Step) !void {
+fn sameFile(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        const nx: u8 = if (x == '/') '\\' else std.ascii.toLower(x);
+        const ny: u8 = if (y == '/') '\\' else std.ascii.toLower(y);
+        if (nx != ny) return false;
+    }
+    return true;
+}
+
+fn measuredFor(arena: Allocator, root: []const u8, head: git_commit.Head, file_abs: []const u8) !?git_commit.Measured {
+    for (head.measured) |m| {
+        const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, m.path });
+        if (sameFile(abs, file_abs)) return m;
+    }
+    return null;
+}
+
+fn sameHash(a: ?symbol.Hash, b: ?symbol.Hash) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return std.mem.eql(u8, &a.?, &b.?);
+}
+
+fn decide(gpa: Allocator, io: std.Io, root: []const u8, head: git_commit.Head, prepared: git_commit.Prepared, changes: []const Change, pendings: []disk.Pending, tag: []const u8, lock: *?disk.Guard, staged_any: *bool, step: ?*const disk.Step) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    try git_commit.remeasure(gpa, io, root, head, changes);
-    const branch = try git_commit.currentBranch(arena, io, root);
+    for (pendings) |*p| {
+        const held_path = if (p.kind == .rename) p.source else p.path;
+        if (p.kind != .create) {
+            const was = (try measuredFor(arena, root, head, held_path)) orelse return error.TargetHasUncommittedChanges;
+            if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUncommittedChanges;
+            p.base_in_history = true;
+        }
+    }
 
     const items = try arena.alloc(commit_intent.Item, changes.len);
     const contents = try arena.alloc(?[]const u8, changes.len);
     for (changes, prepared.entries, items, contents) |change, entry, *item, *content| {
-        const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, entry.path });
-        std.mem.replaceScalar(u8, abs, '/', '\\');
-        const base: ?symbol.Hash = disk.hashFile(gpa, io, abs) catch |err| switch (err) {
-            error.FileNotFound => null,
-            else => |e| return e,
-        };
+        const was = head.find(entry.path) orelse return error.TargetHasUncommittedChanges;
         content.* = change.content;
         item.* = .{
             .path = entry.path,
             .mode = try arena.dupe(u8, &entry.mode),
             .blob = entry.blob orelse "",
-            .base = try hex(arena, base),
+            .base = try hex(arena, was.raw),
             .new = try hex(arena, if (change.content) |bytes| symbol.hashOf(bytes) else null),
         };
     }
+    staged_any.* = true;
     try commit_intent.stage(gpa, io, root, tag, contents);
     if (disk.Step.stops(step)) return error.Crashed;
 
     const dir = try commit_intent.dirOf(arena, root);
     const staged_index = try commit_intent.indexPath(arena, dir, tag);
+    const branch = try git_commit.branchNow(arena, io, root, head);
     var attempt: usize = 0;
     while (true) : (attempt += 1) {
-        const staged = try git_commit.stageIndex(gpa, io, root, prepared.entries, staged_index);
+        const staged = try git_commit.stageChecked(gpa, io, root, head, prepared.entries, staged_index);
         try commit_intent.write(gpa, io, root, tag, .{
             .commit = prepared.commit,
             .base = head.oid,
             .branch = branch,
             .lock = &std.fmt.bytesToHex(staged.digest, .lower),
+            .index_base = &std.fmt.bytesToHex(staged.base, .lower),
             .items = items,
         });
         if (disk.Step.stops(step)) return error.Crashed;
-        git_commit.acquireIndex(gpa, io, root, staged_index, staged) catch |err| {
+        lock.* = git_commit.acquireHeld(gpa, io, head, staged_index, staged) catch |err| {
             if (err == error.IndexChanged and attempt + 1 < index_attempts) continue;
             return err;
         };
-        lock.* = staged.digest;
         break;
     }
     if (disk.Step.stops(step)) return error.Crashed;
+    if (!std.mem.eql(u8, branch, try git_commit.branchNow(arena, io, root, head))) return error.BranchMoved;
     try git_commit.moveBranch(gpa, io, root, branch, prepared.commit, head.oid);
 }

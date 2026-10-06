@@ -9,6 +9,7 @@ const sandbox = @import("sandbox.zig");
 const shadow = @import("shadow.zig");
 const exe_path = @import("exe_path.zig");
 const own_dir = @import("own_dir.zig");
+const git_commit = @import("git_commit.zig");
 
 const Allocator = std.mem.Allocator;
 const Hash = receipt.Hash;
@@ -44,11 +45,81 @@ pub const Commit = struct {
     runtime: ?*Runtime = null,
 };
 
-fn storedSymbol(arena: Allocator, io: std.Io, root: []const u8, made: Commit, rev: []const u8, path: []const u8, ref: []const u8, claimed: ?Hash) !?Hash {
-    if (claimed == null) return null;
-    const runtime = made.runtime orelse return claimed;
-    const bytes = (if (try filtered(arena, io, root, rev, path)) try checkedOut(arena, io, root, rev, path) else try blob(arena, io, root, rev, path)) orelse return claimed;
-    return (try checker.symbolHashIn(arena, runtime, path, bytes, ref)) orelse claimed;
+const Stored = struct {
+    arena: Allocator,
+    io: std.Io,
+    root: []const u8,
+    made: Commit,
+    paths: []const []const u8,
+    before: []const ?[]const u8,
+    after: []const ?[]const u8,
+    filtered_before: ?[]const bool = null,
+    filtered_after: ?[]const bool = null,
+
+    fn load(arena: Allocator, io: std.Io, root: []const u8, made: Commit, paths: []const []const u8) !Stored {
+        const specs = try arena.alloc([]const u8, paths.len * 2);
+        for (paths, 0..) |path, i| {
+            specs[i * 2] = try std.fmt.allocPrint(arena, "{s}:{s}", .{ made.base, path });
+            specs[i * 2 + 1] = try std.fmt.allocPrint(arena, "{s}:{s}", .{ made.oid, path });
+        }
+        const found = try git_commit.blobs(arena, io, root, specs);
+        const before = try arena.alloc(?[]const u8, paths.len);
+        const after = try arena.alloc(?[]const u8, paths.len);
+        for (before, after, 0..) |*b, *a, i| {
+            b.* = found[i * 2];
+            a.* = found[i * 2 + 1];
+        }
+        return .{ .arena = arena, .io = io, .root = root, .made = made, .paths = paths, .before = before, .after = after };
+    }
+
+    fn indexOf(self: *const Stored, path: []const u8) ?usize {
+        for (self.paths, 0..) |known, i| {
+            if (std.mem.eql(u8, known, path)) return i;
+        }
+        return null;
+    }
+
+    fn symbolHash(self: *Stored, after_side: bool, path: []const u8, ref: []const u8, claimed: ?Hash) !?Hash {
+        if (claimed == null) return null;
+        const runtime = self.made.runtime orelse return claimed;
+        const i = self.indexOf(path) orelse return claimed;
+        const rev = if (after_side) self.made.oid else self.made.base;
+        const slot = if (after_side) &self.filtered_after else &self.filtered_before;
+        if (slot.* == null) slot.* = try filteredAll(self.arena, self.io, self.root, rev, self.paths);
+        const stored = if (after_side) self.after[i] else self.before[i];
+        const bytes = (if (slot.*.?[i]) try checkedOut(self.arena, self.io, self.root, rev, path) else stored) orelse return claimed;
+        return (try checker.symbolHashIn(self.arena, runtime, path, bytes, ref)) orelse claimed;
+    }
+};
+
+pub fn filteredAll(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, paths: []const []const u8) ![]bool {
+    const out = try arena.alloc(bool, paths.len);
+    @memset(out, false);
+    if (paths.len == 0) return out;
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{ "check-attr", "-z", "--source", rev, "filter", "--" });
+    try argv.appendSlice(arena, paths);
+    const listed = (try git(arena, io, root, argv.items)) orelse {
+        for (paths, out) |path, *slot| slot.* = try filtered(arena, io, root, rev, path);
+        return out;
+    };
+    var fields = std.mem.splitScalar(u8, listed, 0);
+    while (true) {
+        const path = fields.next() orelse break;
+        _ = fields.next() orelse break;
+        const value = fields.next() orelse break;
+        for (paths, out) |known, *slot| {
+            if (std.mem.eql(u8, known, path)) slot.* = drives(value);
+        }
+    }
+    return out;
+}
+
+fn drives(value: []const u8) bool {
+    for ([_][]const u8{ "unspecified", "unset", "set", "" }) |none| {
+        if (std.mem.eql(u8, value, none)) return false;
+    }
+    return true;
 }
 
 pub fn filtered(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !bool {
@@ -57,22 +128,13 @@ pub fn filtered(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8,
     var fields = std.mem.splitScalar(u8, out, 0);
     _ = fields.next() orelse return false;
     _ = fields.next() orelse return false;
-    const value = fields.next() orelse return false;
-    for ([_][]const u8{ "unspecified", "unset", "set", "" }) |none| {
-        if (std.mem.eql(u8, value, none)) return false;
-    }
-    return true;
+    return drives(fields.next() orelse return false);
 }
 
 pub fn checkedOut(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !?[]u8 {
     const source = try std.fmt.allocPrint(arena, "--attr-source={s}", .{rev});
     const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ rev, path });
     return git(arena, io, root, &.{ source, "cat-file", "--filters", spec });
-}
-
-fn blob(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !?[]u8 {
-    const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ rev, path });
-    return git(arena, io, root, &.{ "cat-file", "blob", spec });
 }
 
 pub fn slashed(arena: Allocator, rel: []const u8) ![]u8 {
@@ -88,16 +150,30 @@ pub fn build(arena: Allocator, io: std.Io, root: []const u8, record: Record) !re
     var files: std.ArrayList(receipt.FileEntry) = .empty;
     var subjects: std.ArrayList(receipt.Subject) = .empty;
     var rule_list: std.ArrayList(receipt.Rule) = .empty;
-    for (record.files) |f| {
+    var stored: ?Stored = null;
+    if (record.commit) |made| {
+        var paths: std.ArrayList([]const u8) = .empty;
+        for (record.files) |f| try paths.append(arena, try slashed(arena, f.rel));
+        for (record.symbols) |sym| {
+            const path = try slashed(arena, sym.path);
+            var seen = false;
+            for (paths.items) |known| {
+                if (std.mem.eql(u8, known, path)) seen = true;
+            }
+            if (!seen) try paths.append(arena, path);
+        }
+        stored = try Stored.load(arena, io, root, made, paths.items);
+    }
+    for (record.files, 0..) |f, file_index| {
         const path = try slashed(arena, f.rel);
         var after: ?Hash = null;
         var before: ?Hash = f.before;
-        if (record.commit) |made| {
-            before = if (try blob(arena, io, root, made.base, path)) |bytes| receipt.blake3(bytes) else null;
+        if (stored) |known| {
+            before = if (known.before[file_index]) |bytes| receipt.blake3(bytes) else null;
         }
         if (f.after_abs) |abs| {
-            const bytes = if (record.commit) |made|
-                (try blob(arena, io, root, made.oid, path)) orelse return error.ReceiptFileNotInCommit
+            const bytes = if (stored) |known|
+                known.after[file_index] orelse return error.ReceiptFileNotInCommit
             else
                 try std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .unlimited);
             after = receipt.blake3(bytes);
@@ -118,9 +194,9 @@ pub fn build(arena: Allocator, io: std.Io, root: []const u8, record: Record) !re
     for (record.symbols) |s| {
         const path = try slashed(arena, s.path);
         var entry: receipt.SymbolEntry = .{ .path = path, .ref = s.ref, .before = s.before, .after = s.after };
-        if (record.commit) |made| {
-            entry.before = try storedSymbol(arena, io, root, made, made.base, path, s.ref, s.before);
-            entry.after = try storedSymbol(arena, io, root, made, made.oid, path, s.ref, s.after);
+        if (stored) |*known| {
+            entry.before = try known.symbolHash(false, path, s.ref, s.before);
+            entry.after = try known.symbolHash(true, path, s.ref, s.after);
         }
         try symbols.append(arena, entry);
     }
@@ -265,10 +341,18 @@ pub fn attach(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8) 
 }
 
 pub fn attachOne(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8, batch: []const u8) !void {
+    return attachTo(gpa, io, root, commit, batch, false);
+}
+
+pub fn attachNew(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8, batch: []const u8) !void {
+    return attachTo(gpa, io, root, commit, batch, true);
+}
+
+fn attachTo(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8, batch: []const u8, fresh: bool) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const rev = try resolveCommit(arena, io, root, commit);
+    const rev = if (fresh) commit else try resolveCommit(arena, io, root, commit);
     const dir_abs = try std.fmt.allocPrint(arena, "{s}\\{s}\\{s}", .{ root, shadow.workspace_dir, receipts_dir });
     const suffix = try std.fmt.allocPrint(arena, "-{s}.json", .{batch});
     var name: ?[]const u8 = null;
@@ -283,10 +367,12 @@ pub fn attachOne(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u
     }
     const found = name orelse return error.ReceiptNotFound;
     var items = std.json.Array.init(arena);
-    if (try noteBytes(arena, io, root, rev)) |existing| {
-        const parsed = try jcs.parse(arena, existing);
-        if (parsed.value != .array) return error.CorruptNote;
-        try items.appendSlice(parsed.value.array.items);
+    if (!fresh) {
+        if (try noteBytes(arena, io, root, rev)) |existing| {
+            const parsed = try jcs.parse(arena, existing);
+            if (parsed.value != .array) return error.CorruptNote;
+            try items.appendSlice(parsed.value.array.items);
+        }
     }
     const bytes = try held.dir.readFileAlloc(io, found, arena, .limited(16 * 1024 * 1024));
     try items.append((try jcs.parse(arena, bytes)).value);

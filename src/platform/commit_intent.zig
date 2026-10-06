@@ -30,6 +30,7 @@ pub const Record = struct {
     base: []const u8,
     branch: []const u8,
     lock: []const u8,
+    index_base: []const u8 = "",
     items: []const Item,
 };
 
@@ -41,8 +42,29 @@ pub const Report = struct {
     pending: usize = 0,
     failed: usize = 0,
     reason: ?[]const u8 = null,
+    named: [named_bytes]u8 = undefined,
+    named_len: usize = 0,
+
+    pub const named_bytes = 480;
+
+    pub fn names(self: *const Report) []const u8 {
+        return self.named[0..self.named_len];
+    }
+
+    pub fn name(self: *Report, path: []const u8) void {
+        const separator: []const u8 = if (self.named_len == 0) "" else ", ";
+        if (self.named_len + separator.len + path.len > named_bytes) return;
+        @memcpy(self.named[self.named_len..][0..separator.len], separator);
+        self.named_len += separator.len;
+        @memcpy(self.named[self.named_len..][0..path.len], path);
+        self.named_len += path.len;
+    }
 
     pub fn add(self: *Report, other: Report) void {
+        var parts = std.mem.splitSequence(u8, other.names(), ", ");
+        while (parts.next()) |part| {
+            if (part.len != 0) self.name(part);
+        }
         self.landed += other.landed;
         self.dropped += other.dropped;
         self.written += other.written;
@@ -58,6 +80,7 @@ pub const index_locked = "IndexLocked";
 pub const index_not_updated = "IndexNotUpdated";
 pub const file_not_written = "FileNotWritten";
 pub const target_changed = "TargetChangedAfterCommit";
+pub const index_changed = "IndexChangedAfterCommit";
 
 pub fn dirOf(gpa: Allocator, root: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa, "{s}\\{s}\\{s}", .{ root, shadow.workspace_dir, dir_name });
@@ -186,22 +209,34 @@ fn same(a: ?symbol.Hash, b: ?symbol.Hash) bool {
 
 const Forward = enum { kept, written, left };
 
-fn forwardOne(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, dir: []const u8, tag: []const u8, base_commit: []const u8, index: usize, item: Item) !Forward {
+fn readAt(arena: Allocator, io: std.Io, path_abs: []const u8) !?[]const u8 {
+    return Dir.cwd().readFileAlloc(io, path_abs, arena, .limited(max_staged_bytes)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => |e| return e,
+    };
+}
+
+fn forwardOne(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, dir: []const u8, tag: []const u8, base_oid: []const u8, index: usize, item: Item) !Forward {
     try shadow.validateRelative(item.path);
     const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, item.path });
     std.mem.replaceScalar(u8, abs, '/', '\\');
     const base = try optionalHash(item.base);
     const new = try optionalHash(item.new);
-    const now = try hashAt(gpa, io, abs);
+    const found = try readAt(arena, io, abs);
+    const now: ?symbol.Hash = if (found) |bytes| symbol.hashOf(bytes) else null;
     if (same(now, new)) return .kept;
-    if (!same(now, base)) return .left;
+    if (base != null and !same(now, base)) return .left;
+    if (found) |bytes| {
+        if (base_oid.len == 0) return .left;
+        const stored = try git_commit.storedForm(gpa, io, root, item.path, bytes);
+        defer gpa.free(stored);
+        if (!std.mem.eql(u8, stored, base_oid)) return .left;
+    } else if (base_oid.len != 0) return .left;
     const journal_dir = try std.fmt.allocPrint(arena, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
 
     if (new == null) {
-        const before = (try git_commit.blobAt(gpa, io, root, base_commit, item.path)) orelse return error.CorruptIntent;
-        defer gpa.free(before);
-        if (!try git_commit.storesAs(gpa, io, root, item.path, abs, before)) return error.CorruptIntent;
-        var pendings = [1]disk.Pending{try disk.stageDelete(gpa, io, abs, base.?)};
+        var pendings = [1]disk.Pending{try disk.stageDelete(gpa, io, abs, now.?)};
+        pendings[0].base_in_history = true;
         try disk.commitBatch(&pendings, null, null, null, null);
         return .written;
     }
@@ -209,8 +244,11 @@ fn forwardOne(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, di
     const bytes = try Dir.cwd().readFileAlloc(io, staged, arena, .limited(max_staged_bytes));
     if (!std.mem.eql(u8, &symbol.hashOf(bytes), &new.?)) return error.CorruptIntent;
     if (!try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;
-    if (base) |expected| {
-        try disk.replaceReporting(gpa, io, abs, bytes, expected, null, journal_dir, null);
+    if (now) |expected| {
+        var pendings = [1]disk.Pending{try disk.prepare(gpa, io, abs, bytes, expected)};
+        pendings[0].base_in_history = true;
+        const journal = disk.Batch.init(gpa, io, journal_dir);
+        try disk.commitBatch(&pendings, null, null, &journal, null);
         return .written;
     }
     if (std.fs.path.dirname(abs)) |parent| try Dir.cwd().createDirPath(io, parent);
@@ -219,6 +257,19 @@ fn forwardOne(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, di
         else => |e| return e,
     };
     return .written;
+}
+
+pub fn finish(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const dir = try dirOf(arena, root);
+    const held = (try own_dir.hold(io, dir, .existing)) orelse return;
+    removeFiles(arena, io, held, tag) catch |err| {
+        held.close();
+        return err;
+    };
+    release(held, dir);
 }
 
 pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, step: ?*const disk.Step) !Report {
@@ -236,13 +287,22 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
     if (!isObjectId(record.commit) or !isObjectId(record.base)) return error.CorruptIntent;
     if (!std.mem.startsWith(u8, record.branch, git_commit.branch_prefix)) return error.CorruptIntent;
     const lock = try parseDigest(record.lock);
+    const index_base: ?git_commit.Digest = if (record.index_base.len == 0) null else try parseDigest(record.index_base);
 
     const entries = try arena.alloc(git_commit.Entry, record.items.len);
-    for (record.items, entries) |item, *slot| {
+    const paths = try arena.alloc([]const u8, record.items.len);
+    for (record.items, entries, paths) |item, *slot, *path| {
         if (item.mode.len != 6) return error.CorruptIntent;
         for (item.mode) |c| if (!std.ascii.isDigit(c)) return error.CorruptIntent;
         if (item.blob.len != 0 and !isObjectId(item.blob)) return error.CorruptIntent;
+        shadow.validateRelative(item.path) catch return error.CorruptIntent;
         slot.* = .{ .path = try arena.dupe(u8, item.path), .mode = item.mode[0..6].*, .blob = if (item.blob.len == 0) null else try arena.dupe(u8, item.blob) };
+        path.* = slot.path;
+    }
+    const line = (try git_commit.lineage(gpa, io, root, record.commit, record.base, paths)) orelse return error.CorruptIntent;
+    defer line.deinit(gpa);
+    for (record.items, line.after) |item, after| {
+        if (!std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;
     }
     const now = try git_commit.standing(gpa, io, root, record.branch, record.commit, entries);
     defer now.deinit(gpa);
@@ -261,10 +321,16 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
             if (disk.Step.stops(step)) return error.Crashed;
         } else try git_commit.releaseIndex(gpa, io, root, lock);
     }
+    const indexed = try arena.dupe(bool, now.indexed);
+    if (published) @memset(indexed, true);
     if (!published) {
         var behind: std.ArrayList(git_commit.Entry) = .empty;
-        for (entries, now.wanted, now.indexed) |entry, wanted, indexed| {
-            if (wanted and !indexed) try behind.append(arena, entry);
+        var marks: std.ArrayList(usize) = .empty;
+        for (entries, now.wanted, now.indexed, 0..) |entry, wanted, has, i| {
+            if (wanted and !has) {
+                try behind.append(arena, entry);
+                try marks.append(arena, i);
+            }
         }
         if (behind.items.len != 0) {
             if (held == .foreign) {
@@ -272,18 +338,31 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
                 report.reason = index_locked;
                 return report;
             }
-            git_commit.updateIndex(gpa, io, root, behind.items) catch {
-                report.pending = 1;
-                report.reason = index_not_updated;
-                return report;
+            const untouched = untouched: {
+                const base_digest = index_base orelse break :untouched false;
+                const current = (try git_commit.indexDigest(gpa, io, root)) orelse break :untouched false;
+                break :untouched std.mem.eql(u8, &current, &base_digest);
             };
-            if (disk.Step.stops(step)) return error.Crashed;
+            if (untouched) {
+                git_commit.advanceIndex(gpa, io, root, behind.items, try indexPath(arena, dir, tag), index_base.?) catch |err| {
+                    if (err == error.OutOfMemory) return err;
+                    report.pending = 1;
+                    report.reason = if (err == error.IndexLocked) index_locked else index_not_updated;
+                    return report;
+                };
+                for (marks.items) |i| indexed[i] = true;
+                if (disk.Step.stops(step)) return error.Crashed;
+            } else {
+                for (behind.items) |entry| report.name(entry.path);
+                report.left += behind.items.len;
+                report.reason = index_changed;
+            }
         }
     }
 
-    for (record.items, now.wanted, 0..) |item, wanted, i| {
-        if (!wanted) continue;
-        const outcome = forwardOne(gpa, arena, io, root, dir, tag, record.base, i, item) catch |err| {
+    for (record.items, now.wanted, indexed, line.base, 0..) |item, wanted, has, base_oid, i| {
+        if (!wanted or !has) continue;
+        const outcome = forwardOne(gpa, arena, io, root, dir, tag, base_oid, i, item) catch |err| {
             if (err == error.Crashed or err == error.OutOfMemory or err == error.CorruptIntent) return err;
             report.pending = 1;
             report.reason = file_not_written;
@@ -297,7 +376,8 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
             },
             .left => {
                 report.left += 1;
-                report.reason = target_changed;
+                report.name(item.path);
+                if (report.reason == null) report.reason = target_changed;
             },
         }
     }
