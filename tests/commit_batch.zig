@@ -621,3 +621,27 @@ test "commit batch: design limit: a try_batch receipt does not list a rewritten 
     }
     try testing.expectEqual(@import("emetgate").checker.Verdict.unverified, result.report.verdict);
 }
+
+test "commit batch: a hand edited doc target is refused before the gate runs, so a failing test is never reached" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Plain = undefined;
+    try case.init(&batch_files);
+    defer case.deinit();
+    const env = &case.env;
+    const before = try env.head();
+    const edited = try std.mem.replaceOwned(u8, env.arena(), notes_src, "kept", "kept by hand");
+    try case.repo.write("notes.md", edited);
+    try env.expectHandEditKept(try batchCall(env, true, red), before, "notes.md", edited);
+}
+
+test "commit batch: a hand edited file to move is refused before the gate runs, so a failing test is never reached" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var served: Served = undefined;
+    try moveFileInit(&served);
+    defer served.deinit();
+    const env = &served.env;
+    const before = try env.head();
+    const edited = move_file_case.util_src ++ "export const by_hand = 1;\n";
+    try served.case.repo.write("src/util.ts", edited);
+    try env.expectHandEditKept(try moveFileCall(&served, true, red), before, "src/util.ts", edited);
+}

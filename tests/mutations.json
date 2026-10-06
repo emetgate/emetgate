@@ -6158,7 +6158,7 @@
       "id": "DW4-doc-write-skips-journal",
       "file": "src/platform/doc_writer.zig",
       "from": "try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n            return .{ .committed = applied.hash };",
-      "to": "try session.land(gpa, io, root, &change, &pendings, null, options.commit_step);\n            return .{ .committed = applied.hash };",
+      "to": "try session.land(gpa, io, root, &change, &pendings, if (applied.source.len == 0) &journal else null, options.commit_step);\n            return .{ .committed = applied.hash };",
       "kills": [
         "doc_writer: a crash right after the journal is written leaves a journal entry, and recover restores the old content"
       ]
@@ -9028,7 +9028,7 @@
       "from": "        if (p.source_rel) |from| try rels.append(arena, from);\n",
       "to": "",
       "kills": [
-        "commit batch: a file move refuses when the file to move was edited by hand"
+        "commit batch: a hand edited file to move is refused before the gate runs, so a failing test is never reached"
       ],
       "note": "a hand edit to the file being moved would be committed under the message of the model"
     },
@@ -9038,7 +9038,7 @@
       "from": "    for (options.doc_edits) |edit| try rels.append(arena, try relativeUnder(arena, root, edit.file_abs));\n",
       "to": "",
       "kills": [
-        "commit batch: try_batch refuses a doc target edited by hand outside the rewritten section"
+        "commit batch: a hand edited doc target is refused before the gate runs, so a failing test is never reached"
       ],
       "note": "a hand edit elsewhere in a doc of the batch would be committed under the message of the model"
     },

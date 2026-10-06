@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1552**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1554**
 - Mutations declared in `tests/mutations.json`: **963**
   - killed: **930**
   - equivalent: **7**
@@ -260,8 +260,8 @@ python tools/verification_page.py --check
 | `RC2-created-file-written-but-not-published` | `src/platform/runner.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `for (&pendings) \|*p\| p.discard(null);         if (false) try ...` | commit on write: a new file is created and committed in the same call | killed |
 | `MC1-try-message-kept-from-the-command-gate` | `src/platform/runner.zig` | `location.shadow, targets, session.message(), options.limits` -> `location.shadow, targets, null, options.limits` | commit on write: a message command judges the message of a try, and a refusal w... | killed |
 | `BC1-batch-written-but-not-published` | `src/platform/batch.zig` | `try session.land(gpa, io, root, changes, pendings, &batch, opti...` -> `for (pendings) \|*p\| p.discard(null);     if (false) try sessi...` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ...; commi... | killed |
-| `BC2-moved-source-not-checked-for-hand-edits` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try rels.append(arena, from);` -> `` | commit batch: a file move refuses when the file to move was edited by hand | killed |
-| `BC3-doc-target-not-checked-for-hand-edits` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | commit batch: try_batch refuses a doc target edited by hand outside the rewritt... | killed |
+| `BC2-moved-source-not-checked-for-hand-edits` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try rels.append(arena, from);` -> `` | commit batch: a hand edited file to move is refused before the gate runs, so a ... | killed |
+| `BC3-doc-target-not-checked-for-hand-edits` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | commit batch: a hand edited doc target is refused before the gate runs, so a fa... | killed |
 | `BC4-moved-source-stays-in-the-commit` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try changes.append(gpa, .{ .rel = fr...` -> `` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
 | `BC5-deleted-file-committed-as-empty` | `src/platform/batch.zig` | `if (p.action == .delete_file) null else p.source()` -> `if (false and p.action == .delete_file) null else p.source()` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
 | `BC6-doc-edit-left-out-of-the-commit` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| try changes.append(gpa, .{ .rel = p.re...` -> `for (doc_prepared) \|p\| if (false) try changes.append(gpa, .{ ...` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
@@ -757,7 +757,7 @@ python tools/verification_page.py --check
 | `DW1-splice-hash-check-removed` | `src/engine/docnode.zig` | `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` -> `fn splice(gpa: Allocator, source: []const u8, span: Span, actua...` | applyJsonPointer refuses a stale hash and refuses a value that is not valid json; applyLi... | killed |
 | `DW2-doc-size-cap-removed` | `src/engine/docnode.zig` | `if (source.len > max_bytes) return error.DocTooLarge;` -> `` | defense in depth: both callers (doc_writer.tryWriteDoc and batch_plan.planDoc) already re... | defense in depth |
 | `DW3-doc-binary-check-removed` | `src/engine/docnode.zig` | `if (looksBinary(source)) return error.BinaryFile;` -> `` | doc_writer: a binary file is refused before any parse or sandbox run | killed |
-| `DW4-doc-write-skips-journal` | `src/platform/doc_writer.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `try session.land(gpa, io, root, &change, &pendings, null, optio...` | doc_writer: a crash right after the journal is written leaves a journal entry, ... | killed |
+| `DW4-doc-write-skips-journal` | `src/platform/doc_writer.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `try session.land(gpa, io, root, &change, &pendings, if (applied...` | doc_writer: a crash right after the journal is written leaves a journal entry, ... | killed |
 | `DW5-json-pointer-post-write-check-removed` | `src/engine/docnode.zig` | `if (!std.mem.eql(u8, reparsed.text(verify.node), new_value)) re...` -> `` | applyJsonPointer refuses a value that reparses to something other than exactly ... | killed |
 | `DW6-markdown-outer-region-check-removed` | `src/engine/docnode.zig` | `found = candidate.node.endByte() == span.start + new_section.le...` -> `found = true;` | applyMarkdownHeading refuses a replacement whose unclosed code fence swallows t...; apply... | killed |
 | `DW7-write-doc-jail-dropped` | `src/protocol/handlers.zig` | `const place = try repo.jailTarget(gpa, io, policy.root, file, f...` -> `const place = repo.Jailed{ .root = try gpa.dupe(u8, policy.root...` | write_doc refuses a path outside the repo, leaves the target untouched; write_doc refuses... | killed |
