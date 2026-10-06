@@ -261,7 +261,7 @@ python tools/verification_page.py --check
 | `BC3-doc-target-not-checked-for-hand-edits` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | commit batch: try_batch refuses a doc target edited by hand outside the rewritt... | killed |
 | `BC4-moved-source-stays-in-the-commit` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try changes.append(gpa, .{ .rel = fr...` -> `` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
 | `BC5-deleted-file-committed-as-empty` | `src/platform/batch.zig` | `if (p.action == .delete_file) null else p.source()` -> `if (false and p.action == .delete_file) null else p.source()` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
-| `BC6-doc-edit-left-out-of-the-commit` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| try changes.append(gpa, .{ .rel = p.re...` -> `` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
+| `BC6-doc-edit-left-out-of-the-commit` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| try changes.append(gpa, .{ .rel = p.re...` -> `for (doc_prepared) \|p\| if (false) try changes.append(gpa, .{ ...` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
 | `BC7-index-sync-of-the-journal-runs-before-the-commit` | `src/platform/batch.zig` | `if (options.commit == null) batch.root = root;` -> `batch.root = root;` | commit batch: a locked index does not keep a written batch out of its commit | killed |
 
 ### Disk, repository boundary and atomic commit

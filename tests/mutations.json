@@ -8937,7 +8937,7 @@
       "id": "BC6-doc-edit-left-out-of-the-commit",
       "file": "src/platform/batch.zig",
       "from": "    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
-      "to": "",
+      "to": "    for (doc_prepared) |p| if (false) try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
