@@ -6,6 +6,7 @@ const exe_path = @import("exe_path.zig");
 const own_dir = @import("own_dir.zig");
 const dir_scan = @import("dir_scan.zig");
 const gate_tree = @import("gate_tree.zig");
+const worker_pool = @import("worker_pool.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -207,10 +208,13 @@ pub const Shadow = struct {
         }
         const tracked = wants.items.len;
         var found: gate_tree.Found = .{};
-        for (options.linked) |link| try gate_tree.discover(arena, root, 0, link, &wants, &found);
+        var pool: worker_pool.Pool = undefined;
+        pool.start(worker_pool.max_threads);
+        defer pool.deinit();
+        for (options.linked) |link| try gate_tree.discover(arena, &pool, root, 0, link, &wants, &found);
 
         const outcomes = try arena.alloc(gate_tree.Outcome, wants.items.len);
-        _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = &.{root}, .wants = wants.items, .outcomes = outcomes }) catch |err| switch (err) {
+        _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = &.{root}, .wants = wants.items, .outcomes = outcomes, .pool = &pool }) catch |err| switch (err) {
             error.GateTreeUnavailable => {
                 held.close();
                 return .{ .unavailable = .no_hard_links };

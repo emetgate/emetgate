@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dir_scan = @import("dir_scan.zig");
 const link_tree = @import("link_tree.zig");
+const worker_pool = @import("worker_pool.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -60,6 +61,7 @@ pub const Options = struct {
     wants: []Want,
     outcomes: ?[]Outcome = null,
     report: ?*Report = null,
+    pool: ?*worker_pool.Pool = null,
 };
 
 pub const Error = error{
@@ -84,6 +86,64 @@ fn step() error{GateTreeInjected}!void {
 
 const no_dir: u32 = std.math.maxInt(u32);
 const remove_batch = 16;
+const key_bytes = 33 * 1024;
+
+const Lock = struct {
+    held: std.atomic.Value(bool) = .init(false),
+
+    fn acquire(self: *Lock) void {
+        while (self.held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) std.atomic.spinLoopHint();
+    }
+
+    fn release(self: *Lock) void {
+        self.held.store(false, .release);
+    }
+};
+
+const Body = *const fn (state: *anyopaque, item: u32, scratch: *align(8) dir_scan.Buffer, key: []u8) Error!void;
+
+const Sweep = struct {
+    items: []const u32,
+    body: Body,
+    state: *anyopaque,
+    next: std.atomic.Value(usize) = .init(0),
+    failed: std.atomic.Value(bool) = .init(false),
+    err: ?Error = null,
+    lock: Lock = .{},
+
+    fn work(raw: *anyopaque) void {
+        const self: *Sweep = @ptrCast(@alignCast(raw));
+        var scratch: dir_scan.Buffer align(8) = undefined;
+        var key: [key_bytes]u8 = undefined;
+        while (!self.failed.load(.acquire)) {
+            const at = self.next.fetchAdd(1, .monotonic);
+            if (at >= self.items.len) return;
+            self.body(self.state, self.items[at], &scratch, &key) catch |err| {
+                self.lock.acquire();
+                if (self.err == null) self.err = err;
+                self.lock.release();
+                self.failed.store(true, .release);
+                return;
+            };
+        }
+    }
+
+    fn run(pool: ?*worker_pool.Pool, items: []const u32, body: Body, state: *anyopaque) Error!void {
+        var sweep: Sweep = .{ .items = items, .body = body, .state = state };
+        if (pool) |p| p.run(p.helpers(), work, &sweep) else work(&sweep);
+        if (sweep.err) |err| return err;
+    }
+};
+
+fn levelsOf(arena: Allocator, parents: []const u32) Allocator.Error!Ranges {
+    const depth = try arena.alloc(u32, parents.len);
+    var deepest: u32 = 0;
+    for (parents, 0..) |parent, index| {
+        depth[index] = if (parent == no_dir) 0 else depth[parent] + 1;
+        deepest = @max(deepest, depth[index]);
+    }
+    return Ranges.build(arena, deepest + 1, depth);
+}
 
 const DirTable = struct {
     rels: std.ArrayList([]const u8) = .empty,
@@ -151,10 +211,23 @@ const Context = struct {
     tree_dirs: DirTable = .{},
     tree_dir_of: []u32,
     want_by_rel: std.StringHashMapUnmanaged(u32) = .empty,
-    dir_children: Ranges = undefined,
     dir_wants: Ranges = undefined,
     present: []bool,
-    scratch: *align(8) dir_scan.Buffer,
+    tree_handles: []?Handle = &.{},
+    actions: []std.ArrayList(Action) = &.{},
+    lock: Lock = .{},
+
+    fn act(self: *Context, dir: u32, name: []const u16, kind: dir_scan.Kind) Allocator.Error!void {
+        self.lock.acquire();
+        defer self.lock.release();
+        try self.actions[dir].append(self.arena, .{ .name = try self.arena.dupe(u16, name), .kind = kind });
+    }
+
+    fn blockedShared(self: *Context, parts: []const []const u8) error{GateTreeBlocked} {
+        self.lock.acquire();
+        defer self.lock.release();
+        return self.blocked(parts);
+    }
 
     fn settle(self: *Context, want_index: u32, outcome: Outcome) void {
         switch (outcome) {
@@ -198,7 +271,6 @@ pub fn reconcile(gpa: Allocator, options: Options) Error!Stats {
         if (want.root >= options.roots.len) return error.UnsafePath;
     }
 
-    const scratch = try arena.alignedAlloc(u8, .@"8", dir_scan.buffer_bytes);
     var ctx: Context = .{
         .arena = arena,
         .options = options,
@@ -209,12 +281,14 @@ pub fn reconcile(gpa: Allocator, options: Options) Error!Stats {
         .source_handles = &.{},
         .tree_dir_of = try arena.alloc(u32, wants.len),
         .present = &.{},
-        .scratch = scratch[0..dir_scan.buffer_bytes],
     };
     @memset(ctx.kinds, .absent);
     @memset(ctx.placed, false);
 
     defer for (ctx.source_handles) |maybe| {
+        if (maybe) |handle| dir_scan.close(handle);
+    };
+    defer for (ctx.tree_handles) |maybe| {
         if (maybe) |handle| dir_scan.close(handle);
     };
     try scanSources(&ctx);
@@ -231,12 +305,17 @@ pub fn reconcile(gpa: Allocator, options: Options) Error!Stats {
         slot.value_ptr.* = @intCast(index);
     }
     const dir_count = ctx.tree_dirs.rels.items.len;
-    ctx.dir_children = try Ranges.build(arena, dir_count, ctx.tree_dirs.parents.items);
     ctx.dir_wants = try Ranges.build(arena, dir_count, ctx.tree_dir_of);
     ctx.present = try arena.alloc(bool, dir_count);
     @memset(ctx.present, false);
+    ctx.tree_handles = try arena.alloc(?Handle, dir_count);
+    @memset(ctx.tree_handles, null);
+    ctx.actions = try arena.alloc(std.ArrayList(Action), dir_count);
+    for (ctx.actions) |*list| list.* = .empty;
 
-    try treeDir(&ctx, options.tree, 0);
+    const levels = try levelsOf(arena, ctx.tree_dirs.parents.items);
+    for (0..levels.starts.len - 1) |level| try Sweep.run(options.pool, levels.of(level), scanTreeDir, &ctx);
+    try applyTree(&ctx);
     return ctx.stats;
 }
 
@@ -296,39 +375,11 @@ fn scanSources(ctx: *Context) Error!void {
     const handles = try arena.alloc(?Handle, dirs.rels.items.len);
     @memset(handles, null);
     ctx.source_handles = handles;
+    var scan: SourceScan = .{ .ctx = ctx, .dirs = &dirs, .needs = needs.items, .by_source = &by_source, .handles = handles };
+    const levels = try levelsOf(arena, dirs.parents.items);
+    for (0..levels.starts.len - 1) |level| try Sweep.run(ctx.options.pool, levels.of(level), SourceScan.body, &scan);
+
     var name_w: [dir_scan.max_name_units + 1]u16 = undefined;
-    for (dirs.rels.items, 0..) |key, index| {
-        const parent = dirs.parents.items[index];
-        if (parent == no_dir) {
-            handles[index] = try duplicate(ctx.options.roots[key[0]]);
-            continue;
-        }
-        const parent_handle = handles[parent] orelse continue;
-        handles[index] = dir_scan.openChild(parent_handle, try toWide(&name_w, baseOf(key[1..]))) catch |err| switch (err) {
-            error.ScanIsLink => null,
-            else => |e| return e,
-        };
-    }
-
-    var key_buf: std.ArrayList(u8) = .empty;
-    for (dirs.rels.items, 0..) |key, index| {
-        if (!needs.items[index]) continue;
-        const handle = handles[index] orelse continue;
-        var reader = dir_scan.Reader.init(handle, ctx.scratch);
-        while (try reader.next()) |entry| {
-            if (entry.kind == .directory or entry.kind == .link_directory) continue;
-            key_buf.clearRetainingCapacity();
-            try key_buf.appendSlice(arena, key);
-            if (key.len > 1) try key_buf.append(arena, '/');
-            const at = key_buf.items.len;
-            try key_buf.resize(arena, at + entry.name.len * 3);
-            const used = std.unicode.wtf16LeToWtf8(key_buf.items[at..], entry.name);
-            const want_index = by_source.get(key_buf.items[0 .. at + used]) orelse continue;
-            ctx.ids[want_index] = entry.id;
-            ctx.kinds[want_index] = if (entry.kind == .link_file) .follow else .file;
-        }
-    }
-
     for (wants, 0..) |want, index| {
         if (ctx.kinds[index] != .absent) continue;
         const handle = handles[ctx.source_dir[index]] orelse continue;
@@ -340,6 +391,49 @@ fn scanSources(ctx: *Context) Error!void {
         ctx.kinds[index] = .file;
     }
 }
+
+const SourceScan = struct {
+    ctx: *Context,
+    dirs: *const DirTable,
+    needs: []const bool,
+    by_source: *const std.StringHashMapUnmanaged(u32),
+    handles: []?Handle,
+
+    fn body(raw: *anyopaque, dir: u32, scratch: *align(8) dir_scan.Buffer, key_buf: []u8) Error!void {
+        const self: *SourceScan = @ptrCast(@alignCast(raw));
+        const key = self.dirs.rels.items[dir];
+        const parent = self.dirs.parents.items[dir];
+        var name_w: [dir_scan.max_name_units + 1]u16 = undefined;
+        const handle = if (parent == no_dir)
+            try duplicate(self.ctx.options.roots[key[0]])
+        else opened: {
+            const parent_handle = self.handles[parent] orelse return;
+            break :opened (dir_scan.openChild(parent_handle, try toWide(&name_w, baseOf(key[1..]))) catch |err| switch (err) {
+                error.ScanIsLink => return,
+                else => |e| return e,
+            }) orelse return;
+        };
+        self.handles[dir] = handle;
+        if (!self.needs[dir]) return;
+
+        if (key.len + 1 > key_buf.len) return error.NameTooLong;
+        @memcpy(key_buf[0..key.len], key);
+        var at = key.len;
+        if (key.len > 1) {
+            key_buf[at] = '/';
+            at += 1;
+        }
+        var reader = dir_scan.Reader.init(handle, scratch);
+        while (try reader.next()) |entry| {
+            if (entry.kind == .directory or entry.kind == .link_directory) continue;
+            if (at + entry.name.len * 3 > key_buf.len) return error.NameTooLong;
+            const used = std.unicode.wtf16LeToWtf8(key_buf[at..], entry.name);
+            const want_index = self.by_source.get(key_buf[0 .. at + used]) orelse continue;
+            self.ctx.ids[want_index] = entry.id;
+            self.ctx.kinds[want_index] = if (entry.kind == .link_file) .follow else .file;
+        }
+    }
+};
 
 fn addSourceDir(dirs: *DirTable, arena: Allocator, key: []const u8) Allocator.Error!u32 {
     if (dirs.by_rel.get(key)) |found| return found;
@@ -363,21 +457,35 @@ const Action = struct {
     kind: dir_scan.Kind,
 };
 
-fn treeDir(ctx: *Context, handle: Handle, dir_index: u32) Error!void {
-    const arena = ctx.arena;
-    const rel = ctx.tree_dirs.rels.items[dir_index];
-    var actions: std.ArrayList(Action) = .empty;
-    var key_buf: std.ArrayList(u8) = .empty;
+fn scanTreeDir(raw: *anyopaque, dir: u32, scratch: *align(8) dir_scan.Buffer, key_buf: []u8) Error!void {
+    const ctx: *Context = @ptrCast(@alignCast(raw));
+    const rel = ctx.tree_dirs.rels.items[dir];
+    const parent = ctx.tree_dirs.parents.items[dir];
+    var name_w: [dir_scan.max_name_units + 1]u16 = undefined;
+    const handle = if (parent == no_dir)
+        try duplicate(ctx.options.tree)
+    else opened: {
+        if (!ctx.present[dir]) return;
+        const parent_handle = ctx.tree_handles[parent] orelse return;
+        break :opened (dir_scan.openChild(parent_handle, try toWide(&name_w, baseOf(rel))) catch |err| switch (err) {
+            error.ScanIsLink, error.ScanDenied, error.ScanBusy => return ctx.blockedShared(&.{rel}),
+            else => |e| return e,
+        }) orelse return ctx.blockedShared(&.{rel});
+    };
+    ctx.tree_handles[dir] = handle;
 
-    var reader = dir_scan.Reader.init(handle, ctx.scratch);
+    if (rel.len + 1 > key_buf.len) return error.NameTooLong;
+    @memcpy(key_buf[0..rel.len], rel);
+    var at = rel.len;
+    if (rel.len != 0) {
+        key_buf[at] = '/';
+        at += 1;
+    }
+    var reader = dir_scan.Reader.init(handle, scratch);
     while (try reader.next()) |entry| {
-        key_buf.clearRetainingCapacity();
-        try key_buf.appendSlice(arena, rel);
-        if (rel.len != 0) try key_buf.append(arena, '/');
-        const at = key_buf.items.len;
-        try key_buf.resize(arena, at + entry.name.len * 3);
-        const used = std.unicode.wtf16LeToWtf8(key_buf.items[at..], entry.name);
-        const key = key_buf.items[0 .. at + used];
+        if (at + entry.name.len * 3 > key_buf.len) return error.NameTooLong;
+        const used = std.unicode.wtf16LeToWtf8(key_buf[at..], entry.name);
+        const key = key_buf[0 .. at + used];
         const keep = switch (entry.kind) {
             .link_file, .link_directory => false,
             .directory => if (ctx.tree_dirs.by_rel.get(key)) |child| mark: {
@@ -391,41 +499,42 @@ fn treeDir(ctx: *Context, handle: Handle, dir_index: u32) Error!void {
                 break :same true;
             } else false,
         };
-        if (keep) continue;
-        try actions.append(arena, .{ .name = try arena.dupe(u16, entry.name), .kind = entry.kind });
+        if (!keep) try ctx.act(dir, entry.name, entry.kind);
     }
+}
 
-    for (actions.items) |action| {
-        try step();
-        try removeName(ctx, handle, action.name, action.kind, rel);
-    }
-
+fn applyTree(ctx: *Context) Error!void {
     var name_w: [dir_scan.max_name_units + 1]u16 = undefined;
-    for (ctx.dir_wants.of(dir_index)) |want_index| {
-        if (ctx.placed[want_index]) {
-            ctx.settle(want_index, .kept);
-            continue;
-        }
-        if (ctx.kinds[want_index] == .absent) {
-            ctx.settle(want_index, .absent);
-            continue;
-        }
-        try step();
-        try place(ctx, handle, want_index);
-    }
-
-    for (ctx.dir_children.of(dir_index)) |child| {
-        const name = try toWide(&name_w, baseOf(ctx.tree_dirs.rels.items[child]));
-        if (!ctx.present[child]) {
+    for (ctx.tree_dirs.rels.items, 0..) |rel, index| {
+        const dir: u32 = @intCast(index);
+        const handle = ctx.tree_handles[index] orelse made: {
+            const parent_handle = ctx.tree_handles[ctx.tree_dirs.parents.items[index]] orelse return ctx.blocked(&.{rel});
+            const name = try toWide(&name_w, baseOf(rel));
             try step();
-            try makeDir(ctx, handle, name, ctx.tree_dirs.rels.items[child]);
+            try makeDir(ctx, parent_handle, name, rel);
+            const opened = (dir_scan.openChild(parent_handle, name) catch |err| switch (err) {
+                error.ScanIsLink, error.ScanDenied, error.ScanBusy => return ctx.blocked(&.{rel}),
+                else => |e| return e,
+            }) orelse return ctx.blocked(&.{rel});
+            ctx.tree_handles[index] = opened;
+            break :made opened;
+        };
+        for (ctx.actions[index].items) |action| {
+            try step();
+            try removeName(ctx, handle, action.name, action.kind, rel);
         }
-        const child_handle = (dir_scan.openChild(handle, name) catch |err| switch (err) {
-            error.ScanIsLink, error.ScanDenied, error.ScanBusy => return ctx.blocked(&.{ctx.tree_dirs.rels.items[child]}),
-            else => |e| return e,
-        }) orelse return ctx.blocked(&.{ctx.tree_dirs.rels.items[child]});
-        defer dir_scan.close(child_handle);
-        try treeDir(ctx, child_handle, child);
+        for (ctx.dir_wants.of(dir)) |want_index| {
+            if (ctx.placed[want_index]) {
+                ctx.settle(want_index, .kept);
+                continue;
+            }
+            if (ctx.kinds[want_index] == .absent) {
+                ctx.settle(want_index, .absent);
+                continue;
+            }
+            try step();
+            try place(ctx, handle, want_index);
+        }
     }
 }
 
@@ -657,7 +766,75 @@ fn descend(tree: Handle, dir_rel: []const u8, create: bool) Error!?Handle {
     return current;
 }
 
-pub fn discover(arena: Allocator, root: Handle, root_index: u8, dir_rel_raw: []const u8, wants: *std.ArrayList(Want), found: *Found) Error!void {
+const Frontier = struct {
+    handle: Handle,
+    rel: []const u8,
+};
+
+const Discovery = struct {
+    arena: Allocator,
+    root_index: u8,
+    wants: *std.ArrayList(Want),
+    found: *Found,
+    current: []const Frontier,
+    next: std.ArrayList(Frontier) = .empty,
+    lock: Lock = .{},
+
+    fn pathOf(self: *Discovery, rel: []const u8, name: []const u16) Allocator.Error![]const u8 {
+        const child = try self.arena.alloc(u8, rel.len + 1 + name.len * 3);
+        @memcpy(child[0..rel.len], rel);
+        child[rel.len] = '/';
+        const used = std.unicode.wtf16LeToWtf8(child[rel.len + 1 ..], name);
+        return child[0 .. rel.len + 1 + used];
+    }
+
+    fn file(self: *Discovery, rel: []const u8, entry: dir_scan.Entry) Allocator.Error!void {
+        self.lock.acquire();
+        defer self.lock.release();
+        const path = try self.pathOf(rel, entry.name);
+        try self.wants.append(self.arena, .{ .rel = path, .source = path, .root = self.root_index, .id = entry.id });
+    }
+
+    fn directory(self: *Discovery, rel: []const u8, name: []const u16, handle: Handle) Allocator.Error!void {
+        self.lock.acquire();
+        defer self.lock.release();
+        try self.next.append(self.arena, .{ .handle = handle, .rel = try self.pathOf(rel, name) });
+    }
+
+    fn skip(self: *Discovery) void {
+        self.lock.acquire();
+        defer self.lock.release();
+        self.found.skipped_links += 1;
+    }
+
+    fn body(raw: *anyopaque, item: u32, scratch: *align(8) dir_scan.Buffer, key: []u8) Error!void {
+        _ = key;
+        const self: *Discovery = @ptrCast(@alignCast(raw));
+        const at = self.current[item];
+        var reader = dir_scan.Reader.init(at.handle, scratch);
+        while (try reader.next()) |entry| {
+            switch (entry.kind) {
+                .link_file, .link_directory => self.skip(),
+                .file => try self.file(at.rel, entry),
+                .directory => {
+                    const child = (dir_scan.openChild(at.handle, entry.name) catch |err| switch (err) {
+                        error.ScanIsLink => {
+                            self.skip();
+                            continue;
+                        },
+                        else => |e| return e,
+                    }) orelse continue;
+                    self.directory(at.rel, entry.name, child) catch |err| {
+                        dir_scan.close(child);
+                        return err;
+                    };
+                },
+            }
+        }
+    }
+};
+
+pub fn discover(arena: Allocator, pool: ?*worker_pool.Pool, root: Handle, root_index: u8, dir_rel_raw: []const u8, wants: *std.ArrayList(Want), found: *Found) Error!void {
     if (builtin.os.tag != .windows) return error.Unsupported;
     const dir_rel = try normalize(arena, dir_rel_raw);
     try validate(dir_rel);
@@ -668,8 +845,19 @@ pub fn discover(arena: Allocator, root: Handle, root_index: u8, dir_rel_raw: []c
         },
         else => |e| return e,
     }) orelse return;
-    const buffer = try arena.alignedAlloc(u8, .@"8", dir_scan.buffer_bytes);
-    try discoverDir(arena, top, root_index, dir_rel, wants, found, buffer[0..dir_scan.buffer_bytes]);
+    var first = [_]Frontier{.{ .handle = top, .rel = dir_rel }};
+    var state: Discovery = .{ .arena = arena, .root_index = root_index, .wants = wants, .found = found, .current = &first };
+    while (state.current.len != 0) {
+        const level = state.current;
+        defer for (level) |entry| dir_scan.close(entry.handle);
+        errdefer for (state.next.items) |entry| dir_scan.close(entry.handle);
+        found.dirs += level.len;
+        const items = try arena.alloc(u32, level.len);
+        for (items, 0..) |*item, index| item.* = @intCast(index);
+        state.next = .empty;
+        try Sweep.run(pool, items, Discovery.body, &state);
+        state.current = state.next.items;
+    }
 }
 
 fn descendExisting(root: Handle, dir_rel: []const u8) Error!?Handle {
@@ -686,36 +874,6 @@ fn descendExisting(root: Handle, dir_rel: []const u8) Error!?Handle {
         current = next;
     }
     return current;
-}
-
-fn discoverDir(arena: Allocator, handle: Handle, root_index: u8, rel: []const u8, wants: *std.ArrayList(Want), found: *Found, buffer: *align(8) dir_scan.Buffer) Error!void {
-    defer dir_scan.close(handle);
-    found.dirs += 1;
-    var subdirs: std.ArrayList([]const u8) = .empty;
-    var reader = dir_scan.Reader.init(handle, buffer);
-    while (try reader.next()) |entry| {
-        const child = try arena.alloc(u8, rel.len + 1 + entry.name.len * 3);
-        @memcpy(child[0..rel.len], rel);
-        child[rel.len] = '/';
-        const used = std.unicode.wtf16LeToWtf8(child[rel.len + 1 ..], entry.name);
-        const path = child[0 .. rel.len + 1 + used];
-        switch (entry.kind) {
-            .link_file, .link_directory => found.skipped_links += 1,
-            .directory => try subdirs.append(arena, path),
-            .file => try wants.append(arena, .{ .rel = path, .source = path, .root = root_index, .id = entry.id }),
-        }
-    }
-    var name_w: [dir_scan.max_name_units + 1]u16 = undefined;
-    for (subdirs.items) |path| {
-        const child = (dir_scan.openChild(handle, try toWide(&name_w, baseOf(path))) catch |err| switch (err) {
-            error.ScanIsLink => {
-                found.skipped_links += 1;
-                continue;
-            },
-            else => |e| return e,
-        }) orelse continue;
-        try discoverDir(arena, child, root_index, path, wants, found, buffer);
-    }
 }
 
 pub fn removeAll(tree: Handle) Error!usize {
@@ -1092,8 +1250,8 @@ test "discover lists every file under a directory with its id and skips junction
     defer arena_state.deinit();
     var wants: std.ArrayList(Want) = .empty;
     var found: Found = .{};
-    try discover(arena_state.allocator(), fx.work, 0, "node_modules", &wants, &found);
-    try discover(arena_state.allocator(), fx.work, 0, "vendor_missing", &wants, &found);
+    try discover(arena_state.allocator(), null, fx.work, 0, "node_modules", &wants, &found);
+    try discover(arena_state.allocator(), null, fx.work, 0, "vendor_missing", &wants, &found);
     try testing.expectEqual(@as(usize, 2), wants.items.len);
     try testing.expectEqual(Found{ .dirs = 3, .skipped_links = 1 }, found);
     for (wants.items) |want| try testing.expect(want.id != null);
