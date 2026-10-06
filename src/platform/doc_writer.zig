@@ -90,10 +90,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     defer shadow.freeFileList(gpa, files);
 
     var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, null);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    defer workspace.finish();
     try workspace.writeFile(rel, applied.source);
 
     if (try runner.runCommandRules(gpa, io, root, location.shadow, &.{}, options.limits, options.allow_repo_memory)) |gated| {

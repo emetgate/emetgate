@@ -154,10 +154,7 @@ pub fn runInShadow(gpa: Allocator, io: std.Io, options: Options) !sandbox.Report
     defer shadow.freeFileList(gpa, files);
 
     var workspace = try runner.prepareShadow(gpa, io, options.root_abs, location, files, options.linked, null);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    defer workspace.finish();
     return switch (try runner.runStages(gpa, io, location.shadow, null, options.command, options.limits)) {
         .tests => |report| report,
         .typecheck => |report| report,

@@ -254,10 +254,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
     defer shadow.freeFileList(gpa, files);
 
     var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    defer workspace.finish();
     for (prepared) |p| {
         if (p.source_rel) |from| try workspace.deleteFile(from);
         if (p.action == .delete_file) try workspace.deleteFile(p.rel) else try workspace.writeFile(p.rel, p.source());

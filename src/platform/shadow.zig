@@ -4,6 +4,8 @@ const link_tree = @import("link_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const exe_path = @import("exe_path.zig");
 const own_dir = @import("own_dir.zig");
+const dir_scan = @import("dir_scan.zig");
+const gate_tree = @import("gate_tree.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -117,11 +119,33 @@ pub const FileLock = struct {
     }
 };
 
+pub const TreeMode = enum { kept, full_copy };
+
+pub const default_tree: TreeMode = .full_copy;
+
+pub const TreeReason = enum { none, requested, other_volume, no_hard_links };
+
+pub const TreeUse = struct {
+    mode: TreeMode = .full_copy,
+    reason: TreeReason = .none,
+    private_copies: usize = 0,
+};
+
+pub const Choice = struct {
+    tree: TreeMode = default_tree,
+    private: []const []const u8 = &.{},
+};
+
+pub var operator_choice: Choice = .{};
+
 pub const Shadow = struct {
     io: std.Io,
     dir: Dir,
     linked: []const []const u8,
     link_stats: link_tree.Stats = .{},
+    use: TreeUse = .{},
+    base_abs: []const u8 = "",
+    shadow_abs: []const u8 = "",
 
     pub const Options = struct {
         root_abs: []const u8,
@@ -129,11 +153,98 @@ pub const Shadow = struct {
         shadow_abs: []const u8,
         files: []const []const u8,
         linked: []const []const u8 = &.{},
+        tree: TreeMode = default_tree,
+        private: []const []const u8 = &.{},
     };
+
+    const Kept = union(enum) { ready: Shadow, unavailable: TreeReason };
 
     pub fn prepare(io: std.Io, options: Options) !Shadow {
         for (options.files) |file| try validateRelative(file);
         for (options.linked) |link| try validateRelative(link);
+        for (options.private) |prefix| try validateRelative(prefix);
+        var reason: TreeReason = .requested;
+        if (options.tree == .kept) {
+            switch (try prepareKept(io, options)) {
+                .ready => |ready| return ready,
+                .unavailable => |why| reason = why,
+            }
+        }
+        var copied = try prepareCopy(io, options);
+        copied.use = .{ .mode = .full_copy, .reason = reason };
+        return copied;
+    }
+
+    fn prepareKept(io: std.Io, options: Options) !Kept {
+        if (builtin.os.tag != .windows) return .{ .unavailable = .no_hard_links };
+        try ensureInsideWorkspace(options.base_abs, options.shadow_abs);
+        try Dir.cwd().createDirPath(io, options.shadow_abs);
+        try ensureNoLinks(options.base_abs, options.shadow_abs);
+        const held = (try own_dir.hold(io, options.shadow_abs, .create)) orelse return error.WorkspaceOpenFailed;
+        errdefer held.close();
+        try writeRootMarker(io, options.shadow_abs, options.root_abs);
+        try labelWithoutPropagation(options.shadow_abs);
+
+        const root = (try dir_scan.openRoot(options.root_abs)) orelse return error.FileNotFound;
+        defer dir_scan.close(root);
+        const tree = held.dir.handle;
+        if (try dir_scan.volumeOf(root) != try dir_scan.volumeOf(tree)) {
+            held.close();
+            return .{ .unavailable = .other_volume };
+        }
+        if (!try dir_scan.supportsHardLinks(root)) {
+            held.close();
+            return .{ .unavailable = .no_hard_links };
+        }
+
+        var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var wants: std.ArrayList(gate_tree.Want) = .empty;
+        for (options.files) |file| {
+            if (isUnderAny(file, options.linked)) continue;
+            try wants.append(arena, .{ .rel = file, .source = file, .how = if (isUnderAny(file, options.private)) .copy else .link });
+        }
+        const tracked = wants.items.len;
+        var found: gate_tree.Found = .{};
+        for (options.linked) |link| try gate_tree.discover(arena, root, 0, link, &wants, &found);
+
+        const outcomes = try arena.alloc(gate_tree.Outcome, wants.items.len);
+        _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = &.{root}, .wants = wants.items, .outcomes = outcomes }) catch |err| switch (err) {
+            error.GateTreeUnavailable => {
+                held.close();
+                return .{ .unavailable = .no_hard_links };
+            },
+            else => |e| return e,
+        };
+
+        var stats: link_tree.Stats = .{ .dirs = found.dirs, .skipped_links = found.skipped_links };
+        var use: TreeUse = .{ .mode = .kept };
+        for (outcomes, 0..) |outcome, index| {
+            if (index < tracked) {
+                if (outcome == .copied) use.private_copies += 1;
+                continue;
+            }
+            switch (outcome) {
+                .kept, .linked => stats.linked += 1,
+                .copied => stats.copied += 1,
+                .absent => {},
+            }
+        }
+        const dir = try Dir.openDirAbsolute(io, options.shadow_abs, .{});
+        held.close();
+        return .{ .ready = .{
+            .io = io,
+            .dir = dir,
+            .linked = options.linked,
+            .link_stats = stats,
+            .use = use,
+            .base_abs = options.base_abs,
+            .shadow_abs = options.shadow_abs,
+        } };
+    }
+
+    fn prepareCopy(io: std.Io, options: Options) !Shadow {
         try remove(io, options.base_abs, options.shadow_abs);
 
         var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
@@ -148,7 +259,10 @@ pub const Shadow = struct {
         for (options.files) |file| {
             if (isUnderAny(file, options.linked)) continue;
             if (std.fs.path.dirname(file)) |parent| try dir.createDirPath(io, parent);
-            try root.copyFile(file, dir, file, io, .{});
+            root.copyFile(file, dir, file, io, .{}) catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => |e| return e,
+            };
         }
 
         var stats: link_tree.Stats = .{};
@@ -163,12 +277,13 @@ pub const Shadow = struct {
             const link_path = try joinWindows(&link_buf, options.shadow_abs, link);
             try link_tree.build(io, target, link_path, &stats);
         }
-        return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats };
+        return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats, .base_abs = options.base_abs, .shadow_abs = options.shadow_abs };
     }
 
     pub fn writeFile(self: Shadow, sub_path: []const u8, data: []const u8) !void {
         try validateRelative(sub_path);
         if (isUnderAny(sub_path, self.linked)) return error.UnsafePath;
+        if (self.use.mode == .kept) return gate_tree.writeFile(self.dir.handle, sub_path, data);
         if (std.fs.path.dirname(sub_path)) |parent| {
             try self.dir.createDirPath(self.io, parent);
             try self.assertResolvesInside(parent);
@@ -179,6 +294,7 @@ pub const Shadow = struct {
     pub fn deleteFile(self: Shadow, sub_path: []const u8) !void {
         try validateRelative(sub_path);
         if (isUnderAny(sub_path, self.linked)) return error.UnsafePath;
+        if (self.use.mode == .kept) return gate_tree.deleteFile(self.dir.handle, sub_path);
         self.dir.deleteFile(self.io, sub_path) catch |err| switch (err) {
             error.FileNotFound => {},
             else => |e| return e,
@@ -204,13 +320,30 @@ pub const Shadow = struct {
         self.dir.close(self.io);
         self.* = undefined;
     }
+
+    pub fn finish(self: *Shadow) void {
+        const io = self.io;
+        const mode = self.use.mode;
+        const base_abs = self.base_abs;
+        const shadow_abs = self.shadow_abs;
+        self.close();
+        if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};
+    }
 };
+
+fn unlinkAll(shadow_abs: []const u8) !void {
+    if (builtin.os.tag != .windows) return;
+    const tree = (try dir_scan.openRoot(shadow_abs)) orelse return;
+    defer dir_scan.close(tree);
+    _ = try gate_tree.removeAll(tree);
+}
 
 pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     try ensureInsideWorkspace(base_abs, shadow_abs);
     const held = try holdWorkspace(io, shadow_abs);
     errdefer if (held) |h| h.close();
     try ensureNoLinks(base_abs, shadow_abs);
+    try unlinkAll(shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
     if (held) |h| h.close();
 
@@ -315,6 +448,28 @@ pub fn grantLowIntegrityWrite(dir_abs: []const u8) error{ LabelFailed, NameTooLo
     if (win.SetSecurityInfo(handle, win.se_file_object, win.label_security_information, null, null, null, sacl) != 0) return error.LabelFailed;
 }
 
+pub fn labelWithoutPropagation(dir_abs: []const u8) error{ LabelFailed, NameTooLong, InvalidWtf8 }!void {
+    if (builtin.os.tag != .windows) return;
+    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const handle = win.CreateFileW(
+        try toExtendedWide(&path_w, dir_abs),
+        win.read_control | win.write_owner,
+        win.file_share_all,
+        null,
+        win.open_existing,
+        win.flag_backup_semantics | win.flag_open_reparse_point,
+        null,
+    );
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.LabelFailed;
+    defer std.os.windows.CloseHandle(handle);
+
+    var descriptor: ?*anyopaque = null;
+    const sddl = std.unicode.utf8ToUtf16LeStringLiteral("S:(ML;OICI;NW;;;LW)");
+    if (win.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, win.sddl_revision_1, &descriptor, null) == .FALSE) return error.LabelFailed;
+    defer _ = win.LocalFree(descriptor);
+    if (win.SetKernelObjectSecurity(handle, win.label_security_information, descriptor.?) == .FALSE) return error.LabelFailed;
+}
+
 pub fn isReparsePoint(path: []const u8) error{ AttributeCheckFailed, NameTooLong, InvalidWtf8 }!bool {
     var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
     const wide = try toExtendedWide(&path_w, path);
@@ -392,8 +547,10 @@ const win = struct {
     extern "advapi32" fn ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl: [*:0]const u16, revision: windows.DWORD, descriptor: *?*anyopaque, size: ?*windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "advapi32" fn GetSecurityDescriptorSacl(descriptor: *anyopaque, present: *windows.BOOL, sacl: *?*anyopaque, defaulted: *windows.BOOL) callconv(.winapi) windows.BOOL;
     extern "advapi32" fn SetSecurityInfo(handle: windows.HANDLE, object_type: c_int, info: windows.DWORD, owner: ?*anyopaque, group: ?*anyopaque, dacl: ?*anyopaque, sacl: ?*anyopaque) callconv(.winapi) windows.DWORD;
+    extern "advapi32" fn SetKernelObjectSecurity(handle: windows.HANDLE, info: windows.DWORD, descriptor: *anyopaque) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn LocalFree(memory: ?*anyopaque) callconv(.winapi) ?*anyopaque;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn SetFileAttributesW(name: [*:0]const u16, attributes: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetFinalPathNameByHandleW(handle: windows.HANDLE, path: [*]u16, count: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
 
@@ -554,13 +711,117 @@ test "prepare copies tracked files, rebuilds heavy directories as hardlink trees
     try testing.expectEqual(link_tree.Stats{ .dirs = 2, .linked = 1 }, shadow.link_stats);
 }
 
-test "a tracked file that is missing from the working tree fails the whole shadow" {
+test "a tracked file that is missing from the working tree is absent from the shadow, kept or copied" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    for ([_]TreeMode{ .kept, .full_copy }) |mode| {
+        var project = try Project.init();
+        defer project.deinit();
+        var options = try project.options();
+        options.tree = mode;
+        if (mode == .kept) {
+            var before = try Shadow.prepare(testing.io, options);
+            try expectFileContent(before.dir, "src/b.ts", "export function b() { return 2; }\n");
+            before.finish();
+        }
+        try project.tmp.dir.deleteFile(testing.io, "project/src/b.ts");
+
+        var shadow = try Shadow.prepare(testing.io, options);
+        defer shadow.finish();
+        try testing.expectEqual(mode, shadow.use.mode);
+        try expectFileContent(shadow.dir, "a.ts", "export const a = 1;\n");
+        try testing.expectError(error.FileNotFound, shadow.dir.access(testing.io, "src/b.ts", .{}));
+    }
+}
+
+test "the kept tree holds the working files themselves, stays after the call and says what it is" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var project = try Project.init();
     defer project.deinit();
-    try project.tmp.dir.deleteFile(testing.io, "project/src/b.ts");
+    var options = try project.options();
+    options.tree = .kept;
 
-    try testing.expectError(error.FileNotFound, Shadow.prepare(testing.io, try project.options()));
+    var first = try Shadow.prepare(testing.io, options);
+    try testing.expectEqual(TreeUse{ .mode = .kept }, first.use);
+    try first.writeFile("out/built.js", "left by a test\n");
+    try first.writeFile("a.ts", "export const a = 999;\n");
+    first.finish();
+    try Dir.cwd().access(testing.io, options.shadow_abs, .{});
+
+    var file = try project.tmp.dir.openFile(testing.io, "project/src/b.ts", .{ .mode = .read_write });
+    try file.writePositionalAll(testing.io, "EXPORT", 0);
+    file.close(testing.io);
+
+    var second = try Shadow.prepare(testing.io, options);
+    defer second.finish();
+    try expectFileContent(second.dir, "a.ts", "export const a = 1;\n");
+    try expectFileContent(second.dir, "src/b.ts", "EXPORT function b() { return 2; }\n");
+    try testing.expectError(error.FileNotFound, second.dir.access(testing.io, "out", .{}));
+    var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var real_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    for ([_][]const u8{ "a.ts", "src\\b.ts", "node_modules\\pkg\\index.js" }) |real_file| {
+        errdefer std.debug.print("the working file became writable for the sandbox: {s}\n", .{real_file});
+        const real_abs = try std.fmt.bufPrint(&real_buf, "{s}\\{s}", .{ project.root_abs, real_file });
+        try testing.expect(try link_tree.lowWriteBlocked(try toExtendedWide(&real_w, real_abs)));
+    }
+    const real = try project.tmp.dir.statFile(testing.io, "project/src/b.ts", .{});
+    const kept = try second.dir.statFile(testing.io, "src/b.ts", .{});
+    try testing.expectEqual(real.inode, kept.inode);
+}
+
+test "a full copy is used when asked for, says so, gives private files and is removed after the call" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .full_copy;
+
+    var shadow = try Shadow.prepare(testing.io, options);
+    try testing.expectEqual(TreeUse{ .mode = .full_copy, .reason = .requested }, shadow.use);
+    const real = try project.tmp.dir.statFile(testing.io, "project/a.ts", .{});
+    const copy = try shadow.dir.statFile(testing.io, "a.ts", .{});
+    try testing.expect(real.inode != copy.inode);
+    shadow.finish();
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
+}
+
+test "a path under a private prefix is a private copy in the kept tree and is counted" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.private = &.{"src"};
+    options.tree = .kept;
+
+    for (0..2) |_| {
+        var shadow = try Shadow.prepare(testing.io, options);
+        defer shadow.finish();
+        try testing.expectEqual(TreeUse{ .mode = .kept, .private_copies = 1 }, shadow.use);
+        try expectFileContent(shadow.dir, "src/b.ts", "export function b() { return 2; }\n");
+        try shadow.dir.writeFile(testing.io, .{ .sub_path = "src/b.ts", .data = "written in place by a test\n" });
+        const original = try project.read("src/b.ts");
+        defer testing.allocator.free(original);
+        try testing.expectEqualStrings("export function b() { return 2; }\n", original);
+    }
+}
+
+test "removing a kept tree leaves every working file in place, a read-only one included" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .kept;
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var name_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    _ = win.SetFileAttributesW(try toExtendedWide(&name_w, try std.fmt.bufPrint(&root_buf, "{s}\\a.ts", .{project.root_abs})), 0x1);
+    defer _ = win.SetFileAttributesW(&name_w, win.file_attribute_normal);
+
+    var shadow = try Shadow.prepare(testing.io, options);
+    shadow.finish();
+    try remove(testing.io, options.base_abs, options.shadow_abs);
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
+    const survivor = try project.read("a.ts");
+    defer testing.allocator.free(survivor);
+    try testing.expectEqualStrings("export const a = 1;\n", survivor);
 }
 
 test "writing into the shadow never touches the project" {

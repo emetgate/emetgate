@@ -65,6 +65,7 @@ pub const Trace = struct {
     linked_files: usize = 0,
     copied_files: usize = 0,
     skipped_links: usize = 0,
+    tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
 };
 
@@ -236,10 +237,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     defer shadow.freeFileList(gpa, files);
 
     var workspace = try prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    defer workspace.finish();
     try workspace.writeFile(rel, patched);
 
     if (try runCommandRules(gpa, io, root, location.shadow, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
@@ -254,8 +252,11 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
         .shadow_abs = location.shadow,
         .files = files,
         .linked = linked,
+        .tree = shadow.operator_choice.tree,
+        .private = shadow.operator_choice.private,
     });
     if (trace) |t| {
+        t.tree = workspace.use;
         t.shadow_dotted = location.dotted();
         t.linked_files = workspace.link_stats.linked;
         t.copied_files = workspace.link_stats.copied;
