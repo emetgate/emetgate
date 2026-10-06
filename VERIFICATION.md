@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1461**
-- Mutations declared in `tests/mutations.json`: **928**
-  - killed: **898**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1495**
+- Mutations declared in `tests/mutations.json`: **951**
+  - killed: **921**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -16,10 +16,11 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
   - survives, not yet classified: **5** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create)
-- Red-team suites: **13** files, **103** tests total
+- Red-team suites: **14** files, **112** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
+  - `tests/redteam_gate_tree.zig`: 9
   - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
@@ -172,7 +173,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-84 mutation(s).
+91 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -260,6 +261,13 @@ python tools/verification_page.py --check
 | `OD4-lock-taken-through-a-linked-workspace` | `src/platform/shadow.zig` | `if (isReparsePoint(workspace) catch true) return error.Workspac...` -> `` | own dir: the workspace lock refuses a workspace that is a junction and leaves t... | killed |
 | `OD5-lock-release-removes-what-it-did-not-verify` | `src/platform/shadow.zig` | `_ = own_dir.removeEmpty(journal);` -> `Dir.cwd().deleteDir(self.io, journal) catch {};` | own dir: releasing the workspace lock leaves a junction that stands where the j... | killed |
 | `OD11-shadow-workspace-not-held` | `src/platform/shadow.zig` | `const held = try holdWorkspace(io, shadow_abs);` -> `const held: ?own_dir.Held = null;` | own dir: a shadow workspace that another handle holds alone is not cleaned | killed |
+| `KT1-wrong-tree-removed-after-the-call` | `src/platform/shadow.zig` | `if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch ...` -> `if (mode == .kept) remove(io, base_abs, shadow_abs) catch {};` | the kept tree holds the working files themselves, stays after the call and says...; a ful... | killed |
+| `KT3-private-prefix-ignored` | `src/platform/shadow.zig` | `.how = if (isUnderAny(file, options.private)) .copy else .link` -> `.how = .link` | a path under a private prefix is a private copy in the kept tree and is counted; redteam ... | killed |
+| `KT4-label-propagated-onto-linked-files` | `src/platform/shadow.zig` | `try labelWithoutPropagation(options.shadow_abs);` -> `try grantLowIntegrityWrite(options.shadow_abs);` | the kept tree holds the working files themselves, stays after the call and says...; redte... | killed |
+| `KT5-edit-written-through-the-link` | `src/platform/shadow.zig` | `if (self.use.mode == .kept) return gate_tree.writeFile(self.dir...` -> `` | the kept tree holds the working files themselves, stays after the call and says... | killed |
+| `KT6-missing-tracked-file-fails-full-copy` | `src/platform/shadow.zig` | `root.copyFile(file, dir, file, io, .{}) catch \|err\| switch (e...` -> `root.copyFile(file, dir, file, io, .{}) catch \|err\| switch (e...` | a tracked file that is missing from the working tree is absent from the shadow,... | killed |
+| `KT7-requested-full-copy-ignored` | `src/platform/shadow.zig` | `if (options.tree == .kept) {` -> `if (true) {` | a full copy is used when asked for, says so, gives private files and is removed...; a tra... | killed |
+| `KT8-private-copies-not-counted` | `src/platform/shadow.zig` | `if (outcome == .copied) use.private_copies += 1;` -> `if (outcome == .linked) use.private_copies += 1;` | a path under a private prefix is a private copy in the kept tree and is counted; redteam ... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -328,7 +336,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-103 mutation(s).
+106 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -435,6 +443,9 @@ python tools/verification_page.py --check
 | `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = old orelse "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
 | `SL10-rule-unknown-check-names-nothing` | `src/protocol/rule_command.zig` | `error.UnknownCheck => try writeCheckNames(err_out),` -> `error.UnknownCheck => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
 | `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err...` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
+| `PL1-model-may-name-the-tree` | `src/protocol/policy.zig` | `"shadow_root", "allow_run", "shadow_tree", "shadow_private" };` -> `"shadow_root", "allow_run" };` | a tool call that names the tree choice is refused like one that names a test co... | killed |
+| `PL2-private-prefix-not-validated` | `src/protocol/policy.zig` | `shadow.validateRelative(prefix) catch return null;` -> `` | the tree choice comes from the operator's flags: kept by default, copy on reque... | killed |
+| `PL3-copy-flag-read-as-kept` | `src/protocol/policy.zig` | `if (std.mem.eql(u8, text, "copy")) return .full_copy;` -> `if (std.mem.eql(u8, text, "copy")) return .kept;` | the tree choice comes from the operator's flags: kept by default, copy on reque... | killed |
 
 ### Scan
 
@@ -572,7 +583,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-452 mutation(s).
+465 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1028,6 +1039,19 @@ python tools/verification_page.py --check
 | `VM7-work-directory-emptied-under-any-two-letter-name` | `src/platform/verify_merge.zig` | `if (entry.kind != .directory or entry.name.len != 2 or !lowerHe...` -> `if (entry.kind != .directory or entry.name.len != 2) continue;` | verify merge: the work directory is emptied of git's object files only | killed |
 | `VM8-python-checks-a-merge-as-an-ordinary-commit` | `tools/verify_py/emetgate_verify.py` | `if len(parents) > 1:` -> `if False and len(parents) > 1:` | verify merge: a merge commit that carries a hand edit is unverified and names t...; verif... | killed |
 | `VM9-python-writes-the-merge-tree-into-the-repository` | `tools/verify_py/emetgate_verify.py` | `env["GIT_OBJECT_DIRECTORY"] = scratch` -> `` | verify merge: a hand edit made while two real sides are merged is named, and th...; verif... | killed |
+| `GT1-file-id-not-compared` | `src/platform/gate_tree.zig` | `if (!std.mem.eql(u8, &ctx.ids[want_index], &entry.id)) break :s...` -> `` | an edit made in place shows through the link and a replace-style save is relink...; a nam... | killed |
+| `GT2-planted-link-kept` | `src/platform/gate_tree.zig` | `.link_file, .link_directory => false,` -> `.link_file, .link_directory => true,` | a name the tree should not hold is removed: a file, a directory with content, a...; redte... | killed |
+| `GT3-low-writable-file-linked` | `src/platform/gate_tree.zig` | `if (try lowWriteBlocked(source)) {` -> `if (true) {` | a working file that a low-integrity process may write is given a private copy, ...; redte... | killed |
+| `GT4-link-limit-not-copied` | `src/platform/gate_tree.zig` | `nt.status_too_many_links => {},` -> `nt.status_too_many_links => return ctx.blocked(&.{want.rel}),` | a working file that already has the most names a file can have is given a priva... | killed |
+| `GT5-copy-want-linked` | `src/platform/gate_tree.zig` | `if (want.how == .link and ctx.kinds[want_index] == .file) {` -> `if (ctx.kinds[want_index] == .file) {` | a want marked copy is a private file that is made again on every call; a path under a pri... | killed |
+| `GT6-removal-follows-a-link` | `src/platform/gate_tree.zig` | `const options: u32 = nt.option_open_reparse_point \| nt.option_...` -> `const options: u32 = nt.option_sync \| (if (directory)` | a name the tree should not hold is removed: a file, a directory with content, a...; redte... | killed |
+| `GT7-dot-segments-accepted` | `src/platform/gate_tree.zig` | `if (std.mem.eql(u8, segment, ".") or std.mem.eql(u8, segment, "...` -> `` | writing the edit refuses a path that leaves the tree or passes through a juncti... | killed |
+| `GT8-edit-descends-through-a-junction` | `src/platform/gate_tree.zig` | `error.ScanIsLink => return error.UnsafePath,` -> `error.ScanIsLink => return error.GateTreeBlocked,` | writing the edit refuses a path that leaves the tree or passes through a juncti... | killed |
+| `GT10-skipped-link-not-counted` | `src/platform/gate_tree.zig` | `.link_file, .link_directory => self.skip(),` -> `.link_file, .link_directory => {},` | discover lists every file under a directory with its id and skips junctions wit... | killed |
+| `DS1-reparse-point-opened-as-directory` | `src/platform/dir_scan.zig` | `if (info.file_attributes & win.file_attribute_reparse_point != ...` -> `` | a junction is never opened as a directory, at the root or below it; writing the edit refu... | killed |
+| `DS2-dot-entries-reported` | `src/platform/dir_scan.zig` | `if (isDot(name)) continue;` -> `` | a directory scan reports every name with its kind and file id, and two hard lin... | killed |
+| `DS3-link-kind-reported-as-plain` | `src/platform/dir_scan.zig` | `if (attributes & win.file_attribute_reparse_point != 0) return ...` -> `` | a directory scan reports every name with its kind and file id, and two hard lin... | killed |
+| `WT1-full-copy-reason-left-out` | `src/protocol/wire.zig` | `try js.write(@tagName(tree.reason));` -> `try js.write("none");` | a result says which tree the gate used: kept with its private copies, or a full... | killed |
 
 ## What this system does not prove
 
