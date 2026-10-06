@@ -99,6 +99,7 @@ pub const scan = @import("platform/scan.zig");
 pub const change_watch = @import("platform/change_watch.zig");
 pub const stdio = @import("platform/stdio.zig");
 pub const lockdown = @import("platform/lockdown.zig");
+pub const lockdown_marks = @import("platform/lockdown_marks.zig");
 pub const lockdown_slash = @import("platform/lockdown_slash.zig");
 pub const memory = @import("platform/memory.zig");
 pub const journal = @import("platform/journal.zig");

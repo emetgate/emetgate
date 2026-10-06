@@ -38,7 +38,7 @@ const usage =
     \\       emetgate recover [--shadow-root <dir>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
-    \\       emetgate lockdown [<claude args>...]
+    \\       emetgate lockdown [--no-marks] [<claude args>...]
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
     \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
     \\       emetgate facts defined_at <name> [--file <path>] [--budget <chars>] [--json]
@@ -71,6 +71,9 @@ const usage =
     \\It refuses to start unless .mcp.json has exactly one emetgate server.
     \\It also gives claude the hook above and a /rule command (--settings, --add-dir),
     \\both from files under %LOCALAPPDATA%\emetgate\lockdown, none in the project.
+    \\It also loads a plugin from the same place (--plugin-dir) that only draws: it marks
+    \\each emetgate write in the transcript as passed or refused. /golem off, /golem on
+    \\and /golem scene switch it inside claude; lockdown --no-marks starts without it.
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
     \\For mutate/try with --hash <hex> (an existing symbol), --body/--body-file is

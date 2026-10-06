@@ -8758,7 +8758,8 @@
       "from": "    return std.mem.eql(u8, present, data);",
       "to": "    return true;",
       "kills": [
-        "lockdown slash: a second install repairs a changed file and leaves nothing else behind"
+        "lockdown slash: a second install repairs a changed file and leaves nothing else behind",
+        "lockdown marks: a second install repairs a changed file and leaves nothing else behind"
       ]
     },
     {
@@ -8774,10 +8775,106 @@
     {
       "id": "SL18-lockdown-launches-without-the-hook",
       "file": "src/platform/lockdown.zig",
-      "from": "    const argv = try lockdown_slash.extend(gpa, locked, slash);",
-      "to": "    const argv = try gpa.dupe([]const u8, locked);",
+      "from": "    const hooked = try lockdown_slash.extend(gpa, locked, slash);",
+      "to": "    const hooked = try gpa.dupe([]const u8, locked);",
       "kills": [
-        "lockdown slash: the launched claude gets the hook settings and the command directory, and the project gains no file"
+        "lockdown slash: the launched claude gets the hook settings and the command directory, and the project gains no file",
+        "lockdown marks: the launched claude gets the plugin directory right after the lock, and the project gains no file",
+        "lockdown marks: with --no-marks claude gets no plugin directory, no plugin file is written and the hook stays"
+      ]
+    },
+    {
+      "id": "LM1-marks-off-flag-ignored",
+      "file": "src/platform/lockdown_marks.zig",
+      "from": "    if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return .{ .wanted = false, .rest = args[1..] };",
+      "to": "    if (false and args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return .{ .wanted = false, .rest = args[1..] };",
+      "kills": [
+        "lockdown marks: --no-marks as the first argument turns the plugin off and is not passed on",
+        "lockdown marks: with --no-marks claude gets no plugin directory, no plugin file is written and the hook stays"
+      ],
+      "note": "the user could not start without the plugin, and the flag would reach claude"
+    },
+    {
+      "id": "LM2-marks-off-flag-passed-on",
+      "file": "src/platform/lockdown_marks.zig",
+      "from": "    if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return .{ .wanted = false, .rest = args[1..] };",
+      "to": "    if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return .{ .wanted = false, .rest = args };",
+      "kills": [
+        "lockdown marks: --no-marks as the first argument turns the plugin off and is not passed on",
+        "lockdown marks: with --no-marks claude gets no plugin directory, no plugin file is written and the hook stays"
+      ]
+    },
+    {
+      "id": "LM3-marks-off-flag-read-from-the-end",
+      "file": "src/platform/lockdown_marks.zig",
+      "from": "    if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return .{ .wanted = false, .rest = args[1..] };",
+      "to": "    if (args.len > 0 and std.mem.eql(u8, args[args.len - 1], off_flag)) return .{ .wanted = false, .rest = args[1..] };",
+      "kills": [
+        "lockdown marks: --no-marks as the first argument turns the plugin off and is not passed on",
+        "lockdown marks: the flag anywhere but first is the user's own argument",
+        "lockdown marks: with --no-marks claude gets no plugin directory, no plugin file is written and the hook stays"
+      ],
+      "note": "a word of the user's prompt would switch the plugin off and lose their first argument"
+    },
+    {
+      "id": "LM4-marks-install-drops-a-file",
+      "file": "src/platform/lockdown_marks.zig",
+      "from": "    for (files) |file| {",
+      "to": "    for (files[1..]) |file| {",
+      "kills": [
+        "lockdown marks: install writes every file byte for byte under the marks directory",
+        "lockdown marks: a second install repairs a changed file and leaves nothing else behind",
+        "lockdown marks: the launched claude gets the plugin directory right after the lock, and the project gains no file"
+      ]
+    },
+    {
+      "id": "LM5-marks-installed-into-the-state-directory",
+      "file": "src/platform/lockdown_marks.zig",
+      "from": "    const dir = try std.fs.path.join(gpa, &.{ state_dir, plugin_dir });",
+      "to": "    const dir = try gpa.dupe(u8, state_dir);",
+      "kills": [
+        "lockdown marks: install writes every file byte for byte under the marks directory",
+        "lockdown marks: a second install repairs a changed file and leaves nothing else behind",
+        "lockdown marks: the launched claude gets the plugin directory right after the lock, and the project gains no file"
+      ],
+      "note": "the plugin's hooks folder would sit beside the /rule settings and --add-dir would load it as a project"
+    },
+    {
+      "id": "LM6-marks-flag-after-the-users-arguments",
+      "file": "src/platform/lockdown_marks.zig",
+      "from": "    const at = argv.len - passthrough_len;",
+      "to": "    const at = argv.len;",
+      "kills": [
+        "lockdown marks: the plugin flag comes after the lock and the user's arguments stay last",
+        "lockdown marks: the launched claude gets the plugin directory right after the lock, and the project gains no file"
+      ],
+      "note": "the user's prompt would no longer be the last argument"
+    },
+    {
+      "id": "LM7-lockdown-launches-without-the-marks",
+      "file": "src/platform/lockdown.zig",
+      "from": "    const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.install(gpa, io, slash.dir) else null;",
+      "to": "    const marks_dir: ?[]u8 = if (false and marks.wanted) try lockdown_marks.install(gpa, io, slash.dir) else null;",
+      "kills": [
+        "lockdown marks: the launched claude gets the plugin directory right after the lock, and the project gains no file"
+      ]
+    },
+    {
+      "id": "LM8-lockdown-loads-the-marks-when-told-not-to",
+      "file": "src/platform/lockdown.zig",
+      "from": "    const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.install(gpa, io, slash.dir) else null;",
+      "to": "    const marks_dir: ?[]u8 = if (true or marks.wanted) try lockdown_marks.install(gpa, io, slash.dir) else null;",
+      "kills": [
+        "lockdown marks: with --no-marks claude gets no plugin directory, no plugin file is written and the hook stays"
+      ]
+    },
+    {
+      "id": "LM9-lockdown-passes-the-off-flag-to-claude",
+      "file": "src/platform/lockdown.zig",
+      "from": "    const passthrough = marks.rest;",
+      "to": "    const passthrough = args;",
+      "kills": [
+        "lockdown marks: with --no-marks claude gets no plugin directory, no plugin file is written and the hook stays"
       ]
     }
   ]

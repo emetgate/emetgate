@@ -101,6 +101,7 @@ pub const scan = src.scan;
 pub const change_watch = src.change_watch;
 pub const stdio = src.stdio;
 pub const lockdown = src.lockdown;
+pub const lockdown_marks = src.lockdown_marks;
 pub const lockdown_slash = src.lockdown_slash;
 pub const memory = src.memory;
 pub const journal = src.journal;
@@ -201,6 +202,7 @@ test {
     _ = @import("tests/git_tools.zig");
     _ = @import("tests/server.zig");
     _ = @import("tests/lockdown.zig");
+    _ = @import("tests/lockdown_marks.zig");
     _ = @import("tests/lockdown_slash.zig");
     _ = @import("tests/prompt_hook.zig");
     _ = @import("tests/launch_path.zig");

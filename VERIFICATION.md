@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1411**
-- Mutations declared in `tests/mutations.json`: **890**
-  - killed: **860**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1424**
+- Mutations declared in `tests/mutations.json`: **899**
+  - killed: **869**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -172,7 +172,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-78 mutation(s).
+81 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -253,7 +253,10 @@ python tools/verification_page.py --check
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
 | `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 | `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
-| `SL18-lockdown-launches-without-the-hook` | `src/platform/lockdown.zig` | `const argv = try lockdown_slash.extend(gpa, locked, slash);` -> `const argv = try gpa.dupe([]const u8, locked);` | lockdown slash: the launched claude gets the hook settings and the command dire... | killed |
+| `SL18-lockdown-launches-without-the-hook` | `src/platform/lockdown.zig` | `const hooked = try lockdown_slash.extend(gpa, locked, slash);` -> `const hooked = try gpa.dupe([]const u8, locked);` | lockdown slash: the launched claude gets the hook settings and the command dire...; lockd... | killed |
+| `LM7-lockdown-launches-without-the-marks` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (false and marks.wanted) try lockdo...` | lockdown marks: the launched claude gets the plugin directory right after the l... | killed |
+| `LM8-lockdown-loads-the-marks-when-told-not-to` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (true or marks.wanted) try lockdown...` | lockdown marks: with --no-marks claude gets no plugin directory, no plugin file... | killed |
+| `LM9-lockdown-passes-the-off-flag-to-claude` | `src/platform/lockdown.zig` | `const passthrough = marks.rest;` -> `const passthrough = args;` | lockdown marks: with --no-marks claude gets no plugin directory, no plugin file... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -563,7 +566,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-423 mutation(s).
+429 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -988,8 +991,14 @@ python tools/verification_page.py --check
 | `SL13-lockdown-hook-loses-its-arguments` | `src/platform/lockdown_slash.zig` | `try js.write(hook_args);` -> `try js.write(hook_args[0..1]);` | lockdown slash: the hook is a command in exec form that names this executable | killed |
 | `SL14-lockdown-command-file-model-invocable` | `src/platform/lockdown_slash.zig` | `"disable-model-invocation: true\n" ++` -> `` | lockdown slash: install puts the settings and the command file under emetgate's... | killed |
 | `SL15-lockdown-slash-flags-after-the-lock` | `src/platform/lockdown_slash.zig` | `@memcpy(out[1 .. 1 + added.len], &added);     @memcpy(out[1 + a...` -> `@memcpy(out[argv.len..], &added);     @memcpy(out[1..argv.len],...` | lockdown slash: the hook flags come before the lock and the prompt stays the la... | killed |
-| `SL16-lockdown-changed-settings-kept` | `src/platform/lockdown_slash.zig` | `return std.mem.eql(u8, present, data);` -> `return true;` | lockdown slash: a second install repairs a changed file and leaves nothing else... | killed |
+| `SL16-lockdown-changed-settings-kept` | `src/platform/lockdown_slash.zig` | `return std.mem.eql(u8, present, data);` -> `return true;` | lockdown slash: a second install repairs a changed file and leaves nothing else...; lockd... | killed |
 | `SL17-lockdown-executables-share-settings` | `src/platform/lockdown_slash.zig` | `shadow_root.repoKey(exe_abs);` -> `shadow_root.repoKey(exe_abs[0..0]);` | lockdown slash: two executables do not share a settings file | killed |
+| `LM1-marks-off-flag-ignored` | `src/platform/lockdown_marks.zig` | `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` -> `if (false and args.len > 0 and std.mem.eql(u8, args[0], off_fla...` | lockdown marks: --no-marks as the first argument turns the plugin off and is no...; lockd... | killed |
+| `LM2-marks-off-flag-passed-on` | `src/platform/lockdown_marks.zig` | `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` -> `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` | lockdown marks: --no-marks as the first argument turns the plugin off and is no...; lockd... | killed |
+| `LM3-marks-off-flag-read-from-the-end` | `src/platform/lockdown_marks.zig` | `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` -> `if (args.len > 0 and std.mem.eql(u8, args[args.len - 1], off_fl...` | lockdown marks: --no-marks as the first argument turns the plugin off and is no...; lockd... | killed |
+| `LM4-marks-install-drops-a-file` | `src/platform/lockdown_marks.zig` | `for (files) \|file\| {` -> `for (files[1..]) \|file\| {` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
+| `LM5-marks-installed-into-the-state-directory` | `src/platform/lockdown_marks.zig` | `const dir = try std.fs.path.join(gpa, &.{ state_dir, plugin_dir...` -> `const dir = try gpa.dupe(u8, state_dir);` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
+| `LM6-marks-flag-after-the-users-arguments` | `src/platform/lockdown_marks.zig` | `const at = argv.len - passthrough_len;` -> `const at = argv.len;` | lockdown marks: the plugin flag comes after the lock and the user's arguments s...; lockd... | killed |
 
 ## What this system does not prove
 

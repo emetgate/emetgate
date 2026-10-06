@@ -1,5 +1,6 @@
 const std = @import("std");
 const exe_path = @import("exe_path.zig");
+const lockdown_marks = @import("lockdown_marks.zig");
 const lockdown_slash = @import("lockdown_slash.zig");
 
 const Allocator = std.mem.Allocator;
@@ -166,7 +167,9 @@ pub fn launch(gpa: Allocator, io: std.Io, parent_env: *const std.process.Environ
     return launchIn(gpa, io, std.Io.Dir.cwd(), parent_env, claude_program, self_exe, passthrough);
 }
 
-pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const std.process.Environ.Map, program: []const u8, self_exe: []const u8, passthrough: []const []const u8) !u8 {
+pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const std.process.Environ.Map, program: []const u8, self_exe: []const u8, args: []const []const u8) !u8 {
+    const marks = lockdown_marks.choose(args);
+    const passthrough = marks.rest;
     try refuseReserved(passthrough);
     const config_abs = try resolveMcpConfig(gpa, io, dir);
     defer gpa.free(config_abs);
@@ -181,7 +184,11 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     const local_app_data = parent_env.get(lockdown_slash.local_app_data_variable) orelse return error.LocalAppDataUnavailable;
     const slash = try lockdown_slash.install(gpa, io, local_app_data, self_exe);
     defer slash.deinit(gpa);
-    const argv = try lockdown_slash.extend(gpa, locked, slash);
+    const hooked = try lockdown_slash.extend(gpa, locked, slash);
+    defer gpa.free(hooked);
+    const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.install(gpa, io, slash.dir) else null;
+    defer if (marks_dir) |owned| gpa.free(owned);
+    const argv = if (marks_dir) |plugin| try lockdown_marks.extend(gpa, hooked, passthrough.len, plugin) else try gpa.dupe([]const u8, hooked);
     defer gpa.free(argv);
     const resolved = exe_path.resolve(gpa, program, null) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
