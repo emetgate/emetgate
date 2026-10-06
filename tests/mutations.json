@@ -8843,7 +8843,7 @@
       "id": "LM6-marks-flag-after-the-users-arguments",
       "file": "src/platform/lockdown_marks.zig",
       "from": "    const at = argv.len - passthrough_len;",
-      "to": "    const at = argv.len;",
+      "to": "    const at = argv.len - @min(passthrough_len, 0);",
       "kills": [
         "lockdown marks: the plugin flag comes after the lock and the user's arguments stay last",
         "lockdown marks: the launched claude gets the plugin directory right after the lock, and the project gains no file"

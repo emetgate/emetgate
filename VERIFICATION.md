@@ -998,7 +998,7 @@ python tools/verification_page.py --check
 | `LM3-marks-off-flag-read-from-the-end` | `src/platform/lockdown_marks.zig` | `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` -> `if (args.len > 0 and std.mem.eql(u8, args[args.len - 1], off_fl...` | lockdown marks: --no-marks as the first argument turns the plugin off and is no...; lockd... | killed |
 | `LM4-marks-install-drops-a-file` | `src/platform/lockdown_marks.zig` | `for (files) \|file\| {` -> `for (files[1..]) \|file\| {` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
 | `LM5-marks-installed-into-the-state-directory` | `src/platform/lockdown_marks.zig` | `const dir = try std.fs.path.join(gpa, &.{ state_dir, plugin_dir...` -> `const dir = try gpa.dupe(u8, state_dir);` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
-| `LM6-marks-flag-after-the-users-arguments` | `src/platform/lockdown_marks.zig` | `const at = argv.len - passthrough_len;` -> `const at = argv.len;` | lockdown marks: the plugin flag comes after the lock and the user's arguments s...; lockd... | killed |
+| `LM6-marks-flag-after-the-users-arguments` | `src/platform/lockdown_marks.zig` | `const at = argv.len - passthrough_len;` -> `const at = argv.len - @min(passthrough_len, 0);` | lockdown marks: the plugin flag comes after the lock and the user's arguments s...; lockd... | killed |
 
 ## What this system does not prove
 
