@@ -53,11 +53,26 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_rename")) return rename_tool.callRename(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_move_file")) return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_try_batch")) {
+        try policy_mod.refuseWithoutCommit(policy);
+        return callTryBatch(gpa, io, runtime, args, event, policy);
+    }
+    if (std.mem.eql(u8, name, "emetgate_rename")) {
+        try policy_mod.refuseWithoutCommit(policy);
+        return rename_tool.callRename(gpa, io, runtime, args, event, policy);
+    }
+    if (std.mem.eql(u8, name, "emetgate_move")) {
+        try policy_mod.refuseWithoutCommit(policy);
+        return move_tool.callMove(gpa, io, runtime, args, event, policy);
+    }
+    if (std.mem.eql(u8, name, "emetgate_move_file")) {
+        try policy_mod.refuseWithoutCommit(policy);
+        return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
+    }
+    if (std.mem.eql(u8, name, "emetgate_write_doc")) {
+        try policy_mod.refuseWithoutCommit(policy);
+        return callWriteDoc(gpa, io, args, event, policy);
+    }
     if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror);
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearch(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session);
@@ -455,7 +470,10 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
 }
 
 fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
-    if (args) |a| if (node_tool.isNodeForm(a)) return node_tool.callTry(gpa, io, runtime, args, event, policy);
+    if (args) |a| if (node_tool.isNodeForm(a)) {
+        try policy_mod.refuseWithoutCommit(policy);
+        return node_tool.callTry(gpa, io, runtime, args, event, policy);
+    };
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
@@ -481,6 +499,8 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
+    var plan: runner.GitCommit = .{ .message = (try policy_mod.commitMessage(args, policy)) orelse "" };
+    defer plan.deinit(gpa);
     const expected = try symbol.parseExpected(hash_hex);
     const place = try repo.jailTarget(gpa, io, policy.root, file, expected == .absent);
     defer place.deinit(gpa);
@@ -500,6 +520,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .allow_repo_memory = policy.allow_repo_memory,
         .shadow_root = policy.shadow_root,
         .trace = &event.trace,
+        .commit = if (policy.commit) &plan else null,
     });
     defer result.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
@@ -527,6 +548,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
                 .test_ms = event.trace.test_ms,
                 .version = receipt_note.version,
             }, w, full);
+            if (plan.oid) |oid| try receipt_note.commit(gpa, io, place.root, oid, w);
             return false;
         },
         .rejected => |report| {

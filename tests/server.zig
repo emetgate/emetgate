@@ -56,6 +56,20 @@ test "a notification produces no response" {
     )) == null);
 }
 
+test "tools/list offers the commit message on emetgate_try only when commits are on, and then requires it" {
+    const line =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+    ;
+    const off = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{})).?;
+    defer testing.allocator.free(off);
+    try testing.expect(std.mem.indexOf(u8, off, "commit message for this change") == null);
+
+    const on = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{ .commit = true })).?;
+    defer testing.allocator.free(on);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, on, "commit message for this change"));
+    try testing.expect(std.mem.indexOf(u8, on, "\"required\":[\"file\",\"message\"]") != null);
+}
+
 test "tools/list names the three tools and marks hash required" {
     const response = (try respond(testing.allocator, testing.io, undefined,
         \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}

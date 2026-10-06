@@ -6,13 +6,13 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1412**
-- Mutations declared in `tests/mutations.json`: **886**
-  - killed: **856**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1432**
+- Mutations declared in `tests/mutations.json`: **899**
+  - killed: **868**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
-  - control: **2**
+  - control: **3**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
   - survives, not yet classified: **5** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create)
@@ -173,7 +173,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-77 mutation(s).
+79 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -254,6 +254,8 @@ python tools/verification_page.py --check
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
 | `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 | `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `RC1-edit-written-but-not-published` | `src/platform/runner.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `plan.oid = prepared;     }     return .{ .committed = applied.h...` | commit on write: an accepted try is one commit with the given message and bytes... | killed |
+| `RC2-created-file-written-but-not-published` | `src/platform/runner.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `plan.oid = prepared;         return .{ .committed = created.has...` | commit on write: a new file is created and committed in the same call | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -319,7 +321,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-107 mutation(s).
+110 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -430,6 +432,9 @@ python tools/verification_page.py --check
 | `MR1-message-rule-reaches-the-code-gate` | `src/platform/rules.zig` | `if (isMessage(rule)) continue;` -> `` | a message rule is kept out of the code gate, which would otherwise fail closed ... | killed |
 | `MR4-message-rule-takes-a-scope` | `src/protocol/rule_command.zig` | `if (text_checks.of(spec) != null and decided.where != null) ret...` -> `` | rule: a message check is adopted, and a bad one or one with --in is refused and... | killed |
 | `MR7-skeleton-lists-message-rules` | `src/platform/rules.zig` | `if (isMessageCheck(decision.check)) continue;` -> `` | rule: a message rule covers no file, so the skeleton does not list it | killed |
+| `MR8-message-violations-dropped` | `src/platform/rules.zig` | `if (list.items.len != 0) return .{ .violated` -> `if (list.items.len == 99999) return .{ .violated` | a commit message is judged only by the message rules, and each violation carrie...; commi... | killed |
+| `CP4-commit-flag-ignored` | `src/protocol/policy.zig` | `policy.commit = true;` -> `` | commit policy: --commit turns commits on, and giving it twice is refused | killed |
+| `CP5-uncommitting-tool-runs-with-commits-on` | `src/protocol/policy.zig` | `if (policy.commit) return error.CommitNotSupportedByTool;` -> `` | commit policy: --commit turns commits on, and giving it twice is refused; commit on write... | killed |
 
 ### Scan
 
@@ -567,7 +572,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-415 mutation(s).
+423 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -986,6 +991,14 @@ python tools/verification_page.py --check
 | `MR2-message-prefix-not-recognized` | `src/engine/text_checks.zig` | `if (!std.mem.startsWith(u8, spec, prefix)) return null;` -> `if (std.mem.startsWith(u8, spec, prefix)) return null;` | text checks: the message prefix marks a rule that judges a commit message | killed |
 | `MR5-zero-limit-accepted` | `src/engine/text_checks.zig` | `if (limit == 0) return error.UnexpectedCheckArgument;` -> `` | text checks: an unknown name, a missing or empty argument and a bad number are ... | killed |
 | `MR6-empty-text-argument-accepted` | `src/engine/text_checks.zig` | `if (arg.len == 0) return error.EmptyCheckArgument;` -> `` | text checks: an unknown name, a missing or empty argument and a bad number are ... | killed |
+| `GC1-detached-head-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "symbolic-ref", "-q", "HEAD" }) == null) re...` -> `` | git commit: a detached HEAD is refused | killed |
+| `GC2-unborn-branch-accepted` | `src/platform/git_commit.zig` | `orelse return error.NoCommitYet;` -> `orelse "HEAD";` | git commit: a repository with no commit yet is refused | killed |
+| `GC3-operation-in-progress-accepted` | `src/platform/git_commit.zig` | `return error.OperationInProgress;` -> `continue;` | git commit: a merge in progress is refused | killed |
+| `GC4-signing-repository-accepted` | `src/platform/git_commit.zig` | `std.mem.eql(u8, value, "true")` -> `std.mem.eql(u8, value, "never")` | git commit: a repository that signs its commits is refused | killed |
+| `GC5-hand-edited-target-accepted` | `src/platform/git_commit.zig` | `if ((try git.need(status.items)).len != 0) return error.TargetH...` -> `` | git commit: a target edited by hand is refused, and an edit to another file is ...; commi... | killed |
+| `GC6-empty-commit-made` | `src/platform/git_commit.zig` | `if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCom...` -> `` | git commit: a change that leaves the tree as it is has nothing to commit | killed |
+| `GC7-head-moved-under-publish` | `src/platform/git_commit.zig` | `"HEAD", commit, head.oid }` -> `"HEAD", commit }` | git commit: when HEAD moved after the commit was prepared, publish refuses and ... | killed |
+| `GC8-no-identity-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) re...` -> `` | no test can take the identity away: git falls back to the user's global configuration and... | control |
 
 ## What this system does not prove
 

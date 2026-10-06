@@ -302,6 +302,38 @@ at 64,000 levels.
 The proposal itself also grows with depth before any rule runs: `emetgate mutate` took 0.33 s
 on a body 4,000 levels deep and 6.3 s on one 16,000 levels deep (ReleaseSafe, no rules).
 
+### A write that is also a commit
+
+`emetgate mcp --commit` makes every accepted `emetgate_try` on a symbol one git commit. The model sends the commit message in the same call, as `message`; the tool list shows that argument, and marks it required, only when `--commit` is on. Without `--commit` a call that carries a `message` is refused (`CommitNotEnabled`), and with it a call without one is refused (`MissingCommitMessage`).
+
+The order is fixed. Before anything runs, the message is checked against the message rules below and the repository is checked: `HEAD` is on a branch (`DetachedHead`), the branch has a commit (`NoCommitYet`), no merge, rebase, cherry-pick, revert or bisect is in progress (`OperationInProgress`), the repository does not ask for signed commits (`SigningNotSupported`), and the target file has no uncommitted change of its own (`TargetHasUncommittedChanges`), so a hand edit is never committed under the model's message. Then the rules, the typecheck and the tests run as they always do. When they pass, the commit object is built from the bytes that were tested, with `git hash-object`, a private index file and `git commit-tree`; the working tree, the index and the branch are untouched until then. A change that leaves the tree as it was is refused (`NothingToCommit`). Only then is the file written, the branch moved with `git update-ref` from the commit it was on (`WrittenButNotCommitted` when someone moved it in between), the index updated and the receipt attached to the new commit. The reply carries the commit id as `commit`.
+
+Emetgate builds the commit with git's plumbing commands, so `pre-commit` and `commit-msg` hooks do not run and the commit is not signed. A check a hook did belongs in the test command or in a rule. A hand edit to another file stays in the working tree and out of the commit.
+
+The node form of `emetgate_try`, `emetgate_try_batch`, `emetgate_write_doc`, `emetgate_rename`, `emetgate_move` and `emetgate_move_file` do not commit yet. With `--commit` on they refuse (`CommitNotSupportedByTool`) and write nothing.
+
+### Rules for a commit message
+
+A check that starts with `message:` judges the commit message of a `--commit` write, not code. The kernel itself asks only what git needs of a message: it is not blank, it is valid UTF-8, it has no NUL byte and it is at most 16 KiB. Everything else is a rule the user adds, and with no rule any message git accepts passes.
+
+| Check | A violation is |
+|---|---|
+| `message:forbid:<text>` | each place the exact text stands |
+| `message:forbid_any_case:<text>` | the same, in any letter case (ASCII) |
+| `message:require:<text>` | the text is missing |
+| `message:require_any_case:<text>` | the same, in any letter case (ASCII) |
+| `message:max_lines:<n>` | the lines after the nth; line ends at the end of the message do not count |
+| `message:max_subject:<n>` | the characters of the first line after the nth |
+| `message:max_line:<n>` | the characters after the nth, on every line that has them |
+
+```
+emetgate rule add "one line" --check message:max_lines:1 --enforce
+emetgate rule add "signed off" --check "message:require:Signed-off-by:" --enforce
+emetgate rule add "short subject" --check message:max_subject:72 --enforce
+```
+
+A message rule takes no `--in` scope (`MessageRuleWithScope`) and no `added:` form. It is not listed in a file's skeleton and `emetgate scan` reports nothing for it. A violation comes back as `rule_violation` with the rule id, the check, the line and column in the message and the text, before any test runs.
+
 ### Rules are readable by the model, never writable
 
 `emetgate_skeleton` returns, beside the outline, every adopted rule that covers that file:

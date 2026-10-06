@@ -284,7 +284,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
         return true;
     }
     if (std.mem.eql(u8, method, "tools/list")) {
-        try writeToolsList(out, request_id);
+        try writeToolsList(out, request_id, policy.commit);
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
@@ -365,7 +365,10 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
     try js.endObject();
 }
 
-fn writeToolsList(out: *Writer, id: Value) !void {
+const commit_tool = "emetgate_try";
+const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
+
+fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
     try js.beginObject();
     try envelope(&js, id);
@@ -394,12 +397,23 @@ fn writeToolsList(out: *Writer, id: Value) !void {
             try js.write(prop.desc);
             try js.endObject();
         }
+        const with_message = commit and std.mem.eql(u8, tool.name, commit_tool);
+        if (with_message) {
+            try js.objectField(commit_prop.name);
+            try js.beginObject();
+            try js.objectField("type");
+            try js.write(commit_prop.ty);
+            try js.objectField("description");
+            try js.write(commit_prop.desc);
+            try js.endObject();
+        }
         try js.endObject();
         try js.objectField("required");
         try js.beginArray();
         for (tool.props) |prop| {
             if (!prop.optional) try js.write(prop.name);
         }
+        if (with_message) try js.write(commit_prop.name);
         try js.endArray();
         try js.endObject();
         try js.endObject();

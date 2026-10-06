@@ -75,6 +75,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
                 policy.allow_run[policy.allow_run_len] = command;
                 policy.allow_run_len += 1;
             }
+        } else if (std.mem.eql(u8, arg, "--commit")) {
+            if (policy.commit) return null;
+            policy.commit = true;
         } else if (std.mem.eql(u8, arg, "--mirror")) {
             if (policy.mirror_enabled) return null;
             policy.mirror_enabled = true;
@@ -137,10 +140,25 @@ pub fn commitMessage(args: ?Value, policy: Policy) CommitError!?[]const u8 {
     return value.string;
 }
 
+pub fn refuseWithoutCommit(policy: Policy) error{CommitNotSupportedByTool}!void {
+    if (policy.commit) return error.CommitNotSupportedByTool;
+}
+
 const testing = std.testing;
 
 fn parsedArgs(text: []const u8) !std.json.Parsed(Value) {
     return std.json.parseFromSlice(Value, testing.allocator, text, .{});
+}
+
+test "commit policy: --commit turns commits on, and giving it twice is refused" {
+    const one = [_][]const u8{"--commit"};
+    try testing.expect(parsePolicy(&one).?.commit);
+    const none = [_][]const u8{ "--test", "npm test" };
+    try testing.expect(!parsePolicy(&none).?.commit);
+    const two = [_][]const u8{ "--commit", "--commit" };
+    try testing.expect(parsePolicy(&two) == null);
+    try refuseWithoutCommit(.{});
+    try testing.expectError(error.CommitNotSupportedByTool, refuseWithoutCommit(.{ .commit = true }));
 }
 
 test "commit policy: with commits off a call without a message passes and a call with one is refused" {

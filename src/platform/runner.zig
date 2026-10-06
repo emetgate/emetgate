@@ -15,6 +15,7 @@ const rules = @import("rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 const create_mod = @import("create.zig");
+const git_commit = @import("git_commit.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -50,6 +51,16 @@ pub const Options = struct {
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
     trace: ?*Trace = null,
+    commit: ?*GitCommit = null,
+};
+
+pub const GitCommit = struct {
+    message: []const u8,
+    oid: ?[]u8 = null,
+
+    pub fn deinit(self: GitCommit, gpa: Allocator) void {
+        if (self.oid) |oid| gpa.free(oid);
+    }
 };
 
 pub const Trace = struct {
@@ -126,7 +137,17 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer lock.release();
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
-    if (options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(gpa, io, runtime, options, root, rel);
+    var head: ?git_commit.Head = null;
+    defer if (head) |h| h.deinit(gpa);
+    if (options.commit) |plan| {
+        switch (try rules.messageGate(gpa, io, root, plan.message)) {
+            .ok => {},
+            .violated => |report| return .{ .rule_violation = report },
+            .failed => |failure| return .{ .rule_check_failed = failure },
+        }
+        head = try git_commit.preflight(gpa, io, root, &.{rel});
+    }
+    if (options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(gpa, io, runtime, options, root, rel, head);
 
     const base = try Snapshot.load(runtime, io, .cwd(), options.file_abs);
     defer base.destroy();
@@ -186,12 +207,19 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer report.deinit(gpa);
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
+    const change = [_]git_commit.Change{.{ .rel = rel, .content = applied.snapshot.source }};
+    const prepared: ?[]u8 = if (options.commit) |plan| try git_commit.prepare(gpa, io, root, head.?, &change, plan.message) else null;
+    errdefer if (prepared) |oid| gpa.free(oid);
     if (options.trace) |t| t.commit_attempted = true;
     try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir, null);
+    if (options.commit) |plan| {
+        try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);
+        plan.oid = prepared;
+    }
     return .{ .committed = applied.hash };
 }
 
-fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, root: []const u8, rel: []const u8) !Result {
+fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, root: []const u8, rel: []const u8, head: ?git_commit.Head) !Result {
     const ref = try symbol.Ref.parse(gpa, options.ref_text);
     defer ref.deinit(gpa);
     const created = try prepareCreate(gpa, io, runtime, root, options.file_abs, rel, ref, options.new_body);
@@ -216,8 +244,16 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
     defer report.deinit(gpa);
 
+    const change = [_]git_commit.Change{.{ .rel = rel, .content = created.snapshot.source }};
+    const prepared: ?[]u8 = if (options.commit) |plan| try git_commit.prepare(gpa, io, root, head.?, &change, plan.message) else null;
+    errdefer if (prepared) |oid| gpa.free(oid);
     if (options.trace) |t| t.commit_attempted = true;
     try disk.create(gpa, io, options.file_abs, created.snapshot.source);
+    if (options.commit) |plan| {
+        try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);
+        plan.oid = prepared;
+        return .{ .committed = created.hash };
+    }
     try repo.addToIndex(gpa, io, root, rel);
     return .{ .committed = created.hash };
 }

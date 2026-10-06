@@ -2049,8 +2049,8 @@
     {
       "id": "NF10-create-failed-tests-committed",
       "file": "src/platform/runner.zig",
-      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
-      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]git_commit.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    const prepared: ?[]u8 = if (options.commit) |plan| try git_commit.prepare(gpa, io, root, head.?, &change, plan.message) else null;\n    errdefer if (prepared) |oid| gpa.free(oid);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]git_commit.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    const prepared: ?[]u8 = if (options.commit) |plan| try git_commit.prepare(gpa, io, root, head.?, &change, plan.message) else null;\n    errdefer if (prepared) |oid| gpa.free(oid);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
       "kills": [
         "new file: a creation whose tests fail leaves no file on disk and nothing in the index"
       ]
@@ -8744,6 +8744,140 @@
         "rule: a message rule covers no file, so the skeleton does not list it"
       ],
       "note": "every skeleton would carry rules that say nothing about the file"
+    },
+    {
+      "id": "GC1-detached-head-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (try git.run(&.{ \"symbolic-ref\", \"-q\", \"HEAD\" }) == null) return error.DetachedHead;\n",
+      "to": "",
+      "kills": [
+        "git commit: a detached HEAD is refused"
+      ],
+      "note": "a commit would move a detached HEAD and belong to no branch"
+    },
+    {
+      "id": "GC2-unborn-branch-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "orelse return error.NoCommitYet;",
+      "to": "orelse \"HEAD\";",
+      "kills": [
+        "git commit: a repository with no commit yet is refused"
+      ],
+      "note": "a first commit has no parent to compare with and no tree to start from"
+    },
+    {
+      "id": "GC3-operation-in-progress-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "        return error.OperationInProgress;\n",
+      "to": "        continue;\n",
+      "kills": [
+        "git commit: a merge in progress is refused"
+      ],
+      "note": "a commit made in the middle of a merge or rebase would end it with the wrong parents"
+    },
+    {
+      "id": "GC4-signing-repository-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "std.mem.eql(u8, value, \"true\")",
+      "to": "std.mem.eql(u8, value, \"never\")",
+      "kills": [
+        "git commit: a repository that signs its commits is refused"
+      ],
+      "note": "an unsigned commit would land in a repository whose owner asked for signed ones"
+    },
+    {
+      "id": "GC5-hand-edited-target-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if ((try git.need(status.items)).len != 0) return error.TargetHasUncommittedChanges;\n",
+      "to": "",
+      "kills": [
+        "git commit: a target edited by hand is refused, and an edit to another file is not in the way",
+        "commit on write: a target edited by hand is refused and keeps the hand edit"
+      ],
+      "note": "the user's own uncommitted edit would be committed under the model's message"
+    },
+    {
+      "id": "GC6-empty-commit-made",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCommit;\n",
+      "to": "",
+      "kills": [
+        "git commit: a change that leaves the tree as it is has nothing to commit"
+      ],
+      "note": "a call that changes nothing would still add a commit"
+    },
+    {
+      "id": "GC7-head-moved-under-publish",
+      "file": "src/platform/git_commit.zig",
+      "from": "\"HEAD\", commit, head.oid }",
+      "to": "\"HEAD\", commit }",
+      "kills": [
+        "git commit: when HEAD moved after the commit was prepared, publish refuses and the branch keeps the newer commit"
+      ],
+      "note": "a commit someone made while the tests ran would be dropped from the branch"
+    },
+    {
+      "id": "GC8-no-identity-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (try git.run(&.{ \"var\", \"GIT_COMMITTER_IDENT\" }) == null) return error.NoCommitIdentity;\n",
+      "to": "",
+      "expect_status": "survived",
+      "filter": [
+        "git commit: a prepared commit holds the given bytes on top of HEAD and moves nothing until it is published"
+      ],
+      "note": "no test can take the identity away: git falls back to the user's global configuration and the login name, which a test repository does not control. Without the guard commit-tree fails later with GitFailed, so the write is still refused; the guard only gives the refusal its own name."
+    },
+    {
+      "id": "RC1-edit-written-but-not-published",
+      "file": "src/platform/runner.zig",
+      "from": "        try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);\n        plan.oid = prepared;\n    }\n    return .{ .committed = applied.hash };",
+      "to": "        plan.oid = prepared;\n    }\n    return .{ .committed = applied.hash };",
+      "kills": [
+        "commit on write: an accepted try is one commit with the given message and bytes, and its receipt rides on it"
+      ],
+      "note": "the file would be written and the branch would never get the commit"
+    },
+    {
+      "id": "RC2-created-file-written-but-not-published",
+      "file": "src/platform/runner.zig",
+      "from": "        try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);\n        plan.oid = prepared;\n        return .{ .committed = created.hash };",
+      "to": "        plan.oid = prepared;\n        return .{ .committed = created.hash };",
+      "kills": [
+        "commit on write: a new file is created and committed in the same call"
+      ],
+      "note": "a created file would stay untracked while the reply names a commit"
+    },
+    {
+      "id": "MR8-message-violations-dropped",
+      "file": "src/platform/rules.zig",
+      "from": "    if (list.items.len != 0) return .{ .violated",
+      "to": "    if (list.items.len == 99999) return .{ .violated",
+      "kills": [
+        "a commit message is judged only by the message rules, and each violation carries its rule and place",
+        "commit on write: a message that breaks a message rule is refused with the rule, and nothing is written"
+      ],
+      "note": "every message would pass whatever the message rules say"
+    },
+    {
+      "id": "CP4-commit-flag-ignored",
+      "file": "src/protocol/policy.zig",
+      "from": "            policy.commit = true;\n",
+      "to": "",
+      "kills": [
+        "commit policy: --commit turns commits on, and giving it twice is refused"
+      ],
+      "note": "the operator would turn commits on and no write would be committed"
+    },
+    {
+      "id": "CP5-uncommitting-tool-runs-with-commits-on",
+      "file": "src/protocol/policy.zig",
+      "from": "    if (policy.commit) return error.CommitNotSupportedByTool;\n",
+      "to": "",
+      "kills": [
+        "commit policy: --commit turns commits on, and giving it twice is refused",
+        "commit on write: a write tool that cannot commit yet refuses while commits are on"
+      ],
+      "note": "a tool that cannot commit would write to the tree and leave work outside any commit"
     }
   ]
 }
