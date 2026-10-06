@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1622**
-- Mutations declared in `tests/mutations.json`: **998**
-  - killed: **965**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1639**
+- Mutations declared in `tests/mutations.json`: **1008**
+  - killed: **975**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **4**
@@ -49,7 +49,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-120 mutation(s).
+122 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -173,10 +173,12 @@ python tools/verification_page.py --check
 | `AD4-added-accepts-a-command` | `src/engine/checks.zig` | `if (commandOf(inner) != null) return error.CommandCheckNotStati...` -> `if (commandOf(inner) != null) return;` | a static-only caller refuses a command check by its own name | killed |
 | `MR3-added-wraps-a-message-check` | `src/engine/checks.zig` | `if (text_checks.of(inner) != null) return error.UnknownCheck;` -> `` | rule: a message check is adopted, and a bad one or one with --in is refused and... | killed |
 | `MC7-message-command-refused-as-an-unknown-check` | `src/engine/checks.zig` | `if (messageCommandOf(spec)) \|command\| return validateCommand(...` -> `` | a message command is a command behind the message prefix, validated for shape a...; rule:... | killed |
+| `FZ5-frozen-takes-an-argument` | `src/engine/checks.zig` | `if (parse(spec).arg != null) return error.UnexpectedCheckArgume...` -> `` | frozen: the rule command adds it with a scope, takes no argument and no added f... | killed |
+| `FZ6-added-form-of-frozen-accepted` | `src/engine/checks.zig` | `if (isFrozen(inner)) return error.UnknownCheck;` -> `` | frozen: the rule command adds it with a scope, takes no argument and no added f... | killed |
 
 ### Sandbox and the test/typecheck gate
 
-94 mutation(s).
+98 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -274,6 +276,10 @@ python tools/verification_page.py --check
 | `OD4-lock-taken-through-a-linked-workspace` | `src/platform/shadow.zig` | `if (isReparsePoint(workspace) catch true) return error.Workspac...` -> `` | own dir: the workspace lock refuses a workspace that is a junction and leaves t... | killed |
 | `OD5-lock-release-removes-what-it-did-not-verify` | `src/platform/shadow.zig` | `_ = own_dir.removeEmpty(sub);` -> `Dir.cwd().deleteDir(self.io, sub) catch {};` | own dir: releasing the workspace lock leaves a junction that stands where a wor... | killed |
 | `OD11-shadow-workspace-not-held` | `src/platform/shadow.zig` | `const held = try holdWorkspace(io, shadow_abs);` -> `const held: ?own_dir.Held = null;` | own dir: a shadow workspace that another handle holds alone is not cleaned | killed |
+| `MB1-symbol-edit-in-place-before-its-message-command` | `src/platform/runner.zig` | `if (try runMessageRules(gpa, io, root, location.shadow, session...` -> `try workspace.writeFile(rel, patched);     if (try runMessageRu...` | message base: a symbol edit cannot add to the file its message command reads wh... | killed |
+| `MB3-batch-in-place-before-its-message-command` | `src/platform/batch.zig` | `if (try runner.runMessageRules(gpa, io, root, location.shadow, ...` -> `for (prepared) \|p\| {         if (p.action != .delete_file) tr...` | message base: a batch cannot add to the file its message command reads what tha... | killed |
+| `FZ3-path-a-file-move-leaves-not-handed-to-the-gate` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try rels.append(arena, from);` -> `` | frozen: a file move out of a frozen path and a file move into a frozen director... | killed |
+| `FZ4-doc-edits-of-a-batch-not-handed-to-the-gate` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | frozen: a batch whose doc edit is in a frozen directory is refused | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -341,7 +347,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-116 mutation(s).
+118 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -461,6 +467,8 @@ python tools/verification_page.py --check
 | `MC6-tracked-message-file-overwritten` | `src/platform/rules.zig` | `\|_\| return error.MessageFileInTheWay else \|err\|` -> `\|_\| {} else \|err\|` | message command: a tracked file where the message file goes is refused by name ... | killed |
 | `SL10-rule-unknown-check-names-nothing` | `src/protocol/rule_command.zig` | `error.UnknownCheck => try writeCheckNames(err_out),` -> `error.UnknownCheck => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
 | `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err...` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
+| `FZ2-frozen-scope-not-read` | `src/platform/rules.zig` | `if (!w.coversFile(path)) continue;             }             co...` -> `if (false and !w.coversFile(path)) continue;             }     ...` | frozen: a symbol edit of a frozen file is refused with and without commits, and...; froze... | killed |
+| `FZ7-frozen-rule-run-as-a-tree-check` | `src/platform/rules.zig` | `if (isMessage(rule) or isFrozen(rule)) continue;` -> `if (isMessage(rule)) continue;` | frozen: the code rules that read a tree take a frozen rule as nothing to check | killed |
 
 ### Scan
 
@@ -598,7 +606,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-498 mutation(s).
+500 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1100,6 +1108,8 @@ python tools/verification_page.py --check
 | `VF4-receipt-hashes-symbols-over-the-working-file-of-a-filtered-path` | `src/platform/receipts.zig` | `(if (try filtered(arena, io, root, rev, path)) try checkedOut` -> `(if (false and try filtered(arena, io, root, rev, path)) try ch...` | verify filtered: a commit whose stored form is not source is verified over what... | killed |
 | `VF5-symmetry-check-runs-without-the-checked-out-form` | `src/verify/checker.zig` | `if (!form.available) return outcome.raise(.unverified, not_chec...` -> `` | verify filtered: a rename whose files cannot be checked out is unverified by na... | killed |
 | `VF6-symmetry-check-calls-unparsed-filter-output-a-mismatch` | `src/verify/checker.zig` | `if (!form.driven) continue;` -> `if (true or !form.driven) continue;` | verify filtered: a rename whose files cannot be checked out is unverified by na... | killed |
+| `MB2-doc-edit-in-place-before-its-message-command` | `src/platform/doc_writer.zig` | `if (try runner.runMessageRules(gpa, io, root, location.shadow, ...` -> `try workspace.writeFile(rel, applied.source);     if (try runne...` | redteam2 commit: a call cannot loosen the file its message command reads in the... | killed |
+| `FZ1-changed-paths-not-handed-to-the-frozen-gate` | `src/platform/commit_plan.zig` | `switch (try rules.frozenGate(gpa, io, root, rels)) {` -> `switch (try rules.frozenGate(gpa, io, root, rels[0..0])) {` | frozen: a symbol edit of a frozen file is refused with and without commits, and...; froze... | killed |
 
 ## What this system does not prove
 

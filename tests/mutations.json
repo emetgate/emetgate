@@ -9881,6 +9881,102 @@
       "kills": [
         "verify filtered: a rename whose files cannot be checked out is unverified by name, not mismatch"
       ]
+    },
+    {
+      "id": "MB1-symbol-edit-in-place-before-its-message-command",
+      "file": "src/platform/runner.zig",
+      "from": "    if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n    try workspace.writeFile(rel, patched);\n",
+      "to": "    try workspace.writeFile(rel, patched);\n    if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "kills": [
+        "message base: a symbol edit cannot add to the file its message command reads what that command looks for"
+      ]
+    },
+    {
+      "id": "MB2-doc-edit-in-place-before-its-message-command",
+      "file": "src/platform/doc_writer.zig",
+      "from": "    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
+      "to": "    try workspace.writeFile(rel, applied.source);\n    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
+      "kills": [
+        "redteam2 commit: a call cannot loosen the file its message command reads in the same commit that message is judged for"
+      ]
+    },
+    {
+      "id": "MB3-batch-in-place-before-its-message-command",
+      "file": "src/platform/batch.zig",
+      "from": "    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "to": "    for (prepared) |p| {\n        if (p.action != .delete_file) try workspace.writeFile(p.rel, p.source());\n    }\n    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "kills": [
+        "message base: a batch cannot add to the file its message command reads what that command looks for"
+      ]
+    },
+    {
+      "id": "FZ1-changed-paths-not-handed-to-the-frozen-gate",
+      "file": "src/platform/commit_plan.zig",
+      "from": "        switch (try rules.frozenGate(gpa, io, root, rels)) {",
+      "to": "        switch (try rules.frozenGate(gpa, io, root, rels[0..0])) {",
+      "kills": [
+        "frozen: a symbol edit of a frozen file is refused with and without commits, and a file outside the scope is written",
+        "frozen: a node edit of a frozen file is refused",
+        "frozen: write_doc on a frozen file is refused with and without commits, and another doc is written",
+        "frozen: a rename that would rewrite a frozen file in another module is refused",
+        "frozen: a move is refused when the file it leaves or the file it enters is frozen",
+        "frozen: a batch that deletes a frozen file is refused whole, and the same batch lands when the scope is elsewhere"
+      ]
+    },
+    {
+      "id": "FZ2-frozen-scope-not-read",
+      "file": "src/platform/rules.zig",
+      "from": "                if (!w.coversFile(path)) continue;\n            }\n            const owned = try ownViolation(gpa, rule, path, at, at, \"\");",
+      "to": "                if (false and !w.coversFile(path)) continue;\n            }\n            const owned = try ownViolation(gpa, rule, path, at, at, \"\");",
+      "kills": [
+        "frozen: a symbol edit of a frozen file is refused with and without commits, and a file outside the scope is written",
+        "frozen: scan and the code gate skip it, and it is listed among the rules of the file it covers"
+      ]
+    },
+    {
+      "id": "FZ3-path-a-file-move-leaves-not-handed-to-the-gate",
+      "file": "src/platform/batch.zig",
+      "from": "        if (p.source_rel) |from| try rels.append(arena, from);\n",
+      "to": "",
+      "kills": [
+        "frozen: a file move out of a frozen path and a file move into a frozen directory are both refused"
+      ]
+    },
+    {
+      "id": "FZ4-doc-edits-of-a-batch-not-handed-to-the-gate",
+      "file": "src/platform/batch.zig",
+      "from": "    for (options.doc_edits) |edit| try rels.append(arena, try relativeUnder(arena, root, edit.file_abs));\n",
+      "to": "",
+      "kills": [
+        "frozen: a batch whose doc edit is in a frozen directory is refused"
+      ]
+    },
+    {
+      "id": "FZ5-frozen-takes-an-argument",
+      "file": "src/engine/checks.zig",
+      "from": "        if (parse(spec).arg != null) return error.UnexpectedCheckArgument;\n",
+      "to": "",
+      "kills": [
+        "frozen: the rule command adds it with a scope, takes no argument and no added form, and the gate then refuses the path"
+      ]
+    },
+    {
+      "id": "FZ6-added-form-of-frozen-accepted",
+      "file": "src/engine/checks.zig",
+      "from": "        if (isFrozen(inner)) return error.UnknownCheck;\n",
+      "to": "",
+      "kills": [
+        "frozen: the rule command adds it with a scope, takes no argument and no added form, and the gate then refuses the path"
+      ]
+    },
+    {
+      "id": "FZ7-frozen-rule-run-as-a-tree-check",
+      "file": "src/platform/rules.zig",
+      "from": "        if (isMessage(rule) or isFrozen(rule)) continue;\n",
+      "to": "        if (isMessage(rule)) continue;\n",
+      "kills": [
+        "frozen: the code rules that read a tree take a frozen rule as nothing to check"
+      ]
     }
   ]
 }
