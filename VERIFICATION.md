@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1392**
-- Mutations declared in `tests/mutations.json`: **872**
-  - killed: **842**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1424**
+- Mutations declared in `tests/mutations.json`: **899**
+  - killed: **869**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -172,7 +172,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-77 mutation(s).
+81 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -253,6 +253,10 @@ python tools/verification_page.py --check
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
 | `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 | `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `SL18-lockdown-launches-without-the-hook` | `src/platform/lockdown.zig` | `const hooked = try lockdown_slash.extend(gpa, locked, slash);` -> `const hooked = try gpa.dupe([]const u8, locked);` | lockdown slash: the launched claude gets the hook settings and the command dire...; lockd... | killed |
+| `LM7-lockdown-launches-without-the-marks` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (false and marks.wanted) try lockdo...` | lockdown marks: the launched claude gets the plugin directory right after the l... | killed |
+| `LM8-lockdown-loads-the-marks-when-told-not-to` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (true or marks.wanted) try lockdown...` | lockdown marks: with --no-marks claude gets no plugin directory, no plugin file... | killed |
+| `LM9-lockdown-passes-the-off-flag-to-claude` | `src/platform/lockdown.zig` | `const passthrough = marks.rest;` -> `const passthrough = args;` | lockdown marks: with --no-marks claude gets no plugin directory, no plugin file... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -318,7 +322,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-101 mutation(s).
+103 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -423,6 +427,8 @@ python tools/verification_page.py --check
 | `AD1-added-counts-what-was-there` | `src/platform/rules.zig` | `if (isAdded(rule) and takeText(&old_texts, tree.source[hit.span...` -> `if (isAdded(rule) and false) continue;` | an added rule counts only what the change adds: a kept comment passes and a new... | killed |
 | `AD2-added-masked-by-a-copy-elsewhere` | `src/platform/rules.zig` | `_ = takeText(&old_texts, tree.source[hit.span.start..hit.span.e...` -> `_ = tree.source[hit.span.start..hit.span.end];` | an added rule counts copies: a second copy of a text that the file already hold... | killed |
 | `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = old orelse "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
+| `SL10-rule-unknown-check-names-nothing` | `src/protocol/rule_command.zig` | `error.UnknownCheck => try writeCheckNames(err_out),` -> `error.UnknownCheck => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
+| `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err...` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
 
 ### Scan
 
@@ -560,7 +566,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-408 mutation(s).
+429 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -972,6 +978,27 @@ python tools/verification_page.py --check
 | `MB1-bound-from-any-file` | `src/protocol/map_tools.zig` | `if (f.file != s.file) continue;` -> `if (f.file != s.file and false) continue;` | map tools: explore adds a small definition of the same file that the sent code ... | killed |
 | `MB2-small-definitions-not-bound` | `src/protocol/map_tools.zig` | `if (!worthSending(size, mentionChance(m.count), call_chars) or ...` -> `if (worthSending(size, mentionChance(m.count), call_chars) or u...` | map tools: explore adds a small definition of the same file that the sent code ... | killed |
 | `MB3-mention-chance-flat` | `src/protocol/map_tools.zig` | `while (i < mention_count.len and count >= mention_count[i]) i +...` -> `while (i < mention_count.len and count < mention_count[i]) i +=...` | map tools: identifiers of three or more characters are counted and a name used ... | killed |
+| `SL1-prompt-open-quote-accepted` | `src/protocol/prompt_words.zig` | `if (quote != .none) return error.UnterminatedQuote;` -> `if (false and quote != .none) return error.UnterminatedQuote;` | prompt words: a quote that never closes is refused; prompt hook: a /rule the grammar does... | killed |
+| `SL2-prompt-single-quote-not-literal` | `src/protocol/prompt_words.zig` | `'\'' => quote = .single,` -> `'\'' => try word.append(arena, c),` | prompt words: quotes group, a single quote keeps everything, a double quote kee... | killed |
+| `SL3-prompt-escaped-quote-closes-the-word` | `src/protocol/prompt_words.zig` | `} else if (c == '\\' and i + 1 < text.len` -> `} else if (false and c == '\\' and i + 1 < text.len` | prompt words: quotes group, a single quote keeps everything, a double quote kee...; promp... | killed |
+| `SL4-hook-takes-a-longer-command-name` | `src/protocol/prompt_hook.zig` | `if (rest.len != 0 and std.mem.indexOfScalar(u8, whitespace, res...` -> `` | prompt hook: only a prompt that is the /rule command is taken | killed |
+| `SL5-hook-input-without-prompt-passes` | `src/protocol/prompt_hook.zig` | `parsed.object.get(prompt_field) orelse return error.HookInputIn...` -> `parsed.object.get(prompt_field) orelse return null;` | prompt hook: input that carries no prompt text is refused by name | killed |
+| `SL6-hook-answer-carries-raw-bytes` | `src/protocol/prompt_hook.zig` | `.escape_unicode = true` -> `.escape_unicode = false` | prompt hook: quotes and Turkish letters reach the ledger byte for byte and the ... | killed |
+| `SL7-hook-silent-command-has-empty-reason` | `src/protocol/prompt_hook.zig` | `if (said.len == 0) done else said` -> `said` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `SL8-hook-rule-error-leaves-the-hook` | `src/protocol/prompt_hook.zig` | `else => try reason.writer.print("error: {t}\n", .{err}),` -> `else => return err,` | prompt hook: a refused rule answers with the error name and the names that exis...; promp... | killed |
+| `SL9-hook-undefined-grammar-answers-nothing` | `src/protocol/prompt_hook.zig` | `rule_command.parse(words) orelse return reason.writeAll(usage);` -> `rule_command.parse(words) orelse return;` | prompt hook: a /rule the grammar does not define answers with the usage and wri... | killed |
+| `SL12-lockdown-hook-is-an-mcp-tool` | `src/platform/lockdown_slash.zig` | `try js.write("command");` -> `try js.write("mcp_tool");` | lockdown slash: the hook is a command in exec form that names this executable | killed |
+| `SL13-lockdown-hook-loses-its-arguments` | `src/platform/lockdown_slash.zig` | `try js.write(hook_args);` -> `try js.write(hook_args[0..1]);` | lockdown slash: the hook is a command in exec form that names this executable | killed |
+| `SL14-lockdown-command-file-model-invocable` | `src/platform/lockdown_slash.zig` | `"disable-model-invocation: true\n" ++` -> `` | lockdown slash: install puts the settings and the command file under emetgate's... | killed |
+| `SL15-lockdown-slash-flags-after-the-lock` | `src/platform/lockdown_slash.zig` | `@memcpy(out[1 .. 1 + added.len], &added);     @memcpy(out[1 + a...` -> `@memcpy(out[argv.len..], &added);     @memcpy(out[1..argv.len],...` | lockdown slash: the hook flags come before the lock and the prompt stays the la... | killed |
+| `SL16-lockdown-changed-settings-kept` | `src/platform/lockdown_slash.zig` | `return std.mem.eql(u8, present, data);` -> `return true;` | lockdown slash: a second install repairs a changed file and leaves nothing else...; lockd... | killed |
+| `SL17-lockdown-executables-share-settings` | `src/platform/lockdown_slash.zig` | `shadow_root.repoKey(exe_abs);` -> `shadow_root.repoKey(exe_abs[0..0]);` | lockdown slash: two executables do not share a settings file | killed |
+| `LM1-marks-off-flag-ignored` | `src/platform/lockdown_marks.zig` | `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` -> `if (false and args.len > 0 and std.mem.eql(u8, args[0], off_fla...` | lockdown marks: --no-marks as the first argument turns the plugin off and is no...; lockd... | killed |
+| `LM2-marks-off-flag-passed-on` | `src/platform/lockdown_marks.zig` | `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` -> `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` | lockdown marks: --no-marks as the first argument turns the plugin off and is no...; lockd... | killed |
+| `LM3-marks-off-flag-read-from-the-end` | `src/platform/lockdown_marks.zig` | `if (args.len > 0 and std.mem.eql(u8, args[0], off_flag)) return...` -> `if (args.len > 0 and std.mem.eql(u8, args[args.len - 1], off_fl...` | lockdown marks: --no-marks as the first argument turns the plugin off and is no...; lockd... | killed |
+| `LM4-marks-install-drops-a-file` | `src/platform/lockdown_marks.zig` | `for (files) \|file\| {` -> `for (files[1..]) \|file\| {` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
+| `LM5-marks-installed-into-the-state-directory` | `src/platform/lockdown_marks.zig` | `const dir = try std.fs.path.join(gpa, &.{ state_dir, plugin_dir...` -> `const dir = try gpa.dupe(u8, state_dir);` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
+| `LM6-marks-flag-after-the-users-arguments` | `src/platform/lockdown_marks.zig` | `const at = argv.len - passthrough_len;` -> `const at = argv.len - @min(passthrough_len, 0);` | lockdown marks: the plugin flag comes after the lock and the user's arguments s...; lockd... | killed |
 
 ## What this system does not prove
 

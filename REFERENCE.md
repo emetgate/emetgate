@@ -309,11 +309,16 @@ its id, its text, whether it is `enforce` or `advisory`, its predicate and its s
 model reads the rules before it writes a body, so it can obey them instead of proposing a
 violation, getting rejected and trying again.
 
-Rule management is available only from the command line. The model-facing tools cannot
-adopt, change or remove a rule, or change an `enforce` rule to `advisory`. A test
-(`red line: the served tool surface is exactly this list`) pins the served tool names and
-fails if another tool is added. A second test verifies that the dispatcher rejects
-rule-writing tool names.
+Rule management is available only to the user: from the command line, and as `/rule` typed
+in a session started by `emetgate lockdown` (see "Rules from the prompt" under Lockdown). The
+model-facing tools cannot adopt, change or remove a rule, or change an `enforce` rule to
+`advisory`. A test (`red line: the served tool surface is exactly this list`) pins the served
+tool names and fails if another tool is added. A second test verifies that the dispatcher
+rejects rule-writing tool names.
+
+When `emetgate rule` refuses a check it does not know (`UnknownCheck`), it prints the names
+that exist before the error: `no_comment forbid no_literal q cmd: added:`. When `supersede` or `forget` names an id that is not active (`DecisionNotActive`), it
+prints the active rules, in the `rule list` format, before the error.
 
 ### A ledger committed to the repository
 
@@ -466,11 +471,13 @@ The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, th
 
 ### Lockdown
 
-`emetgate lockdown [<claude args>...]` starts `claude` in the current directory with this argv in front of the user's arguments, and with `ENABLE_TOOL_SEARCH=false` added to its environment:
+`emetgate lockdown [--no-marks] [<claude args>...]` starts `claude` in the current directory with this argv in front of the user's arguments, and with `ENABLE_TOOL_SEARCH=false` added to its environment:
 
 ```
-claude --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<server>__emetgate_mutate" --mcp-config <absolute .mcp.json> --strict-mcp-config
+claude --add-dir <lockdown directory> --settings <lockdown directory>\settings.json --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<server>__emetgate_mutate" --mcp-config <absolute .mcp.json> --strict-mcp-config --plugin-dir <lockdown directory>\marks
 ```
+
+The first two flags give the session the `/rule` command and are described under "Rules from the prompt" below. The last one loads a plugin that only draws and is described under "Marks in the transcript"; `--no-marks`, as the first argument after `lockdown`, leaves it out.
 
 `--tools ""` leaves Claude Code no built-in tool: no shell, no file read or edit, no web access and no ToolSearch. `--strict-mcp-config` with the absolute path loads only the servers of that `.mcp.json`. A user argument that would change any of this (`--tools`, `--allowedTools`, `--allowed-tools`, `--mcp-config`, `--strict-mcp-config`, `--settings`, `--plugin-dir`, `--agents`, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, alone or as `--flag=value`) is refused before anything starts.
 `--permission-mode bypassPermissions` (also `--permission-mode=bypassPermissions`, in any letter case, though Claude Code 2.1.286 accepts only this spelling) is refused the same way, since it skips every permission check as `--dangerously-skip-permissions` does; the other modes (`acceptEdits`, `auto`, `manual`, `dontAsk`, `plan`) pass.
@@ -509,7 +516,73 @@ Measured on the n8n repository with Claude Code 2.1.286 and Opus, two `emetgate 
 
 The lost turn is the ToolSearch round: with tool search on, Claude Code defers the MCP tool definitions and the model loads them first; with it off, the definitions are in the first request, which costs the extra 6,626 prompt tokens. The first search of a session builds the index in the server process and does not depend on the launcher: 76.0 s and 21.9 s before, 21.6 s and 21.5 s after.
 
+#### Rules from the prompt
+
+In a session started by `emetgate lockdown`, the user manages rules by typing `/rule`:
+
+```
+/rule add "no networkidle waits" --check forbid:networkidle --enforce
+/rule list
+/rule supersede <id> "use integer cents"
+/rule forget <id>
+```
+
+The text after `/rule` is the argument list of `emetgate rule`: it is split into words and handed to the same code, so both forms accept and refuse the same things and write the same ledger. Words are separated by spaces, tabs and line breaks. Single quotes keep everything between them as typed. Double quotes do the same, except that `\"` is one double quote; a backslash anywhere else is an ordinary character, so `"cmd:scripts\lint.cmd"` needs no doubling. A quote that never closes is answered with the usage.
+
+The prompt does not reach the model. Lockdown gives Claude Code a `UserPromptSubmit` hook, `emetgate hook prompt`, which Claude Code runs on every prompt before any request is sent. The hook reads the hook JSON from stdin and looks at its `prompt` field:
+
+| Prompt | What the hook does |
+|---|---|
+| `/rule`, alone or followed by a space, a tab or a line break | Runs the rule command and prints `{"decision":"block","reason":"<answer>"}`. Claude Code shows the answer and sends nothing to the model |
+| anything else, `/rules` and `/ruler` included | Prints nothing and exits 0; the prompt goes on unchanged |
+| stdin that is not a JSON object with a string `prompt` | Prints `error: HookInputInvalid` to stderr and exits 2, which stops the prompt. Every prompt is stopped until this is fixed, so a `/rule` line cannot slip through to the model unseen |
+
+The answer is what `emetgate rule` prints: the new id for `add` and `supersede`, the rows for `list`, and for a refusal the lines `emetgate rule` writes to stderr followed by `error: <name>`. A command that prints nothing (`forget`, or `list` with no rule) answers `ok`, because Claude Code replaces an empty reason with its own `Blocked by hook`. A `/rule` line the grammar does not define answers with the four usage lines. The JSON the hook prints is plain ASCII: every other character is written as a `\u` escape, so the answer does not depend on a code page.
+
+The hook is of type `command` in exec form (`"command": "<absolute emetgate.exe>", "args": ["hook", "prompt"]`), so no shell reads the path. It is not an `mcp_tool` hook: that would need a rule-writing tool on the MCP surface, where the model could call it. The served tool list is unchanged, and with `--tools ""` the model has no shell to run `emetgate rule` either.
+
+Lockdown writes two files, both under its own directory `%LOCALAPPDATA%\emetgate\lockdown\<key of the emetgate.exe path>\`, and nothing into the project or into `~/.claude`:
+
+| File | Why |
+|---|---|
+| `settings.json` | Holds the hook. Passed with `--settings`; hooks from the user's own settings files still run |
+| `.claude\commands\rule.md` | Claude Code answers `Unknown command` to a slash name it has no file for, before any hook runs. The directory is passed with `--add-dir`, which loads its `.claude/commands`. The file is front matter only, with `disable-model-invocation: true`, and has no body |
+
+Each emetgate executable has its own directory, so two builds do not rewrite each other's hook. A file that already has the right bytes is left alone; otherwise it is written beside its place and renamed over it. Without `LOCALAPPDATA` lockdown stops with `LocalAppDataUnavailable` before Claude Code starts. `--add-dir` takes several values, so both flags stand in front of the lock, where the user's prompt cannot become one of them. The user's own `--settings` is still refused; `--add-dir` from the user still passes.
+
+`/rule` exists only in a session started by `emetgate lockdown`. Emetgate installs no hook and no command file for a `claude` started any other way.
+
+Measured with Claude Code 2.1.291 on Windows, 2026-10-06, through `emetgate lockdown -p "<prompt>" --output-format json` in a new repository:
+
+| Prompt | Turns | `total_cost_usd` | Answer shown |
+|---|---|---|---|
+| `/rule add "ğüşıöç İĞÜŞÖÇ 'tek' \"çift\"" --check 'forbid:"şık"' --enforce` | 0 | 0 | `m1fd2c285aedca4d4` |
+| `/rule list` | 0 | 0 | the row, with `forbid:"şık"` and `ğüşıöç İĞÜŞÖÇ 'tek' "çift"` unchanged |
+| `/rule add typo --check frbid:x` | 0 | 0 | the check names, then `error: UnknownCheck` |
+| `/rule` | 0 | 0 | the four usage lines |
+| `/rule forget mdeadbeefdeadbeef` | 0 | 0 | the active row, then `error: DecisionNotActive` |
+| `/rule forget m1fd2c285aedca4d4` | 0 | 0 | `ok` |
+| `/rule list` with no rule left | 0 | 0 | `ok` |
+
+Claude Code printed each answer as `UserPromptSubmit operation blocked by hook:`, the answer, and `Original prompt:` with the prompt. After the seven runs the project held `.emetgate/ledger.ndjson` and no `.claude` directory.
+
+The session's `init` message listed `rule` among its slash commands with the `--add-dir` directory and did not list it without. Not measured: the interactive screen. In print mode Claude Code hands the raw text to the hook whether or not the command file exists, so only an interactive session shows that typing `/rule list` there reaches the hook.
+
 `--tools ""` was chosen over `--tools ToolSearch`. With `ENABLE_TOOL_SEARCH=false` both gave the same 16 tools and the same 25,140-token first request in four sessions; with `--tools ""` and the variable unset, Claude Code still loaded the MCP tools up front in one session. So the model has one tool fewer, and turning tool search off does not depend on the variable alone.
+
+#### Marks in the transcript
+
+`emetgate lockdown` loads one Claude Code plugin, `emetgate-marks`, from `<lockdown directory>\marks` with `--plugin-dir`. It draws in the terminal and does nothing else: it registers no tool, adds nothing to the system prompt, rewrites no prompt and no tool result, and the model reads the same bytes with it and without it.
+
+| Where | What it draws |
+|---|---|
+| Under a write call (`try`, `try_batch`, `write_doc`, `rename`, `move`, `move_file`), also when Claude Code folds calls into one `Called emetgate N times` row | Two small squares, green with `emet` when the call was accepted and red with `met` when it was refused, then the file and symbol |
+| The line that animates while a turn runs | While an emetgate tool runs or has just answered, the word becomes `Weighing at the gate`, `Reading the clay`, `Sealed` or `Turned away` |
+| The line that closes a turn | When the turn made a write call, the word becomes `Sealed`, `Turned away` or `Weighed`, and a second line counts `passed` and `refused` |
+
+`/golem off` stops all of it and `/golem on` brings it back; `/golem scene`, `/golem big` and `/golem small` also draw a larger picture in place of the working line. The choice is kept by Claude Code for the plugin and holds in later sessions. `emetgate lockdown --no-marks` starts without the plugin: nothing is written under `marks` and no `--plugin-dir` is passed. The flag is read only as the first argument; anywhere else it is the user's own argument to Claude Code.
+
+The plugin's five files are part of the executable and are written as the `/rule` files are: byte for byte, left alone when already right, repaired when changed. `--plugin-dir` takes one value and stands after the lock and before the user's arguments. A `--plugin-dir` of the user's own is still refused. Not measured: the time the plugin's `tool.call` hook adds to a call, and how the marks look outside Windows Terminal.
 
 ### Reader
 

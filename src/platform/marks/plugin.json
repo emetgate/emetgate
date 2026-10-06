@@ -1,0 +1,6 @@
+{
+  "name": "emetgate-marks",
+  "version": "0.1.0",
+  "description": "Marks each emetgate write in the transcript as passed or refused, and names the gate while it works",
+  "types": "./types/index.d.ts"
+}

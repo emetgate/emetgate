@@ -13,6 +13,8 @@ const disk = emetgate.disk;
 const shadow = emetgate.shadow;
 const shadow_root = emetgate.shadow_root;
 const lockdown = emetgate.lockdown;
+const lockdown_slash = emetgate.lockdown_slash;
+const prompt_hook = emetgate.prompt_hook;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
 const receipts = emetgate.receipts;
@@ -30,14 +32,13 @@ const usage =
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory] [--json]
     \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--shadow-root <dir>] [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
-    \\       emetgate rule add <text> [--check <spec>] [--in <where>] [--enforce]
-    \\       emetgate rule list [--all] [--json]
-    \\       emetgate rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]
-    \\       emetgate rule forget <id>
+    \\
+++ rule_command.usage("       emetgate rule ") ++
+    \\       emetgate hook prompt
     \\       emetgate recover [--shadow-root <dir>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
-    \\       emetgate lockdown [<claude args>...]
+    \\       emetgate lockdown [--no-marks] [<claude args>...]
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
     \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
     \\       emetgate facts defined_at <name> [--file <path>] [--budget <chars>] [--json]
@@ -55,6 +56,9 @@ const usage =
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.
+    \\hook prompt is the UserPromptSubmit hook that lockdown gives claude: it reads
+    \\the hook JSON on stdin and answers a prompt that starts with /rule itself, as
+    \\emetgate rule would, so that prompt never reaches the model.
     \\
     \\A ledger committed to git (.emetgate/ledger.ndjson) came with the clone:
     \\its cmd: and q: rules never run unless try/mcp is started with --allow-repo-memory;
@@ -65,6 +69,11 @@ const usage =
     \\(--tools "" --mcp-config .mcp.json --strict-mcp-config, ENABLE_TOOL_SEARCH=false)
     \\and lets emetgate's read-only tools run without a permission prompt (--allowedTools).
     \\It refuses to start unless .mcp.json has exactly one emetgate server.
+    \\It also gives claude the hook above and a /rule command (--settings, --add-dir),
+    \\both from files under %LOCALAPPDATA%\emetgate\lockdown, none in the project.
+    \\It also loads a plugin from the same place (--plugin-dir) that only draws: it marks
+    \\each emetgate write in the transcript as passed or refused. /golem off, /golem on
+    \\and /golem scene switch it inside claude; lockdown --no-marks starts without it.
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
     \\For mutate/try with --hash <hex> (an existing symbol), --body/--body-file is
@@ -140,6 +149,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "rule")) {
         const request = rule_command.parse(args[2..]) orelse exitWithUsage();
         return ruleCmd(init, runtime, request, out);
+    }
+    if (args.len == 1 + lockdown_slash.hook_args.len and std.mem.eql(u8, command, lockdown_slash.hook_args[0]) and std.mem.eql(u8, args[2], lockdown_slash.hook_args[1])) {
+        return hookPromptCmd(init, runtime, out);
     }
     if (std.mem.eql(u8, command, "recover")) {
         if (args.len == 2) return recoverCmd(init, runtime, null);
@@ -489,6 +501,27 @@ fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Requ
     defer stderr_writer.interface.flush() catch {};
     try rule_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
     return 0;
+}
+
+fn hookPromptCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) u8 {
+    answerPrompt(init, runtime, out) catch |err| {
+        std.debug.print("error: {t}\n", .{err});
+        return prompt_hook.blocking_exit_code;
+    };
+    return 0;
+}
+
+fn answerPrompt(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !void {
+    const gpa = runtime.gpa;
+    var buffer: [4096]u8 = undefined;
+    var reader = std.Io.File.Reader.init(stdio.stdin(), init.io, &buffer);
+    const input = try reader.interface.allocRemaining(gpa, .limited(prompt_hook.max_input_bytes));
+    defer gpa.free(input);
+    const text = (try prompt_hook.ruleText(init.arena.allocator(), input)) orelse return;
+    const root = runner.repoRoot(gpa, init.io);
+    defer if (root) |path| gpa.free(path) else |_| {};
+    try prompt_hook.respond(gpa, init.io, root, text, out);
+    try out.flush();
 }
 
 const VerifyArgs = struct { options: verify_run.Options, json: bool };

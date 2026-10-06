@@ -417,7 +417,53 @@ fn addEndToEndTests(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Buil
         if (case.stderr_contains) |bytes| run.expectStdErrMatch(bytes);
         disk_check.step.dependOn(&run.step);
     }
+
+    for (hook_cases) |case| {
+        const run = cliRun(b, exe, case.name, &.{ "hook", "prompt" });
+        run.setStdIn(.{ .bytes = case.stdin });
+        run.expectExitCode(case.exit_code);
+        run.expectStdOutEqual(case.stdout);
+        if (case.stderr_contains) |bytes| run.expectStdErrMatch(bytes);
+        step.dependOn(&run.step);
+    }
 }
+
+const HookCase = struct {
+    name: []const u8,
+    stdin: []const u8,
+    exit_code: u8,
+    stdout: []const u8,
+    stderr_contains: ?[]const u8 = null,
+};
+
+const hook_cases = [_]HookCase{
+    .{
+        .name = "hook prompt writes nothing for a prompt that is not /rule",
+        .stdin = "{\"session_id\":\"s\",\"cwd\":\"C:\\\\repo\",\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"fix the \\\"/rule\\\" bug in \u{15f}u dosya\"}",
+        .exit_code = 0,
+        .stdout = "",
+    },
+    .{
+        .name = "hook prompt stops a /rule prompt with the usage as the reason",
+        .stdin = "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"/rule add \\\"\u{e7}ift t\u{131}rnak kapanmad\u{131}\"}",
+        .exit_code = 0,
+        .stdout = "{\"decision\":\"block\",\"reason\":\"/rule add <text> [--check <spec>] [--in <where>] [--enforce]\\n/rule list [--all] [--json]\\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\\n/rule forget <id>\"}\n",
+    },
+    .{
+        .name = "hook prompt stops every prompt with exit code 2 when its input is not the hook JSON",
+        .stdin = "not json",
+        .exit_code = 2,
+        .stdout = "",
+        .stderr_contains = "error: HookInputInvalid",
+    },
+    .{
+        .name = "hook prompt stops every prompt with exit code 2 when the input has no prompt",
+        .stdin = "{\"hook_event_name\":\"UserPromptSubmit\",\"user_input\":\"/rule list\"}",
+        .exit_code = 2,
+        .stdout = "",
+        .stderr_contains = "error: HookInputInvalid",
+    },
+};
 
 fn cliRun(b: *std.Build, exe: *std.Build.Step.Compile, name: []const u8, args: []const []const u8) *std.Build.Step.Run {
     const run = b.addRunArtifact(exe);

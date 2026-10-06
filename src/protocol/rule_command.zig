@@ -11,6 +11,13 @@ pub const Error = error{EnforceWithoutCheck};
 
 pub const absent_field = "-";
 
+pub fn usage(comptime prefix: []const u8) []const u8 {
+    return prefix ++ "add <text> [--check <spec>] [--in <where>] [--enforce]\n" ++
+        prefix ++ "list [--all] [--json]\n" ++
+        prefix ++ "supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\n" ++
+        prefix ++ "forget <id>\n";
+}
+
 pub const Decided = struct {
     text: []const u8,
     check: ?[]const u8 = null,
@@ -91,6 +98,23 @@ fn parseListing(args: []const [:0]const u8) ?Listing {
 }
 
 pub fn run(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer, err_out: *Writer) !void {
+    apply(gpa, io, root_abs, request, out, err_out) catch |err| {
+        switch (err) {
+            error.UnknownCheck => try writeCheckNames(err_out),
+            error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err_out),
+            else => {},
+        }
+        return err;
+    };
+}
+
+fn writeCheckNames(err_out: *Writer) !void {
+    for (checks.registry) |check| try err_out.print("{s} ", .{check.name});
+    try err_out.print("{s} {s}", .{ checks.command_prefix, checks.added_prefix });
+    try err_out.writeByte('\n');
+}
+
+fn apply(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer, err_out: *Writer) !void {
     switch (request) {
         .add => |decided| {
             try explainQuery(gpa, decided, err_out);
