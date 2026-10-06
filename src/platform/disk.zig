@@ -7,6 +7,7 @@ const durability_log = @import("durability_log.zig");
 const journal = @import("journal.zig");
 const git_repo = @import("repo.zig");
 const shadow_root = @import("shadow_root.zig");
+const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -550,6 +551,11 @@ fn abandonAll(pendings: []Pending) error{Crashed} {
 pub fn commitBatch(pendings: []Pending, leftover: ?*Leftover, fail_before: ?usize, batch: ?*const Batch, step: ?*const Step) !void {
     var journal_path: ?[]u8 = null;
     defer if (journal_path) |jp| batch.?.gpa.free(jp);
+    const held: ?own_dir.Held = if (batch) |b| own_dir.hold(b.io, b.journal_dir, .create) catch |err| {
+        abort(pendings, leftover, null, null);
+        return err;
+    } else null;
+    defer if (held) |h| h.close();
     if (batch) |b| {
         journal_path = writeBatchJournal(b, pendings) catch |err| {
             abort(pendings, leftover, null, null);
@@ -876,20 +882,22 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
     var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
     const journal_dir = std.fmt.bufPrint(&journal_buf, "{s}\\{s}\\journal", .{ root_abs, shadow.workspace_dir }) catch return;
 
-    var dir = std.Io.Dir.openDirAbsolute(io, journal_dir, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
-    };
-    defer dir.close(io);
+    const held = (try own_dir.hold(io, journal_dir, .existing)) orelse return;
+    var holding = true;
+    defer if (holding) held.close();
 
     var names: std.ArrayList([]u8) = .empty;
     defer {
         for (names.items) |n| gpa.free(n);
         names.deinit(gpa);
     }
-    var it = dir.iterate();
+    var it = held.dir.iterate();
     while (try it.next(io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
+        if (own_dir.tagOf(entry.name, &.{".json"}) == null) {
+            report.failed += 1;
+            continue;
+        }
         try names.append(gpa, try gpa.dupe(u8, entry.name));
     }
 
@@ -921,7 +929,9 @@ fn recoverJournaled(gpa: Allocator, io: std.Io, root_abs: []const u8, report: *R
     for (index_journals.items) |jp| _ = deleteWithRetry(io, jp);
     commit_record.flushDir(journal_dir) catch return;
     try commit_record.removeAll(gpa, io, journal_dir, kept.items);
-    if (std.Io.Dir.cwd().deleteDir(io, journal_dir)) |_| durability_log.removedDir(journal_dir) else |_| {}
+    holding = false;
+    held.close();
+    if (own_dir.removeEmpty(journal_dir)) durability_log.removedDir(journal_dir);
 }
 
 const JournalOutcome = enum { delete, after_index, keep };

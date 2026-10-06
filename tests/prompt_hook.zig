@@ -152,8 +152,62 @@ test "prompt hook: only a prompt that is the /rule command is taken" {
     try testing.expectEqualStrings(" list", prompt_hook.argumentsOf("/rule list").?);
     try testing.expectEqualStrings("\tlist", prompt_hook.argumentsOf("/rule\tlist").?);
     try testing.expectEqualStrings("\nlist", prompt_hook.argumentsOf("/rule\nlist").?);
-    const passed_on = [_][]const u8{ "", "fix the bug", "/rules list", "/ruler", "/rule-add x", " /rule list", "rule list", "run /rule list", "/RULE list", "/emetgate:rule list" };
+    const passed_on = [_][]const u8{ "", "fix the bug", "/rules list", "/ruler", "/rule-add x", "rule list", "run /rule list", "/RULE list", "/emetgate:rule list" };
     for (passed_on) |prompt| try testing.expect(prompt_hook.argumentsOf(prompt) == null);
+}
+
+test "prompt hook: blanks, line breaks and one byte order mark before /rule are dropped and the line is taken" {
+    const taken = [_][]const u8{ " /rule list", "\n/rule list", "\t/rule list", "\r\n/rule list", " \t\r\n /rule list", "\xef\xbb\xbf/rule list", "\xef\xbb\xbf \n/rule list", "\n \xef\xbb\xbf/rule list", " \xef\xbb\xbf\t/rule list" };
+    for (taken) |prompt| {
+        errdefer std.debug.print("handed on: {s}\n", .{prompt});
+        try testing.expectEqualStrings(" list", prompt_hook.argumentsOf(prompt).?);
+    }
+    try testing.expectEqualStrings("", prompt_hook.argumentsOf("\n/rule").?);
+    try testing.expectEqualStrings("\n", prompt_hook.argumentsOf(" /rule\n").?);
+}
+
+test "prompt hook: a line that only resembles /rule is handed on, whatever stands before it" {
+    const passed_on = [_][]const u8{
+        "/rules list",
+        "/ruler",
+        "/rule-add x",
+        "rule list",
+        "run /rule list",
+        "/RULE list",
+        "/emetgate:rule list",
+        " /rules list",
+        "\n/ruler",
+        "\t/rule-add x",
+        " rule list",
+        "\n/RULE list",
+        " /emetgate:rule list",
+        "\x0b/rule list",
+        "\xc2\xa0/rule list",
+        "/rule\x0blist",
+        "/rule\xc2\xa0list",
+        "\x0c/rule list",
+        "\xef\xbb\xbf\xef\xbb\xbf/rule list",
+        "\xef\xbb/rule list",
+        "\xef\xbb\xbf",
+        " \n\t",
+        "x /rule list",
+    };
+    for (passed_on) |prompt| {
+        errdefer std.debug.print("taken: {s}\n", .{prompt});
+        try testing.expect(prompt_hook.argumentsOf(prompt) == null);
+    }
+}
+
+test "prompt hook: a /rule line typed after a blank or a line break is answered and reaches the ledger" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const input = try hookInput("\n /rule add \"no console\" --check forbid:console.log");
+    defer testing.allocator.free(input);
+    const reply = (try replyTo(repo.root_abs, input)).?;
+    defer reply.deinit();
+    const bytes = try repo.ledger();
+    defer testing.allocator.free(bytes);
+    try testing.expect(std.mem.indexOf(u8, bytes, "no console") != null);
 }
 
 test "prompt hook: any other prompt gets no answer at all" {
