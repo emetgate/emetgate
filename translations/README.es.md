@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/banner.png" alt="Emetgate" width="640">
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
-<p align="center"><a href="README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>Español</b></p>
+<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>Español</b></p>
 
 # Emetgate
 
@@ -17,14 +17,14 @@ Una puerta entre un modelo que escribe código y tu árbol de fuentes. El modelo
 Funciona como servidor MCP para Claude Code, en Windows, para proyectos de TypeScript y JavaScript.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
 </p>
 
 ## Qué hace
 
 **Comprueba cada escritura.** Un cambio nombra un símbolo y el hash del código en el que se basó. Emetgate coloca el nuevo cuerpo en su sitio, vuelve a analizar el archivo, ejecuta tus reglas y luego ejecuta tu comprobación de tipos y tus pruebas sobre una copia del repositorio dentro de un sandbox. Si algún paso falla, no se escribe nada. Cada commit deja un recibo que `emetgate verify` puede volver a comprobar más tarde sin confiar en el proceso que lo escribió.
 
-**Lee código para el modelo.** `emetgate_explore` responde a una pregunta sobre la base de código con definiciones enteras y números de línea. `emetgate_evidence` devuelve el código completo de los símbolos que nombras. También hay herramientas para símbolos, archivos, búsqueda y git; la lista está en [REFERENCE.md](REFERENCE.md#mcp-tools).
+**Lee código para el modelo.** `emetgate_explore` responde a una pregunta sobre la base de código con definiciones enteras y números de línea. `emetgate_evidence` devuelve el código completo de los símbolos que nombras. También hay herramientas para símbolos, archivos, búsqueda y git; la lista está en [REFERENCE.md](../REFERENCE.md#mcp-tools).
 
 **Guarda tus reglas.** Añades una regla una vez desde la línea de comandos. El modelo puede leer las reglas y no puede cambiarlas ni eliminarlas.
 
@@ -64,7 +64,7 @@ En este conjunto Emetgate usa menos tokens y cuesta menos que las demás. No es 
 También escribí a mano tres preguntas más en las cuatro herramientas, una ejecución cada una. Emetgate volvió a usar menos tokens, y las herramientas propias de Claude Code fueron más baratas y más rápidas:
 
 <p align="center">
-  <img src="tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
+  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
 </p>
 
 Lo que las 345 sesiones grabadas mostraron sobre el coste:
@@ -73,16 +73,16 @@ Lo que las 345 sesiones grabadas mostraron sobre el coste:
 - Una llamada más al modelo cuesta más o menos lo mismo que 8,000 caracteres de salida de herramienta.
 - El modelo escribe lo que pidió. Un punto de la clave que nombró en su propia llamada llegó a la respuesta el 98.5% de las veces; uno que solo vio en una respuesta, el 90.5%.
 
-Las sesiones, las preguntas, las claves de respuestas y el script que produce estos números están en [tests/bench/neutral](tests/bench/neutral). La prueba manual con sus respuestas completas está en [tests/bench/hand](tests/bench/hand). Los recuentos de tokens de lecturas, ediciones y búsquedas individuales están en [REFERENCE.md](REFERENCE.md).
+Las sesiones, las preguntas, las claves de respuestas y el script que produce estos números están en [tests/bench/neutral](../tests/bench/neutral). La prueba manual con sus respuestas completas está en [tests/bench/hand](../tests/bench/hand). Los recuentos de tokens de lecturas, ediciones y búsquedas individuales están en [REFERENCE.md](../REFERENCE.md).
 
 ## Cómo se prueba la puerta
 
-- **Pruebas de mutación.** Cada guarda se rompe a propósito y al menos una prueba debe fallar. Para el motor hay hoy 64 mutantes: 57 eliminados, 4 demostrados equivalentes, 2 guardas redundantes mantenidas como defensa en profundidad, 1 abierto. La lista está en [VERIFICATION.md](VERIFICATION.md).
+- **Pruebas de mutación.** Cada guarda se rompe a propósito y al menos una prueba debe fallar. Para el motor hay hoy 64 mutantes: 57 eliminados, 4 demostrados equivalentes, 2 guardas redundantes mantenidas como defensa en profundidad, 1 abierto. La lista está en [VERIFICATION.md](../VERIFICATION.md).
 - **Verificación de modelos.** El diario de commits está especificado en TLA+ y comprobado con TLC, incluidas las caídas durante la recuperación.
 - **Pruebas de caída.** Los lotes se cortan después de cada paso y se recuperan.
 - **Suites de red team y de fuzzing** contra la superficie MCP, el sandbox, el diario y los analizadores.
 
-Los hallazgos contra la puerta y sus correcciones se listan en [REFERENCE.md](REFERENCE.md#security-history).
+Los hallazgos contra la puerta y sus correcciones se listan en [REFERENCE.md](../REFERENCE.md#security-history).
 
 ## Límites
 
@@ -106,4 +106,4 @@ tools/accept.ps1 <ref>     # tests three times, then the mutants on lines change
 
 MIT. Las gramáticas incluidas bajo `vendor/` conservan sus propias licencias MIT.
 
-<p align="center"><a href="README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>Español</b></p>
+<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>Español</b></p>

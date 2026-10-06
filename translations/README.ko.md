@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/banner.png" alt="Emetgate" width="640">
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
-<p align="center"><a href="README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
+<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
 
 # Emetgate
 
@@ -17,14 +17,14 @@
 Claude Code용 MCP 서버로 실행되며, Windows에서 TypeScript와 JavaScript 프로젝트를 지원합니다.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
 </p>
 
 ## 하는 일
 
 **모든 쓰기를 검사합니다.** 변경은 심볼과, 그 변경이 기반으로 삼은 코드의 해시를 지정합니다. Emetgate는 새 본문을 제자리에 넣고, 파일을 다시 파싱하고, 규칙을 실행한 다음, 샌드박스 안의 저장소 복사본에서 타입 검사와 테스트를 실행합니다. 어느 단계든 실패하면 아무것도 기록되지 않습니다. 커밋마다 영수증이 남으며, `emetgate verify`는 그것을 기록한 프로세스를 신뢰하지 않고도 나중에 다시 검사할 수 있습니다.
 
-**모델을 위해 코드를 읽습니다.** `emetgate_explore`는 코드베이스에 대한 질문에 전체 정의와 줄 번호로 답합니다. `emetgate_evidence`는 이름을 지정한 심볼의 전체 코드를 반환합니다. 심볼, 파일, 검색, git을 위한 도구도 있으며 목록은 [REFERENCE.md](REFERENCE.md#mcp-tools)에 있습니다.
+**모델을 위해 코드를 읽습니다.** `emetgate_explore`는 코드베이스에 대한 질문에 전체 정의와 줄 번호로 답합니다. `emetgate_evidence`는 이름을 지정한 심볼의 전체 코드를 반환합니다. 심볼, 파일, 검색, git을 위한 도구도 있으며 목록은 [REFERENCE.md](../REFERENCE.md#mcp-tools)에 있습니다.
 
 **규칙을 지킵니다.** 규칙은 명령줄에서 한 번 추가합니다. 모델은 규칙을 읽을 수 있지만 바꾸거나 제거할 수 없습니다.
 
@@ -64,7 +64,7 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 또한 네 도구에 질문 세 개를 직접 더 입력했고, 각각 한 번씩 실행했습니다. Emetgate는 이번에도 토큰을 가장 적게 썼고, Claude Code 자체 도구가 더 저렴하고 더 빨랐습니다:
 
 <p align="center">
-  <img src="tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
+  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
 </p>
 
 기록된 345개 세션이 비용에 대해 보여 준 것:
@@ -73,16 +73,16 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 - 모델 호출이 한 번 늘어나는 비용은 도구 출력 약 8,000자와 비슷합니다.
 - 모델은 자신이 요청한 것을 씁니다. 자신의 도구 호출에서 이름을 지정한 항목은 98.5%가 답변에 들어갔고, 응답에서 보기만 한 항목은 90.5%였습니다.
 
-세션, 질문, 정답 키와 이 숫자들을 만들어 내는 스크립트는 [tests/bench/neutral](tests/bench/neutral)에 있습니다. 전체 답변이 포함된 직접 테스트는 [tests/bench/hand](tests/bench/hand)에 있습니다. 개별 읽기, 편집, 검색의 토큰 수는 [REFERENCE.md](REFERENCE.md)에 있습니다.
+세션, 질문, 정답 키와 이 숫자들을 만들어 내는 스크립트는 [tests/bench/neutral](../tests/bench/neutral)에 있습니다. 전체 답변이 포함된 직접 테스트는 [tests/bench/hand](../tests/bench/hand)에 있습니다. 개별 읽기, 편집, 검색의 토큰 수는 [REFERENCE.md](../REFERENCE.md)에 있습니다.
 
 ## 게이트는 어떻게 테스트되는가
 
-- **변이 테스트.** 각 가드를 일부러 망가뜨리고, 적어도 하나의 테스트가 실패해야 합니다. 엔진에는 현재 변이체 64개가 있습니다: 57개 제거됨, 4개는 동등함이 증명됨, 2개는 심층 방어로 유지하는 중복 가드, 1개 미해결. 목록은 [VERIFICATION.md](VERIFICATION.md)에 있습니다.
+- **변이 테스트.** 각 가드를 일부러 망가뜨리고, 적어도 하나의 테스트가 실패해야 합니다. 엔진에는 현재 변이체 64개가 있습니다: 57개 제거됨, 4개는 동등함이 증명됨, 2개는 심층 방어로 유지하는 중복 가드, 1개 미해결. 목록은 [VERIFICATION.md](../VERIFICATION.md)에 있습니다.
 - **모델 검사.** 커밋 저널은 TLA+로 명세되어 있으며, 복구 중의 크래시를 포함해 TLC로 검사했습니다.
 - **크래시 테스트.** 배치를 모든 단계 뒤에서 끊고 복구합니다.
 - **레드팀 및 퍼즈 스위트**: MCP 표면, 샌드박스, 저널, 파서를 대상으로 합니다.
 
-게이트에 대해 발견된 문제와 수정 내용은 [REFERENCE.md](REFERENCE.md#security-history)에 정리되어 있습니다.
+게이트에 대해 발견된 문제와 수정 내용은 [REFERENCE.md](../REFERENCE.md#security-history)에 정리되어 있습니다.
 
 ## 한계
 
@@ -106,4 +106,4 @@ tools/accept.ps1 <ref>     # tests three times, then the mutants on lines change
 
 MIT. `vendor/` 아래에 포함된 문법은 각자의 MIT 라이선스를 유지합니다.
 
-<p align="center"><a href="README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
+<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>

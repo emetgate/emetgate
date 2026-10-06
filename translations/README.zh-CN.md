@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/banner.png" alt="Emetgate" width="640">
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
-<p align="center"><a href="README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></p>
+<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></p>
 
 # Emetgate
 
@@ -17,14 +17,14 @@
 它作为 Claude Code 的 MCP 服务器运行，支持 Windows 上的 TypeScript 和 JavaScript 项目。
 
 <p align="center">
-  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
 </p>
 
 ## 它做什么
 
 **检查每一次写入。** 一次修改要指明符号，以及它所基于代码的哈希。Emetgate 把新的函数体放到位，重新解析文件，运行你的规则，然后在沙箱内的仓库副本上运行你的类型检查和测试。任何一步失败，都不会写入任何内容。每次提交都会留下一份收据，`emetgate verify` 之后可以重新检查它，而无需信任当初写入的进程。
 
-**替模型读代码。** `emetgate_explore` 用完整的定义和行号回答关于代码库的问题。`emetgate_evidence` 返回你点名的符号的完整代码。另外还有针对符号、文件、搜索和 git 的工具；列表见 [REFERENCE.md](REFERENCE.md#mcp-tools)。
+**替模型读代码。** `emetgate_explore` 用完整的定义和行号回答关于代码库的问题。`emetgate_evidence` 返回你点名的符号的完整代码。另外还有针对符号、文件、搜索和 git 的工具；列表见 [REFERENCE.md](../REFERENCE.md#mcp-tools)。
 
 **保存你的规则。** 规则只需从命令行添加一次。模型可以读取规则，但不能更改或删除。
 
@@ -64,7 +64,7 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 我还手动向四个工具各输入了另外三个问题，每个问题只运行一次。Emetgate 使用的 token 依然最少，而 Claude Code 自带工具更便宜也更快：
 
 <p align="center">
-  <img src="tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
+  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
 </p>
 
 记录下来的 345 个会话在费用方面说明了什么：
@@ -73,16 +73,16 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 - 多一次模型调用的费用，大约相当于 8,000 个字符的工具输出。
 - 模型会写下它自己要求的内容。它在自己的工具调用中点名的要点，有 98.5% 进入了回答；只在工具回复中看到的要点，为 90.5%。
 
-会话、问题、答案要点以及生成这些数字的脚本见 [tests/bench/neutral](tests/bench/neutral)。手动测试及其完整回答见 [tests/bench/hand](tests/bench/hand)。单次读取、编辑和搜索的 token 数见 [REFERENCE.md](REFERENCE.md)。
+会话、问题、答案要点以及生成这些数字的脚本见 [tests/bench/neutral](../tests/bench/neutral)。手动测试及其完整回答见 [tests/bench/hand](../tests/bench/hand)。单次读取、编辑和搜索的 token 数见 [REFERENCE.md](../REFERENCE.md)。
 
 ## 闸门如何被测试
 
-- **变异测试。** 故意破坏每一项防护，并且必须至少有一个测试失败。引擎部分目前有 64 个变异体：57 个被杀死，4 个被证明等价，2 个是作为纵深防御保留的冗余防护，1 个未解决。清单见 [VERIFICATION.md](VERIFICATION.md)。
+- **变异测试。** 故意破坏每一项防护，并且必须至少有一个测试失败。引擎部分目前有 64 个变异体：57 个被杀死，4 个被证明等价，2 个是作为纵深防御保留的冗余防护，1 个未解决。清单见 [VERIFICATION.md](../VERIFICATION.md)。
 - **模型检查。** 提交日志用 TLA+ 描述，并用 TLC 检查，包括恢复过程中的崩溃。
 - **崩溃测试。** 批次在每一步之后被截断并恢复。
 - **红队和模糊测试套件**，针对 MCP 接口、沙箱、日志和解析器。
 
-针对闸门的发现及其修复列在 [REFERENCE.md](REFERENCE.md#security-history) 中。
+针对闸门的发现及其修复列在 [REFERENCE.md](../REFERENCE.md#security-history) 中。
 
 ## 局限
 
@@ -106,4 +106,4 @@ tools/accept.ps1 <ref>     # tests three times, then the mutants on lines change
 
 MIT。`vendor/` 下随仓库附带的语法保留其各自的 MIT 许可证。
 
-<p align="center"><a href="README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></p>
+<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></p>
