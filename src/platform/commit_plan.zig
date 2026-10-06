@@ -45,6 +45,11 @@ pub const Session = struct {
     prepared: ?git_commit.Prepared = null,
 
     pub fn open(gpa: Allocator, io: std.Io, root: []const u8, request: ?*Request, rels: []const []const u8) !Opened {
+        switch (try rules.frozenGate(gpa, io, root, rels)) {
+            .ok => {},
+            .violated => |report| return .{ .violated = report },
+            .failed => |failure| return .{ .failed = failure },
+        }
         const plan = request orelse return .{ .ok = .{} };
         switch (try rules.messageGate(gpa, io, root, plan.message)) {
             .ok => {},

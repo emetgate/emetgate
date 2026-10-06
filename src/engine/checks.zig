@@ -81,6 +81,11 @@ fn resolve(checks: []const Check, spec: []const u8) Error!struct { check: Check,
 }
 
 pub const added_prefix = "added:";
+pub const frozen_name = "frozen";
+
+pub fn isFrozen(spec: []const u8) bool {
+    return std.mem.eql(u8, parse(spec).name, frozen_name);
+}
 
 pub fn addedOf(spec: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, spec, added_prefix)) return null;
@@ -104,7 +109,12 @@ pub fn validateStatic(gpa: Allocator, spec: []const u8) Error!void {
         if (commandOf(inner) != null) return error.CommandCheckNotStatic;
         if (addedOf(inner) != null) return error.UnknownCheck;
         if (text_checks.of(inner) != null) return error.UnknownCheck;
+        if (isFrozen(inner)) return error.UnknownCheck;
         return validateStatic(gpa, inner);
+    }
+    if (isFrozen(spec)) {
+        if (parse(spec).arg != null) return error.UnexpectedCheckArgument;
+        return;
     }
     const resolved = try resolve(&registry, spec);
     if (std.mem.eql(u8, resolved.check.name, query_name)) {

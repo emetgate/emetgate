@@ -120,6 +120,40 @@ pub fn isAdded(rule: Rule) bool {
     return checks.addedOf(rule.check) != null;
 }
 
+pub fn isFrozen(rule: Rule) bool {
+    return checks.isFrozen(rule.check);
+}
+
+pub fn frozenGate(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !Gate {
+    const enforced = try load(gpa, io, root_abs);
+    defer enforced.deinit();
+    return evaluateFrozen(gpa, enforced.rules, paths);
+}
+
+pub fn evaluateFrozen(gpa: Allocator, rules: []const Rule, paths: []const []const u8) !Gate {
+    var list: std.ArrayList(Violation) = .empty;
+    defer list.deinit(gpa);
+    defer for (list.items) |v| freeViolation(gpa, v);
+    const at: Position = .{ .line = 1, .col = 1 };
+    for (rules) |rule| {
+        if (!isFrozen(rule)) continue;
+        const scope: ?where_mod.Where = if (rule.where) |text| try where_mod.parse(text) else null;
+        for (paths) |path| {
+            if (scope) |w| {
+                if (!w.coversFile(path)) continue;
+            }
+            const owned = try ownViolation(gpa, rule, path, at, at, "");
+            std.mem.replaceScalar(u8, owned.file, '\\', '/');
+            list.append(gpa, owned) catch |err| {
+                freeViolation(gpa, owned);
+                return err;
+            };
+        }
+    }
+    if (list.items.len != 0) return .{ .violated = .{ .violations = try list.toOwnedSlice(gpa) } };
+    return .ok;
+}
+
 pub fn isMessage(rule: Rule) bool {
     return text_checks.of(rule.check) != null;
 }
@@ -231,7 +265,7 @@ pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile
     defer if (parser) |p| p.deinit();
 
     for (rules) |rule| {
-        if (isMessage(rule)) continue;
+        if (isMessage(rule) or isFrozen(rule)) continue;
         var old_texts: std.ArrayList([]const u8) = .empty;
         defer old_texts.deinit(gpa);
         if (isAdded(rule)) {
