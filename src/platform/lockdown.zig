@@ -1,5 +1,6 @@
 const std = @import("std");
 const exe_path = @import("exe_path.zig");
+const lockdown_slash = @import("lockdown_slash.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -160,10 +161,12 @@ pub fn childEnviron(gpa: Allocator, parent: *const std.process.Environ.Map) !std
 }
 
 pub fn launch(gpa: Allocator, io: std.Io, parent_env: *const std.process.Environ.Map, passthrough: []const []const u8) !u8 {
-    return launchIn(gpa, io, std.Io.Dir.cwd(), parent_env, claude_program, passthrough);
+    const self_exe = try std.process.executablePathAlloc(io, gpa);
+    defer gpa.free(self_exe);
+    return launchIn(gpa, io, std.Io.Dir.cwd(), parent_env, claude_program, self_exe, passthrough);
 }
 
-pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const std.process.Environ.Map, program: []const u8, passthrough: []const []const u8) !u8 {
+pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const std.process.Environ.Map, program: []const u8, self_exe: []const u8, passthrough: []const []const u8) !u8 {
     try refuseReserved(passthrough);
     const config_abs = try resolveMcpConfig(gpa, io, dir);
     defer gpa.free(config_abs);
@@ -173,7 +176,12 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     defer gpa.free(server);
     const allowed = try allowedTools(gpa, server);
     defer gpa.free(allowed);
-    const argv = try buildArgv(gpa, config_abs, allowed, passthrough);
+    const locked = try buildArgv(gpa, config_abs, allowed, passthrough);
+    defer gpa.free(locked);
+    const local_app_data = parent_env.get(lockdown_slash.local_app_data_variable) orelse return error.LocalAppDataUnavailable;
+    const slash = try lockdown_slash.install(gpa, io, local_app_data, self_exe);
+    defer slash.deinit(gpa);
+    const argv = try lockdown_slash.extend(gpa, locked, slash);
     defer gpa.free(argv);
     const resolved = exe_path.resolve(gpa, program, null) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
