@@ -107,6 +107,11 @@ pub fn runCommandRulesFor(gpa: Allocator, io: std.Io, root: []const u8, shadow_a
     };
 }
 
+pub fn runMessageRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, message: ?[]const u8, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
+    if (message == null) return null;
+    return runCommandRulesFor(gpa, io, root, shadow_abs, &.{}, message, limits, allow_repo_memory);
+}
+
 pub fn runStages(gpa: Allocator, io: std.Io, cwd: []const u8, typecheck_command: ?[]const u8, test_command: []const u8, limits: sandbox.Limits) !ShadowRun {
     if (typecheck_command) |typecheck| {
         const checked = try runCommand(gpa, io, cwd, typecheck, limits);
@@ -262,9 +267,10 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
         workspace.close();
         shadow.remove(io, location.base, location.shadow) catch {};
     }
+    if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     try workspace.writeFile(rel, patched);
 
-    if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
+    if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
     return runStages(gpa, io, location.shadow, options.typecheck_command, command, options.limits);
 }
 

@@ -290,6 +290,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         workspace.close();
         shadow.remove(io, location.base, location.shadow) catch {};
     }
+    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     for (prepared) |p| {
         if (p.source_rel) |from| try workspace.deleteFile(from);
         if (p.action == .delete_file) try workspace.deleteFile(p.rel) else try workspace.writeFile(p.rel, p.source());
@@ -317,7 +318,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
         built += 1;
     }
-    if (try runner.runCommandRulesFor(gpa, io, root, location.shadow, targets[0..built], session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
+    if (try runner.runCommandRulesFor(gpa, io, root, location.shadow, targets[0..built], null, options.limits, options.allow_repo_memory)) |gated| return gated;
 
     return runner.runStages(gpa, io, location.shadow, options.typecheck_command, options.test_command, options.limits);
 }
