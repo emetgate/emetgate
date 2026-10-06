@@ -49,6 +49,17 @@ const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    _ = commit_plan.takeFound();
+    var result = try dispatch(gpa, io, runtime, name, args, event, policy);
+    const found = commit_plan.takeFound() orelse return result;
+    errdefer gpa.free(result.text);
+    const text = try receipt_note.withRecovered(gpa, result.text, found);
+    gpa.free(result.text);
+    result.text = text;
+    return result;
+}
+
+fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget);

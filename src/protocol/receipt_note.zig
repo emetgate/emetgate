@@ -40,6 +40,20 @@ pub fn insert(gpa: Allocator, w: *Writer, field: []const u8) !void {
     try allocating.writer.writeAll(tail);
 }
 
+pub fn withRecovered(gpa: Allocator, text: []const u8, found: commit_plan.Found) ![]u8 {
+    var field: std.Io.Writer.Allocating = .init(gpa);
+    defer field.deinit();
+    try field.writer.writeAll("\"recovered\":");
+    var js: std.json.Stringify = .{ .writer = &field.writer };
+    try js.write(found.reason);
+    try field.writer.writeAll(",\"recovered_left_as_found\":");
+    var names: std.json.Stringify = .{ .writer = &field.writer };
+    try names.write(found.names());
+    const close = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+    if (close < 2 or text[close - 1] != '}') return std.fmt.allocPrint(gpa, "{s}\n{{{s}}}", .{ text, field.written() });
+    return std.fmt.allocPrint(gpa, "{s},{s}{s}", .{ text[0 .. close - 1], field.written(), text[close - 1 ..] });
+}
+
 pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_plan.Request, w: *Writer) !void {
     const made = request orelse return;
     const oid = made.oid orelse return;
@@ -52,11 +66,6 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_pla
         try buffer.writer.writeAll(",\"left_as_found\":");
         var js: std.json.Stringify = .{ .writer = &buffer.writer };
         try js.write(made.left_names[0..made.left_names_len]);
-    }
-    if (made.recovered) |reason| {
-        try buffer.writer.print(",\"recovered\":\"{s}\",\"recovered_left_as_found\":", .{reason});
-        var js: std.json.Stringify = .{ .writer = &buffer.writer };
-        try js.write(made.recovered_names[0..made.recovered_names_len]);
     }
     if (made.receipt) |batch| {
         if (receipts.attachNew(gpa, io, root, oid, &batch)) |_| {} else |err| try buffer.writer.print(",\"receipt_attach_error\":\"{t}\"", .{err});

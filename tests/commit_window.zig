@@ -495,3 +495,27 @@ test "commit window: after a soft reset to the commit before, recover writes no 
     try testing.expectEqualStrings(staged, try env.git(&.{ "rev-parse", ":src/util.ts" }));
     try testing.expect(!case.repo.exists(".emetgate/intents"));
 }
+
+test "commit window: what an implicit recover left as found is named in the reply of a call that is then refused" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&.{ two_file, ignore, .{ .rel = "src/other.ts", .text = other_src } });
+    defer case.deinit();
+    const env = &case.env;
+    try cutAfterIndex(&case);
+    try case.repo.write("src/util.ts", two_hand);
+    const made = try env.head();
+
+    const reply = try env.call("emetgate_try", .{ .file = try env.abs("src/other.ts"), .symbol = "sub", .hash = "0" ** 32, .body = "{\n  return b - a;\n}", .message = message }, common.green, true);
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expect(contains(reply.text, "\"status\":\"error\""));
+    try testing.expect(contains(reply.text, "\"recovered\":\"TargetChangedAfterCommit\""));
+    try testing.expect(contains(reply.text, "\"recovered_left_as_found\":\"src/util.ts\""));
+    try testing.expectEqualStrings(made, try env.head());
+    try testing.expectEqualStrings(two_hand, try env.read("src/util.ts"));
+
+    const again = try env.call("emetgate_try", .{ .file = try env.abs("src/other.ts"), .symbol = "sub", .hash = "0" ** 32, .body = "{\n  return b - a;\n}", .message = message }, common.green, true);
+    try testing.expect(again.is_error);
+    try testing.expect(!contains(again.text, "recovered"));
+}

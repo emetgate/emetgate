@@ -21,9 +21,6 @@ pub const Request = struct {
     left: usize = 0,
     left_names: [commit_intent.Report.named_bytes]u8 = undefined,
     left_names_len: usize = 0,
-    recovered: ?[]const u8 = null,
-    recovered_names: [commit_intent.Report.named_bytes]u8 = undefined,
-    recovered_names_len: usize = 0,
     receipt: ?[16]u8 = null,
     runtime: ?*Runtime = null,
 
@@ -38,6 +35,32 @@ pub const Opened = union(enum) {
     violated: rules.Report,
     failed: rules.Failure,
 };
+
+pub const Found = struct {
+    reason: []const u8,
+    named: [commit_intent.Report.named_bytes]u8 = undefined,
+    named_len: usize = 0,
+
+    pub fn names(self: *const Found) []const u8 {
+        return self.named[0..self.named_len];
+    }
+};
+
+threadlocal var last_found: ?Found = null;
+
+pub fn noteFound(report: commit_intent.Report) void {
+    if (report.left == 0) return;
+    var found: Found = .{ .reason = report.reason orelse "" };
+    found.named_len = report.names().len;
+    @memcpy(found.named[0..found.named_len], report.names());
+    last_found = found;
+}
+
+pub fn takeFound() ?Found {
+    const found = last_found;
+    last_found = null;
+    return found;
+}
 
 pub fn recoverPending(gpa: Allocator, io: std.Io, root: []const u8) !void {
     _ = try recoverFound(gpa, io, root);
@@ -71,11 +94,7 @@ pub const Session = struct {
             .failed => |failure| return .{ .failed = failure },
         }
         const found = try recoverFound(gpa, io, root);
-        if (found.left != 0) {
-            plan.recovered = found.reason;
-            plan.recovered_names_len = found.names().len;
-            @memcpy(plan.recovered_names[0..plan.recovered_names_len], found.names());
-        }
+        noteFound(found);
         return .{ .ok = .{ .request = plan, .head = try git_commit.preflight(gpa, io, root, rels) } };
     }
 
