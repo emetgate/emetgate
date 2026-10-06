@@ -148,6 +148,7 @@ test {
     _ = @import("tests/appcontainer_compat.zig");
     _ = @import("tests/redteam_link_tree.zig");
     _ = @import("tests/redteam_git.zig");
+    _ = @import("tests/redteam_commit.zig");
     _ = @import("tests/run_tool.zig");
     _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
