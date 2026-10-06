@@ -259,7 +259,7 @@ test "prompt hook: a refused rule answers with the error name and the names that
 
     const typo = try say(&repo, "/rule add typo --check frbid:x --enforce");
     defer typo.deinit();
-    try testing.expectEqualStrings("no_comment forbid no_literal q cmd: added: message:forbid message:forbid_any_case message:require message:require_any_case message:max_lines message:max_subject message:max_line\nerror: UnknownCheck", typo.reason());
+    try testing.expectEqualStrings("no_comment forbid no_literal q cmd: added:\nerror: UnknownCheck", typo.reason());
 
     const unchecked = try say(&repo, "/rule add \"no networkidle\" --enforce");
     defer unchecked.deinit();

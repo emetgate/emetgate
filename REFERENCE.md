@@ -317,8 +317,7 @@ tool names and fails if another tool is added. A second test verifies that the d
 rejects rule-writing tool names.
 
 When `emetgate rule` refuses a check it does not know (`UnknownCheck`), it prints the names
-that exist before the error: `no_comment forbid no_literal q cmd: added:` and the `message:`
-checks. When `supersede` or `forget` names an id that is not active (`DecisionNotActive`), it
+that exist before the error: `no_comment forbid no_literal q cmd: added:`. When `supersede` or `forget` names an id that is not active (`DecisionNotActive`), it
 prints the active rules, in the `rule list` format, before the error.
 
 ### A ledger committed to the repository
