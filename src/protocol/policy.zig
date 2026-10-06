@@ -4,6 +4,7 @@ const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
+const commit_message = @import("../platform/commit_message.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const read_budget_mod = @import("read_budget.zig");
 const map_tools = @import("map_tools.zig");
@@ -27,6 +28,7 @@ pub const Policy = struct {
     map_session: ?*map_tools.Session = null,
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
+    commit: bool = false,
 
     pub fn allowedRuns(self: *const Policy) []const []const u8 {
         return self.allow_run[0..self.allow_run_len];
@@ -119,4 +121,51 @@ pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestP
 
 pub fn trustedTypecheckCommand(policy: Policy) []const u8 {
     return policy.typecheck_command orelse "";
+}
+
+pub const CommitError = error{ CommitNotEnabled, MissingCommitMessage } || commit_message.Error;
+
+pub fn commitMessage(args: ?Value, policy: Policy) CommitError!?[]const u8 {
+    const given: ?Value = if (args) |a| tool_result.getField(a, "message") else null;
+    if (!policy.commit) {
+        if (given != null) return error.CommitNotEnabled;
+        return null;
+    }
+    const value = given orelse return error.MissingCommitMessage;
+    if (value != .string) return error.MissingCommitMessage;
+    try commit_message.check(value.string);
+    return value.string;
+}
+
+const testing = std.testing;
+
+fn parsedArgs(text: []const u8) !std.json.Parsed(Value) {
+    return std.json.parseFromSlice(Value, testing.allocator, text, .{});
+}
+
+test "commit policy: with commits off a call without a message passes and a call with one is refused" {
+    const plain = try parsedArgs("{\"file\":\"a.ts\"}");
+    defer plain.deinit();
+    try testing.expectEqual(@as(?[]const u8, null), try commitMessage(plain.value, .{}));
+    try testing.expectEqual(@as(?[]const u8, null), try commitMessage(null, .{}));
+    const with = try parsedArgs("{\"file\":\"a.ts\",\"message\":\"fix: one\"}");
+    defer with.deinit();
+    try testing.expectError(error.CommitNotEnabled, commitMessage(with.value, .{}));
+}
+
+test "commit policy: with commits on every call needs a message, and the message is checked" {
+    const on: Policy = .{ .commit = true };
+    const plain = try parsedArgs("{\"file\":\"a.ts\"}");
+    defer plain.deinit();
+    try testing.expectError(error.MissingCommitMessage, commitMessage(plain.value, on));
+    try testing.expectError(error.MissingCommitMessage, commitMessage(null, on));
+    const number = try parsedArgs("{\"message\":7}");
+    defer number.deinit();
+    try testing.expectError(error.MissingCommitMessage, commitMessage(number.value, on));
+    const blank = try parsedArgs("{\"message\":\"  \"}");
+    defer blank.deinit();
+    try testing.expectError(error.CommitMessageEmpty, commitMessage(blank.value, on));
+    const good = try parsedArgs("{\"message\":\"fix: one\"}");
+    defer good.deinit();
+    try testing.expectEqualStrings("fix: one", (try commitMessage(good.value, on)).?);
 }
