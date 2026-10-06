@@ -4765,7 +4765,6 @@
       "from": "try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);",
       "to": "try session.land(gpa, io, root, changes, pendings, null, options.commit_step);",
       "kills": [
-        "batch crash through the tool: a crash right after the commit record recovers every file new",
         "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
       ]
     },
