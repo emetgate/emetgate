@@ -20,7 +20,6 @@ pub const Intent = struct {
 };
 
 pub fn write(gpa: Allocator, io: std.Io, journal_dir: []const u8, batch: []const u8, created_dirs: []const []const u8, intents: []const Intent) ![]u8 {
-    std.Io.Dir.cwd().createDirPath(io, journal_dir) catch {};
     const final = try std.fmt.allocPrint(gpa, "{s}\\{s}.json", .{ journal_dir, batch });
     errdefer gpa.free(final);
     const staged = try std.fmt.allocPrint(gpa, "{s}.tmp", .{final});

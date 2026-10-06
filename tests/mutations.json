@@ -9724,6 +9724,108 @@
       "kills": [
         "lockdown slash: the launched claude gets the hook settings and the command directory, and the project gains no file"
       ]
+    },
+    {
+      "id": "OD1-own-directory-link-not-refused",
+      "file": "src/platform/own_dir.zig",
+      "from": "    if (!try plainDirectory(handle)) return error.WorkspaceIsLink;\n",
+      "to": "    if (false and !try plainDirectory(handle)) return error.WorkspaceIsLink;\n",
+      "kills": [
+        "own dir: a directory that is a junction is refused by name, and so is one under a junction",
+        "own dir: receipts are not read or moved through a receipts directory that is a junction"
+      ]
+    },
+    {
+      "id": "OD2-held-directory-shares-delete",
+      "file": "src/platform/own_dir.zig",
+      "from": "        win.file_share_read | win.file_share_write,\n",
+      "to": "        win.file_share_read | win.file_share_write | win.file_share_delete,\n",
+      "kills": [
+        "own dir: a held directory cannot be renamed away or replaced until it is released",
+        "own dir: while a shadow is prepared its workspace cannot be renamed away"
+      ]
+    },
+    {
+      "id": "OD3-removal-takes-a-junction",
+      "file": "src/platform/own_dir.zig",
+      "from": "    if (!(plainDirectory(handle) catch false)) return false;\n",
+      "to": "",
+      "kills": [
+        "own dir: only an empty plain directory is removed, never a junction and never a directory with a file",
+        "own dir: releasing the workspace lock leaves a junction that stands where a work directory would be"
+      ]
+    },
+    {
+      "id": "OD4-lock-taken-through-a-linked-workspace",
+      "file": "src/platform/shadow.zig",
+      "from": "        if (isReparsePoint(workspace) catch true) return error.WorkspaceIsLink;\n",
+      "to": "",
+      "kills": [
+        "own dir: the workspace lock refuses a workspace that is a junction and leaves the junction in place"
+      ]
+    },
+    {
+      "id": "OD5-lock-release-removes-what-it-did-not-verify",
+      "file": "src/platform/shadow.zig",
+      "from": "                _ = own_dir.removeEmpty(sub);\n",
+      "to": "                Dir.cwd().deleteDir(self.io, sub) catch {};\n",
+      "kills": [
+        "own dir: releasing the workspace lock leaves a junction that stands where a work directory would be"
+      ]
+    },
+    {
+      "id": "OD6-intents-cleanup-takes-any-file",
+      "file": "src/platform/commit_intent.zig",
+      "from": "        const owner = ownTag(entry.name) orelse continue;\n",
+      "to": "        const owner = ownTag(entry.name) orelse entry.name;\n",
+      "kills": [
+        "own dir: recover leaves a file it did not write in the intents directory, whatever its ending"
+      ]
+    },
+    {
+      "id": "OD7-any-json-is-read-as-an-intent-record",
+      "file": "src/platform/commit_intent.zig",
+      "from": "            const tag = own_dir.tagOf(entry.name, &.{record_suffix}) orelse continue;\n",
+      "to": "            const tag = if (std.mem.endsWith(u8, entry.name, record_suffix)) entry.name[0 .. entry.name.len - record_suffix.len] else continue;\n",
+      "kills": [
+        "own dir: recover leaves a file it did not write in the intents directory, whatever its ending"
+      ]
+    },
+    {
+      "id": "OD8-any-json-is-applied-as-a-journal",
+      "file": "src/platform/disk.zig",
+      "from": "        if (own_dir.tagOf(entry.name, &.{\".json\"}) == null) {\n            report.failed += 1;\n            continue;\n        }\n",
+      "to": "",
+      "kills": [
+        "own dir: recover leaves a journal and a commit record it did not name, and reports the journal"
+      ]
+    },
+    {
+      "id": "OD9-commit-records-removed-by-ending",
+      "file": "src/platform/commit_record.zig",
+      "from": "        if (own_dir.tagOf(entry.name, &.{ record_suffix, staged_suffix, staged_journal_suffix }) == null) continue;\n",
+      "to": "        if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.mem.endsWith(u8, entry.name, staged_suffix) and !std.mem.endsWith(u8, entry.name, staged_journal_suffix)) continue;\n",
+      "kills": [
+        "own dir: recover leaves a journal and a commit record it did not name, and reports the journal"
+      ]
+    },
+    {
+      "id": "OD10-commit-work-directory-emptied",
+      "file": "src/platform/git_commit.zig",
+      "from": "                if (entry.kind != .file or !ours(entry.name)) continue;\n",
+      "to": "                if (entry.kind != .file) continue;\n",
+      "kills": [
+        "own dir: a commit call leaves a file it did not write in the commit work directory"
+      ]
+    },
+    {
+      "id": "OD11-shadow-workspace-not-held",
+      "file": "src/platform/shadow.zig",
+      "from": "        const held = try holdWorkspace(io, options.shadow_abs);\n",
+      "to": "        const held: ?own_dir.Held = null;\n",
+      "kills": [
+        "own dir: while a shadow is prepared its workspace cannot be renamed away"
+      ]
     }
   ]
 }

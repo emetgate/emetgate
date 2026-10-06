@@ -4,6 +4,7 @@ const shadow = @import("shadow.zig");
 const disk = @import("disk.zig");
 const commit_record = @import("commit_record.zig");
 const git_commit = @import("git_commit.zig");
+const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -79,7 +80,8 @@ pub fn stage(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, cont
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const dir = try dirOf(arena, root);
-    try Dir.cwd().createDirPath(io, dir);
+    const held = (try own_dir.hold(io, dir, .create)).?;
+    defer held.close();
     for (contents, 0..) |content, i| {
         const bytes = content orelse continue;
         try disk.writeDurably(io, try stagedPath(arena, dir, tag, i), bytes);
@@ -91,7 +93,8 @@ pub fn write(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, reco
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const dir = try dirOf(arena, root);
-    try Dir.cwd().createDirPath(io, dir);
+    const held = (try own_dir.hold(io, dir, .create)).?;
+    defer held.close();
     const final = try recordPath(arena, dir, tag);
     const staged = try std.fmt.allocPrint(arena, "{s}.tmp", .{final});
     var buffer: std.Io.Writer.Allocating = .init(arena);
@@ -104,31 +107,40 @@ pub fn write(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, reco
     commit_record.flushDir(dir) catch {};
 }
 
-fn removeFiles(arena: Allocator, io: std.Io, dir_abs: []const u8, tag: ?[]const u8) !void {
-    var dir = Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch return;
-    defer dir.close(io);
+const record_suffix = ".json";
+const own_suffixes = [_][]const u8{ record_suffix, ".json.tmp", ".index" };
+
+fn ownTag(name: []const u8) ?[]const u8 {
+    if (own_dir.tagOf(name, &own_suffixes)) |tag| return tag;
+    if (name.len <= own_dir.tag_len or !own_dir.isTag(name[0..own_dir.tag_len])) return null;
+    return if (own_dir.numbered(name[own_dir.tag_len..], ".", ".new")) name[0..own_dir.tag_len] else null;
+}
+
+fn removeFiles(arena: Allocator, io: std.Io, held: own_dir.Held, tag: ?[]const u8) !void {
     var names: std.ArrayList([]const u8) = .empty;
-    var it = dir.iterate();
+    var it = held.dir.iterate();
     while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
+        const owner = ownTag(entry.name) orelse continue;
         if (tag) |t| {
-            if (!std.mem.startsWith(u8, entry.name, t)) continue;
+            if (!std.mem.eql(u8, owner, t)) continue;
         }
         try names.append(arena, try arena.dupe(u8, entry.name));
     }
     for (names.items) |name| {
-        if (std.mem.endsWith(u8, name, ".json")) continue;
-        dir.deleteFile(io, name) catch {};
+        if (std.mem.endsWith(u8, name, record_suffix)) continue;
+        held.dir.deleteFile(io, name) catch {};
     }
     for (names.items) |name| {
-        if (!std.mem.endsWith(u8, name, ".json")) continue;
-        dir.deleteFile(io, name) catch return error.IntentNotRemoved;
+        if (!std.mem.endsWith(u8, name, record_suffix)) continue;
+        held.dir.deleteFile(io, name) catch return error.IntentNotRemoved;
     }
 }
 
-fn removeDir(io: std.Io, dir_abs: []const u8) void {
+fn release(held: own_dir.Held, dir_abs: []const u8) void {
     commit_record.flushDir(dir_abs) catch {};
-    Dir.cwd().deleteDir(io, dir_abs) catch {};
+    held.close();
+    _ = own_dir.removeEmpty(dir_abs);
 }
 
 pub fn discard(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, lock: ?git_commit.Digest) void {
@@ -137,8 +149,9 @@ pub fn discard(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, lo
     const arena = arena_state.allocator();
     if (lock) |digest| git_commit.releaseIndex(gpa, io, root, digest) catch {};
     const dir = dirOf(arena, root) catch return;
-    removeFiles(arena, io, dir, tag) catch {};
-    removeDir(io, dir);
+    const held = (own_dir.hold(io, dir, .existing) catch return) orelse return;
+    removeFiles(arena, io, held, tag) catch {};
+    release(held, dir);
 }
 
 fn isObjectId(text: []const u8) bool {
@@ -213,7 +226,11 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const dir = try dirOf(arena, root);
-    const bytes = try Dir.cwd().readFileAlloc(io, try recordPath(arena, dir, tag), arena, .limited(max_bytes));
+    if (!own_dir.isTag(tag)) return error.CorruptIntent;
+    const folder = (try own_dir.hold(io, dir, .existing)) orelse return error.FileNotFound;
+    var holding = true;
+    defer if (holding) folder.close();
+    const bytes = try folder.dir.readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}" ++ record_suffix, .{tag}), arena, .limited(max_bytes));
     const record = std.json.parseFromSliceLeaky(Record, arena, bytes, .{ .ignore_unknown_fields = true }) catch return error.CorruptIntent;
     if (record.version != version) return error.CorruptIntent;
     if (!isObjectId(record.commit) or !isObjectId(record.base)) return error.CorruptIntent;
@@ -285,8 +302,9 @@ pub fn complete(gpa: Allocator, io: std.Io, root: []const u8, tag: []const u8, s
         }
     }
 
-    try removeFiles(arena, io, dir, tag);
-    removeDir(io, dir);
+    try removeFiles(arena, io, folder, tag);
+    holding = false;
+    release(folder, dir);
     if (now.any()) report.landed = 1 else report.dropped = 1;
     return report;
 }
@@ -298,29 +316,29 @@ pub fn recoverAll(gpa: Allocator, io: std.Io, root: []const u8) !Report {
     const dir_abs = try dirOf(arena, root);
     var total: Report = .{};
     var tags: std.ArrayList([]const u8) = .empty;
+    const held = (try own_dir.hold(io, dir_abs, .existing)) orelse return total;
+    var holding = true;
+    defer if (holding) held.close();
     {
-        var dir = Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch |err| switch (err) {
-            error.FileNotFound => return total,
-            else => |e| return e,
-        };
-        defer dir.close(io);
-        var it = dir.iterate();
+        var it = held.dir.iterate();
         while (try it.next(io)) |entry| {
-            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
-            try tags.append(arena, try arena.dupe(u8, entry.name[0 .. entry.name.len - ".json".len]));
+            if (entry.kind != .file) continue;
+            const tag = own_dir.tagOf(entry.name, &.{record_suffix}) orelse continue;
+            try tags.append(arena, try arena.dupe(u8, tag));
         }
     }
     for (tags.items) |tag| {
         const one = complete(gpa, io, root, tag, null) catch |err| {
             if (err == error.Crashed or err == error.OutOfMemory) return err;
-            if (err == error.CorruptIntent) removeFiles(arena, io, dir_abs, tag) catch {};
+            if (err == error.CorruptIntent) removeFiles(arena, io, held, tag) catch {};
             total.failed += 1;
             total.reason = @errorName(err);
             continue;
         };
         total.add(one);
     }
-    if (total.pending == 0 and total.failed == 0) removeFiles(arena, io, dir_abs, null) catch {};
-    removeDir(io, dir_abs);
+    if (total.pending == 0 and total.failed == 0) removeFiles(arena, io, held, null) catch {};
+    holding = false;
+    release(held, dir_abs);
     return total;
 }

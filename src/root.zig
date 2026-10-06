@@ -96,6 +96,7 @@ pub const commit_message = @import("platform/commit_message.zig");
 pub const git_commit = @import("platform/git_commit.zig");
 pub const commit_plan = @import("platform/commit_plan.zig");
 pub const commit_intent = @import("platform/commit_intent.zig");
+pub const own_dir = @import("platform/own_dir.zig");
 pub const text_checks = @import("engine/text_checks.zig");
 pub const batch_plan = @import("platform/batch_plan.zig");
 pub const doc_writer = @import("platform/doc_writer.zig");

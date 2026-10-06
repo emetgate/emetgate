@@ -4,6 +4,7 @@ const exe_path = @import("exe_path.zig");
 const shadow = @import("shadow.zig");
 const disk = @import("disk.zig");
 const commit_message = @import("commit_message.zig");
+const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -372,12 +373,56 @@ pub fn remeasure(gpa: Allocator, io: std.Io, root: []const u8, head: Head, chang
     try measure(git, head.oid, try survey(git, rels));
 }
 
-fn workDir(arena: Allocator, io: std.Io, root: []const u8) ![]const u8 {
-    const dir = try std.fs.path.join(arena, &.{ root, shadow.workspace_dir, work_dir });
-    Dir.cwd().deleteTree(io, dir) catch {};
-    try Dir.cwd().createDirPath(io, dir);
-    return dir;
-}
+const Work = struct {
+    io: std.Io,
+    dir: []const u8,
+    held: own_dir.Held,
+
+    fn open(arena: Allocator, io: std.Io, root: []const u8) !Work {
+        const dir = try std.fs.path.join(arena, &.{ root, shadow.workspace_dir, work_dir });
+        const held = (try own_dir.hold(io, dir, .create)).?;
+        const work: Work = .{ .io = io, .dir = dir, .held = held };
+        work.sweep();
+        return work;
+    }
+
+    fn sweep(self: Work) void {
+        var names: [64][]const u8 = undefined;
+        var buffer: [64 * 32]u8 = undefined;
+        while (true) {
+            var count: usize = 0;
+            var used: usize = 0;
+            var it = self.held.dir.iterate();
+            while (it.next(self.io) catch return) |entry| {
+                if (entry.kind != .file or !ours(entry.name)) continue;
+                if (count == names.len or used + entry.name.len > buffer.len) break;
+                @memcpy(buffer[used..][0..entry.name.len], entry.name);
+                names[count] = buffer[used..][0..entry.name.len];
+                used += entry.name.len;
+                count += 1;
+            }
+            if (count == 0) return;
+            var removed: usize = 0;
+            for (names[0..count]) |name| {
+                if (self.held.dir.deleteFile(self.io, name)) |_| removed += 1 else |_| {}
+            }
+            if (removed == 0) return;
+        }
+    }
+
+    fn ours(name: []const u8) bool {
+        for ([_][]const u8{ "index", "index.lock", "message" }) |known| {
+            if (std.mem.eql(u8, name, known)) return true;
+        }
+        return name.len <= 24 and own_dir.numbered(name, "blob-", "");
+    }
+
+    fn done(self: Work) void {
+        self.sweep();
+        self.held.close();
+        _ = own_dir.removeEmpty(self.dir);
+    }
+};
 
 pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, changes: []const Change, message: []const u8) !Prepared {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -385,8 +430,9 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, changes
     const arena = arena_state.allocator();
     const git = try Git.init(arena, io, root);
 
-    const dir = try workDir(arena, io, root);
-    defer Dir.cwd().deleteTree(io, dir) catch {};
+    const work = try Work.open(arena, io, root);
+    defer work.done();
+    const dir = work.dir;
 
     var rels: std.ArrayList([]const u8) = .empty;
     for (changes) |change| try rels.append(arena, change.rel);
@@ -720,8 +766,9 @@ pub fn checkoutInto(gpa: Allocator, io: std.Io, root: []const u8, head: Head, pa
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const git = try Git.init(arena, io, root);
-    const dir = try workDir(arena, io, root);
-    defer Dir.cwd().deleteTree(io, dir) catch {};
+    const work = try Work.open(arena, io, root);
+    defer work.done();
+    const dir = work.dir;
     const private = try git.withIndex(try std.fs.path.join(arena, &.{ dir, "index" }));
     _ = try private.need(&.{ "read-tree", head.oid });
     const prefix = try std.fmt.allocPrint(arena, "--prefix={s}/", .{try slashed(arena, target_abs)});

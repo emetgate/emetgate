@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1573**
-- Mutations declared in `tests/mutations.json`: **981**
-  - killed: **948**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1615**
+- Mutations declared in `tests/mutations.json`: **992**
+  - killed: **959**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **4**
@@ -16,11 +16,12 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
   - survives, not yet classified: **6** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit)
-- Red-team suites: **14** files, **152** tests total
+- Red-team suites: **15** files, **182** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_commit.zig`: 49
+  - `tests/redteam_commit2.zig`: 30
   - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
@@ -175,7 +176,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-91 mutation(s).
+94 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -270,10 +271,13 @@ python tools/verification_page.py --check
 | `PV25-moved-file-loses-its-mode` | `src/platform/batch.zig` | `, .mode_from = p.source_rel });` -> `});` | commit batch: a moved file keeps its executable bit at the new path | killed |
 | `PV26-batch-message-kept-from-the-command-gate` | `src/platform/batch.zig` | `targets[0..built], session.message(), options.limits` -> `targets[0..built], null, options.limits` | commit batch: a message command judges the message of a try_batch, refuses one ...; commi... | killed |
 | `SL18-lockdown-launches-without-the-hook` | `src/platform/lockdown.zig` | `const argv = try lockdown_slash.extend(gpa, locked, slash);` -> `const argv = try gpa.dupe([]const u8, locked);` | lockdown slash: the launched claude gets the hook settings and the command dire... | killed |
+| `OD4-lock-taken-through-a-linked-workspace` | `src/platform/shadow.zig` | `if (isReparsePoint(workspace) catch true) return error.Workspac...` -> `` | own dir: the workspace lock refuses a workspace that is a junction and leaves t... | killed |
+| `OD5-lock-release-removes-what-it-did-not-verify` | `src/platform/shadow.zig` | `_ = own_dir.removeEmpty(sub);` -> `Dir.cwd().deleteDir(self.io, sub) catch {};` | own dir: releasing the workspace lock leaves a junction that stands where a wor... | killed |
+| `OD11-shadow-workspace-not-held` | `src/platform/shadow.zig` | `const held = try holdWorkspace(io, options.shadow_abs);` -> `const held: ?own_dir.Held = null;` | own dir: while a shadow is prepared its workspace cannot be renamed away | killed |
 
 ### Disk, repository boundary and atomic commit
 
-55 mutation(s).
+57 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -332,6 +336,8 @@ python tools/verification_page.py --check
 | `JR2-only-the-file-directory-is-checked-for-a-nested-repository` | `src/platform/repo.zig` | `dir = std.fs.path.dirname(dir) orelse return error.FileOutsideR...` -> `dir = root;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 | `JR3-nested-bare-repository-not-recognized` | `src/platform/repo.zig` | `return try entryExists(gpa, io, dir, "objects") and try entryEx...` -> `return false;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 | `EP2-ignore-check-runs-bare-git` | `src/platform/repo.zig` | `.argv = &.{ git, "check-ignore", "-q", "--no-index", "--", rel ...` -> `.argv = &.{ "git", "check-ignore", "-q", "--no-index", "--", re...` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `OD8-any-json-is-applied-as-a-journal` | `src/platform/disk.zig` | `if (own_dir.tagOf(entry.name, &.{".json"}) == null) {          ...` -> `` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
+| `OD9-commit-records-removed-by-ending` | `src/platform/commit_record.zig` | `if (own_dir.tagOf(entry.name, &.{ record_suffix, staged_suffix,...` -> `if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.m...` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
 
 ### Rules and the q: query engine
 
@@ -592,7 +598,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-486 mutation(s).
+492 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1082,6 +1088,12 @@ python tools/verification_page.py --check
 | `SL15-lockdown-slash-flags-after-the-lock` | `src/platform/lockdown_slash.zig` | `@memcpy(out[1 .. 1 + added.len], &added);     @memcpy(out[1 + a...` -> `@memcpy(out[argv.len..], &added);     @memcpy(out[1..argv.len],...` | lockdown slash: the hook flags come before the lock and the prompt stays the la... | killed |
 | `SL16-lockdown-changed-settings-kept` | `src/platform/lockdown_slash.zig` | `return std.mem.eql(u8, present, data);` -> `return true;` | lockdown slash: a second install repairs a changed file and leaves nothing else... | killed |
 | `SL17-lockdown-executables-share-settings` | `src/platform/lockdown_slash.zig` | `shadow_root.repoKey(exe_abs);` -> `shadow_root.repoKey(exe_abs[0..0]);` | lockdown slash: two executables do not share a settings file | killed |
+| `OD1-own-directory-link-not-refused` | `src/platform/own_dir.zig` | `if (!try plainDirectory(handle)) return error.WorkspaceIsLink;` -> `if (false and !try plainDirectory(handle)) return error.Workspa...` | own dir: a directory that is a junction is refused by name, and so is one under...; own d... | killed |
+| `OD2-held-directory-shares-delete` | `src/platform/own_dir.zig` | `win.file_share_read \| win.file_share_write,` -> `win.file_share_read \| win.file_share_write \| win.file_share_d...` | own dir: a held directory cannot be renamed away or replaced until it is releas...; own d... | killed |
+| `OD3-removal-takes-a-junction` | `src/platform/own_dir.zig` | `if (!(plainDirectory(handle) catch false)) return false;` -> `` | own dir: only an empty plain directory is removed, never a junction and never a...; own d... | killed |
+| `OD6-intents-cleanup-takes-any-file` | `src/platform/commit_intent.zig` | `const owner = ownTag(entry.name) orelse continue;` -> `const owner = ownTag(entry.name) orelse entry.name;` | own dir: recover leaves a file it did not write in the intents directory, whate... | killed |
+| `OD7-any-json-is-read-as-an-intent-record` | `src/platform/commit_intent.zig` | `const tag = own_dir.tagOf(entry.name, &.{record_suffix}) orelse...` -> `const tag = if (std.mem.endsWith(u8, entry.name, record_suffix)...` | own dir: recover leaves a file it did not write in the intents directory, whate... | killed |
+| `OD10-commit-work-directory-emptied` | `src/platform/git_commit.zig` | `if (entry.kind != .file or !ours(entry.name)) continue;` -> `if (entry.kind != .file) continue;` | own dir: a commit call leaves a file it did not write in the commit work direct... | killed |
 
 ## What this system does not prove
 

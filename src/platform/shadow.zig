@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const link_tree = @import("link_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const exe_path = @import("exe_path.zig");
+const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -56,6 +57,7 @@ pub const Lock = struct {
         var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
         const workspace = try std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ root_abs, workspace_dir });
         Dir.cwd().createDirPath(io, workspace) catch {};
+        if (isReparsePoint(workspace) catch true) return error.WorkspaceIsLink;
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const lock_path = try std.fmt.bufPrint(&path_buf, "{s}\\.lock", .{workspace});
         var wide: [std.fs.max_path_bytes:0]u16 = undefined;
@@ -85,10 +87,10 @@ pub const Lock = struct {
         var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
         for ([_][]const u8{ "journal", "intents", "commit" }) |name| {
             if (std.fmt.bufPrint(&journal_buf, "{s}\\{s}", .{ workspace, name })) |sub| {
-                Dir.cwd().deleteDir(self.io, sub) catch {};
+                _ = own_dir.removeEmpty(sub);
             } else |_| {}
         }
-        Dir.cwd().deleteDir(self.io, workspace) catch {};
+        _ = own_dir.removeEmpty(workspace);
     }
 };
 
@@ -126,6 +128,7 @@ pub const Shadow = struct {
     dir: Dir,
     linked: []const []const u8,
     link_stats: link_tree.Stats = .{},
+    held: ?own_dir.Held = null,
 
     pub const Options = struct {
         root_abs: []const u8,
@@ -143,6 +146,8 @@ pub const Shadow = struct {
         var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
         defer root.close(io);
         try Dir.cwd().createDirPath(io, options.shadow_abs);
+        const held = try holdWorkspace(io, options.shadow_abs);
+        errdefer if (held) |h| h.close();
         try ensureNoLinks(options.base_abs, options.shadow_abs);
         try writeRootMarker(io, options.shadow_abs, options.root_abs);
         try grantLowIntegrityWrite(options.shadow_abs);
@@ -167,7 +172,7 @@ pub const Shadow = struct {
             const link_path = try joinWindows(&link_buf, options.shadow_abs, link);
             try link_tree.build(io, target, link_path, &stats);
         }
-        return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats };
+        return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats, .held = held };
     }
 
     pub fn writeFile(self: Shadow, sub_path: []const u8, data: []const u8) !void {
@@ -206,20 +211,32 @@ pub const Shadow = struct {
 
     pub fn close(self: *Shadow) void {
         self.dir.close(self.io);
+        if (self.held) |held| held.close();
         self.* = undefined;
     }
 };
 
 pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     try ensureInsideWorkspace(base_abs, shadow_abs);
+    const held = try holdWorkspace(io, shadow_abs);
+    errdefer if (held) |h| h.close();
     try ensureNoLinks(base_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
+    if (held) |h| h.close();
 
     const workspace = std.fs.path.dirname(shadow_abs) orelse return;
     var marker_buf: [std.fs.max_path_bytes]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, "{s}\\{s}", .{ workspace, shadow_root.marker_name }) catch return;
     Dir.cwd().deleteFile(io, marker) catch {};
     Dir.cwd().deleteDir(io, workspace) catch {};
+}
+
+fn holdWorkspace(io: std.Io, shadow_abs: []const u8) !?own_dir.Held {
+    const workspace = std.fs.path.dirname(shadow_abs) orelse return error.ShadowOutsideWorkspace;
+    return own_dir.hold(io, workspace, .existing) catch |err| switch (err) {
+        error.Unsupported => null,
+        else => |e| return e,
+    };
 }
 
 fn writeRootMarker(io: std.Io, shadow_abs: []const u8, root_abs: []const u8) !void {

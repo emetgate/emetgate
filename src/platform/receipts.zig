@@ -8,6 +8,7 @@ const rules = @import("rules.zig");
 const sandbox = @import("sandbox.zig");
 const shadow = @import("shadow.zig");
 const exe_path = @import("exe_path.zig");
+const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const Hash = receipt.Hash;
@@ -143,7 +144,8 @@ pub fn write(gpa: Allocator, io: std.Io, root: []const u8, record: Record) !Writ
     const r = try build(arena, io, root, record);
     const bytes = try receipt.encode(arena, r);
     const dir = try std.fmt.allocPrint(arena, "{s}\\{s}\\{s}", .{ root, shadow.workspace_dir, receipts_dir });
-    try std.Io.Dir.cwd().createDirPath(io, dir);
+    const held = (try own_dir.hold(io, dir, .create)).?;
+    defer held.close();
     const now = std.Io.Timestamp.now(io, .real).nanoseconds;
     const path = try std.fmt.allocPrint(arena, "{s}\\{d:0>20}-{s}.json", .{ dir, @as(u128, @intCast(now)), r.batch });
     try disk.writeDurably(io, path, bytes);
@@ -204,15 +206,15 @@ pub fn attach(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8) 
     const changed = try changedPaths(arena, io, root, rev);
     const dir_abs = try std.fmt.allocPrint(arena, "{s}\\{s}\\{s}", .{ root, shadow.workspace_dir, receipts_dir });
     var names: std.ArrayList([]const u8) = .empty;
-    if (std.Io.Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true })) |opened| {
-        var dir = opened;
-        defer dir.close(io);
-        var it = dir.iterate();
+    const held = (try own_dir.hold(io, dir_abs, .existing)) orelse return .{ .count = 0 };
+    defer held.close();
+    {
+        var it = held.dir.iterate();
         while (try it.next(io)) |entry| {
             if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".json")) continue;
             try names.append(arena, try arena.dupe(u8, entry.name));
         }
-    } else |_| return .{ .count = 0 };
+    }
     std.mem.sort([]const u8, names.items, {}, lessString);
 
     var items = std.json.Array.init(arena);
@@ -223,8 +225,7 @@ pub fn attach(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8) 
     }
     var taken: std.ArrayList([]const u8) = .empty;
     for (names.items) |name| {
-        const path = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ dir_abs, name });
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(16 * 1024 * 1024));
+        const bytes = try held.dir.readFileAlloc(io, name, arena, .limited(16 * 1024 * 1024));
         const parsed = jcs.parse(arena, bytes) catch continue;
         const r = receipt.fromValue(arena, parsed.value) catch continue;
         var covered = true;
@@ -252,10 +253,10 @@ pub fn attachOne(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u
     const dir_abs = try std.fmt.allocPrint(arena, "{s}\\{s}\\{s}", .{ root, shadow.workspace_dir, receipts_dir });
     const suffix = try std.fmt.allocPrint(arena, "-{s}.json", .{batch});
     var name: ?[]const u8 = null;
+    const held = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.ReceiptNotFound;
+    defer held.close();
     {
-        var dir = std.Io.Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch return error.ReceiptNotFound;
-        defer dir.close(io);
-        var it = dir.iterate();
+        var it = held.dir.iterate();
         while (try it.next(io)) |entry| {
             if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, suffix)) continue;
             name = try arena.dupe(u8, entry.name);
@@ -268,8 +269,7 @@ pub fn attachOne(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u
         if (parsed.value != .array) return error.CorruptNote;
         try items.appendSlice(parsed.value.array.items);
     }
-    const path = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ dir_abs, found });
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(16 * 1024 * 1024));
+    const bytes = try held.dir.readFileAlloc(io, found, arena, .limited(16 * 1024 * 1024));
     try items.append((try jcs.parse(arena, bytes)).value);
     try store(arena, io, root, rev, dir_abs, items, &.{found});
 }
@@ -282,7 +282,8 @@ fn store(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, dir_ab
     defer std.Io.Dir.deleteFileAbsolute(io, staged) catch {};
     _ = (try git(arena, io, root, &.{ "notes", "--ref=" ++ notes_ref, "add", "-f", "-F", staged, rev })) orelse return error.GitFailed;
     const attached_dir = try std.fmt.allocPrint(arena, "{s}\\attached", .{dir_abs});
-    try std.Io.Dir.cwd().createDirPath(io, attached_dir);
+    const attached = (try own_dir.hold(io, attached_dir, .create)).?;
+    defer attached.close();
     for (taken) |name| {
         const from = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ dir_abs, name });
         const to = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ attached_dir, name });

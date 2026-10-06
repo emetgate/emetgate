@@ -98,6 +98,7 @@ pub const commit_message = src.commit_message;
 pub const git_commit = src.git_commit;
 pub const commit_plan = src.commit_plan;
 pub const commit_intent = src.commit_intent;
+pub const own_dir = src.own_dir;
 pub const text_checks = src.text_checks;
 pub const batch_plan = src.batch_plan;
 pub const doc_writer = src.doc_writer;
@@ -155,6 +156,7 @@ test {
     _ = @import("tests/redteam_git.zig");
     _ = @import("tests/redteam_commit.zig");
     _ = @import("tests/redteam_commit2.zig");
+    _ = @import("tests/own_dir.zig");
     _ = @import("tests/run_tool.zig");
     _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
