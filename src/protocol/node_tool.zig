@@ -1,4 +1,5 @@
 const std = @import("std");
+const commit_plan = @import("../platform/commit_plan.zig");
 const symbol = @import("../engine/symbol.zig");
 const node_cas = @import("../engine/node_cas.zig");
 const wire = @import("wire.zig");
@@ -89,7 +90,7 @@ pub fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try policy_mod.trustedTestCommand(args, policy);
-    var commit = try policy_mod.commitRequest(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy, runtime);
     defer if (commit) |request| request.deinit(gpa);
     const node_edits = try parse(gpa, args);
     defer gpa.free(node_edits);
@@ -130,7 +131,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args
             if (policy.tree_cache) |cache| cache.invalidate(place.abs);
             const full = tool_result.wantsFull(args);
             try wire.writeNodesCommitted(w, file, applied, note, full);
-            try record(gpa, io, place.root, place.rel, place.abs, before_hash, applied, test_command, typecheck_command, event.trace.test_ms, w, full);
+            try record(gpa, io, place.root, place.rel, place.abs, before_hash, applied, test_command, typecheck_command, event.trace.test_ms, w, full, if (commit) |*made| made else null);
             try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
@@ -161,7 +162,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args
     }
 }
 
-fn record(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, abs: []const u8, before: ?symbol.Hash, applied: node_cas.Applied, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool) !void {
+fn record(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, abs: []const u8, before: ?symbol.Hash, applied: node_cas.Applied, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool, request: ?*commit_plan.Request) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -177,5 +178,5 @@ fn record(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, abs: []
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w, full);
+    }, w, full, request);
 }

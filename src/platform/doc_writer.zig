@@ -93,18 +93,14 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
     defer location.deinit(gpa);
 
-    const files = try shadow.trackedFiles(gpa, io, root);
-    defer gpa.free(files);
-    defer shadow.freeFileList(gpa, files);
-
-    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, null);
+    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, null, &session);
     defer {
         workspace.close();
         shadow.remove(io, location.base, location.shadow) catch {};
     }
     try workspace.writeFile(rel, applied.source);
 
-    if (try runner.runCommandRulesFor(gpa, io, root, location.shadow, &.{}, runner.messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| {
+    if (try runner.runCommandRulesFor(gpa, io, root, location.shadow, &.{}, session.message(), options.limits, options.allow_repo_memory)) |gated| {
         return switch (gated) {
             .rule_violation => |report| .{ .rule_violation = report },
             .rule_check_failed => |failure| .{ .rule_check_failed = failure },
@@ -123,8 +119,9 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
             defer gpa.free(journal_dir);
             const change = [_]commit_plan.Change{.{ .rel = rel, .content = applied.source }};
             try session.prepare(gpa, io, root, &change);
-            try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir, options.commit_step);
-            try session.publish(gpa, io, root, &change);
+            var pendings = [1]disk.Pending{try disk.prepare(gpa, io, options.file_abs, applied.source, base_hash)};
+            const journal = disk.Batch.init(gpa, io, journal_dir);
+            try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);
             return .{ .committed = applied.hash };
         },
     }

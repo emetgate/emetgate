@@ -1,4 +1,5 @@
 const std = @import("std");
+const Runtime = @import("../engine/runtime.zig").Runtime;
 const tool_result = @import("tool_result.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
@@ -141,9 +142,9 @@ pub fn commitMessage(args: ?Value, policy: Policy) CommitError!?[]const u8 {
     return value.string;
 }
 
-pub fn commitRequest(args: ?Value, policy: Policy) CommitError!?commit_plan.Request {
+pub fn commitRequest(args: ?Value, policy: Policy, runtime: ?*Runtime) CommitError!?commit_plan.Request {
     const message = (try commitMessage(args, policy)) orelse return null;
-    return .{ .message = message };
+    return .{ .message = message, .runtime = runtime };
 }
 
 const testing = std.testing;

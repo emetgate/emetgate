@@ -265,21 +265,25 @@ test "commit batch: try_batch refuses a doc target edited by hand outside the re
     try testing.expectEqualStrings(a_src, try env.read("src/a.ts"));
 }
 
-test "commit batch: a locked index does not keep a written batch out of its commit" {
+test "commit batch: an index another process holds locked refuses the batch, and the lock, the branch and the files stay as they were" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Plain = undefined;
     try case.init(&batch_files);
     defer case.deinit();
     const env = &case.env;
     const before = try env.head();
-    try case.repo.write(".git/index.lock", "");
+    const status_before = try env.git(&.{ "status", "--porcelain", "--untracked-files=all" });
+    try case.repo.write(".git/index.lock", "held by someone else");
     const reply = try batchCall(env, true, green);
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(reply.is_error);
-    try testing.expect(std.mem.indexOf(u8, reply.text, "not_indexed") != null or std.mem.indexOf(u8, reply.text, "NotIndexed") != null);
-    try testing.expectEqualStrings(before, try env.git(&.{ "rev-parse", "HEAD^" }));
-    try testing.expectEqualStrings("M\tnotes.md\nM\tsrc/a.ts\nA\tsrc/fresh.ts\nD\tsrc/old.ts", try env.git(&.{ "diff", "--no-renames", "--name-status", "HEAD^", "HEAD" }));
-    try testing.expectEqualStrings(std.mem.trim(u8, fresh_body, "\n"), try env.git(&.{ "show", "HEAD:src/fresh.ts" }));
+    try testing.expect(std.mem.indexOf(u8, reply.text, "IndexLocked") != null);
+    try testing.expectEqualStrings(before, try env.head());
+    try testing.expectEqualStrings("held by someone else", try env.read(".git/index.lock"));
+    try testing.expect(!case.repo.exists("src/fresh.ts"));
+    try testing.expect(case.repo.exists("src/old.ts"));
+    try case.repo.tmp.dir.deleteFile(testing.io, "repo/.git/index.lock");
+    try testing.expectEqualStrings(status_before, try env.git(&.{ "status", "--porcelain", "--untracked-files=all" }));
 }
 
 const math_src =
@@ -509,4 +513,111 @@ test "commit batch: a file move refuses when the file to move was edited by hand
     try served.case.repo.write("src/util.ts", edited);
     try env.expectHandEditKept(try moveFileCall(&served, true, green), before, "src/util.ts", edited);
     try testing.expect(!served.case.repo.exists("src/core"));
+}
+
+const refusing_command = "message:cmd:findstr /b fix: .emetgate\\COMMIT_EDITMSG";
+const accepting_command = "message:cmd:findstr /b refactor: .emetgate\\COMMIT_EDITMSG";
+
+fn expectMessageCommandRefuses(env: *Env, reply: Reply, before: []const u8, id: []const u8) !void {
+    try env.expectUntouched(reply, before, "rule_violation");
+    try testing.expect(std.mem.indexOf(u8, reply.text, id) != null);
+}
+
+test "commit batch: a message command judges the message of a try_batch, refuses one and accepts another" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    {
+        var case: Plain = undefined;
+        try case.init(&batch_files);
+        defer case.deinit();
+        const env = &case.env;
+        const id = try memory.remember(testing.allocator, testing.io, case.repo.root_abs, .project, "starts with fix", true, refusing_command, null);
+        defer testing.allocator.free(id);
+        const before = try env.head();
+        try expectMessageCommandRefuses(env, try batchCall(env, true, green), before, id);
+        try testing.expect(!case.repo.exists("src/fresh.ts"));
+    }
+    {
+        var case: Plain = undefined;
+        try case.init(&batch_files);
+        defer case.deinit();
+        const env = &case.env;
+        const id = try memory.remember(testing.allocator, testing.io, case.repo.root_abs, .project, "starts with refactor", true, accepting_command, null);
+        defer testing.allocator.free(id);
+        const before = try env.head();
+        try env.expectOneCommit(try batchCall(env, true, green), before, "M\tnotes.md\nM\tsrc/a.ts\nA\tsrc/fresh.ts\nD\tsrc/old.ts", &.{"src/a.ts"});
+    }
+}
+
+test "commit batch: a message command judges the message of a node try" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Plain = undefined;
+    try case.init(&node_files);
+    defer case.deinit();
+    const env = &case.env;
+    const id = try memory.remember(testing.allocator, testing.io, case.repo.root_abs, .project, "starts with fix", true, refusing_command, null);
+    defer testing.allocator.free(id);
+    const before = try env.head();
+    try expectMessageCommandRefuses(env, try nodeCall(env, true, green), before, id);
+}
+
+test "commit batch: a message command judges the message of a rename, a move and a file move" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    {
+        var served: Served = undefined;
+        try renameInit(&served);
+        defer served.deinit();
+        const id = try memory.remember(testing.allocator, testing.io, served.case.repo.root_abs, .project, "starts with fix", true, refusing_command, null);
+        defer testing.allocator.free(id);
+        const before = try served.env.head();
+        try expectMessageCommandRefuses(&served.env, try renameCall(&served, true, green), before, id);
+    }
+    {
+        var served: Served = undefined;
+        try moveInit(&served);
+        defer served.deinit();
+        const id = try memory.remember(testing.allocator, testing.io, served.case.repo.root_abs, .project, "starts with fix", true, refusing_command, null);
+        defer testing.allocator.free(id);
+        const before = try served.env.head();
+        try expectMessageCommandRefuses(&served.env, try moveCall(&served, true, green), before, id);
+    }
+    {
+        var served: Served = undefined;
+        try moveFileInit(&served);
+        defer served.deinit();
+        const id = try memory.remember(testing.allocator, testing.io, served.case.repo.root_abs, .project, "starts with fix", true, refusing_command, null);
+        defer testing.allocator.free(id);
+        const before = try served.env.head();
+        try expectMessageCommandRefuses(&served.env, try moveFileCall(&served, true, green), before, id);
+    }
+}
+
+test "commit batch: a moved file keeps its executable bit at the new path" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var served: Served = undefined;
+    try moveFileInit(&served);
+    defer served.deinit();
+    const env = &served.env;
+    _ = try env.git(&.{ "update-index", "--chmod=+x", "src/util.ts" });
+    _ = try env.git(&.{ "commit", "-q", "-m", "chore: mode" });
+    const reply = try moveFileCall(&served, true, green);
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expect(std.mem.startsWith(u8, try env.git(&.{ "ls-tree", "HEAD", "src/core/tools/util.ts" }), "100755 "));
+    try testing.expectEqualStrings("", try env.git(&.{ "status", "--porcelain", "--untracked-files=all" }));
+}
+
+test "commit batch: design limit: a try_batch receipt does not list a rewritten doc, and verify calls that commit unverified" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Plain = undefined;
+    try case.init(&batch_files);
+    defer case.deinit();
+    const env = &case.env;
+    const reply = try batchCall(env, true, green);
+    try testing.expect(!reply.is_error);
+    const result = try @import("emetgate").verify_run.run(testing.allocator, env.arena(), testing.io, case.runtime, case.repo.root_abs, .{ .commit = "HEAD", .test_command = green });
+    for (result.report.files) |f| {
+        const is_doc = std.mem.eql(u8, f.path, "notes.md");
+        try testing.expectEqual(if (is_doc) @import("emetgate").checker.Verdict.unverified else @import("emetgate").checker.Verdict.verified, f.outcome.verdict);
+    }
+    try testing.expectEqual(@import("emetgate").checker.Verdict.unverified, result.report.verdict);
 }

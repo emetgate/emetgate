@@ -59,6 +59,27 @@ const Repo = struct {
         try testing.expectEqualStrings(want, std.mem.trim(u8, got, " \r\n"));
     }
 
+    fn has(self: *Repo, rel: []const u8) bool {
+        const sub = std.fmt.allocPrint(testing.allocator, "repo/{s}", .{rel}) catch return false;
+        defer testing.allocator.free(sub);
+        self.tmp.dir.access(testing.io, sub, .{}) catch return false;
+        return true;
+    }
+
+    fn land(self: *Repo, head: git_commit.Head, prepared: git_commit.Prepared) !void {
+        const staged_abs = try std.fmt.allocPrint(testing.allocator, "{s}.staged-index", .{self.root});
+        defer testing.allocator.free(staged_abs);
+        const staged = try git_commit.stageIndex(testing.allocator, testing.io, self.root, prepared.entries, staged_abs);
+        try git_commit.acquireIndex(testing.allocator, testing.io, self.root, staged_abs, staged);
+        const branch = try git_commit.currentBranch(testing.allocator, testing.io, self.root);
+        defer testing.allocator.free(branch);
+        git_commit.moveBranch(testing.allocator, testing.io, self.root, branch, prepared.commit, head.oid) catch |err| {
+            try git_commit.releaseIndex(testing.allocator, testing.io, self.root, staged.digest);
+            return err;
+        };
+        try testing.expect(try git_commit.publishIndex(testing.allocator, testing.io, self.root, staged.digest));
+    }
+
     fn write(self: *Repo, rel: []const u8, data: []const u8) !void {
         const sub = try std.fmt.allocPrint(testing.allocator, "repo/{s}", .{rel});
         defer testing.allocator.free(sub);
@@ -80,8 +101,9 @@ test "git commit: a prepared commit holds the given bytes on top of HEAD and mov
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const commit = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
-    defer testing.allocator.free(commit);
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    defer prepared.deinit(testing.allocator);
+    const commit = prepared.commit;
 
     try repo.expectOut(head.oid, &.{ "rev-parse", "HEAD" });
     try repo.expectOut("", &.{ "status", "--porcelain" });
@@ -99,7 +121,7 @@ test "git commit: a prepared commit holds the given bytes on top of HEAD and mov
     try repo.expectOut("M\tsrc/a.ts", &.{ "diff", "--name-status", head.oid, commit });
 
     try repo.write("src/a.ts", "export const a = 2;\n");
-    try git_commit.publish(testing.allocator, testing.io, repo.root, head, commit, &changes);
+    try repo.land(head, prepared);
     try repo.expectOut(commit, &.{ "rev-parse", "HEAD" });
     try repo.expectOut("", &.{ "status", "--porcelain" });
     try repo.git(&.{ "symbolic-ref", "-q", "HEAD" });
@@ -112,8 +134,9 @@ test "git commit: a message with a body and a trailer is stored as given" {
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const message = "fix: two\n\nWhy it changed.\n\nSigned-off-by: A Developer <a@example.com>";
-    const commit = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &.{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }}, message);
-    defer testing.allocator.free(commit);
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &.{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }}, message);
+    defer prepared.deinit(testing.allocator);
+    const commit = prepared.commit;
     try repo.expectOut(message, &.{ "log", "-1", "--format=%B", commit });
 }
 
@@ -128,8 +151,9 @@ test "git commit: a new file and a deleted file land in one commit" {
         .{ .rel = "src\\deep\\new.ts", .content = "export const n = 1;\n" },
         .{ .rel = "src\\b.ts", .content = null },
     };
-    const commit = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "feat: swap");
-    defer testing.allocator.free(commit);
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "feat: swap");
+    defer prepared.deinit(testing.allocator);
+    const commit = prepared.commit;
     try repo.expectOut("D\tsrc/b.ts\nA\tsrc/deep/new.ts", &.{ "diff", "--name-status", head.oid, commit });
     const listed = try std.fmt.allocPrint(testing.allocator, "{s}", .{commit});
     defer testing.allocator.free(listed);
@@ -140,7 +164,7 @@ test "git commit: a new file and a deleted file land in one commit" {
     try repo.tmp.dir.createDirPath(testing.io, "repo/src/deep");
     try repo.write("src/deep/new.ts", "export const n = 1;\n");
     try repo.tmp.dir.deleteFile(testing.io, "repo/src/b.ts");
-    try git_commit.publish(testing.allocator, testing.io, repo.root, head, commit, &changes);
+    try repo.land(head, prepared);
     try repo.expectOut(commit, &.{ "rev-parse", "HEAD" });
     try repo.expectOut("", &.{ "status", "--porcelain" });
 }
@@ -198,7 +222,7 @@ test "git commit: a target edited by hand is refused, and an edit to another fil
     head.deinit(testing.allocator);
     try testing.expectError(error.TargetHasUncommittedChanges, git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\b.ts"}));
     try repo.write("src/new.ts", "export const n = 1;\n");
-    try testing.expectError(error.TargetHasUncommittedChanges, git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\new.ts"}));
+    try testing.expectError(error.TargetNotInHead, git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\new.ts"}));
 }
 
 test "git commit: a hand edit to another file stays out of the commit and stays in the working tree" {
@@ -209,10 +233,11 @@ test "git commit: a hand edit to another file stays out of the commit and stays 
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const commit = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
-    defer testing.allocator.free(commit);
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    defer prepared.deinit(testing.allocator);
+    const commit = prepared.commit;
     try repo.write("src/a.ts", "export const a = 2;\n");
-    try git_commit.publish(testing.allocator, testing.io, repo.root, head, commit, &changes);
+    try repo.land(head, prepared);
     try repo.expectOut("M\tsrc/a.ts", &.{ "diff", "--name-status", head.oid, commit });
     try repo.expectOut("M src/b.ts", &.{ "status", "--porcelain" });
 }
@@ -224,12 +249,81 @@ test "git commit: when HEAD moved after the commit was prepared, publish refuses
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const commit = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
-    defer testing.allocator.free(commit);
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    defer prepared.deinit(testing.allocator);
 
     try repo.git(&.{ "commit", "-q", "--allow-empty", "-m", "someone else" });
     const newer = try repo.out(&.{ "rev-parse", "HEAD" });
     defer testing.allocator.free(newer);
-    try testing.expectError(error.WrittenButNotCommitted, git_commit.publish(testing.allocator, testing.io, repo.root, head, commit, &changes));
+    try testing.expectError(error.BranchMoved, repo.land(head, prepared));
+    try testing.expect(!repo.has(".git/index.lock"));
     try repo.expectOut(std.mem.trim(u8, newer, " \r\n"), &.{ "rev-parse", "HEAD" });
+}
+
+test "git commit: a target the user keeps out of the working tree with skip-worktree is refused by that name, even with the same bytes" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.git(&.{ "update-index", "--skip-worktree", "src/a.ts" });
+    try testing.expectError(error.TargetSkipWorktree, git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"}));
+}
+
+test "git commit: a target whose staged entry differs from HEAD is refused though the file on disk matches HEAD" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.write("src/a.ts", "export const a = 5;\n");
+    try repo.git(&.{ "add", "src/a.ts" });
+    try repo.write("src/a.ts", "export const a = 1;\n");
+    try testing.expectError(error.TargetHasUncommittedChanges, git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"}));
+}
+
+test "git commit: a tracked file deleted by hand is not a free path to create on" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.deleteFile(testing.io, "repo/src/a.ts");
+    try testing.expectError(error.TargetHasUncommittedChanges, git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"}));
+}
+
+test "git commit: an index lock held by another process is never taken over, and it stays as it was" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
+    defer head.deinit(testing.allocator);
+    const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    defer prepared.deinit(testing.allocator);
+    const staged_abs = try std.fmt.allocPrint(testing.allocator, "{s}.staged-index", .{repo.root});
+    defer testing.allocator.free(staged_abs);
+    const staged = try git_commit.stageIndex(testing.allocator, testing.io, repo.root, prepared.entries, staged_abs);
+    try repo.write(".git/index.lock", "held by someone else");
+    try testing.expectError(error.IndexLocked, git_commit.acquireIndex(testing.allocator, testing.io, repo.root, staged_abs, staged));
+    try testing.expectEqual(git_commit.LockState.foreign, try git_commit.lockState(testing.allocator, testing.io, repo.root, staged.digest));
+    try git_commit.releaseIndex(testing.allocator, testing.io, repo.root, staged.digest);
+    try testing.expect(!try git_commit.publishIndex(testing.allocator, testing.io, repo.root, staged.digest));
+    const lock = try repo.read(".git/index.lock");
+    defer testing.allocator.free(lock);
+    try testing.expectEqualStrings("held by someone else", lock);
+    try repo.expectOut(head.oid, &.{ "rev-parse", "HEAD" });
+}
+
+test "git commit: an index that changed after it was copied is not replaced, and what the user staged meanwhile stays staged" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
+    defer head.deinit(testing.allocator);
+    const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    defer prepared.deinit(testing.allocator);
+    const staged_abs = try std.fmt.allocPrint(testing.allocator, "{s}.staged-index", .{repo.root});
+    defer testing.allocator.free(staged_abs);
+    const staged = try git_commit.stageIndex(testing.allocator, testing.io, repo.root, prepared.entries, staged_abs);
+    try repo.write("src/b.ts", "export const b = 7;\n");
+    try repo.git(&.{ "add", "src/b.ts" });
+    try testing.expectError(error.IndexChanged, git_commit.acquireIndex(testing.allocator, testing.io, repo.root, staged_abs, staged));
+    try testing.expect(!repo.has(".git/index.lock"));
+    try repo.expectOut("M  src/b.ts", &.{ "status", "--porcelain" });
 }

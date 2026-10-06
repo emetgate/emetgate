@@ -1,4 +1,5 @@
 const std = @import("std");
+const commit_plan = @import("../platform/commit_plan.zig");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const skeleton = @import("../engine/skeleton.zig");
@@ -481,7 +482,7 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    var commit = try policy_mod.commitRequest(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy, runtime);
     defer if (commit) |request| request.deinit(gpa);
     const expected = try symbol.parseExpected(hash_hex);
     const place = try repo.jailTarget(gpa, io, policy.root, file, expected == .absent);
@@ -529,7 +530,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
                 .typecheck_command = typecheck_command,
                 .test_ms = event.trace.test_ms,
                 .version = receipt_note.version,
-            }, w, full);
+            }, w, full, if (commit) |*made| made else null);
             try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
@@ -596,7 +597,7 @@ fn callWriteDoc(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
 
 fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const u8, new_text: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    var commit = try policy_mod.commitRequest(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy, null);
     defer if (commit) |request| request.deinit(gpa);
     const arguments = args orelse return error.MissingArgument;
     const picked = try docSelector(arguments);
@@ -719,7 +720,7 @@ fn firstAbsentFile(items: []const Value) []const u8 {
     return getString(items[0], "file").?;
 }
 
-fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool) !void {
+fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool, request: ?*commit_plan.Request) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -757,12 +758,12 @@ fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: [
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w, full);
+    }, w, full, request);
 }
 
 fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    var commit = try policy_mod.commitRequest(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy, runtime);
     defer if (commit) |request| request.deinit(gpa);
 
     var code_count: usize = 0;
@@ -899,7 +900,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 code_places[order[i]] = places[i];
                 code_committed[order[i]] = committed[order[i]];
             }
-            try recordBatch(gpa, io, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full);
+            try recordBatch(gpa, io, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full, if (commit) |*made| made else null);
             try receipt_note.commit(gpa, io, places[0].root, commit, w);
             return false;
         },

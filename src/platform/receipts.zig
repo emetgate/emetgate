@@ -1,5 +1,7 @@
 const std = @import("std");
 const receipt = @import("../verify/receipt.zig");
+const checker = @import("../verify/checker.zig");
+const Runtime = @import("../engine/runtime.zig").Runtime;
 const jcs = @import("../verify/jcs.zig");
 const disk = @import("disk.zig");
 const rules = @import("rules.zig");
@@ -32,7 +34,26 @@ pub const Record = struct {
     test_ms: ?u64 = null,
     limits: sandbox.Limits = .{},
     version: []const u8,
+    commit: ?Commit = null,
 };
+
+pub const Commit = struct {
+    base: []const u8,
+    oid: []const u8,
+    runtime: ?*Runtime = null,
+};
+
+fn storedSymbol(arena: Allocator, io: std.Io, root: []const u8, made: Commit, rev: []const u8, path: []const u8, ref: []const u8, claimed: ?Hash) !?Hash {
+    if (claimed == null) return null;
+    const runtime = made.runtime orelse return claimed;
+    const bytes = (try blob(arena, io, root, rev, path)) orelse return claimed;
+    return (try checker.symbolHashIn(arena, runtime, path, bytes, ref)) orelse claimed;
+}
+
+fn blob(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, path: []const u8) !?[]u8 {
+    const spec = try std.fmt.allocPrint(arena, "{s}:{s}", .{ rev, path });
+    return git(arena, io, root, &.{ "cat-file", "blob", spec });
+}
 
 pub fn slashed(arena: Allocator, rel: []const u8) ![]u8 {
     const out = try arena.dupe(u8, rel);
@@ -50,12 +71,19 @@ pub fn build(arena: Allocator, io: std.Io, root: []const u8, record: Record) !re
     for (record.files) |f| {
         const path = try slashed(arena, f.rel);
         var after: ?Hash = null;
+        var before: ?Hash = f.before;
+        if (record.commit) |made| {
+            before = if (try blob(arena, io, root, made.base, path)) |bytes| receipt.blake3(bytes) else null;
+        }
         if (f.after_abs) |abs| {
-            const bytes = try std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .unlimited);
+            const bytes = if (record.commit) |made|
+                (try blob(arena, io, root, made.oid, path)) orelse return error.ReceiptFileNotInCommit
+            else
+                try std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .unlimited);
             after = receipt.blake3(bytes);
             try subjects.append(arena, .{ .path = path, .blake3 = after.?, .sha256 = receipt.sha256(bytes) });
         }
-        try files.append(arena, .{ .path = path, .before = f.before, .after = after });
+        try files.append(arena, .{ .path = path, .before = before, .after = after });
         const adopted = rules.adoptedFor(arena, io, root, f.rel) catch continue;
         for (adopted.items) |rule| {
             var seen = false;
@@ -67,7 +95,15 @@ pub fn build(arena: Allocator, io: std.Io, root: []const u8, record: Record) !re
         }
     }
     var symbols: std.ArrayList(receipt.SymbolEntry) = .empty;
-    for (record.symbols) |s| try symbols.append(arena, .{ .path = try slashed(arena, s.path), .ref = s.ref, .before = s.before, .after = s.after });
+    for (record.symbols) |s| {
+        const path = try slashed(arena, s.path);
+        var entry: receipt.SymbolEntry = .{ .path = path, .ref = s.ref, .before = s.before, .after = s.after };
+        if (record.commit) |made| {
+            entry.before = try storedSymbol(arena, io, root, made, made.base, path, s.ref, s.before);
+            entry.after = try storedSymbol(arena, io, root, made, made.oid, path, s.ref, s.after);
+        }
+        try symbols.append(arena, entry);
+    }
     var checks: std.ArrayList(receipt.Check) = .empty;
     if (record.typecheck_command) |command| if (command.len != 0) {
         try checks.append(arena, .{ .kind = .typecheck, .command = command, .command_digest = receipt.blake3(command), .exit_code = 0, .duration_ms = null });
@@ -204,6 +240,41 @@ pub fn attach(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8) 
         try taken.append(arena, name);
     }
     if (taken.items.len == 0) return .{ .count = 0 };
+    try store(arena, io, root, rev, dir_abs, items, taken.items);
+    return .{ .count = taken.items.len };
+}
+
+pub fn attachOne(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8, batch: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const rev = try resolveCommit(arena, io, root, commit);
+    const dir_abs = try std.fmt.allocPrint(arena, "{s}\\{s}\\{s}", .{ root, shadow.workspace_dir, receipts_dir });
+    const suffix = try std.fmt.allocPrint(arena, "-{s}.json", .{batch});
+    var name: ?[]const u8 = null;
+    {
+        var dir = std.Io.Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch return error.ReceiptNotFound;
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, suffix)) continue;
+            name = try arena.dupe(u8, entry.name);
+        }
+    }
+    const found = name orelse return error.ReceiptNotFound;
+    var items = std.json.Array.init(arena);
+    if (try noteBytes(arena, io, root, rev)) |existing| {
+        const parsed = try jcs.parse(arena, existing);
+        if (parsed.value != .array) return error.CorruptNote;
+        try items.appendSlice(parsed.value.array.items);
+    }
+    const path = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ dir_abs, found });
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(16 * 1024 * 1024));
+    try items.append((try jcs.parse(arena, bytes)).value);
+    try store(arena, io, root, rev, dir_abs, items, &.{found});
+}
+
+fn store(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8, dir_abs: []const u8, items: std.json.Array, taken: []const []const u8) !void {
     const note = try jcs.canonicalize(arena, .{ .array = items });
     const staged = try std.fmt.allocPrint(arena, "{s}\\note-{s}.tmp", .{ dir_abs, rev[0..@min(rev.len, 16)] });
     std.Io.Dir.deleteFileAbsolute(io, staged) catch {};
@@ -212,12 +283,11 @@ pub fn attach(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8) 
     _ = (try git(arena, io, root, &.{ "notes", "--ref=" ++ notes_ref, "add", "-f", "-F", staged, rev })) orelse return error.GitFailed;
     const attached_dir = try std.fmt.allocPrint(arena, "{s}\\attached", .{dir_abs});
     try std.Io.Dir.cwd().createDirPath(io, attached_dir);
-    for (taken.items) |name| {
+    for (taken) |name| {
         const from = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ dir_abs, name });
         const to = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ attached_dir, name });
         std.Io.Dir.renameAbsolute(from, to, io) catch {};
     }
-    return .{ .count = taken.items.len };
 }
 
 fn lessString(_: void, a: []const u8, b: []const u8) bool {

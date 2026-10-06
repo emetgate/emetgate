@@ -1,4 +1,6 @@
 const std = @import("std");
+const commit_intent = @import("../platform/commit_intent.zig");
+const commit_plan = @import("../platform/commit_plan.zig");
 const telemetry = @import("telemetry.zig");
 const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
@@ -198,9 +200,19 @@ pub const tool_defs = [_]Tool{
     },
 };
 
+pub fn finishPendingCommits(gpa: Allocator, io: std.Io, root: []const u8) void {
+    const dir = commit_intent.dirOf(gpa, root) catch return;
+    defer gpa.free(dir);
+    std.Io.Dir.cwd().access(io, dir, .{}) catch return;
+    const lock = shadow.Lock.acquire(io, root) catch return;
+    defer lock.release();
+    commit_plan.recoverPending(gpa, io, root) catch {};
+}
+
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
     const root: ?[]u8 = runner.repoRoot(gpa, io) catch null;
     defer if (root) |r| gpa.free(r);
+    if (root) |r| finishPendingCommits(gpa, io, r);
     const workspace: ?[]u8 = if (root) |r| std.fmt.allocPrint(gpa, "{s}\\{s}", .{ r, shadow.workspace_dir }) catch null else null;
     defer if (workspace) |ws| gpa.free(ws);
     var observer: ?telemetry.Observer = if (workspace) |ws| .{ .workspace_abs = ws } else null;

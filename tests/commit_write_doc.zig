@@ -199,7 +199,7 @@ test "commit write_doc: a target git does not track yet is refused and stays as 
     const hash = try case.arena().dupe(u8, &symbol.formatHash(symbol.hashOf(old_value)));
     const reply = try case.call("emetgate_write_doc", &.{ .{ "file", "draft.json" }, .{ "pointer", "/build" }, .{ "hash", hash }, .{ "content", new_value }, .{ "message", "build: typecheck" } }, committing);
     try testing.expect(reply.is_error);
-    try testing.expect(std.mem.indexOf(u8, reply.text, "TargetHasUncommittedChanges") != null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "TargetNotInHead") != null);
     try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
     const on_disk = try case.repo.read("draft.json");
     defer testing.allocator.free(on_disk);

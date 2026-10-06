@@ -38,6 +38,10 @@ pub fn trackedFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
     return files.toOwnedSlice(gpa);
 }
 
+pub fn journalDir(gpa: Allocator, root_abs: []const u8) ![]u8 {
+    return std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root_abs, workspace_dir });
+}
+
 pub fn freeFileList(gpa: Allocator, files: []const []u8) void {
     for (files) |file| gpa.free(file);
 }
@@ -79,9 +83,11 @@ pub const Lock = struct {
         var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
         const workspace = std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ self.root_abs, workspace_dir }) catch return;
         var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
-        if (std.fmt.bufPrint(&journal_buf, "{s}\\journal", .{workspace})) |journal| {
-            Dir.cwd().deleteDir(self.io, journal) catch {};
-        } else |_| {}
+        for ([_][]const u8{ "journal", "intents", "commit" }) |name| {
+            if (std.fmt.bufPrint(&journal_buf, "{s}\\{s}", .{ workspace, name })) |sub| {
+                Dir.cwd().deleteDir(self.io, sub) catch {};
+            } else |_| {}
+        }
         Dir.cwd().deleteDir(self.io, workspace) catch {};
     }
 };

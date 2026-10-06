@@ -7,6 +7,7 @@ const durability_log = @import("durability_log.zig");
 const journal = @import("journal.zig");
 const git_repo = @import("repo.zig");
 const shadow_root = @import("shadow_root.zig");
+const commit_intent = @import("commit_intent.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -105,7 +106,7 @@ pub const Step = struct {
     context: *anyopaque,
     reached: *const fn (context: *anyopaque) bool,
 
-    fn stops(step: ?*const Step) bool {
+    pub fn stops(step: ?*const Step) bool {
         const s = step orelse return false;
         return s.reached(s.context);
     }
@@ -656,6 +657,7 @@ pub const RecoverReport = struct {
     skipped: usize = 0,
     failed: usize = 0,
     not_indexed: usize = 0,
+    commits: commit_intent.Report = .{},
 };
 
 const SidecarKind = enum { tmp, bak };
@@ -729,6 +731,7 @@ pub fn recover(gpa: Allocator, io: std.Io, root_abs: []const u8) !RecoverReport 
     if (builtin.os.tag != .windows) return error.Unsupported;
     var report: RecoverReport = .{};
     try recoverJournaled(gpa, io, root_abs, &report);
+    report.commits = try commit_intent.recoverAll(gpa, io, root_abs);
     try clearOrphanTemps(gpa, io, root_abs, &report);
     return report;
 }
@@ -742,11 +745,17 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, shadow
     const removal = shadow.remove(io, location.base, location.shadow);
 
     try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}, not indexed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed, report.not_indexed });
+    const c = report.commits;
+    if (c.landed + c.dropped + c.left + c.pending + c.failed != 0) {
+        try err_out.print("commits completed {d}, dropped undecided {d}, files written {d}, files left as found {d}, still pending {d}, failed {d}", .{ c.landed, c.dropped, c.written, c.left, c.pending, c.failed });
+        if (c.reason) |reason| try err_out.print(", {s}", .{reason});
+        try err_out.writeAll("\n");
+    }
     if (removal) |_| {} else |err| {
         try err_out.print("could not remove shadow: {t}\n", .{err});
         return recover_failed_exit_code;
     }
-    return if (report.failed > 0 or report.not_indexed > 0) recover_failed_exit_code else 0;
+    return if (report.failed > 0 or report.not_indexed > 0 or c.pending > 0 or c.failed > 0) recover_failed_exit_code else 0;
 }
 
 const Verified = enum { deleted, missing, mismatch };
@@ -1114,6 +1123,29 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     };
 }
 
+pub fn copyWithTimes(io: std.Io, from_abs: []const u8, to_abs: []const u8) !void {
+    var from_wide: WidePath = undefined;
+    var to_wide: WidePath = undefined;
+    if (win.CopyFileW(try toWide(&from_wide, from_abs), try toWide(&to_wide, to_abs), .TRUE) == .FALSE) return error.CopyFailed;
+    const file = try std.Io.Dir.openFileAbsolute(io, to_abs, .{ .mode = .read_write });
+    defer file.close(io);
+    try file.sync(io);
+}
+
+pub fn moveExclusive(gpa: Allocator, from_abs: []const u8, to_abs: []const u8) !void {
+    const guard = try Guard.open(from_abs);
+    defer guard.close();
+    try guard.renameTo(gpa, to_abs);
+    flushParent(to_abs) catch {};
+}
+
+pub fn moveOver(gpa: Allocator, from_abs: []const u8, to_abs: []const u8) !void {
+    const guard = try Guard.open(from_abs);
+    defer guard.close();
+    try guard.renameReplacing(gpa, to_abs);
+    flushParent(to_abs) catch {};
+}
+
 pub fn replaceByRename(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
@@ -1244,6 +1276,7 @@ const win = struct {
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn SetFileAttributesW(name: [*:0]const u16, attributes: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn CopyFileW(from: [*:0]const u16, to: [*:0]const u16, fail_if_exists: windows.BOOL) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 };
 

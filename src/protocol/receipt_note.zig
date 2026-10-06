@@ -7,8 +7,15 @@ const Writer = std.Io.Writer;
 
 pub const version = @import("server.zig").server_version;
 
-pub fn record(gpa: Allocator, io: std.Io, root: []const u8, rec: receipts.Record, w: *Writer, full: bool) !void {
-    const written = receipts.write(gpa, io, root, rec);
+pub fn record(gpa: Allocator, io: std.Io, root: []const u8, rec: receipts.Record, w: *Writer, full: bool, request: ?*commit_plan.Request) !void {
+    var bound = rec;
+    if (request) |made| {
+        if (made.oid) |oid| bound.commit = .{ .base = made.base.?, .oid = oid, .runtime = made.runtime };
+    }
+    const written = receipts.write(gpa, io, root, bound);
+    if (written) |ok| {
+        if (request) |made| made.receipt = ok.batch[0..16].*;
+    } else |_| {}
     if (!full) {
         if (written) |ok| gpa.free(ok.batch) else |_| {}
         return;
@@ -34,12 +41,15 @@ pub fn insert(gpa: Allocator, w: *Writer, field: []const u8) !void {
 }
 
 pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_plan.Request, w: *Writer) !void {
-    const oid = (request orelse return).oid orelse return;
-    const attached = receipts.attach(gpa, io, root, oid);
-    const field = if (attached) |_|
-        try std.fmt.allocPrint(gpa, ",\"commit\":\"{s}\"", .{oid})
-    else |err|
-        try std.fmt.allocPrint(gpa, ",\"commit\":\"{s}\",\"receipt_attach_error\":\"{t}\"", .{ oid, err });
-    defer gpa.free(field);
-    try insert(gpa, w, field);
+    const made = request orelse return;
+    const oid = made.oid orelse return;
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    try buffer.writer.print(",\"commit\":\"{s}\"", .{oid});
+    if (made.unfinished) |name| try buffer.writer.print(",\"commit_unfinished\":\"{s}\"", .{name});
+    if (made.left != 0) try buffer.writer.print(",\"files_left_as_found\":{d}", .{made.left});
+    if (made.receipt) |batch| {
+        if (receipts.attachOne(gpa, io, root, oid, &batch)) |_| {} else |err| try buffer.writer.print(",\"receipt_attach_error\":\"{t}\"", .{err});
+    }
+    try insert(gpa, w, buffer.written());
 }

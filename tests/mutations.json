@@ -2049,8 +2049,8 @@
     {
       "id": "NF10-create-failed-tests-committed",
       "file": "src/platform/runner.zig",
-      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    try session.prepare(gpa, io, root, &change);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
-      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    try session.prepare(gpa, io, root, &change);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};",
+      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};",
       "kills": [
         "new file: a creation whose tests fail leaves no file on disk and nothing in the index"
       ]
@@ -3402,8 +3402,8 @@
     {
       "id": "CMD3-command-cwd-is-the-real-repo",
       "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| return gated;",
-      "to": "if (try runCommandRulesFor(gpa, io, root, root, targets, messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "from": "if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "to": "if (try runCommandRulesFor(gpa, io, root, root, targets, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;",
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
       ]
@@ -4762,8 +4762,8 @@
     {
       "id": "TB2-try-batch-commits-without-record",
       "file": "src/platform/batch.zig",
-      "from": "try disk.commitBatch(pendings, null, null, &batch, options.commit_step);",
-      "to": "try disk.commitBatch(pendings, null, null, null, options.commit_step);",
+      "from": "try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);",
+      "to": "try session.land(gpa, io, root, changes, pendings, null, options.commit_step);",
       "kills": [
         "batch crash through the tool: a crash right after the commit record recovers every file new",
         "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
@@ -4772,8 +4772,8 @@
     {
       "id": "TB3-try-batch-drops-commit-step",
       "file": "src/platform/batch.zig",
-      "from": "try disk.commitBatch(pendings, null, null, &batch, options.commit_step);",
-      "to": "try disk.commitBatch(pendings, null, null, &batch, null);",
+      "from": "try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);",
+      "to": "try session.land(gpa, io, root, changes, pendings, &batch, null);",
       "kills": [
         "batch crash through the tool: a crash right after the commit record recovers every file new",
         "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new",
@@ -6157,8 +6157,8 @@
     {
       "id": "DW4-doc-write-skips-journal",
       "file": "src/platform/doc_writer.zig",
-      "from": "try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir, options.commit_step);",
-      "to": "try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, null, options.commit_step);",
+      "from": "try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n            return .{ .committed = applied.hash };",
+      "to": "try session.land(gpa, io, root, &change, &pendings, null, options.commit_step);\n            return .{ .committed = applied.hash };",
       "kills": [
         "doc_writer: a crash right after the journal is written leaves a journal entry, and recover restores the old content"
       ]
@@ -6502,8 +6502,8 @@
     {
       "id": "WR3-receipt-note-always-full",
       "file": "src/protocol/receipt_note.zig",
-      "from": "    const written = receipts.write(gpa, io, root, rec);\n    if (!full) {",
-      "to": "    const written = receipts.write(gpa, io, root, rec);\n    if (full and false) {",
+      "from": "    if (!full) {\n        if (written) |ok| gpa.free(ok.batch) else |_| {}",
+      "to": "    if (full and false) {\n        if (written) |ok| gpa.free(ok.batch) else |_| {}",
       "kills": [
         "node edit: read_symbol with nodes gives hash|code lines and a node try commits exactly that node with a receipt that verifies"
       ]
@@ -8748,8 +8748,8 @@
     {
       "id": "GC1-detached-head-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "    if (try git.run(&.{ \"symbolic-ref\", \"-q\", \"HEAD\" }) == null) return error.DetachedHead;\n",
-      "to": "",
+      "from": "    const ref = (try git.run(&.{ \"symbolic-ref\", \"-q\", \"HEAD\" })) orelse return error.DetachedHead;\n",
+      "to": "    const ref = (try git.run(&.{ \"symbolic-ref\", \"-q\", \"HEAD\" })) orelse \"refs/heads/none\";\n",
       "kills": [
         "git commit: a detached HEAD is refused"
       ],
@@ -8768,8 +8768,8 @@
     {
       "id": "GC3-operation-in-progress-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "        return error.OperationInProgress;\n",
-      "to": "        continue;\n",
+      "from": "        if (try exists(io, path)) return error.OperationInProgress;\n",
+      "to": "        if (false and try exists(io, path)) return error.OperationInProgress;\n",
       "kills": [
         "git commit: a merge in progress is refused"
       ],
@@ -8778,8 +8778,8 @@
     {
       "id": "GC4-signing-repository-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "std.mem.eql(u8, value, \"true\")",
-      "to": "std.mem.eql(u8, value, \"never\")",
+      "from": "if (std.mem.eql(u8, value, \"true\")) return error.SigningNotSupported;",
+      "to": "if (std.mem.eql(u8, value, \"never\")) return error.SigningNotSupported;",
       "kills": [
         "git commit: a repository that signs its commits is refused"
       ],
@@ -8788,13 +8788,14 @@
     {
       "id": "GC5-hand-edited-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "    if ((try git.need(status.items)).len != 0) return error.TargetHasUncommittedChanges;\n",
-      "to": "",
+      "from": "        if (!std.mem.eql(u8, inTree(tree, path).?.oid, oid)) return error.TargetHasUncommittedChanges;\n",
+      "to": "        if (false and !std.mem.eql(u8, inTree(tree, path).?.oid, oid)) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "git commit: a target edited by hand is refused, and an edit to another file is not in the way",
-        "commit on write: a target edited by hand is refused and keeps the hand edit"
+        "commit on write: a target edited by hand is refused and keeps the hand edit",
+        "redteam commit: a hand edit hidden by assume-unchanged is not committed under the model's message"
       ],
-      "note": "the user's own uncommitted edit would be committed under the model's message"
+      "note": "a hand edit, also one git status does not show, would be committed under the model's message"
     },
     {
       "id": "GC6-empty-commit-made",
@@ -8809,12 +8810,13 @@
     {
       "id": "GC7-failed-branch-update-reported-as-a-commit",
       "file": "src/platform/git_commit.zig",
-      "from": "\"HEAD\", commit, head.oid }) == null) return error.WrittenButNotCommitted;",
-      "to": "\"HEAD\", commit, head.oid }) == null) return;",
+      "from": "    return if (std.mem.eql(u8, now, base)) error.BranchUpdateRefused else error.BranchMoved;",
+      "to": "    if (now.len != 0) return;\n    return error.BranchMoved;",
       "kills": [
-        "git commit: when HEAD moved after the commit was prepared, publish refuses and the branch keeps the newer commit"
+        "git commit: when HEAD moved after the commit was prepared, publish refuses and the branch keeps the newer commit",
+        "redteam commit: when the branch cannot move no write is left without a commit"
       ],
-      "note": "when the branch moved while the tests ran, the write would be reported as committed although the branch never got the commit"
+      "note": "a branch that did not move would be treated as decided and the files written without a commit"
     },
     {
       "id": "GC8-no-identity-accepted",
@@ -8830,8 +8832,8 @@
     {
       "id": "RC1-edit-written-but-not-published",
       "file": "src/platform/runner.zig",
-      "from": "    try session.publish(gpa, io, root, &change);\n    return .{ .committed = applied.hash };",
-      "to": "    return .{ .committed = applied.hash };",
+      "from": "    try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n    return .{ .committed = applied.hash };",
+      "to": "    for (&pendings) |*p| p.discard(null);\n    if (false) try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n    return .{ .committed = applied.hash };",
       "kills": [
         "commit on write: an accepted try is one commit with the given message and bytes, and its receipt rides on it"
       ],
@@ -8840,8 +8842,8 @@
     {
       "id": "RC2-created-file-written-but-not-published",
       "file": "src/platform/runner.zig",
-      "from": "    try session.publish(gpa, io, root, &change);\n    if (options.commit != null) return .{ .committed = created.hash };",
-      "to": "    if (options.commit != null) return .{ .committed = created.hash };",
+      "from": "        try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n        return .{ .committed = created.hash };",
+      "to": "        for (&pendings) |*p| p.discard(null);\n        if (false) try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n        return .{ .committed = created.hash };",
       "kills": [
         "commit on write: a new file is created and committed in the same call"
       ],
@@ -8881,8 +8883,8 @@
     {
       "id": "DC3-write-doc-written-but-not-published",
       "file": "src/platform/doc_writer.zig",
-      "from": "            try session.publish(gpa, io, root, &change);\n",
-      "to": "",
+      "from": "            try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n",
+      "to": "            for (&pendings) |*p| p.discard(null);\n            if (false) try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n",
       "kills": [
         "commit write_doc: an accepted write is one commit with the given message and the written bytes"
       ],
@@ -8901,7 +8903,7 @@
     {
       "id": "DC5-write-doc-message-kept-from-the-command-gate",
       "file": "src/platform/doc_writer.zig",
-      "from": "&.{}, runner.messageOf(options.commit), options.limits",
+      "from": "&.{}, session.message(), options.limits",
       "to": "&.{}, null, options.limits",
       "kills": [
         "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
@@ -8915,8 +8917,8 @@
     {
       "id": "MC1-try-message-kept-from-the-command-gate",
       "file": "src/platform/runner.zig",
-      "from": "targets, messageOf(options.commit), options.limits",
-      "to": "targets, null, options.limits",
+      "from": "location.shadow, targets, session.message(), options.limits",
+      "to": "location.shadow, targets, null, options.limits",
       "kills": [
         "commit on write: a message command judges the message of a try, and a refusal writes nothing"
       ],
@@ -9009,8 +9011,8 @@
     {
       "id": "BC1-batch-written-but-not-published",
       "file": "src/platform/batch.zig",
-      "from": "    try session.publish(gpa, io, root, changes);\n",
-      "to": "",
+      "from": "    try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);\n",
+      "to": "    for (pendings) |*p| p.discard(null);\n    if (false) try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);\n",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files",
         "commit batch: a node try is one commit of the edited file",
@@ -9075,10 +9077,11 @@
       "file": "src/platform/batch.zig",
       "from": "    if (options.commit == null) batch.root = root;",
       "to": "    batch.root = root;",
-      "kills": [
-        "commit batch: a locked index does not keep a written batch out of its commit"
-      ],
-      "note": "a failed index update would stop a written batch before its commit is published"
+      "note": "since protocol v2 the index is published from the locked copy before the files are written, so the journal adding the same blobs again changes nothing a test can see; the line only saves the extra git calls and keeps a failed git add from being reported after the commit",
+      "expect_status": "survived",
+      "filter": [
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
+      ]
     },
     {
       "id": "BC8-rename-drops-the-commit-request",
@@ -9241,6 +9244,292 @@
         "commit write_doc: a message that breaks a message rule is refused with the rule, and nothing is written"
       ],
       "note": "a message that breaks a message rule would be committed by every write tool"
+    },
+    {
+      "id": "PV1-skip-worktree-target-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "            if (entry.tag == 'S' or entry.tag == 's') return error.TargetSkipWorktree;\n",
+      "to": "            if (false and (entry.tag == 'S' or entry.tag == 's')) return error.TargetSkipWorktree;\n",
+      "kills": [
+        "git commit: a target the user keeps out of the working tree with skip-worktree is refused by that name, even with the same bytes"
+      ],
+      "note": "a file the user keeps out of the working tree would be written and committed"
+    },
+    {
+      "id": "PV2-staged-target-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "            if (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.mem.eql(u8, index_entry.mode, head_entry.mode)) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.mem.eql(u8, index_entry.mode, head_entry.mode))) return error.TargetHasUncommittedChanges;\n",
+      "kills": [
+        "git commit: a target whose staged entry differs from HEAD is refused though the file on disk matches HEAD"
+      ],
+      "note": "what the user staged on the target would be replaced by the commit"
+    },
+    {
+      "id": "PV3-untracked-target-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "            const head_entry = in_head orelse return error.TargetNotInHead;\n",
+      "to": "            const head_entry = in_head orelse continue;\n",
+      "kills": [
+        "redteam commit: a file the user keeps ignored is not put into history by a try on it",
+        "commit write_doc: a target git does not track yet is refused and stays as it was"
+      ],
+      "note": "a file git does not track, ignored or not, would enter history by an edit"
+    },
+    {
+      "id": "PV4-deleted-tracked-path-accepted-as-new",
+      "file": "src/platform/git_commit.zig",
+      "from": "        } else if (in_head != null or in_index != null) return error.TargetHasUncommittedChanges;\n",
+      "to": "        } else if (false and (in_head != null or in_index != null)) return error.TargetHasUncommittedChanges;\n",
+      "kills": [
+        "git commit: a tracked file deleted by hand is not a free path to create on"
+      ],
+      "note": "a file the user deleted by hand would be recreated and committed"
+    },
+    {
+      "id": "PV5-head-on-a-tag-accepted",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (!std.mem.startsWith(u8, ref, branch_prefix)) return error.DetachedHead;\n",
+      "to": "    if (false and !std.mem.startsWith(u8, ref, branch_prefix)) return error.DetachedHead;\n",
+      "kills": [
+        "redteam commit: a HEAD that points at a tag is refused and the tag does not move"
+      ],
+      "note": "a tag HEAD points at would be moved"
+    },
+    {
+      "id": "PV6-locked-index-found-after-the-gate",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (try exists(io, try lockPath(git))) return error.IndexLocked;\n",
+      "to": "    if (false and try exists(io, try lockPath(git))) return error.IndexLocked;\n",
+      "kills": [
+        "commit protocol: an index lock is refused before the gate runs, so a failing test is never reached"
+      ],
+      "note": "the tests would run for a call that cannot land"
+    },
+    {
+      "id": "PV7-commit-encoding-taken-from-config",
+      "file": "src/platform/git_commit.zig",
+      "from": "\"-c\", \"i18n.commitEncoding=UTF-8\", ",
+      "to": "",
+      "kills": [
+        "redteam commit: a commit encoding setting does not mislabel the UTF-8 message"
+      ],
+      "note": "a UTF-8 message would be labelled with another encoding"
+    },
+    {
+      "id": "PV8-any-index-lock-treated-as-ours",
+      "file": "src/platform/git_commit.zig",
+      "from": "    return if (std.mem.eql(u8, &found, &digest)) .ours else .foreign;",
+      "to": "    return if (std.mem.eql(u8, &found, &digest) or true) .ours else .foreign;",
+      "kills": [
+        "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after",
+        "git commit: an index lock held by another process is never taken over, and it stays as it was"
+      ],
+      "note": "the lock of another git process would be removed or published as the index"
+    },
+    {
+      "id": "PV9-index-lock-taken-over",
+      "file": "src/platform/git_commit.zig",
+      "from": "    disk.moveExclusive(gpa, staged_abs, lock) catch |err| switch (err) {",
+      "to": "    disk.moveOver(gpa, staged_abs, lock) catch |err| switch (err) {",
+      "kills": [
+        "git commit: an index lock held by another process is never taken over, and it stays as it was"
+      ],
+      "note": "the lock of another git process would be overwritten"
+    },
+    {
+      "id": "PV10-changed-index-replaced",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {",
+      "to": "    if (false and (now == null or !std.mem.eql(u8, &now.?, &staged.base))) {",
+      "kills": [
+        "git commit: an index that changed after it was copied is not replaced, and what the user staged meanwhile stays staged"
+      ],
+      "note": "what the user staged between the copy and the lock would be lost"
+    },
+    {
+      "id": "PV11-intent-record-not-written",
+      "file": "src/platform/commit_intent.zig",
+      "from": "    try disk.moveOver(gpa, staged, final);\n    commit_record.flushDir(dir) catch {};",
+      "to": "    if (false) try disk.moveOver(gpa, staged, final);\n    commit_record.flushDir(dir) catch {};",
+      "kills": [
+        "redteam commit: a process that dies between the write and the branch move is rolled back or completed by recover",
+        "commit batch crash: a crash after any step of a committing try_batch recovers to no write or to the whole commit"
+      ],
+      "note": "a crash after the branch moved would leave the commit without its files"
+    },
+    {
+      "id": "PV12-recover-writes-what-head-does-not-hold",
+      "file": "src/platform/commit_intent.zig",
+      "from": "        if (!wanted) continue;\n        const outcome = forwardOne(",
+      "to": "        if (false and !wanted) continue;\n        const outcome = forwardOne(",
+      "kills": [
+        "commit protocol: the user removes the lock and commits before the index was published, and recover writes nothing and leaves a clean tree"
+      ],
+      "note": "recover would write a file the checked out commit does not hold"
+    },
+    {
+      "id": "PV13-recover-overwrites-a-hand-edit",
+      "file": "src/platform/commit_intent.zig",
+      "from": "    if (!same(now, base)) return .left;\n",
+      "to": "    if (false and !same(now, base)) return .left;\n",
+      "kills": [
+        "commit protocol: a target the user edited after the crash is left as found, named in the report, and shows as their change"
+      ],
+      "note": "a file edited after the crash would not be reported as left"
+    },
+    {
+      "id": "PV14-targets-not-measured-again-before-the-branch-moves",
+      "file": "src/platform/commit_plan.zig",
+      "from": "    try git_commit.remeasure(gpa, io, root, head, changes);\n",
+      "to": "",
+      "kills": [
+        "commit protocol: a change the user stages on the target while the tests run is not overwritten in the index"
+      ],
+      "note": "a change staged while the tests ran would be replaced in the index"
+    },
+    {
+      "id": "PV15-unpublished-index-not-reported",
+      "file": "src/platform/commit_plan.zig",
+      "from": "            plan.unfinished = commit_intent.index_not_published;\n",
+      "to": "",
+      "kills": [
+        "commit protocol: a publish that is refused a few times is retried, and one that keeps being refused is reported with the commit and finished later"
+      ],
+      "note": "a commit whose index was not published would be reported as complete"
+    },
+    {
+      "id": "PV17-staged-bytes-not-checked-against-the-blob",
+      "file": "src/platform/commit_intent.zig",
+      "from": "    if (!try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
+      "to": "    if (false and !try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
+      "kills": [
+        "commit protocol: staged bytes that were tampered with are never written, whether or not the record was changed to match"
+      ],
+      "note": "a crafted intent record could write bytes the commit does not hold"
+    },
+    {
+      "id": "PV18-pending-commit-not-finished-before-the-next",
+      "file": "src/platform/commit_plan.zig",
+      "from": "        try recoverPending(gpa, io, root);\n",
+      "to": "",
+      "kills": [
+        "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after"
+      ],
+      "note": "a new commit would start while an earlier one is not landed"
+    },
+    {
+      "id": "PV19-shadow-keeps-hand-edits-out-but-does-not-restore-head",
+      "file": "src/platform/runner.zig",
+      "from": "    try git_commit.checkoutInto(gpa, io, root, head, restore.items, location.shadow);\n",
+      "to": "",
+      "kills": [
+        "commit protocol: the gate tests the tree the commit will hold, not a hand edit to another file, hidden from git status or not"
+      ],
+      "note": "the gate would test a tree with files missing"
+    },
+    {
+      "id": "PV20-staged-files-reach-the-gate",
+      "file": "src/platform/git_commit.zig",
+      "from": "    while (staged.next()) |_| try differs.put(arena, staged.next() orelse return error.GitFailed, {});\n",
+      "to": "    while (staged.next()) |_| _ = staged.next();\n",
+      "kills": [
+        "redteam commit: the gate runs on the tree the commit will hold, so a test that needs a file staged by hand is rejected"
+      ],
+      "note": "a commit would pass the gate thanks to a file it does not hold"
+    },
+    {
+      "id": "PV21-flagged-files-not-measured-for-the-shadow",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (entry.tag != 'S' and !std.ascii.isLower(entry.tag)) continue;\n",
+      "to": "        if (entry.stage == 0) continue;\n",
+      "kills": [
+        "commit protocol: the gate tests the tree the commit will hold, not a hand edit to another file, hidden from git status or not"
+      ],
+      "note": "a hand edit hidden by assume-unchanged would reach the gate"
+    },
+    {
+      "id": "PV22-receipt-digests-taken-from-the-working-tree",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "        if (made.oid) |oid| bound.commit = .{ .base = made.base.?, .oid = oid, .runtime = made.runtime };",
+      "to": "        if (made.oid) |oid| bound.commit = if (oid.len == 0) .{ .base = made.base.?, .oid = oid, .runtime = made.runtime } else null;",
+      "kills": [
+        "redteam commit: with autocrlf on verify accepts the commit emetgate just made"
+      ],
+      "note": "verify would refuse a commit emetgate made under a line end conversion"
+    },
+    {
+      "id": "PV23-receipt-symbol-hashes-taken-from-the-working-tree",
+      "file": "src/platform/receipts.zig",
+      "from": "    const runtime = made.runtime orelse return claimed;\n",
+      "to": "    const runtime = made.runtime orelse return claimed;\n    if (rev.len != 0) return claimed;\n",
+      "kills": [
+        "redteam commit: with autocrlf on verify accepts the commit emetgate just made"
+      ],
+      "note": "verify would refuse a commit emetgate made under a line end conversion"
+    },
+    {
+      "id": "PV24-another-pending-receipt-attached",
+      "file": "src/platform/receipts.zig",
+      "from": "            if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, suffix)) continue;\n",
+      "to": "            if (entry.kind != .file or name != null or !std.mem.endsWith(u8, entry.name, \".json\")) continue;\n            _ = suffix;\n",
+      "kills": [
+        "redteam commit: verify accepts a commit made after a discarded earlier write"
+      ],
+      "note": "the receipt of a discarded write would ride on the commit"
+    },
+    {
+      "id": "PV25-moved-file-loses-its-mode",
+      "file": "src/platform/batch.zig",
+      "from": ", .mode_from = p.source_rel });",
+      "to": " });",
+      "kills": [
+        "commit batch: a moved file keeps its executable bit at the new path"
+      ],
+      "note": "a moved executable would be committed as a plain file"
+    },
+    {
+      "id": "PV26-batch-message-kept-from-the-command-gate",
+      "file": "src/platform/batch.zig",
+      "from": "targets[0..built], session.message(), options.limits",
+      "to": "targets[0..built], null, options.limits",
+      "kills": [
+        "commit batch: a message command judges the message of a try_batch, refuses one and accepts another",
+        "commit batch: a message command judges the message of a node try",
+        "commit batch: a message command judges the message of a rename, a move and a file move"
+      ],
+      "note": "a batch commit would skip the message commands"
+    },
+    {
+      "id": "PV27-server-start-leaves-a-pending-commit",
+      "file": "src/protocol/server.zig",
+      "from": "    commit_plan.recoverPending(gpa, io, root) catch {};\n}",
+      "to": "}",
+      "kills": [
+        "commit protocol: the server finishes a pending commit when it starts"
+      ],
+      "note": "the lock of a crashed commit would stay until the user runs recover"
+    },
+    {
+      "id": "PV28-lock-published-though-the-branch-moved-away",
+      "file": "src/platform/commit_intent.zig",
+      "from": "        if (now.on_commit) {",
+      "to": "        if (now.on_commit or true) {",
+      "kills": [
+        "commit protocol: a soft reset while the lock is held undoes the commit, and recover releases the lock and writes nothing"
+      ],
+      "note": "the index of a commit the user undid would be published"
+    },
+    {
+      "id": "PV16-staged-bytes-hash-unchecked",
+      "file": "src/platform/commit_intent.zig",
+      "from": "    if (!std.mem.eql(u8, &symbol.hashOf(bytes), &new.?)) return error.CorruptIntent;\n",
+      "to": "",
+      "expect_status": "survived",
+      "filter": [
+        "commit protocol: staged bytes that were tampered with are never written, whether or not the record was changed to match"
+      ],
+      "note": "defense in depth: the check against the blob right after it (PV17) refuses the same tampered bytes; this one refuses them without a git call and also refuses bytes of the same stored form that are not the tested ones"
     }
   ]
 }

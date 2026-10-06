@@ -161,6 +161,14 @@ const Checker = struct {
     }
 };
 
+pub fn symbolHashIn(arena: Allocator, runtime: *Runtime, path: []const u8, bytes: []const u8, ref_text: []const u8) !?Hash {
+    var c: Checker = .{ .arena = arena, .runtime = runtime, .source = undefined, .files = .{ .arena = arena } };
+    return c.symbolHash(path, bytes, ref_text) catch |err| switch (err) {
+        error.Unparsable => null,
+        else => |e| e,
+    };
+}
+
 const Known = struct {
     path: []const u8,
     before: ?[]const u8,

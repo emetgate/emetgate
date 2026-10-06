@@ -129,7 +129,16 @@ fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, haystack, needle) != null;
 }
 
-test "redteam commit: with autocrlf on the commit holds the bytes the gate tested" {
+fn expectStoredForm(case: *Case, rel: []const u8) !void {
+    const path_arg = try std.fmt.allocPrint(case.arena(), "--path={s}", .{rel});
+    const spec = try std.fmt.allocPrint(case.arena(), "HEAD:{s}", .{rel});
+    try testing.expectEqualStrings(try case.git(&.{ "hash-object", path_arg, "--", rel }), try case.git(&.{ "rev-parse", spec }));
+    try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
+    try testing.expectEqualStrings("", try case.git(&.{ "diff", "HEAD", "--name-only" }));
+    try testing.expectEqualStrings("", try case.git(&.{ "diff", "--cached", "--name-only" }));
+}
+
+test "redteam commit: with autocrlf on the commit holds the bytes the gate tested, in the form git stores them" {
     try skipOffWindows();
     var case: Case = undefined;
     try case.initDefault();
@@ -141,10 +150,12 @@ test "redteam commit: with autocrlf on the commit holds the bytes the gate teste
     try testing.expect(!reply.is_error);
     const tested = try case.disk("src/util.ts");
     try testing.expect(contains(tested, "\r\n"));
-    try testing.expectEqualStrings(tested, try case.headBlob("src/util.ts"));
+    try testing.expect(contains(tested, model_mark));
+    try testing.expect(contains(try case.headBlob("src/util.ts"), model_mark));
+    try expectStoredForm(&case, "src/util.ts");
 }
 
-test "redteam commit: with autocrlf on a fresh checkout of the commit gives back the tested bytes" {
+test "redteam commit: with autocrlf on a fresh checkout of the commit is the same stored file and a clean tree" {
     try skipOffWindows();
     var case: Case = undefined;
     try case.initDefault();
@@ -153,10 +164,13 @@ test "redteam commit: with autocrlf on a fresh checkout of the commit gives back
 
     const reply = try case.swap("src/util.ts", "{\r\n  return b + a;\r\n}", "fix: swap", committing);
     try testing.expect(!reply.is_error);
-    const tested = try case.disk("src/util.ts");
+    try expectStoredForm(&case, "src/util.ts");
+    const stored = try case.git(&.{ "hash-object", "--path=src/util.ts", "--", "src/util.ts" });
     try case.repo.tmp.dir.deleteFile(testing.io, "repo/src/util.ts");
     _ = try case.git(&.{ "checkout", "-q", "HEAD", "--", "src/util.ts" });
-    try testing.expectEqualStrings(tested, try case.disk("src/util.ts"));
+    try testing.expectEqualStrings(stored, try case.git(&.{ "hash-object", "--path=src/util.ts", "--", "src/util.ts" }));
+    try testing.expect(contains(try case.disk("src/util.ts"), model_mark));
+    try expectStoredForm(&case, "src/util.ts");
 }
 
 test "redteam commit: with autocrlf on verify accepts the commit emetgate just made" {
@@ -171,7 +185,7 @@ test "redteam commit: with autocrlf on verify accepts the commit emetgate just m
     try testing.expectEqual(emetgate.checker.Verdict.verified, try case.verdict());
 }
 
-test "redteam commit: a cloned gitattributes ident filter does not change the committed bytes" {
+test "redteam commit: under a cloned gitattributes ident filter the commit holds the tested file in the form git stores it" {
     try skipOffWindows();
     var case: Case = undefined;
     try case.init(&.{ util_file, ignore_workspace, .{ .rel = ".gitattributes", .text = "*.ts ident\n" } });
@@ -183,10 +197,12 @@ test "redteam commit: a cloned gitattributes ident filter does not change the co
     try testing.expect(!reply.is_error);
     const tested = try case.disk("src/util.ts");
     try testing.expect(contains(tested, "$Id: tested $"));
-    try testing.expectEqualStrings(tested, try case.headBlob("src/util.ts"));
+    try testing.expect(contains(try case.headBlob("src/util.ts"), ".length + b + a"));
+    try expectStoredForm(&case, "src/util.ts");
+    try testing.expectEqual(emetgate.checker.Verdict.verified, try case.verdict());
 }
 
-test "redteam commit: a cloned gitattributes eol rule does not change the committed bytes" {
+test "redteam commit: under a cloned gitattributes eol rule the commit holds the tested file in the form git stores it" {
     try skipOffWindows();
     var case: Case = undefined;
     try case.init(&.{ util_file, ignore_workspace, .{ .rel = ".gitattributes", .text = "*.ts text eol=lf\n" } });
@@ -196,7 +212,10 @@ test "redteam commit: a cloned gitattributes eol rule does not change the commit
     const reply = try case.swap("src/util.ts", "{\r\n  return b + a;\r\n}", "fix: swap", committing);
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(!reply.is_error);
-    try testing.expectEqualStrings(try case.disk("src/util.ts"), try case.headBlob("src/util.ts"));
+    try testing.expect(contains(try case.disk("src/util.ts"), "\r\n"));
+    try testing.expect(contains(try case.headBlob("src/util.ts"), model_mark));
+    try expectStoredForm(&case, "src/util.ts");
+    try testing.expectEqual(emetgate.checker.Verdict.verified, try case.verdict());
 }
 
 test "redteam commit: a hand edit hidden by assume-unchanged is not committed under the model's message" {
@@ -302,9 +321,20 @@ test "redteam commit: when the branch cannot move the reply names the state" {
     defer case.deinit();
     try installAbortingHook(&case);
 
+    const before = try case.git(&.{ "rev-parse", "HEAD" });
+    const index_before = try case.git(&.{ "ls-files", "-s" });
+
     const reply = try case.swap("src/util.ts", new_body, "fix: swap", committing);
+    errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(reply.is_error);
-    try testing.expect(contains(reply.text, "WrittenButNotCommitted"));
+    try testing.expect(contains(reply.text, "BranchUpdateRefused"));
+    try testing.expect(!contains(reply.text, "\"commit\""));
+    try testing.expectEqualStrings(util_src, try case.disk("src/util.ts"));
+    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
+    try testing.expectEqualStrings(index_before, try case.git(&.{ "ls-files", "-s" }));
+    try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
+    try testing.expect(!case.repo.exists(".git/index.lock"));
+    try testing.expect(!case.repo.exists(".emetgate/intents"));
 }
 
 test "redteam commit: when the branch cannot move no write is left without a commit" {
@@ -321,20 +351,31 @@ test "redteam commit: when the branch cannot move no write is left without a com
     try testing.expectEqual(written, committed);
 }
 
-test "redteam commit: a write left without a commit cannot be committed by the next call under a new message" {
+test "redteam commit: a refused call leaves no write for the next call to commit under a new message" {
     try skipOffWindows();
     var case: Case = undefined;
     try case.initDefault();
     defer case.deinit();
     try installAbortingHook(&case);
     const before = try case.git(&.{ "rev-parse", "HEAD" });
-    _ = try case.swap("src/util.ts", new_body, "fix: swap", committing);
+    const first = try case.swap("src/util.ts", new_body, "fix: swap", committing);
+    try testing.expect(first.is_error);
+    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
+    try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
+    try testing.expectEqualStrings(util_src, try case.disk("src/util.ts"));
     try case.repo.tmp.dir.deleteFile(testing.io, "repo/.git/hooks/reference-transaction");
 
     const next = try case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "sub" }, .{ "hash", try case.hashOf("src/util.ts", "sub") }, .{ "body", "{\n  return a - b - 1;\n}" }, .{ "message", "fix: another message" } }, committing);
-    try testing.expect(next.is_error);
-    try testing.expect(contains(next.text, "TargetHasUncommittedChanges"));
-    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
+    errdefer std.debug.print("{s}\n", .{next.text});
+    try testing.expect(!next.is_error);
+    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD^" }));
+    try testing.expectEqualStrings("fix: another message", try case.git(&.{ "log", "-1", "--format=%B" }));
+    try testing.expectEqualStrings("M\tsrc/util.ts", try case.git(&.{ "diff", "--name-status", "HEAD^", "HEAD" }));
+    try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
+    try testing.expect(contains(try case.headBlob("src/util.ts"), "a - b - 1"));
+    try testing.expect(!contains(try case.headBlob("src/util.ts"), model_mark));
+    try testing.expect(!contains(try case.disk("src/util.ts"), model_mark));
+    try testing.expectEqualStrings("", try case.git(&.{ "log", "--all", "-S" ++ model_mark, "--format=%H" }));
 }
 
 fn raceCommit(root_abs: []const u8, shadow_abs: []const u8) void {
@@ -434,23 +475,70 @@ test "redteam commit: a process that dies between the write and the branch move 
     var case: Case = undefined;
     try case.initDefault();
     defer case.deinit();
-    const root = case.repo.root_abs;
-    const rel = "src\\util.ts";
-    const file = try case.repo.abs(case.arena(), "src/util.ts");
-    const journal_dir = try std.fmt.allocPrint(case.arena(), "{s}\\.emetgate\\journal", .{root});
-
-    const head = try git_commit.preflight(testing.allocator, testing.io, root, &.{rel});
-    defer head.deinit(testing.allocator);
-    const changes = [_]git_commit.Change{.{ .rel = rel, .content = util_hand }};
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, root, head, &changes, "fix: swap");
-    defer testing.allocator.free(prepared);
-    try emetgate.disk.replaceReporting(testing.allocator, testing.io, file, util_hand, emetgate.symbol.hashOf(util_src), null, journal_dir, null);
-
-    _ = try emetgate.disk.recover(testing.allocator, testing.io, root);
-    const written = contains(try case.disk("src/util.ts"), hand_mark);
-    const committed = contains(try case.headBlob("src/util.ts"), hand_mark);
-    try testing.expectEqual(written, committed);
+    case.deinit();
+    for ([_]bool{ false, true }) |creates| {
+        var stop: usize = 1;
+        var crashes: usize = 0;
+        while (true) : (stop += 1) {
+            try case.initDefault();
+            errdefer std.debug.print("creates {}, cut after step {d}\n", .{ creates, stop });
+            const rel: []const u8 = if (creates) "src/fresh.ts" else "src/util.ts";
+            const mark: []const u8 = if (creates) "fresh" else model_mark;
+            const before = try case.git(&.{ "rev-parse", "HEAD" });
+            var at: CutAt = .{ .target = stop };
+            const step: emetgate.disk.Step = .{ .context = &at, .reached = CutAt.reached };
+            var request: emetgate.commit_plan.Request = .{ .message = "fix: swap" };
+            defer request.deinit(testing.allocator);
+            const outcome = emetgate.runner.tryMutate(testing.allocator, testing.io, case.runtime, .{
+                .file_abs = try case.repo.abs(case.arena(), rel),
+                .ref_text = if (creates) "fresh" else "add",
+                .expected_hash = if (creates) .absent else .{ .present = try support.hashOfRef(testing.allocator, testing.io, case.runtime, try case.repo.abs(case.arena(), rel), "add") },
+                .new_body = if (creates) "export function fresh(): number {\n  return 1;\n}\n" else new_body,
+                .test_command = green,
+                .commit = &request,
+                .commit_step = &step,
+            });
+            const crashed = if (outcome) |result| blk: {
+                result.deinit(testing.allocator);
+                break :blk false;
+            } else |err| switch (err) {
+                error.Crashed => true,
+                else => |e| return e,
+            };
+            if (crashed) {
+                crashes += 1;
+                const report = try emetgate.disk.recover(testing.allocator, testing.io, case.repo.root_abs);
+                try testing.expectEqual(@as(usize, 0), report.failed);
+                try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
+            }
+            const written = case.repo.exists(rel) and contains(try case.disk(rel), mark);
+            const head = try case.git(&.{ "rev-parse", "HEAD" });
+            const moved = !std.mem.eql(u8, head, before);
+            const committed = if (case.headBlob(rel)) |blob| contains(blob, mark) else |_| false;
+            try testing.expectEqual(written, committed);
+            try testing.expectEqual(moved, committed);
+            if (moved) try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD^" }));
+            try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
+            try testing.expect(!case.repo.exists(".git/index.lock"));
+            try testing.expect(!case.repo.exists(".emetgate/intents"));
+            case.deinit();
+            if (!crashed) break;
+        }
+        try testing.expect(crashes >= 6);
+    }
+    try case.initDefault();
 }
+
+const CutAt = struct {
+    target: usize,
+    seen: usize = 0,
+
+    fn reached(context: *anyopaque) bool {
+        const self: *CutAt = @ptrCast(@alignCast(context));
+        self.seen += 1;
+        return self.seen == self.target;
+    }
+};
 
 test "redteam commit: a stale index lock does not leave the index behind the new commit" {
     try skipOffWindows();
@@ -669,20 +757,38 @@ test "redteam commit: mutate writes nothing and every write tool without a messa
         .{ .tool = "emetgate_try", .fields = &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body } } },
         .{ .tool = "emetgate_try", .fields = &.{ .{ "file", "src/util.ts" }, .{ "node", "0" }, .{ "hash", "0" }, .{ "text", "x" } } },
         .{ .tool = "emetgate_rename", .fields = &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "new_name", "plus" } } },
-        .{ .tool = "emetgate_move", .fields = &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "to", "src/other.ts" } } },
-        .{ .tool = "emetgate_move_file", .fields = &.{ .{ "file", "src/util.ts" }, .{ "hash", file_hash }, .{ "to", "src/moved.ts" } } },
-        .{ .tool = "emetgate_write_doc", .fields = &.{ .{ "file", "src/util.ts" }, .{ "line_start", "1" }, .{ "line_end", "1" }, .{ "hash", "0" }, .{ "content", "x" } } },
-        .{ .tool = "emetgate_try_batch", .fields = &.{} },
+        .{ .tool = "emetgate_move", .fields = &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "target_file", try case.repo.abs(case.arena(), "src/other.ts") } } },
+        .{ .tool = "emetgate_move_file", .fields = &.{ .{ "from", try case.repo.abs(case.arena(), "src/util.ts") }, .{ "from_hash", file_hash }, .{ "to", try case.repo.abs(case.arena(), "src/moved.ts") } } },
+        .{ .tool = "emetgate_write_doc", .fields = &.{ .{ "file", ".gitignore" }, .{ "heading", "none" }, .{ "hash", file_hash }, .{ "content", "x" } } },
     };
     for (calls) |c| {
         errdefer std.debug.print("{s}\n", .{c.tool});
-        if (case.call(c.tool, c.fields, committing)) |reply| {
-            try testing.expect(reply.is_error);
-            try testing.expect(contains(reply.text, "MissingCommitMessage"));
-        } else |_| {}
+        const reply = try case.call(c.tool, c.fields, committing);
+        errdefer std.debug.print("{s}\n", .{reply.text});
+        try testing.expect(reply.is_error);
+        try testing.expect(contains(reply.text, "MissingCommitMessage"));
         try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
         try testing.expect(!case.repo.exists("src/moved.ts"));
         try testing.expect(!case.repo.exists("src/other.ts"));
+    }
+    {
+        var edit: std.json.ObjectMap = .empty;
+        try edit.put(case.arena(), "file", .{ .string = try case.repo.abs(case.arena(), "src/util.ts") });
+        try edit.put(case.arena(), "symbol", .{ .string = "add" });
+        try edit.put(case.arena(), "hash", .{ .string = hash });
+        try edit.put(case.arena(), "body", .{ .string = new_body });
+        var edits = std.json.Array.init(case.arena());
+        try edits.append(.{ .object = edit });
+        var map: std.json.ObjectMap = .empty;
+        try map.put(case.arena(), "edits", .{ .array = edits });
+        var event: telemetry.Event = .{ .tool = "emetgate_try_batch" };
+        var policy = committing;
+        policy.root = case.repo.root_abs;
+        const result = try handlers.callTool(testing.allocator, testing.io, case.runtime, "emetgate_try_batch", .{ .object = map }, &event, policy);
+        defer testing.allocator.free(result.text);
+        errdefer std.debug.print("{s}\n", .{result.text});
+        try testing.expect(result.is_error);
+        try testing.expect(contains(result.text, "MissingCommitMessage"));
     }
     try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
     try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
@@ -805,7 +911,30 @@ test "redteam commit: design limit: a lone carriage return is not a line end for
     try testing.expectEqual(@as(usize, 0), hits.len);
 }
 
-test "redteam commit: the committed tree passes the test command the gate ran" {
+test "redteam commit: the gate runs on the tree the commit will hold, so a test that needs a file staged by hand is rejected" {
+    try skipOffWindows();
+    var case: Case = undefined;
+    try case.initDefault();
+    defer case.deinit();
+    const needs_staged = "if exist src\\c.ts (exit 0) else (exit 1)";
+    const c_src = "export const c = 1;\n";
+    try case.repo.write("src/c.ts", c_src);
+    _ = try case.git(&.{ "add", "src/c.ts" });
+    const before = try case.git(&.{ "rev-parse", "HEAD" });
+    const index_before = try case.git(&.{ "ls-files", "-s" });
+
+    const reply = try case.swap("src/util.ts", new_body, "fix: swap", .{ .test_command = needs_staged, .commit = true });
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("rejected", reply.value.object.get("status").?.string);
+    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
+    try testing.expectEqualStrings(util_src, try case.disk("src/util.ts"));
+    try testing.expectEqualStrings(index_before, try case.git(&.{ "ls-files", "-s" }));
+    try testing.expectEqualStrings("A  src/c.ts", try case.git(&.{ "status", "--porcelain" }));
+    try testing.expectEqualStrings(c_src, try case.disk("src/c.ts"));
+}
+
+test "redteam commit: once the file the test needs is committed, the same call is accepted and verify passes the commit with the same command" {
     try skipOffWindows();
     var case: Case = undefined;
     try case.initDefault();
@@ -813,6 +942,7 @@ test "redteam commit: the committed tree passes the test command the gate ran" {
     const needs_staged = "if exist src\\c.ts (exit 0) else (exit 1)";
     try case.repo.write("src/c.ts", "export const c = 1;\n");
     _ = try case.git(&.{ "add", "src/c.ts" });
+    _ = try case.git(&.{ "commit", "-q", "-m", "feat: c" });
 
     const reply = try case.swap("src/util.ts", new_body, "fix: swap", .{ .test_command = needs_staged, .commit = true });
     errdefer std.debug.print("{s}\n", .{reply.text});

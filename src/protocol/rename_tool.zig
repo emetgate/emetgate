@@ -1,4 +1,5 @@
 const std = @import("std");
+const commit_plan = @import("../platform/commit_plan.zig");
 const symbol = @import("../engine/symbol.zig");
 const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
@@ -44,7 +45,7 @@ pub fn callRename(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn recordRename(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, sym: []const u8, hash: symbol.Hash, plan: rename_batch.Plan, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+fn recordRename(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, sym: []const u8, hash: symbol.Hash, plan: rename_batch.Plan, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, request: ?*commit_plan.Request) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -61,12 +62,12 @@ fn recordRename(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, s
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w, true);
+    }, w, true, request);
 }
 
 fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, new_name: []const u8, interface_change: bool, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try policy_mod.trustedTestCommand(args, policy);
-    var commit = try policy_mod.commitRequest(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy, runtime);
     defer if (commit) |request| request.deinit(gpa);
     const hash = try symbol.parseHash(hash_hex);
     const place = try repo.jail(gpa, io, policy.root, file);
@@ -112,7 +113,7 @@ fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, s
                 .symbols_checked = outcome.plan.symbols_checked,
                 .files = files,
             }, note);
-            try recordRename(gpa, io, place.root, place.rel, sym, hash, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w);
+            try recordRename(gpa, io, place.root, place.rel, sym, hash, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w, if (commit) |*made| made else null);
             try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },

@@ -16,6 +16,7 @@ const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 const create_mod = @import("create.zig");
 const commit_plan = @import("commit_plan.zig");
+const git_commit = @import("git_commit.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -52,6 +53,7 @@ pub const Options = struct {
     shadow_root: ?[]const u8 = null,
     trace: ?*Trace = null,
     commit: ?*GitCommit = null,
+    commit_step: ?*const disk.Step = null,
 };
 
 pub const GitCommit = commit_plan.Request;
@@ -95,14 +97,6 @@ pub const ShadowRun = union(enum) {
     rule_violation: rules.Report,
     rule_check_failed: rules.Failure,
 };
-
-pub fn runCommandRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
-    return runCommandRulesFor(gpa, io, root, shadow_abs, targets, null, limits, allow_repo_memory);
-}
-
-pub fn messageOf(commit: ?*const GitCommit) ?[]const u8 {
-    return if (commit) |plan| plan.message else null;
-}
 
 pub fn runCommandRulesFor(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, message: ?[]const u8, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
     const gated = try rules.commandGate(gpa, io, root, targets, .{ .shadow_abs = shadow_abs, .limits = limits, .allow_repo_memory = allow_repo_memory, .message = message });
@@ -192,7 +186,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer if (scoped_owned) |s| gpa.free(s);
     const command = scoped_owned orelse options.test_command;
 
-    const report = switch (try runInShadow(gpa, io, root, location, rel, applied.snapshot.source, options, command, &.{.{ .file = rel, .ref = ref }})) {
+    const report = switch (try runInShadow(gpa, io, root, location, rel, applied.snapshot.source, options, &session, command, &.{.{ .file = rel, .ref = ref }})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |report| return .{ .rule_violation = report },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -207,8 +201,9 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     const change = [_]commit_plan.Change{.{ .rel = rel, .content = applied.snapshot.source }};
     try session.prepare(gpa, io, root, &change);
     if (options.trace) |t| t.commit_attempted = true;
-    try disk.replaceReporting(gpa, io, options.file_abs, applied.snapshot.source, base_hash, null, journal_dir, null);
-    try session.publish(gpa, io, root, &change);
+    var pendings = [1]disk.Pending{try disk.prepare(gpa, io, options.file_abs, applied.snapshot.source, base_hash)};
+    const journal = disk.Batch.init(gpa, io, journal_dir);
+    try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);
     return .{ .committed = applied.hash };
 }
 
@@ -227,7 +222,7 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     defer location.deinit(gpa);
     if (options.trace) |t| t.* = .{ .gate = .full, .base_len = 0, .new_len = created.snapshot.source.len };
 
-    const report = switch (try runInShadow(gpa, io, root, location, rel, created.snapshot.source, options, options.test_command, &.{.{ .file = rel, .ref = ref }})) {
+    const report = switch (try runInShadow(gpa, io, root, location, rel, created.snapshot.source, options, session, options.test_command, &.{.{ .file = rel, .ref = ref }})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |report| return .{ .rule_violation = report },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -240,9 +235,15 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};
     try session.prepare(gpa, io, root, &change);
     if (options.trace) |t| t.commit_attempted = true;
+    if (session.committing()) {
+        const journal_dir = try shadow.journalDir(gpa, root);
+        defer gpa.free(journal_dir);
+        var pendings = [1]disk.Pending{try disk.stageCreate(gpa, io, options.file_abs, created.snapshot.source)};
+        const journal = disk.Batch.init(gpa, io, journal_dir);
+        try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);
+        return .{ .committed = created.hash };
+    }
     try disk.create(gpa, io, options.file_abs, created.snapshot.source);
-    try session.publish(gpa, io, root, &change);
-    if (options.commit != null) return .{ .committed = created.hash };
     try repo.addToIndex(gpa, io, root, rel);
     return .{ .committed = created.hash };
 }
@@ -255,20 +256,48 @@ fn fileExists(io: std.Io, path_abs: []const u8) !bool {
     return true;
 }
 
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, command: []const u8, targets: []const rules.Target) !ShadowRun {
-    const files = try shadow.trackedFiles(gpa, io, root);
-    defer gpa.free(files);
-    defer shadow.freeFileList(gpa, files);
-
-    var workspace = try prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
+fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *const commit_plan.Session, command: []const u8, targets: []const rules.Target) !ShadowRun {
+    var workspace = try openShadow(gpa, io, root, location, options.linked, options.trace, session);
     defer {
         workspace.close();
         shadow.remove(io, location.base, location.shadow) catch {};
     }
     try workspace.writeFile(rel, patched);
 
-    if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, messageOf(options.commit), options.limits, options.allow_repo_memory)) |gated| return gated;
+    if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     return runStages(gpa, io, location.shadow, options.typecheck_command, command, options.limits);
+}
+
+fn linkedPath(path: []const u8, linked: []const []const u8) bool {
+    for (linked) |dir| {
+        if (std.ascii.eqlIgnoreCase(path, dir)) return true;
+        if (path.len > dir.len and std.ascii.startsWithIgnoreCase(path, dir) and path[dir.len] == 47) return true;
+    }
+    return false;
+}
+
+pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, linked: []const []const u8, trace: ?*Trace, session: *const commit_plan.Session) !shadow.Shadow {
+    const head = session.head orelse {
+        const files = try shadow.trackedFiles(gpa, io, root);
+        defer gpa.free(files);
+        defer shadow.freeFileList(gpa, files);
+        return prepareShadow(gpa, io, root, location, files, linked, trace);
+    };
+    const tree = try git_commit.committedTree(gpa, io, root, head);
+    defer tree.deinit(gpa);
+    var restore: std.ArrayList([]const u8) = .empty;
+    defer restore.deinit(gpa);
+    for (tree.restore) |path| {
+        try shadow.validateRelative(path);
+        if (!linkedPath(path, linked)) try restore.append(gpa, path);
+    }
+    var workspace = try prepareShadow(gpa, io, root, location, tree.files, linked, trace);
+    errdefer {
+        workspace.close();
+        shadow.remove(io, location.base, location.shadow) catch {};
+    }
+    try git_commit.checkoutInto(gpa, io, root, head, restore.items, location.shadow);
+    return workspace;
 }
 
 pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, trace: ?*Trace) !shadow.Shadow {
