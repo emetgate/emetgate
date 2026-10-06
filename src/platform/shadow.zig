@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const link_tree = @import("link_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const exe_path = @import("exe_path.zig");
+const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -52,6 +53,7 @@ pub const Lock = struct {
         var ws_buf: [std.fs.max_path_bytes]u8 = undefined;
         const workspace = try std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ root_abs, workspace_dir });
         Dir.cwd().createDirPath(io, workspace) catch {};
+        if (isReparsePoint(workspace) catch true) return error.WorkspaceIsLink;
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         const lock_path = try std.fmt.bufPrint(&path_buf, "{s}\\.lock", .{workspace});
         var wide: [std.fs.max_path_bytes:0]u16 = undefined;
@@ -80,9 +82,9 @@ pub const Lock = struct {
         const workspace = std.fmt.bufPrint(&ws_buf, "{s}\\{s}", .{ self.root_abs, workspace_dir }) catch return;
         var journal_buf: [std.fs.max_path_bytes]u8 = undefined;
         if (std.fmt.bufPrint(&journal_buf, "{s}\\journal", .{workspace})) |journal| {
-            Dir.cwd().deleteDir(self.io, journal) catch {};
+            _ = own_dir.removeEmpty(journal);
         } else |_| {}
-        Dir.cwd().deleteDir(self.io, workspace) catch {};
+        _ = own_dir.removeEmpty(workspace);
     }
 };
 
@@ -206,14 +208,25 @@ pub const Shadow = struct {
 
 pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     try ensureInsideWorkspace(base_abs, shadow_abs);
+    const held = try holdWorkspace(io, shadow_abs);
+    errdefer if (held) |h| h.close();
     try ensureNoLinks(base_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
+    if (held) |h| h.close();
 
     const workspace = std.fs.path.dirname(shadow_abs) orelse return;
     var marker_buf: [std.fs.max_path_bytes]u8 = undefined;
     const marker = std.fmt.bufPrint(&marker_buf, "{s}\\{s}", .{ workspace, shadow_root.marker_name }) catch return;
     Dir.cwd().deleteFile(io, marker) catch {};
     Dir.cwd().deleteDir(io, workspace) catch {};
+}
+
+fn holdWorkspace(io: std.Io, shadow_abs: []const u8) !?own_dir.Held {
+    const workspace = std.fs.path.dirname(shadow_abs) orelse return error.ShadowOutsideWorkspace;
+    return own_dir.hold(io, workspace, .existing) catch |err| switch (err) {
+        error.Unsupported => null,
+        else => |e| return e,
+    };
 }
 
 fn writeRootMarker(io: std.Io, shadow_abs: []const u8, root_abs: []const u8) !void {

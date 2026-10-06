@@ -92,6 +92,7 @@ pub const receipt = @import("verify/receipt.zig");
 pub const checker = @import("verify/checker.zig");
 pub const runner = @import("platform/runner.zig");
 pub const run_command = @import("platform/run_command.zig");
+pub const own_dir = @import("platform/own_dir.zig");
 pub const batch_plan = @import("platform/batch_plan.zig");
 pub const doc_writer = @import("platform/doc_writer.zig");
 pub const rules = @import("platform/rules.zig");

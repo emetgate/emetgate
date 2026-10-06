@@ -94,6 +94,7 @@ pub const receipt = src.receipt;
 pub const checker = src.checker;
 pub const runner = src.runner;
 pub const run_command = src.run_command;
+pub const own_dir = src.own_dir;
 pub const batch_plan = src.batch_plan;
 pub const doc_writer = src.doc_writer;
 pub const rules = src.rules;
@@ -149,6 +150,7 @@ test {
     _ = @import("tests/appcontainer_compat.zig");
     _ = @import("tests/redteam_link_tree.zig");
     _ = @import("tests/redteam_git.zig");
+    _ = @import("tests/own_dir.zig");
     _ = @import("tests/run_tool.zig");
     _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
