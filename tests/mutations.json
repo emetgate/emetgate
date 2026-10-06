@@ -9157,6 +9157,246 @@
         "verify merge: a hand edit made while two real sides are merged is named, and the repository's object store stays byte for byte",
         "verify merge: a conflict resolved by hand is named, and the repository's object store stays byte for byte"
       ]
+    },
+    {
+      "id": "GT1-file-id-not-compared",
+      "file": "src/platform/gate_tree.zig",
+      "from": "if (!std.mem.eql(u8, &ctx.ids[want_index], &entry.id)) break :same false;",
+      "to": "",
+      "kills": [
+        "an edit made in place shows through the link and a replace-style save is relinked by the next call",
+        "a name the tree should not hold is removed: a file, a directory with content, a replaced link and a junction whose target stays",
+        "redteam gate tree: what the sandbox may do to names is seen and undone by the next call"
+      ]
+    },
+    {
+      "id": "GT2-planted-link-kept",
+      "file": "src/platform/gate_tree.zig",
+      "from": ".link_file, .link_directory => false,",
+      "to": ".link_file, .link_directory => true,",
+      "kills": [
+        "a name the tree should not hold is removed: a file, a directory with content, a replaced link and a junction whose target stays",
+        "redteam gate tree: a junction, a symlink and a hard link planted in the tree are removed without being followed"
+      ]
+    },
+    {
+      "id": "GT3-low-writable-file-linked",
+      "file": "src/platform/gate_tree.zig",
+      "from": "if (try lowWriteBlocked(source)) {",
+      "to": "if (true) {",
+      "kills": [
+        "a working file that a low-integrity process may write is given a private copy, never a link",
+        "redteam gate tree: a working file the sandbox could write is a private copy, so a write to it stays in the tree"
+      ]
+    },
+    {
+      "id": "GT4-link-limit-not-copied",
+      "file": "src/platform/gate_tree.zig",
+      "from": "nt.status_too_many_links => {},",
+      "to": "nt.status_too_many_links => return ctx.blocked(&.{want.rel}),",
+      "kills": [
+        "a working file that already has the most names a file can have is given a private copy"
+      ]
+    },
+    {
+      "id": "GT5-copy-want-linked",
+      "file": "src/platform/gate_tree.zig",
+      "from": "if (want.how == .link and ctx.kinds[want_index] == .file) {",
+      "to": "if (ctx.kinds[want_index] == .file) {",
+      "kills": [
+        "a want marked copy is a private file that is made again on every call",
+        "a path under a private prefix is a private copy in the kept tree and is counted",
+        "redteam gate tree: a test that writes a tracked file in place is refused in the kept tree and served by a private prefix"
+      ]
+    },
+    {
+      "id": "GT6-removal-follows-a-link",
+      "file": "src/platform/gate_tree.zig",
+      "from": "const options: u32 = nt.option_open_reparse_point | nt.option_sync | (if (directory)",
+      "to": "const options: u32 = nt.option_sync | (if (directory)",
+      "kills": [
+        "a name the tree should not hold is removed: a file, a directory with content, a replaced link and a junction whose target stays",
+        "redteam gate tree: a junction, a symlink and a hard link planted in the tree are removed without being followed"
+      ]
+    },
+    {
+      "id": "GT7-dot-segments-accepted",
+      "file": "src/platform/gate_tree.zig",
+      "from": "if (std.mem.eql(u8, segment, \".\") or std.mem.eql(u8, segment, \"..\")) return error.UnsafePath;",
+      "to": "",
+      "kills": [
+        "writing the edit refuses a path that leaves the tree or passes through a junction"
+      ]
+    },
+    {
+      "id": "GT8-edit-descends-through-a-junction",
+      "file": "src/platform/gate_tree.zig",
+      "from": "error.ScanIsLink => return error.UnsafePath,",
+      "to": "error.ScanIsLink => return error.GateTreeBlocked,",
+      "kills": [
+        "writing the edit refuses a path that leaves the tree or passes through a junction"
+      ]
+    },
+    {
+      "id": "GT9-absent-source-left-in-tree",
+      "file": "src/platform/gate_tree.zig",
+      "from": "if (ctx.options.wants[want_index].how != .link or ctx.kinds[want_index] != .file) break :same false;",
+      "to": "if (ctx.options.wants[want_index].how != .link) break :same false;",
+      "kills": [
+        "a wanted file that the working tree does not have is absent from the tree, and leaves it when it disappears",
+        "a failure at any step of reconcile leaves a tree that the next call makes right"
+      ]
+    },
+    {
+      "id": "GT10-skipped-link-not-counted",
+      "file": "src/platform/gate_tree.zig",
+      "from": ".link_file, .link_directory => self.skip(),",
+      "to": ".link_file, .link_directory => {},",
+      "kills": [
+        "discover lists every file under a directory with its id and skips junctions without following them"
+      ]
+    },
+    {
+      "id": "DS1-reparse-point-opened-as-directory",
+      "file": "src/platform/dir_scan.zig",
+      "from": "if (info.file_attributes & win.file_attribute_reparse_point != 0) return false;",
+      "to": "",
+      "kills": [
+        "a junction is never opened as a directory, at the root or below it",
+        "writing the edit refuses a path that leaves the tree or passes through a junction"
+      ]
+    },
+    {
+      "id": "DS2-dot-entries-reported",
+      "file": "src/platform/dir_scan.zig",
+      "from": "if (isDot(name)) continue;",
+      "to": "",
+      "kills": [
+        "a directory scan reports every name with its kind and file id, and two hard links share one id"
+      ]
+    },
+    {
+      "id": "DS3-link-kind-reported-as-plain",
+      "file": "src/platform/dir_scan.zig",
+      "from": "if (attributes & win.file_attribute_reparse_point != 0) return if (directory) .link_directory else .link_file;",
+      "to": "",
+      "kills": [
+        "a directory scan reports every name with its kind and file id, and two hard links share one id",
+        "a name the tree should not hold is removed: a file, a directory with content, a replaced link and a junction whose target stays"
+      ]
+    },
+    {
+      "id": "KT1-kept-tree-removed-after-the-call",
+      "file": "src/platform/shadow.zig",
+      "from": "if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};",
+      "to": "remove(io, base_abs, shadow_abs) catch {};",
+      "kills": [
+        "the kept tree holds the working files themselves, stays after the call and says what it is"
+      ]
+    },
+    {
+      "id": "KT2-full-copy-left-after-the-call",
+      "file": "src/platform/shadow.zig",
+      "from": "if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};",
+      "to": "",
+      "kills": [
+        "a full copy is used when asked for, says so, gives private files and is removed after the call"
+      ]
+    },
+    {
+      "id": "KT3-private-prefix-ignored",
+      "file": "src/platform/shadow.zig",
+      "from": ".how = if (isUnderAny(file, options.private)) .copy else .link",
+      "to": ".how = .link",
+      "kills": [
+        "a path under a private prefix is a private copy in the kept tree and is counted",
+        "redteam gate tree: a test that writes a tracked file in place is refused in the kept tree and served by a private prefix"
+      ]
+    },
+    {
+      "id": "KT4-label-propagated-onto-linked-files",
+      "file": "src/platform/shadow.zig",
+      "from": "try labelWithoutPropagation(options.shadow_abs);",
+      "to": "try grantLowIntegrityWrite(options.shadow_abs);",
+      "kills": [
+        "the kept tree holds the working files themselves, stays after the call and says what it is",
+        "redteam gate tree: every write the sandbox tries on a linked tracked file is denied and the working file stays as it was",
+        "redteam gate tree: what the sandbox may do to names is seen and undone by the next call"
+      ]
+    },
+    {
+      "id": "KT5-edit-written-through-the-link",
+      "file": "src/platform/shadow.zig",
+      "from": "if (self.use.mode == .kept) return gate_tree.writeFile(self.dir.handle, sub_path, data);",
+      "to": "",
+      "kills": [
+        "the kept tree holds the working files themselves, stays after the call and says what it is"
+      ]
+    },
+    {
+      "id": "KT6-missing-tracked-file-fails-full-copy",
+      "file": "src/platform/shadow.zig",
+      "from": "root.copyFile(file, dir, file, io, .{}) catch |err| switch (err) {\n                error.FileNotFound => continue,",
+      "to": "root.copyFile(file, dir, file, io, .{}) catch |err| switch (err) {\n                error.FileNotFound => return err,",
+      "kills": [
+        "a tracked file that is missing from the working tree is absent from the shadow, kept or copied"
+      ]
+    },
+    {
+      "id": "KT7-requested-full-copy-ignored",
+      "file": "src/platform/shadow.zig",
+      "from": "if (options.tree == .kept) {",
+      "to": "if (true) {",
+      "kills": [
+        "a full copy is used when asked for, says so, gives private files and is removed after the call",
+        "a tracked file that is missing from the working tree is absent from the shadow, kept or copied"
+      ]
+    },
+    {
+      "id": "KT8-private-copies-not-counted",
+      "file": "src/platform/shadow.zig",
+      "from": "if (outcome == .copied) use.private_copies += 1;",
+      "to": "",
+      "kills": [
+        "a path under a private prefix is a private copy in the kept tree and is counted",
+        "redteam gate tree: a working file the sandbox could write is a private copy, so a write to it stays in the tree"
+      ]
+    },
+    {
+      "id": "PL1-model-may-name-the-tree",
+      "file": "src/protocol/policy.zig",
+      "from": "\"shadow_root\", \"allow_run\", \"shadow_tree\", \"shadow_private\" };",
+      "to": "\"shadow_root\", \"allow_run\" };",
+      "kills": [
+        "a tool call that names the tree choice is refused like one that names a test command"
+      ]
+    },
+    {
+      "id": "PL2-private-prefix-not-validated",
+      "file": "src/protocol/policy.zig",
+      "from": "shadow.validateRelative(prefix) catch return null;",
+      "to": "",
+      "kills": [
+        "the tree choice comes from the operator's flags: kept by default, copy on request, private prefixes in order"
+      ]
+    },
+    {
+      "id": "PL3-copy-flag-read-as-kept",
+      "file": "src/protocol/policy.zig",
+      "from": "if (std.mem.eql(u8, text, \"copy\")) return .full_copy;",
+      "to": "if (std.mem.eql(u8, text, \"copy\")) return .kept;",
+      "kills": [
+        "the tree choice comes from the operator's flags: kept by default, copy on request, private prefixes in order"
+      ]
+    },
+    {
+      "id": "WT1-full-copy-reason-left-out",
+      "file": "src/protocol/wire.zig",
+      "from": "try js.write(@tagName(tree.reason));",
+      "to": "try js.write(\"none\");",
+      "kills": [
+        "a result says which tree the gate used: kept with its private copies, or a full copy with the reason"
+      ]
     }
   ]
 }
