@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1432**
-- Mutations declared in `tests/mutations.json`: **899**
-  - killed: **868**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1452**
+- Mutations declared in `tests/mutations.json`: **922**
+  - killed: **891**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -173,7 +173,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-79 mutation(s).
+86 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -254,8 +254,15 @@ python tools/verification_page.py --check
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
 | `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 | `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
-| `RC1-edit-written-but-not-published` | `src/platform/runner.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `plan.oid = prepared;     }     return .{ .committed = applied.h...` | commit on write: an accepted try is one commit with the given message and bytes... | killed |
-| `RC2-created-file-written-but-not-published` | `src/platform/runner.zig` | `try git_commit.publish(gpa, io, root, head.?, prepared.?, &chan...` -> `plan.oid = prepared;         return .{ .committed = created.has...` | commit on write: a new file is created and committed in the same call | killed |
+| `RC1-edit-written-but-not-published` | `src/platform/runner.zig` | `try session.publish(gpa, io, root, &change);     return .{ .com...` -> `return .{ .committed = applied.hash };` | commit on write: an accepted try is one commit with the given message and bytes... | killed |
+| `RC2-created-file-written-but-not-published` | `src/platform/runner.zig` | `try session.publish(gpa, io, root, &change);     if (options.co...` -> `if (options.commit != null) return .{ .committed = created.hash...` | commit on write: a new file is created and committed in the same call | killed |
+| `BC1-batch-written-but-not-published` | `src/platform/batch.zig` | `try session.publish(gpa, io, root, changes);` -> `` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ...; commi... | killed |
+| `BC2-moved-source-not-checked-for-hand-edits` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try rels.append(arena, from);` -> `` | commit batch: a file move refuses when the file to move was edited by hand | killed |
+| `BC3-doc-target-not-checked-for-hand-edits` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | commit batch: try_batch refuses a doc target edited by hand outside the rewritt... | killed |
+| `BC4-moved-source-stays-in-the-commit` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try changes.append(gpa, .{ .rel = fr...` -> `` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
+| `BC5-deleted-file-committed-as-empty` | `src/platform/batch.zig` | `if (p.action == .delete_file) null else p.source()` -> `if (false and p.action == .delete_file) null else p.source()` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
+| `BC6-doc-edit-left-out-of-the-commit` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| try changes.append(gpa, .{ .rel = p.re...` -> `` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
+| `BC7-index-sync-of-the-journal-runs-before-the-commit` | `src/platform/batch.zig` | `if (options.commit == null) batch.root = root;` -> `batch.root = root;` | commit batch: a locked index does not keep a written batch out of its commit | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -572,7 +579,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-423 mutation(s).
+439 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -999,6 +1006,22 @@ python tools/verification_page.py --check
 | `GC6-empty-commit-made` | `src/platform/git_commit.zig` | `if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCom...` -> `` | git commit: a change that leaves the tree as it is has nothing to commit | killed |
 | `GC7-failed-branch-update-reported-as-a-commit` | `src/platform/git_commit.zig` | `"HEAD", commit, head.oid }) == null) return error.WrittenButNot...` -> `"HEAD", commit, head.oid }) == null) return;` | git commit: when HEAD moved after the commit was prepared, publish refuses and ... | killed |
 | `GC8-no-identity-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) re...` -> `` | no test can take the identity away: git falls back to the user's global configuration and... | control |
+| `BC8-rename-drops-the-commit-request` | `src/platform/rename_batch.zig` | `.commit = options.commit,` -> `` | commit batch: a rename across three files is one commit of the three files | killed |
+| `BC9-move-drops-the-commit-request` | `src/platform/move_batch.zig` | `.commit = options.commit,` -> `` | commit batch: a move into a new file is one commit of the source, the new file ... | killed |
+| `BC10-file-move-drops-the-commit-request` | `src/platform/file_move.zig` | `.commit = options.commit,` -> `` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
+| `BC11-try-batch-handler-drops-the-commit-request` | `src/protocol/handlers.zig` | `.language_service = policy.language_service, .commit = if (comm...` -> `.language_service = policy.language_service, .commit = if (comm...` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
+| `BC12-node-try-handler-drops-the-commit-request` | `src/protocol/node_tool.zig` | `.commit = if (commit) \|*request\| request else null` -> `.commit = if (commit) \|*request\| (if (false) request else nul...` | commit batch: a node try is one commit of the edited file | killed |
+| `BC13-rename-handler-drops-the-commit-request` | `src/protocol/rename_tool.zig` | `.commit = if (commit) \|*request\| request else null` -> `.commit = if (commit) \|*request\| (if (false) request else nul...` | commit batch: a rename across three files is one commit of the three files | killed |
+| `BC14-move-handler-drops-the-commit-request` | `src/protocol/move_tool.zig` | `.commit = if (commit) \|*request\| request else null` -> `.commit = if (commit) \|*request\| (if (false) request else nul...` | commit batch: a move into a new file is one commit of the source, the new file ... | killed |
+| `BC15-file-move-handler-drops-the-commit-request` | `src/protocol/move_file_tool.zig` | `.commit = if (commit) \|*request\| request else null` -> `.commit = if (commit) \|*request\| (if (false) request else nul...` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
+| `BC16-message-offered-on-the-symbol-try-only` | `src/protocol/server.zig` | `const with_message = commit and commits(tool.name);` -> `const with_message = commit and std.mem.eql(u8, tool.name, "eme...` | tools/list offers the commit message on the tools that commit only when commits... | killed |
+| `BC17-message-not-offered-on-try-batch` | `src/protocol/server.zig` | `if (commit) try writeCommitProp(js);` -> `` | tools/list offers the commit message on the tools that commit only when commits... | killed |
+| `BC18-try-batch-receipt-not-attached` | `src/protocol/handlers.zig` | `try receipt_note.commit(gpa, io, places[0].root, commit, w);` -> `` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
+| `BC19-node-try-receipt-not-attached` | `src/protocol/node_tool.zig` | `try receipt_note.commit(gpa, io, place.root, commit, w);` -> `` | commit batch: a node try is one commit of the edited file | killed |
+| `BC20-rename-receipt-not-attached` | `src/protocol/rename_tool.zig` | `try receipt_note.commit(gpa, io, place.root, commit, w);` -> `` | commit batch: a rename across three files is one commit of the three files | killed |
+| `BC21-move-receipt-not-attached` | `src/protocol/move_tool.zig` | `try receipt_note.commit(gpa, io, place.root, commit, w);` -> `` | commit batch: a move into a new file is one commit of the source, the new file ... | killed |
+| `BC22-file-move-receipt-not-attached` | `src/protocol/move_file_tool.zig` | `try receipt_note.commit(gpa, io, place.root, commit, w);` -> `` | commit batch: a file move is one commit that removes the old path, adds the new... | killed |
+| `BC23-message-rules-skipped-by-the-shared-session` | `src/platform/commit_plan.zig` | `.violated => \|report\| return .{ .violated = report },` -> `.violated => \|report\| report.deinit(gpa),` | commit on write: a message that breaks a message rule is refused with the rule,...; commi... | killed |
 
 ## What this system does not prove
 

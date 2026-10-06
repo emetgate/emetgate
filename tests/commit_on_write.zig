@@ -205,5 +205,4 @@ test "commit on write: a write tool that cannot commit yet refuses while commits
     try case.init();
     defer case.deinit();
     try testing.expectError(error.CommitNotSupportedByTool, case.call("emetgate_write_doc", &.{ .{ "file", "notes.md" }, .{ "heading", "Notes" }, .{ "hash", "0" }, .{ "text", "# Notes\n" } }, committing));
-    try testing.expectError(error.CommitNotSupportedByTool, case.call("emetgate_try_batch", &.{}, committing));
 }

@@ -5,6 +5,7 @@ const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
 const commit_message = @import("../platform/commit_message.zig");
+const commit_plan = @import("../platform/commit_plan.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const read_budget_mod = @import("read_budget.zig");
 const map_tools = @import("map_tools.zig");
@@ -138,6 +139,11 @@ pub fn commitMessage(args: ?Value, policy: Policy) CommitError!?[]const u8 {
     if (value != .string) return error.MissingCommitMessage;
     try commit_message.check(value.string);
     return value.string;
+}
+
+pub fn commitRequest(args: ?Value, policy: Policy) CommitError!?commit_plan.Request {
+    const message = (try commitMessage(args, policy)) orelse return null;
+    return .{ .message = message };
 }
 
 pub fn refuseWithoutCommit(policy: Policy) error{CommitNotSupportedByTool}!void {
