@@ -434,7 +434,7 @@ python tools/verification_page.py --check
 | `MR7-skeleton-lists-message-rules` | `src/platform/rules.zig` | `if (isMessageCheck(decision.check)) continue;` -> `` | rule: a message rule covers no file, so the skeleton does not list it | killed |
 | `MR8-message-violations-dropped` | `src/platform/rules.zig` | `if (list.items.len != 0) return .{ .violated` -> `if (list.items.len == 99999) return .{ .violated` | a commit message is judged only by the message rules, and each violation carrie...; commi... | killed |
 | `CP4-commit-flag-ignored` | `src/protocol/policy.zig` | `policy.commit = true;` -> `` | commit policy: --commit turns commits on, and giving it twice is refused | killed |
-| `CP5-uncommitting-tool-runs-with-commits-on` | `src/protocol/policy.zig` | `if (policy.commit) return error.CommitNotSupportedByTool;` -> `` | commit policy: --commit turns commits on, and giving it twice is refused; commit on write... | killed |
+| `CP5-uncommitting-tool-runs-with-commits-on` | `src/protocol/policy.zig` | `if (policy.commit) return error.CommitNotSupportedByTool;` -> `if (false and policy.commit) return error.CommitNotSupportedByT...` | commit policy: --commit turns commits on, and giving it twice is refused; commit on write... | killed |
 
 ### Scan
 
@@ -997,7 +997,7 @@ python tools/verification_page.py --check
 | `GC4-signing-repository-accepted` | `src/platform/git_commit.zig` | `std.mem.eql(u8, value, "true")` -> `std.mem.eql(u8, value, "never")` | git commit: a repository that signs its commits is refused | killed |
 | `GC5-hand-edited-target-accepted` | `src/platform/git_commit.zig` | `if ((try git.need(status.items)).len != 0) return error.TargetH...` -> `` | git commit: a target edited by hand is refused, and an edit to another file is ...; commi... | killed |
 | `GC6-empty-commit-made` | `src/platform/git_commit.zig` | `if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCom...` -> `` | git commit: a change that leaves the tree as it is has nothing to commit | killed |
-| `GC7-head-moved-under-publish` | `src/platform/git_commit.zig` | `"HEAD", commit, head.oid }` -> `"HEAD", commit }` | git commit: when HEAD moved after the commit was prepared, publish refuses and ... | killed |
+| `GC7-failed-branch-update-reported-as-a-commit` | `src/platform/git_commit.zig` | `"HEAD", commit, head.oid }) == null) return error.WrittenButNot...` -> `"HEAD", commit, head.oid }) == null) return;` | git commit: when HEAD moved after the commit was prepared, publish refuses and ... | killed |
 | `GC8-no-identity-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) re...` -> `` | no test can take the identity away: git falls back to the user's global configuration and... | control |
 
 ## What this system does not prove

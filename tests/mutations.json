@@ -8807,14 +8807,14 @@
       "note": "a call that changes nothing would still add a commit"
     },
     {
-      "id": "GC7-head-moved-under-publish",
+      "id": "GC7-failed-branch-update-reported-as-a-commit",
       "file": "src/platform/git_commit.zig",
-      "from": "\"HEAD\", commit, head.oid }",
-      "to": "\"HEAD\", commit }",
+      "from": "\"HEAD\", commit, head.oid }) == null) return error.WrittenButNotCommitted;",
+      "to": "\"HEAD\", commit, head.oid }) == null) return;",
       "kills": [
         "git commit: when HEAD moved after the commit was prepared, publish refuses and the branch keeps the newer commit"
       ],
-      "note": "a commit someone made while the tests ran would be dropped from the branch"
+      "note": "when the branch moved while the tests ran, the write would be reported as committed although the branch never got the commit"
     },
     {
       "id": "GC8-no-identity-accepted",
@@ -8871,8 +8871,8 @@
     {
       "id": "CP5-uncommitting-tool-runs-with-commits-on",
       "file": "src/protocol/policy.zig",
-      "from": "    if (policy.commit) return error.CommitNotSupportedByTool;\n",
-      "to": "",
+      "from": "    if (policy.commit) return error.CommitNotSupportedByTool;",
+      "to": "    if (false and policy.commit) return error.CommitNotSupportedByTool;",
       "kills": [
         "commit policy: --commit turns commits on, and giving it twice is refused",
         "commit on write: a write tool that cannot commit yet refuses while commits are on"
