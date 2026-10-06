@@ -29,8 +29,8 @@ const usage =
     \\       emetgate symbols <file.ts> [--json]
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
-    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--shadow-root <dir>] [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory]
+    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
+    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++
@@ -133,12 +133,15 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         const parsed = extractFlags(init, args[2..]);
         const request = TryRequest.parse(parsed.rest) orelse exitWithUsage();
         const trust: Trust = .{ .repo_config = parsed.allow_repo_config, .repo_memory = parsed.allow_repo_memory };
+        const private: []const []const u8 = if (request.shadow_private) |*prefix| prefix[0..1] else &.{};
+        shadow.operator_choice = .{ .tree = request.shadow_tree, .private = private };
         if (parsed.json) return tryRunJson(init, runtime, request, out, trust);
         return tryRun(init, runtime, request, out, trust);
     }
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
         if (server.refusedRunEntry(args[2..])) |refused| exitWithRunRefusal(refused);
         const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
+        shadow.operator_choice = policy.treeChoice();
         try server.serve(runtime.gpa, init.io, runtime, out, policy);
         return 0;
     }
@@ -237,7 +240,7 @@ const exitCodeFor = wire.exitCode;
 
 const rejected_exit_code: u8 = 10;
 
-const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test", "--typecheck", "--shadow-root" };
+const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test", "--typecheck", "--shadow-root", "--shadow-tree", "--shadow-private" };
 
 const TryRequest = struct {
     path: []const u8,
@@ -247,6 +250,8 @@ const TryRequest = struct {
     test_command: []const u8,
     typecheck_command: []const u8,
     shadow_root: ?[]const u8,
+    shadow_tree: shadow.TreeMode,
+    shadow_private: ?[]const u8,
 
     fn parse(args: []const [:0]const u8) ?TryRequest {
         if (args.len == 0 or args.len % 2 == 0) return null;
@@ -259,6 +264,8 @@ const TryRequest = struct {
             values[slot] = args[i + 1];
         }
 
+        const tree: shadow.TreeMode = if (values[7]) |text| server.parseTree(text) orelse return null else shadow.default_tree;
+        if (values[8]) |prefix| shadow.validateRelative(prefix) catch return null;
         const inline_body = values[2];
         const body_file = values[3];
         if ((inline_body == null) == (body_file == null)) return null;
@@ -270,6 +277,8 @@ const TryRequest = struct {
             .test_command = values[4] orelse "",
             .typecheck_command = values[5] orelse "",
             .shadow_root = values[6],
+            .shadow_tree = tree,
+            .shadow_private = values[8],
         };
     }
 };

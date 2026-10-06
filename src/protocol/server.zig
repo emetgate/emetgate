@@ -23,6 +23,7 @@ const getString = tool_result.getString;
 
 pub const Policy = policy_mod.Policy;
 pub const parsePolicy = policy_mod.parsePolicy;
+pub const parseTree = policy_mod.parseTree;
 pub const refusedRunEntry = policy_mod.refusedRunEntry;
 pub const RunRefusal = policy_mod.RunRefusal;
 
