@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1424**
-- Mutations declared in `tests/mutations.json`: **899**
-  - killed: **869**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1461**
+- Mutations declared in `tests/mutations.json`: **928**
+  - killed: **898**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **4**
@@ -172,7 +172,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-81 mutation(s).
+84 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -257,10 +257,13 @@ python tools/verification_page.py --check
 | `LM7-lockdown-launches-without-the-marks` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (false and marks.wanted) try lockdo...` | lockdown marks: the launched claude gets the plugin directory right after the l... | killed |
 | `LM8-lockdown-loads-the-marks-when-told-not-to` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (true or marks.wanted) try lockdown...` | lockdown marks: with --no-marks claude gets no plugin directory, no plugin file... | killed |
 | `LM9-lockdown-passes-the-off-flag-to-claude` | `src/platform/lockdown.zig` | `const passthrough = marks.rest;` -> `const passthrough = args;` | lockdown marks: with --no-marks claude gets no plugin directory, no plugin file... | killed |
+| `OD4-lock-taken-through-a-linked-workspace` | `src/platform/shadow.zig` | `if (isReparsePoint(workspace) catch true) return error.Workspac...` -> `` | own dir: the workspace lock refuses a workspace that is a junction and leaves t... | killed |
+| `OD5-lock-release-removes-what-it-did-not-verify` | `src/platform/shadow.zig` | `_ = own_dir.removeEmpty(journal);` -> `Dir.cwd().deleteDir(self.io, journal) catch {};` | own dir: releasing the workspace lock leaves a junction that stands where the j... | killed |
+| `OD11-shadow-workspace-not-held` | `src/platform/shadow.zig` | `const held = try holdWorkspace(io, shadow_abs);` -> `const held: ?own_dir.Held = null;` | own dir: a shadow workspace that another handle holds alone is not cleaned | killed |
 
 ### Disk, repository boundary and atomic commit
 
-55 mutation(s).
+58 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -319,6 +322,9 @@ python tools/verification_page.py --check
 | `JR2-only-the-file-directory-is-checked-for-a-nested-repository` | `src/platform/repo.zig` | `dir = std.fs.path.dirname(dir) orelse return error.FileOutsideR...` -> `dir = root;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 | `JR3-nested-bare-repository-not-recognized` | `src/platform/repo.zig` | `return try entryExists(gpa, io, dir, "objects") and try entryEx...` -> `return false;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 | `EP2-ignore-check-runs-bare-git` | `src/platform/repo.zig` | `.argv = &.{ git, "check-ignore", "-q", "--no-index", "--", rel ...` -> `.argv = &.{ "git", "check-ignore", "-q", "--no-index", "--", re...` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `OD6-batch-journal-written-without-holding-its-directory` | `src/platform/disk.zig` | `const held: ?own_dir.Held = if (batch) \|b\| own_dir.hold(b.io,...` -> `const held: ?own_dir.Held = null;     if (batch) \|b\| std.Io.D...` | own dir: a gated write is refused by name when .emetgate/journal is a junction,... | killed |
+| `OD8-any-json-is-applied-as-a-journal` | `src/platform/disk.zig` | `if (own_dir.tagOf(entry.name, &.{".json"}) == null) {          ...` -> `` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
+| `OD9-commit-records-removed-by-ending` | `src/platform/commit_record.zig` | `if (own_dir.tagOf(entry.name, &.{ record_suffix, staged_suffix,...` -> `if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.m...` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
 
 ### Rules and the q: query engine
 
@@ -566,7 +572,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-429 mutation(s).
+452 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -710,7 +716,7 @@ python tools/verification_page.py --check
 | `RUN4-output-cap-removed` | `src/protocol/run_tool.zig` | `const cut = run_command.tail(bytes, max_output_lines, max_outpu...` -> `const cut = run_command.tail(bytes, std.math.maxInt(usize), std...` | redteam run: a flood of output comes back cut to the last lines with a count of... | killed |
 | `RUN5-model-policy-accepted` | `src/protocol/run_tool.zig` | `try policy_mod.refuseModelPolicy(args);` -> `if (args == null) try policy_mod.refuseModelPolicy(args);` | redteam run: a call that names any policy field is refused before anything runs | killed |
 | `RUN6-out-of-scope-accepted` | `src/platform/run_command.zig` | `if (isOutOfScope(command)) return error.RunCommandOutOfScope;` -> `` | installing dependencies and git commit or push are out of scope for the allowli...; run p... | killed |
-| `VR1-before-digest-not-chained` | `src/verify/checker.zig` | `if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch,...` -> `` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
+| `VR1-before-digest-not-chained` | `src/verify/checker.zig` | `} else if (!eqlOptional(st.digest, f.before)) outcome.raise(.mi...` -> `}` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR2-non-canonical-note-accepted` | `src/verify/checker.zig` | `if (parsed.value != .array or canonical == null or !std.mem.eql...` -> `if (parsed.value != .array or canonical == null) {` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
 | `VR3-tests-not-rerun` | `src/platform/verify_run.zig` | `slot.* = self.rerun(trusted) catch null;` -> `slot.* = if (trusted.len != 0) true else null;` | verify: a spending receipt whose tests are red at the commit is a mismatch | killed |
 | `VR4-unreceipted-change-green` | `src/verify/checker.zig` | `if (last.get(path) == null) try c.files.raise(path, .unverified...` -> `if (last.get(path) == null and false) try c.files.raise(path, ....` | verify: a change without a receipt is unverified and never green | killed |
@@ -999,6 +1005,29 @@ python tools/verification_page.py --check
 | `LM4-marks-install-drops-a-file` | `src/platform/lockdown_marks.zig` | `for (files) \|file\| {` -> `for (files[1..]) \|file\| {` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
 | `LM5-marks-installed-into-the-state-directory` | `src/platform/lockdown_marks.zig` | `const dir = try std.fs.path.join(gpa, &.{ state_dir, plugin_dir...` -> `const dir = try gpa.dupe(u8, state_dir);` | lockdown marks: install writes every file byte for byte under the marks directo...; lockd... | killed |
 | `LM6-marks-flag-after-the-users-arguments` | `src/platform/lockdown_marks.zig` | `const at = argv.len - passthrough_len;` -> `const at = argv.len - @min(passthrough_len, 0);` | lockdown marks: the plugin flag comes after the lock and the user's arguments s...; lockd... | killed |
+| `OD1-own-directory-link-not-refused` | `src/platform/own_dir.zig` | `if (!try plainDirectory(handle)) return error.WorkspaceIsLink;` -> `if (false and !try plainDirectory(handle)) return error.Workspa...` | own dir: a directory that is a junction is refused by name, and so is one under...; own d... | killed |
+| `OD2-held-directory-shares-delete` | `src/platform/own_dir.zig` | `win.file_share_read \| win.file_share_write,` -> `win.file_share_read \| win.file_share_write \| win.file_share_d...` | own dir: a held directory cannot be renamed away or replaced until it is releas... | killed |
+| `OD3-removal-takes-a-junction` | `src/platform/own_dir.zig` | `if (!(plainDirectory(handle) catch false)) return false;` -> `` | own dir: only an empty plain directory is removed, never a junction and never a...; own d... | killed |
+| `HK1-hook-keeps-the-blanks-before-the-command` | `src/protocol/prompt_hook.zig` | `const typed = withoutLead(prompt);` -> `const typed = if (false) withoutLead(prompt) else prompt;` | prompt hook: blanks, line breaks and one byte order mark before /rule are dropp...; promp... | killed |
+| `HK2-hook-keeps-a-byte-order-mark` | `src/protocol/prompt_hook.zig` | `if (std.mem.startsWith(u8, rest, byte_order_mark)) rest = rest[...` -> `if (false and std.mem.startsWith(u8, rest, byte_order_mark)) re...` | prompt hook: blanks, line breaks and one byte order mark before /rule are dropp... | killed |
+| `HK3-hook-drops-every-byte-order-mark` | `src/protocol/prompt_hook.zig` | `if (std.mem.startsWith(u8, rest, byte_order_mark)) rest = rest[...` -> `while (std.mem.startsWith(u8, rest, byte_order_mark)) rest = re...` | prompt hook: a line that only resembles /rule is handed on, whatever stands bef... | killed |
+| `HK4-hook-keeps-blanks-after-a-byte-order-mark` | `src/protocol/prompt_hook.zig` | `return std.mem.trimStart(u8, rest, whitespace);` -> `return rest;` | prompt hook: blanks, line breaks and one byte order mark before /rule are dropp... | killed |
+| `HK5-hook-counts-a-vertical-tab-as-a-blank` | `src/protocol/prompt_hook.zig` | `const whitespace = " \t\r\n";` -> `const whitespace = " \t\r\n\x0b";` | prompt hook: a line that only resembles /rule is handed on, whatever stands bef... | killed |
+| `VF1-verify-reads-the-stored-form-of-a-filtered-file` | `src/platform/verify_run.zig` | `if (!try receipts.filtered(self.arena, self.io, self.root, r, p...` -> `if (true or !try receipts.filtered(self.arena, self.io, self.ro...` | verify filtered: a commit whose stored form is not source is verified over what...; verif... | killed |
+| `VF2-filtered-file-that-is-not-reproduced-is-called-a-mismatch` | `src/verify/checker.zig` | `if (st.driven and (!st.known or !eqlOptional(st.digest, f.befor...` -> `if (false and st.driven and (!st.known or !eqlOptional(st.diges...` | verify filtered: without the filter that checks the file out the verdict is unv...; verif... | killed |
+| `VF3-missing-filter-output-after-the-change-is-not-named` | `src/verify/checker.zig` | `if (!form.available) {` -> `if (false and !form.available) {` | verify filtered: a filter that fails gives unverified by name for the receipt a... | killed |
+| `VF4-absent-claim-trusted-when-the-file-cannot-be-checked-out` | `src/verify/checker.zig` | `if (st.driven and (!st.known or !eqlOptional(st.digest, f.befor...` -> `if (st.driven and (!eqlOptional(st.digest, f.before))) {` | verify filtered: a receipt that calls a filtered file absent is not taken on tr... | killed |
+| `VF5-symbols-hashed-over-a-form-the-receipt-did-not-measure` | `src/verify/checker.zig` | `entry.before_known = false;` -> `` | verify filtered: a working file its filter does not give back before the change... | killed |
+| `VF6-python-reads-the-stored-form-of-a-filtered-file` | `tools/verify_py/emetgate_verify.py` | `if stored is None or not self.filtered(rev, path):` -> `if True or stored is None or not self.filtered(rev, path):` | verify filtered: a commit whose stored form is not source is verified over what... | killed |
+| `VM1-merge-commit-checked-as-an-ordinary-commit` | `src/platform/verify_run.zig` | `if (parents.len > 1) return` -> `if (false and parents.len > 1) return` | verify merge: a merge commit that carries a hand edit is unverified and names t...; verif... | killed |
+| `VM2-more-than-two-parents-merged-as-two` | `src/platform/verify_merge.zig` | `if (of.len != 2) return told(.unverified, many_parents);` -> `if (false and of.len != 2) return told(.unverified, many_parent...` | verify merge: a commit with three parents is unverified because what it adds ca... | killed |
+| `VM3-merge-tree-not-compared-with-the-commit` | `src/platform/verify_merge.zig` | `if (std.mem.eql(u8, tree, want)) return .same;` -> `if (true or std.mem.eql(u8, tree, want)) return .same;` | verify merge: a merge commit that carries a hand edit is unverified and names t...; verif... | killed |
+| `VM4-merge-tree-written-into-the-repository` | `src/platform/verify_merge.zig` | `try env.put(object_directory, scratch.dir_abs);` -> `if (false) try env.put(object_directory, scratch.dir_abs);` | verify merge: a hand edit made while two real sides are merged is named, and th...; verif... | killed |
+| `VM5-conflicting-merge-not-compared` | `src/platform/verify_merge.zig` | `if (merged.code != 0 and merged.code != 1) return null;` -> `if (merged.code != 0) return null;` | verify merge: a conflict resolved by hand is named, and the repository's object... | killed |
+| `VM6-work-directory-emptied-of-any-file` | `src/platform/verify_merge.zig` | `if (entry.kind != .file or !objectName(entry.name)) continue;` -> `if (entry.kind != .file) continue;` | verify merge: the work directory is emptied of git's object files only | killed |
+| `VM7-work-directory-emptied-under-any-two-letter-name` | `src/platform/verify_merge.zig` | `if (entry.kind != .directory or entry.name.len != 2 or !lowerHe...` -> `if (entry.kind != .directory or entry.name.len != 2) continue;` | verify merge: the work directory is emptied of git's object files only | killed |
+| `VM8-python-checks-a-merge-as-an-ordinary-commit` | `tools/verify_py/emetgate_verify.py` | `if len(parents) > 1:` -> `if False and len(parents) > 1:` | verify merge: a merge commit that carries a hand edit is unverified and names t...; verif... | killed |
+| `VM9-python-writes-the-merge-tree-into-the-repository` | `tools/verify_py/emetgate_verify.py` | `env["GIT_OBJECT_DIRECTORY"] = scratch` -> `` | verify merge: a hand edit made while two real sides are merged is named, and th...; verif... | killed |
 
 ## What this system does not prove
 
