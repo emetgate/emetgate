@@ -53,22 +53,10 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_try_batch")) {
-        try policy_mod.refuseWithoutCommit(policy);
-        return callTryBatch(gpa, io, runtime, args, event, policy);
-    }
-    if (std.mem.eql(u8, name, "emetgate_rename")) {
-        try policy_mod.refuseWithoutCommit(policy);
-        return rename_tool.callRename(gpa, io, runtime, args, event, policy);
-    }
-    if (std.mem.eql(u8, name, "emetgate_move")) {
-        try policy_mod.refuseWithoutCommit(policy);
-        return move_tool.callMove(gpa, io, runtime, args, event, policy);
-    }
-    if (std.mem.eql(u8, name, "emetgate_move_file")) {
-        try policy_mod.refuseWithoutCommit(policy);
-        return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
-    }
+    if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_rename")) return rename_tool.callRename(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_move_file")) return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror);
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
@@ -467,10 +455,7 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
 }
 
 fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
-    if (args) |a| if (node_tool.isNodeForm(a)) {
-        try policy_mod.refuseWithoutCommit(policy);
-        return node_tool.callTry(gpa, io, runtime, args, event, policy);
-    };
+    if (args) |a| if (node_tool.isNodeForm(a)) return node_tool.callTry(gpa, io, runtime, args, event, policy);
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
@@ -496,8 +481,8 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    var plan: runner.GitCommit = .{ .message = (try policy_mod.commitMessage(args, policy)) orelse "" };
-    defer plan.deinit(gpa);
+    var commit = try policy_mod.commitRequest(args, policy);
+    defer if (commit) |request| request.deinit(gpa);
     const expected = try symbol.parseExpected(hash_hex);
     const place = try repo.jailTarget(gpa, io, policy.root, file, expected == .absent);
     defer place.deinit(gpa);
@@ -517,7 +502,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .allow_repo_memory = policy.allow_repo_memory,
         .shadow_root = policy.shadow_root,
         .trace = &event.trace,
-        .commit = if (policy.commit) &plan else null,
+        .commit = if (commit) |*request| request else null,
     });
     defer result.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
@@ -545,7 +530,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
                 .test_ms = event.trace.test_ms,
                 .version = receipt_note.version,
             }, w, full);
-            if (plan.oid) |oid| try receipt_note.commit(gpa, io, place.root, oid, w);
+            try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
         .rejected => |report| {
@@ -611,8 +596,8 @@ fn callWriteDoc(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
 
 fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const u8, new_text: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
-    var plan: runner.GitCommit = .{ .message = (try policy_mod.commitMessage(args, policy)) orelse "" };
-    defer plan.deinit(gpa);
+    var commit = try policy_mod.commitRequest(args, policy);
+    defer if (commit) |request| request.deinit(gpa);
     const arguments = args orelse return error.MissingArgument;
     const picked = try docSelector(arguments);
     const expected_hash = try symbol.parseHash(hash_hex);
@@ -631,7 +616,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
         .shadow_root = policy.shadow_root,
-        .commit = if (policy.commit) &plan else null,
+        .commit = if (commit) |*request| request else null,
     }, null);
     defer result.deinit(gpa);
     const expected: symbol.Expected = .{ .present = expected_hash };
@@ -642,7 +627,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
             event.edits = 1;
             event.hash = new_hash;
             try wire.writeCommitted(w, picked.label, expected, new_hash, null, full);
-            if (plan.oid) |oid| try receipt_note.commit(gpa, io, place.root, oid, w);
+            try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
         .rejected => |report| {
@@ -777,6 +762,8 @@ fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: [
 
 fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy);
+    defer if (commit) |request| request.deinit(gpa);
 
     var code_count: usize = 0;
     var doc_count: usize = 0;
@@ -854,7 +841,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
     defer gpa.free(before_hashes);
     for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service };
+    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null };
     var planned = try batch_mod.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
     const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits, options);
@@ -913,6 +900,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 code_committed[order[i]] = committed[order[i]];
             }
             try recordBatch(gpa, io, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full);
+            try receipt_note.commit(gpa, io, places[0].root, commit, w);
             return false;
         },
         .rejected => |report| {

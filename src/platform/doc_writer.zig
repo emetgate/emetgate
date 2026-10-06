@@ -9,7 +9,7 @@ const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
 const rules = @import("rules.zig");
-const git_commit = @import("git_commit.zig");
+const commit_plan = @import("commit_plan.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -30,7 +30,7 @@ pub const Options = struct {
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
     commit_step: ?*const disk.Step = null,
-    commit: ?*runner.GitCommit = null,
+    commit: ?*commit_plan.Request = null,
 };
 
 pub const Trace = struct {
@@ -68,16 +68,12 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     defer lock.release();
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
-    var head: ?git_commit.Head = null;
-    defer if (head) |h| h.deinit(gpa);
-    if (options.commit) |plan| {
-        switch (try rules.messageGate(gpa, io, root, plan.message)) {
-            .ok => {},
-            .violated => |report| return .{ .rule_violation = report },
-            .failed => |failure| return .{ .rule_check_failed = failure },
-        }
-        head = try git_commit.preflight(gpa, io, root, &.{rel});
-    }
+    var session = switch (try commit_plan.Session.open(gpa, io, root, options.commit, &.{rel})) {
+        .ok => |opened| opened,
+        .violated => |report| return .{ .rule_violation = report },
+        .failed => |failure| return .{ .rule_check_failed = failure },
+    };
+    defer session.deinit(gpa);
 
     const source = std.Io.Dir.cwd().readFileAlloc(io, options.file_abs, gpa, .limited(docnode.max_bytes + 1)) catch |err| switch (err) {
         error.StreamTooLong => return error.DocTooLarge,
@@ -125,14 +121,10 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
             defer report.deinit(gpa);
             const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
             defer gpa.free(journal_dir);
-            const change = [_]git_commit.Change{.{ .rel = rel, .content = applied.source }};
-            const prepared: ?[]u8 = if (options.commit) |plan| try git_commit.prepare(gpa, io, root, head.?, &change, plan.message) else null;
-            errdefer if (prepared) |oid| gpa.free(oid);
+            const change = [_]commit_plan.Change{.{ .rel = rel, .content = applied.source }};
+            try session.prepare(gpa, io, root, &change);
             try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir, options.commit_step);
-            if (options.commit) |plan| {
-                try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);
-                plan.oid = prepared;
-            }
+            try session.publish(gpa, io, root, &change);
             return .{ .committed = applied.hash };
         },
     }

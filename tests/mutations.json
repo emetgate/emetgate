@@ -2049,8 +2049,8 @@
     {
       "id": "NF10-create-failed-tests-committed",
       "file": "src/platform/runner.zig",
-      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]git_commit.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    const prepared: ?[]u8 = if (options.commit) |plan| try git_commit.prepare(gpa, io, root, head.?, &change, plan.message) else null;\n    errdefer if (prepared) |oid| gpa.free(oid);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
-      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]git_commit.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    const prepared: ?[]u8 = if (options.commit) |plan| try git_commit.prepare(gpa, io, root, head.?, &change, plan.message) else null;\n    errdefer if (prepared) |oid| gpa.free(oid);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    try session.prepare(gpa, io, root, &change);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
+      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};\n    try session.prepare(gpa, io, root, &change);\n    if (options.trace) |t| t.commit_attempted = true;\n    try disk.create",
       "kills": [
         "new file: a creation whose tests fail leaves no file on disk and nothing in the index"
       ]
@@ -8830,8 +8830,8 @@
     {
       "id": "RC1-edit-written-but-not-published",
       "file": "src/platform/runner.zig",
-      "from": "        try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);\n        plan.oid = prepared;\n    }\n    return .{ .committed = applied.hash };",
-      "to": "        plan.oid = prepared;\n    }\n    return .{ .committed = applied.hash };",
+      "from": "    try session.publish(gpa, io, root, &change);\n    return .{ .committed = applied.hash };",
+      "to": "    return .{ .committed = applied.hash };",
       "kills": [
         "commit on write: an accepted try is one commit with the given message and bytes, and its receipt rides on it"
       ],
@@ -8840,8 +8840,8 @@
     {
       "id": "RC2-created-file-written-but-not-published",
       "file": "src/platform/runner.zig",
-      "from": "        try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);\n        plan.oid = prepared;\n        return .{ .committed = created.hash };",
-      "to": "        plan.oid = prepared;\n        return .{ .committed = created.hash };",
+      "from": "    try session.publish(gpa, io, root, &change);\n    if (options.commit != null) return .{ .committed = created.hash };",
+      "to": "    if (options.commit != null) return .{ .committed = created.hash };",
       "kills": [
         "commit on write: a new file is created and committed in the same call"
       ],
@@ -8869,27 +8869,6 @@
       "note": "the operator would turn commits on and no write would be committed"
     },
     {
-      "id": "CP5-uncommitting-tool-runs-with-commits-on",
-      "file": "src/protocol/policy.zig",
-      "from": "    if (policy.commit) return error.CommitNotSupportedByTool;",
-      "to": "    if (false and policy.commit) return error.CommitNotSupportedByTool;",
-      "kills": [
-        "commit policy: --commit turns commits on, and giving it twice is refused",
-        "commit on write: a write tool that cannot commit yet refuses while commits are on"
-      ],
-      "note": "a tool that cannot commit would write to the tree and leave work outside any commit"
-    },
-    {
-      "id": "DC1-write-doc-message-rules-skipped",
-      "file": "src/platform/doc_writer.zig",
-      "from": "            .violated => |report| return .{ .rule_violation = report },\n",
-      "to": "            .violated => |report| report.deinit(gpa),\n",
-      "kills": [
-        "commit write_doc: a message that breaks a message rule is refused with the rule, and nothing is written"
-      ],
-      "note": "a write_doc commit would carry a message the message rules refuse"
-    },
-    {
       "id": "DC2-write-doc-commits-the-old-bytes",
       "file": "src/platform/doc_writer.zig",
       "from": ".content = applied.source }};",
@@ -8902,7 +8881,7 @@
     {
       "id": "DC3-write-doc-written-but-not-published",
       "file": "src/platform/doc_writer.zig",
-      "from": "                try git_commit.publish(gpa, io, root, head.?, prepared.?, &change);\n",
+      "from": "            try session.publish(gpa, io, root, &change);\n",
       "to": "",
       "kills": [
         "commit write_doc: an accepted write is one commit with the given message and the written bytes"
@@ -8912,8 +8891,8 @@
     {
       "id": "DC4-write-doc-handler-drops-the-commit",
       "file": "src/protocol/handlers.zig",
-      "from": "        .commit = if (policy.commit) &plan else null,\n    }, null);",
-      "to": "        .commit = if (false and policy.commit) &plan else null,\n    }, null);",
+      "from": "        .commit = if (commit) |*request| request else null,\n    }, null);",
+      "to": "        .commit = if (commit) |*request| if (false) request else null else null,\n    }, null);",
       "kills": [
         "commit write_doc: an accepted write is one commit with the given message and the written bytes"
       ],
@@ -9026,6 +9005,242 @@
         "commit message: the stored form ends with the line end git would add, and a message that has one is kept"
       ],
       "note": "the checker and git would be handed a message without its final line end"
+    },
+    {
+      "id": "BC1-batch-written-but-not-published",
+      "file": "src/platform/batch.zig",
+      "from": "    try session.publish(gpa, io, root, changes);\n",
+      "to": "",
+      "kills": [
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files",
+        "commit batch: a node try is one commit of the edited file",
+        "commit batch: a rename across three files is one commit of the three files",
+        "commit batch: a move into a new file is one commit of the source, the new file and the user",
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
+      ],
+      "note": "every file of a batch would be written and the branch would never get the commit"
+    },
+    {
+      "id": "BC2-moved-source-not-checked-for-hand-edits",
+      "file": "src/platform/batch.zig",
+      "from": "        if (p.source_rel) |from| try rels.append(arena, from);\n",
+      "to": "",
+      "kills": [
+        "commit batch: a file move refuses when the file to move was edited by hand"
+      ],
+      "note": "a hand edit to the file being moved would be committed under the message of the model"
+    },
+    {
+      "id": "BC3-doc-target-not-checked-for-hand-edits",
+      "file": "src/platform/batch.zig",
+      "from": "    for (options.doc_edits) |edit| try rels.append(arena, try relativeUnder(arena, root, edit.file_abs));\n",
+      "to": "",
+      "kills": [
+        "commit batch: try_batch refuses a doc target edited by hand outside the rewritten section"
+      ],
+      "note": "a hand edit elsewhere in a doc of the batch would be committed under the message of the model"
+    },
+    {
+      "id": "BC4-moved-source-stays-in-the-commit",
+      "file": "src/platform/batch.zig",
+      "from": "        if (p.source_rel) |from| try changes.append(gpa, .{ .rel = from, .content = null });\n",
+      "to": "",
+      "kills": [
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
+      ],
+      "note": "the commit of a file move would keep the old path beside the new one"
+    },
+    {
+      "id": "BC5-deleted-file-committed-as-empty",
+      "file": "src/platform/batch.zig",
+      "from": "if (p.action == .delete_file) null else p.source()",
+      "to": "if (false and p.action == .delete_file) null else p.source()",
+      "kills": [
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
+      ],
+      "note": "a file the batch deletes would stay in the commit as an empty file"
+    },
+    {
+      "id": "BC6-doc-edit-left-out-of-the-commit",
+      "file": "src/platform/batch.zig",
+      "from": "    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
+      "to": "    for (doc_prepared) |p| if (false) try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
+      "kills": [
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
+      ],
+      "note": "the doc edit of a batch would be written and left outside the commit"
+    },
+    {
+      "id": "BC7-index-sync-of-the-journal-runs-before-the-commit",
+      "file": "src/platform/batch.zig",
+      "from": "    if (options.commit == null) batch.root = root;",
+      "to": "    batch.root = root;",
+      "kills": [
+        "commit batch: a locked index does not keep a written batch out of its commit"
+      ],
+      "note": "a failed index update would stop a written batch before its commit is published"
+    },
+    {
+      "id": "BC8-rename-drops-the-commit-request",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        .commit = options.commit,\n",
+      "to": "",
+      "kills": [
+        "commit batch: a rename across three files is one commit of the three files"
+      ],
+      "note": "a rename would write its files with commits on and make no commit"
+    },
+    {
+      "id": "BC9-move-drops-the-commit-request",
+      "file": "src/platform/move_batch.zig",
+      "from": "        .commit = options.commit,\n",
+      "to": "",
+      "kills": [
+        "commit batch: a move into a new file is one commit of the source, the new file and the user"
+      ],
+      "note": "a move would write its files with commits on and make no commit"
+    },
+    {
+      "id": "BC10-file-move-drops-the-commit-request",
+      "file": "src/platform/file_move.zig",
+      "from": "        .commit = options.commit,\n",
+      "to": "",
+      "kills": [
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
+      ],
+      "note": "a file move would write its files with commits on and make no commit"
+    },
+    {
+      "id": "BC11-try-batch-handler-drops-the-commit-request",
+      "file": "src/protocol/handlers.zig",
+      "from": ".language_service = policy.language_service, .commit = if (commit) |*request| request else null };",
+      "to": ".language_service = policy.language_service, .commit = if (commit) |*request| (if (false) request else null) else null };",
+      "kills": [
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
+      ],
+      "note": "try_batch would take a message with commits on and make no commit"
+    },
+    {
+      "id": "BC12-node-try-handler-drops-the-commit-request",
+      "file": "src/protocol/node_tool.zig",
+      "from": ".commit = if (commit) |*request| request else null",
+      "to": ".commit = if (commit) |*request| (if (false) request else null) else null",
+      "kills": [
+        "commit batch: a node try is one commit of the edited file"
+      ],
+      "note": "a node try would take a message with commits on and make no commit"
+    },
+    {
+      "id": "BC13-rename-handler-drops-the-commit-request",
+      "file": "src/protocol/rename_tool.zig",
+      "from": ".commit = if (commit) |*request| request else null",
+      "to": ".commit = if (commit) |*request| (if (false) request else null) else null",
+      "kills": [
+        "commit batch: a rename across three files is one commit of the three files"
+      ],
+      "note": "emetgate_rename would take a message with commits on and make no commit"
+    },
+    {
+      "id": "BC14-move-handler-drops-the-commit-request",
+      "file": "src/protocol/move_tool.zig",
+      "from": ".commit = if (commit) |*request| request else null",
+      "to": ".commit = if (commit) |*request| (if (false) request else null) else null",
+      "kills": [
+        "commit batch: a move into a new file is one commit of the source, the new file and the user"
+      ],
+      "note": "emetgate_move would take a message with commits on and make no commit"
+    },
+    {
+      "id": "BC15-file-move-handler-drops-the-commit-request",
+      "file": "src/protocol/move_file_tool.zig",
+      "from": ".commit = if (commit) |*request| request else null",
+      "to": ".commit = if (commit) |*request| (if (false) request else null) else null",
+      "kills": [
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
+      ],
+      "note": "emetgate_move_file would take a message with commits on and make no commit"
+    },
+    {
+      "id": "BC16-message-offered-on-the-symbol-try-only",
+      "file": "src/protocol/server.zig",
+      "from": "const with_message = commit and commits(tool.name);",
+      "to": "const with_message = commit and std.mem.eql(u8, tool.name, \"emetgate_try\");",
+      "kills": [
+        "tools/list offers the commit message on the tools that commit only when commits are on, and then requires it"
+      ],
+      "note": "rename, move and move_file would require a message the tool list never shows"
+    },
+    {
+      "id": "BC17-message-not-offered-on-try-batch",
+      "file": "src/protocol/server.zig",
+      "from": "    if (commit) try writeCommitProp(js);\n",
+      "to": "",
+      "kills": [
+        "tools/list offers the commit message on the tools that commit only when commits are on, and then requires it"
+      ],
+      "note": "try_batch would require a message the tool list never shows"
+    },
+    {
+      "id": "BC18-try-batch-receipt-not-attached",
+      "file": "src/protocol/handlers.zig",
+      "from": "            try receipt_note.commit(gpa, io, places[0].root, commit, w);\n",
+      "to": "",
+      "kills": [
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
+      ],
+      "note": "the commit of a batch would carry no receipt and the reply no commit id"
+    },
+    {
+      "id": "BC19-node-try-receipt-not-attached",
+      "file": "src/protocol/node_tool.zig",
+      "from": "            try receipt_note.commit(gpa, io, place.root, commit, w);\n",
+      "to": "",
+      "kills": [
+        "commit batch: a node try is one commit of the edited file"
+      ],
+      "note": "the commit of a node try would carry no receipt and the reply no commit id"
+    },
+    {
+      "id": "BC20-rename-receipt-not-attached",
+      "file": "src/protocol/rename_tool.zig",
+      "from": "            try receipt_note.commit(gpa, io, place.root, commit, w);\n",
+      "to": "",
+      "kills": [
+        "commit batch: a rename across three files is one commit of the three files"
+      ],
+      "note": "the commit of a rename would carry no receipt and the reply no commit id"
+    },
+    {
+      "id": "BC21-move-receipt-not-attached",
+      "file": "src/protocol/move_tool.zig",
+      "from": "            try receipt_note.commit(gpa, io, place.root, commit, w);\n",
+      "to": "",
+      "kills": [
+        "commit batch: a move into a new file is one commit of the source, the new file and the user"
+      ],
+      "note": "the commit of a move would carry no receipt and the reply no commit id"
+    },
+    {
+      "id": "BC22-file-move-receipt-not-attached",
+      "file": "src/protocol/move_file_tool.zig",
+      "from": "            try receipt_note.commit(gpa, io, place.root, commit, w);\n",
+      "to": "",
+      "kills": [
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
+      ],
+      "note": "the commit of a file move would carry no receipt and the reply no commit id"
+    },
+    {
+      "id": "BC23-message-rules-skipped-by-the-shared-session",
+      "file": "src/platform/commit_plan.zig",
+      "from": "            .violated => |report| return .{ .violated = report },",
+      "to": "            .violated => |report| report.deinit(gpa),",
+      "kills": [
+        "commit on write: a message that breaks a message rule is refused with the rule, and nothing is written",
+        "commit batch: try_batch with a message that breaks a message rule is refused before anything is written",
+        "commit write_doc: a message that breaks a message rule is refused with the rule, and nothing is written"
+      ],
+      "note": "a message that breaks a message rule would be committed by every write tool"
     }
   ]
 }

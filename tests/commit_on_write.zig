@@ -218,11 +218,3 @@ test "commit on write: a message command judges the message of a try, and a refu
     const accepted = try case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", try case.addHash() }, .{ "body", new_body }, .{ "message", "fix: swap" } }, committing);
     try testing.expect(!accepted.is_error);
 }
-
-test "commit on write: a write tool that cannot commit yet refuses while commits are on" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var case: Case = undefined;
-    try case.init();
-    defer case.deinit();
-    try testing.expectError(error.CommitNotSupportedByTool, case.call("emetgate_try_batch", &.{}, committing));
-}

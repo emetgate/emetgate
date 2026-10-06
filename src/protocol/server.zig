@@ -365,15 +365,15 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
     try js.endObject();
 }
 
-const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_write_doc" };
+pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc" };
+const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
 
-fn takesMessage(tool: []const u8) bool {
+fn commits(tool: []const u8) bool {
     for (commit_tools) |name| {
         if (std.mem.eql(u8, name, tool)) return true;
     }
     return false;
 }
-const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
 
 fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
@@ -404,16 +404,8 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
             try js.write(prop.desc);
             try js.endObject();
         }
-        const with_message = commit and takesMessage(tool.name);
-        if (with_message) {
-            try js.objectField(commit_prop.name);
-            try js.beginObject();
-            try js.objectField("type");
-            try js.write(commit_prop.ty);
-            try js.objectField("description");
-            try js.write(commit_prop.desc);
-            try js.endObject();
-        }
+        const with_message = commit and commits(tool.name);
+        if (with_message) try writeCommitProp(&js);
         try js.endObject();
         try js.objectField("required");
         try js.beginArray();
@@ -425,13 +417,23 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
         try js.endObject();
         try js.endObject();
     }
-    try writeBatchToolDef(&js);
+    try writeBatchToolDef(&js, commit);
     try js.endArray();
     try js.endObject();
     try js.endObject();
 }
 
-fn writeBatchToolDef(js: *std.json.Stringify) !void {
+fn writeCommitProp(js: *std.json.Stringify) !void {
+    try js.objectField(commit_prop.name);
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write(commit_prop.ty);
+    try js.objectField("description");
+    try js.write(commit_prop.desc);
+    try js.endObject();
+}
+
+fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();
     try js.objectField("name");
     try js.write("emetgate_try_batch");
@@ -501,10 +503,12 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.endArray();
     try js.endObject();
     try js.endObject();
+    if (commit) try writeCommitProp(js);
     try js.endObject();
     try js.objectField("required");
     try js.beginArray();
     try js.write("edits");
+    if (commit) try js.write(commit_prop.name);
     try js.endArray();
     try js.endObject();
     try js.endObject();

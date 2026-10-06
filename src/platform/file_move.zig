@@ -7,6 +7,7 @@ const repo = @import("repo.zig");
 const shadow = @import("shadow.zig");
 const tsserver = @import("tsserver.zig");
 const batch = @import("batch.zig");
+const commit_plan = @import("commit_plan.zig");
 const batch_plan = @import("batch_plan.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
@@ -45,6 +46,7 @@ pub const Options = struct {
     shadow_root: ?[]const u8 = null,
     trace: ?*runner.Trace = null,
     commit_step: ?*const disk.Step = null,
+    commit: ?*commit_plan.Request = null,
     language_service: ?*tsserver.Session = null,
 };
 
@@ -514,6 +516,7 @@ pub fn tryMoveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Optio
         .shadow_root = options.shadow_root,
         .trace = options.trace,
         .commit_step = options.commit_step,
+        .commit = options.commit,
         .created_dirs = created,
     });
     return .{ .plan = planned, .result = result };

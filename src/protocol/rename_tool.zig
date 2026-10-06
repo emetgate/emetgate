@@ -66,6 +66,8 @@ fn recordRename(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, s
 
 fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, new_name: []const u8, interface_change: bool, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try policy_mod.trustedTestCommand(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy);
+    defer if (commit) |request| request.deinit(gpa);
     const hash = try symbol.parseHash(hash_hex);
     const place = try repo.jail(gpa, io, policy.root, file);
     defer place.deinit(gpa);
@@ -81,6 +83,7 @@ fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, s
         .shadow_root = policy.shadow_root,
         .trace = &event.trace,
         .language_service = policy.language_service,
+        .commit = if (commit) |*request| request else null,
     });
     defer outcome.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
@@ -110,6 +113,7 @@ fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, s
                 .files = files,
             }, note);
             try recordRename(gpa, io, place.root, place.rel, sym, hash, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w);
+            try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
         .rejected => |report| {

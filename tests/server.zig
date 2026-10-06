@@ -56,7 +56,7 @@ test "a notification produces no response" {
     )) == null);
 }
 
-test "tools/list offers the commit message on the tools that commit, only when commits are on, and then requires it" {
+test "tools/list offers the commit message on the tools that commit only when commits are on, and then requires it" {
     const line =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
     ;
@@ -66,9 +66,23 @@ test "tools/list offers the commit message on the tools that commit, only when c
 
     const on = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{ .commit = true })).?;
     defer testing.allocator.free(on);
-    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, on, "commit message for this change"));
-    try testing.expect(std.mem.indexOf(u8, on, "\"required\":[\"file\",\"message\"]") != null);
-    try testing.expect(std.mem.indexOf(u8, on, "\"required\":[\"file\",\"hash\",\"content\",\"message\"]") != null);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, on, .{});
+    defer parsed.deinit();
+    const committing = [_][]const u8{ "emetgate_try", "emetgate_try_batch", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc" };
+    var offered: usize = 0;
+    for (parsed.value.object.get("result").?.object.get("tools").?.array.items) |tool| {
+        const name = tool.object.get("name").?.string;
+        const schema = tool.object.get("inputSchema").?.object;
+        var commits = false;
+        for (committing) |expected| commits = commits or std.mem.eql(u8, expected, name);
+        var required = false;
+        for (schema.get("required").?.array.items) |field| required = required or std.mem.eql(u8, field.string, "message");
+        errdefer std.debug.print("{s}\n", .{name});
+        try testing.expectEqual(commits, schema.get("properties").?.object.get("message") != null);
+        try testing.expectEqual(commits, required);
+        if (commits) offered += 1;
+    }
+    try testing.expectEqual(committing.len, offered);
 }
 
 test "tools/list names the three tools and marks hash required" {

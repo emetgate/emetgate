@@ -655,18 +655,35 @@ test "redteam commit: a file staged by hand stays staged and out of the model's 
     try testing.expectEqualStrings("M  src/b.ts", try case.git(&.{ "status", "--porcelain" }));
 }
 
-test "redteam commit: mutate and the node form of try write nothing while commits are on" {
+test "redteam commit: mutate writes nothing and every write tool without a message is refused while commits are on" {
     try skipOffWindows();
     var case: Case = undefined;
     try case.initDefault();
     defer case.deinit();
     const before = try case.git(&.{ "rev-parse", "HEAD" });
+    const hash = try case.hashOf("src/util.ts", "add");
+    const file_hash = try case.arena().dupe(u8, &std.fmt.bytesToHex(emetgate.symbol.fileHash(util_src), .lower));
 
-    _ = try case.call("emetgate_mutate", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", try case.hashOf("src/util.ts", "add") }, .{ "body", new_body } }, committing);
-    try testing.expectError(error.CommitNotSupportedByTool, case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "node", "0" }, .{ "hash", "0" }, .{ "text", "x" }, .{ "message", "fix: swap" } }, committing));
-    try testing.expectError(error.CommitNotSupportedByTool, case.call("emetgate_rename", &.{}, committing));
-    try testing.expectError(error.CommitNotSupportedByTool, case.call("emetgate_move", &.{}, committing));
-    try testing.expectError(error.CommitNotSupportedByTool, case.call("emetgate_move_file", &.{}, committing));
+    _ = try case.call("emetgate_mutate", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body } }, committing);
+    const calls = [_]struct { tool: []const u8, fields: []const [2][]const u8 }{
+        .{ .tool = "emetgate_try", .fields = &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body } } },
+        .{ .tool = "emetgate_try", .fields = &.{ .{ "file", "src/util.ts" }, .{ "node", "0" }, .{ "hash", "0" }, .{ "text", "x" } } },
+        .{ .tool = "emetgate_rename", .fields = &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "new_name", "plus" } } },
+        .{ .tool = "emetgate_move", .fields = &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "to", "src/other.ts" } } },
+        .{ .tool = "emetgate_move_file", .fields = &.{ .{ "file", "src/util.ts" }, .{ "hash", file_hash }, .{ "to", "src/moved.ts" } } },
+        .{ .tool = "emetgate_write_doc", .fields = &.{ .{ "file", "src/util.ts" }, .{ "line_start", "1" }, .{ "line_end", "1" }, .{ "hash", "0" }, .{ "content", "x" } } },
+        .{ .tool = "emetgate_try_batch", .fields = &.{} },
+    };
+    for (calls) |c| {
+        errdefer std.debug.print("{s}\n", .{c.tool});
+        if (case.call(c.tool, c.fields, committing)) |reply| {
+            try testing.expect(reply.is_error);
+            try testing.expect(contains(reply.text, "MissingCommitMessage"));
+        } else |_| {}
+        try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
+        try testing.expect(!case.repo.exists("src/moved.ts"));
+        try testing.expect(!case.repo.exists("src/other.ts"));
+    }
     try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD" }));
     try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
     try testing.expectEqualStrings(util_src, try case.disk("src/util.ts"));

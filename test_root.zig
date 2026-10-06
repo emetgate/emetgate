@@ -96,6 +96,7 @@ pub const runner = src.runner;
 pub const run_command = src.run_command;
 pub const commit_message = src.commit_message;
 pub const git_commit = src.git_commit;
+pub const commit_plan = src.commit_plan;
 pub const text_checks = src.text_checks;
 pub const batch_plan = src.batch_plan;
 pub const doc_writer = src.doc_writer;
@@ -219,6 +220,8 @@ test {
     _ = @import("tests/doc_writer.zig");
     _ = @import("tests/redteam_write_doc.zig");
     _ = @import("tests/batch_crash_doc.zig");
+    _ = @import("tests/commit_batch.zig");
+    _ = @import("tests/commit_batch_crash.zig");
     _ = @import("tests/commit_on_write.zig");
     _ = @import("tests/commit_write_doc.zig");
     _ = @import("tests/message_command.zig");

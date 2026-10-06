@@ -1,5 +1,6 @@
 const std = @import("std");
 const receipts = @import("../platform/receipts.zig");
+const commit_plan = @import("../platform/commit_plan.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -32,7 +33,8 @@ pub fn insert(gpa: Allocator, w: *Writer, field: []const u8) !void {
     try allocating.writer.writeAll(tail);
 }
 
-pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, oid: []const u8, w: *Writer) !void {
+pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_plan.Request, w: *Writer) !void {
+    const oid = (request orelse return).oid orelse return;
     const attached = receipts.attach(gpa, io, root, oid);
     const field = if (attached) |_|
         try std.fmt.allocPrint(gpa, ",\"commit\":\"{s}\"", .{oid})

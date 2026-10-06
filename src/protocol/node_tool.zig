@@ -89,6 +89,8 @@ pub fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try policy_mod.trustedTestCommand(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy);
+    defer if (commit) |request| request.deinit(gpa);
     const node_edits = try parse(gpa, args);
     defer gpa.free(node_edits);
     const place = try repo.jailTarget(gpa, io, policy.root, file, false);
@@ -108,6 +110,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args
         .shadow_root = policy.shadow_root,
         .trace = &event.trace,
         .language_service = policy.language_service,
+        .commit = if (commit) |*request| request else null,
     };
     var planned = try batch.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
@@ -128,6 +131,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, args
             const full = tool_result.wantsFull(args);
             try wire.writeNodesCommitted(w, file, applied, note, full);
             try record(gpa, io, place.root, place.rel, place.abs, before_hash, applied, test_command, typecheck_command, event.trace.test_ms, w, full);
+            try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
         .rejected => |report| {
