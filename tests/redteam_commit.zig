@@ -391,6 +391,67 @@ test "redteam commit: a user commit made while the tests run is not overwritten"
     try testing.expect(contains(log, "user: an unrelated commit"));
 }
 
+fn raceBranchSwitch(root_abs: []const u8, shadow_abs: []const u8) void {
+    const io = testing.io;
+    var started_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var raced_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const started = std.fmt.bufPrint(&started_buf, "{s}\\started", .{shadow_abs}) catch return;
+    const raced = std.fmt.bufPrint(&raced_buf, "{s}\\raced", .{shadow_abs}) catch return;
+    var attempt: usize = 0;
+    while (attempt < 3000) : (attempt += 1) {
+        if (std.Io.Dir.cwd().access(io, started, .{})) |_| break else |_| {}
+        io.sleep(.fromMilliseconds(10), .awake) catch return;
+    } else return;
+    support.Repo.git(root_abs, &.{ "checkout", "-q", "-b", "other" }) catch {};
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raced, .data = "" }) catch return;
+}
+
+test "redteam commit: a branch switch made while the tests run puts the commit on the branch now checked out and leaves the first branch alone" {
+    try skipOffWindows();
+    var case: Case = undefined;
+    try case.initDefault();
+    defer case.deinit();
+    const location = try shadow_root.locate(testing.allocator, case.repo.root_abs, null);
+    defer location.deinit(testing.allocator);
+    const before = try case.git(&.{ "rev-parse", "HEAD" });
+    const first = try case.git(&.{ "symbolic-ref", "--short", "HEAD" });
+
+    const hash = try case.hashOf("src/util.ts", "add");
+    const racer = try std.Thread.spawn(.{}, raceBranchSwitch, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.shadow) });
+    const outcome = case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body }, .{ "message", "fix: swap" } }, .{ .test_command = racing_cmd, .commit = true });
+    racer.join();
+    const reply = try outcome;
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("other", try case.git(&.{ "symbolic-ref", "--short", "HEAD" }));
+    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", first }));
+    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "other^" }));
+    try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
+}
+
+test "redteam commit: a process that dies between the write and the branch move is rolled back or completed by recover" {
+    try skipOffWindows();
+    var case: Case = undefined;
+    try case.initDefault();
+    defer case.deinit();
+    const root = case.repo.root_abs;
+    const rel = "src\\util.ts";
+    const file = try case.repo.abs(case.arena(), "src/util.ts");
+    const journal_dir = try std.fmt.allocPrint(case.arena(), "{s}\\.emetgate\\journal", .{root});
+
+    const head = try git_commit.preflight(testing.allocator, testing.io, root, &.{rel});
+    defer head.deinit(testing.allocator);
+    const changes = [_]git_commit.Change{.{ .rel = rel, .content = util_hand }};
+    const prepared = try git_commit.prepare(testing.allocator, testing.io, root, head, &changes, "fix: swap");
+    defer testing.allocator.free(prepared);
+    try emetgate.disk.replaceReporting(testing.allocator, testing.io, file, util_hand, emetgate.symbol.hashOf(util_src), null, journal_dir, null);
+
+    _ = try emetgate.disk.recover(testing.allocator, testing.io, root);
+    const written = contains(try case.disk("src/util.ts"), hand_mark);
+    const committed = contains(try case.headBlob("src/util.ts"), hand_mark);
+    try testing.expectEqual(written, committed);
+}
+
 test "redteam commit: a stale index lock does not leave the index behind the new commit" {
     try skipOffWindows();
     var case: Case = undefined;
