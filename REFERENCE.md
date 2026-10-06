@@ -472,13 +472,13 @@ The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, th
 
 ### Lockdown
 
-`emetgate lockdown [<claude args>...]` starts `claude` in the current directory with this argv in front of the user's arguments, and with `ENABLE_TOOL_SEARCH=false` added to its environment:
+`emetgate lockdown [--no-marks] [<claude args>...]` starts `claude` in the current directory with this argv in front of the user's arguments, and with `ENABLE_TOOL_SEARCH=false` added to its environment:
 
 ```
-claude --add-dir <lockdown directory> --settings <lockdown directory>\settings.json --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<server>__emetgate_mutate" --mcp-config <absolute .mcp.json> --strict-mcp-config
+claude --add-dir <lockdown directory> --settings <lockdown directory>\settings.json --tools "" --allowedTools "mcp__<server>__emetgate_symbols ... mcp__<server>__emetgate_mutate" --mcp-config <absolute .mcp.json> --strict-mcp-config --plugin-dir <lockdown directory>\marks
 ```
 
-The first two flags give the session the `/rule` command and are described under "Rules from the prompt" below.
+The first two flags give the session the `/rule` command and are described under "Rules from the prompt" below. The last one loads a plugin that only draws and is described under "Marks in the transcript"; `--no-marks`, as the first argument after `lockdown`, leaves it out.
 
 `--tools ""` leaves Claude Code no built-in tool: no shell, no file read or edit, no web access and no ToolSearch. `--strict-mcp-config` with the absolute path loads only the servers of that `.mcp.json`. A user argument that would change any of this (`--tools`, `--allowedTools`, `--allowed-tools`, `--mcp-config`, `--strict-mcp-config`, `--settings`, `--plugin-dir`, `--agents`, `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, alone or as `--flag=value`) is refused before anything starts.
 `--permission-mode bypassPermissions` (also `--permission-mode=bypassPermissions`, in any letter case, though Claude Code 2.1.286 accepts only this spelling) is refused the same way, since it skips every permission check as `--dangerously-skip-permissions` does; the other modes (`acceptEdits`, `auto`, `manual`, `dontAsk`, `plan`) pass.
@@ -570,6 +570,20 @@ Claude Code printed each answer as `UserPromptSubmit operation blocked by hook:`
 The session's `init` message listed `rule` among its slash commands with the `--add-dir` directory and did not list it without. Not measured: the interactive screen. In print mode Claude Code hands the raw text to the hook whether or not the command file exists, so only an interactive session shows that typing `/rule list` there reaches the hook.
 
 `--tools ""` was chosen over `--tools ToolSearch`. With `ENABLE_TOOL_SEARCH=false` both gave the same 16 tools and the same 25,140-token first request in four sessions; with `--tools ""` and the variable unset, Claude Code still loaded the MCP tools up front in one session. So the model has one tool fewer, and turning tool search off does not depend on the variable alone.
+
+#### Marks in the transcript
+
+`emetgate lockdown` loads one Claude Code plugin, `emetgate-marks`, from `<lockdown directory>\marks` with `--plugin-dir`. It draws in the terminal and does nothing else: it registers no tool, adds nothing to the system prompt, rewrites no prompt and no tool result, and the model reads the same bytes with it and without it.
+
+| Where | What it draws |
+|---|---|
+| Under a write call (`try`, `try_batch`, `write_doc`, `rename`, `move`, `move_file`), also when Claude Code folds calls into one `Called emetgate N times` row | Two small squares, green with `emet` when the call was accepted and red with `met` when it was refused, then the file and symbol |
+| The line that animates while a turn runs | While an emetgate tool runs or has just answered, the word becomes `Weighing at the gate`, `Reading the clay`, `Sealed` or `Turned away` |
+| The line that closes a turn | When the turn made a write call, the word becomes `Sealed`, `Turned away` or `Weighed`, and a second line counts `passed` and `refused` |
+
+`/golem off` stops all of it and `/golem on` brings it back; `/golem scene`, `/golem big` and `/golem small` also draw a larger picture in place of the working line. The choice is kept by Claude Code for the plugin and holds in later sessions. `emetgate lockdown --no-marks` starts without the plugin: nothing is written under `marks` and no `--plugin-dir` is passed. The flag is read only as the first argument; anywhere else it is the user's own argument to Claude Code.
+
+The plugin's five files are part of the executable and are written as the `/rule` files are: byte for byte, left alone when already right, repaired when changed. `--plugin-dir` takes one value and stands after the lock and before the user's arguments. A `--plugin-dir` of the user's own is still refused. Not measured: the time the plugin's `tool.call` hook adds to a call, and how the marks look outside Windows Terminal.
 
 ### Reader
 
