@@ -111,7 +111,7 @@ pub fn run(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, o
 
 fn writeCheckNames(err_out: *Writer) !void {
     for (checks.registry) |check| try err_out.print("{s} ", .{check.name});
-    try err_out.print("{s} {s}", .{ checks.command_prefix, checks.added_prefix });
+    try err_out.print("{s} {s} {s}", .{ checks.frozen_name, checks.command_prefix, checks.added_prefix });
     for (text_checks.registry) |check| try err_out.print(" {s}{s}", .{ text_checks.prefix, check.name });
     try err_out.writeByte('\n');
 }
