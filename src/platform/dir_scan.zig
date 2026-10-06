@@ -96,6 +96,12 @@ pub fn idOf(handle: Handle) Error!Id {
     return info.file_id;
 }
 
+pub fn supportsHardLinks(handle: Handle) Error!bool {
+    var flags: u32 = 0;
+    if (win.GetVolumeInformationByHandleW(handle, null, 0, null, null, &flags, null, 0) == .FALSE) return error.ScanFailed;
+    return flags & win.file_supports_hard_links != 0;
+}
+
 pub fn volumeOf(handle: Handle) Error!u64 {
     var info: win.FileIdInfo = undefined;
     if (win.GetFileInformationByHandleEx(handle, win.file_id_info, &info, @sizeOf(win.FileIdInfo)) == .FALSE) return error.ScanFailed;
@@ -205,6 +211,7 @@ pub const win = struct {
     pub const status_invalid_device_request: u32 = 0xC0000010;
 
     const class_id_extd_directory: u32 = 60;
+    const file_supports_hard_links: u32 = 0x00400000;
     const extd_name_offset = 88;
     const file_id_info: u32 = 18;
     const open_existing: u32 = 3;
@@ -257,6 +264,7 @@ pub const win = struct {
     extern "ntdll" fn NtQueryDirectoryFile(handle: Handle, event: ?Handle, apc: ?*anyopaque, apc_context: ?*anyopaque, iosb: *IoStatusBlock, info: *anyopaque, length: u32, class: u32, single: u8, name: ?*UnicodeString, restart: u8) callconv(.winapi) u32;
     extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: u32, share: u32, security: ?*anyopaque, disposition: u32, flags: u32, template: ?Handle) callconv(.winapi) Handle;
     extern "kernel32" fn GetLastError() callconv(.winapi) u32;
+    extern "kernel32" fn GetVolumeInformationByHandleW(handle: Handle, name: ?[*]u16, name_size: u32, serial: ?*u32, component: ?*u32, flags: ?*u32, system: ?[*]u16, system_size: u32) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetFileInformationByHandle(handle: Handle, info: *ByHandleFileInformation) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetFileInformationByHandleEx(handle: Handle, class: u32, info: *anyopaque, size: u32) callconv(.winapi) windows.BOOL;
 };

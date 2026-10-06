@@ -21,6 +21,11 @@ pub const Want = struct {
 
 pub const Outcome = enum { absent, kept, linked, copied };
 
+pub const Found = struct {
+    dirs: usize = 0,
+    skipped_links: usize = 0,
+};
+
 pub const Stats = struct {
     kept: usize = 0,
     linked: usize = 0,
@@ -62,6 +67,8 @@ pub const Error = error{
     GateTreeUnavailable,
     GateTreeCaseCollision,
     GateTreeInjected,
+    FileBusy,
+    AccessDenied,
     UnsafePath,
     OutOfMemory,
 } || dir_scan.Error;
@@ -433,9 +440,9 @@ fn makeDir(ctx: *Context, parent: Handle, name: []const u16, rel: []const u8) Er
 fn removeName(ctx: *Context, parent: Handle, name: []const u16, kind: dir_scan.Kind, dir_rel: []const u8) Error!void {
     var name8: [dir_scan.max_name_units * 3]u8 = undefined;
     const shown = name8[0..std.unicode.wtf16LeToWtf8(&name8, name)];
-    removeEntry(parent, name, kind, &ctx.stats.removed) catch |err| switch (err) {
-        error.GateTreeBlocked => return ctx.blocked(&.{ dir_rel, "/", shown }),
-        else => |e| return e,
+    removeEntry(parent, name, kind, &ctx.stats.removed) catch |err| {
+        if (ctx.options.report) |report| report.set(&.{ dir_rel, "/", shown });
+        return err;
     };
 }
 
@@ -448,6 +455,8 @@ fn removeEntry(parent: Handle, name: []const u16, kind: dir_scan.Kind, removed: 
     switch (status) {
         nt.status_success => {},
         nt.status_name_not_found, nt.status_path_not_found => return,
+        nt.status_sharing_violation => return error.FileBusy,
+        nt.status_access_denied => return error.AccessDenied,
         else => return error.GateTreeBlocked,
     }
     defer dir_scan.close(handle);
@@ -648,19 +657,19 @@ fn descend(tree: Handle, dir_rel: []const u8, create: bool) Error!?Handle {
     return current;
 }
 
-pub fn discover(arena: Allocator, root: Handle, root_index: u8, dir_rel_raw: []const u8, wants: *std.ArrayList(Want), skipped_links: *usize) Error!void {
+pub fn discover(arena: Allocator, root: Handle, root_index: u8, dir_rel_raw: []const u8, wants: *std.ArrayList(Want), found: *Found) Error!void {
     if (builtin.os.tag != .windows) return error.Unsupported;
     const dir_rel = try normalize(arena, dir_rel_raw);
     try validate(dir_rel);
     const top = (descendExisting(root, dir_rel) catch |err| switch (err) {
         error.ScanIsLink => {
-            skipped_links.* += 1;
+            found.skipped_links += 1;
             return;
         },
         else => |e| return e,
     }) orelse return;
     const buffer = try arena.alignedAlloc(u8, .@"8", dir_scan.buffer_bytes);
-    try discoverDir(arena, top, root_index, dir_rel, wants, skipped_links, buffer[0..dir_scan.buffer_bytes]);
+    try discoverDir(arena, top, root_index, dir_rel, wants, found, buffer[0..dir_scan.buffer_bytes]);
 }
 
 fn descendExisting(root: Handle, dir_rel: []const u8) Error!?Handle {
@@ -679,8 +688,9 @@ fn descendExisting(root: Handle, dir_rel: []const u8) Error!?Handle {
     return current;
 }
 
-fn discoverDir(arena: Allocator, handle: Handle, root_index: u8, rel: []const u8, wants: *std.ArrayList(Want), skipped_links: *usize, buffer: *align(8) dir_scan.Buffer) Error!void {
+fn discoverDir(arena: Allocator, handle: Handle, root_index: u8, rel: []const u8, wants: *std.ArrayList(Want), found: *Found, buffer: *align(8) dir_scan.Buffer) Error!void {
     defer dir_scan.close(handle);
+    found.dirs += 1;
     var subdirs: std.ArrayList([]const u8) = .empty;
     var reader = dir_scan.Reader.init(handle, buffer);
     while (try reader.next()) |entry| {
@@ -690,7 +700,7 @@ fn discoverDir(arena: Allocator, handle: Handle, root_index: u8, rel: []const u8
         const used = std.unicode.wtf16LeToWtf8(child[rel.len + 1 ..], entry.name);
         const path = child[0 .. rel.len + 1 + used];
         switch (entry.kind) {
-            .link_file, .link_directory => skipped_links.* += 1,
+            .link_file, .link_directory => found.skipped_links += 1,
             .directory => try subdirs.append(arena, path),
             .file => try wants.append(arena, .{ .rel = path, .source = path, .root = root_index, .id = entry.id }),
         }
@@ -699,12 +709,12 @@ fn discoverDir(arena: Allocator, handle: Handle, root_index: u8, rel: []const u8
     for (subdirs.items) |path| {
         const child = (dir_scan.openChild(handle, try toWide(&name_w, baseOf(path))) catch |err| switch (err) {
             error.ScanIsLink => {
-                skipped_links.* += 1;
+                found.skipped_links += 1;
                 continue;
             },
             else => |e| return e,
         }) orelse continue;
-        try discoverDir(arena, child, root_index, path, wants, skipped_links, buffer);
+        try discoverDir(arena, child, root_index, path, wants, found, buffer);
     }
 }
 
@@ -1081,11 +1091,11 @@ test "discover lists every file under a directory with its id and skips junction
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     var wants: std.ArrayList(Want) = .empty;
-    var skipped: usize = 0;
-    try discover(arena_state.allocator(), fx.work, 0, "node_modules", &wants, &skipped);
-    try discover(arena_state.allocator(), fx.work, 0, "vendor_missing", &wants, &skipped);
+    var found: Found = .{};
+    try discover(arena_state.allocator(), fx.work, 0, "node_modules", &wants, &found);
+    try discover(arena_state.allocator(), fx.work, 0, "vendor_missing", &wants, &found);
     try testing.expectEqual(@as(usize, 2), wants.items.len);
-    try testing.expectEqual(@as(usize, 1), skipped);
+    try testing.expectEqual(Found{ .dirs = 3, .skipped_links = 1 }, found);
     for (wants.items) |want| try testing.expect(want.id != null);
 
     const stats = try fx.run(wants.items);
