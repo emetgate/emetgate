@@ -232,7 +232,9 @@ test "own dir: receipts are not read or moved through a receipts directory that 
     try testing.expect(!case.repo.exists("vault/attached"));
 }
 
-test "own dir: while a shadow is prepared its workspace cannot be renamed away" {
+extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: u32, share: u32, security: ?*anyopaque, disposition: u32, flags: u32, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
+
+test "own dir: a shadow workspace that another handle holds alone is not cleaned" {
     try skipOffWindows();
     var tree = try Tree.init();
     defer tree.deinit();
@@ -245,14 +247,20 @@ test "own dir: while a shadow is prepared its workspace cannot be renamed away" 
     const base = try tree.abs(&b, "shadows");
     const key = emetgate.shadow_root.repoKey(root);
     const shadow_abs = try std.fmt.bufPrint(&c, "{s}\\{s}\\shadow", .{ base, &key });
-    var key_rel_buf: [128]u8 = undefined;
-    const key_rel = try std.fmt.bufPrint(&key_rel_buf, "shadows/{s}", .{&key});
 
     var prepared = try shadow.Shadow.prepare(testing.io, .{ .root_abs = root, .base_abs = base, .shadow_abs = shadow_abs, .files = &.{"a.ts"} });
-    var closed = false;
-    defer if (!closed) prepared.close();
-    try testing.expect(std.meta.isError(tree.tmp.dir.rename(key_rel, tree.tmp.dir, "shadows/moved", testing.io)));
     prepared.close();
-    closed = true;
+
+    var wide: [std.fs.max_path_bytes:0]u16 = undefined;
+    const workspace = std.fs.path.dirname(shadow_abs).?;
+    const len = try std.unicode.wtf8ToWtf16Le(&wide, workspace);
+    wide[len] = 0;
+    const alone = CreateFileW(&wide, 0x80000000, 0, null, 3, 0x02000000, null);
+    try testing.expect(alone != std.os.windows.INVALID_HANDLE_VALUE);
+    const refused = shadow.remove(testing.io, base, shadow_abs);
+    std.os.windows.CloseHandle(alone);
+    try testing.expectError(error.WorkspaceBusy, refused);
+    var probe: [std.fs.max_path_bytes]u8 = undefined;
+    try std.Io.Dir.cwd().access(testing.io, try std.fmt.bufPrint(&probe, "{s}\\a.ts", .{shadow_abs}), .{});
     try shadow.remove(testing.io, base, shadow_abs);
 }

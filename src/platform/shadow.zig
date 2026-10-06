@@ -128,7 +128,6 @@ pub const Shadow = struct {
     dir: Dir,
     linked: []const []const u8,
     link_stats: link_tree.Stats = .{},
-    held: ?own_dir.Held = null,
 
     pub const Options = struct {
         root_abs: []const u8,
@@ -146,8 +145,6 @@ pub const Shadow = struct {
         var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
         defer root.close(io);
         try Dir.cwd().createDirPath(io, options.shadow_abs);
-        const held = try holdWorkspace(io, options.shadow_abs);
-        errdefer if (held) |h| h.close();
         try ensureNoLinks(options.base_abs, options.shadow_abs);
         try writeRootMarker(io, options.shadow_abs, options.root_abs);
         try grantLowIntegrityWrite(options.shadow_abs);
@@ -172,7 +169,7 @@ pub const Shadow = struct {
             const link_path = try joinWindows(&link_buf, options.shadow_abs, link);
             try link_tree.build(io, target, link_path, &stats);
         }
-        return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats, .held = held };
+        return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats };
     }
 
     pub fn writeFile(self: Shadow, sub_path: []const u8, data: []const u8) !void {
@@ -211,7 +208,6 @@ pub const Shadow = struct {
 
     pub fn close(self: *Shadow) void {
         self.dir.close(self.io);
-        if (self.held) |held| held.close();
         self.* = undefined;
     }
 };

@@ -9741,8 +9741,7 @@
       "from": "        win.file_share_read | win.file_share_write,\n",
       "to": "        win.file_share_read | win.file_share_write | win.file_share_delete,\n",
       "kills": [
-        "own dir: a held directory cannot be renamed away or replaced until it is released",
-        "own dir: while a shadow is prepared its workspace cannot be renamed away"
+        "own dir: a held directory cannot be renamed away or replaced until it is released"
       ]
     },
     {
@@ -9821,10 +9820,10 @@
     {
       "id": "OD11-shadow-workspace-not-held",
       "file": "src/platform/shadow.zig",
-      "from": "        const held = try holdWorkspace(io, options.shadow_abs);\n",
-      "to": "        const held: ?own_dir.Held = null;\n",
+      "from": "    const held = try holdWorkspace(io, shadow_abs);\n",
+      "to": "    const held: ?own_dir.Held = null;\n",
       "kills": [
-        "own dir: while a shadow is prepared its workspace cannot be renamed away"
+        "own dir: a shadow workspace that another handle holds alone is not cleaned"
       ]
     }
   ]
