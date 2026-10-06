@@ -9341,8 +9341,7 @@
       "from": "if (outcome == .copied) use.private_copies += 1;",
       "to": "if (outcome == .linked) use.private_copies += 1;",
       "kills": [
-        "a path under a private prefix is a private copy in the kept tree and is counted",
-        "redteam gate tree: a working file the sandbox could write is a private copy, so a write to it stays in the tree"
+        "a path under a private prefix is a private copy in the kept tree and is counted"
       ]
     },
     {

@@ -6,12 +6,12 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1495**
-- Mutations declared in `tests/mutations.json`: **951**
-  - killed: **921**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1498**
+- Mutations declared in `tests/mutations.json`: **955**
+  - killed: **924**
   - equivalent: **7**
   - defense in depth: **7**
-  - open: **4**
+  - open: **5**
   - control: **2**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **4**
@@ -173,7 +173,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-91 mutation(s).
+93 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -248,7 +248,7 @@ python tools/verification_page.py --check
 | `TB2-try-batch-commits-without-record` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, null, options.commit...` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
 | `TB3-try-batch-drops-commit-step` | `src/platform/batch.zig` | `try disk.commitBatch(pendings, null, null, &batch, options.comm...` -> `try disk.commitBatch(pendings, null, null, &batch, null);` | batch crash through the tool: a crash right after the commit record recovers ev...; batch... | killed |
 | `LT1-linked-dir-junctioned-again` | `src/platform/shadow.zig` | `try link_tree.build(io, target, link_path, &stats);` -> `_ = &stats; try createJunction(io, link_path, target);` | prepare copies tracked files, rebuilds heavy directories as hardlink trees and ... | killed |
-| `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
+| `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `Links(base_abs, shadow_abs);     try Dir.cwd().deleteTree(io, s...` -> `Links(base_abs, shadow_abs[0..base_abs.len]);     try Dir.cwd()...` | the workspace is opened through own_dir.hold before this check and a linked workspace is ... | open |
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
 | `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
@@ -267,7 +267,9 @@ python tools/verification_page.py --check
 | `KT5-edit-written-through-the-link` | `src/platform/shadow.zig` | `if (self.use.mode == .kept) return gate_tree.writeFile(self.dir...` -> `` | the kept tree holds the working files themselves, stays after the call and says... | killed |
 | `KT6-missing-tracked-file-fails-full-copy` | `src/platform/shadow.zig` | `root.copyFile(file, dir, file, io, .{}) catch \|err\| switch (e...` -> `root.copyFile(file, dir, file, io, .{}) catch \|err\| switch (e...` | a tracked file that is missing from the working tree is absent from the shadow,... | killed |
 | `KT7-requested-full-copy-ignored` | `src/platform/shadow.zig` | `if (options.tree == .kept) {` -> `if (true) {` | a full copy is used when asked for, says so, gives private files and is removed...; a tra... | killed |
-| `KT8-private-copies-not-counted` | `src/platform/shadow.zig` | `if (outcome == .copied) use.private_copies += 1;` -> `if (outcome == .linked) use.private_copies += 1;` | a path under a private prefix is a private copy in the kept tree and is counted; redteam ... | killed |
+| `KT8-private-copies-not-counted` | `src/platform/shadow.zig` | `if (outcome == .copied) use.private_copies += 1;` -> `if (outcome == .linked) use.private_copies += 1;` | a path under a private prefix is a private copy in the kept tree and is counted | killed |
+| `KT9-other-volume-not-detected` | `src/platform/shadow.zig` | `if (try dir_scan.volumeOf(root) != try treeVolume(tree)) {` -> `if (false) {` | gate tree replies: a repository on another volume, or a volume without hard lin... | killed |
+| `KT10-missing-hard-links-not-detected` | `src/platform/shadow.zig` | `if (!try linksSupported(root)) {` -> `if (false) {` | gate tree replies: a repository on another volume, or a volume without hard lin... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -583,7 +585,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-465 mutation(s).
+467 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1052,6 +1054,8 @@ python tools/verification_page.py --check
 | `DS2-dot-entries-reported` | `src/platform/dir_scan.zig` | `if (isDot(name)) continue;` -> `` | a directory scan reports every name with its kind and file id, and two hard lin... | killed |
 | `DS3-link-kind-reported-as-plain` | `src/platform/dir_scan.zig` | `if (attributes & win.file_attribute_reparse_point != 0) return ...` -> `` | a directory scan reports every name with its kind and file id, and two hard lin... | killed |
 | `WT1-full-copy-reason-left-out` | `src/protocol/wire.zig` | `try js.write(@tagName(tree.reason));` -> `try js.write("none");` | a result says which tree the gate used: kept with its private copies, or a full... | killed |
+| `KT11-run-ignores-the-tree-choice` | `src/protocol/run_tool.zig` | `.gate_tree = policy.treeChoice(),         .used = &used,` -> `.used = &used,` | gate tree replies: a run reply says which tree was used, and two servers in one... | killed |
+| `KT12-doc-write-reply-without-the-tree` | `src/protocol/handlers.zig` | `const doc_note = wire.treeNote(doc_trace.gate);` -> `const doc_note: ?wire.ShadowNote = null;` | gate tree replies: a rejected doc write says which tree was used, for each serv...; gate ... | killed |
 
 ## What this system does not prove
 
