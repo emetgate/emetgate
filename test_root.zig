@@ -193,6 +193,7 @@ test {
     _ = @import("tests/move_file_tool.zig");
     _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/verify_receipts.zig");
+    _ = @import("tests/verify_filtered.zig");
     _ = @import("tests/verify_tcb.zig");
     _ = @import("tests/verify_n_version.zig");
     _ = @import("tests/query.zig");

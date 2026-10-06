@@ -55,6 +55,23 @@ const Context = struct {
         return self.blob(self.commit, path);
     }
 
+    fn text(self: *Context, rev: ?[]const u8, path: []const u8) !checker.Text {
+        const r = rev orelse return .stored;
+        if (!try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;
+        const bytes = (try receipts.checkedOut(self.arena, self.io, self.root, r, path)) orelse return .unavailable;
+        return .{ .driver = bytes };
+    }
+
+    fn beforeText(context: *anyopaque, path: []const u8) anyerror!checker.Text {
+        const self: *Context = @ptrCast(@alignCast(context));
+        return self.text(self.parent, path);
+    }
+
+    fn afterText(context: *anyopaque, path: []const u8) anyerror!checker.Text {
+        const self: *Context = @ptrCast(@alignCast(context));
+        return self.text(self.commit, path);
+    }
+
     fn mentioned(context: *anyopaque, name: []const u8, except: []const u8) anyerror!bool {
         const self: *Context = @ptrCast(@alignCast(context));
         const out = (try receipts.git(self.arena, self.io, self.root, &.{ "grep", "-z", "-l", "-w", "-F", "-e", name, self.commit, "--" })) orelse return false;
@@ -130,6 +147,8 @@ pub fn run(gpa: Allocator, arena: Allocator, io: std.Io, runtime: *Runtime, root
         .mentioned = Context.mentioned,
         .check = Context.check,
         .rule = Context.rule,
+        .before_text = Context.beforeText,
+        .after_text = Context.afterText,
     });
     return .{ .commit = commit, .parent = parent, .report = report };
 }

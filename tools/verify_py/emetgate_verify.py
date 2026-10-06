@@ -26,6 +26,8 @@ VERIFIED = "verified"
 UNVERIFIED = "unverified"
 MISMATCH = "mismatch"
 CONSISTENT = "consistent"
+NOT_CHECKED_OUT = "the checked-out form of a filtered file is not available"
+NO_FILTER = (b"unspecified", b"unset", b"set", b"")
 RANK = {VERIFIED: 0, UNVERIFIED: 1, MISMATCH: 2}
 EXIT = {VERIFIED: 0, CONSISTENT: 55, UNVERIFIED: 53, MISMATCH: 54}
 
@@ -71,6 +73,22 @@ class Git:
         if rev is None:
             return None
         return self.run("cat-file", "blob", rev + ":" + path)
+
+    def filtered(self, rev, path):
+        out = self.run("check-attr", "-z", "--source", rev, "filter", "--", path)
+        if out is None:
+            out = self.run("check-attr", "-z", "filter", "--", path)
+        if out is None:
+            return False
+        fields = out.split(b"\0")
+        return len(fields) >= 3 and fields[2] not in NO_FILTER
+
+    def form(self, rev, path):
+        stored = self.blob(rev, path)
+        if stored is None or not self.filtered(rev, path):
+            return stored, False, True
+        text = self.run("--attr-source=" + rev, "cat-file", "--filters", rev + ":" + path)
+        return text, True, text is not None
 
     def changed(self, rev):
         out = self.run("diff-tree", "--no-commit-id", "--root", "-r", "--name-only", "-z", rev)
@@ -247,7 +265,8 @@ def verify(git, spec):
 
     def current(path):
         if path not in state:
-            state[path] = blob_digest(git.blob(parent, path))
+            data, driven, available = git.form(parent, path)
+            state[path] = (blob_digest(data), driven, available)
         return state[path]
 
     index = 0
@@ -263,17 +282,23 @@ def verify(git, spec):
             if f["after"] is not None and not any(s["path"] == f["path"] for s in r["subjects"]):
                 outcome.raise_to(MISMATCH, "a written file is not a subject")
         for f in r["files"]:
-            if current(f["path"]) != f["before"]:
+            before, driven, available = current(f["path"])
+            if driven and (not available or before != f["before"]):
+                outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
+            elif before != f["before"]:
                 outcome.raise_to(MISMATCH, "the before digest does not match the parent commit or the previous receipt")
             if last[f["path"]] == index:
-                data = git.blob(rev, f["path"])
-                if blob_digest(data) == f["after"]:
+                data, driven, available = git.form(rev, f["path"])
+                if not available:
+                    outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
+                    raise_file(f["path"], UNVERIFIED, NOT_CHECKED_OUT)
+                elif blob_digest(data) == f["after"]:
                     for s in r["subjects"]:
                         if s["path"] == f["path"] and sha256(data) != s["sha256"]:
                             outcome.raise_to(MISMATCH, "a subject's sha256 does not match the commit")
                 else:
                     raise_file(f["path"], UNVERIFIED, "the file changed after the receipt, outside the gate")
-            state[f["path"]] = f["after"]
+            state[f["path"]] = (f["after"], False, True)
         for c in r["checks"]:
             if blake3_128(c["command"].encode("utf-8")) != c["command_digest"]:
                 outcome.raise_to(MISMATCH, "a check's command does not match its digest")

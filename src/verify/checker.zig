@@ -21,6 +21,14 @@ pub const Verdict = enum {
     }
 };
 
+pub const Text = union(enum) {
+    stored,
+    driver: []const u8,
+    unavailable,
+};
+
+pub const not_checked_out = "the checked-out form of a filtered file is not available";
+
 pub const Source = struct {
     context: *anyopaque,
     changed: []const []const u8,
@@ -29,6 +37,14 @@ pub const Source = struct {
     mentioned: *const fn (context: *anyopaque, name: []const u8, except: []const u8) anyerror!bool,
     check: *const fn (context: *anyopaque, kind: receipt.CheckKind, digest: Hash) ?bool,
     rule: *const fn (context: *anyopaque, id: []const u8) ?Hash,
+    before_text: ?*const fn (context: *anyopaque, path: []const u8) anyerror!Text = null,
+    after_text: ?*const fn (context: *anyopaque, path: []const u8) anyerror!Text = null,
+};
+
+const Form = struct {
+    bytes: ?[]const u8 = null,
+    driven: bool = false,
+    available: bool = true,
 };
 
 pub const Outcome = struct {
@@ -65,6 +81,7 @@ const State = struct {
     digest: ?Hash,
     bytes: ?[]const u8,
     known: bool,
+    driven: bool = false,
 };
 
 const Files = struct {
@@ -104,10 +121,20 @@ const Checker = struct {
     fn state(self: *Checker, path: []const u8) !*State {
         const slot = try self.states.getOrPut(self.arena, path);
         if (!slot.found_existing) {
-            const bytes = try self.source.before(self.source.context, path);
-            slot.value_ptr.* = .{ .digest = digestOf(bytes), .bytes = bytes, .known = true };
+            const form = try self.formOf(self.source.before_text, path, try self.source.before(self.source.context, path));
+            slot.value_ptr.* = .{ .digest = digestOf(form.bytes), .bytes = form.bytes, .known = form.available, .driven = form.driven };
         }
         return slot.value_ptr;
+    }
+
+    fn formOf(self: *Checker, read: ?*const fn (context: *anyopaque, path: []const u8) anyerror!Text, path: []const u8, bytes: ?[]const u8) !Form {
+        if (bytes == null) return .{};
+        const ask = read orelse return .{ .bytes = bytes };
+        return switch (try ask(self.source.context, path)) {
+            .stored => .{ .bytes = bytes },
+            .driver => |text| .{ .bytes = text, .driven = true },
+            .unavailable => .{ .driven = true, .available = false },
+        };
     }
 
     fn parse(self: *Checker, path: []const u8, bytes: []const u8) !?*Snapshot {
@@ -220,11 +247,18 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
     var known: std.ArrayList(Known) = .empty;
     for (r.files) |f| {
         const st = try c.state(f.path);
-        if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch, "the before digest does not match the parent commit or the previous receipt");
         var entry: Known = .{ .path = f.path, .before = st.bytes, .after = null, .before_known = st.known, .after_known = false };
+        if (st.driven and (!st.known or !eqlOptional(st.digest, f.before))) {
+            entry.before_known = false;
+            outcome.raise(.unverified, not_checked_out);
+        } else if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch, "the before digest does not match the parent commit or the previous receipt");
         if (last.get(f.path).? == index) {
-            const bytes = try c.source.after(c.source.context, f.path);
-            if (eqlOptional(digestOf(bytes), f.after)) {
+            const form = try c.formOf(c.source.after_text, f.path, try c.source.after(c.source.context, f.path));
+            const bytes = form.bytes;
+            if (!form.available) {
+                outcome.raise(.unverified, not_checked_out);
+                try c.files.raise(f.path, .unverified, not_checked_out);
+            } else if (eqlOptional(digestOf(bytes), f.after)) {
                 entry.after = bytes;
                 entry.after_known = true;
                 for (r.subjects) |s| {
