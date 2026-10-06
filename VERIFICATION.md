@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1657**
-- Mutations declared in `tests/mutations.json`: **1021**
-  - killed: **988**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1659**
+- Mutations declared in `tests/mutations.json`: **1022**
+  - killed: **989**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **4**
@@ -612,7 +612,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-507 mutation(s).
+508 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1120,9 +1120,10 @@ python tools/verification_page.py --check
 | `P1g-commit-lands-on-the-branch-that-was-measured` | `src/platform/commit_plan.zig` | `const branch = try git_commit.branchNow(arena, io, root, head);` -> `const branch = head.branch;` | commit window: a HEAD that was pointed at another branch after the measurement ...; redte... | killed |
 | `P1h-recover-advances-an-entry-on-a-rewritten-index` | `src/platform/commit_intent.zig` | `break :untouched std.mem.eql(u8, &current, &base_digest);` -> `break :untouched std.mem.eql(u8, &current, &base_digest) or tru...` | commit window: an entry staged after the crash on an index that was never publi... | killed |
 | `P1i-recover-writes-over-bytes-the-parent-does-not-hold` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, stored, base_oid)) return .left;` -> `` | commit window: a record that names the hash of the user's uncommitted edit as i... | killed |
-| `P1k-what-an-implicit-recover-left-is-not-reported` | `src/platform/commit_plan.zig` | `if (found.left != 0) {             plan.recovered = found.reaso...` -> `if (false and found.left != 0) {             plan.recovered = f...` | commit window: what an implicit recover left as found is named in the reply of ... | killed |
+| `P1k-what-an-implicit-recover-left-is-not-reported` | `src/platform/commit_plan.zig` | `if (report.left == 0) return;     var found: Found` -> `if (report.left == 0 or true) return;     var found: Found` | commit window: what an implicit recover left as found is named in the reply of ... | killed |
 | `P1l-left-paths-not-named-in-the-reply` | `src/platform/commit_plan.zig` | `plan.left_names_len = report.names().len;` -> `plan.left_names_len = 0;` | commit window: a file created at the path between the two moves is kept, the co... | killed |
 | `P1m-record-blob-not-checked-against-the-commit` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, item.blob, after)) return error.CorruptInt...` -> `if (false and !std.mem.eql(u8, item.blob, after)) return error....` | commit window: a record whose blob is not the one its commit holds at that path... | killed |
+| `P1n-refused-call-drops-what-its-recover-left` | `src/protocol/handlers.zig` | `const found = commit_plan.takeFound() orelse return result;` -> `const found = (if (result.is_error) null else commit_plan.takeF...` | commit window: what an implicit recover left as found is named in the reply of ... | killed |
 
 ## What this system does not prove
 

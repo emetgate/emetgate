@@ -10075,8 +10075,8 @@
     {
       "id": "P1k-what-an-implicit-recover-left-is-not-reported",
       "file": "src/platform/commit_plan.zig",
-      "from": "        if (found.left != 0) {\n            plan.recovered = found.reason;",
-      "to": "        if (false and found.left != 0) {\n            plan.recovered = found.reason;",
+      "from": "    if (report.left == 0) return;\n    var found: Found",
+      "to": "    if (report.left == 0 or true) return;\n    var found: Found",
       "kills": [
         "commit window: what an implicit recover left as found is named in the reply of the call that ran it"
       ]
@@ -10097,6 +10097,15 @@
       "to": "        if (false and !std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;\n",
       "kills": [
         "commit window: a record whose blob is not the one its commit holds at that path is refused whole"
+      ]
+    },
+    {
+      "id": "P1n-refused-call-drops-what-its-recover-left",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const found = commit_plan.takeFound() orelse return result;\n",
+      "to": "    const found = (if (result.is_error) null else commit_plan.takeFound()) orelse return result;\n",
+      "kills": [
+        "commit window: what an implicit recover left as found is named in the reply of a call that is then refused"
       ]
     }
   ]

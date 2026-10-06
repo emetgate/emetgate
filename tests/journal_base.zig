@@ -219,3 +219,30 @@ test "journal base: a file renamed over the target between the check and the wri
     defer testing.allocator.free(now);
     try testing.expectEqualStrings(new_text, now);
 }
+
+test "journal base: recover leaves the file the user created in the gap and the backup of the old bytes beside it, and reports no failure" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tree = try Tree.init();
+    defer tree.deinit();
+    var writer: Creator = .{ .tree = &tree };
+    disk.between_moves = .{ .context = &writer, .run = Creator.run };
+    defer disk.between_moves = null;
+    var leftover: disk.Leftover = .{};
+    try testing.expectError(error.Conflict, disk.replaceReporting(testing.allocator, testing.io, tree.file, new_text, symbol.hashOf(base_text), &leftover, tree.journal, null));
+    disk.between_moves = null;
+    const backup = leftover.path().?;
+    const name = std.fs.path.basename(backup);
+    try testing.expect(std.mem.startsWith(u8, name, "a.ts.emetgate-"));
+    try testing.expect(std.mem.endsWith(u8, name, ".bak"));
+    try testing.expectEqual("a.ts.emetgate-".len + 16 + ".bak".len, name.len);
+
+    const report = try disk.recover(testing.allocator, testing.io, tree.root);
+    try testing.expectEqual(@as(usize, 0), report.failed + report.restored + report.rolled_forward);
+    const now = (try tree.read()).?;
+    defer testing.allocator.free(now);
+    try testing.expectEqualStrings(user_text, now);
+    const kept = try std.Io.Dir.cwd().readFileAlloc(testing.io, backup, testing.allocator, .unlimited);
+    defer testing.allocator.free(kept);
+    try testing.expectEqualStrings(base_text, kept);
+    try testing.expectEqual(@as(usize, 1), try tree.sidecars());
+}
