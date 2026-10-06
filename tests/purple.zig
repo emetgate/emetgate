@@ -286,26 +286,39 @@ test "purple C2: every placeholder variant is rejected before any test runs" {
 test "purple C3: a hanging test command times out and nothing commits" {
     try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try Repo.init();
-    defer repo.deinit();
-    const runtime = try Runtime.create(testing.allocator);
-    defer runtime.destroy() catch @panic("live snapshots");
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const file = try repo.filePath(&buf);
-    const hash = try hashOfAdd(testing.allocator, runtime, file);
+    for ([_]shadow.TreeMode{ .full_copy, .kept }) |tree| {
+        var repo = try Repo.init();
+        defer repo.deinit();
+        defer repo.removeKeptTree();
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file = try repo.filePath(&buf);
+        const hash = try hashOfAdd(testing.allocator, runtime, file);
 
-    const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
-        .file_abs = file,
-        .ref_text = "add",
-        .expected_hash = .{ .present = hash },
-        .new_body = "{ return a - b; }",
-        .test_command = "ping -n 20 127.0.0.1 >nul",
-        .limits = .{ .timeout_ms = 1500 },
-    });
-    defer result.deinit(testing.allocator);
-    try testing.expect(result == .rejected);
-    try testing.expectEqual(sandbox.Outcome.timed_out, result.rejected.outcome);
-    try expectPristine(&repo);
+        const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
+            .file_abs = file,
+            .ref_text = "add",
+            .expected_hash = .{ .present = hash },
+            .new_body = "{ return a - b; }",
+            .test_command = "ping -n 20 127.0.0.1 >nul",
+            .limits = .{ .timeout_ms = 1500 },
+            .gate_tree = .{ .tree = tree },
+        });
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .rejected);
+        try testing.expectEqual(sandbox.Outcome.timed_out, result.rejected.outcome);
+        if (tree == .full_copy) {
+            try expectPristine(&repo);
+        } else {
+            const on_disk = try repo.onDisk();
+            defer testing.allocator.free(on_disk);
+            try testing.expectEqualStrings(Repo.source, on_disk);
+            try testing.expect(!try repo.hasSibling(".tmp"));
+            try testing.expect(!try repo.hasSibling(".bak"));
+            try testing.expect(try repo.holdsOnlyKeptTree());
+        }
+    }
 }
 
 test "purple C3: a test command that leaves a lingering process is caught, not passed" {
