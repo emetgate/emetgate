@@ -381,8 +381,38 @@ pub fn main(init: std.process.Init.Minimal) void {
         std.process.exit(2);
     };
     emetgate_mutant = options.mutant;
-    std.process.exit(run(gpa, init, options));
+    const outermost = redirectAppData();
+    const code = run(gpa, init, options);
+    if (outermost) Io.Dir.cwd().deleteTree(rio, app_data_dir ++ "/emetgate") catch {};
+    std.process.exit(code);
 }
+
+const app_data_dir = "zig-out/test-appdata";
+
+fn redirectAppData() bool {
+    if (builtin.os.tag != .windows) return false;
+    const name = std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA");
+    var target: [std.fs.max_path_bytes:0]u16 = undefined;
+    var len: usize = app_data_win.GetCurrentDirectoryW(@intCast(target.len), &target);
+    if (len == 0 or len + 32 >= target.len) return false;
+    for ([_][]const u16{ std.unicode.utf8ToUtf16LeStringLiteral("\\zig-out"), std.unicode.utf8ToUtf16LeStringLiteral("\\test-appdata") }) |part| {
+        @memcpy(target[len..][0..part.len], part);
+        len += part.len;
+        target[len] = 0;
+        _ = app_data_win.CreateDirectoryW(&target, null);
+    }
+    var current: [std.fs.max_path_bytes:0]u16 = undefined;
+    const have = app_data_win.GetEnvironmentVariableW(name, &current, @intCast(current.len));
+    if (have == len and std.mem.eql(u16, current[0..have], target[0..len])) return false;
+    return app_data_win.SetEnvironmentVariableW(name, &target) != .FALSE;
+}
+
+const app_data_win = struct {
+    extern "kernel32" fn GetCurrentDirectoryW(size: u32, buffer: [*]u16) callconv(.winapi) u32;
+    extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buffer: [*]u16, size: u32) callconv(.winapi) u32;
+    extern "kernel32" fn SetEnvironmentVariableW(name: [*:0]const u16, value: [*:0]const u16) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn CreateDirectoryW(name: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) std.os.windows.BOOL;
+};
 
 fn run(gpa: std.mem.Allocator, init: std.process.Init.Minimal, options: Options) u8 {
     emetgate_slow = options.slow;
