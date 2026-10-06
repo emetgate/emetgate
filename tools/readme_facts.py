@@ -1,4 +1,5 @@
 import argparse
+import posixpath
 import re
 import sys
 
@@ -217,7 +218,7 @@ FACTS = {
 
 FACT_FILES = [README_PATH, os.path.join(ROOT, "REFERENCE.md")]
 
-TRANSLATIONS = ["README.tr.md", "README.ko.md", "README.zh-CN.md", "README.es.md"]
+TRANSLATIONS = ["translations/README.tr.md", "translations/README.ko.md", "translations/README.zh-CN.md", "translations/README.es.md"]
 
 NUMBER = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
 FENCE = re.compile(r"^```.*?^```", re.DOTALL | re.MULTILINE)
@@ -251,7 +252,8 @@ def translation_faults(source, name):
     if extra:
         faults.append(f"{name}: numbers here and not in README.md: {' '.join(extra)}")
     for other in ["README.md"] + TRANSLATIONS:
-        if other != name and f'href="{other}"' not in text:
+        link = posixpath.relpath(other, posixpath.dirname(name))
+        if other != name and f'href="{link}"' not in text:
             faults.append(f"{name}: no link to {other}")
     return faults
 

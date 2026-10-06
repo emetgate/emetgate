@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/banner.png" alt="Emetgate" width="640">
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
 </p>
 
-<p align="center"><a href="README.md">English</a> · <b>Türkçe</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
+<p align="center"><a href="../README.md">English</a> · <b>Türkçe</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
 
 # Emetgate
 
@@ -17,14 +17,14 @@ Kod yazan bir model ile kaynak ağacınız arasında duran bir kapı. Model bir 
 Claude Code için MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript ve JavaScript projelerinde.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
 </p>
 
 ## Ne yapar
 
 **Her yazmayı denetler.** Bir değişiklik bir sembolü ve dayandığı kodun hash'ini belirtir. Emetgate yeni gövdeyi yerine koyar, dosyayı yeniden ayrıştırır, kurallarınızı çalıştırır, sonra tip denetiminizi ve testlerinizi deponun korumalı alandaki bir kopyasında çalıştırır. Herhangi bir adım başarısız olursa hiçbir şey yazılmaz. Her commit bir makbuz bırakır; `emetgate verify` onu, yazan sürece güvenmeden sonradan yeniden denetleyebilir.
 
-**Model için kod okur.** `emetgate_explore`, kod tabanı hakkındaki bir soruyu bütün tanımlarla ve satır numaralarıyla cevaplar. `emetgate_evidence`, adını verdiğiniz sembollerin tam kodunu döndürür. Semboller, dosyalar, arama ve git için de araçlar vardır; liste [REFERENCE.md](REFERENCE.md#mcp-tools) içindedir.
+**Model için kod okur.** `emetgate_explore`, kod tabanı hakkındaki bir soruyu bütün tanımlarla ve satır numaralarıyla cevaplar. `emetgate_evidence`, adını verdiğiniz sembollerin tam kodunu döndürür. Semboller, dosyalar, arama ve git için de araçlar vardır; liste [REFERENCE.md](../REFERENCE.md#mcp-tools) içindedir.
 
 **Kurallarınızı tutar.** Bir kuralı komut satırından bir kez eklersiniz. Model kuralları okuyabilir; değiştiremez ve kaldıramaz.
 
@@ -64,7 +64,7 @@ Bu sette Emetgate en az token'ı harcıyor ve en ucuzu. En doğrusu değil: iki 
 Ayrıca dört araca üç soru daha elle sordum, her biri tek koşu. Emetgate yine en az token'ı harcadı; Claude Code'un kendi araçları ise daha ucuz ve daha hızlıydı:
 
 <p align="center">
-  <img src="tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
+  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
 </p>
 
 Kaydedilen 345 oturumun maliyet hakkında gösterdikleri:
@@ -73,16 +73,16 @@ Kaydedilen 345 oturumun maliyet hakkında gösterdikleri:
 - Fazladan bir model çağrısı, yaklaşık 8,000 karakterlik araç çıktısı kadar tutar.
 - Model kendi istediğini yazar. Kendi araç çağrısında adını verdiği bir madde %98.5 oranında cevaba girdi; yalnızca bir cevapta gördüğü madde %90.5 oranında.
 
-Oturumlar, sorular, cevap anahtarları ve bu sayıları üreten betik [tests/bench/neutral](tests/bench/neutral) içindedir. Tam cevaplarıyla birlikte elle yapılan test [tests/bench/hand](tests/bench/hand) içindedir. Tekil okuma, düzenleme ve aramaların token sayıları [REFERENCE.md](REFERENCE.md) içindedir.
+Oturumlar, sorular, cevap anahtarları ve bu sayıları üreten betik [tests/bench/neutral](../tests/bench/neutral) içindedir. Tam cevaplarıyla birlikte elle yapılan test [tests/bench/hand](../tests/bench/hand) içindedir. Tekil okuma, düzenleme ve aramaların token sayıları [REFERENCE.md](../REFERENCE.md) içindedir.
 
 ## Kapı nasıl test edilir
 
-- **Mutasyon testi.** Her koruma bilerek bozulur ve en az bir testin başarısız olması gerekir. Motor için bugün 64 mutant var: 57 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan korumalar, 1 açık. Liste [VERIFICATION.md](VERIFICATION.md) içindedir.
+- **Mutasyon testi.** Her koruma bilerek bozulur ve en az bir testin başarısız olması gerekir. Motor için bugün 64 mutant var: 57 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan korumalar, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
 - **Model denetimi.** Commit günlüğü TLA+ ile tanımlandı ve kurtarma sırasındaki çökmeler dahil TLC ile denetlendi.
 - **Çökme testleri.** Toplu işler her adımdan sonra kesilir ve kurtarılır.
 - **Kırmızı takım ve fuzz paketleri**: MCP yüzeyine, korumalı alana, günlüğe ve ayrıştırıcılara karşı.
 
-Kapıya karşı bulgular ve düzeltmeleri [REFERENCE.md](REFERENCE.md#security-history) içinde listelenir.
+Kapıya karşı bulgular ve düzeltmeleri [REFERENCE.md](../REFERENCE.md#security-history) içinde listelenir.
 
 ## Sınırlar
 
@@ -106,4 +106,4 @@ tools/accept.ps1 <ref>     # tests three times, then the mutants on lines change
 
 MIT. `vendor/` altındaki depoya alınmış gramerler kendi MIT lisanslarını korur.
 
-<p align="center"><a href="README.md">English</a> · <b>Türkçe</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
+<p align="center"><a href="../README.md">English</a> · <b>Türkçe</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
