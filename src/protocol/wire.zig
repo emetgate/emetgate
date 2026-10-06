@@ -357,7 +357,32 @@ pub const ShadowNote = struct {
     copied_files: usize,
     skipped_links: usize,
     tree: ?shadow.TreeUse = null,
+    tree_only: bool = false,
 };
+
+pub fn treeNote(trace: runner.Trace) ?ShadowNote {
+    const tree = trace.tree orelse return null;
+    return .{ .root = "", .dotted = false, .linked_files = 0, .copied_files = 0, .skipped_links = 0, .tree = tree, .tree_only = true };
+}
+
+pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
+    const tree = used orelse return;
+    try js.objectField("gate_tree");
+    try js.beginObject();
+    try js.objectField("kind");
+    try js.write(@tagName(tree.mode));
+    switch (tree.mode) {
+        .kept => {
+            try js.objectField("private_copies");
+            try js.write(tree.private_copies);
+        },
+        .full_copy => {
+            try js.objectField("reason");
+            try js.write(@tagName(tree.reason));
+        },
+    }
+    try js.endObject();
+}
 
 pub const shadow_path_warning = "the shadow root has a path segment starting with a dot; tools that refuse dot directories (the send package behind express res.sendFile is one) fail there; start emetgate with --shadow-root <dir> on a path without one";
 
@@ -374,6 +399,7 @@ pub fn shadowNote(root: []const u8, trace: runner.Trace) ShadowNote {
 
 fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
     const n = note orelse return;
+    if (n.tree_only) return writeGateTree(js, n.tree);
     try js.objectField("shadow");
     try js.beginObject();
     try js.objectField("root");
@@ -385,23 +411,7 @@ fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
     try js.objectField("skipped_links");
     try js.write(n.skipped_links);
     try js.endObject();
-    if (n.tree) |tree| {
-        try js.objectField("gate_tree");
-        try js.beginObject();
-        try js.objectField("kind");
-        try js.write(@tagName(tree.mode));
-        switch (tree.mode) {
-            .kept => {
-                try js.objectField("private_copies");
-                try js.write(tree.private_copies);
-            },
-            .full_copy => {
-                try js.objectField("reason");
-                try js.write(@tagName(tree.reason));
-            },
-        }
-        try js.endObject();
-    }
+    try writeGateTree(js, n.tree);
     if (n.dotted) {
         try js.objectField("shadow_path_warning");
         try js.write(shadow_path_warning);

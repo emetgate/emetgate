@@ -49,6 +49,7 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     trace: ?*Trace = null,
 };
 
@@ -236,7 +237,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
+    var workspace = try prepareShadow(gpa, io, root, location, files, options.linked, options.gate_tree, options.trace);
     defer workspace.finish();
     try workspace.writeFile(rel, patched);
 
@@ -244,7 +245,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     return runStages(gpa, io, location.shadow, options.typecheck_command, command, options.limits);
 }
 
-pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, trace: ?*Trace) !shadow.Shadow {
+pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace) !shadow.Shadow {
     _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
     const workspace = try shadow.Shadow.prepare(io, .{
         .root_abs = root,
@@ -252,8 +253,8 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
         .shadow_abs = location.shadow,
         .files = files,
         .linked = linked,
-        .tree = shadow.operator_choice.tree,
-        .private = shadow.operator_choice.private,
+        .tree = choice.tree,
+        .private = choice.private,
     });
     if (trace) |t| {
         t.tree = workspace.use;

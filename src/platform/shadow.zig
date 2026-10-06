@@ -122,7 +122,7 @@ pub const FileLock = struct {
 
 pub const TreeMode = enum { kept, full_copy };
 
-pub const default_tree: TreeMode = .full_copy;
+pub const default_tree: TreeMode = .kept;
 
 pub const TreeReason = enum { none, requested, other_volume, no_hard_links };
 
@@ -137,7 +137,26 @@ pub const Choice = struct {
     private: []const []const u8 = &.{},
 };
 
-pub var operator_choice: Choice = .{};
+pub const Probe = struct {
+    tree_volume: ?u64 = null,
+    hard_links: ?bool = null,
+};
+
+pub var injected_probe: Probe = .{};
+
+fn treeVolume(tree: std.os.windows.HANDLE) !u64 {
+    if (builtin.is_test) {
+        if (injected_probe.tree_volume) |forced| return forced;
+    }
+    return dir_scan.volumeOf(tree);
+}
+
+fn linksSupported(root: std.os.windows.HANDLE) !bool {
+    if (builtin.is_test) {
+        if (injected_probe.hard_links) |forced| return forced;
+    }
+    return dir_scan.supportsHardLinks(root);
+}
 
 pub const Shadow = struct {
     io: std.Io,
@@ -189,11 +208,11 @@ pub const Shadow = struct {
         const root = (try dir_scan.openRoot(options.root_abs)) orelse return error.FileNotFound;
         defer dir_scan.close(root);
         const tree = held.dir.handle;
-        if (try dir_scan.volumeOf(root) != try dir_scan.volumeOf(tree)) {
+        if (try dir_scan.volumeOf(root) != try treeVolume(tree)) {
             held.close();
             return .{ .unavailable = .other_volume };
         }
-        if (!try dir_scan.supportsHardLinks(root)) {
+        if (!try linksSupported(root)) {
             held.close();
             return .{ .unavailable = .no_hard_links };
         }

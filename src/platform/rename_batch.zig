@@ -36,6 +36,7 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     trace: ?*runner.Trace = null,
     commit_step: ?*const disk.Step = null,
     language_service: ?*tsserver.Session = null,
@@ -364,6 +365,7 @@ pub fn tryRename(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
         .limits = options.limits,
         .allow_repo_memory = options.allow_repo_memory,
         .shadow_root = options.shadow_root,
+        .gate_tree = options.gate_tree,
         .trace = options.trace,
         .commit_step = options.commit_step,
     });

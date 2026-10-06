@@ -37,6 +37,7 @@ pub const BatchOptions = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     trace: ?*Trace = null,
     commit_step: ?*const disk.Step = null,
     language_service: ?*tsserver.Session = null,
@@ -253,7 +254,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
+    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, options.gate_tree, options.trace);
     defer workspace.finish();
     for (prepared) |p| {
         if (p.source_rel) |from| try workspace.deleteFile(from);

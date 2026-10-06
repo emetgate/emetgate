@@ -133,15 +133,12 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         const parsed = extractFlags(init, args[2..]);
         const request = TryRequest.parse(parsed.rest) orelse exitWithUsage();
         const trust: Trust = .{ .repo_config = parsed.allow_repo_config, .repo_memory = parsed.allow_repo_memory };
-        const private: []const []const u8 = if (request.shadow_private) |*prefix| prefix[0..1] else &.{};
-        shadow.operator_choice = .{ .tree = request.shadow_tree, .private = private };
         if (parsed.json) return tryRunJson(init, runtime, request, out, trust);
         return tryRun(init, runtime, request, out, trust);
     }
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
         if (server.refusedRunEntry(args[2..])) |refused| exitWithRunRefusal(refused);
         const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
-        shadow.operator_choice = policy.treeChoice();
         try server.serve(runtime.gpa, init.io, runtime, out, policy);
         return 0;
     }
@@ -253,6 +250,10 @@ const TryRequest = struct {
     shadow_tree: shadow.TreeMode,
     shadow_private: ?[]const u8,
 
+    fn treeChoice(self: *const TryRequest) shadow.Choice {
+        return .{ .tree = self.shadow_tree, .private = if (self.shadow_private) |*prefix| prefix[0..1] else &.{} };
+    }
+
     fn parse(args: []const [:0]const u8) ?TryRequest {
         if (args.len == 0 or args.len % 2 == 0) return null;
         var values: [try_flags.len]?[]const u8 = @splat(null);
@@ -313,6 +314,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
         .typecheck_command = typecheck_command,
         .allow_repo_memory = trust.repo_memory,
         .shadow_root = request.shadow_root,
+        .gate_tree = request.treeChoice(),
         .trace = &trace,
     }) catch |err| {
         if (err == error.WrittenButNotIndexed) std.debug.print("error: WrittenButNotIndexed: {s}: {s}\nrun: git add -- {s}\n", .{ request.path, wire.not_indexed_message, request.path });
@@ -417,6 +419,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         .typecheck_command = typecheck_command,
         .allow_repo_memory = trust.repo_memory,
         .shadow_root = request.shadow_root,
+        .gate_tree = request.treeChoice(),
         .trace = &trace,
     });
     defer result.deinit(gpa);
