@@ -82,7 +82,7 @@ pub fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
-        try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+        try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         break :blk true;
     };
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };

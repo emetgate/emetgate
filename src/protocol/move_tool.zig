@@ -50,7 +50,7 @@ pub fn callMove(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, arguments.target);
         } else {
-            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+            try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         }
         break :blk true;
     };

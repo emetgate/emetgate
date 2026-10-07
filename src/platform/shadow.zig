@@ -192,6 +192,7 @@ pub const Shadow = struct {
         tree: TreeMode = default_tree,
         private: []const []const u8 = &.{},
         committed: ?Committed = null,
+        blocked: ?*gate_tree.Report = null,
     };
 
     const Kept = union(enum) { ready: Shadow, unavailable: TreeReason };
@@ -201,11 +202,13 @@ pub const Shadow = struct {
         for (options.linked) |link| try validateRelative(link);
         for (options.private) |prefix| try validateRelative(prefix);
         var reason: TreeReason = .requested;
+        if (options.blocked) |report| report.clear();
         if (options.tree == .kept) {
             switch (try prepareKept(io, options)) {
                 .ready => |ready| return ready,
                 .unavailable => |why| reason = why,
             }
+            if (options.blocked) |report| report.clear();
         }
         var copied = try prepareCopy(io, options);
         copied.use = .{ .mode = .full_copy, .reason = reason, .source = if (options.committed != null) .head else .working };
@@ -222,7 +225,7 @@ pub const Shadow = struct {
         try writeRootMarker(io, options.shadow_abs, options.root_abs);
         try labelWithoutPropagation(options.shadow_abs);
 
-        const root = (try dir_scan.openRoot(options.root_abs)) orelse return error.FileNotFound;
+        const root = (dir_scan.openRoot(options.root_abs) catch |err| return rootRefused(options.blocked, err)) orelse return error.FileNotFound;
         defer dir_scan.close(root);
         const store: ?std.os.windows.HANDLE = if (options.committed) |committed| (try dir_scan.openRoot(committed.dir)) orelse return error.CommittedTreeIncomplete else null;
         defer if (store) |handle| dir_scan.close(handle);
@@ -258,7 +261,7 @@ pub const Shadow = struct {
             try wants.append(arena, .{ .rel = file, .source = file, .how = if (isUnderAny(file, options.private)) .copy else .link });
         }
         const tracked = wants.items.len;
-        var found: gate_tree.Found = .{};
+        var found: gate_tree.Found = .{ .report = options.blocked };
         for (options.linked) |link| try gate_tree.discover(arena, &pool, root, 0, link, &wants, &found);
         if (store != null) {
             var kept: usize = tracked;
@@ -272,7 +275,7 @@ pub const Shadow = struct {
 
         const roots: []const std.os.windows.HANDLE = if (store) |handle| &.{ root, handle } else &.{root};
         const outcomes = try arena.alloc(gate_tree.Outcome, wants.items.len);
-        _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = roots, .wants = wants.items, .outcomes = outcomes, .pool = &pool }) catch |err| switch (err) {
+        _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = roots, .wants = wants.items, .outcomes = outcomes, .report = options.blocked, .pool = &pool }) catch |err| switch (err) {
             error.GateTreeUnavailable => {
                 held.close();
                 return .{ .unavailable = .no_hard_links };
@@ -424,6 +427,11 @@ pub const Shadow = struct {
         if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};
     }
 };
+
+fn rootRefused(blocked: ?*gate_tree.Report, err: dir_scan.Error) dir_scan.Error {
+    if (blocked) |report| report.note(.working_tree, gate_tree.reasonOf(err), &.{"."});
+    return err;
+}
 
 fn unlinkAll(base_abs: []const u8, shadow_abs: []const u8) !void {
     if (builtin.os.tag != .windows) return;

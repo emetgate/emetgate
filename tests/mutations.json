@@ -10907,6 +10907,113 @@
       "kills": [
         "commit tree: a file missing from the store is noticed by the count and the store is built again"
       ]
+    },
+    {
+      "id": "KT13-working-directory-opened-with-delete-child",
+      "file": "src/platform/dir_scan.zig",
+      "from": "const dir_access: u32 = win.file_list_directory | win.file_read_attributes | win.synchronize;",
+      "to": "const dir_access: u32 = win.file_list_directory | win.file_delete_child | win.file_read_attributes | win.synchronize;",
+      "kills": [
+        "gate tree rights: a repository the user may modify but not fully control gets the kept tree on the first call and on later ones",
+        "gate tree rights: a doc write and a batch are committed in a repository the user may modify but not fully control"
+      ]
+    },
+    {
+      "id": "KT14-held-directory-opened-with-delete-child",
+      "file": "src/platform/own_dir.zig",
+      "from": "        win.generic_read | win.generic_write | win.file_traverse,",
+      "to": "        win.generic_read | win.generic_write | win.file_traverse | 0x00000040,",
+      "kills": [
+        "gate tree rights: a doc write and a batch are committed in a repository the user may modify but not fully control"
+      ]
+    },
+    {
+      "id": "KT15-denied-working-directory-not-named",
+      "file": "src/platform/gate_tree.zig",
+      "from": "                else => |e| return self.ctx.sourceRefused(e, key[1..]),",
+      "to": "                else => |e| return e,",
+      "kills": [
+        "gate tree rights: a working directory that cannot be listed is named in the reply with the reason"
+      ]
+    },
+    {
+      "id": "KT16-denied-linked-directory-not-named",
+      "file": "src/platform/gate_tree.zig",
+      "from": "            if (found.report) |report| report.note(.working_tree, reasonOf(e), &.{dir_rel});\n",
+      "to": "",
+      "kills": [
+        "gate tree rights: a linked directory or a directory inside it that cannot be listed is named in the reply"
+      ]
+    },
+    {
+      "id": "KT17-denied-directory-inside-a-linked-one-not-named",
+      "file": "src/platform/gate_tree.zig",
+      "from": "                        else => |e| return self.refused(e, at.rel, entry.name),",
+      "to": "                        else => |e| return e,",
+      "kills": [
+        "gate tree rights: a linked directory or a directory inside it that cannot be listed is named in the reply"
+      ]
+    },
+    {
+      "id": "KT18-denied-root-not-named",
+      "file": "src/platform/shadow.zig",
+      "from": "    if (blocked) |report| report.note(.working_tree, gate_tree.reasonOf(err), &.{\".\"});\n",
+      "to": "    if (false) blocked.?.note(.working_tree, gate_tree.reasonOf(err), &.{\".\"});\n",
+      "kills": [
+        "gate tree rights: a repository root that cannot be listed is named in the reply"
+      ]
+    },
+    {
+      "id": "KT19-reply-drops-the-blocked-path",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (blocked.len == 0) return writeError(writer, @errorName(err), exitCode(err));",
+      "to": "    if (true or blocked.len == 0) return writeError(writer, @errorName(err), exitCode(err));",
+      "kills": [
+        "gate tree rights: a working directory that cannot be listed is named in the reply with the reason",
+        "gate tree rights: a linked directory or a directory inside it that cannot be listed is named in the reply",
+        "gate tree rights: a repository root that cannot be listed is named in the reply"
+      ]
+    },
+    {
+      "id": "KT20-doc-write-reply-drops-the-blocked-path",
+      "file": "src/protocol/handlers.zig",
+      "from": "    defer event.trace.blocked = doc_trace.gate.blocked;\n",
+      "to": "",
+      "kills": [
+        "gate tree rights: a working directory that cannot be listed is named in the reply with the reason"
+      ]
+    },
+    {
+      "id": "KT21-run-reply-drops-the-blocked-path",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        .blocked = &event.trace.blocked,\n",
+      "to": "",
+      "kills": [
+        "gate tree rights: a working directory that cannot be listed is named in the reply with the reason",
+        "gate tree rights: a linked directory or a directory inside it that cannot be listed is named in the reply",
+        "gate tree rights: a repository root that cannot be listed is named in the reply"
+      ]
+    },
+    {
+      "id": "KT22-gate-does-not-pass-the-report",
+      "file": "src/platform/runner.zig",
+      "from": "        .blocked = if (trace) |t| &t.blocked else null,\n",
+      "to": "",
+      "kills": [
+        "gate tree rights: a working directory that cannot be listed is named in the reply with the reason",
+        "gate tree rights: a linked directory or a directory inside it that cannot be listed is named in the reply",
+        "gate tree rights: a repository root that cannot be listed is named in the reply"
+      ]
+    },
+    {
+      "id": "SB6-spawn-fault-read-after-the-process-exists",
+      "file": "src/platform/sandbox.zig",
+      "from": "    if (faulted(.spawn_as_user)) return error.SandboxUnavailable;\n    var info: std.os.windows.PROCESS.INFORMATION = undefined;",
+      "to": "    if (false and faulted(.spawn_as_user)) return error.SandboxUnavailable;\n    var info: std.os.windows.PROCESS.INFORMATION = undefined;",
+      "kills": [
+        "a service whose token is not low integrity is refused before it runs",
+        "a spawn fault is decided before the process is created, so no child of the test is left behind"
+      ]
     }
   ]
 }

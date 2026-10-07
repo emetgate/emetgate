@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const boundedness = @import("../engine/boundedness.zig");
 const shadow = @import("shadow.zig");
+const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
@@ -75,6 +76,7 @@ pub const Trace = struct {
     skipped_links: usize = 0,
     tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
+    blocked: gate_tree.Report = .{},
 };
 
 pub const Result = union(enum) {
@@ -313,6 +315,7 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
         .tree = choice.tree,
         .private = choice.private,
         .committed = committed,
+        .blocked = if (trace) |t| &t.blocked else null,
     });
     if (trace) |t| {
         t.tree = workspace.use;

@@ -1,6 +1,6 @@
 .{
     .name = .emetgate,
-    .version = "0.4.0",
+    .version = "0.5.1",
     .fingerprint = 0xda4cc3fd9cf936a2,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},

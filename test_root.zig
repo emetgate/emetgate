@@ -160,6 +160,7 @@ test {
     _ = @import("tests/redteam_link_tree.zig");
     _ = @import("tests/redteam_gate_tree.zig");
     _ = @import("tests/gate_tree_replies.zig");
+    _ = @import("tests/gate_tree_rights.zig");
     _ = @import("tests/redteam_git.zig");
     _ = @import("tests/redteam_commit.zig");
     _ = @import("tests/redteam_commit2.zig");

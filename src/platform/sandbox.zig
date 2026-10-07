@@ -395,20 +395,18 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     startup.info.hStdOutput = stdout_pipe.write;
     startup.info.hStdError = child_stderr;
 
+    if (faulted(.spawn_as_user)) return error.SandboxUnavailable;
     var info: std.os.windows.PROCESS.INFORMATION = undefined;
     const flags = win.create_suspended | win.create_unicode_environment | win.create_no_window | win.extended_startupinfo_present;
     const spawned: std.os.windows.BOOL = switch (backend) {
         .low => |token| win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
         .app => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
     };
-    if (faulted(.spawn_as_user) or spawned == .FALSE) {
-        if (faulted(.spawn_as_user)) return error.SandboxUnavailable;
-        return switch (win.GetLastError()) {
-            win.error_file_not_found, win.error_path_not_found, win.error_directory => error.FileNotFound,
-            win.error_bad_exe_format => error.InvalidExe,
-            else => error.SandboxUnavailable,
-        };
-    }
+    if (spawned == .FALSE) return switch (win.GetLastError()) {
+        win.error_file_not_found, win.error_path_not_found, win.error_directory => error.FileNotFound,
+        win.error_bad_exe_format => error.InvalidExe,
+        else => error.SandboxUnavailable,
+    };
 
     return .{
         .id = info.hProcess,
@@ -448,7 +446,7 @@ pub fn spawnService(gpa: Allocator, argv: []const []const u8, cwd: []const u8) !
     defer token.close();
     const child = try spawnRestricted(gpa, .{ .low = token }, .{ .argv = argv, .cwd = cwd }, .service);
     errdefer {
-        _ = win.TerminateProcess(child.id.?, win.terminated_exit_code);
+        endProcess(child.id.?);
         std.os.windows.CloseHandle(child.stdin.?.handle);
         std.os.windows.CloseHandle(child.stdout.?.handle);
         std.os.windows.CloseHandle(child.id.?);
@@ -458,6 +456,11 @@ pub fn spawnService(gpa: Allocator, argv: []const []const u8, cwd: []const u8) !
     try job.assign(child.id.?);
     try resumeMainThread(child.thread_handle);
     return .{ .job = job, .process = child.id.?, .stdin = child.stdin.?, .stdout = child.stdout.? };
+}
+
+fn endProcess(process: std.os.windows.HANDLE) void {
+    _ = win.TerminateProcess(process, win.terminated_exit_code);
+    _ = win.WaitForSingleObject(process, win.stop_wait_ms);
 }
 
 pub fn environmentValue(arena: Allocator, name: [:0]const u16) !?[]u8 {
@@ -1123,4 +1126,74 @@ test "a service whose token is not low integrity is refused before it runs" {
         injected_fault = step;
         try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, "."));
     }
+}
+
+const snapshot_win = struct {
+    const snap_process: u32 = 0x2;
+
+    const ProcessEntry = extern struct {
+        size: u32,
+        usage: u32,
+        process_id: u32,
+        default_heap_id: usize,
+        module_id: u32,
+        threads: u32,
+        parent_process_id: u32,
+        priority: i32,
+        flags: u32,
+        exe_file: [260]u16,
+    };
+
+    extern "kernel32" fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) callconv(.winapi) std.os.windows.HANDLE;
+    extern "kernel32" fn Process32FirstW(snapshot: std.os.windows.HANDLE, entry: *ProcessEntry) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn Process32NextW(snapshot: std.os.windows.HANDLE, entry: *ProcessEntry) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn Sleep(milliseconds: u32) callconv(.winapi) void;
+};
+
+fn ownChildrenNamed(image: []const u8) !usize {
+    const snapshot = snapshot_win.CreateToolhelp32Snapshot(snapshot_win.snap_process, 0);
+    if (snapshot == std.os.windows.INVALID_HANDLE_VALUE) return error.SnapshotFailed;
+    defer std.os.windows.CloseHandle(snapshot);
+    const own = win.GetCurrentProcessId();
+    var entry: snapshot_win.ProcessEntry = undefined;
+    entry.size = @sizeOf(snapshot_win.ProcessEntry);
+    var count: usize = 0;
+    var more = snapshot_win.Process32FirstW(snapshot, &entry);
+    while (more != .FALSE) : (more = snapshot_win.Process32NextW(snapshot, &entry)) {
+        if (entry.parent_process_id != own) continue;
+        var name: [260 * 3]u8 = undefined;
+        const units = std.mem.sliceTo(&entry.exe_file, 0);
+        if (std.ascii.eqlIgnoreCase(name[0..std.unicode.wtf16LeToWtf8(&name, units)], image)) count += 1;
+    }
+    return count;
+}
+
+fn reportLingering(image: []const u8, expected: usize) void {
+    var waited: u32 = 0;
+    while (waited < 5000) : (waited += 50) {
+        if ((ownChildrenNamed(image) catch return) == expected) {
+            std.debug.print("the extra child left the process list within {d} ms\n", .{waited});
+            return;
+        }
+        snapshot_win.Sleep(50);
+    }
+    std.debug.print("the extra child is still listed after {d} ms\n", .{waited});
+}
+
+test "a spawn fault is decided before the process is created, so no child of the test is left behind" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    defer injected_fault = null;
+    const image = std.fs.path.basename(build_options.probe_path);
+    const before = try ownChildrenNamed(image);
+    inline for (std.meta.fields(TokenStep)) |field| {
+        injected_fault = @enumFromInt(field.value);
+        try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, "."));
+    }
+    injected_fault = null;
+    const after = try ownChildrenNamed(image);
+    if (after != before) reportLingering(image, before);
+    try testing.expectEqual(before, after);
+    var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
+    try testing.expectEqual(before + 1, try ownChildrenNamed(image));
+    service.stop();
 }

@@ -484,7 +484,7 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, file);
         } else {
-            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+            try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         }
         break :blk true;
     };
@@ -600,7 +600,7 @@ fn callWriteDoc(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, file);
         } else {
-            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+            try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         }
         break :blk true;
     };
@@ -621,6 +621,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, place.abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
     var doc_trace: doc_writer.Trace = .{};
+    defer event.trace.blocked = doc_trace.gate.blocked;
     const result = try doc_writer.tryWriteDoc(gpa, io, .{
         .file_abs = place.abs,
         .selector = picked.selector,
@@ -714,7 +715,7 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, firstAbsentFile(edits_val.array.items));
         } else {
-            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+            try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         }
         break :blk true;
     };

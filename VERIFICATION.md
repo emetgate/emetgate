@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1753**
-- Mutations declared in `tests/mutations.json`: **1105**
-  - killed: **1071**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1761**
+- Mutations declared in `tests/mutations.json`: **1116**
+  - killed: **1082**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -179,7 +179,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-119 mutation(s).
+122 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -302,6 +302,9 @@ python tools/verification_page.py --check
 | `CT7-recover-leaves-the-store` | `src/platform/shadow.zig` | `try Dir.cwd().deleteTree(io, committed);` -> `` | commit tree: recover removes the store and the trees with the workspace | killed |
 | `CT24-committing-call-links-working-files` | `src/platform/runner.zig` | `return prepareShadow(gpa, io, root, location, location.shadow, ...` -> `return prepareShadow(gpa, io, root, location, location.shadow, ...` | redteam2 commit: a hand edit to another file that keeps its size and its time i...; redte... | killed |
 | `CT25-store-not-rebuilt-after-a-miscount` | `src/platform/runner.zig` | `try commit_store.invalidate(gpa, io, location.committed);` -> `` | commit tree: a file missing from the store is noticed by the count and the stor... | killed |
+| `KT18-denied-root-not-named` | `src/platform/shadow.zig` | `if (blocked) \|report\| report.note(.working_tree, gate_tree.re...` -> `if (false) blocked.?.note(.working_tree, gate_tree.reasonOf(err...` | gate tree rights: a repository root that cannot be listed is named in the reply | killed |
+| `KT22-gate-does-not-pass-the-report` | `src/platform/runner.zig` | `.blocked = if (trace) \|t\| &t.blocked else null,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
+| `SB6-spawn-fault-read-after-the-process-exists` | `src/platform/sandbox.zig` | `if (faulted(.spawn_as_user)) return error.SandboxUnavailable;  ...` -> `if (false and faulted(.spawn_as_user)) return error.SandboxUnav...` | a service whose token is not low integrity is refused before it runs; a spawn fault is de... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -638,7 +641,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-566 mutation(s).
+574 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1208,6 +1211,14 @@ python tools/verification_page.py --check
 | `CT21-reply-hides-where-tracked-files-came-from` | `src/protocol/wire.zig` | `if (tree.source == .head) {` -> `if (false and tree.source == .head) {` | commit tree: the reply says the tracked files came from HEAD, and a call that d...; commi... | killed |
 | `CT22-run-tool-shares-the-committing-tree` | `src/platform/run_command.zig` | `const tree_abs = if (options.beside_commits) location.working_s...` -> `const tree_abs = if (false and options.beside_commits) location...` | commit tree: the run tool beside commits keeps its own tree of working files an... | killed |
 | `CT23-verify-reruns-the-test-in-a-sparse-worktree` | `src/platform/verify_run.zig` | `if (std.mem.eql(u8, std.mem.trim(u8, sparse, " \r\n"), "true"))...` -> `if (false and std.mem.eql(u8, std.mem.trim(u8, sparse, " \r\n")...` | redteam2 commit: in a cone sparse checkout with a sparse index the gate sees th... | killed |
+| `KT13-working-directory-opened-with-delete-child` | `src/platform/dir_scan.zig` | `const dir_access: u32 = win.file_list_directory \| win.file_rea...` -> `const dir_access: u32 = win.file_list_directory \| win.file_del...` | gate tree rights: a repository the user may modify but not fully control gets t...; gate ... | killed |
+| `KT14-held-directory-opened-with-delete-child` | `src/platform/own_dir.zig` | `win.generic_read \| win.generic_write \| win.file_traverse,` -> `win.generic_read \| win.generic_write \| win.file_traverse \| 0...` | gate tree rights: a doc write and a batch are committed in a repository the use... | killed |
+| `KT15-denied-working-directory-not-named` | `src/platform/gate_tree.zig` | `else => \|e\| return self.ctx.sourceRefused(e, key[1..]),` -> `else => \|e\| return e,` | gate tree rights: a working directory that cannot be listed is named in the rep... | killed |
+| `KT16-denied-linked-directory-not-named` | `src/platform/gate_tree.zig` | `if (found.report) \|report\| report.note(.working_tree, reasonO...` -> `` | gate tree rights: a linked directory or a directory inside it that cannot be li... | killed |
+| `KT17-denied-directory-inside-a-linked-one-not-named` | `src/platform/gate_tree.zig` | `else => \|e\| return self.refused(e, at.rel, entry.name),` -> `else => \|e\| return e,` | gate tree rights: a linked directory or a directory inside it that cannot be li... | killed |
+| `KT19-reply-drops-the-blocked-path` | `src/protocol/wire.zig` | `if (blocked.len == 0) return writeError(writer, @errorName(err)...` -> `if (true or blocked.len == 0) return writeError(writer, @errorN...` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
+| `KT20-doc-write-reply-drops-the-blocked-path` | `src/protocol/handlers.zig` | `defer event.trace.blocked = doc_trace.gate.blocked;` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep... | killed |
+| `KT21-run-reply-drops-the-blocked-path` | `src/protocol/run_tool.zig` | `.blocked = &event.trace.blocked,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
 
 ## What this system does not prove
 

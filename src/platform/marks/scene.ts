@@ -273,15 +273,40 @@ const fit = (px: Int32Array, cols: number, rows: number): Uint32Array => {
   return words
 }
 
-export const FACE_COLUMNS = 3
-export const FACE_ROWS = 1
+export const WORD_COLUMNS = 3
+export const WORD_ROWS = 1
 
-export const face = (isOk: boolean): string => {
-  const eye = isOk ? 0x00dd88 : 0xdd0000
+const ALEF = 0x5d0
+const MEM = 0x5de
+const TAV = 0x5ea
+const PASSED = 0x00dd88
+const REFUSED = 0xdd0000
+const ERASED = 0x333333
+
+const CLAY = 0xddbb88
+const GATE = [0xffcc33, 0xffdd55] as const
+const WRITING = [1, 1, 2, 2, 3, 3, 3, 3] as const
+
+export type Hand = 'write' | 'read' | 'weigh'
+
+export const writingWord = (hand: Hand, beat: number): string => {
+  const shown = hand === 'write' ? (WRITING[beat % WRITING.length] ?? 3) : 3
+  const ink = hand === 'weigh' ? (GATE[beat % GATE.length] ?? CLAY) : CLAY
   const words = Uint32Array.of(
-    0x25a0, eye, DEFAULT_COLOR,
-    0x20, DEFAULT_COLOR, DEFAULT_COLOR,
-    0x25a0, eye, DEFAULT_COLOR,
+    ALEF, shown >= 1 ? ink : ERASED, DEFAULT_COLOR,
+    MEM, shown >= 2 ? ink : ERASED, DEFAULT_COLOR,
+    TAV, shown >= 3 ? ink : ERASED, DEFAULT_COLOR,
+  )
+
+  return toBase64(new Uint8Array(words.buffer))
+}
+
+export const verdictWord = (isOk: boolean): string => {
+  const ink = isOk ? PASSED : REFUSED
+  const words = Uint32Array.of(
+    ALEF, isOk ? ink : ERASED, DEFAULT_COLOR,
+    MEM, ink, DEFAULT_COLOR,
+    TAV, ink, DEFAULT_COLOR,
   )
 
   return toBase64(new Uint8Array(words.buffer))
