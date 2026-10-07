@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1505**
-- Mutations declared in `tests/mutations.json`: **966**
-  - killed: **935**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1514**
+- Mutations declared in `tests/mutations.json`: **971**
+  - killed: **940**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **5**
@@ -31,7 +31,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
   - `tests/redteam_write_doc.zig`: 8
-- Security findings recorded in README's Security History: **8**
+- Security findings recorded in README's Security History: **9**
 
 ## Reproducing this
 
@@ -173,7 +173,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-96 mutation(s).
+97 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -273,10 +273,11 @@ python tools/verification_page.py --check
 | `KT18-denied-root-not-named` | `src/platform/shadow.zig` | `if (blocked) \|report\| report.note(.working_tree, gate_tree.re...` -> `if (false) blocked.?.note(.working_tree, gate_tree.reasonOf(err...` | gate tree rights: a repository root that cannot be listed is named in the reply | killed |
 | `KT22-gate-does-not-pass-the-report` | `src/platform/runner.zig` | `.blocked = if (trace) \|t\| &t.blocked else null,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
 | `SB6-spawn-fault-read-after-the-process-exists` | `src/platform/sandbox.zig` | `if (faulted(.spawn_as_user)) return error.SandboxUnavailable;  ...` -> `if (false and faulted(.spawn_as_user)) return error.SandboxUnav...` | a service whose token is not low integrity is refused before it runs; a spawn fault is de... | killed |
+| `BD3-batch-plans-code-before-refusing-a-source-doc-edit` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try docnode.refuseSource(edit....` -> `` | mixed batch: a symbol edit and a doc edit of the same source file are refused a... | killed |
 
 ### Disk, repository boundary and atomic commit
 
-58 mutation(s).
+59 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -338,6 +339,7 @@ python tools/verification_page.py --check
 | `OD6-batch-journal-written-without-holding-its-directory` | `src/platform/disk.zig` | `const held: ?own_dir.Held = if (batch) \|b\| own_dir.hold(b.io,...` -> `const held: ?own_dir.Held = null;     if (batch) \|b\| std.Io.D...` | own dir: a gated write is refused by name when .emetgate/journal is a junction,... | killed |
 | `OD8-any-json-is-applied-as-a-journal` | `src/platform/disk.zig` | `if (own_dir.tagOf(entry.name, &.{".json"}) == null) {          ...` -> `` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
 | `OD9-commit-records-removed-by-ending` | `src/platform/commit_record.zig` | `if (own_dir.tagOf(entry.name, &.{ record_suffix, staged_suffix,...` -> `if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.m...` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
+| `BD4-plan-doc-skips-the-source-refusal` | `src/platform/batch_plan.zig` | `try docnode.refuseSource(edit.file_abs);` -> `` | planDoc refuses a file of a registered language before it reads it | killed |
 
 ### Rules and the q: query engine
 
@@ -588,7 +590,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-475 mutation(s).
+478 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1067,6 +1069,9 @@ python tools/verification_page.py --check
 | `KT19-reply-drops-the-blocked-path` | `src/protocol/wire.zig` | `if (blocked.len == 0) return writeError(writer, @errorName(err)...` -> `if (true or blocked.len == 0) return writeError(writer, @errorN...` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
 | `KT20-doc-write-reply-drops-the-blocked-path` | `src/protocol/handlers.zig` | `defer event.trace.blocked = doc_trace.gate.blocked;` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep... | killed |
 | `KT21-run-reply-drops-the-blocked-path` | `src/protocol/run_tool.zig` | `.blocked = &event.trace.blocked,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
+| `BD1-source-doc-edit-not-refused` | `src/engine/docnode.zig` | `if (registry.forPath(path) != null) return error.UseSymbolTools...` -> `if (false and registry.forPath(path) != null) return error.UseS...` | batch doc on source: a line range that adds comments under an enforced no_comme...; batch... | killed |
+| `BD2-write-doc-skips-the-source-refusal` | `src/platform/doc_writer.zig` | `try docnode.refuseSource(options.file_abs);` -> `` | write_doc on source: a line range of a source file is refused like the batch, a... | killed |
+| `BD5-doc-only-batch-writes-an-empty-receipt` | `src/protocol/handlers.zig` | `if (edits.len == 0) return;` -> `if (false and edits.len == 0) return;` | batch doc on a document: a batch of one Markdown edit commits, answers, is logg... | killed |
 
 ## What this system does not prove
 

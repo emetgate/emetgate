@@ -9523,6 +9523,56 @@
         "a service whose token is not low integrity is refused before it runs",
         "a spawn fault is decided before the process is created, so no child of the test is left behind"
       ]
+    },
+    {
+      "id": "BD1-source-doc-edit-not-refused",
+      "file": "src/engine/docnode.zig",
+      "from": "    if (registry.forPath(path) != null) return error.UseSymbolToolsForSource;\n",
+      "to": "    if (false and registry.forPath(path) != null) return error.UseSymbolToolsForSource;\n",
+      "kills": [
+        "batch doc on source: a line range that adds comments under an enforced no_comment rule is refused, nothing is written and the call is logged",
+        "batch doc on source: the same edit is refused under an enforced forbid rule and under an advisory rule",
+        "write_doc on source: a line range of a source file is refused like the batch, and nothing is written",
+        "mixed batch: a symbol edit of one file and a doc edit of another source file are refused together",
+        "mixed batch: a symbol edit and a doc edit of the same source file are refused as a source doc edit",
+        "planDoc refuses a file of a registered language before it reads it"
+      ]
+    },
+    {
+      "id": "BD2-write-doc-skips-the-source-refusal",
+      "file": "src/platform/doc_writer.zig",
+      "from": "    try docnode.refuseSource(options.file_abs);\n",
+      "to": "",
+      "kills": [
+        "write_doc on source: a line range of a source file is refused like the batch, and nothing is written"
+      ]
+    },
+    {
+      "id": "BD3-batch-plans-code-before-refusing-a-source-doc-edit",
+      "file": "src/platform/batch.zig",
+      "from": "    for (options.doc_edits) |edit| try docnode.refuseSource(edit.file_abs);\n",
+      "to": "",
+      "kills": [
+        "mixed batch: a symbol edit and a doc edit of the same source file are refused as a source doc edit"
+      ]
+    },
+    {
+      "id": "BD4-plan-doc-skips-the-source-refusal",
+      "file": "src/platform/batch_plan.zig",
+      "from": "    try docnode.refuseSource(edit.file_abs);\n",
+      "to": "",
+      "kills": [
+        "planDoc refuses a file of a registered language before it reads it"
+      ]
+    },
+    {
+      "id": "BD5-doc-only-batch-writes-an-empty-receipt",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (edits.len == 0) return;\n",
+      "to": "    if (false and edits.len == 0) return;\n",
+      "kills": [
+        "batch doc on a document: a batch of one Markdown edit commits, answers, is logged and leaves no receipt"
+      ]
     }
   ]
 }
