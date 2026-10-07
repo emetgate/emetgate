@@ -744,6 +744,7 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, lines: 
     }
 
     const commit = try gpa.dupe(u8, try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p", head.oid, "-F", "-" }, try commit_message.stored(arena, message)));
+    keepListing(tree, lines);
     return .{ .commit = commit, .entries = entries };
 }
 

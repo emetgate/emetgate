@@ -360,7 +360,7 @@ test "commit derive: mending the store refuses a junction where its files are ke
     try testing.expect(!existsAbs(try std.fs.path.join(env.arena(), &.{ elsewhere, "src" })));
 }
 
-test "commit derive: the listing of a tree is asked of git once while HEAD stays, and again when HEAD has moved" {
+test "commit derive: the listing of a tree is asked of git once while HEAD stays or moves by emetgate's own commit, and again when someone else moved it" {
     try skipOffWindows();
     var case: Plain = undefined;
     try case.init(&files);
@@ -381,4 +381,10 @@ test "commit derive: the listing of a tree is asked of git once while HEAD stays
     const moved = try env.head();
     try expectLanded(env, try swap(env, new_body, has_new), moved);
     try testing.expectEqual(started + 2, git_commit.listings_read);
+
+    const landed = try env.head();
+    try expectLanded(env, try swap(env, other_body, has_new), landed);
+    try testing.expectEqual(started + 2, git_commit.listings_read);
+    try testing.expectEqualStrings("M\tsrc/util.ts", try env.git(&.{ "diff", "--name-status", "HEAD^", "HEAD" }));
+    try testing.expectEqualStrings("", try env.git(&.{ "status", "--porcelain" }));
 }

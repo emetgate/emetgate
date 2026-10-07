@@ -11253,7 +11253,7 @@
       "from": "    if (!std.mem.eql(u8, last_listing.tree[0..last_listing.tree_len], tree)) return null;\n",
       "to": "    if (false and !std.mem.eql(u8, last_listing.tree[0..last_listing.tree_len], tree)) return null;\n",
       "kills": [
-        "commit derive: the listing of a tree is asked of git once while HEAD stays, and again when HEAD has moved"
+        "commit derive: the listing of a tree is asked of git once while HEAD stays or moves by emetgate's own commit, and again when someone else moved it"
       ],
       "note": "the targets and the tested files would be held to the blobs of a tree HEAD no longer has"
     },
