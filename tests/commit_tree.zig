@@ -346,12 +346,13 @@ test "commit tree: the run tool and a call that does not commit keep the tree of
     try testing.expectEqualStrings(flag_new, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.shadow, "src", "flag.ts" })));
     try testing.expectEqualStrings(flag_old, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.committed_shadow, "src", "flag.ts" })));
 
+    try expectRefused(env, try swap(env, other_body, has_new), try env.head());
+
     const plain = try callWith(env, new_body, .{ .root = "", .test_command = has_new }, false);
     errdefer std.debug.print("{s}\n", .{plain.text});
     try testing.expect(!plain.is_error);
     try testing.expect(contains(try env.read("src/util.ts"), "b + a"));
     try testing.expectEqualStrings(flag_old, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.committed_shadow, "src", "flag.ts" })));
-    try expectRefused(env, try swap(env, other_body, has_new), try env.head());
 }
 
 fn expectNamed(env: *Env, outcome: anyerror!Reply, name: []const u8, before: []const u8) !void {
