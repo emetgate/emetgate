@@ -289,7 +289,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     const expected = try symbol.parseExpected(request.hash);
     const target = try newFileTarget(init, gpa, request.path, expected);
     defer if (target) |place| place.deinit(gpa);
-    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try emetgate.repo.finalPath(gpa, init.io, request.path);
     defer gpa.free(file_abs);
 
     const body_from_file: ?[]u8 = switch (request.body) {
@@ -395,7 +395,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     const expected = try symbol.parseExpected(request.hash);
     const target = try newFileTarget(init, gpa, request.path, expected);
     defer if (target) |place| place.deinit(gpa);
-    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try emetgate.repo.finalPath(gpa, init.io, request.path);
     defer gpa.free(file_abs);
 
     const body_from_file: ?[]u8 = switch (request.body) {

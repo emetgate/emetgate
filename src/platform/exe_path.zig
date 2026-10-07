@@ -108,6 +108,31 @@ fn fullyQualified(path: []const u8) bool {
 }
 
 pub fn finalName(buf: []u16, path: []const u8) ?[]const u16 {
+    return finalNameIn(buf, path, win.volume_name_nt);
+}
+
+pub fn finalDosPath(gpa: Allocator, path: []const u8) error{OutOfMemory}!?[]u8 {
+    var buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    const final = finalNameIn(&buf, path, win.volume_name_dos) orelse return null;
+    const verbatim = std.unicode.wtf16LeToWtf8Alloc(gpa, final) catch return error.OutOfMemory;
+    defer gpa.free(verbatim);
+    return plainPath(gpa, verbatim);
+}
+
+const verbatim_prefix = "\\\\?\\";
+const verbatim_unc_prefix = "\\\\?\\UNC\\";
+
+pub fn plainPath(gpa: Allocator, verbatim: []const u8) error{OutOfMemory}!?[]u8 {
+    if (std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {
+        return try std.fmt.allocPrint(gpa, "\\\\{s}", .{verbatim[verbatim_unc_prefix.len..]});
+    }
+    if (!std.mem.startsWith(u8, verbatim, verbatim_prefix)) return null;
+    const rest = verbatim[verbatim_prefix.len..];
+    if (rest.len < 3 or rest[1] != ':' or rest[2] != '\\') return null;
+    return try gpa.dupe(u8, rest);
+}
+
+fn finalNameIn(buf: []u16, path: []const u8, volume: windows.DWORD) ?[]const u16 {
     var wide: [windows.PATH_MAX_WIDE:0]u16 = undefined;
     const prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\");
     const long = path.len >= long_from and std.ascii.isAlphabetic(path[0]) and path[1] == ':';
@@ -122,7 +147,7 @@ pub fn finalName(buf: []u16, path: []const u8) ?[]const u16 {
     const handle = win.CreateFileW(&wide, win.file_read_attributes, win.file_share_all, null, win.open_existing, win.file_flag_backup_semantics, null);
     if (handle == windows.INVALID_HANDLE_VALUE) return null;
     defer windows.CloseHandle(handle);
-    const got = win.GetFinalPathNameByHandleW(handle, buf.ptr, @intCast(buf.len), win.volume_name_nt);
+    const got = win.GetFinalPathNameByHandleW(handle, buf.ptr, @intCast(buf.len), volume);
     if (got == 0 or got >= buf.len) return null;
     return buf[0..got];
 }
@@ -194,6 +219,7 @@ const win = struct {
     const open_existing: windows.DWORD = 3;
     const file_flag_backup_semantics: windows.DWORD = 0x02000000;
     const volume_name_nt: windows.DWORD = 0x2;
+    const volume_name_dos: windows.DWORD = 0x0;
 
     extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: windows.DWORD, share: windows.DWORD, security: ?*anyopaque, disposition: windows.DWORD, flags: windows.DWORD, template: ?windows.HANDLE) callconv(.winapi) windows.HANDLE;
     extern "kernel32" fn GetFinalPathNameByHandleW(file: windows.HANDLE, buffer: [*]u16, size: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
@@ -322,4 +348,31 @@ test "exe path: the system directory gives cmd.exe and the live PATH gives a pro
     const where = try resolve(testing.allocator, "where", null);
     defer testing.allocator.free(where);
     try testing.expect(fullyQualified(where));
+}
+
+test "exe path: a final name becomes a drive or share path, and any other form gives none" {
+    const drive = (try plainPath(testing.allocator, "\\\\?\\C:\\work\\repo")).?;
+    defer testing.allocator.free(drive);
+    try testing.expectEqualStrings("C:\\work\\repo", drive);
+    const share = (try plainPath(testing.allocator, "\\\\?\\UNC\\host\\share\\repo")).?;
+    defer testing.allocator.free(share);
+    try testing.expectEqualStrings("\\\\host\\share\\repo", share);
+    for ([_][]const u8{ "C:\\work\\repo", "\\\\?\\Volume{4c1b02c1-d990-11dc-99ae-806e6f6e6963}\\repo", "\\\\?\\C:", "\\\\?\\", "ABCDC:\\work\\repo", "" }) |other| {
+        errdefer std.debug.print("accepted: {s}\n", .{other});
+        try testing.expectEqual(@as(?[]u8, null), try plainPath(testing.allocator, other));
+    }
+}
+
+test "exe path: the final drive path of a directory names it the long way whichever way it was reached" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var layout = try Layout.init();
+    defer layout.deinit();
+    var b: [2048]u8 = undefined;
+    const direct = (try finalDosPath(testing.allocator, layout.join(&b, "repo\\bin"))).?;
+    defer testing.allocator.free(direct);
+    try testing.expect(std.ascii.endsWithIgnoreCase(direct, "\\repo\\bin"));
+    const climbed = (try finalDosPath(testing.allocator, layout.join(&b, "work/../repo/bin"))).?;
+    defer testing.allocator.free(climbed);
+    try testing.expectEqualStrings(direct, climbed);
+    try testing.expectEqual(@as(?[]u8, null), try finalDosPath(testing.allocator, layout.join(&b, "repo\\missing")));
 }
