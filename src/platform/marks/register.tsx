@@ -36,6 +36,7 @@ const verdict = atom({ plugin: 'emetgate-marks', key: 'verdict' } as const, null
 const isHidden = atom({ plugin: 'emetgate-marks', key: 'isHidden' } as const, true)
 const isSilent = atom({ plugin: 'emetgate-marks', key: 'isSilent' } as const, false)
 const beat = atom({ plugin: 'emetgate-marks', key: 'beat' } as const, 0)
+const verdicts = atom({ plugin: 'emetgate-marks', key: 'verdicts' } as const, {})
 
 const tail = (path: string): string =>
   path.split('\\').join('/').split('/').slice(-2).join('/')
@@ -73,6 +74,17 @@ const noteOf = (text: string): string => {
     return ''
   }
 }
+
+type Row = { tool_use_id?: string; isRunning: boolean; isErrored: boolean; isInterrupted: boolean; output?: unknown }
+
+const recorded = (known: Readonly<Record<string, boolean>>, row: Row): boolean | undefined =>
+  row.tool_use_id === undefined ? undefined : known[row.tool_use_id]
+
+const isDecided = (known: Readonly<Record<string, boolean>>, row: Row): boolean =>
+  recorded(known, row) !== undefined || (!row.isRunning && (row.output !== undefined || row.isErrored || row.isInterrupted))
+
+const passedOf = (known: Readonly<Record<string, boolean>>, row: Row): boolean =>
+  recorded(known, row) ?? (!row.isErrored && !row.isInterrupted)
 
 export const register: Register = on => {
   let isOff = true
@@ -228,6 +240,7 @@ export const register: Register = on => {
         turnPassed += isOk ? 1 : 0
         turnRefused += isOk ? 0 : 1
         await update($, verdict, () => ({ isOk, startFrame }))
+        await update($, verdicts, known => ({ ...known, [e.tool_use_id]: isOk }))
         verdictLimit = isOk ? OK_TICKS : BAD_TICKS
         verdictTicks = 0
       }
@@ -393,11 +406,12 @@ export const register: Register = on => {
       return base
     }
 
+    const known = await read($, verdicts)
     const writes = e.props.calls.filter(call => {
       const name = String(call.tool)
       const at = name.lastIndexOf(MARK)
 
-      return at >= 0 && !call.isRunning && WRITERS.includes(name.slice(at + MARK.length))
+      return at >= 0 && WRITERS.includes(name.slice(at + MARK.length)) && isDecided(known, call)
     })
 
     if (writes.length === 0) {
@@ -411,7 +425,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {base ?? null}
         {writes.map((call, index) => {
-          const isOk = !call.isErrored && !call.isInterrupted
+          const isOk = passedOf(known, call)
           const target = targetOf((call.input ?? {}) as Record<string, unknown>)
           if (!isTerminal) {
             return (
@@ -444,12 +458,18 @@ export const register: Register = on => {
     const name = String(e.props.tool)
     const at = name.lastIndexOf(MARK)
 
-    if (at < 0 || e.props.isRunning || !WRITERS.includes(name.slice(at + MARK.length)) || (await read($, isSilent))) {
+    if (at < 0 || !WRITERS.includes(name.slice(at + MARK.length)) || (await read($, isSilent))) {
+      return base
+    }
+
+    const known = await read($, verdicts)
+
+    if (!isDecided(known, e.props)) {
       return base
     }
 
     const { Box, Text } = $.ui.resolve(e)
-    const isOk = !e.props.isErrored && !e.props.isInterrupted
+    const isOk = passedOf(known, e.props)
 
     const words = (
       <Text color={isOk ? 'green' : 'red'} bold>
