@@ -6,6 +6,8 @@
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
   <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
+  <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
 </p>
 
 <p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></p>
@@ -32,6 +34,13 @@
 emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
 emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
 ```
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
+    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
+  </picture>
+</p>
 
 ## 安装
 
@@ -100,6 +109,21 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 - 沙箱阻止向副本之外写入。它不阻止读取或网络访问。
 - 在闸门之外所做的修改不在覆盖范围内。lockdown 正是为此而设。
 - Node.js 24.15.0 及更早版本在 Windows 回环连接上会间歇性崩溃；请使用 24.16.0 或更高版本。
+
+## 名字的由来
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
+  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+</picture>
+
+在布拉格魔像的传说中，拉比勒夫在泥人的额头上写下 **אמת**（*emet*，真理），泥人便活了过来。抹去第一个字母，剩下 **מת**（*met*，死亡），魔像随即停下。
+
+Emetgate 用同一个词标记每一次写入：闸门放行时是完整的词，拒绝时第一个字母被抹去。
+
+<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+
+<br clear="left">
 
 ## 构建
 
