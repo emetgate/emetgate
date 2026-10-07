@@ -404,7 +404,7 @@ test "redteam commit: a user commit made while the tests run leaves no write wit
     defer location.deinit(testing.allocator);
 
     const hash = try case.hashOf("src/util.ts", "add");
-    const racer = try std.Thread.spawn(.{}, raceCommit, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.shadow) });
+    const racer = try std.Thread.spawn(.{}, raceCommit, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.committed_shadow) });
     const outcome = case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body }, .{ "message", "fix: swap" } }, .{ .test_command = racing_cmd, .commit = true });
     racer.join();
     const reply = try outcome;
@@ -424,7 +424,7 @@ test "redteam commit: a user commit made while the tests run is not overwritten"
     defer location.deinit(testing.allocator);
 
     const hash = try case.hashOf("src/util.ts", "add");
-    const racer = try std.Thread.spawn(.{}, raceCommit, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.shadow) });
+    const racer = try std.Thread.spawn(.{}, raceCommit, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.committed_shadow) });
     const outcome = case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body }, .{ "message", "fix: swap" } }, .{ .test_command = racing_cmd, .commit = true });
     racer.join();
     _ = try outcome;
@@ -458,7 +458,7 @@ test "redteam commit: a branch switch made while the tests run puts the commit o
     const first = try case.git(&.{ "symbolic-ref", "--short", "HEAD" });
 
     const hash = try case.hashOf("src/util.ts", "add");
-    const racer = try std.Thread.spawn(.{}, raceBranchSwitch, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.shadow) });
+    const racer = try std.Thread.spawn(.{}, raceBranchSwitch, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.committed_shadow) });
     const outcome = case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body }, .{ "message", "fix: swap" } }, .{ .test_command = racing_cmd, .commit = true });
     racer.join();
     const reply = try outcome;
@@ -989,7 +989,7 @@ test "redteam commit: a hand edit made to the target while the tests run is kept
     const file = try case.repo.abs(case.arena(), "src/util.ts");
 
     const hash = try case.hashOf("src/util.ts", "add");
-    const racer = try std.Thread.spawn(.{}, raceHandEdit, .{ @as([]const u8, file), @as([]const u8, location.shadow) });
+    const racer = try std.Thread.spawn(.{}, raceHandEdit, .{ @as([]const u8, file), @as([]const u8, location.committed_shadow) });
     const outcome = case.call("emetgate_try", &.{ .{ "file", "src/util.ts" }, .{ "symbol", "add" }, .{ "hash", hash }, .{ "body", new_body }, .{ "message", "fix: swap" } }, .{ .test_command = racing_cmd, .commit = true });
     racer.join();
     const reply = try outcome;

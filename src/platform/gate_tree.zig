@@ -950,10 +950,13 @@ const Flush = struct {
         if (dir_scan.openRelative(self.root, wide[0..len], win.file_write_data | nt.synchronize, nt.file_open, nt.option_non_directory | nt.option_sync | nt.option_open_reparse_point, &file) != nt.status_success) return error.GateTreeBlocked;
         defer dir_scan.close(file);
         if (win.FlushFileBuffers(file) == .FALSE) return error.GateTreeBlocked;
+        if (builtin.is_test) _ = flushed.fetchAdd(1, .monotonic);
     }
 };
 
 const flush_path_units = 4096;
+
+pub var flushed: std.atomic.Value(usize) = .init(0);
 
 pub fn flushFiles(pool: ?*worker_pool.Pool, root: Handle, rels: []const []const u8) Error!void {
     if (builtin.os.tag != .windows) return error.Unsupported;

@@ -127,9 +127,11 @@ test "commit tree: after a commit the user makes by hand the gate tests the new 
     try case.repo.write("src/flag.ts", flag_old);
     const before = try env.head();
     const built = commit_store.rebuilds;
+    const flushed = emetgate.gate_tree.flushed.load(.monotonic);
     const reply = try swap(env, new_body, "(if exist src\\gone.ts exit 1) & (if not exist lib\\deep\\fresh.ts exit 1) & findstr bbbb src\\flag.ts");
     try expectLanded(env, reply, before);
     try testing.expectEqual(built, commit_store.rebuilds);
+    try testing.expectEqual(flushed + 2, emetgate.gate_tree.flushed.load(.monotonic));
 
     const location = try shadow_root.locate(testing.allocator, case.repo.root_abs, null);
     defer location.deinit(testing.allocator);
@@ -310,7 +312,7 @@ test "commit tree: recover removes the store and the trees with the workspace" {
     const location = try shadow_root.locate(testing.allocator, case.repo.root_abs, null);
     defer location.deinit(testing.allocator);
     try testing.expect(existsAbs(try storedPath(env, location, "src/flag.ts")));
-    try testing.expect(existsAbs(location.shadow));
+    try testing.expect(existsAbs(location.committed_shadow));
 
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
@@ -320,7 +322,7 @@ test "commit tree: recover removes the store and the trees with the workspace" {
     try testing.expectEqualStrings(flag_old, try env.read("src/flag.ts"));
 }
 
-test "commit tree: the run tool beside commits keeps its own tree of working files and leaves the committing tree alone" {
+test "commit tree: the run tool and a call that does not commit keep the tree of working files, and neither undoes the committing tree" {
     try skipOffWindows();
     var case: Plain = undefined;
     try case.init(&files);
@@ -341,8 +343,15 @@ test "commit tree: the run tool beside commits keeps its own tree of working fil
 
     const location = try shadow_root.locate(testing.allocator, case.repo.root_abs, null);
     defer location.deinit(testing.allocator);
-    try testing.expectEqualStrings(flag_new, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.working_shadow, "src", "flag.ts" })));
-    try testing.expectEqualStrings(flag_old, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.shadow, "src", "flag.ts" })));
+    try testing.expectEqualStrings(flag_new, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.shadow, "src", "flag.ts" })));
+    try testing.expectEqualStrings(flag_old, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.committed_shadow, "src", "flag.ts" })));
+
+    const plain = try callWith(env, new_body, .{ .root = "", .test_command = has_new }, false);
+    errdefer std.debug.print("{s}\n", .{plain.text});
+    try testing.expect(!plain.is_error);
+    try testing.expect(contains(try env.read("src/util.ts"), "b + a"));
+    try testing.expectEqualStrings(flag_old, try readAbs(env, try std.fs.path.join(env.arena(), &.{ location.committed_shadow, "src", "flag.ts" })));
+    try expectRefused(env, try swap(env, other_body, has_new), try env.head());
 }
 
 fn expectNamed(env: *Env, outcome: anyerror!Reply, name: []const u8, before: []const u8) !void {
@@ -415,4 +424,56 @@ test "commit tree: a junction where the store keeps its files is refused and not
     const before = try env.head();
     try expectNamed(env, swap(env, new_body, common.green), "WorkspaceIsLink", before);
     try testing.expect(!existsAbs(try std.fs.path.join(env.arena(), &.{ elsewhere, "src" })));
+}
+
+test "commit tree: a store built whole flushes every file it wrote before it is called ready" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    const flushed = emetgate.gate_tree.flushed.load(.monotonic);
+    try expectRefused(env, try swap(env, new_body, red), try env.head());
+    try testing.expectEqual(flushed + files.len, emetgate.gate_tree.flushed.load(.monotonic));
+}
+
+test "commit tree: a record whose commit id is an option for git is dropped before git sees it" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    const head = try env.head();
+    const record = try std.fmt.allocPrint(env.arena(), "{{\"version\":1,\"commit\":\"--output=owned.txt\",\"base\":\"{s}\",\"branch\":\"refs/heads/main\",\"lock\":\"{s}\",\"items\":[]}}", .{ head, "00" ** 32 });
+    try case.repo.write(".emetgate/intents/0123456789abcdef.json", record);
+    const report = try disk.recover(testing.allocator, testing.io, case.repo.root_abs);
+    try testing.expectEqual(@as(usize, 1), report.commits.failed);
+    try testing.expect(!case.repo.exists("owned.txt"));
+}
+
+test "commit tree: the full copy refuses a store whose files are reached through a junction" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    try expectRefused(env, try swap(env, new_body, red), try env.head());
+    const location = try shadow_root.locate(testing.allocator, case.repo.root_abs, null);
+    defer location.deinit(testing.allocator);
+    const real = try std.fs.path.join(env.arena(), &.{ location.committed, commit_store.tree_name });
+    const moved = try std.fs.path.join(env.arena(), &.{ location.committed, "moved" });
+    try std.Io.Dir.renameAbsolute(real, moved, testing.io);
+    try shadow.createJunction(testing.io, real, moved);
+    defer {
+        std.Io.Dir.cwd().deleteDir(testing.io, real) catch {};
+        std.Io.Dir.renameAbsolute(moved, real, testing.io) catch {};
+    }
+    try testing.expectError(error.WorkspaceIsLink, shadow.Shadow.prepare(testing.io, .{
+        .root_abs = case.repo.root_abs,
+        .base_abs = location.base,
+        .shadow_abs = location.committed_shadow,
+        .files = &.{},
+        .tree = .full_copy,
+        .committed = .{ .dir = location.committed, .count = files.len },
+    }));
 }

@@ -84,7 +84,6 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         .command = entry,
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
-        .beside_commits = policy.commit,
         .used = &used,
         .blocked = &event.trace.blocked,
     }) catch |err| switch (err) {

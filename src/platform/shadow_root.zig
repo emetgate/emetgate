@@ -15,10 +15,10 @@ pub const Location = struct {
     workspace: []u8,
     shadow: []u8,
     committed: []u8 = &.{},
-    working_shadow: []u8 = &.{},
+    committed_shadow: []u8 = &.{},
 
     pub fn deinit(self: Location, gpa: Allocator) void {
-        gpa.free(self.working_shadow);
+        gpa.free(self.committed_shadow);
         gpa.free(self.committed);
         gpa.free(self.shadow);
         gpa.free(self.workspace);
@@ -40,8 +40,8 @@ pub fn locate(gpa: Allocator, root_abs: []const u8, override: ?[]const u8) !Loca
     errdefer gpa.free(shadow_abs);
     const committed = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ workspace, shadow.committed_dir });
     errdefer gpa.free(committed);
-    const working_shadow = try std.fmt.allocPrint(gpa, "{s}\\{s}\\shadow", .{ workspace, shadow.working_dir });
-    return .{ .base = base, .workspace = workspace, .shadow = shadow_abs, .committed = committed, .working_shadow = working_shadow };
+    const committed_shadow = try std.fmt.allocPrint(gpa, "{s}\\shadow", .{committed});
+    return .{ .base = base, .workspace = workspace, .shadow = shadow_abs, .committed = committed, .committed_shadow = committed_shadow };
 }
 
 pub fn displayRoot(gpa: Allocator, override: ?[]const u8) ![]u8 {

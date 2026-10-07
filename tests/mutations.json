@@ -3402,7 +3402,7 @@
     {
       "id": "CMD3-command-cwd-is-the-real-repo",
       "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;",
+      "from": "if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;",
       "to": "if (try runCommandRulesFor(gpa, io, root, root, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;",
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
@@ -5830,7 +5830,7 @@
     {
       "id": "RUN3-in-working-tree",
       "file": "src/platform/run_command.zig",
-      "from": "runner.runStages(gpa, io, tree_abs, null, options.command, options.limits)",
+      "from": "runner.runStages(gpa, io, location.shadow, null, options.command, options.limits)",
       "to": "runner.runStages(gpa, io, options.root_abs, null, options.command, options.limits)",
       "kills": [
         "redteam run: an allowed script cannot write outside the shadow, runs from the shadow and leaves no trace in the working tree"
@@ -9391,8 +9391,8 @@
     {
       "id": "KT11-run-ignores-the-tree-choice",
       "file": "src/protocol/run_tool.zig",
-      "from": "        .gate_tree = policy.treeChoice(),\n        .beside_commits = policy.commit,\n",
-      "to": "        .beside_commits = policy.commit,\n",
+      "from": "        .gate_tree = policy.treeChoice(),\n        .used = &used,",
+      "to": "        .used = &used,",
       "kills": [
         "gate tree replies: a run reply says which tree was used, and two servers in one process keep their own choice"
       ]
@@ -9715,8 +9715,8 @@
     {
       "id": "DC5-write-doc-message-kept-from-the-command-gate",
       "file": "src/platform/doc_writer.zig",
-      "from": "runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits",
-      "to": "runner.runMessageRules(gpa, io, root, location.shadow, null, options.limits",
+      "from": "runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits",
+      "to": "runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), null, options.limits",
       "kills": [
         "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
         "message command: the same file redirected to standard input serves a checker that reads the message there",
@@ -9729,8 +9729,8 @@
     {
       "id": "MC1-try-message-kept-from-the-command-gate",
       "file": "src/platform/runner.zig",
-      "from": "if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits",
-      "to": "if (try runMessageRules(gpa, io, root, location.shadow, null, options.limits",
+      "from": "if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits",
+      "to": "if (try runMessageRules(gpa, io, root, gate_abs, null, options.limits",
       "kills": [
         "commit on write: a message command judges the message of a try, and a refusal writes nothing"
       ],
@@ -10083,10 +10083,9 @@
       "from": "            const head_entry = in_head orelse return error.TargetNotInHead;\n",
       "to": "            const head_entry = in_head orelse continue;\n",
       "kills": [
-        "redteam commit: a file the user keeps ignored is not put into history by a try on it",
         "commit write_doc: a target git does not track yet is refused and stays as it was"
       ],
-      "note": "a file git does not track, ignored or not, would enter history by an edit"
+      "note": "this line gives the refusal its name before the gate runs; a target that was never measured is refused again when the index copy is validated, so the ignored file stays out of history either way"
     },
     {
       "id": "PV4-deleted-tracked-path-accepted-as-new",
@@ -10284,8 +10283,8 @@
     {
       "id": "PV26-batch-message-kept-from-the-command-gate",
       "file": "src/platform/batch.zig",
-      "from": "runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits",
-      "to": "runner.runMessageRules(gpa, io, root, location.shadow, null, options.limits",
+      "from": "runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits",
+      "to": "runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), null, options.limits",
       "kills": [
         "commit batch: a message command judges the message of a try_batch, refuses one and accepts another",
         "commit batch: a message command judges the message of a node try",
@@ -10340,9 +10339,9 @@
       "from": "    if (!isObjectId(record.commit) or !isObjectId(record.base)) return error.CorruptIntent;\n",
       "to": "",
       "kills": [
-        "commit protocol: a record with a commit id or a branch that is not one is dropped without a git call on it"
+        "commit tree: a record whose commit id is an option for git is dropped before git sees it"
       ],
-      "note": "text from a record would reach a git command line as a revision"
+      "note": "the base id is compared as text with the parent git reports and never reaches a command line; the commit id does"
     },
     {
       "id": "OD6-intents-cleanup-takes-any-file",
@@ -10430,8 +10429,8 @@
     {
       "id": "MB1-symbol-edit-in-place-before-its-message-command",
       "file": "src/platform/runner.zig",
-      "from": "    if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n    try workspace.writeFile(rel, patched);\n",
-      "to": "    try workspace.writeFile(rel, patched);\n    if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "from": "    if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n    try workspace.writeFile(rel, patched);\n",
+      "to": "    try workspace.writeFile(rel, patched);\n    if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "kills": [
         "message base: a symbol edit cannot add to the file its message command reads what that command looks for"
       ]
@@ -10439,8 +10438,8 @@
     {
       "id": "MB2-doc-edit-in-place-before-its-message-command",
       "file": "src/platform/doc_writer.zig",
-      "from": "    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
-      "to": "    try workspace.writeFile(rel, applied.source);\n    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
+      "from": "    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
+      "to": "    try workspace.writeFile(rel, applied.source);\n    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
       "kills": [
         "redteam2 commit: a call cannot loosen the file its message command reads in the same commit that message is judged for"
       ]
@@ -10448,8 +10447,8 @@
     {
       "id": "MB3-batch-in-place-before-its-message-command",
       "file": "src/platform/batch.zig",
-      "from": "    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
-      "to": "    for (prepared) |p| {\n        if (p.action != .delete_file) try workspace.writeFile(p.rel, p.source());\n    }\n    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "from": "    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "to": "    for (prepared) |p| {\n        if (p.action != .delete_file) try workspace.writeFile(p.rel, p.source());\n    }\n    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "kills": [
         "message base: a batch cannot add to the file its message command reads what that command looks for"
       ]
@@ -10690,12 +10689,13 @@
     },
     {
       "id": "CT1-a-link-of-a-linked-directory-wins-over-the-file-head-holds",
-      "file": "src/platform/shadow.zig",
-      "from": "                if (from_head.contains(want.rel)) continue;\n",
-      "to": "                if (false and from_head.contains(want.rel)) continue;\n",
+      "file": "src/platform/gate_tree.zig",
+      "from": "            ctx.tree_dir_of[index] = no_dir;\n            continue;\n",
+      "to": "            ctx.tree_dir_of[slot.value_ptr.*] = no_dir;\n",
       "kills": [
         "commit tree: in the kept tree a tracked file under node_modules comes from HEAD and an untracked file beside it is the working file"
-      ]
+      ],
+      "note": "reconcile gives a tree path to the first want that names it; the tracked files of HEAD are listed before the files of a linked directory"
     },
     {
       "id": "CT2-store-count-not-checked-for-the-kept-tree",
@@ -10871,15 +10871,6 @@
       ]
     },
     {
-      "id": "CT22-run-tool-shares-the-committing-tree",
-      "file": "src/platform/run_command.zig",
-      "from": "    const tree_abs = if (options.beside_commits) location.working_shadow else location.shadow;\n",
-      "to": "    const tree_abs = if (false and options.beside_commits) location.working_shadow else location.shadow;\n",
-      "kills": [
-        "commit tree: the run tool beside commits keeps its own tree of working files and leaves the committing tree alone"
-      ]
-    },
-    {
       "id": "CT23-verify-reruns-the-test-in-a-sparse-worktree",
       "file": "src/platform/verify_run.zig",
       "from": "            if (std.mem.eql(u8, std.mem.trim(u8, sparse, \" \\r\\n\"), \"true\")) {\n",
@@ -10891,8 +10882,8 @@
     {
       "id": "CT24-committing-call-links-working-files",
       "file": "src/platform/runner.zig",
-      "from": "    return prepareShadow(gpa, io, root, location, location.shadow, &.{}, linked, choice, trace, .{ .dir = first.dir, .count = first.count }) catch |err| switch (err) {\n",
-      "to": "    return prepareShadow(gpa, io, root, location, location.shadow, try shadow.trackedFiles(gpa, io, root), linked, choice, trace, if (false) .{ .dir = first.dir, .count = first.count } else null) catch |err| switch (err) {\n",
+      "from": "    return prepareShadow(gpa, io, root, location, location.committed_shadow, &.{}, linked, choice, trace, .{ .dir = first.dir, .count = first.count }) catch |err| switch (err) {\n",
+      "to": "    return prepareShadow(gpa, io, root, location, location.committed_shadow, try shadow.trackedFiles(gpa, io, root), linked, choice, trace, if (false) .{ .dir = first.dir, .count = first.count } else null) catch |err| switch (err) {\n",
       "kills": [
         "redteam2 commit: a hand edit to another file that keeps its size and its time is not what the gate tests",
         "redteam2 commit: in a cone sparse checkout with a sparse index the gate sees the whole committed tree and the commit leaves a clean sparse tree",
@@ -11013,6 +11004,42 @@
       "kills": [
         "a service whose token is not low integrity is refused before it runs",
         "a spawn fault is decided before the process is created, so no child of the test is left behind"
+      ]
+    },
+    {
+      "id": "CT22-committing-call-tested-in-the-tree-of-working-files",
+      "file": "src/platform/runner.zig",
+      "from": "    return if (session.head != null) location.committed_shadow else location.shadow;\n",
+      "to": "    return location.shadow;\n",
+      "kills": [
+        "commit tree: the run tool and a call that does not commit keep the tree of working files, and neither undoes the committing tree"
+      ]
+    },
+    {
+      "id": "CT26-store-update-not-flushed",
+      "file": "src/platform/commit_store.zig",
+      "from": "        gate_tree.flushFiles(null, handle, written.items) catch return error.CommittedTreeIncomplete;\n",
+      "to": "",
+      "kills": [
+        "commit tree: after a commit the user makes by hand the gate tests the new HEAD without building the store again"
+      ]
+    },
+    {
+      "id": "CT27-rebuilt-store-not-flushed",
+      "file": "src/platform/commit_store.zig",
+      "from": "        gate_tree.flushFiles(&pool, handle, rels) catch return error.CommittedTreeIncomplete;\n",
+      "to": "",
+      "kills": [
+        "commit tree: a store built whole flushes every file it wrote before it is called ready"
+      ]
+    },
+    {
+      "id": "CT28-full-copy-reads-the-store-through-a-junction",
+      "file": "src/platform/shadow.zig",
+      "from": "        try ensureNoLinks(options.base_abs, source_abs);\n",
+      "to": "",
+      "kills": [
+        "commit tree: the full copy refuses a store whose files are reached through a junction"
       ]
     }
   ]

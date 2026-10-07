@@ -451,7 +451,6 @@ const Facts = struct {
 
 fn facts(git: Git) !Facts {
     const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "--git-path", "info/attributes", "HEAD^{commit}", "HEAD^{tree}", "--symbolic-full-name", "HEAD" })) orelse {
-        _ = try branchOf(git);
         if (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" }) == null) return error.NoCommitYet;
         return error.GitFailed;
     };

@@ -491,7 +491,7 @@ test "commit protocol: a change the user stages on the target while the tests ru
     defer location.deinit(testing.allocator);
     const before = try env.head();
     const hash = try env.hashOf("src/util.ts", "add");
-    const racer = try std.Thread.spawn(.{}, raceStage, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.shadow) });
+    const racer = try std.Thread.spawn(.{}, raceStage, .{ @as([]const u8, case.repo.root_abs), @as([]const u8, location.committed_shadow) });
     const outcome = env.call("emetgate_try", .{ .file = try env.abs("src/util.ts"), .symbol = "add", .hash = hash, .body = new_body, .message = message }, racing_cmd, true);
     racer.join();
     const reply = try outcome;

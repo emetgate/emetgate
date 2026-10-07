@@ -97,7 +97,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
 
     var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, if (trace) |t| &t.gate else null, &session);
     defer workspace.finish();
-    if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| {
+    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits, options.allow_repo_memory)) |gated| {
         return switch (gated) {
             .rule_violation => |report| .{ .rule_violation = report },
             .rule_check_failed => |failure| .{ .rule_check_failed = failure },
@@ -106,7 +106,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     }
     try workspace.writeFile(rel, applied.source);
 
-    const staged = try runner.runStages(gpa, io, location.shadow, options.typecheck_command, options.test_command, options.limits);
+    const staged = try runner.runStages(gpa, io, runner.gateDir(location, &session), options.typecheck_command, options.test_command, options.limits);
     switch (staged) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation, .rule_check_failed => unreachable,

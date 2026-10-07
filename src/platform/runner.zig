@@ -113,7 +113,6 @@ pub fn runCommandRulesFor(gpa: Allocator, io: std.Io, root: []const u8, shadow_a
 }
 
 pub fn runMessageRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, message: ?[]const u8, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
-    if (message == null) return null;
     return runCommandRulesFor(gpa, io, root, shadow_abs, &.{}, message, limits, allow_repo_memory);
 }
 
@@ -269,11 +268,12 @@ fn fileExists(io: std.Io, path_abs: []const u8) !bool {
 fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *const commit_plan.Session, command: []const u8, targets: []const rules.Target) !ShadowRun {
     var workspace = try openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
     defer workspace.finish();
-    if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
+    const gate_abs = gateDir(location, session);
+    if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     try workspace.writeFile(rel, patched);
 
-    if (try runCommandRulesFor(gpa, io, root, location.shadow, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
-    return runStages(gpa, io, location.shadow, options.typecheck_command, command, options.limits);
+    if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
+    return runStages(gpa, io, gate_abs, options.typecheck_command, command, options.limits);
 }
 
 fn linkedPath(path: []const u8, linked: []const []const u8) bool {
@@ -282,6 +282,10 @@ fn linkedPath(path: []const u8, linked: []const []const u8) bool {
         if (path.len > dir.len and std.ascii.startsWithIgnoreCase(path, dir) and path[dir.len] == 47) return true;
     }
     return false;
+}
+
+pub fn gateDir(location: shadow_root.Location, session: *const commit_plan.Session) []const u8 {
+    return if (session.head != null) location.committed_shadow else location.shadow;
 }
 
 pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace, session: *const commit_plan.Session) !shadow.Shadow {
@@ -293,12 +297,12 @@ pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow
     };
     const first = try commit_store.ensure(gpa, io, root, location.base, location.committed, head);
     try shadow_root.writeMarker(io, location, root);
-    return prepareShadow(gpa, io, root, location, location.shadow, &.{}, linked, choice, trace, .{ .dir = first.dir, .count = first.count }) catch |err| switch (err) {
+    return prepareShadow(gpa, io, root, location, location.committed_shadow, &.{}, linked, choice, trace, .{ .dir = first.dir, .count = first.count }) catch |err| switch (err) {
         error.CommittedTreeIncomplete => {
             if (first.built == .rebuilt) return err;
             try commit_store.invalidate(gpa, io, location.committed);
             const again = try commit_store.ensure(gpa, io, root, location.base, location.committed, head);
-            return prepareShadow(gpa, io, root, location, location.shadow, &.{}, linked, choice, trace, .{ .dir = again.dir, .count = again.count });
+            return prepareShadow(gpa, io, root, location, location.committed_shadow, &.{}, linked, choice, trace, .{ .dir = again.dir, .count = again.count });
         },
         else => |e| return e,
     };

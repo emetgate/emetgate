@@ -246,7 +246,6 @@ pub const Shadow = struct {
         var pool: worker_pool.Pool = undefined;
         pool.start(worker_pool.max_threads);
         defer pool.deinit();
-        var from_head: std.StringHashMapUnmanaged(void) = .empty;
         if (store) |handle| {
             var stored: gate_tree.Found = .{};
             try gate_tree.discover(arena, &pool, handle, 1, committed_tree, &wants, &stored);
@@ -254,7 +253,6 @@ pub const Shadow = struct {
             for (wants.items) |*want| {
                 want.rel = want.rel[committed_tree.len + 1 ..];
                 if (isUnderAny(want.rel, options.private)) want.how = .copy;
-                try from_head.put(arena, want.rel, {});
             }
         } else for (options.files) |file| {
             if (isUnderAny(file, options.linked)) continue;
@@ -263,16 +261,6 @@ pub const Shadow = struct {
         const tracked = wants.items.len;
         var found: gate_tree.Found = .{ .report = options.blocked };
         for (options.linked) |link| try gate_tree.discover(arena, &pool, root, 0, link, &wants, &found);
-        if (store != null) {
-            var kept: usize = tracked;
-            for (wants.items[tracked..]) |want| {
-                if (from_head.contains(want.rel)) continue;
-                wants.items[kept] = want;
-                kept += 1;
-            }
-            wants.shrinkRetainingCapacity(kept);
-        }
-
         const roots: []const std.os.windows.HANDLE = if (store) |handle| &.{ root, handle } else &.{root};
         const outcomes = try arena.alloc(gate_tree.Outcome, wants.items.len);
         _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = roots, .wants = wants.items, .outcomes = outcomes, .report = options.blocked, .pool = &pool }) catch |err| switch (err) {
@@ -458,20 +446,16 @@ pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
 }
 
 pub const committed_dir = "committed";
-pub const working_dir = "working";
 
 pub fn removeWorkspace(io: std.Io, base_abs: []const u8, workspace_abs: []const u8) !void {
     var committed_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var working_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var inner_buf: [std.fs.max_path_bytes]u8 = undefined;
     var shadow_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const shadow_abs = try std.fmt.bufPrint(&shadow_buf, "{s}\\shadow", .{workspace_abs});
-    try ensureInsideWorkspace(base_abs, shadow_abs);
-    try unlinkAll(base_abs, shadow_abs);
-    try remove(io, base_abs, try std.fmt.bufPrint(&working_buf, "{s}\\{s}\\shadow", .{ workspace_abs, working_dir }));
     const committed = try std.fmt.bufPrint(&committed_buf, "{s}\\{s}", .{ workspace_abs, committed_dir });
+    try remove(io, base_abs, try std.fmt.bufPrint(&inner_buf, "{s}\\shadow", .{committed}));
     try ensureNoLinks(base_abs, committed);
     try Dir.cwd().deleteTree(io, committed);
-    try remove(io, base_abs, shadow_abs);
+    try remove(io, base_abs, try std.fmt.bufPrint(&shadow_buf, "{s}\\shadow", .{workspace_abs}));
 }
 
 fn holdWorkspace(io: std.Io, shadow_abs: []const u8) !?own_dir.Held {
