@@ -8674,7 +8674,7 @@
       "from": "if (said.len == 0) done else said",
       "to": "said",
       "kills": [
-        "prompt hook: /rule forget removes the rule, and a command that prints nothing still answers"
+        "prompt hook: a /rule that prints nothing still answers ok"
       ],
       "note": "claude shows its own 'Blocked by hook' for an empty reason, which reads as a failure"
     },
@@ -9615,7 +9615,7 @@
       "id": "RA5-list-columns-not-padded",
       "file": "src/protocol/rule_command.zig",
       "from": "        try out.splatByteAll(' ', width - cell.len + 2);",
-      "to": "        try out.splatByteAll(' ', @min(width - cell.len, 0) + 2);",
+      "to": "        try out.splatByteAll(' ', (width - cell.len) * 0 + 2);",
       "kills": [
         "prompt hook: /rule list answers with the rows emetgate rule list prints"
       ]

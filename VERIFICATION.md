@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1514**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1515**
 - Mutations declared in `tests/mutations.json`: **976**
   - killed: **945**
   - equivalent: **7**
@@ -456,7 +456,7 @@ python tools/verification_page.py --check
 | `RA2-command-line-answers-in-the-spoken-voice` | `src/protocol/rule_command.zig` | `return runAs(.terse, gpa, io, root_abs, request, out, err_out);` -> `return runAs(.spoken, gpa, io, root_abs, request, out, err_out);` | prompt hook: /rule add adopts the rule and answers with its id | killed |
 | `RA3-empty-list-says-nothing` | `src/protocol/rule_command.zig` | `if (decisions.len == 0) return out.writeAll(nothing_kept);` -> `if (false and decisions.len == 0) return out.writeAll(nothing_k...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
 | `RA4-forget-says-nothing` | `src/protocol/rule_command.zig` | `if (voice == .spoken) try out.print("rule forgotten: {s}\n", .{...` -> `if (false and voice == .spoken) try out.print("rule forgotten: ...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
-| `RA5-list-columns-not-padded` | `src/protocol/rule_command.zig` | `try out.splatByteAll(' ', width - cell.len + 2);` -> `try out.splatByteAll(' ', @min(width - cell.len, 0) + 2);` | prompt hook: /rule list answers with the rows emetgate rule list prints | killed |
+| `RA5-list-columns-not-padded` | `src/protocol/rule_command.zig` | `try out.splatByteAll(' ', width - cell.len + 2);` -> `try out.splatByteAll(' ', (width - cell.len) * 0 + 2);` | prompt hook: /rule list answers with the rows emetgate rule list prints | killed |
 
 ### Scan
 
@@ -1012,7 +1012,7 @@ python tools/verification_page.py --check
 | `SL4-hook-takes-a-longer-command-name` | `src/protocol/prompt_hook.zig` | `if (rest.len != 0 and std.mem.indexOfScalar(u8, whitespace, res...` -> `` | prompt hook: only a prompt that is the /rule command is taken | killed |
 | `SL5-hook-input-without-prompt-passes` | `src/protocol/prompt_hook.zig` | `parsed.object.get(prompt_field) orelse return error.HookInputIn...` -> `parsed.object.get(prompt_field) orelse return null;` | prompt hook: input that carries no prompt text is refused by name | killed |
 | `SL6-hook-answer-carries-raw-bytes` | `src/protocol/prompt_hook.zig` | `.escape_unicode = true` -> `.escape_unicode = false` | prompt hook: quotes and Turkish letters reach the ledger byte for byte and the ... | killed |
-| `SL7-hook-silent-command-has-empty-reason` | `src/protocol/prompt_hook.zig` | `if (said.len == 0) done else said` -> `said` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `SL7-hook-silent-command-has-empty-reason` | `src/protocol/prompt_hook.zig` | `if (said.len == 0) done else said` -> `said` | prompt hook: a /rule that prints nothing still answers ok | killed |
 | `SL8-hook-rule-error-leaves-the-hook` | `src/protocol/prompt_hook.zig` | `else => try reason.writer.print("error: {t}\n", .{err}),` -> `else => return err,` | prompt hook: a refused rule answers with the error name and the names that exis...; promp... | killed |
 | `SL9-hook-undefined-grammar-answers-nothing` | `src/protocol/prompt_hook.zig` | `rule_command.parse(words) orelse return reason.writeAll(usage);` -> `rule_command.parse(words) orelse return;` | prompt hook: a /rule the grammar does not define answers with the usage and wri... | killed |
 | `SL12-lockdown-hook-is-an-mcp-tool` | `src/platform/lockdown_slash.zig` | `try js.write("command");` -> `try js.write("mcp_tool");` | lockdown slash: the hook is a command in exec form that names this executable | killed |

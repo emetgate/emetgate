@@ -298,6 +298,15 @@ test "prompt hook: /rule forget removes the rule, and a command that prints noth
     try testing.expectEqualStrings("", rows);
 }
 
+test "prompt hook: a /rule that prints nothing still answers ok" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+
+    const empty = try say(&repo, "/rule list --json");
+    defer empty.deinit();
+    try testing.expectEqualStrings("ok", empty.reason());
+}
+
 const turkish = "\u{11f}\u{fc}\u{15f}\u{131}\u{f6}\u{e7} \u{130}\u{11e}\u{dc}\u{15e}\u{d6}\u{c7}";
 
 test "prompt hook: quotes and Turkish letters reach the ledger byte for byte and the answer is plain ASCII" {
