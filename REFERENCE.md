@@ -569,7 +569,7 @@ The prompt does not reach the model. Lockdown gives Claude Code a `UserPromptSub
 
 Measured on Claude Code 2.1.291 in print mode: the hook receives the prompts ` /rule list`, a line break followed by `/rule list`, and a tab followed by `/rule list` exactly as typed, with the leading character still there. That is why the hook drops it.
 
-The answer is what `emetgate rule` prints: the new id for `add` and `supersede`, the rows for `list`, and for a refusal the lines `emetgate rule` writes to stderr followed by `error: <name>`. A command that prints nothing (`forget`, or `list` with no rule) answers `ok`, because Claude Code replaces an empty reason with its own `Blocked by hook`. A `/rule` line the grammar does not define answers with the four usage lines. The JSON the hook prints is plain ASCII: every other character is written as a `\u` escape, so the answer does not depend on a code page.
+The answer is written for a person, while `emetgate rule` on the command line keeps its terse output for scripts. `add` answers `rule added: <text>` and a second line with the id, `enforce` or `advisory`, the check or `no check`, and the scope or `whole repository`; `supersede` answers the same with `rule replaced`; `forget` answers `rule forgotten: <id>`; `list` answers a header line (`id`, `state`, `mode`, `check`, `where`, `rule`) and one row per rule in padded columns, or `no rules`. A refusal answers the lines `emetgate rule` writes to stderr, with the rules as that table, followed by `error: <name>`. An answer that would be empty is `ok`, because Claude Code replaces an empty reason with its own `Blocked by hook`. A `/rule` line the grammar does not define answers with the four usage lines. The JSON the hook prints is plain ASCII: every other character is written as a `\u` escape, so the answer does not depend on a code page.
 
 The hook is of type `command` in exec form (`"command": "<absolute emetgate.exe>", "args": ["hook", "prompt"]`), so no shell reads the path. It is not an `mcp_tool` hook: that would need a rule-writing tool on the MCP surface, where the model could call it. The served tool list is unchanged, and with `--tools ""` the model has no shell to run `emetgate rule` either.
 
@@ -595,6 +595,8 @@ Measured with Claude Code 2.1.291 on Windows, 2026-10-06, through `emetgate lock
 | `/rule forget mdeadbeefdeadbeef` | 0 | 0 | the active row, then `error: DecisionNotActive` |
 | `/rule forget m1fd2c285aedca4d4` | 0 | 0 | `ok` |
 | `/rule list` with no rule left | 0 | 0 | `ok` |
+
+The answers in this table are those of the version that was measured, which answered with the bare id, tab-separated rows and `ok`. The wording described above has not been measured in print mode.
 
 Claude Code printed each answer as `UserPromptSubmit operation blocked by hook:`, the answer, and `Original prompt:` with the prompt. After the seven runs the project held `.emetgate/ledger.ndjson` and no `.claude` directory.
 
