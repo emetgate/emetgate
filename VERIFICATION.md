@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1515**
-- Mutations declared in `tests/mutations.json`: **976**
-  - killed: **945**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1524**
+- Mutations declared in `tests/mutations.json`: **986**
+  - killed: **955**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **5**
@@ -277,7 +277,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-59 mutation(s).
+64 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -340,6 +340,11 @@ python tools/verification_page.py --check
 | `OD8-any-json-is-applied-as-a-journal` | `src/platform/disk.zig` | `if (own_dir.tagOf(entry.name, &.{".json"}) == null) {          ...` -> `` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
 | `OD9-commit-records-removed-by-ending` | `src/platform/commit_record.zig` | `if (own_dir.tagOf(entry.name, &.{ record_suffix, staged_suffix,...` -> `if (!std.mem.endsWith(u8, entry.name, record_suffix) and !std.m...` | own dir: recover leaves a journal and a commit record it did not name, and repo... | killed |
 | `BD4-plan-doc-skips-the-source-refusal` | `src/platform/batch_plan.zig` | `try docnode.refuseSource(edit.file_abs);` -> `` | planDoc refuses a file of a registered language before it reads it | killed |
+| `SP1-final-name-not-taken-for-a-resolved-path` | `src/platform/repo.zig` | `const final = try finalOf(gpa, opened);     defer gpa.free(fina...` -> `return gpa.dupeZ(u8, opened);` | a repository reached through its 8.3 short path is read, listed and gated like ...; throu... | killed |
+| `SP2-unreadable-final-name-compared-as-spelled` | `src/platform/repo.zig` | `return try exe_path.finalDosPath(gpa, path_abs) orelse error.Fi...` -> `return try exe_path.finalDosPath(gpa, path_abs) orelse try gpa....` | a path whose final name cannot be read is refused instead of being compared as ... | killed |
+| `SP3-served-root-compared-as-spelled` | `src/platform/repo.zig` | `return finalOf(gpa, spelled);` -> `return gpa.dupe(u8, spelled);` | a served root given by its 8.3 short path serves the files of that repository g... | killed |
+| `SP4-new-file-parent-compared-as-spelled` | `src/platform/repo.zig` | `const parent_abs = finalPath(gpa, io, parent) catch` -> `const parent_abs = std.Io.Dir.cwd().realPathFileAlloc(io, paren...` | a new file is created through a short-spelled parent directory, and not inside ... | killed |
+| `SP5-jailed-path-compared-as-spelled` | `src/platform/repo.zig` | `const abs = try finalPath(gpa, io, path);` -> `const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gp...` | a repository reached through its 8.3 short path is read, listed and gated like ...; throu... | killed |
 
 ### Rules and the q: query engine
 
@@ -594,7 +599,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-479 mutation(s).
+484 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1077,6 +1082,11 @@ python tools/verification_page.py --check
 | `BD2-write-doc-skips-the-source-refusal` | `src/platform/doc_writer.zig` | `try docnode.refuseSource(options.file_abs);` -> `` | write_doc on source: a line range of a source file is refused like the batch, a... | killed |
 | `BD5-doc-only-batch-writes-an-empty-receipt` | `src/protocol/handlers.zig` | `if (edits.len == 0) return;` -> `if (false and edits.len == 0) return;` | batch doc on a document: a batch of one Markdown edit commits, answers, is logg... | killed |
 | `RA1-hook-answers-in-the-terse-voice` | `src/protocol/prompt_hook.zig` | `try rule_command.runAs(.spoken, gpa, io, try root, request, rea...` -> `try rule_command.runAs(.terse, gpa, io, try root, request, reas...` | prompt hook: /rule add adopts the rule and answers with its id; prompt hook: /rule list a... | killed |
+| `EP9-share-final-name-not-recognized` | `src/platform/exe_path.zig` | `if (std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {` -> `if (false and std.mem.startsWith(u8, verbatim, verbatim_unc_pre...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
+| `EP10-final-name-without-its-prefix-accepted` | `src/platform/exe_path.zig` | `if (!std.mem.startsWith(u8, verbatim, verbatim_prefix)) return ...` -> `if (false and !std.mem.startsWith(u8, verbatim, verbatim_prefix...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
+| `EP11-final-name-without-a-drive-accepted` | `src/platform/exe_path.zig` | `if (rest.len < 3 or rest[1] != ':' or rest[2] != '\\') return n...` -> `if (false and (rest.len < 3 or rest[1] != ':' or rest[2] != '\\...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
+| `WP1-pool-keeps-its-closed-event` | `src/platform/worker_pool.zig` | `self.done = null;         self.count = 0;         return unclos...` -> `self.count = 0;         return unclosed;` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
+| `WP2-pool-never-started-closes-a-handle` | `src/platform/worker_pool.zig` | `const done = self.done orelse return 0;` -> `const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0...` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
 
 ## What this system does not prove
 
