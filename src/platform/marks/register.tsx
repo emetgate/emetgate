@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Done, Running } from '../types'
-import { BAD_TICKS, FACE_COLUMNS, FACE_ROWS, MIN_COLUMNS, MIN_ROWS, OK_TICKS, face, paint } from './scene'
+import { BAD_TICKS, MIN_COLUMNS, MIN_ROWS, OK_TICKS, WORD_COLUMNS, WORD_ROWS, paint, verdictWord, writingWord } from './scene'
 import type { Kind } from './scene'
 
 const MARK = 'emetgate_'
@@ -19,6 +19,14 @@ const BIG_ROWS = 12
 const BIG_SHARE = 0.22
 const SMALL_ROWS = 7
 const SMALL_SHARE = 0.13
+const MODE_WORDS = {
+  requesting: 'Awaiting the word',
+  thinking: 'Pondering the letters',
+  responding: 'Speaking',
+  'tool-input': 'Shaping the clay',
+  'tool-use': 'Working the clay',
+} as const
+const BEAT_TICKS = 3
 const WRITERS = ['try', 'try_batch', 'write_doc', 'rename', 'move', 'move_file']
 
 const running = atom({ plugin: 'emetgate-marks', key: 'running' } as const, null)
@@ -27,6 +35,7 @@ const frame = atom({ plugin: 'emetgate-marks', key: 'frame' } as const, 0)
 const verdict = atom({ plugin: 'emetgate-marks', key: 'verdict' } as const, null)
 const isHidden = atom({ plugin: 'emetgate-marks', key: 'isHidden' } as const, true)
 const isSilent = atom({ plugin: 'emetgate-marks', key: 'isSilent' } as const, false)
+const beat = atom({ plugin: 'emetgate-marks', key: 'beat' } as const, 0)
 
 const tail = (path: string): string =>
   path.split('\\').join('/').split('/').slice(-2).join('/')
@@ -78,6 +87,7 @@ export const register: Register = on => {
   let anchor = 0
   let turnPassed = 0
   let turnRefused = 0
+  let ticks = 0
   const tallies = new Map<string, { passed: number; refused: number }>()
 
   on('session.start', async ($, e, next) => {
@@ -101,8 +111,12 @@ export const register: Register = on => {
       }
 
       try {
+        ticks += 1
+
         if (!isOff) {
           await update($, frame, n => n + 1)
+        } else if (!isQuiet && ticks % BEAT_TICKS === 0) {
+          await update($, beat, n => n + 1)
         }
 
         if (verdictTicks < 0) {
@@ -252,10 +266,38 @@ export const register: Register = on => {
             ? 'Sealed'
             : 'Turned away'
           : null
-    const base = await next(word === null ? e : { ...e, props: { ...e.props, word, message: null } })
+    const modeWord = MODE_WORDS[e.props.mode] ?? null
 
-    if (e.surface !== 'terminal' || (await read($, isHidden))) {
+    const base = await next(
+      word === null
+        ? modeWord === null
+          ? e
+          : { ...e, props: { ...e.props, word: modeWord, message: null } }
+        : { ...e, props: { ...e.props, word, message: null } },
+    )
+
+    if (e.surface !== 'terminal') {
       return base
+    }
+
+    if (await read($, isHidden)) {
+      const pulse = await read($, beat)
+      const { Box, Raster } = $.ui.resolve(e)
+      const cells =
+        now !== null
+          ? writingWord(WRITERS.includes(now.verb) ? 'weigh' : 'read', pulse)
+          : seen !== null
+            ? verdictWord(seen.isOk)
+            : writingWord('write', pulse)
+
+      return (
+        <Box flexDirection="row" gap={1}>
+          <Box marginTop={1}>
+            <Raster key="letters" columns={WORD_COLUMNS} rows={WORD_ROWS} cells={cells} />
+          </Box>
+          {base ?? null}
+        </Box>
+      )
     }
 
     const tick = await read($, frame)
@@ -295,14 +337,8 @@ export const register: Register = on => {
             <Text color="magenta" bold wrap="truncate-end">
               {now.verb} {now.target}
             </Text>
-          ) : kind === 'ok' ? (
-            <Text color="green" bold>
-              emet
-            </Text>
-          ) : kind === 'bad' ? (
-            <Text color="red" bold>
-              met
-            </Text>
+          ) : kind === 'ok' || kind === 'bad' ? (
+            <Raster key="verdict" columns={WORD_COLUMNS} rows={WORD_ROWS} cells={verdictWord(kind === 'ok')} />
           ) : null}
           <Text dimColor>
             {passed} passed {refused} refused
@@ -326,7 +362,7 @@ export const register: Register = on => {
     }
 
     if (tally.passed + tally.refused === 0) {
-      return next(e)
+      return next({ ...e, props: { ...e.props, word: 'Spoke' } })
     }
 
     const word = tally.refused === 0 ? 'Sealed' : tally.passed === 0 ? 'Turned away' : 'Weighed'
@@ -377,25 +413,25 @@ export const register: Register = on => {
         {writes.map((call, index) => {
           const isOk = !call.isErrored && !call.isInterrupted
           const target = targetOf((call.input ?? {}) as Record<string, unknown>)
-          const words = (
-            <Text wrap="truncate-end">
-              <Text color={isOk ? 'green' : 'red'} bold>
-                {isOk ? 'emet' : 'met'}
-              </Text>
-              <Text dimColor> {target}</Text>
-            </Text>
-          )
-
           if (!isTerminal) {
-            return words
+            return (
+              <Text wrap="truncate-end">
+                <Text color={isOk ? 'green' : 'red'} bold>
+                  {isOk ? 'emet' : 'met'}
+                </Text>
+                <Text dimColor> {target}</Text>
+              </Text>
+            )
           }
 
           const { Raster } = $.ui.resolve(e)
 
           return (
             <Box flexDirection="row" gap={1} paddingLeft={2}>
-              <Raster key={`face${index}`} columns={FACE_COLUMNS} rows={FACE_ROWS} cells={face(isOk)} />
-              {words}
+              <Raster key={`word${index}`} columns={WORD_COLUMNS} rows={WORD_ROWS} cells={verdictWord(isOk)} />
+              <Text dimColor wrap="truncate-end">
+                {target}
+              </Text>
             </Box>
           )
         })}
@@ -435,9 +471,8 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {base ?? null}
-        <Box flexDirection="row" gap={1} paddingLeft={2}>
-          <Raster key="face" columns={FACE_COLUMNS} rows={FACE_ROWS} cells={face(isOk)} />
-          {words}
+        <Box paddingLeft={2}>
+          <Raster key="word" columns={WORD_COLUMNS} rows={WORD_ROWS} cells={verdictWord(isOk)} />
         </Box>
       </Box>
     )
