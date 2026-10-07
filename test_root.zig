@@ -232,6 +232,7 @@ test {
     _ = @import("tests/doc_writer.zig");
     _ = @import("tests/redteam_write_doc.zig");
     _ = @import("tests/batch_crash_doc.zig");
+    _ = @import("tests/batch_doc_source.zig");
     _ = @import("tests/git_fixture_test.zig");
     _ = @import("tests/test_runner_harness.zig");
     _ = @import("tests/suites.zig");
