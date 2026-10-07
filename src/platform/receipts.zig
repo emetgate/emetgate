@@ -224,6 +224,7 @@ pub fn build(arena: Allocator, io: std.Io, root: []const u8, record: Record) !re
             .output_limit_bytes = @intCast(record.limits.max_output_bytes),
         },
         .version = record.version,
+        .form = if (record.commit != null) .stored else .checked_out,
     };
 }
 

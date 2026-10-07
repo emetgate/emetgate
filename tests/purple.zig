@@ -82,6 +82,32 @@ const Repo = struct {
         return true;
     }
 
+    fn holdsOnlyKeptTree(self: *Repo) !bool {
+        self.tmp.dir.access(testing.io, "repo/.emetgate", .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                const location = try shadow_root.locate(testing.allocator, self.root_abs, null);
+                defer location.deinit(testing.allocator);
+                var workspace = try std.Io.Dir.openDirAbsolute(testing.io, location.workspace, .{ .iterate = true });
+                defer workspace.close(testing.io);
+                var it = workspace.iterate();
+                var names: usize = 0;
+                while (try it.next(testing.io)) |entry| {
+                    if (!std.mem.eql(u8, entry.name, shadow_root.marker_name) and !std.mem.eql(u8, entry.name, "shadow")) return false;
+                    names += 1;
+                }
+                return names == 2;
+            },
+            else => |e| return e,
+        };
+        return false;
+    }
+
+    fn removeKeptTree(self: *Repo) void {
+        const location = shadow_root.locate(testing.allocator, self.root_abs, null) catch return;
+        defer location.deinit(testing.allocator);
+        shadow.remove(testing.io, location.base, location.shadow) catch {};
+    }
+
     fn reportLeftoverShadow(self: *Repo) void {
         std.debug.print("leftover {s} entries:\n", .{shadow.workspace_dir});
         if (self.tmp.dir.openDir(testing.io, "repo/" ++ shadow.workspace_dir, .{ .iterate = true })) |opened| {
@@ -260,26 +286,39 @@ test "purple C2: every placeholder variant is rejected before any test runs" {
 test "purple C3: a hanging test command times out and nothing commits" {
     try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try Repo.init();
-    defer repo.deinit();
-    const runtime = try Runtime.create(testing.allocator);
-    defer runtime.destroy() catch @panic("live snapshots");
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const file = try repo.filePath(&buf);
-    const hash = try hashOfAdd(testing.allocator, runtime, file);
+    for ([_]shadow.TreeMode{ .full_copy, .kept }) |tree| {
+        var repo = try Repo.init();
+        defer repo.deinit();
+        defer repo.removeKeptTree();
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file = try repo.filePath(&buf);
+        const hash = try hashOfAdd(testing.allocator, runtime, file);
 
-    const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
-        .file_abs = file,
-        .ref_text = "add",
-        .expected_hash = .{ .present = hash },
-        .new_body = "{ return a - b; }",
-        .test_command = "ping -n 20 127.0.0.1 >nul",
-        .limits = .{ .timeout_ms = 1500 },
-    });
-    defer result.deinit(testing.allocator);
-    try testing.expect(result == .rejected);
-    try testing.expectEqual(sandbox.Outcome.timed_out, result.rejected.outcome);
-    try expectPristine(&repo);
+        const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
+            .file_abs = file,
+            .ref_text = "add",
+            .expected_hash = .{ .present = hash },
+            .new_body = "{ return a - b; }",
+            .test_command = "ping -n 20 127.0.0.1 >nul",
+            .limits = .{ .timeout_ms = 1500 },
+            .gate_tree = .{ .tree = tree },
+        });
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .rejected);
+        try testing.expectEqual(sandbox.Outcome.timed_out, result.rejected.outcome);
+        if (tree == .full_copy) {
+            try expectPristine(&repo);
+        } else {
+            const on_disk = try repo.onDisk();
+            defer testing.allocator.free(on_disk);
+            try testing.expectEqualStrings(Repo.source, on_disk);
+            try testing.expect(!try repo.hasSibling(".tmp"));
+            try testing.expect(!try repo.hasSibling(".bak"));
+            try testing.expect(try repo.holdsOnlyKeptTree());
+        }
+    }
 }
 
 test "purple C3: a test command that leaves a lingering process is caught, not passed" {
@@ -306,51 +345,72 @@ test "purple C3: path traversal, device names and drive paths are refused" {
 
 test "purple C4: a rejected mutation leaves no temp, backup, or shadow artifacts" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try Repo.init();
-    defer repo.deinit();
-    const runtime = try Runtime.create(testing.allocator);
-    defer runtime.destroy() catch @panic("live snapshots");
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const file = try repo.filePath(&buf);
-    const hash = try hashOfAdd(testing.allocator, runtime, file);
+    for ([_]shadow.TreeMode{ .full_copy, .kept }) |tree| {
+        var repo = try Repo.init();
+        defer repo.deinit();
+        defer repo.removeKeptTree();
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file = try repo.filePath(&buf);
+        const hash = try hashOfAdd(testing.allocator, runtime, file);
 
-    const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
-        .file_abs = file,
-        .ref_text = "add",
-        .expected_hash = .{ .present = hash },
-        .new_body = "{ return a - b; }",
-        .test_command = "cmd /c exit 1",
-    });
-    defer result.deinit(testing.allocator);
-    try testing.expect(result == .rejected);
-    try expectPristine(&repo);
+        const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
+            .file_abs = file,
+            .ref_text = "add",
+            .expected_hash = .{ .present = hash },
+            .new_body = "{ return a - b; }",
+            .test_command = "cmd /c exit 1",
+            .gate_tree = .{ .tree = tree },
+        });
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .rejected);
+        if (tree == .full_copy) {
+            try expectPristine(&repo);
+        } else {
+            const on_disk = try repo.onDisk();
+            defer testing.allocator.free(on_disk);
+            try testing.expectEqualStrings(Repo.source, on_disk);
+            try testing.expect(!try repo.hasSibling(".tmp"));
+            try testing.expect(!try repo.hasSibling(".bak"));
+            try testing.expect(try repo.holdsOnlyKeptTree());
+        }
+    }
 }
 
 test "purple C4: a committed mutation leaves no temp or backup artifacts" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try Repo.init();
-    defer repo.deinit();
-    const runtime = try Runtime.create(testing.allocator);
-    defer runtime.destroy() catch @panic("live snapshots");
-    var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const file = try repo.filePath(&buf);
-    const hash = try hashOfAdd(testing.allocator, runtime, file);
+    for ([_]shadow.TreeMode{ .full_copy, .kept }) |tree| {
+        var repo = try Repo.init();
+        defer repo.deinit();
+        defer repo.removeKeptTree();
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file = try repo.filePath(&buf);
+        const hash = try hashOfAdd(testing.allocator, runtime, file);
 
-    const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
-        .file_abs = file,
-        .ref_text = "add",
-        .expected_hash = .{ .present = hash },
-        .new_body = "{ return a - b; }",
-        .test_command = "cmd /c exit 0",
-    });
-    defer result.deinit(testing.allocator);
-    errdefer diagnostics.printResult(result);
-    try testing.expect(result == .committed);
-    try testing.expect(!try repo.hasSibling(".tmp"));
-    try testing.expect(!try repo.hasSibling(".bak"));
-    if (repo.hasShadow()) {
-        repo.reportLeftoverShadow();
-        return error.TestUnexpectedResult;
+        const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
+            .file_abs = file,
+            .ref_text = "add",
+            .expected_hash = .{ .present = hash },
+            .new_body = "{ return a - b; }",
+            .test_command = "cmd /c exit 0",
+            .gate_tree = .{ .tree = tree },
+        });
+        defer result.deinit(testing.allocator);
+        errdefer diagnostics.printResult(result);
+        try testing.expect(result == .committed);
+        try testing.expect(!try repo.hasSibling(".tmp"));
+        try testing.expect(!try repo.hasSibling(".bak"));
+        if (tree == .full_copy) {
+            if (repo.hasShadow()) {
+                repo.reportLeftoverShadow();
+                return error.TestUnexpectedResult;
+            }
+        } else {
+            try testing.expect(try repo.holdsOnlyKeptTree());
+        }
     }
 }
 

@@ -13,6 +13,7 @@ const Hash = receipt.Hash;
 
 pub const Verdict = enum {
     verified,
+    merged,
     unverified,
     mismatch,
 
@@ -75,6 +76,7 @@ pub const Report = struct {
     files: []const FileResult,
     receipts: []const ReceiptResult,
     verdict: Verdict,
+    reason: []const u8 = "",
 };
 
 const State = struct {
@@ -82,6 +84,7 @@ const State = struct {
     bytes: ?[]const u8,
     known: bool,
     form: Form = .{},
+    from_parent: bool = false,
 };
 
 const Files = struct {
@@ -122,7 +125,7 @@ const Checker = struct {
         const slot = try self.states.getOrPut(self.arena, path);
         if (!slot.found_existing) {
             const bytes = try self.source.before(self.source.context, path);
-            slot.value_ptr.* = .{ .digest = digestOf(bytes), .bytes = bytes, .known = true, .form = try self.formOf(self.source.before_text, path, bytes) };
+            slot.value_ptr.* = .{ .digest = digestOf(bytes), .bytes = bytes, .known = true, .form = try self.formOf(self.source.before_text, path, bytes), .from_parent = true };
         }
         return slot.value_ptr;
     }
@@ -254,19 +257,30 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
         if (!found) outcome.raise(.mismatch, "a written file is not a subject");
     }
 
+    const stored = r.form == .stored;
     var known: std.ArrayList(Known) = .empty;
     for (r.files) |f| {
         const st = try c.state(f.path);
-        if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch, "the before digest does not match the parent commit or the previous receipt");
         var entry: Known = .{ .path = f.path, .before = st.bytes, .after = null, .before_known = st.known, .after_known = false, .before_form = st.form };
+        const checked_out = st.from_parent and !stored;
+        const before_digest: ?Hash = if (checked_out) digestOf(st.form.bytes) else st.digest;
+        if (checked_out and st.form.driven and (!st.form.available or !eqlOptional(before_digest, f.before))) {
+            entry.before_known = false;
+            outcome.raise(.unverified, not_checked_out);
+        } else if (!eqlOptional(before_digest, f.before)) outcome.raise(.mismatch, "the before digest does not match the parent commit or the previous receipt");
         if (last.get(f.path).? == index) {
             const bytes = try c.source.after(c.source.context, f.path);
-            if (eqlOptional(digestOf(bytes), f.after)) {
+            const form = try c.formOf(c.source.after_text, f.path, bytes);
+            const judged: ?[]const u8 = if (stored) bytes else form.bytes;
+            if (!stored and !form.available) {
+                outcome.raise(.unverified, not_checked_out);
+                try c.files.raise(f.path, .unverified, not_checked_out);
+            } else if (eqlOptional(digestOf(judged), f.after)) {
                 entry.after = bytes;
                 entry.after_known = true;
-                entry.after_form = try c.formOf(c.source.after_text, f.path, bytes);
+                entry.after_form = form;
                 for (r.subjects) |s| {
-                    if (std.mem.eql(u8, s.path, f.path) and !std.mem.eql(u8, &receipt.sha256(bytes.?), &s.sha256)) outcome.raise(.mismatch, "a subject's sha256 does not match the commit");
+                    if (std.mem.eql(u8, s.path, f.path) and !std.mem.eql(u8, &receipt.sha256(judged.?), &s.sha256)) outcome.raise(.mismatch, "a subject's sha256 does not match the commit");
                 }
             } else {
                 try c.files.raise(f.path, .unverified, "the file changed after the receipt, outside the gate");

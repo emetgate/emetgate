@@ -3,8 +3,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -26,8 +28,15 @@ VERIFIED = "verified"
 UNVERIFIED = "unverified"
 MISMATCH = "mismatch"
 CONSISTENT = "consistent"
+MERGED = "merged"
+ADDED_NOTHING = "adds nothing to its parents; the combination was not gated"
+CARRIES_CONTENT = "holds content that git's own merge of its two parents does not produce"
+MANY_PARENTS = "has more than two parents; what it adds cannot be told"
+MERGE_NOT_RUN = "git could not merge the two parents on its own (git merge-tree --write-tree, git 2.38 or later); what the commit adds cannot be told"
+NOT_CHECKED_OUT = "the checked-out form of a filtered file is not available"
+NO_FILTER = (b"unspecified", b"unset", b"set", b"")
 RANK = {VERIFIED: 0, UNVERIFIED: 1, MISMATCH: 2}
-EXIT = {VERIFIED: 0, CONSISTENT: 55, UNVERIFIED: 53, MISMATCH: 54}
+EXIT = {VERIFIED: 0, CONSISTENT: 55, UNVERIFIED: 53, MISMATCH: 54, MERGED: 58}
 
 
 class Invalid(Exception):
@@ -60,8 +69,41 @@ class Git:
         self.repo = repo
 
     def run(self, *args):
-        result = subprocess.run(["git", "-C", self.repo, "-c", "core.longpaths=true", *args], capture_output=True)
-        return result.stdout if result.returncode == 0 else None
+        code, out = self.ran(None, *args)
+        return out if code == 0 else None
+
+    def ran(self, env, *args):
+        result = subprocess.run(["git", "-C", self.repo, "-c", "core.longpaths=true", *args], capture_output=True, env=env)
+        return result.returncode, result.stdout
+
+    def parents(self, rev):
+        out = self.run("rev-list", "--parents", "-n", "1", rev)
+        if out is None:
+            raise SystemExit("git rev-list failed")
+        return out.decode().split()[1:]
+
+    def merge_difference(self, rev, ours, theirs):
+        store = self.run("rev-parse", "--path-format=absolute", "--git-path", "objects")
+        want = self.run("rev-parse", "--verify", "--quiet", rev + "^{tree}")
+        if store is None or want is None:
+            return None
+        scratch = tempfile.mkdtemp(prefix="emetgate-verify-")
+        try:
+            env = dict(os.environ)
+            env["GIT_OBJECT_DIRECTORY"] = scratch
+            env["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = store.decode().strip()
+            code, out = self.ran(env, "merge-tree", "--write-tree", "--no-messages", ours, theirs)
+            if code not in (0, 1):
+                return None
+            tree = out.split(b"\n")[0].decode()
+            if tree == want.decode().strip():
+                return []
+            code, out = self.ran(env, "diff-tree", "-r", "--name-only", "-z", tree, want.decode().strip())
+            if code != 0:
+                return None
+            return [tree] + [p.decode("utf-8") for p in out.split(b"\0") if p]
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     def commit(self, spec):
         out = self.run("rev-parse", "--verify", "--quiet", spec + "^{commit}")
@@ -71,6 +113,22 @@ class Git:
         if rev is None:
             return None
         return self.run("cat-file", "blob", rev + ":" + path)
+
+    def filtered(self, rev, path):
+        out = self.run("check-attr", "-z", "--source", rev, "filter", "--", path)
+        if out is None:
+            out = self.run("check-attr", "-z", "filter", "--", path)
+        if out is None:
+            return False
+        fields = out.split(b"\0")
+        return len(fields) >= 3 and fields[2] not in NO_FILTER
+
+    def form(self, rev, path):
+        stored = self.blob(rev, path)
+        if stored is None or not self.filtered(rev, path):
+            return stored, False, True
+        text = self.run("--attr-source=" + rev, "cat-file", "--filters", rev + ":" + path)
+        return text, True, text is not None
 
     def changed(self, rev):
         out = self.run("diff-tree", "--no-commit-id", "--root", "-r", "--name-only", "-z", rev)
@@ -128,7 +186,14 @@ def read_receipt(value):
     if value["_type"] != STATEMENT_TYPE or value["predicateType"] != PREDICATE_TYPE:
         raise Invalid("not an emetgate receipt")
     p = value["predicate"]
-    exact_keys(p, ["batch", "operation", "class", "evidence", "resolver", "files", "symbols", "checks", "rules", "sandbox", "emetgate"])
+    keys = ["batch", "operation", "class", "evidence", "resolver", "files", "symbols", "checks", "rules", "sandbox", "emetgate"]
+    form = "checked_out"
+    if isinstance(p, dict) and "form" in p:
+        form = p["form"]
+        if form not in ("stored", "checked_out"):
+            raise Invalid("unknown form")
+        keys = keys + ["form"]
+    exact_keys(p, keys)
     subjects = []
     for s in list_of(value["subject"]):
         exact_keys(s, ["name", "digest"])
@@ -171,7 +236,7 @@ def read_receipt(value):
     if p["resolver"] is not None:
         text(p["resolver"])
     digest(p["batch"], 8)
-    return {"batch": p["batch"], "operation": p["operation"], "class": p["class"], "subjects": subjects, "files": files, "symbols": symbols, "checks": checks, "rules": rules}
+    return {"batch": p["batch"], "operation": p["operation"], "class": p["class"], "subjects": subjects, "files": files, "symbols": symbols, "checks": checks, "rules": rules, "form": form}
 
 
 def list_of(value):
@@ -203,6 +268,9 @@ def verify(git, spec):
     rev = git.commit(spec)
     if rev is None:
         raise SystemExit("unknown commit: " + spec)
+    parents = git.parents(rev)
+    if len(parents) > 1:
+        return verify_merge(git, rev, parents)
     parent = git.commit(rev + "^")
     changed = git.changed(rev)
     note = git.note(rev)
@@ -247,7 +315,8 @@ def verify(git, spec):
 
     def current(path):
         if path not in state:
-            state[path] = blob_digest(git.blob(parent, path))
+            data, driven, available = git.form(parent, path)
+            state[path] = (blob_digest(data), driven, available)
         return state[path]
 
     index = 0
@@ -262,18 +331,27 @@ def verify(git, spec):
         for f in r["files"]:
             if f["after"] is not None and not any(s["path"] == f["path"] for s in r["subjects"]):
                 outcome.raise_to(MISMATCH, "a written file is not a subject")
+        stored = r["form"] == "stored"
         for f in r["files"]:
-            if current(f["path"]) != f["before"]:
+            if stored and f["path"] not in state:
+                state[f["path"]] = (blob_digest(git.blob(parent, f["path"])), False, True)
+            before, driven, available = current(f["path"])
+            if driven and (not available or before != f["before"]):
+                outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
+            elif before != f["before"]:
                 outcome.raise_to(MISMATCH, "the before digest does not match the parent commit or the previous receipt")
             if last[f["path"]] == index:
-                data = git.blob(rev, f["path"])
-                if blob_digest(data) == f["after"]:
+                data, driven, available = (git.blob(rev, f["path"]), False, True) if stored else git.form(rev, f["path"])
+                if not available:
+                    outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
+                    raise_file(f["path"], UNVERIFIED, NOT_CHECKED_OUT)
+                elif blob_digest(data) == f["after"]:
                     for s in r["subjects"]:
                         if s["path"] == f["path"] and sha256(data) != s["sha256"]:
                             outcome.raise_to(MISMATCH, "a subject's sha256 does not match the commit")
                 else:
                     raise_file(f["path"], UNVERIFIED, "the file changed after the receipt, outside the gate")
-            state[f["path"]] = f["after"]
+            state[f["path"]] = (f["after"], False, True)
         for c in r["checks"]:
             if blake3_128(c["command"].encode("utf-8")) != c["command_digest"]:
                 outcome.raise_to(MISMATCH, "a check's command does not match its digest")
@@ -326,6 +404,22 @@ def verify(git, spec):
     }
 
 
+def verify_merge(git, rev, parents):
+    report = {"commit": rev, "verdict": UNVERIFIED, "reason": MANY_PARENTS, "files": [], "receipts": [], "not_checked": []}
+    if len(parents) != 2:
+        return report
+    difference = git.merge_difference(rev, parents[0], parents[1])
+    if difference is None:
+        report["reason"] = MERGE_NOT_RUN
+    elif not difference:
+        report["verdict"] = MERGED
+        report["reason"] = ADDED_NOTHING
+    else:
+        report["reason"] = CARRIES_CONTENT
+        report["files"] = [{"path": p, "verdict": UNVERIFIED, "not_checked": [], "reason": CARRIES_CONTENT} for p in difference[1:]]
+    return report
+
+
 def blob_digest(data):
     return None if data is None else blake3_128(data)
 
@@ -340,7 +434,7 @@ def main():
     if args.json:
         print(json.dumps(report))
     else:
-        print("commit %s: %s" % (report["commit"], report["verdict"]))
+        print("commit %s: %s%s" % (report["commit"], report["verdict"], ("  (" + report["reason"] + ")") if "reason" in report else ""))
         for f in report["files"]:
             print("  %-10s %s%s" % (f["verdict"], f["path"], ("  (" + f["reason"] + ")") if "reason" in f else ""))
         if report["not_checked"]:

@@ -513,6 +513,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
         .shadow_root = policy.shadow_root,
+        .gate_tree = policy.treeChoice(),
         .trace = &event.trace,
         .commit = if (commit) |*request| request else null,
     });
@@ -619,6 +620,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
     defer gpa.free(test_command);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, place.abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
+    var doc_trace: doc_writer.Trace = .{};
     const result = try doc_writer.tryWriteDoc(gpa, io, .{
         .file_abs = place.abs,
         .selector = picked.selector,
@@ -629,8 +631,10 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
         .allow_repo_memory = policy.allow_repo_memory,
         .shadow_root = policy.shadow_root,
         .commit = if (commit) |*request| request else null,
-    }, null);
+        .gate_tree = policy.treeChoice(),
+    }, &doc_trace);
     defer result.deinit(gpa);
+    const doc_note = wire.treeNote(doc_trace.gate);
     const expected: symbol.Expected = .{ .present = expected_hash };
     const full = tool_result.wantsFull(args);
     switch (result) {
@@ -638,20 +642,20 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
             event.outcome = .committed;
             event.edits = 1;
             event.hash = new_hash;
-            try wire.writeCommitted(w, picked.label, expected, new_hash, null, full);
+            try wire.writeCommitted(w, picked.label, expected, new_hash, doc_note, full);
             try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
         .rejected => |report| {
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
-            try wire.writeRejected(gpa, w, test_command, report, null);
+            try wire.writeRejected(gpa, w, test_command, report, doc_note);
             return true;
         },
         .typecheck_failed => |report| {
             event.outcome = .rejected;
             event.reason = wire.typecheckReason(report);
-            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report, null);
+            try wire.writeTypecheckRejected(gpa, w, typecheck_command.?, report, doc_note);
             return true;
         },
         .rule_violation => |report| {
@@ -853,7 +857,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
     defer gpa.free(before_hashes);
     for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null };
+    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null };
     var planned = try batch_mod.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
     const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits, options);

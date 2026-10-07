@@ -70,7 +70,12 @@ pub const Receipt = struct {
     rules: []const Rule,
     sandbox: Sandbox,
     version: []const u8,
+    form: Form = .checked_out,
 };
+
+pub const Form = enum { checked_out, stored };
+
+pub const form_key = "form";
 
 pub const Invalid = error{InvalidReceipt};
 
@@ -140,7 +145,7 @@ pub fn toValue(arena: Allocator, r: Receipt) !Value {
         .timeout_ms = Value{ .integer = r.sandbox.timeout_ms },
         .output_limit_bytes = Value{ .integer = r.sandbox.output_limit_bytes },
     });
-    const predicate = try object(arena, .{
+    var predicate = try object(arena, .{
         .batch = string(r.batch),
         .operation = string(@tagName(r.operation)),
         .class = string(@tagName(r.class)),
@@ -153,6 +158,7 @@ pub fn toValue(arena: Allocator, r: Receipt) !Value {
         .sandbox = sandbox,
         .emetgate = try object(arena, .{ .version = string(r.version) }),
     });
+    if (r.form == .stored) try predicate.object.put(arena, form_key, string(@tagName(r.form)));
     return object(arena, .{
         ._type = string(statement_type),
         .subject = Value{ .array = subjects },
@@ -215,7 +221,11 @@ pub fn fromValue(arena: Allocator, value: Value) (Invalid || Allocator.Error)!Re
     if (!std.mem.eql(u8, try asString(try field(top, "_type")), statement_type)) return error.InvalidReceipt;
     if (!std.mem.eql(u8, try asString(try field(top, "predicateType")), predicate_type)) return error.InvalidReceipt;
     const p = try asObject(try field(top, "predicate"));
-    try expectKeys(p, &.{ "batch", "operation", "class", "evidence", "resolver", "files", "symbols", "checks", "rules", "sandbox", "emetgate" });
+    var form: Form = .checked_out;
+    if (p.get(form_key)) |named| {
+        form = std.meta.stringToEnum(Form, try asString(named)) orelse return error.InvalidReceipt;
+        try expectKeys(p, &.{ "batch", "operation", "class", "evidence", "resolver", "files", "symbols", "checks", "rules", "sandbox", "emetgate", form_key });
+    } else try expectKeys(p, &.{ "batch", "operation", "class", "evidence", "resolver", "files", "symbols", "checks", "rules", "sandbox", "emetgate" });
 
     var subjects: std.ArrayList(Subject) = .empty;
     for (try asArray(try field(top, "subject"))) |item| {
@@ -297,6 +307,7 @@ pub fn fromValue(arena: Allocator, value: Value) (Invalid || Allocator.Error)!Re
             .output_limit_bytes = try asInteger(try field(sb, "output_limit_bytes")),
         },
         .version = try asString(try field(em, "version")),
+        .form = form,
     };
 }
 

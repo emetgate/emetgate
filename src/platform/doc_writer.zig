@@ -29,6 +29,7 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     commit_step: ?*const disk.Step = null,
     commit: ?*commit_plan.Request = null,
 };
@@ -36,6 +37,7 @@ pub const Options = struct {
 pub const Trace = struct {
     base_len: usize = 0,
     new_len: usize = 0,
+    gate: runner.Trace = .{},
 };
 
 pub const Result = union(enum) {
@@ -93,11 +95,8 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
     defer location.deinit(gpa);
 
-    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, null, &session);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, if (trace) |t| &t.gate else null, &session);
+    defer workspace.finish();
     if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| {
         return switch (gated) {
             .rule_violation => |report| .{ .rule_violation = report },

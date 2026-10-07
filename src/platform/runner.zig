@@ -51,6 +51,7 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     trace: ?*Trace = null,
     commit: ?*GitCommit = null,
     commit_step: ?*const disk.Step = null,
@@ -71,6 +72,7 @@ pub const Trace = struct {
     linked_files: usize = 0,
     copied_files: usize = 0,
     skipped_links: usize = 0,
+    tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
 };
 
@@ -262,11 +264,8 @@ fn fileExists(io: std.Io, path_abs: []const u8) !bool {
 }
 
 fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *const commit_plan.Session, command: []const u8, targets: []const rules.Target) !ShadowRun {
-    var workspace = try openShadow(gpa, io, root, location, options.linked, options.trace, session);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    var workspace = try openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
+    defer workspace.finish();
     if (try runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     try workspace.writeFile(rel, patched);
 
@@ -282,12 +281,12 @@ fn linkedPath(path: []const u8, linked: []const []const u8) bool {
     return false;
 }
 
-pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, linked: []const []const u8, trace: ?*Trace, session: *const commit_plan.Session) !shadow.Shadow {
+pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace, session: *const commit_plan.Session) !shadow.Shadow {
     const head = session.head orelse {
         const files = try shadow.trackedFiles(gpa, io, root);
         defer gpa.free(files);
         defer shadow.freeFileList(gpa, files);
-        return prepareShadow(gpa, io, root, location, files, linked, trace);
+        return prepareShadow(gpa, io, root, location, files, linked, choice, trace);
     };
     const tree = try git_commit.committedTree(gpa, io, root, head);
     defer tree.deinit(gpa);
@@ -297,16 +296,13 @@ pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow
         try shadow.validateRelative(path);
         if (!linkedPath(path, linked)) try restore.append(gpa, path);
     }
-    var workspace = try prepareShadow(gpa, io, root, location, tree.files, linked, trace);
-    errdefer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    var workspace = try prepareShadow(gpa, io, root, location, tree.files, linked, .{ .tree = .full_copy, .private = choice.private }, trace);
+    errdefer workspace.finish();
     try git_commit.checkoutInto(gpa, io, root, head, restore.items, location.shadow);
     return workspace;
 }
 
-pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, trace: ?*Trace) !shadow.Shadow {
+pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace) !shadow.Shadow {
     _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
     const workspace = try shadow.Shadow.prepare(io, .{
         .root_abs = root,
@@ -314,8 +310,11 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
         .shadow_abs = location.shadow,
         .files = files,
         .linked = linked,
+        .tree = choice.tree,
+        .private = choice.private,
     });
     if (trace) |t| {
+        t.tree = workspace.use;
         t.shadow_dotted = location.dotted();
         t.linked_files = workspace.link_stats.linked;
         t.copied_files = workspace.link_stats.copied;

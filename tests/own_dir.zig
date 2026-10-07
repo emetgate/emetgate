@@ -2,19 +2,33 @@ const std = @import("std");
 const builtin = @import("builtin");
 const emetgate = @import("emetgate");
 const fixture = @import("ts_fixture.zig");
-const common = @import("commit_batch.zig");
+const support = @import("runner_support.zig");
 
 const own_dir = emetgate.own_dir;
 const shadow = emetgate.shadow;
 const disk = emetgate.disk;
 const receipts = emetgate.receipts;
+const symbol = emetgate.symbol;
+const handlers = emetgate.handlers;
+const telemetry = emetgate.telemetry;
+const Runtime = emetgate.runtime.Runtime;
 
 const testing = std.testing;
-const Plain = common.Plain;
+const TsRepo = fixture.TsRepo;
 
 const util_src = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
 const new_body = "{\n  return b + a;\n}";
+const green = "cmd /c exit 0";
 const files = [_]fixture.File{ .{ .rel = "src/util.ts", .text = util_src }, .{ .rel = ".gitignore", .text = ".emetgate/\n" } };
+const vault_files = [_]fixture.File{
+    .{ .rel = "src/util.ts", .text = util_src },
+    .{ .rel = ".gitignore", .text = ".emetgate/\n" },
+    .{ .rel = "vault/readme.txt", .text = "kept\n" },
+    .{ .rel = "vault/a.json", .text = "{}\n" },
+    .{ .rel = "vault/0123456789abcdef.json", .text = "{}\n" },
+    .{ .rel = "vault/0123456789abcdef.commit", .text = "{\"batch\":\"0123456789abcdef\"}" },
+    .{ .rel = "vault/fedcba9876543210.json.tmp", .text = "{}\n" },
+};
 
 fn skipOffWindows() !void {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
@@ -37,6 +51,36 @@ const Tree = struct {
 
     fn abs(self: *Tree, buffer: []u8, rel: []const u8) ![]const u8 {
         return std.fmt.bufPrint(buffer, "{s}\\{s}", .{ self.root, rel });
+    }
+};
+
+const Linked = struct {
+    repo: TsRepo,
+    link: []u8,
+
+    fn init(self: *Linked, link_rel: []const u8) !void {
+        self.repo = try TsRepo.init(&vault_files);
+        errdefer self.repo.deinit();
+        try self.repo.tmp.dir.createDirPath(testing.io, "repo/.emetgate");
+        self.link = try self.repo.abs(testing.allocator, link_rel);
+        errdefer testing.allocator.free(self.link);
+        const target = try self.repo.abs(testing.allocator, "vault");
+        defer testing.allocator.free(target);
+        try shadow.createJunction(testing.io, self.link, target);
+    }
+
+    fn deinit(self: *Linked) void {
+        std.Io.Dir.cwd().deleteDir(testing.io, self.link) catch {};
+        testing.allocator.free(self.link);
+        self.repo.deinit();
+    }
+
+    fn expectVaultWhole(self: *Linked) !void {
+        for (vault_files[2..]) |file| {
+            errdefer std.debug.print("gone: {s}\n", .{file.rel});
+            try testing.expect(self.repo.exists(file.rel));
+        }
+        try testing.expect(try shadow.isReparsePoint(self.link));
     }
 };
 
@@ -63,12 +107,12 @@ test "own dir: a missing directory is absent when asked for and made when wanted
     var tree = try Tree.init();
     defer tree.deinit();
     var a: [std.fs.max_path_bytes]u8 = undefined;
-    try testing.expect(try own_dir.hold(testing.io, try tree.abs(&a, "ws\\intents"), .existing) == null);
+    try testing.expect(try own_dir.hold(testing.io, try tree.abs(&a, "ws\\journal"), .existing) == null);
     try testing.expectError(error.FileNotFound, tree.tmp.dir.access(testing.io, "ws", .{}));
-    const held = (try own_dir.hold(testing.io, try tree.abs(&a, "ws\\intents"), .create)).?;
+    const held = (try own_dir.hold(testing.io, try tree.abs(&a, "ws\\journal"), .create)).?;
     try held.dir.writeFile(testing.io, .{ .sub_path = "0123456789abcdef.json", .data = "{}" });
     held.close();
-    try tree.tmp.dir.access(testing.io, "ws/intents/0123456789abcdef.json", .{});
+    try tree.tmp.dir.access(testing.io, "ws/journal/0123456789abcdef.json", .{});
 }
 
 test "own dir: a held directory cannot be renamed away or replaced until it is released" {
@@ -76,18 +120,18 @@ test "own dir: a held directory cannot be renamed away or replaced until it is r
     var tree = try Tree.init();
     defer tree.deinit();
     var a: [std.fs.max_path_bytes]u8 = undefined;
-    const held = (try own_dir.hold(testing.io, try tree.abs(&a, "ws\\intents"), .create)).?;
+    const held = (try own_dir.hold(testing.io, try tree.abs(&a, "ws\\journal"), .create)).?;
     var released = false;
     defer if (!released) held.close();
 
-    try testing.expect(std.meta.isError(tree.tmp.dir.rename("ws/intents", tree.tmp.dir, "ws/moved", testing.io)));
+    try testing.expect(std.meta.isError(tree.tmp.dir.rename("ws/journal", tree.tmp.dir, "ws/moved", testing.io)));
     try testing.expect(std.meta.isError(tree.tmp.dir.rename("ws", tree.tmp.dir, "moved", testing.io)));
-    try testing.expect(std.meta.isError(tree.tmp.dir.deleteDir(testing.io, "ws/intents")));
-    try tree.tmp.dir.access(testing.io, "ws/intents", .{});
+    try testing.expect(std.meta.isError(tree.tmp.dir.deleteDir(testing.io, "ws/journal")));
+    try tree.tmp.dir.access(testing.io, "ws/journal", .{});
 
     held.close();
     released = true;
-    try tree.tmp.dir.rename("ws/intents", tree.tmp.dir, "ws/moved", testing.io);
+    try tree.tmp.dir.rename("ws/journal", tree.tmp.dir, "ws/moved", testing.io);
 }
 
 test "own dir: only an empty plain directory is removed, never a junction and never a directory with a file" {
@@ -143,7 +187,7 @@ test "own dir: the workspace lock refuses a workspace that is a junction and lea
     try testing.expectError(error.FileNotFound, tree.tmp.dir.access(testing.io, "vault/.lock", .{}));
 }
 
-test "own dir: releasing the workspace lock leaves a junction that stands where a work directory would be" {
+test "own dir: releasing the workspace lock leaves a junction that stands where the journal directory would be" {
     try skipOffWindows();
     var tree = try Tree.init();
     defer tree.deinit();
@@ -161,75 +205,124 @@ test "own dir: releasing the workspace lock leaves a junction that stands where 
     try tree.tmp.dir.access(testing.io, "vault", .{});
 }
 
-test "own dir: recover leaves a file it did not write in the intents directory, whatever its ending" {
+test "own dir: recover leaves the files of a directory that .emetgate/journal links to and refuses by name" {
     try skipOffWindows();
-    var case: Plain = undefined;
-    try case.init(&files);
+    var case: Linked = undefined;
+    try case.init(".emetgate/journal");
     defer case.deinit();
-    try case.repo.write(".emetgate/intents/notes.txt", "mine\n");
-    try case.repo.write(".emetgate/intents/data.json", "{}\n");
-    try case.repo.write(".emetgate/intents/data.ts", "export const data = 1;\n");
-    try case.repo.write(".emetgate/intents/0123456789abcdef.7.new", "ours by name\n");
 
-    const report = try disk.recover(testing.allocator, testing.io, case.repo.root_abs);
-    try testing.expectEqual(@as(usize, 0), report.commits.failed + report.commits.pending);
-    try testing.expect(case.repo.exists(".emetgate/intents/notes.txt"));
-    try testing.expect(case.repo.exists(".emetgate/intents/data.json"));
-    try testing.expect(case.repo.exists(".emetgate/intents/data.ts"));
-    try testing.expect(!case.repo.exists(".emetgate/intents/0123456789abcdef.7.new"));
+    try testing.expectError(error.WorkspaceIsLink, disk.recover(testing.allocator, testing.io, case.repo.root_abs));
+    try case.expectVaultWhole();
+}
+
+test "own dir: recover leaves the files of a directory that .emetgate itself links to" {
+    try skipOffWindows();
+    var repo = try TsRepo.init(&.{
+        .{ .rel = "src/util.ts", .text = util_src },
+        .{ .rel = "vault/journal/a.json", .text = "{}\n" },
+        .{ .rel = "vault/journal/0123456789abcdef.json", .text = "{}\n" },
+        .{ .rel = "vault/journal/0123456789abcdef.commit", .text = "{}\n" },
+    });
+    defer repo.deinit();
+    const link = try repo.abs(testing.allocator, ".emetgate");
+    defer testing.allocator.free(link);
+    const target = try repo.abs(testing.allocator, "vault");
+    defer testing.allocator.free(target);
+    try shadow.createJunction(testing.io, link, target);
+    defer std.Io.Dir.cwd().deleteDir(testing.io, link) catch {};
+
+    try testing.expectError(error.WorkspaceIsLink, disk.recover(testing.allocator, testing.io, repo.root_abs));
+    try testing.expect(repo.exists("vault/journal/a.json"));
+    try testing.expect(repo.exists("vault/journal/0123456789abcdef.json"));
+    try testing.expect(repo.exists("vault/journal/0123456789abcdef.commit"));
+}
+
+test "own dir: a gated write is refused by name when .emetgate/journal is a junction, and nothing is written through it" {
+    try skipOffWindows();
+    var case: Linked = undefined;
+    try case.init(".emetgate/journal");
+    defer case.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const file = try case.repo.abs(arena, "src/util.ts");
+    const hash = symbol.formatHash(try support.hashOfRef(testing.allocator, testing.io, runtime, file, "add"));
+    var args: std.json.ObjectMap = .empty;
+    try args.put(arena, "file", .{ .string = file });
+    try args.put(arena, "symbol", .{ .string = "add" });
+    try args.put(arena, "hash", .{ .string = try arena.dupe(u8, &hash) });
+    try args.put(arena, "body", .{ .string = new_body });
+    var event: telemetry.Event = .{ .tool = "emetgate_try" };
+    const result = try handlers.callTool(testing.allocator, testing.io, runtime, "emetgate_try", .{ .object = args }, &event, .{ .root = case.repo.root_abs, .test_command = green });
+    defer testing.allocator.free(result.text);
+    errdefer std.debug.print("{s}\n", .{result.text});
+
+    try testing.expect(result.is_error);
+    try testing.expect(std.mem.indexOf(u8, result.text, "WorkspaceIsLink") != null);
+    const now = try case.repo.read("src/util.ts");
+    defer testing.allocator.free(now);
+    try testing.expectEqualStrings(util_src, now);
+    try case.expectVaultWhole();
+    var vault = try case.repo.tmp.dir.openDir(testing.io, "repo/vault", .{ .iterate = true });
+    defer vault.close(testing.io);
+    var count: usize = 0;
+    var it = vault.iterate();
+    while (try it.next(testing.io)) |_| count += 1;
+    try testing.expectEqual(vault_files.len - 2, count);
 }
 
 test "own dir: recover leaves a journal and a commit record it did not name, and reports the journal" {
     try skipOffWindows();
-    var case: Plain = undefined;
-    try case.init(&files);
-    defer case.deinit();
-    try case.repo.write(".emetgate/journal/a.json", "{}\n");
-    try case.repo.write(".emetgate/journal/readme.txt", "kept\n");
-    try case.repo.write(".emetgate/journal/mine.commit", "kept\n");
-    try case.repo.write(".emetgate/journal/0123456789abcdef.commit", "{\"batch\":\"0123456789abcdef\"}");
+    var repo = try TsRepo.init(&files);
+    defer repo.deinit();
+    try repo.write(".emetgate/journal/a.json", "{}\n");
+    try repo.write(".emetgate/journal/readme.txt", "kept\n");
+    try repo.write(".emetgate/journal/mine.commit", "kept\n");
+    try repo.write(".emetgate/journal/0123456789abcdef.commit", "{\"batch\":\"0123456789abcdef\"}");
 
-    const report = try disk.recover(testing.allocator, testing.io, case.repo.root_abs);
+    const report = try disk.recover(testing.allocator, testing.io, repo.root_abs);
     try testing.expectEqual(@as(usize, 1), report.failed);
-    try testing.expect(case.repo.exists(".emetgate/journal/a.json"));
-    try testing.expect(case.repo.exists(".emetgate/journal/readme.txt"));
-    try testing.expect(case.repo.exists(".emetgate/journal/mine.commit"));
-    try testing.expect(!case.repo.exists(".emetgate/journal/0123456789abcdef.commit"));
-}
-
-test "own dir: a commit call leaves a file it did not write in the commit work directory" {
-    try skipOffWindows();
-    var case: Plain = undefined;
-    try case.init(&files);
-    defer case.deinit();
-    const env = &case.env;
-    try case.repo.write(".emetgate/commit/readme.txt", "kept\n");
-    try case.repo.write(".emetgate/commit/blob-old", "kept too\n");
-    try case.repo.write(".emetgate/commit/blob-7", "stale\n");
-    const before = try env.head();
-
-    const reply = try env.call("emetgate_try", .{ .file = try env.abs("src/util.ts"), .symbol = "add", .hash = try env.hashOf("src/util.ts", "add"), .body = new_body, .message = "fix: swap" }, common.green, true);
-    errdefer std.debug.print("{s}\n", .{reply.text});
-    try testing.expect(!reply.is_error);
-    try testing.expectEqualStrings(before, try env.git(&.{ "rev-parse", "HEAD^" }));
-    try testing.expect(case.repo.exists(".emetgate/commit/readme.txt"));
-    try testing.expect(case.repo.exists(".emetgate/commit/blob-old"));
-    try testing.expect(!case.repo.exists(".emetgate/commit/blob-7"));
+    try testing.expect(repo.exists(".emetgate/journal/a.json"));
+    try testing.expect(repo.exists(".emetgate/journal/readme.txt"));
+    try testing.expect(repo.exists(".emetgate/journal/mine.commit"));
+    try testing.expect(!repo.exists(".emetgate/journal/0123456789abcdef.commit"));
 }
 
 test "own dir: receipts are not read or moved through a receipts directory that is a junction" {
     try skipOffWindows();
-    var case: Plain = undefined;
-    try case.init(&.{ .{ .rel = "src/util.ts", .text = util_src }, .{ .rel = ".gitignore", .text = ".emetgate/\n" }, .{ .rel = "vault/a.json", .text = "{}\n" } });
+    var case: Linked = undefined;
+    try case.init(".emetgate/receipts");
     defer case.deinit();
-    const env = &case.env;
-    try case.repo.tmp.dir.createDirPath(testing.io, "repo/.emetgate");
-    try shadow.createJunction(testing.io, try env.abs(".emetgate/receipts"), try env.abs("vault"));
-    defer case.repo.tmp.dir.deleteDir(testing.io, "repo/.emetgate/receipts") catch {};
 
     try testing.expectError(error.WorkspaceIsLink, receipts.attach(testing.allocator, testing.io, case.repo.root_abs, "HEAD"));
-    try testing.expect(case.repo.exists("vault/a.json"));
+    try case.expectVaultWhole();
     try testing.expect(!case.repo.exists("vault/attached"));
+}
+
+test "own dir: a receipt is not written through a receipts directory that is a junction" {
+    try skipOffWindows();
+    var case: Linked = undefined;
+    try case.init(".emetgate/receipts");
+    defer case.deinit();
+
+    try testing.expectError(error.WorkspaceIsLink, receipts.write(testing.allocator, testing.io, case.repo.root_abs, .{
+        .operation = .@"try",
+        .class = .spending,
+        .evidence = "test",
+        .files = &.{},
+        .test_command = green,
+        .version = "0",
+    }));
+    try case.expectVaultWhole();
+    var vault = try case.repo.tmp.dir.openDir(testing.io, "repo/vault", .{ .iterate = true });
+    defer vault.close(testing.io);
+    var count: usize = 0;
+    var it = vault.iterate();
+    while (try it.next(testing.io)) |_| count += 1;
+    try testing.expectEqual(vault_files.len - 2, count);
 }
 
 extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: u32, share: u32, security: ?*anyopaque, disposition: u32, flags: u32, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;

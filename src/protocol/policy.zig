@@ -10,6 +10,7 @@ const commit_plan = @import("../platform/commit_plan.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const read_budget_mod = @import("read_budget.zig");
 const map_tools = @import("map_tools.zig");
+const shadow = @import("../platform/shadow.zig");
 
 const Value = std.json.Value;
 
@@ -31,11 +32,26 @@ pub const Policy = struct {
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
     commit: bool = false,
+    shadow_tree: ?shadow.TreeMode = null,
+    shadow_private: [max_private][]const u8 = undefined,
+    shadow_private_len: usize = 0,
+
+    pub fn treeChoice(self: *const Policy) shadow.Choice {
+        return .{ .tree = self.shadow_tree orelse shadow.default_tree, .private = self.shadow_private[0..self.shadow_private_len] };
+    }
 
     pub fn allowedRuns(self: *const Policy) []const []const u8 {
         return self.allow_run[0..self.allow_run_len];
     }
 };
+
+pub const max_private = 32;
+
+pub fn parseTree(text: []const u8) ?shadow.TreeMode {
+    if (std.mem.eql(u8, text, "kept")) return .kept;
+    if (std.mem.eql(u8, text, "copy")) return .full_copy;
+    return null;
+}
 
 pub const RunRefusal = struct { entry: []const u8, reason: run_command.EntryError };
 
@@ -103,12 +119,23 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const dir: []const u8 = args[i];
             if (dir.len == 0) return null;
             policy.shadow_root = dir;
+        } else if (std.mem.eql(u8, arg, "--shadow-tree")) {
+            if (policy.shadow_tree != null or i + 1 >= args.len) return null;
+            i += 1;
+            policy.shadow_tree = parseTree(args[i]) orelse return null;
+        } else if (std.mem.eql(u8, arg, "--shadow-private")) {
+            if (policy.shadow_private_len == max_private or i + 1 >= args.len) return null;
+            i += 1;
+            const prefix: []const u8 = args[i];
+            shadow.validateRelative(prefix) catch return null;
+            policy.shadow_private[policy.shadow_private_len] = prefix;
+            policy.shadow_private_len += 1;
         } else return null;
     }
     return policy;
 }
 
-pub const model_policy_fields = [_][]const u8{ "test_cmd", "typecheck_cmd", "allow_repo_config", "allow_repo_memory", "shadow_root", "allow_run" };
+pub const model_policy_fields = [_][]const u8{ "test_cmd", "typecheck_cmd", "allow_repo_config", "allow_repo_memory", "shadow_root", "allow_run", "shadow_tree", "shadow_private" };
 
 pub fn refuseModelPolicy(args: ?Value) error{ModelSuppliedTestPolicy}!void {
     const a = args orelse return;
@@ -187,4 +214,38 @@ test "commit policy: with commits on every call needs a message, and the message
     const good = try parsedArgs("{\"message\":\"fix: one\"}");
     defer good.deinit();
     try testing.expectEqualStrings("fix: one", (try commitMessage(good.value, on)).?);
+}
+
+test "the tree choice comes from the operator's flags: kept by default, copy on request, private prefixes in order" {
+    const none = parsePolicy(&[_][]const u8{}).?;
+    try std.testing.expectEqual(shadow.default_tree, none.treeChoice().tree);
+    try std.testing.expectEqual(@as(usize, 0), none.treeChoice().private.len);
+
+    const copy = parsePolicy(&[_][]const u8{ "--shadow-tree", "copy" }).?;
+    try std.testing.expectEqual(shadow.TreeMode.full_copy, copy.treeChoice().tree);
+    const kept = parsePolicy(&[_][]const u8{ "--shadow-tree", "kept", "--shadow-private", "src/__snapshots__", "--shadow-private", "gen" }).?;
+    try std.testing.expectEqual(shadow.TreeMode.kept, kept.treeChoice().tree);
+    try std.testing.expectEqual(@as(usize, 2), kept.treeChoice().private.len);
+    try std.testing.expectEqualStrings("src/__snapshots__", kept.treeChoice().private[0]);
+    try std.testing.expectEqualStrings("gen", kept.treeChoice().private[1]);
+
+    for ([_][]const []const u8{
+        &.{ "--shadow-tree", "fresh" },
+        &.{"--shadow-tree"},
+        &.{ "--shadow-tree", "kept", "--shadow-tree", "copy" },
+        &.{"--shadow-private"},
+        &.{ "--shadow-private", "../outside" },
+        &.{ "--shadow-private", "C:\\abs" },
+        &.{ "--shadow-private", "" },
+    }) |bad| try std.testing.expect(parsePolicy(bad) == null);
+}
+
+test "a tool call that names the tree choice is refused like one that names a test command" {
+    for ([_][]const u8{ "shadow_tree", "shadow_private" }) |field| {
+        var found = false;
+        for (model_policy_fields) |known| {
+            if (std.mem.eql(u8, known, field)) found = true;
+        }
+        try std.testing.expect(found);
+    }
 }

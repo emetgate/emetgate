@@ -78,7 +78,7 @@ pub fn install(gpa: Allocator, io: std.Io, local_app_data: []const u8, exe_abs: 
     return .{ .dir = dir, .settings = settings };
 }
 
-fn place(gpa: Allocator, io: std.Io, abs: []const u8, data: []const u8) !void {
+pub fn place(gpa: Allocator, io: std.Io, abs: []const u8, data: []const u8) !void {
     if (holds(gpa, io, abs, data)) return;
     var nonce: [8]u8 = undefined;
     io.random(&nonce);

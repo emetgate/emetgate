@@ -38,6 +38,7 @@ pub const BatchOptions = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     trace: ?*Trace = null,
     commit_step: ?*const disk.Step = null,
     language_service: ?*tsserver.Session = null,
@@ -285,11 +286,8 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
 }
 
 fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, edits: []const Edit, options: BatchOptions, session: *const commit_plan.Session) !runner.ShadowRun {
-    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.trace, session);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
+    defer workspace.finish();
     if (try runner.runMessageRules(gpa, io, root, location.shadow, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     for (prepared) |p| {
         if (p.source_rel) |from| try workspace.deleteFile(from);

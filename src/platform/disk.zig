@@ -803,6 +803,7 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, shadow
     const location = try shadow_root.locate(gpa, root_abs, shadow_root_dir);
     defer location.deinit(gpa);
     const removal = shadow.remove(io, location.base, location.shadow);
+    _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
 
     try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}, not indexed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed, report.not_indexed });
     const c = report.commits;
