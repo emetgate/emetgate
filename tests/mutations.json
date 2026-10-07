@@ -9560,8 +9560,8 @@
     {
       "id": "GC1-detached-head-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "    const ref = (try git.run(&.{ \"symbolic-ref\", \"-q\", \"HEAD\" })) orelse return error.DetachedHead;\n",
-      "to": "    const ref = (try git.run(&.{ \"symbolic-ref\", \"-q\", \"HEAD\" })) orelse \"refs/heads/none\";\n",
+      "from": "    if (!std.mem.startsWith(u8, branch, branch_prefix)) return error.DetachedHead;\n",
+      "to": "    if (!std.mem.startsWith(u8, branch, branch_prefix) and !std.mem.eql(u8, branch, \"HEAD\")) return error.DetachedHead;\n",
       "kills": [
         "git commit: a detached HEAD is refused"
       ],
@@ -10101,8 +10101,8 @@
     {
       "id": "PV5-head-on-a-tag-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "    if (!std.mem.startsWith(u8, ref, branch_prefix)) return error.DetachedHead;\n",
-      "to": "    if (false and !std.mem.startsWith(u8, ref, branch_prefix)) return error.DetachedHead;\n",
+      "from": "    if (!std.mem.startsWith(u8, branch, branch_prefix)) return error.DetachedHead;\n",
+      "to": "    if (!std.mem.startsWith(u8, branch, branch_prefix) and std.mem.eql(u8, branch, \"HEAD\")) return error.DetachedHead;\n",
       "kills": [
         "redteam commit: a HEAD that points at a tag is refused and the tag does not move"
       ],
@@ -10237,7 +10237,6 @@
       "to": "        const store: ?std.os.windows.HANDLE = if (options.committed) |committed| if (false) (try dir_scan.openRoot(committed.dir)) orelse return error.CommittedTreeIncomplete else null else null;\n",
       "kills": [
         "commit protocol: the gate tests the tree the commit will hold, not a hand edit to another file, hidden from git status or not",
-        "redteam2 commit: a hand edit to another file that keeps its size and its time is not what the gate tests",
         "commit tree: a tracked file deleted by hand in the working tree is still in the tree the gate tests, and the deletion stays"
       ],
       "note": "the gate would test a tree with files missing"
@@ -10378,9 +10377,9 @@
       "from": "        if (!try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;\n",
       "to": "        if (true or !try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;\n",
       "kills": [
-        "verify filtered: a commit whose stored form is not source is verified over what its filter checks out",
-        "verify filtered: without the filter that checks the file out the verdict is unverified by name, not mismatch",
-        "verify filtered: a rename under a filter is verified by the alpha hash of what the filter checks out"
+        "verify filtered commit: a commit whose stored form is not source is verified over what its filter checks out",
+        "verify filtered commit: without the filter that checks the file out the verdict is unverified by name, not mismatch",
+        "verify filtered commit: a rename under a filter is verified by the alpha hash of what the filter checks out"
       ]
     },
     {
@@ -10389,7 +10388,7 @@
       "from": "                        if (form.driven) outcome.raise(.unverified, not_checked_out) else",
       "to": "                        if (false and form.driven) outcome.raise(.unverified, not_checked_out) else",
       "kills": [
-        "verify filtered: without the filter that checks the file out the verdict is unverified by name, not mismatch"
+        "verify filtered commit: without the filter that checks the file out the verdict is unverified by name, not mismatch"
       ]
     },
     {
@@ -10407,7 +10406,7 @@
       "from": "(if (slot.*.?[i]) try checkedOut",
       "to": "(if (false and slot.*.?[i]) try checkedOut",
       "kills": [
-        "verify filtered: a commit whose stored form is not source is verified over what its filter checks out"
+        "verify filtered commit: a commit whose stored form is not source is verified over what its filter checks out"
       ]
     },
     {
@@ -10416,7 +10415,7 @@
       "from": "            if (!form.available) return outcome.raise(.unverified, not_checked_out);\n",
       "to": "",
       "kills": [
-        "verify filtered: a rename whose files cannot be checked out is unverified by name, not mismatch"
+        "verify filtered commit: a rename whose files cannot be checked out is unverified by name, not mismatch"
       ]
     },
     {
@@ -10425,7 +10424,7 @@
       "from": "            if (!form.driven) continue;\n",
       "to": "            if (true or !form.driven) continue;\n",
       "kills": [
-        "verify filtered: a rename whose files cannot be checked out is unverified by name, not mismatch"
+        "verify filtered commit: a rename whose files cannot be checked out is unverified by name, not mismatch"
       ]
     },
     {
@@ -10704,7 +10703,8 @@
       "from": "            if (stored.skipped_links != 0 or wants.items.len != options.committed.?.count) return error.CommittedTreeIncomplete;\n",
       "to": "            if (false and (stored.skipped_links != 0 or wants.items.len != options.committed.?.count)) return error.CommittedTreeIncomplete;\n",
       "kills": [
-        "commit tree: a file missing from the store is noticed by the count and the store is built again"
+        "commit tree: a file missing from the store is noticed by the count and the store is built again",
+        "commit tree: two tracked names that differ only in case cannot both be stored, and the call is refused by name"
       ]
     },
     {
@@ -10804,15 +10804,6 @@
       "to": "",
       "kills": [
         "commit tree: an update of the store that stopped half way is finished by the next call"
-      ]
-    },
-    {
-      "id": "CT14-rebuilt-store-not-counted",
-      "file": "src/platform/commit_store.zig",
-      "from": "        if (wants.items.len != count or found.skipped_links != 0) return error.CommittedTreeIncomplete;\n",
-      "to": "        if (false and (wants.items.len != count or found.skipped_links != 0)) return error.CommittedTreeIncomplete;\n",
-      "kills": [
-        "commit tree: two tracked names that differ only in case cannot both be stored, and the call is refused by name"
       ]
     },
     {

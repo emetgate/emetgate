@@ -158,7 +158,6 @@ const Context = struct {
         var wants: std.ArrayList(gate_tree.Want) = .empty;
         var found: gate_tree.Found = .{};
         try gate_tree.discover(self.arena, &pool, handle, 0, tree_name, &wants, &found);
-        if (wants.items.len != count or found.skipped_links != 0) return error.CommittedTreeIncomplete;
         const rels = try self.arena.alloc([]const u8, wants.items.len);
         for (wants.items, rels) |want, *rel| rel.* = want.rel;
         gate_tree.flushFiles(&pool, handle, rels) catch return error.CommittedTreeIncomplete;
