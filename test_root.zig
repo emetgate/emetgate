@@ -64,6 +64,8 @@ pub const test_util = src.test_util;
 pub const session = src.session;
 pub const shadow = src.shadow;
 pub const link_tree = src.link_tree;
+pub const dir_scan = src.dir_scan;
+pub const gate_tree = src.gate_tree;
 pub const shadow_root = src.shadow_root;
 pub const sandbox = src.sandbox;
 pub const appcontainer = src.appcontainer;
@@ -150,6 +152,8 @@ test {
     _ = @import("tests/redteam_appcontainer.zig");
     _ = @import("tests/appcontainer_compat.zig");
     _ = @import("tests/redteam_link_tree.zig");
+    _ = @import("tests/redteam_gate_tree.zig");
+    _ = @import("tests/gate_tree_replies.zig");
     _ = @import("tests/redteam_git.zig");
     _ = @import("tests/own_dir.zig");
     _ = @import("tests/run_tool.zig");

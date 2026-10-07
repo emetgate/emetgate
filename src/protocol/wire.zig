@@ -7,6 +7,7 @@ const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
 const runner = @import("../platform/runner.zig");
+const shadow = @import("../platform/shadow.zig");
 const read_budget = @import("read_budget.zig");
 
 const Writer = std.Io.Writer;
@@ -355,7 +356,33 @@ pub const ShadowNote = struct {
     linked_files: usize,
     copied_files: usize,
     skipped_links: usize,
+    tree: ?shadow.TreeUse = null,
+    tree_only: bool = false,
 };
+
+pub fn treeNote(trace: runner.Trace) ?ShadowNote {
+    const tree = trace.tree orelse return null;
+    return .{ .root = "", .dotted = false, .linked_files = 0, .copied_files = 0, .skipped_links = 0, .tree = tree, .tree_only = true };
+}
+
+pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
+    const tree = used orelse return;
+    try js.objectField("gate_tree");
+    try js.beginObject();
+    try js.objectField("kind");
+    try js.write(@tagName(tree.mode));
+    switch (tree.mode) {
+        .kept => {
+            try js.objectField("private_copies");
+            try js.write(tree.private_copies);
+        },
+        .full_copy => {
+            try js.objectField("reason");
+            try js.write(@tagName(tree.reason));
+        },
+    }
+    try js.endObject();
+}
 
 pub const shadow_path_warning = "the shadow root has a path segment starting with a dot; tools that refuse dot directories (the send package behind express res.sendFile is one) fail there; start emetgate with --shadow-root <dir> on a path without one";
 
@@ -366,11 +393,13 @@ pub fn shadowNote(root: []const u8, trace: runner.Trace) ShadowNote {
         .linked_files = trace.linked_files,
         .copied_files = trace.copied_files,
         .skipped_links = trace.skipped_links,
+        .tree = trace.tree,
     };
 }
 
 fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
     const n = note orelse return;
+    if (n.tree_only) return writeGateTree(js, n.tree);
     try js.objectField("shadow");
     try js.beginObject();
     try js.objectField("root");
@@ -382,6 +411,7 @@ fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
     try js.objectField("skipped_links");
     try js.write(n.skipped_links);
     try js.endObject();
+    try writeGateTree(js, n.tree);
     if (n.dotted) {
         try js.objectField("shadow_path_warning");
         try js.write(shadow_path_warning);
@@ -1371,4 +1401,26 @@ test "a result names the shadow root and its link counts, and warns when that ro
     dotted.dotted = true;
     try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), dotted, true);
     try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"shadow_path_warning\":\"" ++ shadow_path_warning ++ "\"") != null);
+}
+
+test "a result says which tree the gate used: kept with its private copies, or a full copy with the reason" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    var note: ShadowNote = .{ .root = "D:\\shadows", .dotted = false, .linked_files = 0, .copied_files = 0, .skipped_links = 0 };
+    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), note, true);
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "gate_tree") == null);
+
+    buffer.clearRetainingCapacity();
+    note.tree = .{ .mode = .kept, .private_copies = 3 };
+    try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), note, true);
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"gate_tree\":{\"kind\":\"kept\",\"private_copies\":3}") != null);
+
+    for ([_]shadow.TreeReason{ .requested, .other_volume, .no_hard_links }) |reason| {
+        buffer.clearRetainingCapacity();
+        note.tree = .{ .mode = .full_copy, .reason = reason };
+        try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), note, true);
+        var expected_buf: [96]u8 = undefined;
+        const expected = try std.fmt.bufPrint(&expected_buf, "\"gate_tree\":{{\"kind\":\"full_copy\",\"reason\":\"{t}\"}}", .{reason});
+        try testing.expect(std.mem.indexOf(u8, buffer.written(), expected) != null);
+    }
 }

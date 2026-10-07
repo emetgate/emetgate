@@ -49,6 +49,7 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     trace: ?*Trace = null,
 };
 
@@ -65,6 +66,7 @@ pub const Trace = struct {
     linked_files: usize = 0,
     copied_files: usize = 0,
     skipped_links: usize = 0,
+    tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
 };
 
@@ -235,18 +237,15 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try prepareShadow(gpa, io, root, location, files, options.linked, options.trace);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    var workspace = try prepareShadow(gpa, io, root, location, files, options.linked, options.gate_tree, options.trace);
+    defer workspace.finish();
     try workspace.writeFile(rel, patched);
 
     if (try runCommandRules(gpa, io, root, location.shadow, targets, options.limits, options.allow_repo_memory)) |gated| return gated;
     return runStages(gpa, io, location.shadow, options.typecheck_command, command, options.limits);
 }
 
-pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, trace: ?*Trace) !shadow.Shadow {
+pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace) !shadow.Shadow {
     _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
     const workspace = try shadow.Shadow.prepare(io, .{
         .root_abs = root,
@@ -254,8 +253,11 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
         .shadow_abs = location.shadow,
         .files = files,
         .linked = linked,
+        .tree = choice.tree,
+        .private = choice.private,
     });
     if (trace) |t| {
+        t.tree = workspace.use;
         t.shadow_dotted = location.dotted();
         t.linked_files = workspace.link_stats.linked;
         t.copied_files = workspace.link_stats.copied;

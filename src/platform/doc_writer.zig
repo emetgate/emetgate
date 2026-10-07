@@ -28,12 +28,14 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
+    gate_tree: shadow.Choice = .{},
     commit_step: ?*const disk.Step = null,
 };
 
 pub const Trace = struct {
     base_len: usize = 0,
     new_len: usize = 0,
+    gate: runner.Trace = .{},
 };
 
 pub const Result = union(enum) {
@@ -89,11 +91,8 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, null);
-    defer {
-        workspace.close();
-        shadow.remove(io, location.base, location.shadow) catch {};
-    }
+    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, options.gate_tree, if (trace) |t| &t.gate else null);
+    defer workspace.finish();
     try workspace.writeFile(rel, applied.source);
 
     if (try runner.runCommandRules(gpa, io, root, location.shadow, &.{}, options.limits, options.allow_repo_memory)) |gated| {

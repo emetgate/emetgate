@@ -1,4 +1,6 @@
 const std = @import("std");
+const shadow = @import("../platform/shadow.zig");
+const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const policy_mod = @import("policy.zig");
@@ -76,10 +78,13 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         },
         .allowed => |entry| entry,
     };
+    var used: shadow.TreeUse = .{};
     const report = run_command.runInShadow(gpa, io, .{
         .root_abs = root_abs,
         .command = entry,
         .shadow_root = policy.shadow_root,
+        .gate_tree = policy.treeChoice(),
+        .used = &used,
     }) catch |err| switch (err) {
         error.SandboxUnavailable => {
             event.fail("SandboxUnavailable");
@@ -89,7 +94,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         else => |e| return e,
     };
     defer report.deinit(gpa);
-    try writeRan(w, entry, report);
+    try writeRan(w, entry, report, used);
     return false;
 }
 
@@ -119,7 +124,7 @@ fn writeRefused(w: *Writer, command: []const u8, reason: []const u8, allowed: []
     try w.writeByte('\n');
 }
 
-fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report) !void {
+fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report, used: shadow.TreeUse) !void {
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
@@ -148,6 +153,7 @@ fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report) !void {
     try js.write(report.duration_ns / std.time.ns_per_ms);
     try writeStream(&js, "stdout", report.stdout);
     try writeStream(&js, "stderr", report.stderr);
+    try wire.writeGateTree(&js, used);
     try js.objectField("truncated");
     try js.write(report.truncated);
     try js.endObject();
