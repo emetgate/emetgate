@@ -353,7 +353,14 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     }
 }
 
+fn printLeftBehind(trace: runner.Trace) void {
+    const tree = trace.tree orelse return;
+    const err = tree.left_behind orelse return;
+    std.debug.print("warning: the gate tree could not be removed and stays under the shadow root: {t}\n", .{err});
+}
+
 fn printShadowNote(gpa: std.mem.Allocator, override: ?[]const u8, trace: runner.Trace) void {
+    printLeftBehind(trace);
     const root = shadow_root.displayRoot(gpa, override) catch return;
     defer gpa.free(root);
     if (trace.linked_files + trace.copied_files + trace.skipped_links != 0) {

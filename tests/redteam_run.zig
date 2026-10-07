@@ -127,7 +127,10 @@ test "redteam run: a long command that leaves a child is stopped at the deadline
 
 test "redteam run: a flood of output comes back cut to the last lines with a count of the rest" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try fixture.Repo.init(&.{.{ .name = "flood.cmd", .body = "@echo off\r\n:again\r\necho flood flood flood flood flood flood flood flood\r\ngoto again\r\n" }});
+    var repo = try fixture.Repo.init(&.{
+        .{ .name = "flood.txt", .body = "flood flood flood flood flood flood flood flood\r\n" ** 4096 },
+        .{ .name = "flood.cmd", .body = "@echo off\r\n:again\r\ntype flood.txt\r\ngoto again\r\n" },
+    });
     defer repo.deinit();
     var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{".\\flood.cmd"}), .{ .command = ".\\flood.cmd" });
     defer reply.deinit();

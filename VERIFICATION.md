@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1524**
-- Mutations declared in `tests/mutations.json`: **986**
-  - killed: **955**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1526**
+- Mutations declared in `tests/mutations.json`: **991**
+  - killed: **960**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **5**
@@ -173,7 +173,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-97 mutation(s).
+99 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -261,7 +261,7 @@ python tools/verification_page.py --check
 | `OD4-lock-taken-through-a-linked-workspace` | `src/platform/shadow.zig` | `if (isReparsePoint(workspace) catch true) return error.Workspac...` -> `` | own dir: the workspace lock refuses a workspace that is a junction and leaves t... | killed |
 | `OD5-lock-release-removes-what-it-did-not-verify` | `src/platform/shadow.zig` | `_ = own_dir.removeEmpty(journal);` -> `Dir.cwd().deleteDir(self.io, journal) catch {};` | own dir: releasing the workspace lock leaves a junction that stands where the j... | killed |
 | `OD11-shadow-workspace-not-held` | `src/platform/shadow.zig` | `const held = try holdWorkspace(io, shadow_abs);` -> `const held: ?own_dir.Held = null;` | own dir: a shadow workspace that another handle holds alone is not cleaned | killed |
-| `KT1-wrong-tree-removed-after-the-call` | `src/platform/shadow.zig` | `if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch ...` -> `if (mode == .kept) remove(io, base_abs, shadow_abs) catch {};` | the kept tree holds the working files themselves, stays after the call and says...; a ful... | killed |
+| `KT1-wrong-tree-removed-after-the-call` | `src/platform/shadow.zig` | `if (mode != .full_copy) return;` -> `if (mode != .kept) return;` | the kept tree holds the working files themselves, stays after the call and says...; a ful... | killed |
 | `KT3-private-prefix-ignored` | `src/platform/shadow.zig` | `.how = if (isUnderAny(file, options.private)) .copy else .link` -> `.how = .link` | a path under a private prefix is a private copy in the kept tree and is counted; redteam ... | killed |
 | `KT4-label-propagated-onto-linked-files` | `src/platform/shadow.zig` | `try labelWithoutPropagation(options.shadow_abs);` -> `try grantLowIntegrityWrite(options.shadow_abs);` | the kept tree holds the working files themselves, stays after the call and says...; redte... | killed |
 | `KT5-edit-written-through-the-link` | `src/platform/shadow.zig` | `if (self.use.mode == .kept) return gate_tree.writeFile(self.dir...` -> `` | the kept tree holds the working files themselves, stays after the call and says... | killed |
@@ -270,6 +270,8 @@ python tools/verification_page.py --check
 | `KT8-private-copies-not-counted` | `src/platform/shadow.zig` | `if (outcome == .copied) use.private_copies += 1;` -> `if (outcome == .linked) use.private_copies += 1;` | a path under a private prefix is a private copy in the kept tree and is counted | killed |
 | `KT9-other-volume-not-detected` | `src/platform/shadow.zig` | `if (try dir_scan.volumeOf(root) != try treeVolume(tree)) {` -> `if (false) {` | gate tree replies: a repository on another volume, or a volume without hard lin... | killed |
 | `KT10-missing-hard-links-not-detected` | `src/platform/shadow.zig` | `if (!try linksSupported(root)) {` -> `if (false) {` | gate tree replies: a repository on another volume, or a volume without hard lin... | killed |
+| `LB1-left-behind-tree-not-recorded` | `src/platform/shadow.zig` | `out.left_behind = err;` -> `out.left_behind = if (false) err else null;` | a full copy that cannot be removed after the call is named in the report, and t...; gate ... | killed |
+| `LB2-edit-gate-does-not-report-the-tree` | `src/platform/runner.zig` | `workspace.reportTo(&t.tree.?);` -> `workspace.report = null;` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
 | `KT18-denied-root-not-named` | `src/platform/shadow.zig` | `if (blocked) \|report\| report.note(.working_tree, gate_tree.re...` -> `if (false) blocked.?.note(.working_tree, gate_tree.reasonOf(err...` | gate tree rights: a repository root that cannot be listed is named in the reply | killed |
 | `KT22-gate-does-not-pass-the-report` | `src/platform/runner.zig` | `.blocked = if (trace) \|t\| &t.blocked else null,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
 | `SB6-spawn-fault-read-after-the-process-exists` | `src/platform/sandbox.zig` | `if (faulted(.spawn_as_user)) return error.SandboxUnavailable;  ...` -> `if (false and faulted(.spawn_as_user)) return error.SandboxUnav...` | a service whose token is not low integrity is refused before it runs; a spawn fault is de... | killed |
@@ -599,7 +601,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-484 mutation(s).
+487 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1070,6 +1072,9 @@ python tools/verification_page.py --check
 | `WT1-full-copy-reason-left-out` | `src/protocol/wire.zig` | `try js.write(@tagName(tree.reason));` -> `try js.write("none");` | a result says which tree the gate used: kept with its private copies, or a full... | killed |
 | `KT11-run-ignores-the-tree-choice` | `src/protocol/run_tool.zig` | `.gate_tree = policy.treeChoice(),         .used = &used,` -> `.used = &used,` | gate tree replies: a run reply says which tree was used, and two servers in one... | killed |
 | `KT12-doc-write-reply-without-the-tree` | `src/protocol/handlers.zig` | `const doc_note = wire.treeNote(doc_trace.gate);` -> `const doc_note: ?wire.ShadowNote = null;` | gate tree replies: a rejected doc write says which tree was used, for each serv...; gate ... | killed |
+| `LB3-run-does-not-report-the-tree` | `src/platform/run_command.zig` | `if (options.used) \|used\| workspace.reportTo(used);` -> `if (options.used) \|used\| used.* = workspace.use;` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `LB4-left-behind-not-written` | `src/protocol/wire.zig` | `try js.write(@errorName(err));     }     try js.endObject(); } ...` -> `try js.write(@errorName(err)[0..0]);     }     try js.endObject...` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `LB5-compact-committed-reply-hides-left-behind` | `src/protocol/wire.zig` | `if (tree.left_behind != null) try writeGateTree(js, tree);` -> `if (tree.left_behind != null and full) try writeGateTree(js, tr...` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
 | `KT13-working-directory-opened-with-delete-child` | `src/platform/dir_scan.zig` | `const dir_access: u32 = win.file_list_directory \| win.file_rea...` -> `const dir_access: u32 = win.file_list_directory \| win.file_del...` | gate tree rights: a repository the user may modify but not fully control gets t...; gate ... | killed |
 | `KT14-held-directory-opened-with-delete-child` | `src/platform/own_dir.zig` | `win.generic_read \| win.generic_write \| win.file_traverse,` -> `win.generic_read \| win.generic_write \| win.file_traverse \| 0...` | gate tree rights: a doc write and a batch are committed in a repository the use... | killed |
 | `KT15-denied-working-directory-not-named` | `src/platform/gate_tree.zig` | `else => \|e\| return self.ctx.sourceRefused(e, key[1..]),` -> `else => \|e\| return e,` | gate tree rights: a working directory that cannot be listed is named in the rep... | killed |

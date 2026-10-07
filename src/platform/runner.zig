@@ -249,7 +249,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
 
 pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace) !shadow.Shadow {
     _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
-    const workspace = try shadow.Shadow.prepare(io, .{
+    var workspace = try shadow.Shadow.prepare(io, .{
         .root_abs = root,
         .base_abs = location.base,
         .shadow_abs = location.shadow,
@@ -261,6 +261,7 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
     });
     if (trace) |t| {
         t.tree = workspace.use;
+        workspace.reportTo(&t.tree.?);
         t.shadow_dotted = location.dotted();
         t.linked_files = workspace.link_stats.linked;
         t.copied_files = workspace.link_stats.copied;
