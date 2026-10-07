@@ -8709,7 +8709,7 @@
     {
       "id": "SL11-rule-unknown-id-lists-nothing",
       "file": "src/protocol/rule_command.zig",
-      "from": "            error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err_out),",
+      "from": "            error.DecisionNotActive => try list(voice, gpa, io, root_abs, .{}, err_out),",
       "to": "            error.DecisionNotActive => {},",
       "kills": [
         "prompt hook: a refused rule answers with the error name and the names that exist, and writes nothing"
@@ -9572,6 +9572,52 @@
       "to": "    if (false and edits.len == 0) return;\n",
       "kills": [
         "batch doc on a document: a batch of one Markdown edit commits, answers, is logged and leaves no receipt"
+      ]
+    },
+    {
+      "id": "RA1-hook-answers-in-the-terse-voice",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "    try rule_command.runAs(.spoken, gpa, io, try root, request, reason, reason);",
+      "to": "    try rule_command.runAs(.terse, gpa, io, try root, request, reason, reason);",
+      "kills": [
+        "prompt hook: /rule add adopts the rule and answers with its id",
+        "prompt hook: /rule list answers with the rows emetgate rule list prints"
+      ]
+    },
+    {
+      "id": "RA2-command-line-answers-in-the-spoken-voice",
+      "file": "src/protocol/rule_command.zig",
+      "from": "    return runAs(.terse, gpa, io, root_abs, request, out, err_out);",
+      "to": "    return runAs(.spoken, gpa, io, root_abs, request, out, err_out);",
+      "kills": [
+        "prompt hook: /rule add adopts the rule and answers with its id"
+      ]
+    },
+    {
+      "id": "RA3-empty-list-says-nothing",
+      "file": "src/protocol/rule_command.zig",
+      "from": "    if (decisions.len == 0) return out.writeAll(nothing_kept);",
+      "to": "    if (false and decisions.len == 0) return out.writeAll(nothing_kept);",
+      "kills": [
+        "prompt hook: /rule forget removes the rule, and a command that prints nothing still answers"
+      ]
+    },
+    {
+      "id": "RA4-forget-says-nothing",
+      "file": "src/protocol/rule_command.zig",
+      "from": "            if (voice == .spoken) try out.print(\"rule forgotten: {s}\\n\", .{id});",
+      "to": "            if (false and voice == .spoken) try out.print(\"rule forgotten: {s}\\n\", .{id});",
+      "kills": [
+        "prompt hook: /rule forget removes the rule, and a command that prints nothing still answers"
+      ]
+    },
+    {
+      "id": "RA5-list-columns-not-padded",
+      "file": "src/protocol/rule_command.zig",
+      "from": "        try out.splatByteAll(' ', width - cell.len + 2);",
+      "to": "        try out.splatByteAll(' ', @min(width - cell.len, 0) + 2);",
+      "kills": [
+        "prompt hook: /rule list answers with the rows emetgate rule list prints"
       ]
     }
   ]

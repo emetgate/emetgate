@@ -7,8 +7,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **1514**
-- Mutations declared in `tests/mutations.json`: **971**
-  - killed: **940**
+- Mutations declared in `tests/mutations.json`: **976**
+  - killed: **945**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **5**
@@ -343,7 +343,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-106 mutation(s).
+110 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -449,10 +449,14 @@ python tools/verification_page.py --check
 | `AD2-added-masked-by-a-copy-elsewhere` | `src/platform/rules.zig` | `_ = takeText(&old_texts, tree.source[hit.span.start..hit.span.e...` -> `_ = tree.source[hit.span.start..hit.span.end];` | an added rule counts copies: a second copy of a text that the file already hold... | killed |
 | `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = old orelse "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
 | `SL10-rule-unknown-check-names-nothing` | `src/protocol/rule_command.zig` | `error.UnknownCheck => try writeCheckNames(err_out),` -> `error.UnknownCheck => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
-| `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err...` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
+| `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(voice, gpa, io, root_abs, ....` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
 | `PL1-model-may-name-the-tree` | `src/protocol/policy.zig` | `"shadow_root", "allow_run", "shadow_tree", "shadow_private" };` -> `"shadow_root", "allow_run" };` | a tool call that names the tree choice is refused like one that names a test co... | killed |
 | `PL2-private-prefix-not-validated` | `src/protocol/policy.zig` | `shadow.validateRelative(prefix) catch return null;` -> `` | the tree choice comes from the operator's flags: kept by default, copy on reque... | killed |
 | `PL3-copy-flag-read-as-kept` | `src/protocol/policy.zig` | `if (std.mem.eql(u8, text, "copy")) return .full_copy;` -> `if (std.mem.eql(u8, text, "copy")) return .kept;` | the tree choice comes from the operator's flags: kept by default, copy on reque... | killed |
+| `RA2-command-line-answers-in-the-spoken-voice` | `src/protocol/rule_command.zig` | `return runAs(.terse, gpa, io, root_abs, request, out, err_out);` -> `return runAs(.spoken, gpa, io, root_abs, request, out, err_out);` | prompt hook: /rule add adopts the rule and answers with its id | killed |
+| `RA3-empty-list-says-nothing` | `src/protocol/rule_command.zig` | `if (decisions.len == 0) return out.writeAll(nothing_kept);` -> `if (false and decisions.len == 0) return out.writeAll(nothing_k...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `RA4-forget-says-nothing` | `src/protocol/rule_command.zig` | `if (voice == .spoken) try out.print("rule forgotten: {s}\n", .{...` -> `if (false and voice == .spoken) try out.print("rule forgotten: ...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `RA5-list-columns-not-padded` | `src/protocol/rule_command.zig` | `try out.splatByteAll(' ', width - cell.len + 2);` -> `try out.splatByteAll(' ', @min(width - cell.len, 0) + 2);` | prompt hook: /rule list answers with the rows emetgate rule list prints | killed |
 
 ### Scan
 
@@ -590,7 +594,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-478 mutation(s).
+479 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1072,6 +1076,7 @@ python tools/verification_page.py --check
 | `BD1-source-doc-edit-not-refused` | `src/engine/docnode.zig` | `if (registry.forPath(path) != null) return error.UseSymbolTools...` -> `if (false and registry.forPath(path) != null) return error.UseS...` | batch doc on source: a line range that adds comments under an enforced no_comme...; batch... | killed |
 | `BD2-write-doc-skips-the-source-refusal` | `src/platform/doc_writer.zig` | `try docnode.refuseSource(options.file_abs);` -> `` | write_doc on source: a line range of a source file is refused like the batch, a... | killed |
 | `BD5-doc-only-batch-writes-an-empty-receipt` | `src/protocol/handlers.zig` | `if (edits.len == 0) return;` -> `if (false and edits.len == 0) return;` | batch doc on a document: a batch of one Markdown edit commits, answers, is logg... | killed |
+| `RA1-hook-answers-in-the-terse-voice` | `src/protocol/prompt_hook.zig` | `try rule_command.runAs(.spoken, gpa, io, try root, request, rea...` -> `try rule_command.runAs(.terse, gpa, io, try root, request, reas...` | prompt hook: /rule add adopts the rule and answers with its id; prompt hook: /rule list a... | killed |
 
 ## What this system does not prove
 
