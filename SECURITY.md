@@ -14,7 +14,7 @@ A useful report includes:
 
 You will get a first reply within a week. When a report is confirmed, the fix and the reproduction are published together, the way [issue-driven findings are already written up](https://emetgate.dev/blog). Credit is given unless you ask otherwise.
 
-Past findings and their fixes are listed in the README under [Security history](README.md#security-history).
+Past findings and their fixes are listed in the reference under [Security history](REFERENCE.md#security-history) and on [emetgate.dev/security](https://emetgate.dev/security).
 
 ## Supported versions
 

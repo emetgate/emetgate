@@ -6476,8 +6476,8 @@
     {
       "id": "WR1-compact-reply-drops-new-hash",
       "file": "src/protocol/wire.zig",
-      "from": "    try js.objectField(\"new_hash\");\n    try js.write(new_hex[0..]);\n    if (full) try writeShadowNote(&js, note);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
-      "to": "    if (full) {\n        try js.objectField(\"new_hash\");\n        try js.write(new_hex[0..]);\n    }\n    if (full) try writeShadowNote(&js, note);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
+      "from": "    try js.objectField(\"new_hash\");\n    try js.write(new_hex[0..]);\n    try writeNote(&js, note, full);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
+      "to": "    if (full) {\n        try js.objectField(\"new_hash\");\n        try js.write(new_hex[0..]);\n    }\n    try writeNote(&js, note, full);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
       "kills": [
         "compact committed payload drops the old hash and the shadow note"
       ]
@@ -9269,8 +9269,8 @@
     {
       "id": "KT1-wrong-tree-removed-after-the-call",
       "file": "src/platform/shadow.zig",
-      "from": "if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};",
-      "to": "if (mode == .kept) remove(io, base_abs, shadow_abs) catch {};",
+      "from": "if (mode != .full_copy) return;",
+      "to": "if (mode != .kept) return;",
       "kills": [
         "the kept tree holds the working files themselves, stays after the call and says what it is",
         "a full copy is used when asked for, says so, gives private files and is removed after the call"
@@ -11294,6 +11294,154 @@
       "to": "        error.UnsafePath => return,\n",
       "kills": [
         "commit defense: a junction that stands inside the store where a changed file belongs is refused, and nothing is deleted or written where it points"
+      ]
+    },
+    {
+      "id": "JV3-replace-back-to-two-renames",
+      "file": "src/platform/disk.zig",
+      "from": "        try writeDurably(self.io, self.backup, bytes);",
+      "to": "        try guard.renameTo(self.gpa, self.backup);",
+      "kills": [
+        "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole"
+      ]
+    },
+    {
+      "id": "LB1-left-behind-tree-not-recorded",
+      "file": "src/platform/shadow.zig",
+      "from": "    out.left_behind = err;\n",
+      "to": "    out.left_behind = if (false) err else null;\n",
+      "kills": [
+        "a full copy that cannot be removed after the call is named in the report, and the next call removes it",
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ],
+      "note": "silent loss: the removal error of a full copy would be dropped as it was before"
+    },
+    {
+      "id": "LB2-edit-gate-does-not-report-the-tree",
+      "file": "src/platform/runner.zig",
+      "from": "        workspace.reportTo(&t.tree.?);\n",
+      "to": "        workspace.report = null;\n",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ]
+    },
+    {
+      "id": "LB3-run-does-not-report-the-tree",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (options.used) |used| workspace.reportTo(used);\n",
+      "to": "    if (options.used) |used| used.* = workspace.use;\n",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ]
+    },
+    {
+      "id": "LB4-left-behind-not-written",
+      "file": "src/protocol/wire.zig",
+      "from": "        try js.write(@errorName(err));\n    }\n    try js.endObject();\n}\n\nfn writeNote",
+      "to": "        try js.write(@errorName(err)[0..0]);\n    }\n    try js.endObject();\n}\n\nfn writeNote",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ]
+    },
+    {
+      "id": "LB5-compact-committed-reply-hides-left-behind",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (tree.left_behind != null) try writeGateTree(js, tree);\n",
+      "to": "    if (tree.left_behind != null and full) try writeGateTree(js, tree);\n",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ]
+    },
+    {
+      "id": "SP1-final-name-not-taken-for-a-resolved-path",
+      "file": "src/platform/repo.zig",
+      "from": "    const final = try finalOf(gpa, opened);\n    defer gpa.free(final);\n    return gpa.dupeZ(u8, final);",
+      "to": "    return gpa.dupeZ(u8, opened);",
+      "kills": [
+        "a repository reached through its 8.3 short path is read, listed and gated like the same repository by its long path",
+        "through a short-spelled root a path outside, a junction, a nested repository, .git and the workspace are still refused"
+      ]
+    },
+    {
+      "id": "SP2-unreadable-final-name-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    return try exe_path.finalDosPath(gpa, path_abs) orelse error.FileOutsideRepo;",
+      "to": "    return try exe_path.finalDosPath(gpa, path_abs) orelse try gpa.dupe(u8, path_abs);",
+      "kills": [
+        "a path whose final name cannot be read is refused instead of being compared as spelled"
+      ]
+    },
+    {
+      "id": "SP3-served-root-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    return finalOf(gpa, spelled);",
+      "to": "    return gpa.dupe(u8, spelled);",
+      "kills": [
+        "a served root given by its 8.3 short path serves the files of that repository given by their long path"
+      ]
+    },
+    {
+      "id": "SP4-new-file-parent-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    const parent_abs = finalPath(gpa, io, parent) catch",
+      "to": "    const parent_abs = std.Io.Dir.cwd().realPathFileAlloc(io, parent, gpa) catch",
+      "kills": [
+        "a new file is created through a short-spelled parent directory, and not inside the workspace by its short name"
+      ]
+    },
+    {
+      "id": "SP5-jailed-path-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    const abs = try finalPath(gpa, io, path);",
+      "to": "    const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);",
+      "kills": [
+        "a repository reached through its 8.3 short path is read, listed and gated like the same repository by its long path",
+        "through a short-spelled root a path outside, a junction, a nested repository, .git and the workspace are still refused"
+      ]
+    },
+    {
+      "id": "EP9-share-final-name-not-recognized",
+      "file": "src/platform/exe_path.zig",
+      "from": "    if (std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {",
+      "to": "    if (false and std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {",
+      "kills": [
+        "exe path: a final name becomes a drive or share path, and any other form gives none"
+      ]
+    },
+    {
+      "id": "EP10-final-name-without-its-prefix-accepted",
+      "file": "src/platform/exe_path.zig",
+      "from": "    if (!std.mem.startsWith(u8, verbatim, verbatim_prefix)) return null;",
+      "to": "    if (false and !std.mem.startsWith(u8, verbatim, verbatim_prefix)) return null;",
+      "kills": [
+        "exe path: a final name becomes a drive or share path, and any other form gives none"
+      ]
+    },
+    {
+      "id": "EP11-final-name-without-a-drive-accepted",
+      "file": "src/platform/exe_path.zig",
+      "from": "    if (rest.len < 3 or rest[1] != ':' or rest[2] != '\\\\') return null;",
+      "to": "    if (false and (rest.len < 3 or rest[1] != ':' or rest[2] != '\\\\')) return null;",
+      "kills": [
+        "exe path: a final name becomes a drive or share path, and any other form gives none"
+      ]
+    },
+    {
+      "id": "WP1-pool-keeps-its-closed-event",
+      "file": "src/platform/worker_pool.zig",
+      "from": "        self.done = null;\n        self.count = 0;\n        return unclosed;",
+      "to": "        self.count = 0;\n        return unclosed;",
+      "kills": [
+        "a pool that was never started, and one torn down twice, closes no handle it does not hold"
+      ]
+    },
+    {
+      "id": "WP2-pool-never-started-closes-a-handle",
+      "file": "src/platform/worker_pool.zig",
+      "from": "        const done = self.done orelse return 0;",
+      "to": "        const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0xAAAAAAA8));",
+      "kills": [
+        "a pool that was never started, and one torn down twice, closes no handle it does not hold"
       ]
     }
   ]

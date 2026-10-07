@@ -118,7 +118,7 @@ fn stemOf(path: []const u8) []const u8 {
 }
 
 pub fn jailDestination(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8) ![]u8 {
-    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
+    const cwd = try repo.finalPath(gpa, io, ".");
     defer gpa.free(cwd);
     const resolved = try std.fs.path.resolve(gpa, &.{ cwd, path });
     defer gpa.free(resolved);

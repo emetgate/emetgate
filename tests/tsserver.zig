@@ -19,6 +19,11 @@ fn askRename(repo: *TsRepo, s: *tsserver.Session, rel: []const u8, offset: u32) 
     return client.rename(file, offset);
 }
 
+fn reportProgress(s: *tsserver.Session) void {
+    const client = s.client orelse return;
+    std.debug.print("language service: {d} start(s), {d} request(s) sent, the first of each start is its ping\n", .{ client.starts, client.next_id - 1 });
+}
+
 test "tsserver: the language service starts on first use, answers and stays warm" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try TsRepo.init(&.{.{ .rel = "src/a.ts", .text = source }});
@@ -84,6 +89,7 @@ test "tsserver: a language service that exits mid-request is reported and restar
     try repo.setPlan("{\"exit\":true}");
     var s = session(&repo, 20_000);
     defer s.deinit();
+    errdefer reportProgress(&s);
     try testing.expectError(error.LanguageServiceExited, askRename(&repo, &s, "src/a.ts", 16));
     try repo.setPlan("{\"echo\":3}");
     const answer = try askRename(&repo, &s, "src/a.ts", 16);

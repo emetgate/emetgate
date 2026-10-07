@@ -139,6 +139,7 @@ pub const TreeUse = struct {
     reason: TreeReason = .none,
     private_copies: usize = 0,
     source: TreeSource = .working,
+    left_behind: ?anyerror = null,
 };
 
 pub const Committed = struct {
@@ -156,6 +157,7 @@ pub const Choice = struct {
 pub const Probe = struct {
     tree_volume: ?u64 = null,
     hard_links: ?bool = null,
+    removal: ?anyerror = null,
 };
 
 pub var injected_probe: Probe = .{};
@@ -182,6 +184,7 @@ pub const Shadow = struct {
     use: TreeUse = .{},
     base_abs: []const u8 = "",
     shadow_abs: []const u8 = "",
+    report: ?*TreeUse = null,
 
     pub const Options = struct {
         root_abs: []const u8,
@@ -411,10 +414,29 @@ pub const Shadow = struct {
         const mode = self.use.mode;
         const base_abs = self.base_abs;
         const shadow_abs = self.shadow_abs;
+        const report = self.report;
         self.close();
-        if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};
+        if (mode != .full_copy) return;
+        removeAfterCall(io, base_abs, shadow_abs) catch |err| noteLeftBehind(report, err);
+    }
+
+    pub fn reportTo(self: *Shadow, report: *TreeUse) void {
+        report.* = self.use;
+        self.report = report;
     }
 };
+
+fn removeAfterCall(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
+    if (builtin.is_test) {
+        if (injected_probe.removal) |forced| return forced;
+    }
+    return remove(io, base_abs, shadow_abs);
+}
+
+fn noteLeftBehind(report: ?*TreeUse, err: anyerror) void {
+    const out = report orelse return;
+    out.left_behind = err;
+}
 
 fn rootRefused(blocked: ?*gate_tree.Report, err: dir_scan.Error) dir_scan.Error {
     if (blocked) |report| report.note(.working_tree, gate_tree.reasonOf(err), &.{"."});
@@ -886,6 +908,33 @@ test "a full copy is used when asked for, says so, gives private files and is re
     const copy = try shadow.dir.statFile(testing.io, "a.ts", .{});
     try testing.expect(real.inode != copy.inode);
     shadow.finish();
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
+}
+
+test "a full copy that cannot be removed after the call is named in the report, and the next call removes it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .full_copy;
+
+    var used: TreeUse = .{};
+    var shadow = try Shadow.prepare(testing.io, options);
+    shadow.reportTo(&used);
+    try testing.expectEqual(TreeUse{ .mode = .full_copy, .reason = .requested }, used);
+    var held_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const held = try FileLock.acquire(try std.fmt.bufPrint(&held_buf, "{s}\\held.ts", .{options.shadow_abs}));
+    shadow.finish();
+    const direct = remove(testing.io, options.base_abs, options.shadow_abs);
+    held.release();
+    const expected = if (direct) |_| return error.TestUnexpectedResult else |e| e;
+    try testing.expectEqual(@as(?anyerror, expected), used.left_behind);
+    try testing.expectEqual(TreeMode.full_copy, used.mode);
+
+    var again = try Shadow.prepare(testing.io, options);
+    again.reportTo(&used);
+    again.finish();
+    try testing.expectEqual(@as(?anyerror, null), used.left_behind);
     try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
 }
 

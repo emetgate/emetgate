@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1813**
-- Mutations declared in `tests/mutations.json`: **1145**
-  - killed: **1111**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1824**
+- Mutations declared in `tests/mutations.json`: **1161**
+  - killed: **1127**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -33,7 +33,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
   - `tests/redteam_write_doc.zig`: 8
-- Security findings recorded in README's Security History: **9**
+- Security findings recorded in README's Security History: **10**
 
 ## Reproducing this
 
@@ -179,7 +179,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-125 mutation(s).
+127 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -267,7 +267,7 @@ python tools/verification_page.py --check
 | `OD4-lock-taken-through-a-linked-workspace` | `src/platform/shadow.zig` | `if (isReparsePoint(workspace) catch true) return error.Workspac...` -> `` | own dir: the workspace lock refuses a workspace that is a junction and leaves t... | killed |
 | `OD5-lock-release-removes-what-it-did-not-verify` | `src/platform/shadow.zig` | `_ = own_dir.removeEmpty(sub);` -> `Dir.cwd().deleteDir(self.io, sub) catch {};` | own dir: releasing the workspace lock leaves a junction that stands where the j... | killed |
 | `OD11-shadow-workspace-not-held` | `src/platform/shadow.zig` | `const held = try holdWorkspace(io, shadow_abs);` -> `const held: ?own_dir.Held = null;` | own dir: a shadow workspace that another handle holds alone is not cleaned | killed |
-| `KT1-wrong-tree-removed-after-the-call` | `src/platform/shadow.zig` | `if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch ...` -> `if (mode == .kept) remove(io, base_abs, shadow_abs) catch {};` | the kept tree holds the working files themselves, stays after the call and says...; a ful... | killed |
+| `KT1-wrong-tree-removed-after-the-call` | `src/platform/shadow.zig` | `if (mode != .full_copy) return;` -> `if (mode != .kept) return;` | the kept tree holds the working files themselves, stays after the call and says...; a ful... | killed |
 | `KT3-private-prefix-ignored` | `src/platform/shadow.zig` | `.how = if (isUnderAny(file, options.private)) .copy else .link` -> `.how = .link` | a path under a private prefix is a private copy in the kept tree and is counted; redteam ... | killed |
 | `KT4-label-propagated-onto-linked-files` | `src/platform/shadow.zig` | `try labelWithoutPropagation(options.shadow_abs);` -> `try grantLowIntegrityWrite(options.shadow_abs);` | the kept tree holds the working files themselves, stays after the call and says...; redte... | killed |
 | `KT5-edit-written-through-the-link` | `src/platform/shadow.zig` | `if (self.use.mode == .kept) return gate_tree.writeFile(self.dir...` -> `` | the kept tree holds the working files themselves, stays after the call and says... | killed |
@@ -308,10 +308,12 @@ python tools/verification_page.py --check
 | `CT28-full-copy-reads-the-store-through-a-junction` | `src/platform/shadow.zig` | `try refuseLinks(options.base_abs, source_abs);` -> `` | commit tree: the full copy refuses a store whose files are reached through a ju... | killed |
 | `BD3-batch-plans-code-before-refusing-a-source-doc-edit` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try docnode.refuseSource(edit....` -> `` | mixed batch: a symbol edit and a doc edit of the same source file are refused a... | killed |
 | `CD7-fresh-checkout-not-compared` | `src/platform/runner.zig` | `slot.* = std.mem.eql(u8, tested, fresh);` -> `slot.* = true or std.mem.eql(u8, tested, fresh);` | commit derive: a file of the store rewritten in place is found before the test ...; commi... | killed |
+| `LB1-left-behind-tree-not-recorded` | `src/platform/shadow.zig` | `out.left_behind = err;` -> `out.left_behind = if (false) err else null;` | a full copy that cannot be removed after the call is named in the report, and t...; gate ... | killed |
+| `LB2-edit-gate-does-not-report-the-tree` | `src/platform/runner.zig` | `workspace.reportTo(&t.tree.?);` -> `workspace.report = null;` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
 
 ### Disk, repository boundary and atomic commit
 
-65 mutation(s).
+71 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -380,6 +382,12 @@ python tools/verification_page.py --check
 | `P1e-journal-recover-restores-over-any-target` | `src/platform/disk.zig` | `const ours = new_hash orelse return guard.renameReplacing(gpa, ...` -> `if (true) return guard.renameReplacing(gpa, target_abs);     co...` | journal base: recover does not put the old bytes back over a file the user edit...; journ... | killed |
 | `P1j-next-call-skips-the-journal` | `src/platform/disk.zig` | `var report: RecoverReport = .{};     try recoverJournaled(gpa, ...` -> `const report: RecoverReport = .{};     if (false) try recoverJo...` | commit window: a crash between the two moves of the file write recovers to the ... | killed |
 | `BD4-plan-doc-skips-the-source-refusal` | `src/platform/batch_plan.zig` | `try docnode.refuseSource(edit.file_abs);` -> `` | planDoc refuses a file of a registered language before it reads it | killed |
+| `JV3-replace-back-to-two-renames` | `src/platform/disk.zig` | `try writeDurably(self.io, self.backup, bytes);` -> `try guard.renameTo(self.gpa, self.backup);` | a writer that tries to save between the backup copy and the replace is refused ... | killed |
+| `SP1-final-name-not-taken-for-a-resolved-path` | `src/platform/repo.zig` | `const final = try finalOf(gpa, opened);     defer gpa.free(fina...` -> `return gpa.dupeZ(u8, opened);` | a repository reached through its 8.3 short path is read, listed and gated like ...; throu... | killed |
+| `SP2-unreadable-final-name-compared-as-spelled` | `src/platform/repo.zig` | `return try exe_path.finalDosPath(gpa, path_abs) orelse error.Fi...` -> `return try exe_path.finalDosPath(gpa, path_abs) orelse try gpa....` | a path whose final name cannot be read is refused instead of being compared as ... | killed |
+| `SP3-served-root-compared-as-spelled` | `src/platform/repo.zig` | `return finalOf(gpa, spelled);` -> `return gpa.dupe(u8, spelled);` | a served root given by its 8.3 short path serves the files of that repository g... | killed |
+| `SP4-new-file-parent-compared-as-spelled` | `src/platform/repo.zig` | `const parent_abs = finalPath(gpa, io, parent) catch` -> `const parent_abs = std.Io.Dir.cwd().realPathFileAlloc(io, paren...` | a new file is created through a short-spelled parent directory, and not inside ... | killed |
+| `SP5-jailed-path-compared-as-spelled` | `src/platform/repo.zig` | `const abs = try finalPath(gpa, io, path);` -> `const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gp...` | a repository reached through its 8.3 short path is read, listed and gated like ...; throu... | killed |
 
 ### Rules and the q: query engine
 
@@ -649,7 +657,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-595 mutation(s).
+603 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1248,6 +1256,14 @@ python tools/verification_page.py --check
 | `CF2-store-directory-not-held-while-it-is-mended` | `src/platform/commit_store.zig` | `const pinned = (try own_dir.hold(io, tree_abs, .existing)) orel...` -> `const pinned = (try own_dir.hold(io, dir_abs, .existing)) orels...` | commit defense: the directory of the store cannot be moved away and replaced by...; commi... | killed |
 | `CF3-store-checkout-replaces-a-file-that-is-there` | `src/platform/git_commit.zig` | `"checkout-index", "-q", "-a", prefix });` -> `"checkout-index", "-f", "-q", "-a", prefix });` | commit defense: a junction put inside the store between the link check and the ... | killed |
 | `CF4-stored-file-removed-through-a-link` | `src/platform/commit_store.zig` | `error.UnsafePath => return error.WorkspaceIsLink,` -> `error.UnsafePath => return,` | commit defense: a junction that stands inside the store where a changed file be... | killed |
+| `LB3-run-does-not-report-the-tree` | `src/platform/run_command.zig` | `if (options.used) \|used\| workspace.reportTo(used);` -> `if (options.used) \|used\| used.* = workspace.use;` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `LB4-left-behind-not-written` | `src/protocol/wire.zig` | `try js.write(@errorName(err));     }     try js.endObject(); } ...` -> `try js.write(@errorName(err)[0..0]);     }     try js.endObject...` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `LB5-compact-committed-reply-hides-left-behind` | `src/protocol/wire.zig` | `if (tree.left_behind != null) try writeGateTree(js, tree);` -> `if (tree.left_behind != null and full) try writeGateTree(js, tr...` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `EP9-share-final-name-not-recognized` | `src/platform/exe_path.zig` | `if (std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {` -> `if (false and std.mem.startsWith(u8, verbatim, verbatim_unc_pre...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
+| `EP10-final-name-without-its-prefix-accepted` | `src/platform/exe_path.zig` | `if (!std.mem.startsWith(u8, verbatim, verbatim_prefix)) return ...` -> `if (false and !std.mem.startsWith(u8, verbatim, verbatim_prefix...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
+| `EP11-final-name-without-a-drive-accepted` | `src/platform/exe_path.zig` | `if (rest.len < 3 or rest[1] != ':' or rest[2] != '\\') return n...` -> `if (false and (rest.len < 3 or rest[1] != ':' or rest[2] != '\\...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
+| `WP1-pool-keeps-its-closed-event` | `src/platform/worker_pool.zig` | `self.done = null;         self.count = 0;         return unclos...` -> `self.count = 0;         return unclosed;` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
+| `WP2-pool-never-started-closes-a-handle` | `src/platform/worker_pool.zig` | `const done = self.done orelse return 0;` -> `const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0...` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
 
 ## What this system does not prove
 

@@ -386,7 +386,18 @@ pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
             try js.write(@tagName(tree.reason));
         },
     }
+    if (tree.left_behind) |err| {
+        try js.objectField("left_behind");
+        try js.write(@errorName(err));
+    }
     try js.endObject();
+}
+
+fn writeNote(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void {
+    if (full) return writeShadowNote(js, note);
+    const n = note orelse return;
+    const tree = n.tree orelse return;
+    if (tree.left_behind != null) try writeGateTree(js, tree);
 }
 
 pub const shadow_path_warning = "the shadow root has a path segment starting with a dot; tools that refuse dot directories (the send package behind express res.sendFile is one) fail there; start emetgate with --shadow-root <dir> on a path without one";
@@ -439,7 +450,7 @@ pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expecte
     }
     try js.objectField("new_hash");
     try js.write(new_hex[0..]);
-    if (full) try writeShadowNote(&js, note);
+    try writeNote(&js, note, full);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -491,7 +502,7 @@ pub fn writeNodesCommitted(writer: *Writer, file: []const u8, applied: node_cas.
     try js.objectField("file");
     try js.write(file);
     try writeNodeFields(&js, applied);
-    if (full) try writeShadowNote(&js, note);
+    try writeNote(&js, note, full);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -534,7 +545,7 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
         try js.endObject();
     }
     try js.endArray();
-    if (full) try writeShadowNote(&js, note);
+    try writeNote(&js, note, full);
     try js.endObject();
     try writer.writeByte('\n');
 }

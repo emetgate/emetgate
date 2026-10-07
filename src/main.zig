@@ -289,7 +289,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     const expected = try symbol.parseExpected(request.hash);
     const target = try newFileTarget(init, gpa, request.path, expected);
     defer if (target) |place| place.deinit(gpa);
-    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try emetgate.repo.finalPath(gpa, init.io, request.path);
     defer gpa.free(file_abs);
 
     const body_from_file: ?[]u8 = switch (request.body) {
@@ -353,7 +353,14 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
     }
 }
 
+fn printLeftBehind(trace: runner.Trace) void {
+    const tree = trace.tree orelse return;
+    const err = tree.left_behind orelse return;
+    std.debug.print("warning: the gate tree could not be removed and stays under the shadow root: {t}\n", .{err});
+}
+
 fn printShadowNote(gpa: std.mem.Allocator, override: ?[]const u8, trace: runner.Trace) void {
+    printLeftBehind(trace);
     const root = shadow_root.displayRoot(gpa, override) catch return;
     defer gpa.free(root);
     if (trace.linked_files + trace.copied_files + trace.skipped_links != 0) {
@@ -395,7 +402,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     const expected = try symbol.parseExpected(request.hash);
     const target = try newFileTarget(init, gpa, request.path, expected);
     defer if (target) |place| place.deinit(gpa);
-    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try std.Io.Dir.cwd().realPathFileAlloc(init.io, request.path, gpa);
+    const file_abs: [:0]const u8 = if (target) |place| try gpa.dupeZ(u8, place.abs) else try emetgate.repo.finalPath(gpa, init.io, request.path);
     defer gpa.free(file_abs);
 
     const body_from_file: ?[]u8 = switch (request.body) {

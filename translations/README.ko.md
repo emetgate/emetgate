@@ -18,9 +18,7 @@
 
 Claude Code용 MCP 서버로 실행되며, Windows에서 TypeScript와 JavaScript 프로젝트를 지원합니다.
 
-<p align="center">
-  <img src="../assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
-</p>
+https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
 ## 하는 일
 
