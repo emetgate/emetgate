@@ -25,6 +25,7 @@ pub const Outcome = enum { absent, kept, linked, copied };
 pub const Found = struct {
     dirs: usize = 0,
     skipped_links: usize = 0,
+    report: ?*Report = null,
 };
 
 pub const Stats = struct {
@@ -37,15 +38,52 @@ pub const Stats = struct {
     skipped_links: usize = 0,
 };
 
+pub const Side = enum { kept_tree, working_tree };
+
+pub const Reason = enum { blocked, denied, busy, link };
+
+pub fn reasonOf(err: anyerror) Reason {
+    return switch (err) {
+        error.ScanDenied, error.AccessDenied => .denied,
+        error.ScanBusy, error.FileBusy => .busy,
+        error.ScanIsLink => .link,
+        else => .blocked,
+    };
+}
+
 pub const Report = struct {
     buf: [512]u8 = undefined,
     len: usize = 0,
+    side: Side = .kept_tree,
+    reason: Reason = .blocked,
 
     pub fn path(self: *const Report) []const u8 {
         return self.buf[0..self.len];
     }
 
-    fn set(self: *Report, parts: []const []const u8) void {
+    pub fn clear(self: *Report) void {
+        self.len = 0;
+    }
+
+    pub fn reasonText(self: *const Report) []const u8 {
+        return switch (self.reason) {
+            .blocked => "could not be used",
+            .denied => "access denied",
+            .busy => "in use by another process",
+            .link => "is a link",
+        };
+    }
+
+    pub fn sideText(self: *const Report) []const u8 {
+        return switch (self.side) {
+            .kept_tree => "kept tree",
+            .working_tree => "working tree",
+        };
+    }
+
+    pub fn note(self: *Report, side: Side, reason: Reason, parts: []const []const u8) void {
+        self.side = side;
+        self.reason = reason;
         self.len = 0;
         for (parts) |part| {
             const take = @min(part.len, self.buf.len - self.len);
@@ -223,10 +261,17 @@ const Context = struct {
         try self.actions[dir].append(self.arena, .{ .name = try self.arena.dupe(u16, name), .kind = kind });
     }
 
-    fn blockedShared(self: *Context, parts: []const []const u8) error{GateTreeBlocked} {
+    fn blockedShared(self: *Context, reason: Reason, parts: []const []const u8) error{GateTreeBlocked} {
         self.lock.acquire();
         defer self.lock.release();
-        return self.blocked(parts);
+        return self.blocked(reason, parts);
+    }
+
+    fn sourceRefused(self: *Context, err: Error, rel: []const u8) Error {
+        self.lock.acquire();
+        defer self.lock.release();
+        if (self.options.report) |report| report.note(.working_tree, reasonOf(err), &.{if (rel.len == 0) "." else rel});
+        return err;
     }
 
     fn settle(self: *Context, want_index: u32, outcome: Outcome) void {
@@ -239,8 +284,8 @@ const Context = struct {
         if (self.options.outcomes) |outcomes| outcomes[want_index] = outcome;
     }
 
-    fn blocked(self: *Context, parts: []const []const u8) error{GateTreeBlocked} {
-        if (self.options.report) |report| report.set(parts);
+    fn blocked(self: *Context, reason: Reason, parts: []const []const u8) error{GateTreeBlocked} {
+        if (self.options.report) |report| report.note(.kept_tree, reason, parts);
         return error.GateTreeBlocked;
     }
 };
@@ -410,7 +455,7 @@ const SourceScan = struct {
             const parent_handle = self.handles[parent] orelse return;
             break :opened (dir_scan.openChild(parent_handle, try toWide(&name_w, baseOf(key[1..]))) catch |err| switch (err) {
                 error.ScanIsLink => return,
-                else => |e| return e,
+                else => |e| return self.ctx.sourceRefused(e, key[1..]),
             }) orelse return;
         };
         self.handles[dir] = handle;
@@ -468,9 +513,9 @@ fn scanTreeDir(raw: *anyopaque, dir: u32, scratch: *align(8) dir_scan.Buffer, ke
         if (!ctx.present[dir]) return;
         const parent_handle = ctx.tree_handles[parent] orelse return;
         break :opened (dir_scan.openChild(parent_handle, try toWide(&name_w, baseOf(rel))) catch |err| switch (err) {
-            error.ScanIsLink, error.ScanDenied, error.ScanBusy => return ctx.blockedShared(&.{rel}),
+            error.ScanIsLink, error.ScanDenied, error.ScanBusy => |e| return ctx.blockedShared(reasonOf(e), &.{rel}),
             else => |e| return e,
-        }) orelse return ctx.blockedShared(&.{rel});
+        }) orelse return ctx.blockedShared(.blocked, &.{rel});
     };
     ctx.tree_handles[dir] = handle;
 
@@ -508,14 +553,14 @@ fn applyTree(ctx: *Context) Error!void {
     for (ctx.tree_dirs.rels.items, 0..) |rel, index| {
         const dir: u32 = @intCast(index);
         const handle = ctx.tree_handles[index] orelse made: {
-            const parent_handle = ctx.tree_handles[ctx.tree_dirs.parents.items[index]] orelse return ctx.blocked(&.{rel});
+            const parent_handle = ctx.tree_handles[ctx.tree_dirs.parents.items[index]] orelse return ctx.blocked(.blocked, &.{rel});
             const name = try toWide(&name_w, baseOf(rel));
             try step();
             try makeDir(ctx, parent_handle, name, rel);
             const opened = (dir_scan.openChild(parent_handle, name) catch |err| switch (err) {
-                error.ScanIsLink, error.ScanDenied, error.ScanBusy => return ctx.blocked(&.{rel}),
+                error.ScanIsLink, error.ScanDenied, error.ScanBusy => |e| return ctx.blocked(reasonOf(e), &.{rel}),
                 else => |e| return e,
-            }) orelse return ctx.blocked(&.{rel});
+            }) orelse return ctx.blocked(.blocked, &.{rel});
             ctx.tree_handles[index] = opened;
             break :made opened;
         };
@@ -541,7 +586,7 @@ fn applyTree(ctx: *Context) Error!void {
 fn makeDir(ctx: *Context, parent: Handle, name: []const u16, rel: []const u8) Error!void {
     var made: Handle = undefined;
     const status = dir_scan.openRelative(parent, name, nt.file_list_directory | nt.synchronize, nt.file_create, nt.option_directory | nt.option_sync, &made);
-    if (status != nt.status_success) return ctx.blocked(&.{rel});
+    if (status != nt.status_success) return ctx.blocked(.blocked, &.{rel});
     dir_scan.close(made);
     ctx.stats.dirs_made += 1;
 }
@@ -550,7 +595,7 @@ fn removeName(ctx: *Context, parent: Handle, name: []const u16, kind: dir_scan.K
     var name8: [dir_scan.max_name_units * 3]u8 = undefined;
     const shown = name8[0..std.unicode.wtf16LeToWtf8(&name8, name)];
     removeEntry(parent, name, kind, &ctx.stats.removed) catch |err| {
-        if (ctx.options.report) |report| report.set(&.{ dir_rel, "/", shown });
+        if (ctx.options.report) |report| report.note(.kept_tree, reasonOf(err), &.{ dir_rel, if (dir_rel.len == 0) "" else "/", shown });
         return err;
     };
 }
@@ -615,10 +660,10 @@ fn place(ctx: *Context, tree_dir: Handle, want_index: u32) Error!void {
                         nt.status_too_many_links => {},
                         nt.status_not_same_device, nt.status_not_supported, nt.status_invalid_device_request => return error.GateTreeUnavailable,
                         nt.status_name_collision => {
-                            if (ctx.options.report) |report| report.set(&.{want.rel});
+                            if (ctx.options.report) |report| report.note(.kept_tree, .blocked, &.{want.rel});
                             return error.GateTreeCaseCollision;
                         },
-                        else => return ctx.blocked(&.{want.rel}),
+                        else => return ctx.blocked(.blocked, &.{want.rel}),
                     }
                 }
             },
@@ -657,25 +702,25 @@ fn copyInto(ctx: *Context, want_index: u32, source_dir: Handle, source_name: []c
     switch (dir_scan.openRelative(source_dir, source_name, nt.generic_read | nt.synchronize, nt.file_open, nt.option_non_directory | nt.option_sync, &source)) {
         nt.status_success => {},
         nt.status_name_not_found, nt.status_path_not_found, nt.status_file_is_a_directory => return ctx.settle(want_index, .absent),
-        else => return ctx.blocked(&.{rel}),
+        else => return ctx.blocked(.blocked, &.{rel}),
     }
     defer dir_scan.close(source);
     var dest: Handle = undefined;
     switch (dir_scan.openRelative(tree_dir, name, nt.generic_write | nt.synchronize, nt.file_create, nt.option_non_directory | nt.option_sync, &dest)) {
         nt.status_success => {},
         nt.status_name_collision => {
-            if (ctx.options.report) |report| report.set(&.{rel});
+            if (ctx.options.report) |report| report.note(.kept_tree, .blocked, &.{rel});
             return error.GateTreeCaseCollision;
         },
-        else => return ctx.blocked(&.{rel}),
+        else => return ctx.blocked(.blocked, &.{rel}),
     }
     defer dir_scan.close(dest);
     var chunk: [64 * 1024]u8 = undefined;
     while (true) {
         var got: u32 = 0;
-        if (win.ReadFile(source, &chunk, chunk.len, &got, null) == .FALSE) return ctx.blocked(&.{rel});
+        if (win.ReadFile(source, &chunk, chunk.len, &got, null) == .FALSE) return ctx.blocked(.blocked, &.{rel});
         if (got == 0) break;
-        if (!writeAll(dest, chunk[0..got])) return ctx.blocked(&.{rel});
+        if (!writeAll(dest, chunk[0..got])) return ctx.blocked(.blocked, &.{rel});
     }
     ctx.settle(want_index, .copied);
 }
@@ -801,6 +846,15 @@ const Discovery = struct {
         try self.next.append(self.arena, .{ .handle = handle, .rel = try self.pathOf(rel, name) });
     }
 
+    fn refused(self: *Discovery, err: Error, rel: []const u8, name: []const u16) Error {
+        self.lock.acquire();
+        defer self.lock.release();
+        const report = self.found.report orelse return err;
+        var name8: [dir_scan.max_name_units * 3]u8 = undefined;
+        report.note(.working_tree, reasonOf(err), &.{ rel, "/", name8[0..std.unicode.wtf16LeToWtf8(&name8, name)] });
+        return err;
+    }
+
     fn skip(self: *Discovery) void {
         self.lock.acquire();
         defer self.lock.release();
@@ -822,7 +876,7 @@ const Discovery = struct {
                             self.skip();
                             continue;
                         },
-                        else => |e| return e,
+                        else => |e| return self.refused(e, at.rel, entry.name),
                     }) orelse continue;
                     self.directory(at.rel, entry.name, child) catch |err| {
                         dir_scan.close(child);
@@ -843,7 +897,10 @@ pub fn discover(arena: Allocator, pool: ?*worker_pool.Pool, root: Handle, root_i
             found.skipped_links += 1;
             return;
         },
-        else => |e| return e,
+        else => |e| {
+            if (found.report) |report| report.note(.working_tree, reasonOf(e), &.{dir_rel});
+            return e;
+        },
     }) orelse return;
     var first = [_]Frontier{.{ .handle = top, .rel = dir_rel }};
     var state: Discovery = .{ .arena = arena, .root_index = root_index, .wants = wants, .found = found, .current = &first };

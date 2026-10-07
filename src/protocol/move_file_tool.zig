@@ -44,7 +44,7 @@ pub fn callMoveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value,
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, arguments.to);
         } else {
-            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+            try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         }
         break :blk true;
     };

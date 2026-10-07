@@ -8,6 +8,7 @@ const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
+const gate_tree = @import("../platform/gate_tree.zig");
 const read_budget = @import("read_budget.zig");
 
 const Writer = std.Io.Writer;
@@ -942,6 +943,13 @@ pub fn writeMalformedRule(writer: *Writer, rule: []const u8, check: []const u8, 
     try js.write(check);
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+pub fn writeFailure(writer: *Writer, err: anyerror, blocked: *const gate_tree.Report) !void {
+    if (blocked.len == 0) return writeError(writer, @errorName(err), exitCode(err));
+    var buf: [640]u8 = undefined;
+    const message = std.fmt.bufPrint(&buf, "{s}: {s} ({s})", .{ blocked.reasonText(), blocked.path(), blocked.sideText() }) catch unreachable;
+    return writeErrorMessage(writer, @errorName(err), exitCode(err), message);
 }
 
 pub fn writeErrorMessage(writer: *Writer, name: []const u8, exit_code: u8, message: []const u8) !void {

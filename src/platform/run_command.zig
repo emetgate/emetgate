@@ -1,6 +1,7 @@
 const std = @import("std");
 const runner = @import("runner.zig");
 const shadow = @import("shadow.zig");
+const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const test_command = @import("test_command.zig");
@@ -140,6 +141,7 @@ pub const Options = struct {
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
     used: ?*shadow.TreeUse = null,
+    blocked: ?*gate_tree.Report = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
 };
@@ -155,7 +157,11 @@ pub fn runInShadow(gpa: Allocator, io: std.Io, options: Options) !sandbox.Report
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try runner.prepareShadow(gpa, io, options.root_abs, location, files, options.linked, options.gate_tree, null);
+    var trace: runner.Trace = .{};
+    defer if (options.blocked) |blocked| {
+        blocked.* = trace.blocked;
+    };
+    var workspace = try runner.prepareShadow(gpa, io, options.root_abs, location, files, options.linked, options.gate_tree, &trace);
     if (options.used) |used| used.* = workspace.use;
     defer workspace.finish();
     return switch (try runner.runStages(gpa, io, location.shadow, null, options.command, options.limits)) {

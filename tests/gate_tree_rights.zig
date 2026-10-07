@@ -173,6 +173,39 @@ test "gate tree rights: a doc write and a batch are committed in a repository th
     try expectHas(last, kept_field);
 }
 
+test "gate tree rights: a linked directory or a directory inside it that cannot be listed is named in the reply" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try newRepo();
+    defer repo.deinit();
+    const cases = [_]struct { sub: []const u8, message: []const u8 }{
+        .{ .sub = "node_modules", .message = "\"message\":\"access denied: node_modules (working tree)\"" },
+        .{ .sub = "node_modules\\pkg", .message = "\"message\":\"access denied: node_modules/pkg (working tree)\"" },
+    };
+    for (cases) |case| {
+        const dir_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ repo.root_abs, case.sub });
+        defer gpa.free(dir_abs);
+        try denyListing(dir_abs);
+        defer allowListing(dir_abs);
+        const reply = try run(keptPolicy(repo.root_abs));
+        defer gpa.free(reply);
+        try expectHas(reply, "\"error\":\"ScanDenied\"");
+        try expectHas(reply, case.message);
+    }
+}
+
+test "gate tree rights: a repository root that cannot be listed is named in the reply" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try newRepo();
+    defer repo.deinit();
+    try denyListing(repo.root_abs);
+    defer allowListing(repo.root_abs);
+
+    const reply = try run(keptPolicy(repo.root_abs));
+    defer gpa.free(reply);
+    try expectHas(reply, "\"error\":\"ScanDenied\"");
+    try expectHas(reply, "\"message\":\"access denied: . (working tree)\"");
+}
+
 test "gate tree rights: a tracked file the user may read but not change is given a private copy" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try newRepo();
@@ -190,4 +223,32 @@ test "gate tree rights: a tracked file the user may read but not change is given
         try expectHas(reply, "\"gate_tree\":{\"kind\":\"kept\",\"private_copies\":1}");
     }
     try expectFile(&repo, "repo/notes.txt", notes);
+}
+
+test "gate tree rights: a working directory that cannot be listed is named in the reply with the reason" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try newRepo();
+    defer repo.deinit();
+    const src_abs = try std.fmt.allocPrint(gpa, "{s}\\src", .{repo.root_abs});
+    defer gpa.free(src_abs);
+    try denyListing(src_abs);
+    defer allowListing(src_abs);
+
+    const policy = keptPolicy(repo.root_abs);
+    const reply = try run(policy);
+    defer gpa.free(reply);
+    try expectHas(reply, "\"status\":\"error\"");
+    try expectHas(reply, "\"error\":\"ScanDenied\"");
+    try expectHas(reply, "\"message\":\"access denied: src (working tree)\"");
+
+    const doc = try writeDoc(policy, repo.root_abs);
+    defer gpa.free(doc);
+    try expectHas(doc, "\"error\":\"ScanDenied\"");
+    try expectHas(doc, "\"message\":\"access denied: src (working tree)\"");
+
+    allowListing(src_abs);
+    const healed = try run(policy);
+    defer gpa.free(healed);
+    try expectHas(healed, "\"status\":\"ran\"");
+    try expectHas(healed, kept_field);
 }
