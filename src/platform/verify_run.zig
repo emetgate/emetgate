@@ -114,6 +114,11 @@ const Context = struct {
         defer {
             _ = receipts.git(self.arena, self.io, self.root, &.{ "worktree", "remove", "--force", dir }) catch null;
         }
+        if (try receipts.git(self.arena, self.io, dir, &.{ "config", "--get", "core.sparseCheckout" })) |sparse| {
+            if (std.mem.eql(u8, std.mem.trim(u8, sparse, " \r\n"), "true")) {
+                _ = (try receipts.git(self.arena, self.io, dir, &.{ "sparse-checkout", "disable" })) orelse return error.WorktreeFailed;
+            }
+        }
         const modules = try std.fmt.allocPrint(self.arena, "{s}\\node_modules", .{self.root});
         if (std.Io.Dir.cwd().access(self.io, modules, .{})) |_| {
             const link = try std.fmt.allocPrint(self.arena, "{s}\\node_modules", .{dir});

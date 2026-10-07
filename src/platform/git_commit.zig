@@ -6,6 +6,7 @@ const disk = @import("disk.zig");
 const commit_message = @import("commit_message.zig");
 const symbol = @import("../engine/symbol.zig");
 const own_dir = @import("own_dir.zig");
+const sandbox = @import("sandbox.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -51,6 +52,8 @@ pub const Measured = struct {
     raw: ?symbol.Hash = null,
 };
 
+pub const Conversion = [32]u8;
+
 pub const Head = struct {
     oid: []u8,
     tree: []u8,
@@ -58,6 +61,7 @@ pub const Head = struct {
     git_dir: []u8 = &.{},
     index: []u8 = &.{},
     icase: bool = false,
+    conversion: Conversion = @splat('0'),
     measured: []Measured = &.{},
 
     pub fn deinit(self: Head, gpa: Allocator) void {
@@ -439,13 +443,14 @@ fn branchOf(git: Git) ![]const u8 {
 const Facts = struct {
     git_dir: []const u8,
     index: []const u8,
+    attributes: []const u8,
     oid: []const u8,
     tree: []const u8,
     branch: []const u8,
 };
 
 fn facts(git: Git) !Facts {
-    const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "HEAD^{commit}", "HEAD^{tree}", "--symbolic-full-name", "HEAD" })) orelse {
+    const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "--git-path", "info/attributes", "HEAD^{commit}", "HEAD^{tree}", "--symbolic-full-name", "HEAD" })) orelse {
         _ = try branchOf(git);
         if (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" }) == null) return error.NoCommitYet;
         return error.GitFailed;
@@ -453,22 +458,79 @@ fn facts(git: Git) !Facts {
     var lines = std.mem.tokenizeAny(u8, out, "\r\n");
     const git_dir = lines.next() orelse return error.GitFailed;
     const listed = lines.next() orelse return error.GitFailed;
+    const attributes_listed = lines.next() orelse return error.GitFailed;
     const oid = lines.next() orelse return error.GitFailed;
     const tree = lines.next() orelse return error.GitFailed;
     const branch = lines.next() orelse return error.DetachedHead;
     if (!std.mem.startsWith(u8, branch, branch_prefix)) return error.DetachedHead;
-    const index = if (std.fs.path.isAbsolute(listed)) blk: {
-        const copy = try git.arena.dupe(u8, listed);
-        std.mem.replaceScalar(u8, copy, '/', '\\');
-        break :blk copy;
-    } else try absOf(git.arena, git.root, listed);
-    return .{ .git_dir = git_dir, .index = index, .oid = oid, .tree = tree, .branch = branch };
+    return .{ .git_dir = git_dir, .index = try listedPath(git, listed), .attributes = try listedPath(git, attributes_listed), .oid = oid, .tree = tree, .branch = branch };
+}
+
+fn listedPath(git: Git, listed: []const u8) ![]const u8 {
+    if (!std.fs.path.isAbsolute(listed)) return absOf(git.arena, git.root, listed);
+    const copy = try git.arena.dupe(u8, listed);
+    std.mem.replaceScalar(u8, copy, '/', '\\');
+    return copy;
 }
 
 const Settings = struct {
     signing: bool = false,
     icase: bool = false,
+    attributes_file: ?[]const u8 = null,
+    conversion: std.crypto.hash.Blake3 = std.crypto.hash.Blake3.init(.{}),
 };
+
+const conversion_keys = [_][]const u8{ "core.autocrlf", "core.eol", "core.symlinks", "core.attributesfile" };
+
+fn shapesCheckout(key: []const u8) bool {
+    if (std.ascii.startsWithIgnoreCase(key, "filter.")) return true;
+    for (conversion_keys) |known| {
+        if (std.ascii.eqlIgnoreCase(key, known)) return true;
+    }
+    return false;
+}
+
+fn homeFile(arena: Allocator, rest: []const u8) !?[]const u8 {
+    if (builtin.os.tag != .windows) return null;
+    const names = [_][:0]const u16{ std.unicode.utf8ToUtf16LeStringLiteral("HOME"), std.unicode.utf8ToUtf16LeStringLiteral("USERPROFILE") };
+    for (names) |name| {
+        const home = (try sandbox.environmentValue(arena, name)) orelse continue;
+        return try std.fs.path.join(arena, &.{ home, rest });
+    }
+    return null;
+}
+
+fn userAttributes(arena: Allocator, named: ?[]const u8) !?[]const u8 {
+    if (named) |path| {
+        if (std.mem.startsWith(u8, path, "~/")) return homeFile(arena, path[2..]);
+        return path;
+    }
+    if (builtin.os.tag != .windows) return null;
+    if (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("XDG_CONFIG_HOME"))) |base| return try std.fs.path.join(arena, &.{ base, "git", "attributes" });
+    return homeFile(arena, ".config/git/attributes");
+}
+
+fn mixFile(git: Git, hasher: *std.crypto.hash.Blake3, path: ?[]const u8) !void {
+    const bytes: []const u8 = if (path) |abs| blk: {
+        if (!std.fs.path.isAbsolute(abs)) break :blk "";
+        break :blk std.Io.Dir.cwd().readFileAlloc(git.io, abs, git.arena, .limited(max_index_bytes)) catch |err| switch (err) {
+            error.FileNotFound => "",
+            else => return error.GitFailed,
+        };
+    } else "";
+    var length: [8]u8 = undefined;
+    std.mem.writeInt(u64, &length, bytes.len, .little);
+    hasher.update(&length);
+    hasher.update(bytes);
+}
+
+fn conversionOf(git: Git, set: *Settings, info_attributes: []const u8) !Conversion {
+    try mixFile(git, &set.conversion, info_attributes);
+    try mixFile(git, &set.conversion, try userAttributes(git.arena, set.attributes_file));
+    var digest: [16]u8 = undefined;
+    set.conversion.final(&digest);
+    return std.fmt.bytesToHex(digest, .lower);
+}
 
 fn truthy(value: ?[]const u8) bool {
     const text = value orelse return true;
@@ -488,6 +550,11 @@ fn settings(git: Git) !Settings {
         const value: ?[]const u8 = if (cut) |at| entry[at + 1 ..] else null;
         if (std.ascii.eqlIgnoreCase(key, "commit.gpgsign")) found.signing = truthy(value);
         if (std.ascii.eqlIgnoreCase(key, "core.ignorecase")) found.icase = truthy(value);
+        if (std.ascii.eqlIgnoreCase(key, "core.attributesfile")) found.attributes_file = value;
+        if (shapesCheckout(key)) {
+            found.conversion.update(entry);
+            found.conversion.update(&.{0});
+        }
     }
     return found;
 }
@@ -505,8 +572,9 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     }
     if (try exists(io, try std.fmt.allocPrint(arena, "{s}.lock", .{known.index}))) return error.IndexLocked;
 
-    const set = try settings(git);
+    var set = try settings(git);
     if (set.signing) return error.SigningNotSupported;
+    const conversion = try conversionOf(git, &set, known.attributes);
     if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) return error.NoCommitIdentity;
 
     var measured: std.ArrayList(Measured) = .empty;
@@ -529,7 +597,7 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     errdefer gpa.free(git_dir);
     const index = try gpa.dupe(u8, known.index);
     errdefer gpa.free(index);
-    return .{ .oid = oid, .tree = tree, .branch = branch, .git_dir = git_dir, .index = index, .icase = set.icase, .measured = try measured.toOwnedSlice(gpa) };
+    return .{ .oid = oid, .tree = tree, .branch = branch, .git_dir = git_dir, .index = index, .icase = set.icase, .conversion = conversion, .measured = try measured.toOwnedSlice(gpa) };
 }
 
 pub fn branchNow(arena: Allocator, io: std.Io, root: []const u8, head: Head) ![]const u8 {
@@ -1049,88 +1117,6 @@ pub fn updateIndex(gpa: Allocator, io: std.Io, root: []const u8, entries: []cons
     try applyEntries(git, entries);
 }
 
-pub const Delta = struct {
-    files: [][]u8,
-    restore: [][]u8,
-
-    pub fn deinit(self: Delta, gpa: Allocator) void {
-        for (self.files) |file| gpa.free(file);
-        gpa.free(self.files);
-        for (self.restore) |file| gpa.free(file);
-        gpa.free(self.restore);
-    }
-};
-
-fn putAll(arena: Allocator, set: *std.StringHashMapUnmanaged(void), out: []const u8) !void {
-    var it = std.mem.tokenizeScalar(u8, out, 0);
-    while (it.next()) |path| try set.put(arena, path, {});
-}
-
-pub fn committedTree(gpa: Allocator, io: std.Io, root: []const u8, head: Head) !Delta {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
-
-    var listed: std.ArrayList(Tracked) = .empty;
-    try parseTracked(arena, try git.needRaw(&.{ "ls-files", "-z", "-s", "-v" }), &listed);
-    var in_head: std.StringHashMapUnmanaged(void) = .empty;
-    try putAll(arena, &in_head, try git.needRaw(&.{ "ls-tree", "-r", "-z", "--name-only", head.oid }));
-
-    var differs: std.StringHashMapUnmanaged(void) = .empty;
-    var staged = std.mem.tokenizeScalar(u8, try git.needRaw(&.{ "diff-index", "--cached", "--no-renames", "--name-status", "-z", head.oid }), 0);
-    while (staged.next()) |_| try differs.put(arena, staged.next() orelse return error.GitFailed, {});
-    try putAll(arena, &differs, try git.needRaw(&.{ "diff-files", "--name-only", "-z" }));
-
-    var flagged: std.ArrayList(Tracked) = .empty;
-    for (listed.items) |entry| {
-        if (entry.stage != 0) {
-            try differs.put(arena, entry.path, {});
-            continue;
-        }
-        if (entry.tag != 'S' and !std.ascii.isLower(entry.tag)) continue;
-        if (try exists(io, try absOf(arena, root, entry.path))) try flagged.append(arena, entry) else try differs.put(arena, entry.path, {});
-    }
-    const flagged_paths = try arena.alloc([]const u8, flagged.items.len);
-    for (flagged.items, flagged_paths) |entry, *slot| slot.* = entry.path;
-    for (flagged.items, try storedOids(git, flagged_paths)) |entry, oid| {
-        if (!std.mem.eql(u8, entry.oid, oid)) try differs.put(arena, entry.path, {});
-    }
-
-    var files: std.ArrayList([]u8) = .empty;
-    errdefer {
-        for (files.items) |file| gpa.free(file);
-        files.deinit(gpa);
-    }
-    var restore: std.ArrayList([]u8) = .empty;
-    errdefer {
-        for (restore.items) |file| gpa.free(file);
-        restore.deinit(gpa);
-    }
-    var last: []const u8 = "";
-    for (listed.items) |entry| {
-        if (std.mem.eql(u8, entry.path, last)) continue;
-        last = entry.path;
-        if (differs.contains(entry.path)) continue;
-        const copy = try gpa.dupe(u8, entry.path);
-        errdefer gpa.free(copy);
-        try files.append(gpa, copy);
-    }
-    var it = differs.keyIterator();
-    while (it.next()) |path| {
-        if (!in_head.contains(path.*)) continue;
-        const copy = try gpa.dupe(u8, path.*);
-        errdefer gpa.free(copy);
-        try restore.append(gpa, copy);
-    }
-    const owned_files = try files.toOwnedSlice(gpa);
-    errdefer {
-        for (owned_files) |file| gpa.free(file);
-        gpa.free(owned_files);
-    }
-    return .{ .files = owned_files, .restore = try restore.toOwnedSlice(gpa) };
-}
-
 pub fn checkoutInto(gpa: Allocator, io: std.Io, root: []const u8, head: Head, paths: []const []const u8, target_abs: []const u8) !void {
     if (paths.len == 0) return;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -1152,4 +1138,82 @@ pub fn checkoutInto(gpa: Allocator, io: std.Io, root: []const u8, head: Head, pa
         _ = try private.need(argv.items);
         at = end;
     }
+}
+
+pub const gitlink_mode = "160000";
+const absent_mode = "000000";
+
+pub const TreeChange = struct {
+    path: []const u8,
+    mode: [6]u8,
+    oid: []const u8,
+    was: bool,
+    now: bool,
+};
+
+fn holdsFile(mode: []const u8) bool {
+    return !std.mem.eql(u8, mode, absent_mode) and !std.mem.eql(u8, mode, gitlink_mode);
+}
+
+pub fn treeChanges(arena: Allocator, io: std.Io, root: []const u8, from: []const u8, to: []const u8) ![]TreeChange {
+    const git = try Git.init(arena, io, root);
+    const out = try git.needRaw(&.{ "diff-tree", "-r", "-z", "--no-renames", "--raw", from, to });
+    var list: std.ArrayList(TreeChange) = .empty;
+    var it = std.mem.tokenizeScalar(u8, out, 0);
+    while (it.next()) |meta| {
+        const path = it.next() orelse return error.GitFailed;
+        if (meta.len == 0 or meta[0] != ':') return error.GitFailed;
+        var fields = std.mem.tokenizeScalar(u8, meta[1..], ' ');
+        const old_mode = fields.next() orelse return error.GitFailed;
+        const new_mode = fields.next() orelse return error.GitFailed;
+        _ = fields.next() orelse return error.GitFailed;
+        const oid = fields.next() orelse return error.GitFailed;
+        if (old_mode.len != 6 or new_mode.len != 6) return error.GitFailed;
+        try list.append(arena, .{ .path = path, .mode = new_mode[0..6].*, .oid = oid, .was = holdsFile(old_mode), .now = holdsFile(new_mode) });
+    }
+    return list.items;
+}
+
+fn checkoutAll(git: Git, private: Git, tree: []const u8, target_abs: []const u8) !void {
+    const source = try std.fmt.allocPrint(git.arena, "--attr-source={s}", .{tree});
+    const prefix = try std.fmt.allocPrint(git.arena, "--prefix={s}/", .{try slashed(git.arena, target_abs)});
+    _ = try private.need(&.{ source, "-c", "checkout.workers=0", "checkout-index", "-f", "-q", "-a", prefix });
+}
+
+pub fn checkoutTree(gpa: Allocator, io: std.Io, root: []const u8, tree: []const u8, target_abs: []const u8) !usize {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const git = try Git.init(arena, io, root);
+    const work = try Work.open(arena, io, root);
+    defer work.done();
+    const private = try git.withIndex(try std.fs.path.join(arena, &.{ work.dir, "index" }));
+    _ = try private.need(&.{ "read-tree", tree });
+    var count: usize = 0;
+    var entries = std.mem.tokenizeScalar(u8, try private.needRaw(&.{ "ls-files", "-s", "-z" }), 0);
+    while (entries.next()) |entry| {
+        if (entry.len < 6) return error.GitFailed;
+        if (holdsFile(entry[0..6])) count += 1;
+    }
+    try checkoutAll(git, private, tree, target_abs);
+    return count;
+}
+
+pub fn checkoutChanges(gpa: Allocator, io: std.Io, root: []const u8, tree: []const u8, changes: []const TreeChange, target_abs: []const u8) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const git = try Git.init(arena, io, root);
+    var lines: std.ArrayList(u8) = .empty;
+    for (changes) |change| {
+        if (!change.now) continue;
+        try lines.appendSlice(arena, try std.fmt.allocPrint(arena, "{s} {s}\t{s}", .{ &change.mode, change.oid, change.path }));
+        try lines.append(arena, 0);
+    }
+    if (lines.items.len == 0) return;
+    const work = try Work.open(arena, io, root);
+    defer work.done();
+    const private = try git.withIndex(try std.fs.path.join(arena, &.{ work.dir, "index" }));
+    _ = (try private.feed(&.{ "update-index", "-z", "--index-info" }, lines.items)) orelse return error.GitFailed;
+    try checkoutAll(git, private, tree, target_abs);
 }

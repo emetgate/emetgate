@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1738**
-- Mutations declared in `tests/mutations.json`: **1083**
-  - killed: **1049**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1753**
+- Mutations declared in `tests/mutations.json`: **1106**
+  - killed: **1072**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -179,7 +179,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-110 mutation(s).
+119 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -286,13 +286,22 @@ python tools/verification_page.py --check
 | `BC5-deleted-file-committed-as-empty` | `src/platform/batch.zig` | `if (p.action == .delete_file) null else p.source()` -> `if (false and p.action == .delete_file) null else p.source()` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
 | `BC6-doc-edit-left-out-of-the-commit` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| try changes.append(gpa, .{ .rel = p.re...` -> `for (doc_prepared) \|p\| if (false) try changes.append(gpa, .{ ...` | commit batch: try_batch that edits, creates, deletes and rewrites a doc is one ... | killed |
 | `BC7-index-sync-of-the-journal-runs-before-the-commit` | `src/platform/batch.zig` | `if (options.commit == null) batch.root = root;` -> `batch.root = root;` | since protocol v2 the index is published from the locked copy before the files are writte... | survives (unclassified) |
-| `PV19-shadow-keeps-hand-edits-out-but-does-not-restore-head` | `src/platform/runner.zig` | `try git_commit.checkoutInto(gpa, io, root, head, restore.items,...` -> `` | commit protocol: the gate tests the tree the commit will hold, not a hand edit ... | killed |
+| `PV19-shadow-keeps-hand-edits-out-but-does-not-restore-head` | `src/platform/shadow.zig` | `const store: ?std.os.windows.HANDLE = if (options.committed) \|...` -> `const store: ?std.os.windows.HANDLE = if (options.committed) \|...` | commit protocol: the gate tests the tree the commit will hold, not a hand edit ...; redte... | killed |
 | `PV25-moved-file-loses-its-mode` | `src/platform/batch.zig` | `, .mode_from = p.source_rel });` -> `});` | commit batch: a moved file keeps its executable bit at the new path | killed |
 | `PV26-batch-message-kept-from-the-command-gate` | `src/platform/batch.zig` | `runner.runMessageRules(gpa, io, root, location.shadow, session....` -> `runner.runMessageRules(gpa, io, root, location.shadow, null, op...` | commit batch: a message command judges the message of a try_batch, refuses one ...; commi... | killed |
 | `MB1-symbol-edit-in-place-before-its-message-command` | `src/platform/runner.zig` | `if (try runMessageRules(gpa, io, root, location.shadow, session...` -> `try workspace.writeFile(rel, patched);     if (try runMessageRu...` | message base: a symbol edit cannot add to the file its message command reads wh... | killed |
 | `MB3-batch-in-place-before-its-message-command` | `src/platform/batch.zig` | `if (try runner.runMessageRules(gpa, io, root, location.shadow, ...` -> `for (prepared) \|p\| {         if (p.action != .delete_file) tr...` | message base: a batch cannot add to the file its message command reads what tha... | killed |
 | `FZ3-path-a-file-move-leaves-not-handed-to-the-gate` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try rels.append(arena, from);` -> `` | frozen: a file move out of a frozen path and a file move into a frozen director... | killed |
 | `FZ4-doc-edits-of-a-batch-not-handed-to-the-gate` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | frozen: a batch whose doc edit is in a frozen directory is refused | killed |
+| `CT1-a-link-of-a-linked-directory-wins-over-the-file-head-holds` | `src/platform/shadow.zig` | `if (from_head.contains(want.rel)) continue;` -> `if (false and from_head.contains(want.rel)) continue;` | commit tree: in the kept tree a tracked file under node_modules comes from HEAD... | killed |
+| `CT2-store-count-not-checked-for-the-kept-tree` | `src/platform/shadow.zig` | `if (stored.skipped_links != 0 or wants.items.len != options.com...` -> `if (false and (stored.skipped_links != 0 or wants.items.len != ...` | commit tree: a file missing from the store is noticed by the count and the stor... | killed |
+| `CT3-private-path-links-to-the-store` | `src/platform/shadow.zig` | `if (isUnderAny(want.rel, options.private)) want.how = .copy;` -> `if (false and isUnderAny(want.rel, options.private)) want.how =...` | commit tree: the test command cannot write a tracked file of the tree in place,... | killed |
+| `CT4-full-copy-leaves-the-linked-directory-link-over-heads-file` | `src/platform/shadow.zig` | `if (isUnderAny(entry.path, options.linked) != under_links) cont...` -> `if (isUnderAny(entry.path, options.linked)) continue;` | commit tree: with the full copy the gate still tests HEAD, for a hand edit and ... | killed |
+| `CT5-store-count-not-checked-for-the-full-copy` | `src/platform/shadow.zig` | `if (try copyCommitted(io, options, committed, dir, false) != co...` -> `if (try copyCommitted(io, options, committed, dir, false) == st...` | commit tree: a file missing from the store is noticed by the count and the stor... | killed |
+| `CT6-full-copy-of-a-committing-call-copies-working-files` | `src/platform/shadow.zig` | `copied.use = .{ .mode = .full_copy, .reason = reason, .source =...` -> `copied.use = .{ .mode = .full_copy, .reason = reason, .source =...` | commit tree: with the full copy the gate still tests HEAD, for a hand edit and ... | killed |
+| `CT7-recover-leaves-the-store` | `src/platform/shadow.zig` | `try Dir.cwd().deleteTree(io, committed);` -> `` | commit tree: recover removes the store and the trees with the workspace | killed |
+| `CT24-committing-call-links-working-files` | `src/platform/runner.zig` | `return prepareShadow(gpa, io, root, location, location.shadow, ...` -> `return prepareShadow(gpa, io, root, location, location.shadow, ...` | redteam2 commit: a hand edit to another file that keeps its size and its time i...; redte... | killed |
+| `CT25-store-not-rebuilt-after-a-miscount` | `src/platform/runner.zig` | `try commit_store.invalidate(gpa, io, location.committed);` -> `` | commit tree: a file missing from the store is noticed by the count and the stor... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -312,9 +321,9 @@ python tools/verification_page.py --check
 | `NF7-disk-create-overwrites` | `src/platform/disk.zig` | `replacement.renameTo(gpa, path_abs) catch \|err\| switch (err) ...` -> `replacement.renameReplacing(gpa, path_abs) catch \|err\| switch...` | create never overwrites an existing file and cleans up its temp | killed |
 | `NF13-index-failure-silent` | `src/platform/repo.zig` | `return error.WrittenButNotIndexed; }  pub fn addAllToIndex` -> `}  pub fn addAllToIndex` | new file: when git add fails the file stays on disk with the written body and t... | killed |
 | `NF14-mcp-create-not-jailed-new` | `src/platform/repo.zig` | `error.FileNotFound => if (may_create) jailNew(gpa, io, root, pa...` -> `error.FileNotFound => if (may_create and false) jailNew(gpa, io...` | purple: hash absent on a missing file creates it through emetgate_try, and emet... | killed |
-| `RC1-recover-swallows-shadow-removal-error` | `src/platform/disk.zig` | `const removal = shadow.remove(io, location.base, location.shado...` -> `const removal: anyerror!void = {}; shadow.remove(io, location.b...` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
+| `RC1-recover-swallows-shadow-removal-error` | `src/platform/disk.zig` | `const removal = shadow.removeWorkspace(io, location.base, locat...` -> `const removal: anyerror!void = {}; shadow.removeWorkspace(io, l...` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
 | `RC2-recover-reports-shadow-error-but-exits-0` | `src/platform/disk.zig` | `return recover_failed_exit_code;` -> `return 0;` | purple recover: a shadow that cannot be removed exits 16 and says so after the ... | killed |
-| `RC3-recover-treats-missing-shadow-as-failure` | `src/platform/disk.zig` | `const removal = shadow.remove(io, location.base, location.shado...` -> `const removal = std.Io.Dir.cwd().deleteDir(io, location.shadow);` | purple recover: no shadow at all is a clean recover with exit 0 | killed |
+| `RC3-recover-treats-missing-shadow-as-failure` | `src/platform/disk.zig` | `const removal = shadow.removeWorkspace(io, location.base, locat...` -> `const removal = std.Io.Dir.cwd().deleteDir(io, location.shadow);` | purple recover: no shadow at all is a clean recover with exit 0 | killed |
 | `F2-internal-path-checked-only-after-resolving` | `src/platform/repo.zig` | `try refuseInternalAsWritten(gpa, io, served, path);` -> `` | read tools refuse .git internals in a git worktree, where .git is a file | killed |
 | `BC1-batch-commit-record-not-written` | `src/platform/disk.zig` | `if (batch) \|b\| commit_record.write(b.gpa, b.io, b.journal_dir...` -> `if (@as(?*const Batch, null)) \|b\| commit_record.write(b.gpa, ...` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
 | `BC2-recover-roll-forward-skipped` | `src/platform/disk.zig` | `if (committed) {         rollForward(` -> `if (committed and false) {         rollForward(` | batch crash: a crash after any step of a two-file commit recovers to all old or...; batch... | killed |
@@ -629,7 +638,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-553 mutation(s).
+567 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -769,7 +778,7 @@ python tools/verification_page.py --check
 | `FM11-literal-require-accepted` | `src/platform/file_move.zig` | `if (tsserver.sameFile(target, request.from_abs)) return error.D...` -> `_ = target;` | move file: a require or a computed import that reaches the file is refused | killed |
 | `RUN1-allowlist-check-skipped` | `src/platform/run_command.zig` | `const entry = match(allowed, requested) orelse return .{ .refus...` -> `const entry = match(allowed, requested) orelse requested;` | a request runs only the allowlist entry it equals byte for byte; run tool: a command the ... | killed |
 | `RUN2-metacharacter-check-relaxed` | `src/platform/run_command.zig` | `pub const shell_metacharacters = "&\|<>^%!;'$()\r\n\x00";` -> `pub const shell_metacharacters = "\x00";` | an allowlist entry with a shell metacharacter is refused; run policy: an --allow-run entr... | killed |
-| `RUN3-in-working-tree` | `src/platform/run_command.zig` | `runner.runStages(gpa, io, location.shadow, null, options.comman...` -> `runner.runStages(gpa, io, options.root_abs, null, options.comma...` | redteam run: an allowed script cannot write outside the shadow, runs from the s... | killed |
+| `RUN3-in-working-tree` | `src/platform/run_command.zig` | `runner.runStages(gpa, io, tree_abs, null, options.command, opti...` -> `runner.runStages(gpa, io, options.root_abs, null, options.comma...` | redteam run: an allowed script cannot write outside the shadow, runs from the s... | killed |
 | `RUN4-output-cap-removed` | `src/protocol/run_tool.zig` | `const cut = run_command.tail(bytes, max_output_lines, max_outpu...` -> `const cut = run_command.tail(bytes, std.math.maxInt(usize), std...` | redteam run: a flood of output comes back cut to the last lines with a count of... | killed |
 | `RUN5-model-policy-accepted` | `src/protocol/run_tool.zig` | `try policy_mod.refuseModelPolicy(args);` -> `if (args == null) try policy_mod.refuseModelPolicy(args);` | redteam run: a call that names any policy field is refused before anything runs | killed |
 | `RUN6-out-of-scope-accepted` | `src/platform/run_command.zig` | `if (isOutOfScope(command)) return error.RunCommandOutOfScope;` -> `` | installing dependencies and git commit or push are out of scope for the allowli...; run p... | killed |
@@ -1098,7 +1107,7 @@ python tools/verification_page.py --check
 | `DS2-dot-entries-reported` | `src/platform/dir_scan.zig` | `if (isDot(name)) continue;` -> `` | a directory scan reports every name with its kind and file id, and two hard lin... | killed |
 | `DS3-link-kind-reported-as-plain` | `src/platform/dir_scan.zig` | `if (attributes & win.file_attribute_reparse_point != 0) return ...` -> `` | a directory scan reports every name with its kind and file id, and two hard lin... | killed |
 | `WT1-full-copy-reason-left-out` | `src/protocol/wire.zig` | `try js.write(@tagName(tree.reason));` -> `try js.write("none");` | a result says which tree the gate used: kept with its private copies, or a full... | killed |
-| `KT11-run-ignores-the-tree-choice` | `src/protocol/run_tool.zig` | `.gate_tree = policy.treeChoice(),         .used = &used,` -> `.used = &used,` | gate tree replies: a run reply says which tree was used, and two servers in one... | killed |
+| `KT11-run-ignores-the-tree-choice` | `src/protocol/run_tool.zig` | `.gate_tree = policy.treeChoice(),         .beside_commits = pol...` -> `.beside_commits = policy.commit,` | gate tree replies: a run reply says which tree was used, and two servers in one... | killed |
 | `KT12-doc-write-reply-without-the-tree` | `src/protocol/handlers.zig` | `const doc_note = wire.treeNote(doc_trace.gate);` -> `const doc_note: ?wire.ShadowNote = null;` | gate tree replies: a rejected doc write says which tree was used, for each serv...; gate ... | killed |
 | `CM1-blank-commit-message-accepted` | `src/platform/commit_message.zig` | `return error.CommitMessageEmpty;` -> `return;` | commit message: an empty or blank message is refused | killed |
 | `CM2-oversized-commit-message-accepted` | `src/platform/commit_message.zig` | `return error.CommitMessageTooLong;` -> `return;` | commit message: a message over the byte limit is refused and one at the limit p... | killed |
@@ -1153,8 +1162,6 @@ python tools/verification_page.py --check
 | `PV15-unpublished-index-not-reported` | `src/platform/commit_plan.zig` | `plan.unfinished = commit_intent.index_not_published;` -> `` | commit protocol: a publish that is refused a few times is retried, and one that... | killed |
 | `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe... | killed |
 | `PV18-pending-commit-not-finished-before-the-next` | `src/platform/commit_plan.zig` | `const found = try recoverFound(gpa, io, root);` -> `const found: commit_intent.Report = .{};` | commit protocol: recover never removes or replaces an index lock it does not ow... | killed |
-| `PV20-staged-files-reach-the-gate` | `src/platform/git_commit.zig` | `while (staged.next()) \|_\| try differs.put(arena, staged.next(...` -> `while (staged.next()) \|_\| _ = staged.next();` | redteam commit: the gate runs on the tree the commit will hold, so a test that ... | killed |
-| `PV21-flagged-files-not-measured-for-the-shadow` | `src/platform/git_commit.zig` | `if (entry.tag != 'S' and !std.ascii.isLower(entry.tag)) continu...` -> `if (entry.stage == 0) continue;` | commit protocol: the gate tests the tree the commit will hold, not a hand edit ... | killed |
 | `PV22-receipt-digests-taken-from-the-working-tree` | `src/protocol/receipt_note.zig` | `if (made.oid) \|oid\| bound.commit = .{ .base = made.base.?, .o...` -> `if (made.oid) \|oid\| bound.commit = if (oid.len == 0) .{ .base...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
 | `PV23-receipt-symbol-hashes-taken-from-the-working-tree` | `src/platform/receipts.zig` | `const runtime = self.made.runtime orelse return claimed;` -> `const runtime = self.made.runtime orelse return claimed;       ...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
 | `PV24-another-pending-receipt-attached` | `src/platform/receipts.zig` | `if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, su...` -> `if (entry.kind != .file or name != null or !std.mem.endsWith(u8...` | redteam commit: verify accepts a commit made after a discarded earlier write | killed |
@@ -1186,6 +1193,22 @@ python tools/verification_page.py --check
 | `RF2-every-receipt-read-as-stored` | `src/verify/checker.zig` | `const stored = r.form == .stored;` -> `const stored = r.form == .stored or true;` | verify filtered: a commit whose stored form is not source is verified over what... | killed |
 | `RF3-unknown-form-accepted` | `src/verify/receipt.zig` | `form = std.meta.stringToEnum(Form, try asString(named)) orelse ...` -> `form = std.meta.stringToEnum(Form, try asString(named)) orelse ...` | receipt form: a form the format does not name is a receipt that does not follow... | killed |
 | `RF4-stored-receipt-read-as-checked-out` | `src/verify/checker.zig` | `const stored = r.form == .stored;` -> `const stored = r.form == .stored and false;` | verify filtered commit: a commit whose stored form is not source is verified ov... | killed |
+| `CT8-store-not-moved-when-head-moved` | `src/platform/commit_store.zig` | `if (!std.mem.eql(u8, known.tree, head.tree)) {` -> `if (false and !std.mem.eql(u8, known.tree, head.tree)) {` | commit tree: after a commit the user makes by hand the gate tests the new HEAD ... | killed |
+| `CT9-store-kept-under-other-conversion-settings` | `src/platform/commit_store.zig` | `if (std.mem.eql(u8, state.conversion, ctx.conversion)) have = ....` -> `if (true or std.mem.eql(u8, state.conversion, ctx.conversion)) ...` | commit tree: a changed conversion setting builds the store again, and a setting... | killed |
+| `CT10-attributes-change-updates-only-the-attributes-file` | `src/platform/commit_store.zig` | `if (isAttributes(change.path)) return null;` -> `if (false and isAttributes(change.path)) return null;` | commit tree: a commit that changes .gitattributes builds the store again in the... | killed |
+| `CT11-file-head-dropped-stays-in-the-store` | `src/platform/commit_store.zig` | `if (change.was) try removeStored(self.io, self.tree_abs, change...` -> `if (false and change.was) try removeStored(self.io, self.tree_a...` | commit tree: after a commit the user makes by hand the gate tests the new HEAD ... | killed |
+| `CT12-half-done-update-thrown-away` | `src/platform/commit_store.zig` | `if (std.mem.eql(u8, state.conversion, ctx.conversion)) {` -> `if (false and std.mem.eql(u8, state.conversion, ctx.conversion)...` | commit tree: an update of the store that stopped half way is finished by the ne... | killed |
+| `CT13-update-not-marked-before-files-change` | `src/platform/commit_store.zig` | `try writeState(self.arena, self.io, self.dir_abs, try std.fmt.a...` -> `` | commit tree: an update of the store that stopped half way is finished by the ne... | killed |
+| `CT14-rebuilt-store-not-counted` | `src/platform/commit_store.zig` | `if (wants.items.len != count or found.skipped_links != 0) retur...` -> `if (false and (wants.items.len != count or found.skipped_links ...` | commit tree: two tracked names that differ only in case cannot both be stored, ... | killed |
+| `CT15-store-written-through-a-junction` | `src/platform/commit_store.zig` | `try refuseLinks(base_abs, tree_abs);` -> `` | commit tree: a junction where the store keeps its files is refused and nothing ... | killed |
+| `CT16-store-checked-out-with-working-tree-attributes` | `src/platform/git_commit.zig` | `_ = try private.need(&.{ source, "-c", "checkout.workers=0", "c...` -> `_ = try private.need(&.{ if (false) source else "--no-pager", "...` | commit tree: an update of the store takes attributes from HEAD, not from the wo... | killed |
+| `CT17-conversion-settings-not-in-the-digest` | `src/platform/git_commit.zig` | `if (shapesCheckout(key)) {` -> `if (false and shapesCheckout(key)) {` | commit tree: a changed conversion setting builds the store again, and a setting... | killed |
+| `CT18-repository-attributes-not-in-the-digest` | `src/platform/git_commit.zig` | `try mixFile(git, &set.conversion, info_attributes);` -> `try mixFile(git, &set.conversion, if (false) info_attributes el...` | commit tree: a changed conversion setting builds the store again, and a setting... | killed |
+| `CT19-user-attributes-not-in-the-digest` | `src/platform/git_commit.zig` | `try mixFile(git, &set.conversion, try userAttributes(git.arena,...` -> `try mixFile(git, &set.conversion, if (false) try userAttributes...` | commit tree: a changed conversion setting builds the store again, and a setting... | killed |
+| `CT20-every-setting-in-the-digest` | `src/platform/git_commit.zig` | `if (std.ascii.startsWithIgnoreCase(key, "filter.")) return true;` -> `if (true or std.ascii.startsWithIgnoreCase(key, "filter.")) ret...` | commit tree: a changed conversion setting builds the store again, and a setting... | killed |
+| `CT21-reply-hides-where-tracked-files-came-from` | `src/protocol/wire.zig` | `if (tree.source == .head) {` -> `if (false and tree.source == .head) {` | commit tree: the reply says the tracked files came from HEAD, and a call that d...; commi... | killed |
+| `CT22-run-tool-shares-the-committing-tree` | `src/platform/run_command.zig` | `const tree_abs = if (options.beside_commits) location.working_s...` -> `const tree_abs = if (false and options.beside_commits) location...` | commit tree: the run tool beside commits keeps its own tree of working files an... | killed |
+| `CT23-verify-reruns-the-test-in-a-sparse-worktree` | `src/platform/verify_run.zig` | `if (std.mem.eql(u8, std.mem.trim(u8, sparse, " \r\n"), "true"))...` -> `if (false and std.mem.eql(u8, std.mem.trim(u8, sparse, " \r\n")...` | redteam2 commit: in a cone sparse checkout with a sparse index the gate sees th... | killed |
 
 ## What this system does not prove
 

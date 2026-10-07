@@ -99,6 +99,7 @@ pub const runner = src.runner;
 pub const run_command = src.run_command;
 pub const commit_message = src.commit_message;
 pub const git_commit = src.git_commit;
+pub const commit_store = src.commit_store;
 pub const commit_plan = src.commit_plan;
 pub const commit_intent = src.commit_intent;
 pub const own_dir = src.own_dir;
@@ -165,6 +166,7 @@ test {
     _ = @import("tests/own_dir.zig");
     _ = @import("tests/own_dir_commit.zig");
     _ = @import("tests/receipt_form.zig");
+    _ = @import("tests/commit_tree.zig");
     _ = @import("tests/commit_window.zig");
     _ = @import("tests/journal_base.zig");
     _ = @import("tests/frozen.zig");

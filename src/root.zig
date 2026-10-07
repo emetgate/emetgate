@@ -97,6 +97,7 @@ pub const runner = @import("platform/runner.zig");
 pub const run_command = @import("platform/run_command.zig");
 pub const commit_message = @import("platform/commit_message.zig");
 pub const git_commit = @import("platform/git_commit.zig");
+pub const commit_store = @import("platform/commit_store.zig");
 pub const commit_plan = @import("platform/commit_plan.zig");
 pub const commit_intent = @import("platform/commit_intent.zig");
 pub const own_dir = @import("platform/own_dir.zig");

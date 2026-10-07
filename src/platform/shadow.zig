@@ -132,11 +132,21 @@ pub const default_tree: TreeMode = .kept;
 
 pub const TreeReason = enum { none, requested, other_volume, no_hard_links };
 
+pub const TreeSource = enum { working, head };
+
 pub const TreeUse = struct {
     mode: TreeMode = .full_copy,
     reason: TreeReason = .none,
     private_copies: usize = 0,
+    source: TreeSource = .working,
 };
+
+pub const Committed = struct {
+    dir: []const u8,
+    count: usize,
+};
+
+pub const committed_tree = "tree";
 
 pub const Choice = struct {
     tree: TreeMode = default_tree,
@@ -181,6 +191,7 @@ pub const Shadow = struct {
         linked: []const []const u8 = &.{},
         tree: TreeMode = default_tree,
         private: []const []const u8 = &.{},
+        committed: ?Committed = null,
     };
 
     const Kept = union(enum) { ready: Shadow, unavailable: TreeReason };
@@ -197,7 +208,7 @@ pub const Shadow = struct {
             }
         }
         var copied = try prepareCopy(io, options);
-        copied.use = .{ .mode = .full_copy, .reason = reason };
+        copied.use = .{ .mode = .full_copy, .reason = reason, .source = if (options.committed != null) .head else .working };
         return copied;
     }
 
@@ -213,6 +224,8 @@ pub const Shadow = struct {
 
         const root = (try dir_scan.openRoot(options.root_abs)) orelse return error.FileNotFound;
         defer dir_scan.close(root);
+        const store: ?std.os.windows.HANDLE = if (options.committed) |committed| (try dir_scan.openRoot(committed.dir)) orelse return error.CommittedTreeIncomplete else null;
+        defer if (store) |handle| dir_scan.close(handle);
         const tree = held.dir.handle;
         if (try dir_scan.volumeOf(root) != try treeVolume(tree)) {
             held.close();
@@ -227,19 +240,39 @@ pub const Shadow = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         var wants: std.ArrayList(gate_tree.Want) = .empty;
-        for (options.files) |file| {
+        var pool: worker_pool.Pool = undefined;
+        pool.start(worker_pool.max_threads);
+        defer pool.deinit();
+        var from_head: std.StringHashMapUnmanaged(void) = .empty;
+        if (store) |handle| {
+            var stored: gate_tree.Found = .{};
+            try gate_tree.discover(arena, &pool, handle, 1, committed_tree, &wants, &stored);
+            if (stored.skipped_links != 0 or wants.items.len != options.committed.?.count) return error.CommittedTreeIncomplete;
+            for (wants.items) |*want| {
+                want.rel = want.rel[committed_tree.len + 1 ..];
+                if (isUnderAny(want.rel, options.private)) want.how = .copy;
+                try from_head.put(arena, want.rel, {});
+            }
+        } else for (options.files) |file| {
             if (isUnderAny(file, options.linked)) continue;
             try wants.append(arena, .{ .rel = file, .source = file, .how = if (isUnderAny(file, options.private)) .copy else .link });
         }
         const tracked = wants.items.len;
         var found: gate_tree.Found = .{};
-        var pool: worker_pool.Pool = undefined;
-        pool.start(worker_pool.max_threads);
-        defer pool.deinit();
         for (options.linked) |link| try gate_tree.discover(arena, &pool, root, 0, link, &wants, &found);
+        if (store != null) {
+            var kept: usize = tracked;
+            for (wants.items[tracked..]) |want| {
+                if (from_head.contains(want.rel)) continue;
+                wants.items[kept] = want;
+                kept += 1;
+            }
+            wants.shrinkRetainingCapacity(kept);
+        }
 
+        const roots: []const std.os.windows.HANDLE = if (store) |handle| &.{ root, handle } else &.{root};
         const outcomes = try arena.alloc(gate_tree.Outcome, wants.items.len);
-        _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = &.{root}, .wants = wants.items, .outcomes = outcomes, .pool = &pool }) catch |err| switch (err) {
+        _ = gate_tree.reconcile(std.heap.page_allocator, .{ .tree = tree, .roots = roots, .wants = wants.items, .outcomes = outcomes, .pool = &pool }) catch |err| switch (err) {
             error.GateTreeUnavailable => {
                 held.close();
                 return .{ .unavailable = .no_hard_links };
@@ -248,7 +281,7 @@ pub const Shadow = struct {
         };
 
         var stats: link_tree.Stats = .{ .dirs = found.dirs, .skipped_links = found.skipped_links };
-        var use: TreeUse = .{ .mode = .kept };
+        var use: TreeUse = .{ .mode = .kept, .source = if (store != null) .head else .working };
         for (outcomes, 0..) |outcome, index| {
             if (index < tracked) {
                 if (outcome == .copied) use.private_copies += 1;
@@ -273,6 +306,35 @@ pub const Shadow = struct {
         } };
     }
 
+    fn copyCommitted(io: std.Io, options: Options, committed: Committed, dir: Dir, under_links: bool) !usize {
+        var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        const source_abs = try std.fs.path.join(arena, &.{ committed.dir, committed_tree });
+        try ensureNoLinks(options.base_abs, source_abs);
+        var source = Dir.openDirAbsolute(io, source_abs, .{ .iterate = true }) catch return error.CommittedTreeIncomplete;
+        defer source.close(io);
+        var walker = try source.walk(arena);
+        defer walker.deinit();
+        var count: usize = 0;
+        while (try walker.next(io)) |entry| {
+            switch (entry.kind) {
+                .directory => continue,
+                .file => {},
+                else => return error.CommittedTreeIncomplete,
+            }
+            count += 1;
+            if (isUnderAny(entry.path, options.linked) != under_links) continue;
+            if (std.fs.path.dirname(entry.path)) |parent| try dir.createDirPath(io, parent);
+            if (under_links) dir.deleteFile(io, entry.path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => |e| return e,
+            };
+            try source.copyFile(entry.path, dir, entry.path, io, .{});
+        }
+        return count;
+    }
+
     fn prepareCopy(io: std.Io, options: Options) !Shadow {
         try remove(io, options.base_abs, options.shadow_abs);
 
@@ -285,7 +347,9 @@ pub const Shadow = struct {
         var dir = try Dir.openDirAbsolute(io, options.shadow_abs, .{});
         errdefer dir.close(io);
 
-        for (options.files) |file| {
+        if (options.committed) |committed| {
+            if (try copyCommitted(io, options, committed, dir, false) != committed.count) return error.CommittedTreeIncomplete;
+        } else for (options.files) |file| {
             if (isUnderAny(file, options.linked)) continue;
             if (std.fs.path.dirname(file)) |parent| try dir.createDirPath(io, parent);
             root.copyFile(file, dir, file, io, .{}) catch |err| switch (err) {
@@ -306,6 +370,7 @@ pub const Shadow = struct {
             const link_path = try joinWindows(&link_buf, options.shadow_abs, link);
             try link_tree.build(io, target, link_path, &stats);
         }
+        if (options.committed) |committed| _ = try copyCommitted(io, options, committed, dir, true);
         return .{ .io = io, .dir = dir, .linked = options.linked, .link_stats = stats, .base_abs = options.base_abs, .shadow_abs = options.shadow_abs };
     }
 
@@ -384,6 +449,23 @@ pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     Dir.cwd().deleteDir(io, workspace) catch {};
 }
 
+pub const committed_dir = "committed";
+pub const working_dir = "working";
+
+pub fn removeWorkspace(io: std.Io, base_abs: []const u8, workspace_abs: []const u8) !void {
+    var committed_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var working_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var shadow_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const shadow_abs = try std.fmt.bufPrint(&shadow_buf, "{s}\\shadow", .{workspace_abs});
+    try ensureInsideWorkspace(base_abs, shadow_abs);
+    try unlinkAll(base_abs, shadow_abs);
+    try remove(io, base_abs, try std.fmt.bufPrint(&working_buf, "{s}\\{s}\\shadow", .{ workspace_abs, working_dir }));
+    const committed = try std.fmt.bufPrint(&committed_buf, "{s}\\{s}", .{ workspace_abs, committed_dir });
+    try ensureNoLinks(base_abs, committed);
+    try Dir.cwd().deleteTree(io, committed);
+    try remove(io, base_abs, shadow_abs);
+}
+
 fn holdWorkspace(io: std.Io, shadow_abs: []const u8) !?own_dir.Held {
     const workspace = std.fs.path.dirname(shadow_abs) orelse return error.ShadowOutsideWorkspace;
     return own_dir.hold(io, workspace, .existing) catch |err| switch (err) {
@@ -442,7 +524,7 @@ fn isReservedDevice(segment: []const u8) bool {
     return false;
 }
 
-fn ensureNoLinks(base_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceIsLink, AttributeCheckFailed, NameTooLong, InvalidWtf8 }!void {
+pub fn ensureNoLinks(base_abs: []const u8, shadow_abs: []const u8) error{ WorkspaceIsLink, AttributeCheckFailed, NameTooLong, InvalidWtf8 }!void {
     if (builtin.os.tag != .windows) return;
     var index = base_abs.len;
     while (index <= shadow_abs.len) : (index += 1) {

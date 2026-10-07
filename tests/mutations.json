@@ -3302,8 +3302,8 @@
     {
       "id": "RC1-recover-swallows-shadow-removal-error",
       "file": "src/platform/disk.zig",
-      "from": "const removal = shadow.remove(io, location.base, location.shadow);",
-      "to": "const removal: anyerror!void = {}; shadow.remove(io, location.base, location.shadow) catch {};",
+      "from": "const removal = shadow.removeWorkspace(io, location.base, location.workspace);",
+      "to": "const removal: anyerror!void = {}; shadow.removeWorkspace(io, location.base, location.workspace) catch {};",
       "kills": [
         "purple recover: a shadow that cannot be removed exits 16 and says so after the summary"
       ]
@@ -3320,7 +3320,7 @@
     {
       "id": "RC3-recover-treats-missing-shadow-as-failure",
       "file": "src/platform/disk.zig",
-      "from": "const removal = shadow.remove(io, location.base, location.shadow);",
+      "from": "const removal = shadow.removeWorkspace(io, location.base, location.workspace);",
       "to": "const removal = std.Io.Dir.cwd().deleteDir(io, location.shadow);",
       "kills": [
         "purple recover: no shadow at all is a clean recover with exit 0"
@@ -5830,7 +5830,7 @@
     {
       "id": "RUN3-in-working-tree",
       "file": "src/platform/run_command.zig",
-      "from": "runner.runStages(gpa, io, location.shadow, null, options.command, options.limits)",
+      "from": "runner.runStages(gpa, io, tree_abs, null, options.command, options.limits)",
       "to": "runner.runStages(gpa, io, options.root_abs, null, options.command, options.limits)",
       "kills": [
         "redteam run: an allowed script cannot write outside the shadow, runs from the shadow and leaves no trace in the working tree"
@@ -9391,8 +9391,8 @@
     {
       "id": "KT11-run-ignores-the-tree-choice",
       "file": "src/protocol/run_tool.zig",
-      "from": "        .gate_tree = policy.treeChoice(),\n        .used = &used,",
-      "to": "        .used = &used,",
+      "from": "        .gate_tree = policy.treeChoice(),\n        .beside_commits = policy.commit,\n",
+      "to": "        .beside_commits = policy.commit,\n",
       "kills": [
         "gate tree replies: a run reply says which tree was used, and two servers in one process keep their own choice"
       ]
@@ -10232,33 +10232,15 @@
     },
     {
       "id": "PV19-shadow-keeps-hand-edits-out-but-does-not-restore-head",
-      "file": "src/platform/runner.zig",
-      "from": "    try git_commit.checkoutInto(gpa, io, root, head, restore.items, location.shadow);\n",
-      "to": "",
+      "file": "src/platform/shadow.zig",
+      "from": "        const store: ?std.os.windows.HANDLE = if (options.committed) |committed| (try dir_scan.openRoot(committed.dir)) orelse return error.CommittedTreeIncomplete else null;\n",
+      "to": "        const store: ?std.os.windows.HANDLE = if (options.committed) |committed| if (false) (try dir_scan.openRoot(committed.dir)) orelse return error.CommittedTreeIncomplete else null else null;\n",
       "kills": [
-        "commit protocol: the gate tests the tree the commit will hold, not a hand edit to another file, hidden from git status or not"
+        "commit protocol: the gate tests the tree the commit will hold, not a hand edit to another file, hidden from git status or not",
+        "redteam2 commit: a hand edit to another file that keeps its size and its time is not what the gate tests",
+        "commit tree: a tracked file deleted by hand in the working tree is still in the tree the gate tests, and the deletion stays"
       ],
       "note": "the gate would test a tree with files missing"
-    },
-    {
-      "id": "PV20-staged-files-reach-the-gate",
-      "file": "src/platform/git_commit.zig",
-      "from": "    while (staged.next()) |_| try differs.put(arena, staged.next() orelse return error.GitFailed, {});\n",
-      "to": "    while (staged.next()) |_| _ = staged.next();\n",
-      "kills": [
-        "redteam commit: the gate runs on the tree the commit will hold, so a test that needs a file staged by hand is rejected"
-      ],
-      "note": "a commit would pass the gate thanks to a file it does not hold"
-    },
-    {
-      "id": "PV21-flagged-files-not-measured-for-the-shadow",
-      "file": "src/platform/git_commit.zig",
-      "from": "        if (entry.tag != 'S' and !std.ascii.isLower(entry.tag)) continue;\n",
-      "to": "        if (entry.stage == 0) continue;\n",
-      "kills": [
-        "commit protocol: the gate tests the tree the commit will hold, not a hand edit to another file, hidden from git status or not"
-      ],
-      "note": "a hand edit hidden by assume-unchanged would reach the gate"
     },
     {
       "id": "PV22-receipt-digests-taken-from-the-working-tree",
@@ -10705,6 +10687,234 @@
       "to": "    const stored = r.form == .stored and false;\n",
       "kills": [
         "verify filtered commit: a commit whose stored form is not source is verified over what its filter checks out"
+      ]
+    },
+    {
+      "id": "CT1-a-link-of-a-linked-directory-wins-over-the-file-head-holds",
+      "file": "src/platform/shadow.zig",
+      "from": "                if (from_head.contains(want.rel)) continue;\n",
+      "to": "                if (false and from_head.contains(want.rel)) continue;\n",
+      "kills": [
+        "commit tree: in the kept tree a tracked file under node_modules comes from HEAD and an untracked file beside it is the working file"
+      ]
+    },
+    {
+      "id": "CT2-store-count-not-checked-for-the-kept-tree",
+      "file": "src/platform/shadow.zig",
+      "from": "            if (stored.skipped_links != 0 or wants.items.len != options.committed.?.count) return error.CommittedTreeIncomplete;\n",
+      "to": "            if (false and (stored.skipped_links != 0 or wants.items.len != options.committed.?.count)) return error.CommittedTreeIncomplete;\n",
+      "kills": [
+        "commit tree: a file missing from the store is noticed by the count and the store is built again"
+      ]
+    },
+    {
+      "id": "CT3-private-path-links-to-the-store",
+      "file": "src/platform/shadow.zig",
+      "from": "                if (isUnderAny(want.rel, options.private)) want.how = .copy;\n",
+      "to": "                if (false and isUnderAny(want.rel, options.private)) want.how = .copy;\n",
+      "kills": [
+        "commit tree: the test command cannot write a tracked file of the tree in place, and a private path is a copy that leaves the store alone"
+      ]
+    },
+    {
+      "id": "CT4-full-copy-leaves-the-linked-directory-link-over-heads-file",
+      "file": "src/platform/shadow.zig",
+      "from": "            if (isUnderAny(entry.path, options.linked) != under_links) continue;\n",
+      "to": "            if (isUnderAny(entry.path, options.linked)) continue;\n",
+      "kills": [
+        "commit tree: with the full copy the gate still tests HEAD, for a hand edit and for a tracked file under node_modules"
+      ]
+    },
+    {
+      "id": "CT5-store-count-not-checked-for-the-full-copy",
+      "file": "src/platform/shadow.zig",
+      "from": "            if (try copyCommitted(io, options, committed, dir, false) != committed.count) return error.CommittedTreeIncomplete;\n",
+      "to": "            if (try copyCommitted(io, options, committed, dir, false) == std.math.maxInt(usize)) return error.CommittedTreeIncomplete;\n",
+      "kills": [
+        "commit tree: a file missing from the store is noticed by the count and the store is built again"
+      ]
+    },
+    {
+      "id": "CT6-full-copy-of-a-committing-call-copies-working-files",
+      "file": "src/platform/shadow.zig",
+      "from": "        copied.use = .{ .mode = .full_copy, .reason = reason, .source = if (options.committed != null) .head else .working };\n",
+      "to": "        copied.use = .{ .mode = .full_copy, .reason = reason, .source = .working };\n",
+      "kills": [
+        "commit tree: with the full copy the gate still tests HEAD, for a hand edit and for a tracked file under node_modules"
+      ]
+    },
+    {
+      "id": "CT7-recover-leaves-the-store",
+      "file": "src/platform/shadow.zig",
+      "from": "    try Dir.cwd().deleteTree(io, committed);\n",
+      "to": "",
+      "kills": [
+        "commit tree: recover removes the store and the trees with the workspace"
+      ]
+    },
+    {
+      "id": "CT8-store-not-moved-when-head-moved",
+      "file": "src/platform/commit_store.zig",
+      "from": "        if (!std.mem.eql(u8, known.tree, head.tree)) {\n",
+      "to": "        if (false and !std.mem.eql(u8, known.tree, head.tree)) {\n",
+      "kills": [
+        "commit tree: after a commit the user makes by hand the gate tests the new HEAD without building the store again"
+      ]
+    },
+    {
+      "id": "CT9-store-kept-under-other-conversion-settings",
+      "file": "src/platform/commit_store.zig",
+      "from": "            if (std.mem.eql(u8, state.conversion, ctx.conversion)) have = .{ .tree = state.tree, .count = state.count };\n",
+      "to": "            if (true or std.mem.eql(u8, state.conversion, ctx.conversion)) have = .{ .tree = state.tree, .count = state.count };\n",
+      "kills": [
+        "commit tree: a changed conversion setting builds the store again, and a setting that does not shape a checkout does not"
+      ]
+    },
+    {
+      "id": "CT10-attributes-change-updates-only-the-attributes-file",
+      "file": "src/platform/commit_store.zig",
+      "from": "            if (isAttributes(change.path)) return null;\n",
+      "to": "            if (false and isAttributes(change.path)) return null;\n",
+      "kills": [
+        "commit tree: a commit that changes .gitattributes builds the store again in the new checked-out form"
+      ]
+    },
+    {
+      "id": "CT11-file-head-dropped-stays-in-the-store",
+      "file": "src/platform/commit_store.zig",
+      "from": "            if (change.was) try removeStored(self.io, self.tree_abs, change.path);\n",
+      "to": "            if (false and change.was) try removeStored(self.io, self.tree_abs, change.path);\n",
+      "kills": [
+        "commit tree: after a commit the user makes by hand the gate tests the new HEAD without building the store again"
+      ]
+    },
+    {
+      "id": "CT12-half-done-update-thrown-away",
+      "file": "src/platform/commit_store.zig",
+      "from": "            if (std.mem.eql(u8, state.conversion, ctx.conversion)) {\n",
+      "to": "            if (false and std.mem.eql(u8, state.conversion, ctx.conversion)) {\n",
+      "kills": [
+        "commit tree: an update of the store that stopped half way is finished by the next call"
+      ]
+    },
+    {
+      "id": "CT13-update-not-marked-before-files-change",
+      "file": "src/platform/commit_store.zig",
+      "from": "        try writeState(self.arena, self.io, self.dir_abs, try std.fmt.allocPrint(self.arena, \"moving {s} {s} {s} {d}\\n\", .{ from, to, self.conversion, count }));\n",
+      "to": "",
+      "kills": [
+        "commit tree: an update of the store that stopped half way is finished by the next call"
+      ]
+    },
+    {
+      "id": "CT14-rebuilt-store-not-counted",
+      "file": "src/platform/commit_store.zig",
+      "from": "        if (wants.items.len != count or found.skipped_links != 0) return error.CommittedTreeIncomplete;\n",
+      "to": "        if (false and (wants.items.len != count or found.skipped_links != 0)) return error.CommittedTreeIncomplete;\n",
+      "kills": [
+        "commit tree: two tracked names that differ only in case cannot both be stored, and the call is refused by name"
+      ]
+    },
+    {
+      "id": "CT15-store-written-through-a-junction",
+      "file": "src/platform/commit_store.zig",
+      "from": "    try refuseLinks(base_abs, tree_abs);\n",
+      "to": "",
+      "kills": [
+        "commit tree: a junction where the store keeps its files is refused and nothing is written through it"
+      ]
+    },
+    {
+      "id": "CT16-store-checked-out-with-working-tree-attributes",
+      "file": "src/platform/git_commit.zig",
+      "from": "    _ = try private.need(&.{ source, \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-f\", \"-q\", \"-a\", prefix });\n",
+      "to": "    _ = try private.need(&.{ if (false) source else \"--no-pager\", \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-f\", \"-q\", \"-a\", prefix });\n",
+      "kills": [
+        "commit tree: an update of the store takes attributes from HEAD, not from the working tree"
+      ]
+    },
+    {
+      "id": "CT17-conversion-settings-not-in-the-digest",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (shapesCheckout(key)) {\n",
+      "to": "        if (false and shapesCheckout(key)) {\n",
+      "kills": [
+        "commit tree: a changed conversion setting builds the store again, and a setting that does not shape a checkout does not"
+      ]
+    },
+    {
+      "id": "CT18-repository-attributes-not-in-the-digest",
+      "file": "src/platform/git_commit.zig",
+      "from": "    try mixFile(git, &set.conversion, info_attributes);\n",
+      "to": "    try mixFile(git, &set.conversion, if (false) info_attributes else null);\n",
+      "kills": [
+        "commit tree: a changed conversion setting builds the store again, and a setting that does not shape a checkout does not"
+      ]
+    },
+    {
+      "id": "CT19-user-attributes-not-in-the-digest",
+      "file": "src/platform/git_commit.zig",
+      "from": "    try mixFile(git, &set.conversion, try userAttributes(git.arena, set.attributes_file));\n",
+      "to": "    try mixFile(git, &set.conversion, if (false) try userAttributes(git.arena, set.attributes_file) else null);\n",
+      "kills": [
+        "commit tree: a changed conversion setting builds the store again, and a setting that does not shape a checkout does not"
+      ]
+    },
+    {
+      "id": "CT20-every-setting-in-the-digest",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (std.ascii.startsWithIgnoreCase(key, \"filter.\")) return true;\n",
+      "to": "    if (true or std.ascii.startsWithIgnoreCase(key, \"filter.\")) return true;\n",
+      "kills": [
+        "commit tree: a changed conversion setting builds the store again, and a setting that does not shape a checkout does not"
+      ]
+    },
+    {
+      "id": "CT21-reply-hides-where-tracked-files-came-from",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (tree.source == .head) {\n",
+      "to": "    if (false and tree.source == .head) {\n",
+      "kills": [
+        "commit tree: the reply says the tracked files came from HEAD, and a call that does not commit does not",
+        "commit tree: with the full copy the gate still tests HEAD, for a hand edit and for a tracked file under node_modules"
+      ]
+    },
+    {
+      "id": "CT22-run-tool-shares-the-committing-tree",
+      "file": "src/platform/run_command.zig",
+      "from": "    const tree_abs = if (options.beside_commits) location.working_shadow else location.shadow;\n",
+      "to": "    const tree_abs = if (false and options.beside_commits) location.working_shadow else location.shadow;\n",
+      "kills": [
+        "commit tree: the run tool beside commits keeps its own tree of working files and leaves the committing tree alone"
+      ]
+    },
+    {
+      "id": "CT23-verify-reruns-the-test-in-a-sparse-worktree",
+      "file": "src/platform/verify_run.zig",
+      "from": "            if (std.mem.eql(u8, std.mem.trim(u8, sparse, \" \\r\\n\"), \"true\")) {\n",
+      "to": "            if (false and std.mem.eql(u8, std.mem.trim(u8, sparse, \" \\r\\n\"), \"true\")) {\n",
+      "kills": [
+        "redteam2 commit: in a cone sparse checkout with a sparse index the gate sees the whole committed tree and the commit leaves a clean sparse tree"
+      ]
+    },
+    {
+      "id": "CT24-committing-call-links-working-files",
+      "file": "src/platform/runner.zig",
+      "from": "    return prepareShadow(gpa, io, root, location, location.shadow, &.{}, linked, choice, trace, .{ .dir = first.dir, .count = first.count }) catch |err| switch (err) {\n",
+      "to": "    return prepareShadow(gpa, io, root, location, location.shadow, try shadow.trackedFiles(gpa, io, root), linked, choice, trace, if (false) .{ .dir = first.dir, .count = first.count } else null) catch |err| switch (err) {\n",
+      "kills": [
+        "redteam2 commit: a hand edit to another file that keeps its size and its time is not what the gate tests",
+        "redteam2 commit: in a cone sparse checkout with a sparse index the gate sees the whole committed tree and the commit leaves a clean sparse tree",
+        "commit tree: a tracked file deleted by hand in the working tree is still in the tree the gate tests, and the deletion stays"
+      ]
+    },
+    {
+      "id": "CT25-store-not-rebuilt-after-a-miscount",
+      "file": "src/platform/runner.zig",
+      "from": "            try commit_store.invalidate(gpa, io, location.committed);\n",
+      "to": "",
+      "kills": [
+        "commit tree: a file missing from the store is noticed by the count and the store is built again"
       ]
     }
   ]

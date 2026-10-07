@@ -17,6 +17,7 @@ const Snapshot = @import("../engine/loader.zig").Snapshot;
 const create_mod = @import("create.zig");
 const commit_plan = @import("commit_plan.zig");
 const git_commit = @import("git_commit.zig");
+const commit_store = @import("commit_store.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -286,32 +287,32 @@ pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow
         const files = try shadow.trackedFiles(gpa, io, root);
         defer gpa.free(files);
         defer shadow.freeFileList(gpa, files);
-        return prepareShadow(gpa, io, root, location, files, linked, choice, trace);
+        return prepareShadow(gpa, io, root, location, location.shadow, files, linked, choice, trace, null);
     };
-    const tree = try git_commit.committedTree(gpa, io, root, head);
-    defer tree.deinit(gpa);
-    var restore: std.ArrayList([]const u8) = .empty;
-    defer restore.deinit(gpa);
-    for (tree.restore) |path| {
-        try shadow.validateRelative(path);
-        if (!linkedPath(path, linked)) try restore.append(gpa, path);
-    }
-    var workspace = try prepareShadow(gpa, io, root, location, tree.files, linked, .{ .tree = .full_copy, .private = choice.private }, trace);
-    errdefer workspace.finish();
-    try git_commit.checkoutInto(gpa, io, root, head, restore.items, location.shadow);
-    return workspace;
+    const first = try commit_store.ensure(gpa, io, root, location.base, location.committed, head);
+    try shadow_root.writeMarker(io, location, root);
+    return prepareShadow(gpa, io, root, location, location.shadow, &.{}, linked, choice, trace, .{ .dir = first.dir, .count = first.count }) catch |err| switch (err) {
+        error.CommittedTreeIncomplete => {
+            if (first.built == .rebuilt) return err;
+            try commit_store.invalidate(gpa, io, location.committed);
+            const again = try commit_store.ensure(gpa, io, root, location.base, location.committed, head);
+            return prepareShadow(gpa, io, root, location, location.shadow, &.{}, linked, choice, trace, .{ .dir = again.dir, .count = again.count });
+        },
+        else => |e| return e,
+    };
 }
 
-pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace) !shadow.Shadow {
+pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, tree_abs: []const u8, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace, committed: ?shadow.Committed) !shadow.Shadow {
     _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
     const workspace = try shadow.Shadow.prepare(io, .{
         .root_abs = root,
         .base_abs = location.base,
-        .shadow_abs = location.shadow,
+        .shadow_abs = tree_abs,
         .files = files,
         .linked = linked,
         .tree = choice.tree,
         .private = choice.private,
+        .committed = committed,
     });
     if (trace) |t| {
         t.tree = workspace.use;

@@ -371,6 +371,10 @@ pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
     try js.beginObject();
     try js.objectField("kind");
     try js.write(@tagName(tree.mode));
+    if (tree.source == .head) {
+        try js.objectField("tracked_files");
+        try js.write("head");
+    }
     switch (tree.mode) {
         .kept => {
             try js.objectField("private_copies");

@@ -84,6 +84,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         .command = entry,
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
+        .beside_commits = policy.commit,
         .used = &used,
     }) catch |err| switch (err) {
         error.SandboxUnavailable => {

@@ -139,6 +139,7 @@ pub const Options = struct {
     command: []const u8,
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
+    beside_commits: bool = false,
     used: ?*shadow.TreeUse = null,
     linked: []const []const u8 = &.{"node_modules"},
     limits: sandbox.Limits = .{},
@@ -155,10 +156,11 @@ pub fn runInShadow(gpa: Allocator, io: std.Io, options: Options) !sandbox.Report
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
-    var workspace = try runner.prepareShadow(gpa, io, options.root_abs, location, files, options.linked, options.gate_tree, null);
+    const tree_abs = if (options.beside_commits) location.working_shadow else location.shadow;
+    var workspace = try runner.prepareShadow(gpa, io, options.root_abs, location, tree_abs, files, options.linked, options.gate_tree, null, null);
     if (options.used) |used| used.* = workspace.use;
     defer workspace.finish();
-    return switch (try runner.runStages(gpa, io, location.shadow, null, options.command, options.limits)) {
+    return switch (try runner.runStages(gpa, io, tree_abs, null, options.command, options.limits)) {
         .tests => |report| report,
         .typecheck => |report| report,
         .rule_violation, .rule_check_failed => unreachable,
