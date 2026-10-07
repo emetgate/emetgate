@@ -113,3 +113,36 @@ test "gate tree replies: a repository on another volume, or a volume without har
     defer gpa.free(again);
     try expectHas(again, kept_field);
 }
+
+test "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try newRepo();
+    defer repo.deinit();
+    var copy = policies(repo.root_abs)[1];
+    defer shadow.injected_probe = .{};
+    const left_field = "\"gate_tree\":{\"kind\":\"full_copy\",\"reason\":\"requested\",\"left_behind\":\"FileBusy\"}";
+
+    shadow.injected_probe = .{ .removal = error.FileBusy };
+    const ran = try run(copy);
+    defer gpa.free(ran);
+    try expectHas(ran, "\"status\":\"ran\"");
+    try expectHas(ran, left_field);
+
+    const rejected = try writeDoc(copy, repo.root_abs);
+    defer gpa.free(rejected);
+    try expectHas(rejected, "\"status\":\"rejected\"");
+    try expectHas(rejected, left_field);
+
+    copy.test_command = "cmd /c exit 0";
+    const committed = try writeDoc(copy, repo.root_abs);
+    defer gpa.free(committed);
+    try expectHas(committed, "\"status\":\"committed\"");
+    try expectHas(committed, left_field);
+    try testing.expect(std.mem.indexOf(u8, committed, "\"shadow\":") == null);
+
+    shadow.injected_probe = .{};
+    const clean = try run(copy);
+    defer gpa.free(clean);
+    try expectHas(clean, copy_field);
+    try testing.expect(std.mem.indexOf(u8, clean, "left_behind") == null);
+}
