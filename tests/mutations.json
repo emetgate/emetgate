@@ -9416,6 +9416,25 @@
         "gate tree replies: a rejected doc write says which tree was used, for each server's own choice",
         "gate tree replies: a repository on another volume, or a volume without hard links, gets a full copy and the reply gives the reason"
       ]
+    },
+    {
+      "id": "KT13-working-directory-opened-with-delete-child",
+      "file": "src/platform/dir_scan.zig",
+      "from": "const dir_access: u32 = win.file_list_directory | win.file_read_attributes | win.synchronize;",
+      "to": "const dir_access: u32 = win.file_list_directory | win.file_delete_child | win.file_read_attributes | win.synchronize;",
+      "kills": [
+        "gate tree rights: a repository the user may modify but not fully control gets the kept tree on the first call and on later ones",
+        "gate tree rights: a doc write and a batch are committed in a repository the user may modify but not fully control"
+      ]
+    },
+    {
+      "id": "KT14-held-directory-opened-with-delete-child",
+      "file": "src/platform/own_dir.zig",
+      "from": "        win.generic_read | win.generic_write | win.file_traverse,",
+      "to": "        win.generic_read | win.generic_write | win.file_traverse | 0x00000040,",
+      "kills": [
+        "gate tree rights: a doc write and a batch are committed in a repository the user may modify but not fully control"
+      ]
     }
   ]
 }

@@ -557,7 +557,7 @@ fn removeName(ctx: *Context, parent: Handle, name: []const u16, kind: dir_scan.K
 
 fn removeEntry(parent: Handle, name: []const u16, kind: dir_scan.Kind, removed: *usize) Error!void {
     const directory = kind == .directory or kind == .link_directory;
-    const access: u32 = nt.delete | nt.synchronize | nt.file_read_attributes | (if (kind == .directory) nt.file_list_directory | nt.file_delete_child else 0);
+    const access: u32 = nt.delete | nt.synchronize | nt.file_read_attributes | (if (kind == .directory) nt.file_list_directory else 0);
     const options: u32 = nt.option_open_reparse_point | nt.option_sync | (if (directory) nt.option_directory else nt.option_non_directory);
     var handle: Handle = undefined;
     const status = dir_scan.openRelative(parent, name, access, nt.file_open, options, &handle);
