@@ -11010,7 +11010,7 @@
       "id": "CT22-committing-call-tested-in-the-tree-of-working-files",
       "file": "src/platform/runner.zig",
       "from": "    return if (session.head != null) location.committed_shadow else location.shadow;\n",
-      "to": "    return location.shadow;\n",
+      "to": "    return if (false and session.head != null) location.committed_shadow else location.shadow;\n",
       "kills": [
         "commit tree: the run tool and a call that does not commit keep the tree of working files, and neither undoes the committing tree"
       ]
@@ -11036,7 +11036,7 @@
     {
       "id": "CT28-full-copy-reads-the-store-through-a-junction",
       "file": "src/platform/shadow.zig",
-      "from": "        try ensureNoLinks(options.base_abs, source_abs);\n",
+      "from": "        try refuseLinks(options.base_abs, source_abs);\n",
       "to": "",
       "kills": [
         "commit tree: the full copy refuses a store whose files are reached through a junction"

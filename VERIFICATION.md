@@ -304,8 +304,8 @@ python tools/verification_page.py --check
 | `KT18-denied-root-not-named` | `src/platform/shadow.zig` | `if (blocked) \|report\| report.note(.working_tree, gate_tree.re...` -> `if (false) blocked.?.note(.working_tree, gate_tree.reasonOf(err...` | gate tree rights: a repository root that cannot be listed is named in the reply | killed |
 | `KT22-gate-does-not-pass-the-report` | `src/platform/runner.zig` | `.blocked = if (trace) \|t\| &t.blocked else null,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
 | `SB6-spawn-fault-read-after-the-process-exists` | `src/platform/sandbox.zig` | `if (faulted(.spawn_as_user)) return error.SandboxUnavailable;  ...` -> `if (false and faulted(.spawn_as_user)) return error.SandboxUnav...` | a service whose token is not low integrity is refused before it runs; a spawn fault is de... | killed |
-| `CT22-committing-call-tested-in-the-tree-of-working-files` | `src/platform/runner.zig` | `return if (session.head != null) location.committed_shadow else...` -> `return location.shadow;` | commit tree: the run tool and a call that does not commit keep the tree of work... | killed |
-| `CT28-full-copy-reads-the-store-through-a-junction` | `src/platform/shadow.zig` | `try ensureNoLinks(options.base_abs, source_abs);` -> `` | commit tree: the full copy refuses a store whose files are reached through a ju... | killed |
+| `CT22-committing-call-tested-in-the-tree-of-working-files` | `src/platform/runner.zig` | `return if (session.head != null) location.committed_shadow else...` -> `return if (false and session.head != null) location.committed_s...` | commit tree: the run tool and a call that does not commit keep the tree of work... | killed |
+| `CT28-full-copy-reads-the-store-through-a-junction` | `src/platform/shadow.zig` | `try refuseLinks(options.base_abs, source_abs);` -> `` | commit tree: the full copy refuses a store whose files are reached through a ju... | killed |
 
 ### Disk, repository boundary and atomic commit
 

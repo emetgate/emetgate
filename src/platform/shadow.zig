@@ -302,7 +302,7 @@ pub const Shadow = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         const source_abs = try std.fs.path.join(arena, &.{ committed.dir, committed_tree });
-        try ensureNoLinks(options.base_abs, source_abs);
+        try refuseLinks(options.base_abs, source_abs);
         var source = Dir.openDirAbsolute(io, source_abs, .{ .iterate = true }) catch return error.CommittedTreeIncomplete;
         defer source.close(io);
         var walker = try source.walk(arena);
@@ -446,6 +446,7 @@ pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
 }
 
 pub const committed_dir = "committed";
+const refuseLinks = ensureNoLinks;
 
 pub fn removeWorkspace(io: std.Io, base_abs: []const u8, workspace_abs: []const u8) !void {
     var committed_buf: [std.fs.max_path_bytes]u8 = undefined;
