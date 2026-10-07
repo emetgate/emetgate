@@ -712,7 +712,8 @@ fn firstAbsentFile(items: []const Value) []const u8 {
     return getString(items[0], "file").?;
 }
 
-fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool) !void {
+fn recordBatch(gpa: Allocator, io: std.Io, root: []const u8, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool) !void {
+    if (edits.len == 0) return;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -740,7 +741,7 @@ fn recordBatch(gpa: Allocator, io: std.Io, places: []const repo.Jailed, edits: [
         };
         if (!created or !evidence.symmetric()) symmetric = false;
     }
-    try receipt_note.record(gpa, io, places[0].root, .{
+    try receipt_note.record(gpa, io, root, .{
         .operation = .try_batch,
         .class = if (symmetric) .symmetry else .spending,
         .evidence = if (symmetric) "unreferenced" else "test",
@@ -890,7 +891,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 code_places[order[i]] = places[i];
                 code_committed[order[i]] = committed[order[i]];
             }
-            try recordBatch(gpa, io, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full);
+            try recordBatch(gpa, io, places[0].root, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full);
             return false;
         },
         .rejected => |report| {
