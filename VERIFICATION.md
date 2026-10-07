@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1498**
-- Mutations declared in `tests/mutations.json`: **955**
-  - killed: **924**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1505**
+- Mutations declared in `tests/mutations.json`: **966**
+  - killed: **935**
   - equivalent: **7**
   - defense in depth: **7**
   - open: **5**
@@ -173,7 +173,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-93 mutation(s).
+96 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -270,6 +270,9 @@ python tools/verification_page.py --check
 | `KT8-private-copies-not-counted` | `src/platform/shadow.zig` | `if (outcome == .copied) use.private_copies += 1;` -> `if (outcome == .linked) use.private_copies += 1;` | a path under a private prefix is a private copy in the kept tree and is counted | killed |
 | `KT9-other-volume-not-detected` | `src/platform/shadow.zig` | `if (try dir_scan.volumeOf(root) != try treeVolume(tree)) {` -> `if (false) {` | gate tree replies: a repository on another volume, or a volume without hard lin... | killed |
 | `KT10-missing-hard-links-not-detected` | `src/platform/shadow.zig` | `if (!try linksSupported(root)) {` -> `if (false) {` | gate tree replies: a repository on another volume, or a volume without hard lin... | killed |
+| `KT18-denied-root-not-named` | `src/platform/shadow.zig` | `if (blocked) \|report\| report.note(.working_tree, gate_tree.re...` -> `if (false) blocked.?.note(.working_tree, gate_tree.reasonOf(err...` | gate tree rights: a repository root that cannot be listed is named in the reply | killed |
+| `KT22-gate-does-not-pass-the-report` | `src/platform/runner.zig` | `.blocked = if (trace) \|t\| &t.blocked else null,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
+| `SB6-spawn-fault-read-after-the-process-exists` | `src/platform/sandbox.zig` | `if (faulted(.spawn_as_user)) return error.SandboxUnavailable;  ...` -> `if (false and faulted(.spawn_as_user)) return error.SandboxUnav...` | a service whose token is not low integrity is refused before it runs; a spawn fault is de... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -585,7 +588,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-467 mutation(s).
+475 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1056,6 +1059,14 @@ python tools/verification_page.py --check
 | `WT1-full-copy-reason-left-out` | `src/protocol/wire.zig` | `try js.write(@tagName(tree.reason));` -> `try js.write("none");` | a result says which tree the gate used: kept with its private copies, or a full... | killed |
 | `KT11-run-ignores-the-tree-choice` | `src/protocol/run_tool.zig` | `.gate_tree = policy.treeChoice(),         .used = &used,` -> `.used = &used,` | gate tree replies: a run reply says which tree was used, and two servers in one... | killed |
 | `KT12-doc-write-reply-without-the-tree` | `src/protocol/handlers.zig` | `const doc_note = wire.treeNote(doc_trace.gate);` -> `const doc_note: ?wire.ShadowNote = null;` | gate tree replies: a rejected doc write says which tree was used, for each serv...; gate ... | killed |
+| `KT13-working-directory-opened-with-delete-child` | `src/platform/dir_scan.zig` | `const dir_access: u32 = win.file_list_directory \| win.file_rea...` -> `const dir_access: u32 = win.file_list_directory \| win.file_del...` | gate tree rights: a repository the user may modify but not fully control gets t...; gate ... | killed |
+| `KT14-held-directory-opened-with-delete-child` | `src/platform/own_dir.zig` | `win.generic_read \| win.generic_write \| win.file_traverse,` -> `win.generic_read \| win.generic_write \| win.file_traverse \| 0...` | gate tree rights: a doc write and a batch are committed in a repository the use... | killed |
+| `KT15-denied-working-directory-not-named` | `src/platform/gate_tree.zig` | `else => \|e\| return self.ctx.sourceRefused(e, key[1..]),` -> `else => \|e\| return e,` | gate tree rights: a working directory that cannot be listed is named in the rep... | killed |
+| `KT16-denied-linked-directory-not-named` | `src/platform/gate_tree.zig` | `if (found.report) \|report\| report.note(.working_tree, reasonO...` -> `` | gate tree rights: a linked directory or a directory inside it that cannot be li... | killed |
+| `KT17-denied-directory-inside-a-linked-one-not-named` | `src/platform/gate_tree.zig` | `else => \|e\| return self.refused(e, at.rel, entry.name),` -> `else => \|e\| return e,` | gate tree rights: a linked directory or a directory inside it that cannot be li... | killed |
+| `KT19-reply-drops-the-blocked-path` | `src/protocol/wire.zig` | `if (blocked.len == 0) return writeError(writer, @errorName(err)...` -> `if (true or blocked.len == 0) return writeError(writer, @errorN...` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
+| `KT20-doc-write-reply-drops-the-blocked-path` | `src/protocol/handlers.zig` | `defer event.trace.blocked = doc_trace.gate.blocked;` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep... | killed |
+| `KT21-run-reply-drops-the-blocked-path` | `src/protocol/run_tool.zig` | `.blocked = &event.trace.blocked,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
 
 ## What this system does not prove
 
