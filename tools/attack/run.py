@@ -45,8 +45,11 @@ class Server:
             "params": {"name": tool, "arguments": arguments},
         }
         self.next_id += 1
-        self.proc.stdin.write(json.dumps(request) + "\n")
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.write(json.dumps(request) + "\n")
+            self.proc.stdin.flush()
+        except OSError:
+            return None
         try:
             line = self.out_q.get(timeout=timeout)
         except queue.Empty:
@@ -180,9 +183,13 @@ def run_cases(exe, spec, cases, verbose):
     hashes = resolve_hashes(server, fixture["path"])
     hashes.update(resolve_hashes(server, second_fixture["path"]))
     if not hashes:
+        answer = server.call("emetgate_symbols", {"file": fixture["path"]})
         server.close()
         print("could not resolve fixture symbol hashes; aborting", file=sys.stderr)
-        return 1, [], Counter()
+        print(f"emetgate_symbols answered: {answer!r}", file=sys.stderr)
+        print(f"server exit code: {server.proc.returncode}", file=sys.stderr)
+        print(f"server stderr: {server.proc.stderr.read()[-4000:]}", file=sys.stderr)
+        return 1, [], [], Counter()
 
     breaches = []
     rejected_ids = []
