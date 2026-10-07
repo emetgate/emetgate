@@ -10703,8 +10703,7 @@
       "from": "            if (stored.skipped_links != 0 or wants.items.len != options.committed.?.count) return error.CommittedTreeIncomplete;\n",
       "to": "            if (false and (stored.skipped_links != 0 or wants.items.len != options.committed.?.count)) return error.CommittedTreeIncomplete;\n",
       "kills": [
-        "commit tree: a file missing from the store is noticed by the count and the store is built again",
-        "commit tree: two tracked names that differ only in case cannot both be stored, and the call is refused by name"
+        "commit tree: a file missing from the store is noticed by the count and the store is built again"
       ]
     },
     {
@@ -11144,7 +11143,8 @@
       "from": "    return commit_names.clash(arena, names);\n",
       "to": "    return if (false) commit_names.clash(arena, names) else null;\n",
       "kills": [
-        "commit derive: two tracked names that differ only in case are refused with both names before any store is built, the second time too"
+        "commit derive: two tracked names that differ only in case are refused with both names before any store is built, the second time too",
+        "commit tree: two tracked names that differ only in case cannot both be stored, and the call is refused by name"
       ],
       "note": "the store would be built whole on every call for a tree it can never hold, and the refusal would not name the two paths"
     },
