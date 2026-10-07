@@ -37,11 +37,11 @@
   <text class="s no" x="296" y="140">broken</text>
   <text class="s no" x="472" y="140">fail</text>
   <rect class="box okbox" x="604" y="64" width="152" height="52" rx="6"/>
-  <text class="he ok" x="632" y="97" text-anchor="middle">אמת</text>
-  <text class="t strong" x="662" y="86">written</text>
-  <text class="s" x="662" y="103">with a receipt</text>
+  <text class="he ok" x="630" y="97" text-anchor="middle">אמת</text>
+  <text class="t strong" x="668" y="86">written</text>
+  <text class="s" x="668" y="103">with a receipt</text>
   <rect class="box nobox" x="604" y="152" width="152" height="52" rx="6"/>
-  <text class="he no" x="632" y="185" text-anchor="middle">מת</text>
-  <text class="t strong" x="662" y="174">nothing</text>
-  <text class="s" x="662" y="191">is written</text>
+  <text class="he no" x="630" y="185" text-anchor="middle">מת</text>
+  <text class="t strong" x="668" y="174">nothing</text>
+  <text class="s" x="668" y="191">is written</text>
 </svg>
