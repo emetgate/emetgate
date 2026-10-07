@@ -359,3 +359,26 @@ test "commit derive: mending the store refuses a junction where its files are ke
     try testing.expectError(error.WorkspaceIsLink, commit_store.restore(testing.allocator, testing.io, root, location.base, location.committed, head, &.{"src/flag.ts"}));
     try testing.expect(!existsAbs(try std.fs.path.join(env.arena(), &.{ elsewhere, "src" })));
 }
+
+test "commit derive: the listing of a tree is asked of git once while HEAD stays, and again when HEAD has moved" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    var random: [8]u8 = undefined;
+    testing.io.random(&random);
+    try case.repo.write("src/flag.ts", try std.fmt.allocPrint(env.arena(), "export const flag = 'aaaa{s}';\n", .{&std.fmt.bytesToHex(random, .lower)}));
+    try byHand(env, "user: a tree no other test has");
+    const before = try env.head();
+    const started = git_commit.listings_read;
+    try expectRefused(env, try swap(env, new_body, red), before);
+    try expectRefused(env, try swap(env, other_body, red), before);
+    try testing.expectEqual(started + 1, git_commit.listings_read);
+
+    try case.repo.write("src/flag.ts", flag_new);
+    try byHand(env, "user: bbbb");
+    const moved = try env.head();
+    try expectLanded(env, try swap(env, new_body, has_new), moved);
+    try testing.expectEqual(started + 2, git_commit.listings_read);
+}

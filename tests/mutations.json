@@ -11255,6 +11255,16 @@
       "kills": [
         "commit derive: mending the store refuses a junction where its files are kept and writes nothing through it"
       ]
+    },
+    {
+      "id": "CD13-listing-of-another-tree-reused",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (!std.mem.eql(u8, last_listing.tree[0..last_listing.tree_len], tree)) return null;\n",
+      "to": "    if (false and !std.mem.eql(u8, last_listing.tree[0..last_listing.tree_len], tree)) return null;\n",
+      "kills": [
+        "commit derive: the listing of a tree is asked of git once while HEAD stays, and again when HEAD has moved"
+      ],
+      "note": "the targets and the tested files would be held to the blobs of a tree HEAD no longer has"
     }
   ]
 }

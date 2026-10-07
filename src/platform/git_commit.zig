@@ -568,7 +568,7 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     }
     if (try exists(io, try std.fmt.allocPrint(arena, "{s}.lock", .{known.index}))) return error.IndexLocked;
 
-    const listing = try git.needRaw(&.{ "ls-tree", "-r", "-z", known.oid });
+    const listing = try treeListing(git, known.oid, known.tree);
     var held: std.ArrayList(TreeEntry) = .empty;
     try parseTree(arena, listing, &held);
     if (try caseClash(arena, held.items)) |pair| {
@@ -604,6 +604,42 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     const kept = try gpa.dupe(u8, listing);
     errdefer gpa.free(kept);
     return .{ .oid = oid, .tree = tree, .branch = branch, .git_dir = git_dir, .index = index, .icase = set.icase, .conversion = conversion, .measured = try measured.toOwnedSlice(gpa), .listing = kept };
+}
+
+const Listing = struct {
+    busy: std.atomic.Value(bool) = .init(false),
+    tree: [64]u8 = undefined,
+    tree_len: usize = 0,
+    bytes: []u8 = &.{},
+};
+
+var last_listing: Listing = .{};
+pub var listings_read: usize = 0;
+
+fn treeListing(git: Git, commit: []const u8, tree: []const u8) ![]const u8 {
+    if (try keptListing(git.arena, tree)) |kept| return kept;
+    const out = try git.needRaw(&.{ "ls-tree", "-r", "-z", commit });
+    if (builtin.is_test) listings_read += 1;
+    keepListing(tree, out);
+    return out;
+}
+
+fn keptListing(arena: Allocator, tree: []const u8) !?[]const u8 {
+    if (last_listing.busy.swap(true, .acquire)) return null;
+    defer last_listing.busy.store(false, .release);
+    if (!std.mem.eql(u8, last_listing.tree[0..last_listing.tree_len], tree)) return null;
+    return try arena.dupe(u8, last_listing.bytes);
+}
+
+fn keepListing(tree: []const u8, bytes: []const u8) void {
+    if (tree.len > last_listing.tree.len) return;
+    if (last_listing.busy.swap(true, .acquire)) return;
+    defer last_listing.busy.store(false, .release);
+    const copy = std.heap.page_allocator.dupe(u8, bytes) catch return;
+    std.heap.page_allocator.free(last_listing.bytes);
+    last_listing.bytes = copy;
+    @memcpy(last_listing.tree[0..tree.len], tree);
+    last_listing.tree_len = tree.len;
 }
 
 fn caseClash(arena: Allocator, held: []const TreeEntry) !?commit_names.Clash {
