@@ -9,6 +9,8 @@ env:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   windows-binary:
@@ -46,6 +48,10 @@ jobs:
           $hash = (Get-FileHash dist/emetgate.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  emetgate.exe" | Out-File -FilePath dist/emetgate.exe.sha256 -Encoding ascii -NoNewline
           Get-Content dist/emetgate.exe.sha256
+      - name: Attest that this binary was built from this commit
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/emetgate.exe
       - name: Create the GitHub release
         shell: pwsh
         env:
