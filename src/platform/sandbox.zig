@@ -446,7 +446,7 @@ pub fn spawnService(gpa: Allocator, argv: []const []const u8, cwd: []const u8) !
     defer token.close();
     const child = try spawnRestricted(gpa, .{ .low = token }, .{ .argv = argv, .cwd = cwd }, .service);
     errdefer {
-        _ = win.TerminateProcess(child.id.?, win.terminated_exit_code);
+        endProcess(child.id.?);
         std.os.windows.CloseHandle(child.stdin.?.handle);
         std.os.windows.CloseHandle(child.stdout.?.handle);
         std.os.windows.CloseHandle(child.id.?);
@@ -456,6 +456,11 @@ pub fn spawnService(gpa: Allocator, argv: []const []const u8, cwd: []const u8) !
     try job.assign(child.id.?);
     try resumeMainThread(child.thread_handle);
     return .{ .job = job, .process = child.id.?, .stdin = child.stdin.?, .stdout = child.stdout.? };
+}
+
+fn endProcess(process: std.os.windows.HANDLE) void {
+    _ = win.TerminateProcess(process, win.terminated_exit_code);
+    _ = win.WaitForSingleObject(process, win.stop_wait_ms);
 }
 
 pub fn environmentValue(arena: Allocator, name: [:0]const u16) !?[]u8 {
@@ -1142,6 +1147,7 @@ const snapshot_win = struct {
     extern "kernel32" fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) callconv(.winapi) std.os.windows.HANDLE;
     extern "kernel32" fn Process32FirstW(snapshot: std.os.windows.HANDLE, entry: *ProcessEntry) callconv(.winapi) std.os.windows.BOOL;
     extern "kernel32" fn Process32NextW(snapshot: std.os.windows.HANDLE, entry: *ProcessEntry) callconv(.winapi) std.os.windows.BOOL;
+    extern "kernel32" fn Sleep(milliseconds: u32) callconv(.winapi) void;
 };
 
 fn ownChildrenNamed(image: []const u8) !usize {
@@ -1162,6 +1168,18 @@ fn ownChildrenNamed(image: []const u8) !usize {
     return count;
 }
 
+fn reportLingering(image: []const u8, expected: usize) void {
+    var waited: u32 = 0;
+    while (waited < 5000) : (waited += 50) {
+        if ((ownChildrenNamed(image) catch return) == expected) {
+            std.debug.print("the extra child left the process list within {d} ms\n", .{waited});
+            return;
+        }
+        snapshot_win.Sleep(50);
+    }
+    std.debug.print("the extra child is still listed after {d} ms\n", .{waited});
+}
+
 test "a spawn fault is decided before the process is created, so no child of the test is left behind" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     defer injected_fault = null;
@@ -1172,7 +1190,9 @@ test "a spawn fault is decided before the process is created, so no child of the
         try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, "."));
     }
     injected_fault = null;
-    try testing.expectEqual(before, try ownChildrenNamed(image));
+    const after = try ownChildrenNamed(image);
+    if (after != before) reportLingering(image, before);
+    try testing.expectEqual(before, after);
     var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
     try testing.expectEqual(before + 1, try ownChildrenNamed(image));
     service.stop();
