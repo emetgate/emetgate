@@ -477,3 +477,56 @@ test "commit tree: the full copy refuses a store whose files are reached through
         .committed = .{ .dir = location.committed, .count = files.len },
     }));
 }
+
+const slipped = "  return a + b; // slipped past the code rules\n";
+
+fn callJson(env: *Env, tool: []const u8, args: anytype) !Reply {
+    var text: std.Io.Writer.Allocating = .init(env.arena());
+    var js: std.json.Stringify = .{ .writer = &text.writer };
+    try js.write(args);
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, env.arena(), text.written(), .{});
+    var event: telemetry.Event = .{ .tool = tool };
+    const policy: Policy = .{ .root = env.repo.root_abs, .test_command = common.green, .commit = true, .language_service = env.session };
+    const result = try handlers.callTool(testing.allocator, testing.io, env.runtime, tool, parsed, &event, policy);
+    defer testing.allocator.free(result.text);
+    return .{ .text = try env.arena().dupe(u8, result.text), .is_error = result.is_error };
+}
+
+fn expectSourceRefused(env: *Env, reply: Reply, before: []const u8) !void {
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expect(contains(reply.text, "UseSymbolToolsForSource"));
+    try testing.expectEqualStrings(before, try env.head());
+    try testing.expectEqualStrings(util_src, try env.read("src/util.ts"));
+    try testing.expectEqualStrings("", try env.git(&.{ "status", "--porcelain" }));
+}
+
+fn lineHash(env: *Env) ![]const u8 {
+    return env.arena().dupe(u8, &emetgate.symbol.formatHash(emetgate.symbol.hashOf("  return a + b;\n")));
+}
+
+test "commit tree: a doc edit of a source file inside a committing batch is refused, writes nothing and commits nothing" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    const before = try env.head();
+    const Doc = struct { kind: []const u8, file: []const u8, hash: []const u8, content: []const u8, line_start: i64, line_end: i64 };
+    const reply = try callJson(env, "emetgate_try_batch", .{
+        .edits = [_]Doc{.{ .kind = "doc", .file = try env.abs("src/util.ts"), .hash = try lineHash(env), .content = slipped, .line_start = 2, .line_end = 2 }},
+        .message = message,
+    });
+    try expectSourceRefused(env, reply, before);
+}
+
+test "commit tree: a committing write_doc on a source file is refused, writes nothing and commits nothing" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    const before = try env.head();
+    const reply = try callJson(env, "emetgate_write_doc", .{ .file = try env.abs("src/util.ts"), .hash = try lineHash(env), .content = slipped, .line_start = @as(i64, 2), .line_end = @as(i64, 2), .message = message });
+    try expectSourceRefused(env, reply, before);
+}
