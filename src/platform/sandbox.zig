@@ -1150,6 +1150,12 @@ const snapshot_win = struct {
     extern "kernel32" fn Sleep(milliseconds: u32) callconv(.winapi) void;
 };
 
+fn isRunning(pid: u32) bool {
+    const process = win.OpenProcess(win.synchronize, .FALSE, pid) orelse return false;
+    defer std.os.windows.CloseHandle(process);
+    return !hasExited(process);
+}
+
 fn ownChildrenNamed(image: []const u8) !usize {
     const snapshot = snapshot_win.CreateToolhelp32Snapshot(snapshot_win.snap_process, 0);
     if (snapshot == std.os.windows.INVALID_HANDLE_VALUE) return error.SnapshotFailed;
@@ -1161,6 +1167,7 @@ fn ownChildrenNamed(image: []const u8) !usize {
     var more = snapshot_win.Process32FirstW(snapshot, &entry);
     while (more != .FALSE) : (more = snapshot_win.Process32NextW(snapshot, &entry)) {
         if (entry.parent_process_id != own) continue;
+        if (!isRunning(entry.process_id)) continue;
         var name: [260 * 3]u8 = undefined;
         const units = std.mem.sliceTo(&entry.exe_file, 0);
         if (std.ascii.eqlIgnoreCase(name[0..std.unicode.wtf16LeToWtf8(&name, units)], image)) count += 1;
