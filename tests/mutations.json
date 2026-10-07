@@ -9450,7 +9450,7 @@
       "id": "LB4-left-behind-not-written",
       "file": "src/protocol/wire.zig",
       "from": "        try js.write(@errorName(err));\n    }\n    try js.endObject();\n}\n\nfn writeNote",
-      "to": "        try js.write(\"\");\n    }\n    try js.endObject();\n}\n\nfn writeNote",
+      "to": "        try js.write(@errorName(err)[0..0]);\n    }\n    try js.endObject();\n}\n\nfn writeNote",
       "kills": [
         "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
       ]
