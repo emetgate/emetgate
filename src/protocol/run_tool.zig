@@ -85,6 +85,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
         .used = &used,
+        .blocked = &event.trace.blocked,
     }) catch |err| switch (err) {
         error.SandboxUnavailable => {
             event.fail("SandboxUnavailable");

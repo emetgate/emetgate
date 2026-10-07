@@ -370,11 +370,12 @@ fn printStageRejected(stage: []const u8, outcome: emetgate.sandbox.Outcome) void
 }
 
 fn tryRunJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, trust: Trust) u8 {
-    return emitTryJson(init, runtime, request, out, trust) catch |err| {
+    var trace: runner.Trace = .{};
+    return emitTryJson(init, runtime, request, out, trust, &trace) catch |err| {
         if (err == error.WrittenButNotIndexed) {
             wire.writeNotIndexed(out, request.path) catch {};
         } else {
-            wire.writeError(out, @errorName(err), exitCodeFor(err)) catch {};
+            wire.writeFailure(out, err, &trace.blocked) catch {};
         }
         return exitCodeFor(err);
     };
@@ -389,7 +390,7 @@ fn newFileTarget(init: std.process.Init, gpa: std.mem.Allocator, path: []const u
     return null;
 }
 
-fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, trust: Trust) !u8 {
+fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, trust: Trust, trace: *runner.Trace) !u8 {
     const gpa = runtime.gpa;
     const expected = try symbol.parseExpected(request.hash);
     const target = try newFileTarget(init, gpa, request.path, expected);
@@ -409,7 +410,6 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, init.io, file_abs, request.typecheck_command, trust.repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
 
-    var trace: runner.Trace = .{};
     const result = try runner.tryMutate(gpa, init.io, runtime, .{
         .file_abs = file_abs,
         .ref_text = request.symbol,
@@ -420,12 +420,12 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         .allow_repo_memory = trust.repo_memory,
         .shadow_root = request.shadow_root,
         .gate_tree = request.treeChoice(),
-        .trace = &trace,
+        .trace = trace,
     });
     defer result.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, request.shadow_root);
     defer gpa.free(note_root);
-    const note = wire.shadowNote(note_root, trace);
+    const note = wire.shadowNote(note_root, trace.*);
 
     switch (result) {
         .committed => |new_hash| {

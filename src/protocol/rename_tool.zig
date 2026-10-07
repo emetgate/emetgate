@@ -37,7 +37,7 @@ pub fn callRename(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, file);
         } else {
-            try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+            try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         }
         break :blk true;
     };

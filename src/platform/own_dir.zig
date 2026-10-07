@@ -61,7 +61,7 @@ fn frozen(dir_abs: []const u8) Error!?windows.HANDLE {
     };
     const handle = win.CreateFileW(
         name,
-        win.generic_read | win.generic_write | win.file_traverse | win.file_delete_child,
+        win.generic_read | win.generic_write | win.file_traverse,
         win.file_share_read | win.file_share_write,
         null,
         win.open_existing,
@@ -136,7 +136,6 @@ const win = struct {
     const generic_write: windows.DWORD = 0x40000000;
     const delete: windows.DWORD = 0x00010000;
     const file_traverse: windows.DWORD = 0x00000020;
-    const file_delete_child: windows.DWORD = 0x00000040;
     const file_read_attributes: windows.DWORD = 0x00000080;
     const file_share_read: windows.DWORD = 0x00000001;
     const file_share_write: windows.DWORD = 0x00000002;

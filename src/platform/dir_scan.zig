@@ -165,7 +165,7 @@ fn isDot(name: []const u16) bool {
     return false;
 }
 
-const dir_access: u32 = win.file_list_directory | win.file_traverse | win.file_add_file | win.file_add_subdirectory | win.file_delete_child | win.file_read_attributes | win.synchronize;
+const dir_access: u32 = win.file_list_directory | win.file_read_attributes | win.synchronize;
 const share_all: u32 = 0x7;
 
 pub const win = struct {

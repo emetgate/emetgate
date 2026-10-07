@@ -14,7 +14,7 @@ pub fn success(gpa: Allocator, buffer: *std.Io.Writer.Allocating) !ToolResult {
 pub fn failure(gpa: Allocator, buffer: *std.Io.Writer.Allocating, err: anyerror, event: *telemetry.Event) !ToolResult {
     event.fail(@errorName(err));
     buffer.clearRetainingCapacity();
-    try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+    try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };
 }
 
