@@ -1168,16 +1168,14 @@ fn ownChildrenNamed(image: []const u8) !usize {
     return count;
 }
 
-fn reportLingering(image: []const u8, expected: usize) void {
+fn settledChildren(image: []const u8, expected: usize) !usize {
     var waited: u32 = 0;
-    while (waited < 5000) : (waited += 50) {
-        if ((ownChildrenNamed(image) catch return) == expected) {
-            std.debug.print("the extra child left the process list within {d} ms\n", .{waited});
-            return;
-        }
+    var count = try ownChildrenNamed(image);
+    while (count != expected and waited < win.stop_wait_ms) : (waited += 50) {
         snapshot_win.Sleep(50);
+        count = try ownChildrenNamed(image);
     }
-    std.debug.print("the extra child is still listed after {d} ms\n", .{waited});
+    return count;
 }
 
 test "a spawn fault is decided before the process is created, so no child of the test is left behind" {
@@ -1190,9 +1188,7 @@ test "a spawn fault is decided before the process is created, so no child of the
         try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, "."));
     }
     injected_fault = null;
-    const after = try ownChildrenNamed(image);
-    if (after != before) reportLingering(image, before);
-    try testing.expectEqual(before, after);
+    try testing.expectEqual(before, try settledChildren(image, before));
     var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
     try testing.expectEqual(before + 1, try ownChildrenNamed(image));
     service.stop();
