@@ -9,6 +9,7 @@ const runner = @import("runner.zig");
 const rules = @import("rules.zig");
 const create = @import("create.zig");
 const batch_plan = @import("batch_plan.zig");
+const docnode = @import("../engine/docnode.zig");
 const tsserver = @import("tsserver.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -77,6 +78,7 @@ pub const Planned = struct {
 pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !Planned {
     if (options.test_command.len == 0) return error.NoTestCommand;
     if (options.edits.len == 0 and options.doc_edits.len == 0) return error.EmptyBatch;
+    for (options.doc_edits) |edit| try docnode.refuseSource(edit.file_abs);
 
     const first_file = if (options.edits.len != 0) options.edits[0].file_abs else options.doc_edits[0].file_abs;
     const dir0 = std.fs.path.dirname(first_file) orelse return error.InvalidPath;

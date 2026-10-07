@@ -4,6 +4,7 @@ const symbol = @import("symbol.zig");
 const line_range = @import("line_range.zig");
 const json_pointer = @import("lang/json/pointer.zig");
 const markdown_heading = @import("lang/markdown/heading.zig");
+const registry = @import("lang/registry.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -38,6 +39,10 @@ const binary_probe_bytes = 8000;
 
 pub fn looksBinary(bytes: []const u8) bool {
     return std.mem.indexOfScalar(u8, bytes[0..@min(bytes.len, binary_probe_bytes)], 0) != null;
+}
+
+pub fn refuseSource(path: []const u8) error{UseSymbolToolsForSource}!void {
+    if (registry.forPath(path) != null) return error.UseSymbolToolsForSource;
 }
 
 pub fn checkReadable(source: []const u8) Error!void {
