@@ -555,13 +555,16 @@ test "commit defense: a junction that stands inside the store where a changed fi
     defer std.Io.Dir.cwd().deleteDir(testing.io, inside) catch {};
 
     try case.repo.write("src/flag.ts", flag_new);
-    try byHand(env, "user: bbbb");
+    try case.repo.write("src/extra.ts", "export const extra = 1;\n");
+    try byHand(env, "user: bbbb and one more file");
     const before = try env.head();
     const reply = try swap(env, new_body, common.green);
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(reply.is_error);
+    try testing.expect(contains(reply.text, "WorkspaceIsLink"));
     try testing.expectEqualStrings(before, try env.head());
     try testing.expectEqualStrings("the user's own file\n", try env.read(".git/victim/flag.ts"));
+    try testing.expect(!case.repo.exists(".git/victim/extra.ts"));
     try testing.expect(!case.repo.exists(".git/victim/util.ts"));
 }
 

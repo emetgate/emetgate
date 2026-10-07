@@ -11248,15 +11248,6 @@
       ]
     },
     {
-      "id": "CD12-store-mended-through-a-junction",
-      "file": "src/platform/commit_store.zig",
-      "from": "    try shadow.ensureNoLinks(base_abs, tree_abs);\n",
-      "to": "",
-      "kills": [
-        "commit derive: mending the store refuses a junction where its files are kept and writes nothing through it"
-      ]
-    },
-    {
       "id": "CD13-listing-of-another-tree-reused",
       "file": "src/platform/git_commit.zig",
       "from": "    if (!std.mem.eql(u8, last_listing.tree[0..last_listing.tree_len], tree)) return null;\n",
@@ -11282,7 +11273,8 @@
       "from": "    const pinned = (try own_dir.hold(io, tree_abs, .existing)) orelse return error.CommittedTreeUnavailable;\n",
       "to": "    const pinned = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.CommittedTreeUnavailable;\n",
       "kills": [
-        "commit defense: the directory of the store cannot be moved away and replaced by a link while a rewritten file is checked out again"
+        "commit defense: the directory of the store cannot be moved away and replaced by a link while a rewritten file is checked out again",
+        "commit derive: mending the store refuses a junction where its files are kept and writes nothing through it"
       ]
     },
     {

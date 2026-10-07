@@ -227,7 +227,6 @@ pub fn restore(gpa: Allocator, io: std.Io, root: []const u8, base_abs: []const u
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const tree_abs = try std.fs.path.join(arena, &.{ dir_abs, tree_name });
-    try shadow.ensureNoLinks(base_abs, tree_abs);
     const held = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.CommittedTreeUnavailable;
     defer held.close();
     const pinned = (try own_dir.hold(io, tree_abs, .existing)) orelse return error.CommittedTreeUnavailable;
