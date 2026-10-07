@@ -6486,8 +6486,8 @@
     {
       "id": "WR1-compact-reply-drops-new-hash",
       "file": "src/protocol/wire.zig",
-      "from": "    try js.objectField(\"new_hash\");\n    try js.write(new_hex[0..]);\n    if (full) try writeShadowNote(&js, note);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
-      "to": "    if (full) {\n        try js.objectField(\"new_hash\");\n        try js.write(new_hex[0..]);\n    }\n    if (full) try writeShadowNote(&js, note);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
+      "from": "    try js.objectField(\"new_hash\");\n    try js.write(new_hex[0..]);\n    try writeNote(&js, note, full);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
+      "to": "    if (full) {\n        try js.objectField(\"new_hash\");\n        try js.write(new_hex[0..]);\n    }\n    try writeNote(&js, note, full);\n    try js.endObject();\n    try writer.writeByte('\\n');\n}\n\npub const BatchEdit",
       "kills": [
         "compact committed payload drops the old hash and the shadow note"
       ]
@@ -9279,8 +9279,8 @@
     {
       "id": "KT1-wrong-tree-removed-after-the-call",
       "file": "src/platform/shadow.zig",
-      "from": "if (mode == .full_copy) remove(io, base_abs, shadow_abs) catch {};",
-      "to": "if (mode == .kept) remove(io, base_abs, shadow_abs) catch {};",
+      "from": "if (mode != .full_copy) return;",
+      "to": "if (mode != .kept) return;",
       "kills": [
         "the kept tree holds the working files themselves, stays after the call and says what it is",
         "a full copy is used when asked for, says so, gives private files and is removed after the call"
@@ -9415,6 +9415,53 @@
       "kills": [
         "gate tree replies: a rejected doc write says which tree was used, for each server's own choice",
         "gate tree replies: a repository on another volume, or a volume without hard links, gets a full copy and the reply gives the reason"
+      ]
+    },
+    {
+      "id": "LB1-left-behind-tree-not-recorded",
+      "file": "src/platform/shadow.zig",
+      "from": "    out.left_behind = err;\n",
+      "to": "    out.left_behind = if (false) err else null;\n",
+      "kills": [
+        "a full copy that cannot be removed after the call is named in the report, and the next call removes it",
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ],
+      "note": "silent loss: the removal error of a full copy would be dropped as it was before"
+    },
+    {
+      "id": "LB2-edit-gate-does-not-report-the-tree",
+      "file": "src/platform/runner.zig",
+      "from": "        workspace.reportTo(&t.tree.?);\n",
+      "to": "        workspace.report = null;\n",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ]
+    },
+    {
+      "id": "LB3-run-does-not-report-the-tree",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (options.used) |used| workspace.reportTo(used);\n",
+      "to": "    if (options.used) |used| used.* = workspace.use;\n",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ]
+    },
+    {
+      "id": "LB4-left-behind-not-written",
+      "file": "src/protocol/wire.zig",
+      "from": "        try js.write(@errorName(err));\n    }\n    try js.endObject();\n}\n\nfn writeNote",
+      "to": "        try js.write(@errorName(err)[0..0]);\n    }\n    try js.endObject();\n}\n\nfn writeNote",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
+      ]
+    },
+    {
+      "id": "LB5-compact-committed-reply-hides-left-behind",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (tree.left_behind != null) try writeGateTree(js, tree);\n",
+      "to": "    if (tree.left_behind != null and full) try writeGateTree(js, tree);\n",
+      "kills": [
+        "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
       ]
     },
     {
