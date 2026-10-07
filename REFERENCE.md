@@ -604,7 +604,7 @@ The session's `init` message listed `rule` among its slash commands with the `--
 
 | Where | What it draws |
 |---|---|
-| Under a write call (`try`, `try_batch`, `write_doc`, `rename`, `move`, `move_file`), also when Claude Code folds calls into one `Called emetgate N times` row | The word in Hebrew letters, then the file and symbol: **אמת** in green when the call was accepted; when it was refused the first letter is faded out and **מת** stands in red |
+| Under a write call (`try`, `try_batch`, `write_doc`, `rename`, `move`, `move_file`), also when Claude Code folds calls into one `Called emetgate N times` row | Once the gate has answered that call, the word in Hebrew letters, then the file and symbol: **אמת** in green when the call was accepted; when it was refused the first letter is faded out and **מת** stands in red |
 | The line that animates while a turn runs | The word says what the turn is doing: `Awaiting the word` while the request is out, `Pondering the letters` while the model thinks, `Speaking` while it answers, `Shaping the clay` while it writes a tool call, `Reading the clay` while an emetgate read runs, `Weighing at the gate` while a write is at the gate, then `Sealed` or `Turned away`. Before the word stand the three letters: written one after another while the turn works, whole while emetgate reads, yellow at the gate, and as under a write call once the verdict is in |
 | The line that closes a turn | When the turn made a write call, the word becomes `Sealed`, `Turned away` or `Weighed`, and a second line counts `passed` and `refused`; otherwise the word is `Spoke` |
 
