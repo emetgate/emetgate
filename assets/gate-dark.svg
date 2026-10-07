@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 236" width="780" height="236" role="img" aria-label="A proposed change passes the rules, then the typecheck and tests in a sandbox copy. If both hold it is written to disk with a receipt. If either fails nothing is written.">
+  <style>
+    .cap { font: 10.5px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 1.4px; fill: #a79fb8; }
+    .div { stroke: #3a3350; stroke-width: 1; stroke-dasharray: 2 5; }
+    .box { fill: #13101b; stroke: #3a3350; stroke-width: 1.2; }
+    .dash { stroke-dasharray: 5 4; stroke: #a79fb8; }
+    .okbox { stroke: #1fd68d; }
+    .nobox { stroke: #f0524f; }
+    .rail { fill: none; stroke: #1fd68d; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .refuse { stroke: #f0524f; stroke-dasharray: 1 5; stroke-width: 2; }
+    .node { fill: #0b0910; stroke: #b98cff; stroke-width: 2; }
+    .t { font: 13.5px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #a79fb8; }
+    .strong { fill: #e9e4f2; font-weight: 600; }
+    .s { font: 11.5px ui-monospace, SFMono-Regular, Consolas, monospace; fill: #a79fb8; }
+    .he { font: 700 22px "Segoe UI", "Arial Hebrew", "Noto Sans Hebrew", Arial, sans-serif; }
+    .ok { fill: #1fd68d; }
+    .no { fill: #f0524f; }
+  </style>
+  <text class="cap" x="24" y="34">THE MODEL</text>
+  <text class="cap" x="214" y="34">THE GATE</text>
+  <text class="cap" x="604" y="34">YOUR SOURCE TREE</text>
+  <line class="div" x1="190" y1="18" x2="190" y2="222"/>
+  <line class="div" x1="580" y1="18" x2="580" y2="222"/>
+  <rect class="box dash" x="24" y="64" width="142" height="52" rx="6"/>
+  <text class="t" x="95" y="86" text-anchor="middle">proposes</text>
+  <text class="t strong" x="95" y="104" text-anchor="middle">a change</text>
+  <path class="rail" d="M166 90 H604"/>
+  <path class="rail refuse" d="M286 90 V178 H604"/>
+  <path class="rail refuse" d="M462 90 V178"/>
+  <circle class="node" cx="286" cy="90" r="9"/>
+  <circle class="node" cx="462" cy="90" r="9"/>
+  <text class="t strong" x="286" y="64" text-anchor="middle">your rules</text>
+  <text class="t strong" x="462" y="56" text-anchor="middle">typecheck and tests</text>
+  <text class="s" x="462" y="72" text-anchor="middle">in a sandbox copy</text>
+  <text class="s ok" x="374" y="82" text-anchor="middle">kept</text>
+  <text class="s ok" x="530" y="82" text-anchor="middle">pass</text>
+  <text class="s no" x="296" y="140">broken</text>
+  <text class="s no" x="472" y="140">fail</text>
+  <rect class="box okbox" x="604" y="64" width="152" height="52" rx="6"/>
+  <text class="he ok" x="630" y="97" text-anchor="middle">אמת</text>
+  <text class="t strong" x="668" y="86">written</text>
+  <text class="s" x="668" y="103">with a receipt</text>
+  <rect class="box nobox" x="604" y="152" width="152" height="52" rx="6"/>
+  <text class="he no" x="630" y="185" text-anchor="middle">מת</text>
+  <text class="t strong" x="668" y="174">nothing</text>
+  <text class="s" x="668" y="191">is written</text>
+</svg>

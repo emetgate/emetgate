@@ -63,6 +63,7 @@ fn applyDoc(gpa: Allocator, parser: ts.Parser, source: []const u8, options: Opti
 
 pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace) !Result {
     if (options.test_command.len == 0) return error.NoTestCommand;
+    try docnode.refuseSource(options.file_abs);
     const dir = std.fs.path.dirname(options.file_abs) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir);
     defer gpa.free(root);

@@ -101,6 +101,12 @@ fn say(repo: *Repo, prompt: []const u8) !Reply {
     return (try replyTo(repo.root_abs, input)) orelse error.PromptPassedOn;
 }
 
+fn idOf(reply: Reply) []const u8 {
+    const said = reply.reason();
+    const line = said[(std.mem.indexOfScalar(u8, said, '\n') orelse return said) + 1 ..];
+    return line[0 .. std.mem.indexOfScalar(u8, line, ' ') orelse line.len];
+}
+
 fn listed(repo: *Repo) ![]u8 {
     var out: Allocating = .init(testing.allocator);
     defer out.deinit();
@@ -233,9 +239,12 @@ test "prompt hook: /rule add adopts the rule and answers with its id" {
 
     const reply = try say(&repo, "/rule add \"no networkidle\" --check forbid:networkidle --enforce");
     defer reply.deinit();
-    const id = reply.reason();
+    const id = idOf(reply);
     try testing.expectEqual(@as(usize, 17), id.len);
     try testing.expectEqual(@as(u8, 'm'), id[0]);
+    const said = try std.fmt.allocPrint(testing.allocator, "rule added: no networkidle\n{s}  enforce  forbid:networkidle  whole repository", .{id});
+    defer testing.allocator.free(said);
+    try testing.expectEqualStrings(said, reply.reason());
     try testing.expectEqual(@as(u8, '\n'), reply.raw[reply.raw.len - 1]);
 
     const rows = try listed(&repo);
@@ -253,10 +262,17 @@ test "prompt hook: /rule list answers with the rows emetgate rule list prints" {
     defer added.deinit();
     const reply = try say(&repo, "/rule list");
     defer reply.deinit();
+    const id = idOf(added);
+    const want = try std.fmt.allocPrint(
+        testing.allocator,
+        "id                 state   mode      check     where             rule\n{s}  active  advisory  no check  whole repository  prefer explicit waits",
+        .{id},
+    );
+    defer testing.allocator.free(want);
+    try testing.expectEqualStrings(want, reply.reason());
     const rows = try listed(&repo);
     defer testing.allocator.free(rows);
-    try testing.expectEqualStrings(rows[0 .. rows.len - 1], reply.reason());
-    try testing.expect(reply.has(added.reason()));
+    try testing.expect(std.mem.startsWith(u8, rows, id));
 }
 
 test "prompt hook: /rule forget removes the rule, and a command that prints nothing still answers" {
@@ -265,19 +281,30 @@ test "prompt hook: /rule forget removes the rule, and a command that prints noth
 
     const empty = try say(&repo, "/rule list");
     defer empty.deinit();
-    try testing.expectEqualStrings("ok", empty.reason());
+    try testing.expectEqualStrings("no rules", empty.reason());
 
     const added = try say(&repo, "/rule add \"no networkidle\" --check forbid:networkidle --enforce");
     defer added.deinit();
-    const prompt = try std.fmt.allocPrint(testing.allocator, "/rule forget {s}", .{added.reason()});
+    const prompt = try std.fmt.allocPrint(testing.allocator, "/rule forget {s}", .{idOf(added)});
     defer testing.allocator.free(prompt);
     const forgotten = try say(&repo, prompt);
     defer forgotten.deinit();
-    try testing.expectEqualStrings("ok", forgotten.reason());
+    const said = try std.fmt.allocPrint(testing.allocator, "rule forgotten: {s}", .{idOf(added)});
+    defer testing.allocator.free(said);
+    try testing.expectEqualStrings(said, forgotten.reason());
 
     const rows = try listed(&repo);
     defer testing.allocator.free(rows);
     try testing.expectEqualStrings("", rows);
+}
+
+test "prompt hook: a /rule that prints nothing still answers ok" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+
+    const empty = try say(&repo, "/rule list --json");
+    defer empty.deinit();
+    try testing.expectEqualStrings("ok", empty.reason());
 }
 
 const turkish = "\u{11f}\u{fc}\u{15f}\u{131}\u{f6}\u{e7} \u{130}\u{11e}\u{dc}\u{15e}\u{d6}\u{c7}";
@@ -290,14 +317,16 @@ test "prompt hook: quotes and Turkish letters reach the ledger byte for byte and
     const check = "forbid:\"\u{15f}\u{131}k\"";
     const added = try say(&repo, "/rule add \"" ++ turkish ++ " 'tek' \\\"\u{e7}ift\\\"\" --check 'forbid:\"\u{15f}\u{131}k\"' --enforce");
     defer added.deinit();
-    try testing.expectEqual(@as(usize, 17), added.reason().len);
+    try testing.expectEqual(@as(usize, 17), idOf(added).len);
+    for (added.raw) |byte| try testing.expect(byte < 0x80);
 
     const reply = try say(&repo, "/rule list");
     defer reply.deinit();
     for (reply.raw) |byte| try testing.expect(byte < 0x80);
-    const row = try std.fmt.allocPrint(testing.allocator, "{s}\tactive\tenforce\t{s}\t-\t{s}", .{ added.reason(), check, text });
+    const row = try std.fmt.allocPrint(testing.allocator, "{s}  active  enforce  {s}  whole repository  {s}", .{ idOf(added), check, text });
     defer testing.allocator.free(row);
-    try testing.expectEqualStrings(row, reply.reason());
+    try testing.expect(std.mem.endsWith(u8, reply.reason(), row));
+    try testing.expect(std.mem.startsWith(u8, reply.reason(), "id "));
 
     const escaped = "{\"prompt\":\"/rule add \\\"\\u011f\\u00fc\\u015f\\\"\"}";
     const again = (try replyTo(repo.root_abs, escaped)).?;
@@ -329,7 +358,11 @@ test "prompt hook: a refused rule answers with the error name and the names that
     defer added.deinit();
     const unknown = try say(&repo, "/rule forget mdeadbeefdeadbeef");
     defer unknown.deinit();
-    const want = try std.fmt.allocPrint(testing.allocator, "{s}\tactive\tadvisory\t-\t-\tprefer explicit waits\nerror: DecisionNotActive", .{added.reason()});
+    const want = try std.fmt.allocPrint(
+        testing.allocator,
+        "id                 state   mode      check     where             rule\n{s}  active  advisory  no check  whole repository  prefer explicit waits\nerror: DecisionNotActive",
+        .{idOf(added)},
+    );
     defer testing.allocator.free(want);
     try testing.expectEqualStrings(want, unknown.reason());
 }

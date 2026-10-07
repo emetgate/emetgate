@@ -12,6 +12,13 @@ pub const Error = error{ EnforceWithoutCheck, MessageRuleWithScope };
 
 pub const absent_field = "-";
 
+pub const Voice = enum { terse, spoken };
+
+const no_check = "no check";
+const everywhere = "whole repository";
+const nothing_kept = "no rules\n";
+const columns = [_][]const u8{ "id", "state", "mode", "check", "where", "rule" };
+
 pub fn usage(comptime prefix: []const u8) []const u8 {
     return prefix ++ "add <text> [--check <spec>] [--in <where>] [--enforce]\n" ++
         prefix ++ "list [--all] [--json]\n" ++
@@ -99,10 +106,14 @@ fn parseListing(args: []const [:0]const u8) ?Listing {
 }
 
 pub fn run(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer, err_out: *Writer) !void {
-    apply(gpa, io, root_abs, request, out, err_out) catch |err| {
+    return runAs(.terse, gpa, io, root_abs, request, out, err_out);
+}
+
+pub fn runAs(voice: Voice, gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer, err_out: *Writer) !void {
+    apply(voice, gpa, io, root_abs, request, out, err_out) catch |err| {
         switch (err) {
             error.UnknownCheck => try writeCheckNames(err_out),
-            error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err_out),
+            error.DecisionNotActive => try list(voice, gpa, io, root_abs, .{}, err_out),
             else => {},
         }
         return err;
@@ -116,14 +127,14 @@ fn writeCheckNames(err_out: *Writer) !void {
     try err_out.writeByte('\n');
 }
 
-fn apply(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer, err_out: *Writer) !void {
+fn apply(voice: Voice, gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out: *Writer, err_out: *Writer) !void {
     switch (request) {
         .add => |decided| {
             try explainQuery(gpa, decided, err_out);
             try refuseUnwritable(gpa, decided);
             const id = try memory.remember(gpa, io, root_abs, .project, decided.text, decided.enforce, decided.check, decided.where);
             defer gpa.free(id);
-            try out.print("{s}\n", .{id});
+            try writeDecided(voice, "rule added", id, decided, out);
         },
         .supersede => |target| {
             try explainQuery(gpa, target.decided, err_out);
@@ -131,11 +142,29 @@ fn apply(gpa: Allocator, io: std.Io, root_abs: []const u8, request: Request, out
             const decided = target.decided;
             const id = try memory.supersede(gpa, io, root_abs, target.id, .project, decided.text, decided.enforce, decided.check, decided.where);
             defer gpa.free(id);
-            try out.print("{s}\n", .{id});
+            try writeDecided(voice, "rule replaced", id, decided, out);
         },
-        .forget => |id| try memory.forget(gpa, io, root_abs, id),
-        .list => |listing| try list(gpa, io, root_abs, listing, out),
+        .forget => |id| {
+            try memory.forget(gpa, io, root_abs, id);
+            if (voice == .spoken) try out.print("rule forgotten: {s}\n", .{id});
+        },
+        .list => |listing| try list(voice, gpa, io, root_abs, listing, out),
     }
+}
+
+fn writeDecided(voice: Voice, what: []const u8, id: []const u8, decided: Decided, out: *Writer) !void {
+    if (voice == .terse) return out.print("{s}\n", .{id});
+    try out.print("{s}: {s}\n", .{ what, firstLine(decided.text) });
+    try out.print("{s}  {s}  {s}  {s}\n", .{
+        id,
+        modeOf(decided.enforce),
+        decided.check orelse no_check,
+        decided.where orelse everywhere,
+    });
+}
+
+fn modeOf(enforce: bool) []const u8 {
+    return if (enforce) "enforce" else "advisory";
 }
 
 fn refuseUnwritable(gpa: Allocator, decided: Decided) !void {
@@ -179,13 +208,14 @@ fn writeProblem(err_out: *Writer, err: query.CompileError, diag: query.Diagnosti
     try err_out.print("{t}: {s}: \"{s}\"\n", .{ err, diag.what, diag.at() });
 }
 
-fn list(gpa: Allocator, io: std.Io, root_abs: []const u8, listing: Listing, out: *Writer) !void {
+fn list(voice: Voice, gpa: Allocator, io: std.Io, root_abs: []const u8, listing: Listing, out: *Writer) !void {
     const recalled = if (listing.all)
         try memory.recallAll(gpa, io, root_abs)
     else
         try memory.recall(gpa, io, root_abs);
     defer recalled.deinit();
 
+    if (voice == .spoken and !listing.json) return table(recalled.decisions, out);
     for (recalled.decisions) |decision| {
         if (listing.json) {
             var js: std.json.Stringify = .{ .writer = out };
@@ -195,13 +225,44 @@ fn list(gpa: Allocator, io: std.Io, root_abs: []const u8, listing: Listing, out:
             try out.print("{s}\t{t}\t{s}\t{s}\t{s}\t{s}\n", .{
                 decision.id,
                 decision.status,
-                if (decision.enforce) "enforce" else "advisory",
+                modeOf(decision.enforce),
                 decision.check orelse absent_field,
                 decision.where orelse absent_field,
                 firstLine(decision.text),
             });
         }
     }
+}
+
+fn table(decisions: []const memory.Decision, out: *Writer) !void {
+    if (decisions.len == 0) return out.writeAll(nothing_kept);
+    var widths: [columns.len]usize = undefined;
+    for (columns, &widths) |name, *width| width.* = name.len;
+    for (decisions) |decision| {
+        for (cellsOf(decision), &widths) |cell, *width| width.* = @max(width.*, cell.len);
+    }
+    try writeRow(columns, widths, out);
+    for (decisions) |decision| try writeRow(cellsOf(decision), widths, out);
+}
+
+fn cellsOf(decision: memory.Decision) [columns.len][]const u8 {
+    return .{
+        decision.id,
+        @tagName(decision.status),
+        modeOf(decision.enforce),
+        decision.check orelse no_check,
+        decision.where orelse everywhere,
+        firstLine(decision.text),
+    };
+}
+
+fn writeRow(cells: [columns.len][]const u8, widths: [columns.len]usize, out: *Writer) !void {
+    for (cells, widths, 0..) |cell, width, index| {
+        try out.writeAll(cell);
+        if (index + 1 == cells.len) break;
+        try out.splatByteAll(' ', width - cell.len + 2);
+    }
+    try out.writeByte('\n');
 }
 
 fn firstLine(text: []const u8) []const u8 {

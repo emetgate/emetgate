@@ -91,6 +91,7 @@ fn readDocSource(gpa: Allocator, io: std.Io, file_abs: []const u8) ![]u8 {
 }
 
 pub fn planDoc(gpa: Allocator, io: std.Io, edit: DocEdit, rel: []u8) !Prepared {
+    try docnode.refuseSource(edit.file_abs);
     const source = try readDocSource(gpa, io, edit.file_abs);
     defer gpa.free(source);
     const base_hash = symbol.hashOf(source);

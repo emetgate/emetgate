@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1764**
-- Mutations declared in `tests/mutations.json`: **1119**
-  - killed: **1085**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1774**
+- Mutations declared in `tests/mutations.json`: **1129**
+  - killed: **1095**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -33,7 +33,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
   - `tests/redteam_write_doc.zig`: 8
-- Security findings recorded in README's Security History: **8**
+- Security findings recorded in README's Security History: **9**
 
 ## Reproducing this
 
@@ -179,7 +179,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-123 mutation(s).
+124 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -306,10 +306,11 @@ python tools/verification_page.py --check
 | `SB6-spawn-fault-read-after-the-process-exists` | `src/platform/sandbox.zig` | `if (faulted(.spawn_as_user)) return error.SandboxUnavailable;  ...` -> `if (false and faulted(.spawn_as_user)) return error.SandboxUnav...` | a service whose token is not low integrity is refused before it runs; a spawn fault is de... | killed |
 | `CT22-committing-call-tested-in-the-tree-of-working-files` | `src/platform/runner.zig` | `return if (session.head != null) location.committed_shadow else...` -> `return if (false and session.head != null) location.committed_s...` | commit tree: the run tool and a call that does not commit keep the tree of work... | killed |
 | `CT28-full-copy-reads-the-store-through-a-junction` | `src/platform/shadow.zig` | `try refuseLinks(options.base_abs, source_abs);` -> `` | commit tree: the full copy refuses a store whose files are reached through a ju... | killed |
+| `BD3-batch-plans-code-before-refusing-a-source-doc-edit` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try docnode.refuseSource(edit....` -> `` | mixed batch: a symbol edit and a doc edit of the same source file are refused a... | killed |
 
 ### Disk, repository boundary and atomic commit
 
-64 mutation(s).
+65 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -377,10 +378,11 @@ python tools/verification_page.py --check
 | `P1d-backup-of-committed-bytes-left-behind` | `src/platform/disk.zig` | `if (err == error.PathAlreadyExists and self.base_in_history) {` -> `if (false and err == error.PathAlreadyExists and self.base_in_h...` | commit window: a file created at the path between the two moves is kept, the co... | killed |
 | `P1e-journal-recover-restores-over-any-target` | `src/platform/disk.zig` | `const ours = new_hash orelse return guard.renameReplacing(gpa, ...` -> `if (true) return guard.renameReplacing(gpa, target_abs);     co...` | journal base: recover does not put the old bytes back over a file the user edit...; journ... | killed |
 | `P1j-next-call-skips-the-journal` | `src/platform/disk.zig` | `var report: RecoverReport = .{};     try recoverJournaled(gpa, ...` -> `const report: RecoverReport = .{};     if (false) try recoverJo...` | commit window: a crash between the two moves of the file write recovers to the ... | killed |
+| `BD4-plan-doc-skips-the-source-refusal` | `src/platform/batch_plan.zig` | `try docnode.refuseSource(edit.file_abs);` -> `` | planDoc refuses a file of a registered language before it reads it | killed |
 
 ### Rules and the q: query engine
 
-121 mutation(s).
+125 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -486,7 +488,7 @@ python tools/verification_page.py --check
 | `AD2-added-masked-by-a-copy-elsewhere` | `src/platform/rules.zig` | `_ = takeText(&old_texts, tree.source[hit.span.start..hit.span.e...` -> `_ = tree.source[hit.span.start..hit.span.end];` | an added rule counts copies: a second copy of a text that the file already hold... | killed |
 | `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = old orelse "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
 | `SL10-rule-unknown-check-names-nothing` | `src/protocol/rule_command.zig` | `error.UnknownCheck => try writeCheckNames(err_out),` -> `error.UnknownCheck => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
-| `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(gpa, io, root_abs, .{}, err...` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
+| `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(voice, gpa, io, root_abs, ....` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
 | `PL1-model-may-name-the-tree` | `src/protocol/policy.zig` | `"shadow_root", "allow_run", "shadow_tree", "shadow_private" };` -> `"shadow_root", "allow_run" };` | a tool call that names the tree choice is refused like one that names a test co... | killed |
 | `PL2-private-prefix-not-validated` | `src/protocol/policy.zig` | `shadow.validateRelative(prefix) catch return null;` -> `` | the tree choice comes from the operator's flags: kept by default, copy on reque... | killed |
 | `PL3-copy-flag-read-as-kept` | `src/protocol/policy.zig` | `if (std.mem.eql(u8, text, "copy")) return .full_copy;` -> `if (std.mem.eql(u8, text, "copy")) return .kept;` | the tree choice comes from the operator's flags: kept by default, copy on reque... | killed |
@@ -505,6 +507,10 @@ python tools/verification_page.py --check
 | `MC6-tracked-message-file-overwritten` | `src/platform/rules.zig` | `\|_\| return error.MessageFileInTheWay else \|err\|` -> `\|_\| {} else \|err\|` | message command: a tracked file where the message file goes is refused by name ... | killed |
 | `FZ2-frozen-scope-not-read` | `src/platform/rules.zig` | `if (!w.coversFile(path)) continue;             }             co...` -> `if (false and !w.coversFile(path)) continue;             }     ...` | frozen: a symbol edit of a frozen file is refused with and without commits, and...; froze... | killed |
 | `FZ7-frozen-rule-run-as-a-tree-check` | `src/platform/rules.zig` | `if (isMessage(rule) or isFrozen(rule)) continue;` -> `if (isMessage(rule)) continue;` | frozen: the code rules that read a tree take a frozen rule as nothing to check | killed |
+| `RA2-command-line-answers-in-the-spoken-voice` | `src/protocol/rule_command.zig` | `return runAs(.terse, gpa, io, root_abs, request, out, err_out);` -> `return runAs(.spoken, gpa, io, root_abs, request, out, err_out);` | prompt hook: /rule add adopts the rule and answers with its id | killed |
+| `RA3-empty-list-says-nothing` | `src/protocol/rule_command.zig` | `if (decisions.len == 0) return out.writeAll(nothing_kept);` -> `if (false and decisions.len == 0) return out.writeAll(nothing_k...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `RA4-forget-says-nothing` | `src/protocol/rule_command.zig` | `if (voice == .spoken) try out.print("rule forgotten: {s}\n", .{...` -> `if (false and voice == .spoken) try out.print("rule forgotten: ...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `RA5-list-columns-not-padded` | `src/protocol/rule_command.zig` | `try out.splatByteAll(' ', width - cell.len + 2);` -> `try out.splatByteAll(' ', (width - cell.len) * 0 + 2);` | prompt hook: /rule list answers with the rows emetgate rule list prints | killed |
 
 ### Scan
 
@@ -642,7 +648,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-576 mutation(s).
+580 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1060,7 +1066,7 @@ python tools/verification_page.py --check
 | `SL4-hook-takes-a-longer-command-name` | `src/protocol/prompt_hook.zig` | `if (rest.len != 0 and std.mem.indexOfScalar(u8, whitespace, res...` -> `` | prompt hook: only a prompt that is the /rule command is taken | killed |
 | `SL5-hook-input-without-prompt-passes` | `src/protocol/prompt_hook.zig` | `parsed.object.get(prompt_field) orelse return error.HookInputIn...` -> `parsed.object.get(prompt_field) orelse return null;` | prompt hook: input that carries no prompt text is refused by name | killed |
 | `SL6-hook-answer-carries-raw-bytes` | `src/protocol/prompt_hook.zig` | `.escape_unicode = true` -> `.escape_unicode = false` | prompt hook: quotes and Turkish letters reach the ledger byte for byte and the ... | killed |
-| `SL7-hook-silent-command-has-empty-reason` | `src/protocol/prompt_hook.zig` | `if (said.len == 0) done else said` -> `said` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `SL7-hook-silent-command-has-empty-reason` | `src/protocol/prompt_hook.zig` | `if (said.len == 0) done else said` -> `said` | prompt hook: a /rule that prints nothing still answers ok | killed |
 | `SL8-hook-rule-error-leaves-the-hook` | `src/protocol/prompt_hook.zig` | `else => try reason.writer.print("error: {t}\n", .{err}),` -> `else => return err,` | prompt hook: a refused rule answers with the error name and the names that exis...; promp... | killed |
 | `SL9-hook-undefined-grammar-answers-nothing` | `src/protocol/prompt_hook.zig` | `rule_command.parse(words) orelse return reason.writeAll(usage);` -> `rule_command.parse(words) orelse return;` | prompt hook: a /rule the grammar does not define answers with the usage and wri... | killed |
 | `SL12-lockdown-hook-is-an-mcp-tool` | `src/platform/lockdown_slash.zig` | `try js.write("command");` -> `try js.write("mcp_tool");` | lockdown slash: the hook is a command in exec form that names this executable | killed |
@@ -1222,6 +1228,10 @@ python tools/verification_page.py --check
 | `KT21-run-reply-drops-the-blocked-path` | `src/protocol/run_tool.zig` | `.blocked = &event.trace.blocked,` -> `` | gate tree rights: a working directory that cannot be listed is named in the rep...; gate ... | killed |
 | `CT26-store-update-not-flushed` | `src/platform/commit_store.zig` | `gate_tree.flushFiles(null, handle, written.items) catch return ...` -> `` | commit tree: after a commit the user makes by hand the gate tests the new HEAD ... | killed |
 | `CT27-rebuilt-store-not-flushed` | `src/platform/commit_store.zig` | `gate_tree.flushFiles(&pool, handle, rels) catch return error.Co...` -> `` | commit tree: a store built whole flushes every file it wrote before it is calle... | killed |
+| `BD1-source-doc-edit-not-refused` | `src/engine/docnode.zig` | `if (registry.forPath(path) != null) return error.UseSymbolTools...` -> `if (false and registry.forPath(path) != null) return error.UseS...` | batch doc on source: a line range that adds comments under an enforced no_comme...; batch... | killed |
+| `BD2-write-doc-skips-the-source-refusal` | `src/platform/doc_writer.zig` | `try docnode.refuseSource(options.file_abs);` -> `` | write_doc on source: a line range of a source file is refused like the batch, a... | killed |
+| `BD5-doc-only-batch-writes-an-empty-receipt` | `src/protocol/handlers.zig` | `if (edits.len == 0) return;` -> `if (false and edits.len == 0) return;` | batch doc on a document: a batch of one Markdown edit commits, answers, is logg... | killed |
+| `RA1-hook-answers-in-the-terse-voice` | `src/protocol/prompt_hook.zig` | `try rule_command.runAs(.spoken, gpa, io, try root, request, rea...` -> `try rule_command.runAs(.terse, gpa, io, try root, request, reas...` | prompt hook: /rule add adopts the rule and answers with its id; prompt hook: /rule list a... | killed |
 
 ## What this system does not prove
 

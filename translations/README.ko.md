@@ -6,6 +6,8 @@
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
   <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
+  <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
 </p>
 
 <p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
@@ -17,7 +19,7 @@
 Claude Code용 MCP 서버로 실행되며, Windows에서 TypeScript와 JavaScript 프로젝트를 지원합니다.
 
 <p align="center">
-  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## 하는 일
@@ -33,6 +35,13 @@ emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --
 emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
 ```
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
+    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
+  </picture>
+</p>
+
 ## 설치
 
 각 릴리스는 `emetgate.exe`와 그 SHA-256을 [릴리스 페이지](https://github.com/emetgate/emetgate/releases)에 게시합니다.
@@ -47,6 +56,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 바이너리는 코드 서명이 되어 있지 않아 첫 실행 때 SmartScreen이 경고합니다. 대신 체크섬을 비교하십시오.
 
 `emetgate lockdown`은 Emetgate의 도구만으로 Claude Code를 시작하므로 모든 쓰기가 게이트를 거칩니다.
+
+lockdown 상태에서는 프롬프트에 규칙을 직접 입력할 수도 있습니다. Emetgate가 응답하며 그 줄은 모델에 전달되지 않습니다:
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+이후 모든 쓰기는 대화 기록에 표시됩니다. 게이트가 통과시키면 초록색 **אמת**, 거부하면 빨간색 **מת**입니다.
 
 ## 측정 결과
 
@@ -91,6 +109,21 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 - 샌드박스는 복사본 밖으로의 쓰기를 막습니다. 읽기나 네트워크 접근은 막지 않습니다.
 - 게이트 밖에서 이루어진 변경은 다루지 않습니다. lockdown은 그것을 위한 것입니다.
 - Node.js 24.15.0 및 그 이전 버전은 Windows 루프백 연결에서 간헐적으로 크래시가 발생합니다. 24.16.0 이상을 사용하십시오.
+
+## 이름의 유래
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
+  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+</picture>
+
+프라하의 골렘 전설에서 랍비 뢰브는 진흙으로 빚은 형상의 이마에 **אמת** (*에메트*, 진실)를 쓰고, 형상은 살아납니다. 첫 글자를 지우면 **מת** (*메트*, 죽음)가 남고 골렘은 멈춥니다.
+
+Emetgate는 모든 쓰기를 같은 단어로 표시합니다. 게이트가 통과시키면 온전한 단어로, 거부하면 첫 글자가 지워진 단어로 표시합니다.
+
+<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+
+<br clear="left">
 
 ## 빌드
 
