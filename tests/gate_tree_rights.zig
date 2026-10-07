@@ -15,6 +15,7 @@ const notes = "line one\nline two\n";
 const calc = "export function two(): number {\n  return 2;\n}\n";
 const kept_field = "\"gate_tree\":{\"kind\":\"kept\",\"private_copies\":0}";
 const authenticated_users = "*S-1-5-11";
+const everyone = "*S-1-1-0";
 
 fn newRepo() !fixture.Repo {
     return fixture.Repo.init(&.{
@@ -38,8 +39,61 @@ fn icacls(args: []const []const u8) !void {
     }
 }
 
-fn grantModifyOnly(dir_abs: []const u8) !void {
-    try icacls(&.{ dir_abs, "/inheritance:r", "/grant:r", authenticated_users ++ ":(OI)(CI)M", "/Q" });
+const modify_only = "D:PAI(A;OICI;0x1301bf;;;AU)";
+const modify_without_delete_child = "D:PAI(D;;DC;;;AU)(A;OICI;0x1301bf;;;AU)";
+
+const acl = struct {
+    const sddl_revision: u32 = 1;
+    const file_object: u32 = 1;
+    const dacl_information: u32 = 0x4;
+    const protected_dacl_information: u32 = 0x80000000;
+
+    extern "advapi32" fn ConvertStringSecurityDescriptorToSecurityDescriptorW(text: [*:0]const u16, revision: u32, descriptor: *?*anyopaque, size: ?*u32) callconv(.winapi) std.os.windows.BOOL;
+    extern "advapi32" fn GetSecurityDescriptorDacl(descriptor: *anyopaque, present: *std.os.windows.BOOL, dacl: *?*anyopaque, defaulted: *std.os.windows.BOOL) callconv(.winapi) std.os.windows.BOOL;
+    extern "advapi32" fn SetNamedSecurityInfoW(name: [*:0]const u16, kind: u32, information: u32, owner: ?*anyopaque, group: ?*anyopaque, dacl: ?*anyopaque, sacl: ?*anyopaque) callconv(.winapi) u32;
+    extern "kernel32" fn LocalFree(memory: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+};
+
+fn replaceDacl(dir_abs: []const u8, comptime sddl: []const u8) !void {
+    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    path_w[try std.unicode.wtf8ToWtf16Le(&path_w, dir_abs)] = 0;
+    var descriptor: ?*anyopaque = null;
+    if (acl.ConvertStringSecurityDescriptorToSecurityDescriptorW(std.unicode.utf8ToUtf16LeStringLiteral(sddl), acl.sddl_revision, &descriptor, null) == .FALSE) return error.AclSetupFailed;
+    defer _ = acl.LocalFree(descriptor);
+    var present: std.os.windows.BOOL = .FALSE;
+    var defaulted: std.os.windows.BOOL = .FALSE;
+    var dacl: ?*anyopaque = null;
+    if (acl.GetSecurityDescriptorDacl(descriptor.?, &present, &dacl, &defaulted) == .FALSE or present == .FALSE) return error.AclSetupFailed;
+    if (acl.SetNamedSecurityInfoW(&path_w, acl.file_object, acl.dacl_information | acl.protected_dacl_information, null, null, dacl, null) != 0) return error.AclSetupFailed;
+}
+
+fn inheritBelow(dir_abs: []const u8) !void {
+    const below = try std.fmt.allocPrint(gpa, "{s}\\*", .{dir_abs});
+    defer gpa.free(below);
+    try icacls(&.{ below, "/reset", "/T", "/Q" });
+}
+
+fn deleteChildDenied(repo: *fixture.Repo) bool {
+    return openStatus(repo.tmp.dir, "repo", nt.file_delete_child) == nt.status_access_denied;
+}
+
+fn showAcl(dir_abs: []const u8) void {
+    const result = std.process.run(gpa, testing.io, .{ .argv = &.{ "icacls", dir_abs } }) catch return;
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    std.debug.print("{s}", .{result.stdout});
+}
+
+fn grantModifyOnly(repo: *fixture.Repo) !void {
+    try replaceDacl(repo.root_abs, modify_only);
+    try inheritBelow(repo.root_abs);
+    if (deleteChildDenied(repo)) return;
+    std.debug.print("the directory lists Modify alone and this account still opens it with delete child:\n", .{});
+    showAcl(repo.root_abs);
+    try replaceDacl(repo.root_abs, modify_without_delete_child);
+    if (deleteChildDenied(repo)) return;
+    std.debug.print("skipped: no entry in the directory's list keeps delete child from this account\n", .{});
+    return error.SkipZigTest;
 }
 
 fn restoreInherited(dir_abs: []const u8) void {
@@ -123,9 +177,8 @@ test "gate tree rights: a repository the user may modify but not fully control g
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try newRepo();
     defer repo.deinit();
-    try grantModifyOnly(repo.root_abs);
     defer restoreInherited(repo.root_abs);
-    try testing.expectEqual(nt.status_access_denied, openStatus(repo.tmp.dir, "repo", nt.file_delete_child));
+    try grantModifyOnly(&repo);
     try testing.expectEqual(nt.status_success, openStatus(repo.tmp.dir, "repo", nt.file_list_directory | nt.file_add_file | nt.delete));
     const before = try repo.fingerprint();
     defer gpa.free(before);
@@ -154,9 +207,9 @@ test "gate tree rights: a doc write and a batch are committed in a repository th
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try newRepo();
     defer repo.deinit();
-    try grantModifyOnly(repo.root_abs);
     defer restoreInherited(repo.root_abs);
-    try testing.expectEqual(nt.status_access_denied, openStatus(repo.tmp.dir, "repo", nt.file_delete_child));
+    try icacls(&.{ repo.root_abs, "/grant", everyone ++ ":(OI)(CI)F", "/Q" });
+    try grantModifyOnly(&repo);
 
     var policy = keptPolicy(repo.root_abs);
     policy.test_command = "cmd /c exit 0";
