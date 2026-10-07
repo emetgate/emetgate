@@ -9513,6 +9513,16 @@
         "gate tree rights: a linked directory or a directory inside it that cannot be listed is named in the reply",
         "gate tree rights: a repository root that cannot be listed is named in the reply"
       ]
+    },
+    {
+      "id": "SB6-spawn-fault-read-after-the-process-exists",
+      "file": "src/platform/sandbox.zig",
+      "from": "    if (faulted(.spawn_as_user)) return error.SandboxUnavailable;\n    var info: std.os.windows.PROCESS.INFORMATION = undefined;",
+      "to": "    if (false and faulted(.spawn_as_user)) return error.SandboxUnavailable;\n    var info: std.os.windows.PROCESS.INFORMATION = undefined;",
+      "kills": [
+        "a service whose token is not low integrity is refused before it runs",
+        "a spawn fault is decided before the process is created, so no child of the test is left behind"
+      ]
     }
   ]
 }
