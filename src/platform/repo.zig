@@ -24,17 +24,28 @@ pub fn repoRoot(gpa: Allocator, io: std.Io) ![]u8 {
 }
 
 pub fn servedRoot(gpa: Allocator, io: std.Io, root: ?[]const u8) ![]u8 {
-    const given = root orelse return repoRoot(gpa, io);
-    const owned = try gpa.dupe(u8, given);
-    std.mem.replaceScalar(u8, owned, '/', '\\');
-    return owned;
+    const spelled = if (root) |given| try gpa.dupe(u8, given) else try repoRoot(gpa, io);
+    defer gpa.free(spelled);
+    return finalOf(gpa, spelled);
+}
+
+pub fn finalOf(gpa: Allocator, path_abs: []const u8) ![]u8 {
+    return try exe_path.finalDosPath(gpa, path_abs) orelse error.FileOutsideRepo;
+}
+
+pub fn finalPath(gpa: Allocator, io: std.Io, path: []const u8) ![:0]u8 {
+    const opened = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
+    defer gpa.free(opened);
+    const final = try finalOf(gpa, opened);
+    defer gpa.free(final);
+    return gpa.dupeZ(u8, final);
 }
 
 pub fn jail(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) !Jailed {
     const served = try servedRoot(gpa, io, root);
     errdefer gpa.free(served);
     try refuseInternalAsWritten(gpa, io, served, path);
-    const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
+    const abs = try finalPath(gpa, io, path);
     errdefer gpa.free(abs);
     const rel = try relativeTo(gpa, served, abs);
     errdefer gpa.free(rel);
@@ -52,7 +63,7 @@ pub fn refuseLinkAsWritten(gpa: Allocator, io: std.Io, path: []const u8) !void {
 }
 
 fn refuseInternalAsWritten(gpa: Allocator, io: std.Io, served: []const u8, path: []const u8) !void {
-    const cwd_abs = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
+    const cwd_abs = try finalPath(gpa, io, ".");
     defer gpa.free(cwd_abs);
     const resolved = try std.fs.path.resolve(gpa, &.{ cwd_abs, path });
     defer gpa.free(resolved);
@@ -79,7 +90,7 @@ pub fn jailNew(gpa: Allocator, io: std.Io, root: ?[]const u8, path: []const u8) 
 
     const served = try servedRoot(gpa, io, root);
     errdefer gpa.free(served);
-    const parent_abs = std.Io.Dir.cwd().realPathFileAlloc(io, parent, gpa) catch |err| switch (err) {
+    const parent_abs = finalPath(gpa, io, parent) catch |err| switch (err) {
         error.FileNotFound => return error.ParentDirectoryMissing,
         else => |e| return e,
     };

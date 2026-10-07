@@ -207,6 +207,7 @@ test {
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
     _ = @import("tests/readtools.zig");
+    _ = @import("tests/short_path_jail.zig");
     _ = @import("tests/read_budget.zig");
     _ = @import("tests/search.zig");
     _ = @import("tests/git_tools.zig");

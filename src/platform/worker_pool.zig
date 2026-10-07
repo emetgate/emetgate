@@ -9,7 +9,7 @@ pub const Task = *const fn (ctx: *anyopaque) void;
 pub const Pool = struct {
     threads: [max_threads]std.Thread = undefined,
     go: [max_threads]windows.HANDLE = undefined,
-    done: windows.HANDLE = undefined,
+    done: ?windows.HANDLE = null,
     count: usize = 0,
     pending: std.atomic.Value(usize) = .init(0),
     task: ?Task = null,
@@ -34,13 +34,21 @@ pub const Pool = struct {
     }
 
     pub fn deinit(self: *Pool) void {
-        if (builtin.os.tag != .windows) return;
+        _ = self.release();
+    }
+
+    pub fn release(self: *Pool) usize {
+        if (builtin.os.tag != .windows) return 0;
+        const done = self.done orelse return 0;
         self.stop = true;
         for (0..self.count) |i| _ = win.SetEvent(self.go[i]);
         for (self.threads[0..self.count]) |t| t.join();
-        for (0..self.count) |i| windows.CloseHandle(self.go[i]);
-        windows.CloseHandle(self.done);
+        var unclosed: usize = 0;
+        for (0..self.count) |i| unclosed += @intFromBool(win.CloseHandle(self.go[i]) == .FALSE);
+        unclosed += @intFromBool(win.CloseHandle(done) == .FALSE);
+        self.done = null;
         self.count = 0;
+        return unclosed;
     }
 
     pub fn helpers(self: *const Pool) usize {
@@ -58,7 +66,7 @@ pub const Pool = struct {
         self.pending.store(n, .release);
         for (0..n) |i| _ = win.SetEvent(self.go[i]);
         task(ctx);
-        _ = win.WaitForSingleObject(self.done, win.infinite);
+        _ = win.WaitForSingleObject(self.done.?, win.infinite);
         self.task = null;
     }
 
@@ -67,7 +75,7 @@ pub const Pool = struct {
             _ = win.WaitForSingleObject(self.go[i], win.infinite);
             if (self.stop) return;
             if (self.task) |task| task(self.ctx);
-            if (self.pending.fetchSub(1, .acq_rel) == 1) _ = win.SetEvent(self.done);
+            if (self.pending.fetchSub(1, .acq_rel) == 1) _ = win.SetEvent(self.done.?);
         }
     }
 };
@@ -75,6 +83,7 @@ pub const Pool = struct {
 const win = struct {
     const infinite: windows.DWORD = 0xFFFFFFFF;
     extern "kernel32" fn CreateEventW(security: ?*anyopaque, manual: windows.BOOL, initial: windows.BOOL, name: ?[*:0]const u16) callconv(.winapi) ?windows.HANDLE;
+    extern "kernel32" fn CloseHandle(handle: windows.HANDLE) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn SetEvent(event: windows.HANDLE) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
 };
@@ -104,4 +113,19 @@ test "a pool runs a task on its helpers and the caller, and every item is done e
         pool.run(4, Counter.work, &counter);
         for (&counter.seen) |*s| try testing.expectEqual(@as(u8, 1), s.load(.monotonic));
     }
+}
+
+test "a pool that was never started, and one torn down twice, closes no handle it does not hold" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var idle: Pool = .{};
+    try testing.expectEqual(@as(usize, 0), idle.release());
+    idle.deinit();
+
+    var pool: Pool = undefined;
+    pool.start(4);
+    var counter: Counter = .{};
+    pool.run(4, Counter.work, &counter);
+    try testing.expectEqual(@as(usize, 0), pool.release());
+    try testing.expectEqual(@as(usize, 0), pool.release());
+    try testing.expectEqual(@as(usize, 0), pool.helpers());
 }

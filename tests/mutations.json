@@ -9666,6 +9666,98 @@
       "kills": [
         "prompt hook: /rule list answers with the rows emetgate rule list prints"
       ]
+    },
+    {
+      "id": "SP1-final-name-not-taken-for-a-resolved-path",
+      "file": "src/platform/repo.zig",
+      "from": "    const final = try finalOf(gpa, opened);\n    defer gpa.free(final);\n    return gpa.dupeZ(u8, final);",
+      "to": "    return gpa.dupeZ(u8, opened);",
+      "kills": [
+        "a repository reached through its 8.3 short path is read, listed and gated like the same repository by its long path",
+        "through a short-spelled root a path outside, a junction, a nested repository, .git and the workspace are still refused"
+      ]
+    },
+    {
+      "id": "SP2-unreadable-final-name-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    return try exe_path.finalDosPath(gpa, path_abs) orelse error.FileOutsideRepo;",
+      "to": "    return try exe_path.finalDosPath(gpa, path_abs) orelse try gpa.dupe(u8, path_abs);",
+      "kills": [
+        "a path whose final name cannot be read is refused instead of being compared as spelled"
+      ]
+    },
+    {
+      "id": "SP3-served-root-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    return finalOf(gpa, spelled);",
+      "to": "    return gpa.dupe(u8, spelled);",
+      "kills": [
+        "a served root given by its 8.3 short path serves the files of that repository given by their long path"
+      ]
+    },
+    {
+      "id": "SP4-new-file-parent-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    const parent_abs = finalPath(gpa, io, parent) catch",
+      "to": "    const parent_abs = std.Io.Dir.cwd().realPathFileAlloc(io, parent, gpa) catch",
+      "kills": [
+        "a new file is created through a short-spelled parent directory, and not inside the workspace by its short name"
+      ]
+    },
+    {
+      "id": "SP5-jailed-path-compared-as-spelled",
+      "file": "src/platform/repo.zig",
+      "from": "    const abs = try finalPath(gpa, io, path);",
+      "to": "    const abs = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);",
+      "kills": [
+        "a repository reached through its 8.3 short path is read, listed and gated like the same repository by its long path",
+        "through a short-spelled root a path outside, a junction, a nested repository, .git and the workspace are still refused"
+      ]
+    },
+    {
+      "id": "EP9-share-final-name-not-recognized",
+      "file": "src/platform/exe_path.zig",
+      "from": "    if (std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {",
+      "to": "    if (false and std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {",
+      "kills": [
+        "exe path: a final name becomes a drive or share path, and any other form gives none"
+      ]
+    },
+    {
+      "id": "EP10-final-name-without-its-prefix-accepted",
+      "file": "src/platform/exe_path.zig",
+      "from": "    if (!std.mem.startsWith(u8, verbatim, verbatim_prefix)) return null;",
+      "to": "    if (false and !std.mem.startsWith(u8, verbatim, verbatim_prefix)) return null;",
+      "kills": [
+        "exe path: a final name becomes a drive or share path, and any other form gives none"
+      ]
+    },
+    {
+      "id": "EP11-final-name-without-a-drive-accepted",
+      "file": "src/platform/exe_path.zig",
+      "from": "    if (rest.len < 3 or rest[1] != ':' or rest[2] != '\\\\') return null;",
+      "to": "    if (false and (rest.len < 3 or rest[1] != ':' or rest[2] != '\\\\')) return null;",
+      "kills": [
+        "exe path: a final name becomes a drive or share path, and any other form gives none"
+      ]
+    },
+    {
+      "id": "WP1-pool-keeps-its-closed-event",
+      "file": "src/platform/worker_pool.zig",
+      "from": "        self.done = null;\n        self.count = 0;\n        return unclosed;",
+      "to": "        self.count = 0;\n        return unclosed;",
+      "kills": [
+        "a pool that was never started, and one torn down twice, closes no handle it does not hold"
+      ]
+    },
+    {
+      "id": "WP2-pool-never-started-closes-a-handle",
+      "file": "src/platform/worker_pool.zig",
+      "from": "        const done = self.done orelse return 0;",
+      "to": "        const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0xAAAAAAA8));",
+      "kills": [
+        "a pool that was never started, and one torn down twice, closes no handle it does not hold"
+      ]
     }
   ]
 }
