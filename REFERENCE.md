@@ -602,13 +602,13 @@ The session's `init` message listed `rule` among its slash commands with the `--
 
 | Where | What it draws |
 |---|---|
-| Under a write call (`try`, `try_batch`, `write_doc`, `rename`, `move`, `move_file`), also when Claude Code folds calls into one `Called emetgate N times` row | Two small squares, green with `emet` when the call was accepted and red with `met` when it was refused, then the file and symbol |
-| The line that animates while a turn runs | While an emetgate tool runs or has just answered, the word becomes `Weighing at the gate`, `Reading the clay`, `Sealed` or `Turned away` |
-| The line that closes a turn | When the turn made a write call, the word becomes `Sealed`, `Turned away` or `Weighed`, and a second line counts `passed` and `refused` |
+| Under a write call (`try`, `try_batch`, `write_doc`, `rename`, `move`, `move_file`), also when Claude Code folds calls into one `Called emetgate N times` row | The word in Hebrew letters, then the file and symbol: **אמת** in green when the call was accepted; when it was refused the first letter is faded out and **מת** stands in red |
+| The line that animates while a turn runs | The word says what the turn is doing: `Awaiting the word` while the request is out, `Pondering the letters` while the model thinks, `Speaking` while it answers, `Shaping the clay` while it writes a tool call, `Reading the clay` while an emetgate read runs, `Weighing at the gate` while a write is at the gate, then `Sealed` or `Turned away`. Before the word stand the three letters: written one after another while the turn works, whole while emetgate reads, yellow at the gate, and as under a write call once the verdict is in |
+| The line that closes a turn | When the turn made a write call, the word becomes `Sealed`, `Turned away` or `Weighed`, and a second line counts `passed` and `refused`; otherwise the word is `Spoke` |
 
 `/golem off` stops all of it and `/golem on` brings it back; `/golem scene`, `/golem big` and `/golem small` also draw a larger picture in place of the working line. The choice is kept by Claude Code for the plugin and holds in later sessions. `emetgate lockdown --no-marks` starts without the plugin: nothing is written under `marks` and no `--plugin-dir` is passed. The flag is read only as the first argument; anywhere else it is the user's own argument to Claude Code.
 
-The plugin's five files are part of the executable and are written as the `/rule` files are: byte for byte, left alone when already right, repaired when changed. `--plugin-dir` takes one value and stands after the lock and before the user's arguments. A `--plugin-dir` of the user's own is still refused. Not measured: the time the plugin's `tool.call` hook adds to a call, and how the marks look outside Windows Terminal.
+The plugin's five files are part of the executable and are written as the `/rule` files are: byte for byte, left alone when already right, repaired when changed. `--plugin-dir` takes one value and stands after the lock and before the user's arguments. A `--plugin-dir` of the user's own is still refused. The letters are given in reading order and Claude Code lays them out right to left; measured on Claude Code 2.1.292 in Windows Terminal with its default font. Not measured: the time the plugin's `tool.call` hook adds to a call, and how the marks look in another terminal or with a font that has no Hebrew letters.
 
 ### Reader
 

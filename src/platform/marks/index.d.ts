@@ -25,6 +25,7 @@ declare module 'claude-code' {
       verdict: Verdict | null
       isHidden: boolean
       isSilent: boolean
+      beat: number
     }
   }
 }
