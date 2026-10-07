@@ -17,7 +17,7 @@ Una puerta entre un modelo que escribe código y tu árbol de fuentes. El modelo
 Funciona como servidor MCP para Claude Code, en Windows, para proyectos de TypeScript y JavaScript.
 
 <p align="center">
-  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## Qué hace
@@ -47,6 +47,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 El binario no está firmado, así que SmartScreen avisa en la primera ejecución. Compara la suma de comprobación en su lugar.
 
 `emetgate lockdown` inicia Claude Code solo con las herramientas de Emetgate, de modo que toda escritura pasa por la puerta.
+
+Bajo lockdown también puedes escribir una regla en el prompt. Emetgate responde y la línea nunca llega al modelo:
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+Después, cada escritura queda marcada en la transcripción: **אמת** en verde cuando la puerta la aprobó, **מת** en rojo cuando la rechazó.
 
 ## Mediciones
 

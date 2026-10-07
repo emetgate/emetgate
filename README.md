@@ -17,7 +17,7 @@ A gate between a coding model and your source tree. The model proposes a change,
 It runs as an MCP server for Claude Code, on Windows, for TypeScript and JavaScript projects.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## What it does
@@ -47,6 +47,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 The binary is not code-signed, so SmartScreen warns on first run. Compare the checksum instead.
 
 `emetgate lockdown` starts Claude Code with only Emetgate's tools, so every write goes through the gate.
+
+Under lockdown you can also type a rule into the prompt. Emetgate answers it and the line never reaches the model:
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+Each write is then marked in the transcript: **אמת** in green when the gate passed it, **מת** in red when it refused.
 
 ## Measured
 

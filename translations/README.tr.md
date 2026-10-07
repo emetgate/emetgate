@@ -17,7 +17,7 @@ Kod yazan bir model ile kaynak ağacınız arasında duran bir kapı. Model bir 
 Claude Code için MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript ve JavaScript projelerinde.
 
 <p align="center">
-  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## Ne yapar
@@ -47,6 +47,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 İkili dosya kod imzalı değildir; bu yüzden SmartScreen ilk çalıştırmada uyarır. Bunun yerine sağlama toplamını karşılaştırın.
 
 `emetgate lockdown`, Claude Code'u yalnızca Emetgate'in araçlarıyla başlatır; böylece her yazma kapıdan geçer.
+
+Lockdown altında kuralı doğrudan isteme de yazabilirsiniz. Cevabı Emetgate verir ve satır modele hiç ulaşmaz:
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+Bundan sonra her yazma konuşma dökümünde işaretlenir: kapı geçirdiyse yeşil **אמת**, reddettiyse kırmızı **מת**.
 
 ## Ölçümler
 

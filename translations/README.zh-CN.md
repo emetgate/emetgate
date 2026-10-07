@@ -17,7 +17,7 @@
 它作为 Claude Code 的 MCP 服务器运行，支持 Windows 上的 TypeScript 和 JavaScript 项目。
 
 <p align="center">
-  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## 它做什么
@@ -47,6 +47,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 该二进制文件没有代码签名，因此首次运行时 SmartScreen 会发出警告。请改为比对校验和。
 
 `emetgate lockdown` 启动的 Claude Code 只带有 Emetgate 的工具，因此每次写入都要经过闸门。
+
+在 lockdown 下，你也可以直接在提示符中输入规则。由 Emetgate 作答，这一行不会到达模型：
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+此后每次写入都会在对话记录中标记：闸门放行时为绿色的 **אמת**，拒绝时为红色的 **מת**。
 
 ## 测量结果
 
