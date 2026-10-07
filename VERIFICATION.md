@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1776**
-- Mutations declared in `tests/mutations.json`: **1129**
-  - killed: **1095**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1813**
+- Mutations declared in `tests/mutations.json`: **1145**
+  - killed: **1111**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -179,7 +179,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-124 mutation(s).
+125 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -293,7 +293,7 @@ python tools/verification_page.py --check
 | `MB3-batch-in-place-before-its-message-command` | `src/platform/batch.zig` | `if (try runner.runMessageRules(gpa, io, root, runner.gateDir(lo...` -> `for (prepared) \|p\| {         if (p.action != .delete_file) tr...` | message base: a batch cannot add to the file its message command reads what tha... | killed |
 | `FZ3-path-a-file-move-leaves-not-handed-to-the-gate` | `src/platform/batch.zig` | `if (p.source_rel) \|from\| try rels.append(arena, from);` -> `` | frozen: a file move out of a frozen path and a file move into a frozen director... | killed |
 | `FZ4-doc-edits-of-a-batch-not-handed-to-the-gate` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try rels.append(arena, try rel...` -> `` | frozen: a batch whose doc edit is in a frozen directory is refused | killed |
-| `CT2-store-count-not-checked-for-the-kept-tree` | `src/platform/shadow.zig` | `if (stored.skipped_links != 0 or wants.items.len != options.com...` -> `if (false and (stored.skipped_links != 0 or wants.items.len != ...` | commit tree: a file missing from the store is noticed by the count and the stor...; commi... | killed |
+| `CT2-store-count-not-checked-for-the-kept-tree` | `src/platform/shadow.zig` | `if (stored.skipped_links != 0 or wants.items.len != options.com...` -> `if (false and (stored.skipped_links != 0 or wants.items.len != ...` | commit tree: a file missing from the store is noticed by the count and the stor... | killed |
 | `CT3-private-path-links-to-the-store` | `src/platform/shadow.zig` | `if (isUnderAny(want.rel, options.private)) want.how = .copy;` -> `if (false and isUnderAny(want.rel, options.private)) want.how =...` | commit tree: the test command cannot write a tracked file of the tree in place,... | killed |
 | `CT4-full-copy-leaves-the-linked-directory-link-over-heads-file` | `src/platform/shadow.zig` | `if (isUnderAny(entry.path, options.linked) != under_links) cont...` -> `if (isUnderAny(entry.path, options.linked)) continue;` | commit tree: with the full copy the gate still tests HEAD, for a hand edit and ... | killed |
 | `CT5-store-count-not-checked-for-the-full-copy` | `src/platform/shadow.zig` | `if (try copyCommitted(io, options, committed, dir, false) != co...` -> `if (try copyCommitted(io, options, committed, dir, false) == st...` | commit tree: a file missing from the store is noticed by the count and the stor... | killed |
@@ -307,6 +307,7 @@ python tools/verification_page.py --check
 | `CT22-committing-call-tested-in-the-tree-of-working-files` | `src/platform/runner.zig` | `return if (session.head != null) location.committed_shadow else...` -> `return if (false and session.head != null) location.committed_s...` | commit tree: the run tool and a call that does not commit keep the tree of work... | killed |
 | `CT28-full-copy-reads-the-store-through-a-junction` | `src/platform/shadow.zig` | `try refuseLinks(options.base_abs, source_abs);` -> `` | commit tree: the full copy refuses a store whose files are reached through a ju... | killed |
 | `BD3-batch-plans-code-before-refusing-a-source-doc-edit` | `src/platform/batch.zig` | `for (options.doc_edits) \|edit\| try docnode.refuseSource(edit....` -> `` | mixed batch: a symbol edit and a doc edit of the same source file are refused a... | killed |
+| `CD7-fresh-checkout-not-compared` | `src/platform/runner.zig` | `slot.* = std.mem.eql(u8, tested, fresh);` -> `slot.* = true or std.mem.eql(u8, tested, fresh);` | commit derive: a file of the store rewritten in place is found before the test ...; commi... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -648,7 +649,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-580 mutation(s).
+595 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1207,7 +1208,7 @@ python tools/verification_page.py --check
 | `CT8-store-not-moved-when-head-moved` | `src/platform/commit_store.zig` | `if (!std.mem.eql(u8, known.tree, head.tree)) {` -> `if (false and !std.mem.eql(u8, known.tree, head.tree)) {` | commit tree: after a commit the user makes by hand the gate tests the new HEAD ... | killed |
 | `CT9-store-kept-under-other-conversion-settings` | `src/platform/commit_store.zig` | `if (std.mem.eql(u8, state.conversion, ctx.conversion)) have = ....` -> `if (true or std.mem.eql(u8, state.conversion, ctx.conversion)) ...` | commit tree: a changed conversion setting builds the store again, and a setting... | killed |
 | `CT10-attributes-change-updates-only-the-attributes-file` | `src/platform/commit_store.zig` | `if (isAttributes(change.path)) return null;` -> `if (false and isAttributes(change.path)) return null;` | commit tree: a commit that changes .gitattributes builds the store again in the... | killed |
-| `CT11-file-head-dropped-stays-in-the-store` | `src/platform/commit_store.zig` | `if (change.was) try removeStored(self.io, self.tree_abs, change...` -> `if (false and change.was) try removeStored(self.io, self.tree_a...` | commit tree: after a commit the user makes by hand the gate tests the new HEAD ... | killed |
+| `CT11-file-head-dropped-stays-in-the-store` | `src/platform/commit_store.zig` | `try removeUnder(self.tree_abs, changes);` -> `if (false) try removeUnder(self.tree_abs, changes);` | commit tree: after a commit the user makes by hand the gate tests the new HEAD ... | killed |
 | `CT12-half-done-update-thrown-away` | `src/platform/commit_store.zig` | `if (std.mem.eql(u8, state.conversion, ctx.conversion)) {` -> `if (false and std.mem.eql(u8, state.conversion, ctx.conversion)...` | commit tree: an update of the store that stopped half way is finished by the ne... | killed |
 | `CT13-update-not-marked-before-files-change` | `src/platform/commit_store.zig` | `try writeState(self.arena, self.io, self.dir_abs, try std.fmt.a...` -> `` | commit tree: an update of the store that stopped half way is finished by the ne... | killed |
 | `CT15-store-written-through-a-junction` | `src/platform/commit_store.zig` | `try refuseLinks(base_abs, tree_abs);` -> `` | commit tree: a junction where the store keeps its files is refused and nothing ... | killed |
@@ -1232,6 +1233,21 @@ python tools/verification_page.py --check
 | `BD2-write-doc-skips-the-source-refusal` | `src/platform/doc_writer.zig` | `try docnode.refuseSource(options.file_abs);` -> `` | write_doc on source: a line range of a source file is refused like the batch, a... | killed |
 | `BD5-doc-only-batch-writes-an-empty-receipt` | `src/protocol/handlers.zig` | `if (edits.len == 0) return;` -> `if (false and edits.len == 0) return;` | batch doc on a document: a batch of one Markdown edit commits, answers, is logg... | killed |
 | `RA1-hook-answers-in-the-terse-voice` | `src/protocol/prompt_hook.zig` | `try rule_command.runAs(.spoken, gpa, io, try root, request, rea...` -> `try rule_command.runAs(.terse, gpa, io, try root, request, reas...` | prompt hook: /rule add adopts the rule and answers with its id; prompt hook: /rule list a... | killed |
+| `CD1-case-only-names-not-looked-for` | `src/platform/git_commit.zig` | `return commit_names.clash(arena, names);` -> `return if (false) commit_names.clash(arena, names) else null;` | commit derive: two tracked names that differ only in case are refused with both...; commi... | killed |
+| `CD2-two-files-in-two-cases-not-a-clash` | `src/platform/commit_names.zig` | `} else if (!(entry.value_ptr.directory and name.directory)) {` -> `} else if (false and !(entry.value_ptr.directory and name.direc...` | commit names: two files whose names differ only in letter case are named, in tr...; commi... | killed |
+| `CD3-file-and-directory-in-two-cases-not-a-clash` | `src/platform/commit_names.zig` | `} else if (!entry.value_ptr.directory) {` -> `} else if (false and !entry.value_ptr.directory) {` | commit names: a file and a directory that differ only in letter case are named | killed |
+| `CD4-names-compared-without-folding` | `src/platform/commit_names.zig` | `for (units) \|*unit\| unit.* = upper(unit.*);` -> `for (units) \|*unit\| unit.* = if (false) upper(unit.*) else un...` | commit names: two files whose names differ only in letter case are named, in tr... | killed |
+| `CD5-tested-file-not-held-to-the-blob-of-head` | `src/platform/commit_derive.zig` | `if (!std.mem.eql(u8, oid, entry.oid)) {` -> `if (false and !std.mem.eql(u8, oid, entry.oid)) {` | commit derive: a file of the store rewritten in place is found before the test ...; commi... | killed |
+| `CD6-file-that-is-not-the-checkout-of-head-accepted` | `src/platform/commit_derive.zig` | `if (!checked_out) try foreign.append(arena, path);` -> `if (false and !checked_out) try foreign.append(arena, path);` | commit derive: a file of the store rewritten in place is found before the test ...; commi... | killed |
+| `CD8-target-in-the-gate-tree-not-held-to-the-proposed-bytes` | `src/platform/commit_derive.zig` | `if (!try sameBytes(git, gate_abs, target.path, target.content))...` -> `if (false and !try sameBytes(git, gate_abs, target.path, target...` | commit derive: a target changed in the gate tree after emetgate wrote it is ref... | killed |
+| `CD9-commit-prepared-for-other-changes-than-the-ones-read` | `src/platform/commit_plan.zig` | `if (!sameChanges(head, changes, derived.entries)) return error....` -> `if (false and !sameChanges(head, changes, derived.entries)) ret...` | commit derive: a commit cannot be prepared from a tree that was not read, or fo... | killed |
+| `CD10-name-that-breaks-the-path-list-handed-to-git` | `src/platform/commit_derive.zig` | `if (!speakable(entry.path)) return error.CommittedTreeIncomplet...` -> `if (false and !speakable(entry.path)) return error.CommittedTre...` | commit derive: a tracked name that cannot be handed to git one per line is refu... | killed |
+| `CD11-paths-left-out-of-a-refusal-not-counted` | `src/protocol/receipt_note.zig` | `if (named.more() != 0) try field.writer.print(` -> `if (false and named.more() != 0) try field.writer.print(` | receipt note: the paths of a refusal are added as a list, with the count of tho... | killed |
+| `CD13-listing-of-another-tree-reused` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, last_listing.tree[0..last_listing.tree_len...` -> `if (false and !std.mem.eql(u8, last_listing.tree[0..last_listin...` | commit derive: the listing of a tree is asked of git once while HEAD stays or m... | killed |
+| `CF1-store-directory-not-held-while-it-is-updated` | `src/platform/commit_store.zig` | `const kept = (try own_dir.hold(io, tree_abs, .existing)) orelse...` -> `const kept = (try own_dir.hold(io, dir_abs, .existing)) orelse ...` | commit defense: the directory the store keeps its files in cannot be moved away... | killed |
+| `CF2-store-directory-not-held-while-it-is-mended` | `src/platform/commit_store.zig` | `const pinned = (try own_dir.hold(io, tree_abs, .existing)) orel...` -> `const pinned = (try own_dir.hold(io, dir_abs, .existing)) orels...` | commit defense: the directory of the store cannot be moved away and replaced by...; commi... | killed |
+| `CF3-store-checkout-replaces-a-file-that-is-there` | `src/platform/git_commit.zig` | `"checkout-index", "-q", "-a", prefix });` -> `"checkout-index", "-f", "-q", "-a", prefix });` | commit defense: a junction put inside the store between the link check and the ... | killed |
+| `CF4-stored-file-removed-through-a-link` | `src/platform/commit_store.zig` | `error.UnsafePath => return error.WorkspaceIsLink,` -> `error.UnsafePath => return,` | commit defense: a junction that stands inside the store where a changed file be... | killed |
 
 ## What this system does not prove
 
