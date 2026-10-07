@@ -1192,7 +1192,7 @@ pub fn treeChanges(arena: Allocator, io: std.Io, root: []const u8, from: []const
 fn checkoutAll(git: Git, private: Git, tree: []const u8, target_abs: []const u8) !void {
     const source = try std.fmt.allocPrint(git.arena, "--attr-source={s}", .{tree});
     const prefix = try std.fmt.allocPrint(git.arena, "--prefix={s}/", .{try slashed(git.arena, target_abs)});
-    _ = try private.need(&.{ source, "-c", "checkout.workers=0", "checkout-index", "-f", "-q", "-a", prefix });
+    _ = try private.need(&.{ source, "-c", "checkout.workers=0", "checkout-index", "-q", "-a", prefix });
 }
 
 pub fn checkoutTree(gpa: Allocator, io: std.Io, root: []const u8, tree: []const u8, target_abs: []const u8) !usize {

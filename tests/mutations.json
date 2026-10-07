@@ -10781,8 +10781,8 @@
     {
       "id": "CT11-file-head-dropped-stays-in-the-store",
       "file": "src/platform/commit_store.zig",
-      "from": "            if (change.was) try removeStored(self.io, self.tree_abs, change.path);\n",
-      "to": "            if (false and change.was) try removeStored(self.io, self.tree_abs, change.path);\n",
+      "from": "        try removeUnder(self.tree_abs, changes);\n",
+      "to": "        if (false) try removeUnder(self.tree_abs, changes);\n",
       "kills": [
         "commit tree: after a commit the user makes by hand the gate tests the new HEAD without building the store again"
       ]
@@ -10817,8 +10817,8 @@
     {
       "id": "CT16-store-checked-out-with-working-tree-attributes",
       "file": "src/platform/git_commit.zig",
-      "from": "    _ = try private.need(&.{ source, \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-f\", \"-q\", \"-a\", prefix });\n",
-      "to": "    _ = try private.need(&.{ if (false) source else \"--no-pager\", \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-f\", \"-q\", \"-a\", prefix });\n",
+      "from": "    _ = try private.need(&.{ source, \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-q\", \"-a\", prefix });\n",
+      "to": "    _ = try private.need(&.{ if (false) source else \"--no-pager\", \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-q\", \"-a\", prefix });\n",
       "kills": [
         "commit tree: an update of the store takes attributes from HEAD, not from the working tree"
       ]
@@ -11265,6 +11265,44 @@
         "commit derive: the listing of a tree is asked of git once while HEAD stays, and again when HEAD has moved"
       ],
       "note": "the targets and the tested files would be held to the blobs of a tree HEAD no longer has"
+    },
+    {
+      "id": "CF1-store-directory-not-held-while-it-is-updated",
+      "file": "src/platform/commit_store.zig",
+      "from": "    const kept = (try own_dir.hold(io, tree_abs, .existing)) orelse return error.CommittedTreeUnavailable;\n",
+      "to": "    const kept = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.CommittedTreeUnavailable;\n",
+      "kills": [
+        "commit defense: the directory the store keeps its files in cannot be moved away and replaced by a link between the link check and the checkout"
+      ],
+      "note": "the directory could be renamed away and a junction put in its place after the link check, and git would write the files of HEAD where it points"
+    },
+    {
+      "id": "CF2-store-directory-not-held-while-it-is-mended",
+      "file": "src/platform/commit_store.zig",
+      "from": "    const pinned = (try own_dir.hold(io, tree_abs, .existing)) orelse return error.CommittedTreeUnavailable;\n",
+      "to": "    const pinned = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.CommittedTreeUnavailable;\n",
+      "kills": [
+        "commit defense: the directory of the store cannot be moved away and replaced by a link while a rewritten file is checked out again"
+      ]
+    },
+    {
+      "id": "CF3-store-checkout-replaces-a-file-that-is-there",
+      "file": "src/platform/git_commit.zig",
+      "from": "\"checkout-index\", \"-q\", \"-a\", prefix });",
+      "to": "\"checkout-index\", \"-f\", \"-q\", \"-a\", prefix });",
+      "kills": [
+        "commit defense: a junction put inside the store between the link check and the checkout never replaces or deletes a file where it points, and the call is refused"
+      ],
+      "note": "a file the user has where a junction points would be replaced by the file of HEAD with the same name"
+    },
+    {
+      "id": "CF4-stored-file-removed-through-a-link",
+      "file": "src/platform/commit_store.zig",
+      "from": "        error.UnsafePath => return error.WorkspaceIsLink,\n",
+      "to": "        error.UnsafePath => return,\n",
+      "kills": [
+        "commit defense: a junction that stands inside the store where a changed file belongs is refused, and nothing is deleted or written where it points"
+      ]
     }
   ]
 }

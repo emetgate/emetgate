@@ -771,6 +771,32 @@ pub fn deleteFile(tree: Handle, rel_raw: []const u8) Error!void {
     try removeAny(parent, try toWide(&name_w, baseOf(rel)), &removed);
 }
 
+pub fn pruneEmptyParents(tree: Handle, rel_raw: []const u8) void {
+    if (builtin.os.tag != .windows) return;
+    var rel_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (rel_raw.len > rel_buf.len) return;
+    const rel = rel_buf[0..rel_raw.len];
+    @memcpy(rel, rel_raw);
+    std.mem.replaceScalar(u8, rel, '\\', '/');
+    validate(rel) catch return;
+    var dir = parentOf(rel);
+    while (dir.len != 0) : (dir = parentOf(dir)) {
+        const parent = (descend(tree, parentOf(dir), false) catch return) orelse return;
+        defer dir_scan.close(parent);
+        var name_w: [dir_scan.max_name_units + 1]u16 = undefined;
+        const name = toWide(&name_w, baseOf(dir)) catch return;
+        var handle: Handle = undefined;
+        if (dir_scan.openRelative(parent, name, nt.delete | nt.synchronize | nt.file_read_attributes, nt.file_open, nt.option_open_reparse_point | nt.option_sync | nt.option_directory, &handle) != nt.status_success) return;
+        defer dir_scan.close(handle);
+        var info: win.BasicInfo = undefined;
+        if (win.GetFileInformationByHandleEx(handle, win.file_basic_info, &info, @sizeOf(win.BasicInfo)) == .FALSE) return;
+        if (dir_scan.kindOf(info.attributes) != .directory) return;
+        var disposition: win.DispositionEx = .{ .flags = win.disposition_delete | win.disposition_posix };
+        var iosb: nt.IoStatusBlock = undefined;
+        if (win.NtSetInformationFile(handle, &iosb, &disposition, @sizeOf(win.DispositionEx), win.class_disposition_ex) != nt.status_success) return;
+    }
+}
+
 fn removeAny(parent: Handle, name: []const u16, removed: *usize) Error!void {
     var probe: Handle = undefined;
     switch (dir_scan.openRelative(parent, name, nt.file_read_attributes | nt.synchronize, nt.file_open, nt.option_open_reparse_point | nt.option_sync, &probe)) {

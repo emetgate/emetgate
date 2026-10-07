@@ -32,6 +32,17 @@ pub var crash_after_marking: bool = false;
 pub var rebuilds: usize = 0;
 pub var restores: usize = 0;
 
+pub const Probe = struct {
+    before_checkout: ?*const fn (tree_abs: []const u8) void = null,
+};
+
+pub var probe: Probe = .{};
+
+fn aboutToCheckOut(tree_abs: []const u8) void {
+    if (!builtin.is_test) return;
+    if (probe.before_checkout) |hook| hook(tree_abs);
+}
+
 const Held = struct {
     tree: []const u8,
     count: usize,
@@ -89,17 +100,18 @@ fn isAttributes(path: []const u8) bool {
     return std.mem.eql(u8, std.fs.path.basenamePosix(path), attributes_name);
 }
 
-fn removeStored(io: std.Io, tree_abs: []const u8, rel: []const u8) !void {
-    var tree = try Dir.openDirAbsolute(io, tree_abs, .{});
-    defer tree.close(io);
-    tree.deleteFile(io, rel) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => |e| return e,
+fn removeStored(tree: std.os.windows.HANDLE, rel: []const u8) !void {
+    gate_tree.deleteFile(tree, rel) catch |err| switch (err) {
+        error.UnsafePath => return error.WorkspaceIsLink,
+        else => return error.CommittedTreeUnavailable,
     };
-    var parent = std.fs.path.dirnamePosix(rel);
-    while (parent) |dir| : (parent = std.fs.path.dirnamePosix(dir)) {
-        tree.deleteDir(io, dir) catch return;
-    }
+    gate_tree.pruneEmptyParents(tree, rel);
+}
+
+fn removeUnder(tree_abs: []const u8, changes: []const git_commit.TreeChange) !void {
+    const tree = (try dir_scan.openRoot(tree_abs)) orelse return error.CommittedTreeUnavailable;
+    defer dir_scan.close(tree);
+    for (changes) |change| try removeStored(tree, change.path);
 }
 
 const Context = struct {
@@ -125,11 +137,12 @@ const Context = struct {
         try writeState(self.arena, self.io, self.dir_abs, try std.fmt.allocPrint(self.arena, "moving {s} {s} {s} {d}\n", .{ from, to, self.conversion, count }));
         if (builtin.is_test and crash_after_marking) return error.CommittedTreeUnavailable;
         var written: std.ArrayList([]const u8) = .empty;
+        for (changes) |change| try shadow.validateRelative(change.path);
+        try removeUnder(self.tree_abs, changes);
         for (changes) |change| {
-            try shadow.validateRelative(change.path);
-            if (change.was) try removeStored(self.io, self.tree_abs, change.path);
             if (change.now) try written.append(self.arena, try std.fmt.allocPrint(self.arena, "{s}/{s}", .{ tree_name, change.path }));
         }
+        aboutToCheckOut(self.tree_abs);
         git_commit.checkoutChanges(self.gpa, self.io, self.root, to, changes, self.tree_abs) catch return error.CommittedTreeUnavailable;
         const handle = (try dir_scan.openRoot(self.dir_abs)) orelse return error.CommittedTreeUnavailable;
         defer dir_scan.close(handle);
@@ -152,6 +165,7 @@ const Context = struct {
             defer dir_scan.close(inner);
             _ = try gate_tree.removeAll(inner);
         }
+        aboutToCheckOut(self.tree_abs);
         const count = git_commit.checkoutTree(self.gpa, self.io, self.root, tree, self.tree_abs) catch return error.CommittedTreeUnavailable;
         var pool: worker_pool.Pool = undefined;
         pool.start(worker_pool.max_threads);
@@ -178,6 +192,8 @@ pub fn ensure(gpa: Allocator, io: std.Io, root: []const u8, base_abs: []const u8
     try Dir.cwd().createDirPath(io, tree_abs);
     const held = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.CommittedTreeUnavailable;
     defer held.close();
+    const kept = (try own_dir.hold(io, tree_abs, .existing)) orelse return error.CommittedTreeUnavailable;
+    defer kept.close();
 
     const ctx: Context = .{ .gpa = gpa, .arena = arena, .io = io, .root = root, .dir_abs = dir_abs, .tree_abs = tree_abs, .conversion = &head.conversion };
     var have: ?Held = null;
@@ -214,6 +230,8 @@ pub fn restore(gpa: Allocator, io: std.Io, root: []const u8, base_abs: []const u
     try shadow.ensureNoLinks(base_abs, tree_abs);
     const held = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.CommittedTreeUnavailable;
     defer held.close();
+    const pinned = (try own_dir.hold(io, tree_abs, .existing)) orelse return error.CommittedTreeUnavailable;
+    defer pinned.close();
 
     const ctx: Context = .{ .gpa = gpa, .arena = arena, .io = io, .root = root, .dir_abs = dir_abs, .tree_abs = tree_abs, .conversion = &head.conversion };
     const count = switch (try readState(arena, io, dir_abs)) {
@@ -233,7 +251,8 @@ pub fn restore(gpa: Allocator, io: std.Io, root: []const u8, base_abs: []const u
     }
     try writeState(arena, io, dir_abs, "building\n");
     if (builtin.is_test) restores += 1;
-    for (changes.items) |change| try removeStored(io, tree_abs, change.path);
+    try removeUnder(tree_abs, changes.items);
+    aboutToCheckOut(tree_abs);
     git_commit.checkoutChanges(gpa, io, root, head.tree, changes.items, tree_abs) catch return error.CommittedTreeUnavailable;
     const handle = (try dir_scan.openRoot(dir_abs)) orelse return error.CommittedTreeUnavailable;
     defer dir_scan.close(handle);

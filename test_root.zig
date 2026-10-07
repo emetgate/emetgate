@@ -172,6 +172,7 @@ test {
     _ = @import("tests/receipt_form.zig");
     _ = @import("tests/commit_tree.zig");
     _ = @import("tests/commit_derive.zig");
+    _ = @import("tests/commit_defense.zig");
     _ = @import("tests/commit_window.zig");
     _ = @import("tests/journal_base.zig");
     _ = @import("tests/frozen.zig");
