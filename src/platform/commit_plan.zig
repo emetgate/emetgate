@@ -123,7 +123,7 @@ pub const Session = struct {
         const plan = self.request orelse return;
         const head = self.head.?;
         const derived = self.derived orelse return error.GateTreeNotDerived;
-        if (!sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;
+        if (!sameChanges(head, changes, derived)) return error.GateTreeNotDerived;
         self.prepared = try git_commit.prepare(gpa, io, root, head, derived.lines, derived.entries, plan.message);
     }
 
@@ -179,11 +179,13 @@ pub const Session = struct {
     }
 };
 
-fn sameChanges(head: git_commit.Head, changes: []const Change, entries: []const git_commit.Entry) bool {
-    if (changes.len != entries.len) return false;
-    for (changes, entries) |change, entry| {
+fn sameChanges(head: git_commit.Head, changes: []const Change, derived: commit_derive.Derived) bool {
+    if (changes.len != derived.entries.len) return false;
+    for (changes, derived.entries, derived.proposed) |change, entry, proposed| {
         const measured = head.find(change.rel) orelse return false;
         if (!std.mem.eql(u8, measured.path, entry.path)) return false;
+        const now: ?symbol.Hash = if (change.content) |bytes| symbol.hashOf(bytes) else null;
+        if (!sameHash(now, proposed)) return false;
     }
     return true;
 }

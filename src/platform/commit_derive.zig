@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const git_commit = @import("git_commit.zig");
+const symbol = @import("../engine/symbol.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -17,9 +18,11 @@ const default_mode = "100644";
 pub const Derived = struct {
     lines: []u8,
     entries: []Entry,
+    proposed: []?symbol.Hash,
 
     pub fn deinit(self: Derived, gpa: Allocator) void {
         gpa.free(self.lines);
+        gpa.free(self.proposed);
         git_commit.freeEntries(gpa, self.entries);
     }
 };
@@ -330,8 +333,11 @@ pub fn derive(gpa: Allocator, io: std.Io, root: []const u8, head: Head, gate_abs
                 entry.* = .{ .path = path, .mode = target.mode, .blob = if (target.oid) |oid| try gpa.dupe(u8, oid) else null };
                 made += 1;
             }
+            const proposed = try gpa.alloc(?symbol.Hash, targets.len);
+            errdefer gpa.free(proposed);
+            for (targets, proposed) |target, *slot| slot.* = if (target.content) |bytes| symbol.hashOf(bytes) else null;
             const kept = try gpa.dupe(u8, lines.items);
-            return .{ .derived = .{ .lines = kept, .entries = entries } };
+            return .{ .derived = .{ .lines = kept, .entries = entries, .proposed = proposed } };
         }
     }
 

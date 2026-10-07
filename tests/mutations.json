@@ -9840,9 +9840,9 @@
       "from": "        if (p.source_rel) |from| try rels.append(arena, from);\n",
       "to": "",
       "kills": [
-        "commit batch: a hand edited file to move is refused before the gate runs, so a failing test is never reached"
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
       ],
-      "note": "a hand edit to the file being moved would be committed under the message of the model"
+      "note": "the file being moved would not be measured; since the commit is built only from measured paths the move is then refused whole, so the test of a clean move is the one that fails"
     },
     {
       "id": "BC3-doc-target-not-checked-for-hand-edits",
@@ -9850,9 +9850,9 @@
       "from": "    for (options.doc_edits) |edit| try rels.append(arena, try relativeUnder(arena, root, edit.file_abs));\n",
       "to": "",
       "kills": [
-        "commit batch: a hand edited doc target is refused before the gate runs, so a failing test is never reached"
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
-      "note": "a hand edit elsewhere in a doc of the batch would be committed under the message of the model"
+      "note": "a doc of the batch would not be measured; since the commit is built only from measured paths the batch is then refused whole, so the test of a clean batch is the one that fails"
     },
     {
       "id": "BC4-moved-source-stays-in-the-commit",
@@ -11226,7 +11226,8 @@
       "from": "        if (!sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;\n",
       "to": "        if (false and !sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;\n",
       "kills": [
-        "commit derive: a commit cannot be prepared from a tree that was not read, or for other changes than the ones read"
+        "commit derive: a commit cannot be prepared from a tree that was not read, or for other changes than the ones read",
+        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
       ]
     },
     {
