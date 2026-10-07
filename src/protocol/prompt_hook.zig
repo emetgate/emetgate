@@ -67,5 +67,5 @@ fn answer(gpa: Allocator, io: std.Io, root: anyerror![]const u8, text: []const u
         error.UnterminatedQuote => return reason.writeAll(usage),
     };
     const request = rule_command.parse(words) orelse return reason.writeAll(usage);
-    try rule_command.run(gpa, io, try root, request, reason, reason);
+    try rule_command.runAs(.spoken, gpa, io, try root, request, reason, reason);
 }
