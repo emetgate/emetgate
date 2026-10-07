@@ -1,5 +1,6 @@
 const std = @import("std");
 const commit_plan = @import("../platform/commit_plan.zig");
+const commit_refusal = @import("../platform/commit_refusal.zig");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const skeleton = @import("../engine/skeleton.zig");
@@ -50,7 +51,14 @@ const dupTrim = tool_result.dupTrim;
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     _ = commit_plan.takeFound();
+    _ = commit_refusal.take();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
+    if (commit_refusal.take()) |named| {
+        errdefer gpa.free(result.text);
+        const text = try receipt_note.withPaths(gpa, result.text, named);
+        gpa.free(result.text);
+        result.text = text;
+    }
     const found = commit_plan.takeFound() orelse return result;
     errdefer gpa.free(result.text);
     const text = try receipt_note.withRecovered(gpa, result.text, found);

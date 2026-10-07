@@ -106,6 +106,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
         };
     }
     try workspace.writeFile(rel, applied.source);
+    try runner.deriveGate(gpa, io, root, location, &session, &.{.{ .rel = rel, .content = applied.source }});
 
     const staged = try runner.runStages(gpa, io, runner.gateDir(location, &session), options.typecheck_command, options.test_command, options.limits);
     switch (staged) {

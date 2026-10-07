@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const git_commit = @import("git_commit.zig");
 const commit_intent = @import("commit_intent.zig");
 const commit_record = @import("commit_record.zig");
+const commit_derive = @import("commit_derive.zig");
 const disk = @import("disk.zig");
 const rules = @import("rules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -79,6 +80,7 @@ pub fn recoverFound(gpa: Allocator, io: std.Io, root: []const u8) !commit_intent
 pub const Session = struct {
     request: ?*Request = null,
     head: ?git_commit.Head = null,
+    derived: ?commit_derive.Derived = null,
     prepared: ?git_commit.Prepared = null,
 
     pub fn open(gpa: Allocator, io: std.Io, root: []const u8, request: ?*Request, rels: []const []const u8) !Opened {
@@ -106,9 +108,23 @@ pub const Session = struct {
         return if (self.request) |plan| plan.message else null;
     }
 
+    pub fn derive(self: *Session, gpa: Allocator, io: std.Io, root: []const u8, gate_abs: []const u8, changes: []const Change, judge: ?commit_derive.Judge) !?commit_derive.Foreign {
+        const head = self.head orelse return null;
+        if (self.derived) |old| old.deinit(gpa);
+        self.derived = null;
+        switch (try commit_derive.derive(gpa, io, root, head, gate_abs, changes, judge)) {
+            .derived => |tree| self.derived = tree,
+            .foreign => |found| return found,
+        }
+        return null;
+    }
+
     pub fn prepare(self: *Session, gpa: Allocator, io: std.Io, root: []const u8, changes: []const Change) !void {
         const plan = self.request orelse return;
-        self.prepared = try git_commit.prepare(gpa, io, root, self.head.?, changes, plan.message);
+        const head = self.head.?;
+        const derived = self.derived orelse return error.GateTreeNotDerived;
+        if (!sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;
+        self.prepared = try git_commit.prepare(gpa, io, root, head, derived.lines, derived.entries, plan.message);
     }
 
     pub fn land(self: *Session, gpa: Allocator, io: std.Io, root: []const u8, changes: []const Change, pendings: []disk.Pending, batch: ?*const disk.Batch, step: ?*const disk.Step) !void {
@@ -157,10 +173,20 @@ pub const Session = struct {
     }
 
     pub fn deinit(self: Session, gpa: Allocator) void {
+        if (self.derived) |derived| derived.deinit(gpa);
         if (self.prepared) |prepared| prepared.deinit(gpa);
         if (self.head) |head| head.deinit(gpa);
     }
 };
+
+fn sameChanges(head: git_commit.Head, changes: []const Change, entries: []const git_commit.Entry) bool {
+    if (changes.len != entries.len) return false;
+    for (changes, entries) |change, entry| {
+        const measured = head.find(change.rel) orelse return false;
+        if (!std.mem.eql(u8, measured.path, entry.path)) return false;
+    }
+    return true;
+}
 
 fn abandon(pendings: []disk.Pending) error{Crashed} {
     for (pendings) |*p| p.abandon();

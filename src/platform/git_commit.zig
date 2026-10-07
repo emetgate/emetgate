@@ -7,6 +7,8 @@ const commit_message = @import("commit_message.zig");
 const symbol = @import("../engine/symbol.zig");
 const own_dir = @import("own_dir.zig");
 const sandbox = @import("sandbox.zig");
+const commit_names = @import("commit_names.zig");
+const commit_refusal = @import("commit_refusal.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -43,6 +45,9 @@ pub const Error = error{
     NothingToCommit,
     BranchMoved,
     BranchUpdateRefused,
+    TrackedNamesDifferOnlyInCase,
+    GateTreeNotHead,
+    GateTreeNotDerived,
 };
 
 pub const Measured = struct {
@@ -63,8 +68,10 @@ pub const Head = struct {
     icase: bool = false,
     conversion: Conversion = @splat('0'),
     measured: []Measured = &.{},
+    listing: []u8 = &.{},
 
     pub fn deinit(self: Head, gpa: Allocator) void {
+        gpa.free(self.listing);
         gpa.free(self.oid);
         gpa.free(self.tree);
         gpa.free(self.branch);
@@ -121,7 +128,7 @@ pub fn freeEntries(gpa: Allocator, entries: []Entry) void {
 
 const in_progress = [_][]const u8{ "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply" };
 
-const Git = struct {
+pub const Git = struct {
     arena: Allocator,
     io: std.Io,
     root: []const u8,
@@ -129,11 +136,11 @@ const Git = struct {
     env: ?*const std.process.Environ.Map = null,
     hex: usize = 40,
 
-    fn init(arena: Allocator, io: std.Io, root: []const u8) !Git {
+    pub fn init(arena: Allocator, io: std.Io, root: []const u8) !Git {
         return .{ .arena = arena, .io = io, .root = root, .exe = try exe_path.git(arena, root) };
     }
 
-    fn raw(self: Git, argv: []const []const u8) !?[]const u8 {
+    pub fn raw(self: Git, argv: []const []const u8) !?[]const u8 {
         var full: std.ArrayList([]const u8) = .empty;
         try full.appendSlice(self.arena, &.{ self.exe, "-c", "core.longpaths=true", "-c", "core.fsmonitor=false" });
         try full.appendSlice(self.arena, argv);
@@ -150,20 +157,20 @@ const Git = struct {
         };
     }
 
-    fn run(self: Git, argv: []const []const u8) !?[]const u8 {
+    pub fn run(self: Git, argv: []const []const u8) !?[]const u8 {
         const out = (try self.raw(argv)) orelse return null;
         return std.mem.trim(u8, out, " \r\n");
     }
 
-    fn need(self: Git, argv: []const []const u8) ![]const u8 {
+    pub fn need(self: Git, argv: []const []const u8) ![]const u8 {
         return (try self.run(argv)) orelse error.GitFailed;
     }
 
-    fn needRaw(self: Git, argv: []const []const u8) ![]const u8 {
+    pub fn needRaw(self: Git, argv: []const []const u8) ![]const u8 {
         return (try self.raw(argv)) orelse error.GitFailed;
     }
 
-    fn feed(self: Git, argv: []const []const u8, input: []const u8) !?[]const u8 {
+    pub fn feed(self: Git, argv: []const []const u8, input: []const u8) !?[]const u8 {
         var full: std.ArrayList([]const u8) = .empty;
         try full.appendSlice(self.arena, &.{ self.exe, "-c", "core.longpaths=true", "-c", "core.fsmonitor=false" });
         try full.appendSlice(self.arena, argv);
@@ -202,12 +209,12 @@ const Git = struct {
         };
     }
 
-    fn fed(self: Git, argv: []const []const u8, input: []const u8) ![]const u8 {
+    pub fn fed(self: Git, argv: []const []const u8, input: []const u8) ![]const u8 {
         const out = (try self.feed(argv, input)) orelse return error.GitFailed;
         return std.mem.trim(u8, out, " \r\n");
     }
 
-    fn withIndex(self: Git, index_path: []const u8) !Git {
+    pub fn withIndex(self: Git, index_path: []const u8) !Git {
         const env = try self.arena.create(std.process.Environ.Map);
         env.* = std.process.Environ.createMap(.{ .block = .global }, self.arena) catch return error.GitFailed;
         try env.put("GIT_INDEX_FILE", index_path);
@@ -223,7 +230,7 @@ pub fn slashed(arena: Allocator, rel: []const u8) ![]u8 {
     return out;
 }
 
-fn absOf(arena: Allocator, root: []const u8, path: []const u8) ![]u8 {
+pub fn absOf(arena: Allocator, root: []const u8, path: []const u8) ![]u8 {
     const out = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, path });
     std.mem.replaceScalar(u8, out, '/', '\\');
     return out;
@@ -245,7 +252,7 @@ const Tracked = struct {
     stage: u8,
 };
 
-const TreeEntry = struct {
+pub const TreeEntry = struct {
     path: []const u8,
     mode: []const u8,
     kind: []const u8,
@@ -266,7 +273,7 @@ fn parseTracked(arena: Allocator, out: []const u8, list: *std.ArrayList(Tracked)
     }
 }
 
-fn parseTree(arena: Allocator, out: []const u8, list: *std.ArrayList(TreeEntry)) !void {
+pub fn parseTree(arena: Allocator, out: []const u8, list: *std.ArrayList(TreeEntry)) !void {
     var it = std.mem.tokenizeScalar(u8, out, 0);
     while (it.next()) |record| {
         const tab = std.mem.indexOfScalar(u8, record, '\t') orelse return error.GitFailed;
@@ -276,11 +283,6 @@ fn parseTree(arena: Allocator, out: []const u8, list: *std.ArrayList(TreeEntry))
         const oid = fields.next() orelse return error.GitFailed;
         try list.append(arena, .{ .path = record[tab + 1 ..], .mode = mode, .kind = kind, .oid = oid });
     }
-}
-
-fn ignoresCase(git: Git) !bool {
-    const value = (try git.run(&.{ "config", "--type=bool", "--get", "core.ignorecase" })) orelse return false;
-    return std.mem.eql(u8, value, "true");
 }
 
 fn indexEntries(git: Git, paths: []const []const u8, icase: bool) ![]Tracked {
@@ -336,7 +338,7 @@ fn tracked(entries: []const Tracked, path: []const u8) ?Tracked {
     return null;
 }
 
-fn inTree(entries: []const TreeEntry, path: []const u8) ?TreeEntry {
+pub fn inTree(entries: []const TreeEntry, path: []const u8) ?TreeEntry {
     for (entries) |entry| {
         if (std.mem.eql(u8, entry.path, path) and std.mem.eql(u8, entry.kind, "blob")) return entry;
     }
@@ -347,10 +349,6 @@ const Survey = struct {
     paths: []const []const u8,
     index: []const Tracked,
 };
-
-fn survey(git: Git, rels: []const []const u8) !Survey {
-    return surveyWith(git, rels, try ignoresCase(git));
-}
 
 fn surveyWith(git: Git, rels: []const []const u8, icase: bool) !Survey {
     const given = try git.arena.alloc([]const u8, rels.len);
@@ -370,8 +368,7 @@ fn surveyWith(git: Git, rels: []const []const u8, icase: bool) !Survey {
     return .{ .paths = paths, .index = index };
 }
 
-fn measure(git: Git, head_oid: []const u8, seen: Survey, out: ?*std.ArrayList(Measured), gpa: Allocator) !void {
-    const tree = try treeEntries(git, head_oid, seen.paths);
+fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList(Measured), gpa: Allocator) !void {
     for (seen.paths) |path| {
         var stages: usize = 0;
         for (seen.index) |entry| {
@@ -571,6 +568,14 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     }
     if (try exists(io, try std.fmt.allocPrint(arena, "{s}.lock", .{known.index}))) return error.IndexLocked;
 
+    const listing = try git.needRaw(&.{ "ls-tree", "-r", "-z", known.oid });
+    var held: std.ArrayList(TreeEntry) = .empty;
+    try parseTree(arena, listing, &held);
+    if (try caseClash(arena, held.items)) |pair| {
+        commit_refusal.note(&.{ pair.first, pair.second }, 2);
+        return error.TrackedNamesDifferOnlyInCase;
+    }
+
     var set = try settings(git);
     if (set.signing) return error.SigningNotSupported;
     const conversion = try conversionOf(git, &set, known.attributes);
@@ -584,7 +589,7 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
         }
         measured.deinit(gpa);
     }
-    try measure(git, known.oid, try surveyWith(git, rels, set.icase), &measured, gpa);
+    try measure(git, held.items, try surveyWith(git, rels, set.icase), &measured, gpa);
 
     const oid = try gpa.dupe(u8, known.oid);
     errdefer gpa.free(oid);
@@ -596,7 +601,16 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     errdefer gpa.free(git_dir);
     const index = try gpa.dupe(u8, known.index);
     errdefer gpa.free(index);
-    return .{ .oid = oid, .tree = tree, .branch = branch, .git_dir = git_dir, .index = index, .icase = set.icase, .conversion = conversion, .measured = try measured.toOwnedSlice(gpa) };
+    const kept = try gpa.dupe(u8, listing);
+    errdefer gpa.free(kept);
+    return .{ .oid = oid, .tree = tree, .branch = branch, .git_dir = git_dir, .index = index, .icase = set.icase, .conversion = conversion, .measured = try measured.toOwnedSlice(gpa), .listing = kept };
+}
+
+fn caseClash(arena: Allocator, held: []const TreeEntry) !?commit_names.Clash {
+    if (builtin.os.tag != .windows) return null;
+    const names = try arena.alloc(commit_names.Name, held.len);
+    for (held, names) |entry, *name| name.* = .{ .path = entry.path, .directory = !std.mem.eql(u8, entry.kind, "blob") };
+    return commit_names.clash(arena, names);
 }
 
 pub fn branchNow(arena: Allocator, io: std.Io, root: []const u8, head: Head) ![]const u8 {
@@ -609,12 +623,12 @@ pub fn branchNow(arena: Allocator, io: std.Io, root: []const u8, head: Head) ![]
     return branchOf(try Git.init(arena, io, root));
 }
 
-const Work = struct {
+pub const Work = struct {
     io: std.Io,
     dir: []const u8,
     held: own_dir.Held,
 
-    fn open(arena: Allocator, io: std.Io, root: []const u8) !Work {
+    pub fn open(arena: Allocator, io: std.Io, root: []const u8) !Work {
         const dir = try std.fs.path.join(arena, &.{ root, shadow.workspace_dir, work_dir });
         const held = (try own_dir.hold(io, dir, .create)).?;
         const work: Work = .{ .io = io, .dir = dir, .held = held };
@@ -650,17 +664,18 @@ const Work = struct {
         for ([_][]const u8{ "index", "index.lock", "message" }) |known| {
             if (std.mem.eql(u8, name, known)) return true;
         }
-        return name.len <= 24 and own_dir.numbered(name, "blob-", "");
+        if (name.len > 24) return false;
+        return own_dir.numbered(name, "blob-", "") or own_dir.numbered(name, "paths-", "") or own_dir.numbered(name, "oids-", "");
     }
 
-    fn done(self: Work) void {
+    pub fn done(self: Work) void {
         self.sweep();
         self.held.close();
         _ = own_dir.removeEmpty(self.dir);
     }
 };
 
-pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, changes: []const Change, message: []const u8) !Prepared {
+pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, lines: []const u8, derived: []const Entry, message: []const u8) !Prepared {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -670,68 +685,33 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, changes
     defer work.done();
     const dir = work.dir;
 
-    const paths = try arena.alloc([]const u8, changes.len);
-    const modes = try arena.alloc(?[6]u8, changes.len);
-    var known = true;
-    for (changes, paths, modes) |change, *path, *mode| {
-        const target = head.find(change.rel) orelse {
-            known = false;
-            break;
-        };
-        const from = head.find(change.mode_from orelse change.rel) orelse {
-            known = false;
-            break;
-        };
-        path.* = target.path;
-        mode.* = from.mode;
-    }
-    if (!known) {
-        var rels: std.ArrayList([]const u8) = .empty;
-        for (changes) |change| try rels.append(arena, change.rel);
-        for (changes) |change| try rels.append(arena, change.mode_from orelse change.rel);
-        const seen = try survey(git, rels.items);
-        const tree_before = try treeEntries(git, head.oid, seen.paths);
-        for (seen.paths[0..changes.len], seen.paths[changes.len..], paths, modes) |path, mode_path, *slot, *mode| {
-            slot.* = path;
-            mode.* = null;
-            if (inTree(tree_before, mode_path)) |from| {
-                if (from.mode.len == 6) mode.* = from.mode[0..6].*;
-            }
-        }
-    }
-
-    var entries: std.ArrayList(Entry) = .empty;
-    errdefer {
-        for (entries.items) |entry| {
-            gpa.free(entry.path);
-            if (entry.blob) |blob| gpa.free(blob);
-        }
-        entries.deinit(gpa);
-    }
-    for (changes, paths, modes) |change, path, mode| {
-        var entry: Entry = .{ .path = try gpa.dupe(u8, path), .mode = mode orelse "100644".*, .blob = null };
-        errdefer gpa.free(entry.path);
-        if (change.content) |content| {
-            const path_arg = try std.fmt.allocPrint(arena, "--path={s}", .{path});
-            entry.blob = try gpa.dupe(u8, try git.fed(&.{ "hash-object", "-w", "--stdin", path_arg }, content));
-        }
-        errdefer if (entry.blob) |blob| gpa.free(blob);
-        try entries.append(gpa, entry);
-    }
-
     var private = try git.withIndex(try std.fs.path.join(arena, &.{ dir, "index" }));
     private.hex = head.oid.len;
-    _ = try private.need(&.{ "read-tree", head.oid });
-    try applyEntries(private, entries.items);
+    _ = (try private.feed(&.{ "update-index", "-z", "--index-info" }, lines)) orelse return error.GitFailed;
     const tree = try private.need(&.{"write-tree"});
     if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCommit;
 
+    const entries = try gpa.alloc(Entry, derived.len);
+    var made: usize = 0;
+    errdefer {
+        for (entries[0..made]) |entry| {
+            gpa.free(entry.path);
+            if (entry.blob) |blob| gpa.free(blob);
+        }
+        gpa.free(entries);
+    }
+    for (derived, entries) |from, *entry| {
+        const path = try gpa.dupe(u8, from.path);
+        errdefer gpa.free(path);
+        entry.* = .{ .path = path, .mode = from.mode, .blob = if (from.blob) |blob| try gpa.dupe(u8, blob) else null };
+        made += 1;
+    }
+
     const commit = try gpa.dupe(u8, try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p", head.oid, "-F", "-" }, try commit_message.stored(arena, message)));
-    errdefer gpa.free(commit);
-    return .{ .commit = commit, .entries = try entries.toOwnedSlice(gpa) };
+    return .{ .commit = commit, .entries = entries };
 }
 
-fn applyEntries(git: Git, entries: []const Entry) !void {
+pub fn applyEntries(git: Git, entries: []const Entry) !void {
     if (entries.len == 0) return;
     var lines: std.ArrayList(u8) = .empty;
     for (entries) |*entry| {

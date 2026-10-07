@@ -30,6 +30,7 @@ pub const Error = error{ CommittedTreeUnavailable, CommittedTreeIncomplete };
 
 pub var crash_after_marking: bool = false;
 pub var rebuilds: usize = 0;
+pub var restores: usize = 0;
 
 const Held = struct {
     tree: []const u8,
@@ -201,6 +202,43 @@ pub fn ensure(gpa: Allocator, io: std.Io, root: []const u8, base_abs: []const u8
     }
     const known = have orelse return .{ .dir = dir_abs, .count = try ctx.rebuild(head.tree), .built = .rebuilt };
     return .{ .dir = dir_abs, .count = known.count, .built = built };
+}
+
+pub fn restore(gpa: Allocator, io: std.Io, root: []const u8, base_abs: []const u8, dir_abs: []const u8, head: git_commit.Head, paths: []const []const u8) !void {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    try shadow.ensureInsideWorkspace(base_abs, dir_abs);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const tree_abs = try std.fs.path.join(arena, &.{ dir_abs, tree_name });
+    try shadow.ensureNoLinks(base_abs, tree_abs);
+    const held = (try own_dir.hold(io, dir_abs, .existing)) orelse return error.CommittedTreeUnavailable;
+    defer held.close();
+
+    const ctx: Context = .{ .gpa = gpa, .arena = arena, .io = io, .root = root, .dir_abs = dir_abs, .tree_abs = tree_abs, .conversion = &head.conversion };
+    const count = switch (try readState(arena, io, dir_abs)) {
+        .ready => |state| if (std.mem.eql(u8, state.tree, head.tree) and std.mem.eql(u8, state.conversion, ctx.conversion)) state.count else return error.CommittedTreeUnavailable,
+        else => return error.CommittedTreeUnavailable,
+    };
+    var listed: std.ArrayList(git_commit.TreeEntry) = .empty;
+    try git_commit.parseTree(arena, head.listing, &listed);
+    var changes: std.ArrayList(git_commit.TreeChange) = .empty;
+    var written: std.ArrayList([]const u8) = .empty;
+    for (paths) |path| {
+        const entry = git_commit.inTree(listed.items, path) orelse return error.CommittedTreeUnavailable;
+        if (entry.mode.len != 6) return error.CommittedTreeUnavailable;
+        try shadow.validateRelative(entry.path);
+        try changes.append(arena, .{ .path = entry.path, .mode = entry.mode[0..6].*, .oid = entry.oid, .was = true, .now = true });
+        try written.append(arena, try std.fmt.allocPrint(arena, "{s}/{s}", .{ tree_name, entry.path }));
+    }
+    try writeState(arena, io, dir_abs, "building\n");
+    if (builtin.is_test) restores += 1;
+    for (changes.items) |change| try removeStored(io, tree_abs, change.path);
+    git_commit.checkoutChanges(gpa, io, root, head.tree, changes.items, tree_abs) catch return error.CommittedTreeUnavailable;
+    const handle = (try dir_scan.openRoot(dir_abs)) orelse return error.CommittedTreeUnavailable;
+    defer dir_scan.close(handle);
+    gate_tree.flushFiles(null, handle, written.items) catch return error.CommittedTreeIncomplete;
+    try ctx.ready(head.tree, count);
 }
 
 pub fn invalidate(gpa: Allocator, io: std.Io, dir_abs: []const u8) !void {

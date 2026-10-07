@@ -19,6 +19,7 @@ const create_mod = @import("create.zig");
 const commit_plan = @import("commit_plan.zig");
 const git_commit = @import("git_commit.zig");
 const commit_store = @import("commit_store.zig");
+const commit_refusal = @import("commit_refusal.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -265,12 +266,13 @@ fn fileExists(io: std.Io, path_abs: []const u8) !bool {
     return true;
 }
 
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *const commit_plan.Session, command: []const u8, targets: []const rules.Target) !ShadowRun {
+fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *commit_plan.Session, command: []const u8, targets: []const rules.Target) !ShadowRun {
     var workspace = try openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
     defer workspace.finish();
     const gate_abs = gateDir(location, session);
     if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     try workspace.writeFile(rel, patched);
+    try deriveGate(gpa, io, root, location, session, &.{.{ .rel = rel, .content = patched }});
 
     if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
     return runStages(gpa, io, gate_abs, options.typecheck_command, command, options.limits);
@@ -282,6 +284,42 @@ fn linkedPath(path: []const u8, linked: []const []const u8) bool {
         if (path.len > dir.len and std.ascii.startsWithIgnoreCase(path, dir) and path[dir.len] == 47) return true;
     }
     return false;
+}
+
+const Fresh = struct {
+    gpa: Allocator,
+    io: std.Io,
+    root: []const u8,
+    location: shadow_root.Location,
+    head: git_commit.Head,
+
+    fn sameAsFresh(raw: *anyopaque, paths: []const []const u8, same: []bool) anyerror!void {
+        const self: *Fresh = @ptrCast(@alignCast(raw));
+        try commit_store.restore(self.gpa, self.io, self.root, self.location.base, self.location.committed, self.head, paths);
+        for (paths, same) |path, *slot| {
+            const tested = try readUnder(self.gpa, self.io, self.location.committed_shadow, "", path);
+            defer self.gpa.free(tested);
+            const fresh = try readUnder(self.gpa, self.io, self.location.committed, commit_store.tree_name, path);
+            defer self.gpa.free(fresh);
+            slot.* = std.mem.eql(u8, tested, fresh);
+        }
+    }
+};
+
+fn readUnder(gpa: Allocator, io: std.Io, dir_abs: []const u8, sub: []const u8, path: []const u8) ![]u8 {
+    const abs = try std.fs.path.join(gpa, &.{ dir_abs, sub, path });
+    defer gpa.free(abs);
+    std.mem.replaceScalar(u8, abs, '/', '\\');
+    return std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(git_commit.max_index_bytes));
+}
+
+pub fn deriveGate(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, session: *commit_plan.Session, changes: []const commit_plan.Change) !void {
+    const head = session.head orelse return;
+    var fresh: Fresh = .{ .gpa = gpa, .io = io, .root = root, .location = location, .head = head };
+    const found = (try session.derive(gpa, io, root, location.committed_shadow, changes, .{ .ctx = &fresh, .same_as_fresh = Fresh.sameAsFresh })) orelse return;
+    defer found.deinit(gpa);
+    commit_refusal.note(found.paths, found.total);
+    return error.GateTreeNotHead;
 }
 
 pub fn gateDir(location: shadow_root.Location, session: *const commit_plan.Session) []const u8 {

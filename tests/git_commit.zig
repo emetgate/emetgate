@@ -80,6 +80,36 @@ const Repo = struct {
         try testing.expect(try git_commit.publishIndex(testing.allocator, testing.io, self.root, staged.digest));
     }
 
+    fn prepare(self: *Repo, head: git_commit.Head, changes: []const git_commit.Change, message: []const u8) !git_commit.Prepared {
+        const gate = try std.fmt.allocPrint(testing.allocator, "{s}.gate", .{self.root});
+        defer testing.allocator.free(gate);
+        std.Io.Dir.cwd().deleteTree(testing.io, gate) catch {};
+        defer std.Io.Dir.cwd().deleteTree(testing.io, gate) catch {};
+        _ = try git_commit.checkoutTree(testing.allocator, testing.io, self.root, head.tree, gate);
+        var dir = try std.Io.Dir.cwd().openDir(testing.io, gate, .{});
+        defer dir.close(testing.io);
+        for (changes) |change| {
+            const rel = try testing.allocator.dupe(u8, change.rel);
+            defer testing.allocator.free(rel);
+            std.mem.replaceScalar(u8, rel, '\\', '/');
+            const bytes = change.content orelse {
+                try dir.deleteFile(testing.io, rel);
+                continue;
+            };
+            if (std.fs.path.dirnamePosix(rel)) |parent| try dir.createDirPath(testing.io, parent);
+            try dir.writeFile(testing.io, .{ .sub_path = rel, .data = bytes });
+        }
+        const derived = switch (try emetgate.commit_derive.derive(testing.allocator, testing.io, self.root, head, gate, changes, null)) {
+            .derived => |tree| tree,
+            .foreign => |found| {
+                found.deinit(testing.allocator);
+                return error.GateTreeNotHead;
+            },
+        };
+        defer derived.deinit(testing.allocator);
+        return git_commit.prepare(testing.allocator, testing.io, self.root, head, derived.lines, derived.entries, message);
+    }
+
     fn write(self: *Repo, rel: []const u8, data: []const u8) !void {
         const sub = try std.fmt.allocPrint(testing.allocator, "repo/{s}", .{rel});
         defer testing.allocator.free(sub);
@@ -101,7 +131,7 @@ test "git commit: a prepared commit holds the given bytes on top of HEAD and mov
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    const prepared = try repo.prepare(head, &changes, "fix: two");
     defer prepared.deinit(testing.allocator);
     const commit = prepared.commit;
 
@@ -134,7 +164,7 @@ test "git commit: a message with a body and a trailer is stored as given" {
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const message = "fix: two\n\nWhy it changed.\n\nSigned-off-by: A Developer <a@example.com>";
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &.{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }}, message);
+    const prepared = try repo.prepare(head, &.{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }}, message);
     defer prepared.deinit(testing.allocator);
     const commit = prepared.commit;
     try repo.expectOut(message, &.{ "log", "-1", "--format=%B", commit });
@@ -151,7 +181,7 @@ test "git commit: a new file and a deleted file land in one commit" {
         .{ .rel = "src\\deep\\new.ts", .content = "export const n = 1;\n" },
         .{ .rel = "src\\b.ts", .content = null },
     };
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "feat: swap");
+    const prepared = try repo.prepare(head, &changes, "feat: swap");
     defer prepared.deinit(testing.allocator);
     const commit = prepared.commit;
     try repo.expectOut("D\tsrc/b.ts\nA\tsrc/deep/new.ts", &.{ "diff", "--name-status", head.oid, commit });
@@ -175,7 +205,7 @@ test "git commit: a change that leaves the tree as it is has nothing to commit" 
     defer repo.deinit();
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
-    try testing.expectError(error.NothingToCommit, git_commit.prepare(testing.allocator, testing.io, repo.root, head, &.{.{ .rel = "src\\a.ts", .content = "export const a = 1;\n" }}, "fix: same"));
+    try testing.expectError(error.NothingToCommit, repo.prepare(head, &.{.{ .rel = "src\\a.ts", .content = "export const a = 1;\n" }}, "fix: same"));
 }
 
 test "git commit: a detached HEAD is refused" {
@@ -233,7 +263,7 @@ test "git commit: a hand edit to another file stays out of the commit and stays 
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    const prepared = try repo.prepare(head, &changes, "fix: two");
     defer prepared.deinit(testing.allocator);
     const commit = prepared.commit;
     try repo.write("src/a.ts", "export const a = 2;\n");
@@ -249,7 +279,7 @@ test "git commit: when HEAD moved after the commit was prepared, publish refuses
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    const prepared = try repo.prepare(head, &changes, "fix: two");
     defer prepared.deinit(testing.allocator);
 
     try repo.git(&.{ "commit", "-q", "--allow-empty", "-m", "someone else" });
@@ -293,7 +323,7 @@ test "git commit: an index lock held by another process is never taken over, and
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    const prepared = try repo.prepare(head, &changes, "fix: two");
     defer prepared.deinit(testing.allocator);
     const staged_abs = try std.fmt.allocPrint(testing.allocator, "{s}.staged-index", .{repo.root});
     defer testing.allocator.free(staged_abs);
@@ -316,7 +346,7 @@ test "git commit: an index that changed after it was copied is not replaced, and
     const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
     defer head.deinit(testing.allocator);
     const changes = [_]git_commit.Change{.{ .rel = "src\\a.ts", .content = "export const a = 2;\n" }};
-    const prepared = try git_commit.prepare(testing.allocator, testing.io, repo.root, head, &changes, "fix: two");
+    const prepared = try repo.prepare(head, &changes, "fix: two");
     defer prepared.deinit(testing.allocator);
     const staged_abs = try std.fmt.allocPrint(testing.allocator, "{s}.staged-index", .{repo.root});
     defer testing.allocator.free(staged_abs);

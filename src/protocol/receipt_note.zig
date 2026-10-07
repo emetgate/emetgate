@@ -1,6 +1,7 @@
 const std = @import("std");
 const receipts = @import("../platform/receipts.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
+const commit_refusal = @import("../platform/commit_refusal.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -54,6 +55,23 @@ pub fn withRecovered(gpa: Allocator, text: []const u8, found: commit_plan.Found)
     return std.fmt.allocPrint(gpa, "{s},{s}{s}", .{ text[0 .. close - 1], field.written(), text[close - 1 ..] });
 }
 
+pub fn withPaths(gpa: Allocator, text: []const u8, named: commit_refusal.Named) ![]u8 {
+    var field: std.Io.Writer.Allocating = .init(gpa);
+    defer field.deinit();
+    try field.writer.writeAll("\"paths\":");
+    var js: std.json.Stringify = .{ .writer = &field.writer };
+    try js.beginArray();
+    var paths = named.paths();
+    while (paths.next()) |path| {
+        if (path.len != 0) try js.write(path);
+    }
+    try js.endArray();
+    if (named.more() != 0) try field.writer.print(",\"paths_more\":{d}", .{named.more()});
+    const close = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+    if (close < 2 or text[close - 1] != '}') return std.fmt.allocPrint(gpa, "{s}\n{{{s}}}", .{ text, field.written() });
+    return std.fmt.allocPrint(gpa, "{s},{s}{s}", .{ text[0 .. close - 1], field.written(), text[close - 1 ..] });
+}
+
 pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_plan.Request, w: *Writer) !void {
     const made = request orelse return;
     const oid = made.oid orelse return;
@@ -71,4 +89,14 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_pla
         if (receipts.attachNew(gpa, io, root, oid, &batch)) |_| {} else |err| try buffer.writer.print(",\"receipt_attach_error\":\"{t}\"", .{err});
     }
     try insert(gpa, w, buffer.written());
+}
+
+test "receipt note: the paths of a refusal are added as a list, with the count of those left out" {
+    const gpa = std.testing.allocator;
+    _ = commit_refusal.take();
+    commit_refusal.note(&.{ "src/a.ts", "src/A.ts" }, 5);
+    const named = commit_refusal.take().?;
+    const text = try withPaths(gpa, "{\"status\":\"error\",\"error\":\"GateTreeNotHead\"}", named);
+    defer gpa.free(text);
+    try std.testing.expectEqualStrings("{\"status\":\"error\",\"error\":\"GateTreeNotHead\",\"paths\":[\"src/a.ts\",\"src/A.ts\"],\"paths_more\":3}", text);
 }

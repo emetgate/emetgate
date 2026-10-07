@@ -405,7 +405,7 @@ test "commit tree: two tracked names that differ only in case cannot both be sto
     _ = try env.git(&.{ "update-index", "--add", "--cacheinfo", try std.fmt.allocPrint(env.arena(), "100644,{s},src/FLAG.ts", .{oid}) });
     _ = try env.git(&.{ "commit", "-q", "-m", "user: a second spelling" });
     const before = try env.head();
-    try expectNamed(env, swap(env, new_body, common.green), "CommittedTreeIncomplete", before);
+    try expectNamed(env, swap(env, new_body, common.green), "TrackedNamesDifferOnlyInCase", before);
 }
 
 test "commit tree: a junction where the store keeps its files is refused and nothing is written through it" {

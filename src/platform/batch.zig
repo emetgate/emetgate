@@ -287,7 +287,7 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
     return committed;
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, edits: []const Edit, options: BatchOptions, session: *const commit_plan.Session) !runner.ShadowRun {
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, edits: []const Edit, options: BatchOptions, session: *commit_plan.Session) !runner.ShadowRun {
     var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
     defer workspace.finish();
     if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
@@ -296,6 +296,11 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         if (p.action == .delete_file) try workspace.deleteFile(p.rel) else try workspace.writeFile(p.rel, p.source());
     }
     for (doc_prepared) |p| try workspace.writeFile(p.rel, p.source());
+    {
+        const changes = try commitChanges(gpa, prepared, doc_prepared);
+        defer gpa.free(changes);
+        try runner.deriveGate(gpa, io, root, location, session, changes);
+    }
 
     var wanted: usize = prepared.len;
     for (prepared) |p| {

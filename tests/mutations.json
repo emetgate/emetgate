@@ -11137,6 +11137,124 @@
       "kills": [
         "prompt hook: /rule list answers with the rows emetgate rule list prints"
       ]
+    },
+    {
+      "id": "CD1-case-only-names-not-looked-for",
+      "file": "src/platform/git_commit.zig",
+      "from": "    return commit_names.clash(arena, names);\n",
+      "to": "    return if (false) commit_names.clash(arena, names) else null;\n",
+      "kills": [
+        "commit derive: two tracked names that differ only in case are refused with both names before any store is built, the second time too"
+      ],
+      "note": "the store would be built whole on every call for a tree it can never hold, and the refusal would not name the two paths"
+    },
+    {
+      "id": "CD2-two-files-in-two-cases-not-a-clash",
+      "file": "src/platform/commit_names.zig",
+      "from": "        } else if (!(entry.value_ptr.directory and name.directory)) {\n",
+      "to": "        } else if (false and !(entry.value_ptr.directory and name.directory)) {\n",
+      "kills": [
+        "commit names: two files whose names differ only in letter case are named, in tree order",
+        "commit derive: two tracked names that differ only in case are refused with both names before any store is built, the second time too"
+      ]
+    },
+    {
+      "id": "CD3-file-and-directory-in-two-cases-not-a-clash",
+      "file": "src/platform/commit_names.zig",
+      "from": "            } else if (!entry.value_ptr.directory) {\n",
+      "to": "            } else if (false and !entry.value_ptr.directory) {\n",
+      "kills": [
+        "commit names: a file and a directory that differ only in letter case are named"
+      ]
+    },
+    {
+      "id": "CD4-names-compared-without-folding",
+      "file": "src/platform/commit_names.zig",
+      "from": "    for (units) |*unit| unit.* = upper(unit.*);\n",
+      "to": "    for (units) |*unit| unit.* = if (false) upper(unit.*) else unit.*;\n",
+      "kills": [
+        "commit names: two files whose names differ only in letter case are named, in tree order"
+      ]
+    },
+    {
+      "id": "CD5-tested-file-not-held-to-the-blob-of-head",
+      "file": "src/platform/commit_derive.zig",
+      "from": "                if (!std.mem.eql(u8, oid, entry.oid)) {\n",
+      "to": "                if (false and !std.mem.eql(u8, oid, entry.oid)) {\n",
+      "kills": [
+        "commit derive: a file of the store rewritten in place is found before the test runs, the call names it and the next call lands on a mended store",
+        "commit derive: rewritten bytes that git already holds as a blob are not taken into the commit either"
+      ],
+      "note": "what a file of the gate tree stores as would go into the commit unseen: a rewritten file would be committed under the model's message when git holds its blob, and fail the tree write without a name when it does not"
+    },
+    {
+      "id": "CD6-file-that-is-not-the-checkout-of-head-accepted",
+      "file": "src/platform/commit_derive.zig",
+      "from": "                    if (!checked_out) try foreign.append(arena, path);\n",
+      "to": "                    if (false and !checked_out) try foreign.append(arena, path);\n",
+      "kills": [
+        "commit derive: a file of the store rewritten in place is found before the test runs, the call names it and the next call lands on a mended store",
+        "commit derive: rewritten bytes that git already holds as a blob are not taken into the commit either",
+        "commit derive: a file whose stored form git would change on its own is tested as HEAD checks it out and stays as HEAD has it"
+      ],
+      "note": "the test would run on a rewritten file and the commit would hold the blob of HEAD"
+    },
+    {
+      "id": "CD7-fresh-checkout-not-compared",
+      "file": "src/platform/runner.zig",
+      "from": "            slot.* = std.mem.eql(u8, tested, fresh);\n",
+      "to": "            slot.* = true or std.mem.eql(u8, tested, fresh);\n",
+      "kills": [
+        "commit derive: a file of the store rewritten in place is found before the test runs, the call names it and the next call lands on a mended store",
+        "commit derive: rewritten bytes that git already holds as a blob are not taken into the commit either",
+        "commit derive: a file whose stored form git would change on its own is tested as HEAD checks it out and stays as HEAD has it"
+      ]
+    },
+    {
+      "id": "CD8-target-in-the-gate-tree-not-held-to-the-proposed-bytes",
+      "file": "src/platform/commit_derive.zig",
+      "from": "        if (!try sameBytes(git, gate_abs, target.path, target.content)) try foreign.append(arena, target.path);\n",
+      "to": "        if (false and !try sameBytes(git, gate_abs, target.path, target.content)) try foreign.append(arena, target.path);\n",
+      "kills": [
+        "commit derive: a target changed in the gate tree after emetgate wrote it is refused by name, so the commit and the working file cannot part"
+      ],
+      "note": "the commit would hold what stood in the gate tree and the working file what the call proposed"
+    },
+    {
+      "id": "CD9-commit-prepared-for-other-changes-than-the-ones-read",
+      "file": "src/platform/commit_plan.zig",
+      "from": "        if (!sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;\n",
+      "to": "        if (false and !sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;\n",
+      "kills": [
+        "commit derive: a commit cannot be prepared from a tree that was not read, or for other changes than the ones read"
+      ]
+    },
+    {
+      "id": "CD10-name-that-breaks-the-path-list-handed-to-git",
+      "file": "src/platform/commit_derive.zig",
+      "from": "        if (!speakable(entry.path)) return error.CommittedTreeIncomplete;\n",
+      "to": "        if (false and !speakable(entry.path)) return error.CommittedTreeIncomplete;\n",
+      "kills": [
+        "commit derive: a tracked name that cannot be handed to git one per line is refused before any file is read"
+      ]
+    },
+    {
+      "id": "CD11-paths-left-out-of-a-refusal-not-counted",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "    if (named.more() != 0) try field.writer.print(",
+      "to": "    if (false and named.more() != 0) try field.writer.print(",
+      "kills": [
+        "receipt note: the paths of a refusal are added as a list, with the count of those left out"
+      ]
+    },
+    {
+      "id": "CD12-store-mended-through-a-junction",
+      "file": "src/platform/commit_store.zig",
+      "from": "    try shadow.ensureNoLinks(base_abs, tree_abs);\n",
+      "to": "",
+      "kills": [
+        "commit derive: mending the store refuses a junction where its files are kept and writes nothing through it"
+      ]
     }
   ]
 }
