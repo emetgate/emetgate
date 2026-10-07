@@ -6,6 +6,8 @@
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
   <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
+  <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
 </p>
 
 <p align="center"><a href="../README.md">English</a> · <b>Türkçe</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
@@ -17,7 +19,7 @@ Kod yazan bir model ile kaynak ağacınız arasında duran bir kapı. Model bir 
 Claude Code için MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript ve JavaScript projelerinde.
 
 <p align="center">
-  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## Ne yapar
@@ -33,6 +35,13 @@ emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --
 emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
 ```
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
+    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
+  </picture>
+</p>
+
 ## Kurulum
 
 Her sürüm, `emetgate.exe` dosyasını ve SHA-256 değerini [sürümler sayfasında](https://github.com/emetgate/emetgate/releases) yayımlar.
@@ -47,6 +56,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 İkili dosya kod imzalı değildir; bu yüzden SmartScreen ilk çalıştırmada uyarır. Bunun yerine sağlama toplamını karşılaştırın.
 
 `emetgate lockdown`, Claude Code'u yalnızca Emetgate'in araçlarıyla başlatır; böylece her yazma kapıdan geçer.
+
+Lockdown altında kuralı doğrudan isteme de yazabilirsiniz. Cevabı Emetgate verir ve satır modele hiç ulaşmaz:
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+Bundan sonra her yazma konuşma dökümünde işaretlenir: kapı geçirdiyse yeşil **אמת**, reddettiyse kırmızı **מת**.
 
 ## Ölçümler
 
@@ -91,6 +109,21 @@ Kapıya karşı bulgular ve düzeltmeleri [REFERENCE.md](../REFERENCE.md#securit
 - Korumalı alan, kopyanın dışına yazmayı engeller. Okumayı ve ağ erişimini engellemez.
 - Kapının dışında yapılan değişiklikler kapsanmaz. Lockdown bunun içindir.
 - Node.js 24.15.0 ve öncesi, Windows loopback bağlantılarında aralıklı olarak çöker; 24.16.0 veya sonrasını kullanın.
+
+## İsim nereden geliyor
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
+  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+</picture>
+
+Prag Golemi efsanesinde Haham Loew, kilden bir figürün alnına **אמת** (*emet*, hakikat) yazar ve figür canlanır. İlk harf silinince **מת** (*met*, ölü) kalır ve golem durur.
+
+Emetgate her yazmayı aynı kelimeyle işaretler: kapı geçirdiyse tam, reddettiyse ilk harfi silinmiş.
+
+<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+
+<br clear="left">
 
 ## Derleme
 

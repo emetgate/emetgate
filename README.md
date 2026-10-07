@@ -6,6 +6,8 @@
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
   <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
+  <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
 </p>
 
 <p align="center"><b>English</b> · <a href="translations/README.tr.md">Türkçe</a> · <a href="translations/README.ko.md">한국어</a> · <a href="translations/README.zh-CN.md">简体中文</a> · <a href="translations/README.es.md">Español</a></p>
@@ -17,7 +19,7 @@ A gate between a coding model and your source tree. The model proposes a change,
 It runs as an MCP server for Claude Code, on Windows, for TypeScript and JavaScript projects.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## What it does
@@ -33,6 +35,13 @@ emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --
 emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
 ```
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/gate-dark.svg">
+    <img src="assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
+  </picture>
+</p>
+
 ## Install
 
 Each release publishes `emetgate.exe` and its SHA-256 on the [releases page](https://github.com/emetgate/emetgate/releases).
@@ -47,6 +56,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 The binary is not code-signed, so SmartScreen warns on first run. Compare the checksum instead.
 
 `emetgate lockdown` starts Claude Code with only Emetgate's tools, so every write goes through the gate.
+
+Under lockdown you can also type a rule into the prompt. Emetgate answers it and the line never reaches the model:
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+Each write is then marked in the transcript: **אמת** in green when the gate passed it, **מת** in red when it refused.
 
 ## Measured
 
@@ -91,6 +109,21 @@ Findings against the gate and their fixes are listed in [REFERENCE.md](REFERENCE
 - The sandbox blocks writes outside the copy. It does not block reads or network access.
 - Changes made outside the gate are not covered. That is what lockdown is for.
 - Node.js 24.15.0 and earlier crash intermittently on Windows loopback connections; use 24.16.0 or later.
+
+## Where the name comes from
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/golem-ales-dark.jpg">
+  <img src="assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+</picture>
+
+In the legend of the Golem of Prague, Rabbi Loew writes **אמת** (*emet*, truth) on the forehead of a figure of clay and it comes to life. Erase the first letter and **מת** (*met*, dead) is left, and the golem stops.
+
+Emetgate marks every write with the same word: whole when the gate passed it, the first letter gone when it refused.
+
+<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+
+<br clear="left">
 
 ## Build
 

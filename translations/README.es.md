@@ -6,6 +6,8 @@
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
   <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
+  <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
 </p>
 
 <p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>Español</b></p>
@@ -17,7 +19,7 @@ Una puerta entre un modelo que escribe código y tu árbol de fuentes. El modelo
 Funciona como servidor MCP para Claude Code, en Windows, para proyectos de TypeScript y JavaScript.
 
 <p align="center">
-  <img src="../assets/demo.gif" alt="A Claude Code session in which the gate rejects a change that fails a test and commits the corrected one" width="900">
+  <img src="../assets/demo.gif" alt="A Claude Code session under emetgate lockdown: a rule is added from the prompt, the gate refuses a change that fails a test and one that breaks the rule, and commits the corrected one" width="900">
 </p>
 
 ## Qué hace
@@ -33,6 +35,13 @@ emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --
 emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
 ```
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
+    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
+  </picture>
+</p>
+
 ## Instalación
 
 Cada versión publica `emetgate.exe` y su SHA-256 en la [página de versiones](https://github.com/emetgate/emetgate/releases).
@@ -47,6 +56,15 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 El binario no está firmado, así que SmartScreen avisa en la primera ejecución. Compara la suma de comprobación en su lugar.
 
 `emetgate lockdown` inicia Claude Code solo con las herramientas de Emetgate, de modo que toda escritura pasa por la puerta.
+
+Bajo lockdown también puedes escribir una regla en el prompt. Emetgate responde y la línea nunca llega al modelo:
+
+```
+/rule add "no comments in source" --check no_comment --enforce
+/rule list
+```
+
+Después, cada escritura queda marcada en la transcripción: **אמת** en verde cuando la puerta la aprobó, **מת** en rojo cuando la rechazó.
 
 ## Mediciones
 
@@ -91,6 +109,21 @@ Los hallazgos contra la puerta y sus correcciones se listan en [REFERENCE.md](..
 - El sandbox bloquea las escrituras fuera de la copia. No bloquea las lecturas ni el acceso a la red.
 - Los cambios hechos fuera de la puerta no están cubiertos. Para eso está lockdown.
 - Node.js 24.15.0 y anteriores fallan de forma intermitente en conexiones loopback de Windows; usa 24.16.0 o posterior.
+
+## De dónde viene el nombre
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
+  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+</picture>
+
+En la leyenda del Gólem de Praga, el rabino Loew escribe **אמת** (*emet*, verdad) en la frente de una figura de barro y esta cobra vida. Si se borra la primera letra queda **מת** (*met*, muerto) y el gólem se detiene.
+
+Emetgate marca cada escritura con la misma palabra: entera cuando la puerta la aprobó, sin la primera letra cuando la rechazó.
+
+<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+
+<br clear="left">
 
 ## Compilación
 
