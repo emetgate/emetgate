@@ -11223,8 +11223,8 @@
     {
       "id": "CD9-commit-prepared-for-other-changes-than-the-ones-read",
       "file": "src/platform/commit_plan.zig",
-      "from": "        if (!sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;\n",
-      "to": "        if (false and !sameChanges(head, changes, derived.entries)) return error.GateTreeNotDerived;\n",
+      "from": "        if (!sameChanges(head, changes, derived)) return error.GateTreeNotDerived;\n",
+      "to": "        if (false and !sameChanges(head, changes, derived)) return error.GateTreeNotDerived;\n",
       "kills": [
         "commit derive: a commit cannot be prepared from a tree that was not read, or for other changes than the ones read",
         "commit write_doc: an accepted write is one commit with the given message and the written bytes"
