@@ -16,7 +16,7 @@
 
 Una puerta entre un modelo que escribe código y tu árbol de fuentes. El modelo propone un cambio, Emetgate lo comprueba y el cambio llega al disco solo si las comprobaciones pasan.
 
-Funciona como servidor MCP para Claude Code, en Windows, para proyectos de TypeScript y JavaScript.
+Funciona como servidor MCP, en Windows, para proyectos de TypeScript y JavaScript. Está desarrollado y probado con Claude Code, y sus herramientas de puerta también funcionan en otros clientes MCP.
 
 https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
@@ -65,6 +65,8 @@ Bajo lockdown también puedes escribir una regla en el prompt. Emetgate responde
 ```
 
 Después, cada escritura queda marcada en la transcripción: **אמת** en verde cuando la puerta la aprobó, **מת** en rojo cuando la rechazó.
+
+Emetgate es un servidor MCP, así que otros clientes también pueden usar sus herramientas. Leer código y rechazar un cambio que no pasa tus reglas o pruebas está verificado también en Codex, opencode, Gemini CLI y Qoder. El modo bloqueo, `/rule` y las marcas son solo de Claude Code; en otro cliente el modelo todavía puede editar fuera de la puerta, así que allí Emetgate es una herramienta de medición, no un monitor a prueba de fallos.
 
 ## Mediciones
 

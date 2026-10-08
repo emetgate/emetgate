@@ -16,7 +16,7 @@
 
 A gate between a coding model and your source tree. The model proposes a change, Emetgate checks it, and the change reaches disk only if the checks pass.
 
-It runs as an MCP server for Claude Code, on Windows, for TypeScript and JavaScript projects.
+It runs as an MCP server, on Windows, for TypeScript and JavaScript projects. It is built and tested with Claude Code, and its gate tools also work in other MCP clients.
 
 https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
@@ -65,6 +65,8 @@ Under lockdown you can also type a rule into the prompt. Emetgate answers it and
 ```
 
 Each write is then marked in the transcript: **אמת** in green when the gate passed it, **מת** in red when it refused.
+
+Emetgate is an MCP server, so other clients can use its tools too. Reading code, and refusing a change that fails your rules or tests, is verified in Codex, opencode, Gemini CLI and Qoder as well. Lockdown, `/rule` and the marks are Claude Code only; in another client the model can still edit outside the gate, so there Emetgate is a measurement tool, not a fail-closed monitor.
 
 ## Measured
 

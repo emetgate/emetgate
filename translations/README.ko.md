@@ -16,7 +16,7 @@
 
 코딩 모델과 소스 트리 사이에 놓이는 게이트입니다. 모델이 변경을 제안하면 Emetgate가 검사하고, 검사를 통과한 변경만 디스크에 기록됩니다.
 
-Claude Code용 MCP 서버로 실행되며, Windows에서 TypeScript와 JavaScript 프로젝트를 지원합니다.
+MCP 서버로 실행되며, Windows에서 TypeScript와 JavaScript 프로젝트를 지원합니다. Claude Code로 개발 및 테스트되었으며, 게이트 도구는 다른 MCP 클라이언트에서도 작동합니다.
 
 https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
@@ -65,6 +65,8 @@ lockdown 상태에서는 프롬프트에 규칙을 직접 입력할 수도 있�
 ```
 
 이후 모든 쓰기는 대화 기록에 표시됩니다. 게이트가 통과시키면 초록색 **אמת**, 거부하면 빨간색 **מת**입니다.
+
+Emetgate는 MCP 서버이므로 다른 클라이언트도 그 도구를 사용할 수 있습니다. 코드를 읽고, 규칙이나 테스트를 통과하지 못하는 변경을 거부하는 것은 Codex, opencode, Gemini CLI, Qoder에서도 검증되었습니다. 잠금, `/rule`, 표시는 Claude Code 전용입니다. 다른 클라이언트에서는 모델이 게이트 밖에서도 편집할 수 있으므로, 거기서 Emetgate는 측정 도구이지 fail-closed 모니터가 아닙니다.
 
 ## 측정 결과
 
