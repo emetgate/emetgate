@@ -234,6 +234,52 @@ test "rule: an invalid --check is refused by name and writes nothing" {
     try expectLedgerUntouched(&repo);
 }
 
+test "rule: a message rule covers no file, so the skeleton does not list it" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{.{ .path = "src/nav.ts", .data = with_networkidle }});
+    defer repo.deinit();
+
+    const coded = try addRule(&repo, &.{ "add", "no networkidle", "--check", "forbid:networkidle", "--enforce" });
+    defer testing.allocator.free(coded);
+    const worded = try addRule(&repo, &.{ "add", "one line", "--check", "message:max_lines:1", "--enforce" });
+    defer testing.allocator.free(worded);
+
+    var body = try skeletonOf(&repo, "src\\nav.ts");
+    defer body.deinit();
+    try testing.expect(ruleRow(body.value, coded) != null);
+    try testing.expect(ruleRow(body.value, worded) == null);
+}
+
+test "rule: a message check is adopted, and a bad one or one with --in is refused and writes nothing" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    try testing.expectError(error.UnknownCheck, runRule(&repo, &.{ "add", "typo", "--check", "message:no_comment", "--enforce" }));
+    try testing.expectError(error.UnexpectedCheckArgument, runRule(&repo, &.{ "add", "one line", "--check", "message:max_lines:one", "--enforce" }));
+    try testing.expectError(error.UnknownCheck, runRule(&repo, &.{ "add", "added", "--check", "added:message:forbid:x", "--enforce" }));
+    try testing.expectError(error.MessageRuleWithScope, runRule(&repo, &.{ "add", "scoped", "--check", "message:forbid:x", "--in", "src/", "--enforce" }));
+    try expectLedgerUntouched(&repo);
+
+    const id = try addRule(&repo, &.{ "add", "one line", "--check", "message:max_lines:1", "--enforce" });
+    defer testing.allocator.free(id);
+    try testing.expect(id.len > 0);
+}
+
+test "rule: a message command is adopted, and an empty one or one with --in is refused and writes nothing" {
+    try skipOffWindows();
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+
+    try testing.expectError(error.EmptyCommandCheck, runRule(&repo, &.{ "add", "lint", "--check", "message:cmd: ", "--enforce" }));
+    try testing.expectError(error.MessageRuleWithScope, runRule(&repo, &.{ "add", "lint", "--check", "message:cmd:exit 0", "--in", "src/", "--enforce" }));
+    try expectLedgerUntouched(&repo);
+
+    const id = try addRule(&repo, &.{ "add", "lint", "--check", "message:cmd:exit 0", "--enforce" });
+    defer testing.allocator.free(id);
+    try testing.expect(id.len > 0);
+}
+
 test "rule: an invalid --in is refused by name and writes nothing" {
     try skipOffWindows();
     var repo = try Repo.init(&.{});

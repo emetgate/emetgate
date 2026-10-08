@@ -7,6 +7,7 @@ const durability_log = @import("durability_log.zig");
 const journal = @import("journal.zig");
 const git_repo = @import("repo.zig");
 const shadow_root = @import("shadow_root.zig");
+const commit_intent = @import("commit_intent.zig");
 const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
@@ -31,11 +32,19 @@ pub const Guard = struct {
     handle: windows.HANDLE,
 
     pub fn open(path_abs: []const u8) !Guard {
+        return shared(path_abs, win.file_share_read | win.file_share_delete);
+    }
+
+    pub fn freeze(path_abs: []const u8) !Guard {
+        return shared(path_abs, win.file_share_read);
+    }
+
+    fn shared(path_abs: []const u8, share: windows.DWORD) !Guard {
         var wide: WidePath = undefined;
         const handle = win.CreateFileW(
             try toWide(&wide, path_abs),
             win.generic_read | win.delete,
-            win.file_share_read | win.file_share_delete,
+            share,
             null,
             win.open_existing,
             win.file_attribute_normal,
@@ -65,7 +74,7 @@ pub const Guard = struct {
         return bytes;
     }
 
-    fn deleteSelf(self: Guard) !void {
+    pub fn deleteSelf(self: Guard) !void {
         var info: win.FILE_DISPOSITION_INFO_EX = .{ .flags = win.file_disposition_flag_delete | win.file_disposition_flag_posix_semantics };
         const removal = durability_log.beforeHandleRemove(self.handle);
         const ok = win.SetFileInformationByHandle(self.handle, win.file_disposition_info_ex, &info, @sizeOf(win.FILE_DISPOSITION_INFO_EX)) != .FALSE;
@@ -84,11 +93,11 @@ pub const Guard = struct {
         return info.file_attributes;
     }
 
-    fn renameTo(self: Guard, gpa: Allocator, path_abs: []const u8) !void {
+    pub fn renameTo(self: Guard, gpa: Allocator, path_abs: []const u8) !void {
         return renameByHandle(gpa, self.handle, path_abs, false);
     }
 
-    fn renameReplacing(self: Guard, gpa: Allocator, path_abs: []const u8) !void {
+    pub fn renameReplacing(self: Guard, gpa: Allocator, path_abs: []const u8) !void {
         return renameByHandle(gpa, self.handle, path_abs, true);
     }
 
@@ -106,7 +115,7 @@ pub const Step = struct {
     context: *anyopaque,
     reached: *const fn (context: *anyopaque) bool,
 
-    fn stops(step: ?*const Step) bool {
+    pub fn stops(step: ?*const Step) bool {
         const s = step orelse return false;
         return s.reached(s.context);
     }
@@ -208,6 +217,7 @@ pub const Pending = struct {
     state: State = .planned,
     freed: bool = false,
     removed: bool = false,
+    base_in_history: bool = false,
 
     pub const Kind = enum { modify, create, delete, rename };
     const State = enum { planned, staged, backed_up, swapped };
@@ -244,11 +254,15 @@ pub const Pending = struct {
         const bytes = try guard.readAll(self.gpa, self.io);
         defer self.gpa.free(bytes);
         if (!std.mem.eql(u8, &symbol.hashOf(bytes), &self.base_hash.?)) return error.BaseChanged;
-        try writeDurably(self.io, self.backup, bytes);
+        if (in_gap) |hook| try hook.run(hook.context);
+        try guard.renameTo(self.gpa, self.backup);
         self.state = .backed_up;
         try flushParent(self.backup);
-        if (in_gap) |hook| try hook.run(hook.context);
-        try self.replacement.?.renameReplacing(self.gpa, self.path);
+        if (crashBetweenMoves()) return error.Crashed;
+        self.replacement.?.renameTo(self.gpa, self.path) catch |err| switch (err) {
+            error.PathAlreadyExists => return error.Conflict,
+            else => |e| return e,
+        };
         applyAttributes(self.path, self.saved_attributes) catch {};
         self.state = .swapped;
         if (crashAfterRename()) return error.Crashed;
@@ -280,10 +294,12 @@ pub const Pending = struct {
     fn finish(self: *Pending, leftover: ?*Leftover) !void {
         switch (self.kind) {
             .modify => {
-                self.closeHandles();
-                if (!deleteWithRetry(self.io, self.backup)) {
+                defer self.closeHandles();
+                self.guard.?.deleteSelf() catch {
                     if (leftover) |out| out.record(self.backup);
-                } else flushParent(self.backup) catch {
+                    return;
+                };
+                flushParent(self.backup) catch {
                     if (leftover) |out| out.record(self.backup);
                 };
             },
@@ -344,19 +360,29 @@ pub const Pending = struct {
             .staged => _ = deleteWithRetry(self.io, self.temp),
             .backed_up => {
                 _ = deleteWithRetry(self.io, self.temp);
-                _ = deleteWithRetry(self.io, self.backup);
+                self.putBack(leftover);
             },
             .swapped => {
-                const backup = Guard.open(self.backup) catch {
+                _ = deleteVerified(self.gpa, self.io, self.path, self.data_hash, null) catch {
                     if (leftover) |out| out.record(self.backup);
                     return;
                 };
-                defer backup.close();
-                backup.renameReplacing(self.gpa, self.path) catch {
-                    if (leftover) |out| out.record(self.backup);
-                };
+                self.putBack(leftover);
             },
         }
+    }
+
+    fn putBack(self: *Pending, leftover: ?*Leftover) void {
+        const guard = self.guard orelse return;
+        guard.renameTo(self.gpa, self.path) catch |err| {
+            if (err == error.PathAlreadyExists and self.base_in_history) {
+                guard.deleteSelf() catch {
+                    if (leftover) |out| out.record(self.backup);
+                };
+                return;
+            }
+            if (leftover) |out| out.record(self.backup);
+        };
     }
 
     fn removeCreated(self: *Pending, leftover: ?*Leftover) void {
@@ -399,6 +425,22 @@ pub fn resetRenameCount() void {
 }
 
 pub var crash_in_recovery: bool = false;
+pub var crash_between_moves: bool = false;
+
+pub const Between = struct {
+    context: *anyopaque,
+    run: *const fn (context: *anyopaque) void,
+};
+
+pub var between_moves: ?Between = null;
+
+fn crashBetweenMoves() bool {
+    if (!builtin.is_test) return false;
+    if (between_moves) |hook| hook.run(hook.context);
+    if (!crash_between_moves) return false;
+    crash_between_moves = false;
+    return true;
+}
 
 fn recoverCrash() bool {
     if (!builtin.is_test or !crash_in_recovery) return false;
@@ -444,7 +486,7 @@ fn plan(gpa: Allocator, io: std.Io, kind: Pending.Kind, path_abs: []const u8, da
 fn openBase(gpa: Allocator, io: std.Io, path_abs: []const u8, expected_base: symbol.Hash) !struct { guard: Guard, attributes: windows.DWORD } {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
-    const guard = try Guard.open(path_abs);
+    const guard = try Guard.freeze(path_abs);
     errdefer guard.close();
     if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &expected_base)) return error.BaseChanged;
     const attributes = try guard.attributes();
@@ -662,6 +704,7 @@ pub const RecoverReport = struct {
     skipped: usize = 0,
     failed: usize = 0,
     not_indexed: usize = 0,
+    commits: commit_intent.Report = .{},
 };
 
 const SidecarKind = enum { tmp, bak };
@@ -722,20 +765,34 @@ fn rollForward(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []co
     if (!deleteWithRetry(io, bak_abs)) return error.BackupNotRemoved;
 }
 
-fn restoreVerified(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, base_hash: symbol.Hash) !void {
+fn restoreVerified(gpa: Allocator, io: std.Io, bak_abs: []const u8, target_abs: []const u8, base_hash: symbol.Hash, new_hash: ?symbol.Hash) !void {
     if (shadow.isReparsePoint(bak_abs) catch true) return error.BackupUnverified;
     const guard = try Guard.open(bak_abs);
     defer guard.close();
     if (!std.mem.eql(u8, &(try guard.hash(gpa, io)), &base_hash)) return error.BackupUnverified;
     clearReadonly(target_abs);
-    try guard.renameReplacing(gpa, target_abs);
+    const ours = new_hash orelse return guard.renameReplacing(gpa, target_abs);
+    if (hasHash(gpa, io, target_abs, base_hash)) return guard.deleteSelf();
+    if (try deleteVerified(gpa, io, target_abs, ours, null) == .mismatch) return error.TargetChanged;
+    guard.renameTo(gpa, target_abs) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.TargetChanged,
+        else => |e| return e,
+    };
 }
 
 pub fn recover(gpa: Allocator, io: std.Io, root_abs: []const u8) !RecoverReport {
     if (builtin.os.tag != .windows) return error.Unsupported;
     var report: RecoverReport = .{};
     try recoverJournaled(gpa, io, root_abs, &report);
+    report.commits = try commit_intent.recoverAll(gpa, io, root_abs);
     try clearOrphanTemps(gpa, io, root_abs, &report);
+    return report;
+}
+
+pub fn recoverJournal(gpa: Allocator, io: std.Io, root_abs: []const u8) !RecoverReport {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    var report: RecoverReport = .{};
+    try recoverJournaled(gpa, io, root_abs, &report);
     return report;
 }
 
@@ -745,15 +802,22 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, shadow
     const report = try recover(gpa, io, root_abs);
     const location = try shadow_root.locate(gpa, root_abs, shadow_root_dir);
     defer location.deinit(gpa);
-    const removal = shadow.remove(io, location.base, location.shadow);
+    const removal = shadow.removeWorkspace(io, location.base, location.workspace);
     _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
 
     try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}, not indexed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed, report.not_indexed });
+    const c = report.commits;
+    if (c.landed + c.dropped + c.left + c.pending + c.failed != 0) {
+        try err_out.print("commits completed {d}, dropped undecided {d}, files written {d}, files left as found {d}, still pending {d}, failed {d}", .{ c.landed, c.dropped, c.written, c.left, c.pending, c.failed });
+        if (c.reason) |reason| try err_out.print(", {s}", .{reason});
+        if (c.names().len != 0) try err_out.print(": {s}", .{c.names()});
+        try err_out.writeAll("\n");
+    }
     if (removal) |_| {} else |err| {
         try err_out.print("could not remove shadow: {t}\n", .{err});
         return recover_failed_exit_code;
     }
-    return if (report.failed > 0 or report.not_indexed > 0) recover_failed_exit_code else 0;
+    return if (report.failed > 0 or report.not_indexed > 0 or c.pending > 0 or c.failed > 0) recover_failed_exit_code else 0;
 }
 
 const Verified = enum { deleted, missing, mismatch };
@@ -866,8 +930,8 @@ fn recoverModified(gpa: Allocator, io: std.Io, target_abs: []const u8, tag: []co
         report.rolled_forward += 1;
         return;
     }
-    restoreVerified(gpa, io, bak, target_abs, base_hash) catch |err| switch (err) {
-        error.BaseChanged, error.FileLocked => {
+    restoreVerified(gpa, io, bak, target_abs, base_hash, new_hash) catch |err| switch (err) {
+        error.BaseChanged, error.FileLocked, error.TargetChanged => {
             report.skipped += 1;
             return;
         },
@@ -1125,6 +1189,29 @@ fn renameByHandle(gpa: Allocator, handle: windows.HANDLE, target_abs: []const u8
     };
 }
 
+pub fn copyWithTimes(io: std.Io, from_abs: []const u8, to_abs: []const u8) !void {
+    var from_wide: WidePath = undefined;
+    var to_wide: WidePath = undefined;
+    if (win.CopyFileW(try toWide(&from_wide, from_abs), try toWide(&to_wide, to_abs), .TRUE) == .FALSE) return error.CopyFailed;
+    const file = try std.Io.Dir.openFileAbsolute(io, to_abs, .{ .mode = .read_write });
+    defer file.close(io);
+    try file.sync(io);
+}
+
+pub fn moveExclusive(gpa: Allocator, from_abs: []const u8, to_abs: []const u8) !void {
+    const guard = try Guard.open(from_abs);
+    defer guard.close();
+    try guard.renameTo(gpa, to_abs);
+    flushParent(to_abs) catch {};
+}
+
+pub fn moveOver(gpa: Allocator, from_abs: []const u8, to_abs: []const u8) !void {
+    const guard = try Guard.open(from_abs);
+    defer guard.close();
+    try guard.renameReplacing(gpa, to_abs);
+    flushParent(to_abs) catch {};
+}
+
 pub fn replaceByRename(gpa: Allocator, io: std.Io, path_abs: []const u8, data: []const u8, expected_base: symbol.Hash) !void {
     if (builtin.os.tag != .windows) return error.Unsupported;
     if (path_abs.len + sidecar_suffix_max > std.fs.max_path_bytes) return error.NameTooLong;
@@ -1255,6 +1342,7 @@ const win = struct {
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn SetFileAttributesW(name: [*:0]const u16, attributes: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn CopyFileW(from: [*:0]const u16, to: [*:0]const u16, fail_if_exists: windows.BOOL) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 };
 

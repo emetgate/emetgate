@@ -1,5 +1,6 @@
 const std = @import("std");
 const checks = @import("../engine/checks.zig");
+const text_checks = @import("../engine/text_checks.zig");
 const query = @import("../engine/query.zig");
 const lang = @import("../engine/lang/registry.zig");
 const memory = @import("../platform/memory.zig");
@@ -7,7 +8,7 @@ const memory = @import("../platform/memory.zig");
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
 
-pub const Error = error{EnforceWithoutCheck};
+pub const Error = error{ EnforceWithoutCheck, MessageRuleWithScope };
 
 pub const absent_field = "-";
 
@@ -121,7 +122,8 @@ pub fn runAs(voice: Voice, gpa: Allocator, io: std.Io, root_abs: []const u8, req
 
 fn writeCheckNames(err_out: *Writer) !void {
     for (checks.registry) |check| try err_out.print("{s} ", .{check.name});
-    try err_out.print("{s} {s}", .{ checks.command_prefix, checks.added_prefix });
+    try err_out.print("{s} {s} {s}", .{ checks.frozen_name, checks.command_prefix, checks.added_prefix });
+    for (text_checks.registry) |check| try err_out.print(" {s}{s}", .{ text_checks.prefix, check.name });
     try err_out.writeByte('\n');
 }
 
@@ -167,7 +169,10 @@ fn modeOf(enforce: bool) []const u8 {
 
 fn refuseUnwritable(gpa: Allocator, decided: Decided) !void {
     if (decided.enforce and decided.check == null) return error.EnforceWithoutCheck;
-    if (decided.check) |spec| try checks.validate(gpa, spec);
+    if (decided.check) |spec| {
+        try checks.validate(gpa, spec);
+        if (text_checks.of(spec) != null and decided.where != null) return error.MessageRuleWithScope;
+    }
 }
 
 fn explainQuery(gpa: Allocator, decided: Decided, err_out: *Writer) !void {

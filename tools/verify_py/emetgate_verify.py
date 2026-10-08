@@ -186,7 +186,14 @@ def read_receipt(value):
     if value["_type"] != STATEMENT_TYPE or value["predicateType"] != PREDICATE_TYPE:
         raise Invalid("not an emetgate receipt")
     p = value["predicate"]
-    exact_keys(p, ["batch", "operation", "class", "evidence", "resolver", "files", "symbols", "checks", "rules", "sandbox", "emetgate"])
+    keys = ["batch", "operation", "class", "evidence", "resolver", "files", "symbols", "checks", "rules", "sandbox", "emetgate"]
+    form = "checked_out"
+    if isinstance(p, dict) and "form" in p:
+        form = p["form"]
+        if form not in ("stored", "checked_out"):
+            raise Invalid("unknown form")
+        keys = keys + ["form"]
+    exact_keys(p, keys)
     subjects = []
     for s in list_of(value["subject"]):
         exact_keys(s, ["name", "digest"])
@@ -229,7 +236,7 @@ def read_receipt(value):
     if p["resolver"] is not None:
         text(p["resolver"])
     digest(p["batch"], 8)
-    return {"batch": p["batch"], "operation": p["operation"], "class": p["class"], "subjects": subjects, "files": files, "symbols": symbols, "checks": checks, "rules": rules}
+    return {"batch": p["batch"], "operation": p["operation"], "class": p["class"], "subjects": subjects, "files": files, "symbols": symbols, "checks": checks, "rules": rules, "form": form}
 
 
 def list_of(value):
@@ -324,14 +331,17 @@ def verify(git, spec):
         for f in r["files"]:
             if f["after"] is not None and not any(s["path"] == f["path"] for s in r["subjects"]):
                 outcome.raise_to(MISMATCH, "a written file is not a subject")
+        stored = r["form"] == "stored"
         for f in r["files"]:
+            if stored and f["path"] not in state:
+                state[f["path"]] = (blob_digest(git.blob(parent, f["path"])), False, True)
             before, driven, available = current(f["path"])
             if driven and (not available or before != f["before"]):
                 outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
             elif before != f["before"]:
                 outcome.raise_to(MISMATCH, "the before digest does not match the parent commit or the previous receipt")
             if last[f["path"]] == index:
-                data, driven, available = git.form(rev, f["path"])
+                data, driven, available = (git.blob(rev, f["path"]), False, True) if stored else git.form(rev, f["path"])
                 if not available:
                     outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
                     raise_file(f["path"], UNVERIFIED, NOT_CHECKED_OUT)

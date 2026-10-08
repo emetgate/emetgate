@@ -7,6 +7,7 @@ const Profile = profile_mod.Profile;
 const isOneOf = @import("functions.zig").isOneOf;
 const query = @import("query.zig");
 const lang = @import("lang/registry.zig");
+const text_checks = @import("text_checks.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -48,6 +49,10 @@ pub fn commandOf(spec: []const u8) ?[]const u8 {
     return spec[command_prefix.len..];
 }
 
+pub fn messageCommandOf(spec: []const u8) ?[]const u8 {
+    return commandOf(text_checks.of(spec) orelse return null);
+}
+
 pub fn validateCommand(command: []const u8) Error!void {
     if (std.mem.trim(u8, command, command_whitespace).len == 0) return error.EmptyCommandCheck;
     if (command.len > max_command_bytes) return error.CommandCheckTooLong;
@@ -76,6 +81,11 @@ fn resolve(checks: []const Check, spec: []const u8) Error!struct { check: Check,
 }
 
 pub const added_prefix = "added:";
+pub const frozen_name = "frozen";
+
+pub fn isFrozen(spec: []const u8) bool {
+    return std.mem.eql(u8, parse(spec).name, frozen_name);
+}
 
 pub fn addedOf(spec: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, spec, added_prefix)) return null;
@@ -93,10 +103,18 @@ pub fn validate(gpa: Allocator, spec: []const u8) Error!void {
 
 pub fn validateStatic(gpa: Allocator, spec: []const u8) Error!void {
     if (commandOf(spec) != null) return error.CommandCheckNotStatic;
+    if (messageCommandOf(spec)) |command| return validateCommand(command);
+    if (text_checks.of(spec)) |inner| return text_checks.validate(inner);
     if (addedOf(spec)) |inner| {
         if (commandOf(inner) != null) return error.CommandCheckNotStatic;
         if (addedOf(inner) != null) return error.UnknownCheck;
+        if (text_checks.of(inner) != null) return error.UnknownCheck;
+        if (isFrozen(inner)) return error.UnknownCheck;
         return validateStatic(gpa, inner);
+    }
+    if (isFrozen(spec)) {
+        if (parse(spec).arg != null) return error.UnexpectedCheckArgument;
+        return;
     }
     const resolved = try resolve(&registry, spec);
     if (std.mem.eql(u8, resolved.check.name, query_name)) {
@@ -582,6 +600,18 @@ test "only a cmd: prefix names a command predicate, and every other spec stays a
     try testing.expect(commandOf("Cmd:x") == null);
     try testing.expect(commandOf("cmd") == null);
     try testing.expect(commandOf("xcmd:x") == null);
+}
+
+test "a message command is a command behind the message prefix, validated for shape and never looked up as a text check" {
+    try testing.expectEqualStrings("npx commitlint", messageCommandOf("message:cmd:npx commitlint").?);
+    try testing.expect(messageCommandOf("cmd:npx commitlint") == null);
+    try testing.expect(messageCommandOf("message:forbid:cmd:x") == null);
+    try testing.expect(messageCommandOf("added:message:cmd:x") == null);
+    try validate(testing.allocator, "message:cmd:npx commitlint");
+    try validateStatic(testing.allocator, "message:cmd:npx commitlint");
+    try testing.expectError(error.EmptyCommandCheck, validate(testing.allocator, "message:cmd: "));
+    try testing.expectError(error.CommandCheckTooLong, validate(testing.allocator, "message:cmd:" ++ "a" ** (max_command_bytes + 1)));
+    try testing.expectError(error.UnknownCheck, validate(testing.allocator, "added:message:cmd:x"));
 }
 
 test "an unknown check name is still refused instead of being run as a command" {

@@ -771,6 +771,32 @@ pub fn deleteFile(tree: Handle, rel_raw: []const u8) Error!void {
     try removeAny(parent, try toWide(&name_w, baseOf(rel)), &removed);
 }
 
+pub fn pruneEmptyParents(tree: Handle, rel_raw: []const u8) void {
+    if (builtin.os.tag != .windows) return;
+    var rel_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (rel_raw.len > rel_buf.len) return;
+    const rel = rel_buf[0..rel_raw.len];
+    @memcpy(rel, rel_raw);
+    std.mem.replaceScalar(u8, rel, '\\', '/');
+    validate(rel) catch return;
+    var dir = parentOf(rel);
+    while (dir.len != 0) : (dir = parentOf(dir)) {
+        const parent = (descend(tree, parentOf(dir), false) catch return) orelse return;
+        defer dir_scan.close(parent);
+        var name_w: [dir_scan.max_name_units + 1]u16 = undefined;
+        const name = toWide(&name_w, baseOf(dir)) catch return;
+        var handle: Handle = undefined;
+        if (dir_scan.openRelative(parent, name, nt.delete | nt.synchronize | nt.file_read_attributes, nt.file_open, nt.option_open_reparse_point | nt.option_sync | nt.option_directory, &handle) != nt.status_success) return;
+        defer dir_scan.close(handle);
+        var info: win.BasicInfo = undefined;
+        if (win.GetFileInformationByHandleEx(handle, win.file_basic_info, &info, @sizeOf(win.BasicInfo)) == .FALSE) return;
+        if (dir_scan.kindOf(info.attributes) != .directory) return;
+        var disposition: win.DispositionEx = .{ .flags = win.disposition_delete | win.disposition_posix };
+        var iosb: nt.IoStatusBlock = undefined;
+        if (win.NtSetInformationFile(handle, &iosb, &disposition, @sizeOf(win.DispositionEx), win.class_disposition_ex) != nt.status_success) return;
+    }
+}
+
 fn removeAny(parent: Handle, name: []const u16, removed: *usize) Error!void {
     var probe: Handle = undefined;
     switch (dir_scan.openRelative(parent, name, nt.file_read_attributes | nt.synchronize, nt.file_open, nt.option_open_reparse_point | nt.option_sync, &probe)) {
@@ -933,6 +959,41 @@ fn descendExisting(root: Handle, dir_rel: []const u8) Error!?Handle {
     return current;
 }
 
+const Flush = struct {
+    root: Handle,
+    rels: []const []const u8,
+
+    fn body(raw: *anyopaque, item: u32, scratch: *align(8) dir_scan.Buffer, key: []u8) Error!void {
+        _ = scratch;
+        _ = key;
+        const self: *Flush = @ptrCast(@alignCast(raw));
+        const rel = self.rels[item];
+        var wide: [flush_path_units]u16 = undefined;
+        if (rel.len > wide.len) return error.NameTooLong;
+        const len = std.unicode.wtf8ToWtf16Le(&wide, rel) catch return error.InvalidWtf8;
+        std.mem.replaceScalar(u16, wide[0..len], '/', '\\');
+        var file: Handle = undefined;
+        if (dir_scan.openRelative(self.root, wide[0..len], win.file_write_data | nt.synchronize, nt.file_open, nt.option_non_directory | nt.option_sync | nt.option_open_reparse_point, &file) != nt.status_success) return error.GateTreeBlocked;
+        defer dir_scan.close(file);
+        if (win.FlushFileBuffers(file) == .FALSE) return error.GateTreeBlocked;
+        if (builtin.is_test) _ = flushed.fetchAdd(1, .monotonic);
+    }
+};
+
+const flush_path_units = 4096;
+
+pub var flushed: std.atomic.Value(usize) = .init(0);
+
+pub fn flushFiles(pool: ?*worker_pool.Pool, root: Handle, rels: []const []const u8) Error!void {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    if (rels.len == 0) return;
+    const items = std.heap.page_allocator.alloc(u32, rels.len) catch return error.OutOfMemory;
+    defer std.heap.page_allocator.free(items);
+    for (items, 0..) |*item, index| item.* = @intCast(index);
+    var state: Flush = .{ .root = root, .rels = rels };
+    try Sweep.run(pool, items, Flush.body, &state);
+}
+
 pub fn removeAll(tree: Handle) Error!usize {
     if (builtin.os.tag != .windows) return error.Unsupported;
     var removed: usize = 0;
@@ -957,6 +1018,7 @@ pub fn removeAll(tree: Handle) Error!usize {
 
 const win = struct {
     const duplicate_same_access: u32 = 2;
+    const file_write_data: u32 = 0x0002;
     const label_security_information: u32 = 0x10;
     const class_link: u32 = 11;
     const class_disposition_ex: u32 = 64;
@@ -978,6 +1040,7 @@ const win = struct {
 
     extern "ntdll" fn NtSetInformationFile(handle: Handle, iosb: *nt.IoStatusBlock, info: *anyopaque, length: u32, class: u32) callconv(.winapi) u32;
     extern "kernel32" fn GetCurrentProcess() callconv(.winapi) Handle;
+    extern "kernel32" fn FlushFileBuffers(handle: Handle) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn DuplicateHandle(source_process: Handle, source: Handle, target_process: Handle, target: *Handle, access: u32, inherit: windows.BOOL, options: u32) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn ReadFile(handle: Handle, buffer: [*]u8, length: u32, read: *u32, overlapped: ?*anyopaque) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn WriteFile(handle: Handle, buffer: [*]const u8, length: u32, written: *u32, overlapped: ?*anyopaque) callconv(.winapi) windows.BOOL;

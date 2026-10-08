@@ -9,6 +9,7 @@ const runner = @import("runner.zig");
 const rules = @import("rules.zig");
 const create = @import("create.zig");
 const batch_plan = @import("batch_plan.zig");
+const commit_plan = @import("commit_plan.zig");
 const docnode = @import("../engine/docnode.zig");
 const tsserver = @import("tsserver.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -43,6 +44,7 @@ pub const BatchOptions = struct {
     commit_step: ?*const disk.Step = null,
     language_service: ?*tsserver.Session = null,
     created_dirs: []const []const u8 = &.{},
+    commit: ?*commit_plan.Request = null,
 };
 
 pub const BatchResult = union(enum) {
@@ -117,6 +119,12 @@ pub fn tryMutateBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Ba
 
 pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit, options: BatchOptions) !BatchResult {
     if (options.test_command.len == 0) return error.NoTestCommand;
+    var session = switch (try openCommit(gpa, io, root, prepared, options)) {
+        .ok => |opened| opened,
+        .violated => |report| return .{ .rule_violation = report },
+        .failed => |failure| return .{ .rule_check_failed = failure },
+    };
+    defer session.deinit(gpa);
     for (prepared, edits[0..prepared.len]) |p, edit| {
         if (p.nodes) |applied| {
             const snapshot = applied.snapshot;
@@ -173,7 +181,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         for (doc_prepared.items) |p| new_total += p.source().len;
         t.* = .{ .gate = .full, .new_len = new_total };
     }
-    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, edits, options)) {
+    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, edits, options, &session)) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |violated| return .{ .rule_violation = violated },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -185,6 +193,10 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
 
     const committed = try classifyAll(gpa, io, root, prepared, edits, doc_prepared.items);
     errdefer gpa.free(committed);
+
+    const changes = try commitChanges(gpa, prepared, doc_prepared.items);
+    defer gpa.free(changes);
+    try session.prepare(gpa, io, root, changes);
 
     const total = prepared.len + doc_prepared.items.len;
     const pendings = try gpa.alloc(disk.Pending, total);
@@ -201,7 +213,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
     var batch = disk.Batch.init(gpa, io, journal_dir);
-    batch.root = root;
+    if (options.commit == null) batch.root = root;
     batch.created_dirs = options.created_dirs;
     if (options.trace) |t| t.commit_attempted = true;
     for (prepared, 0..) |p, i| {
@@ -221,8 +233,32 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         count = prepared.len + i + 1;
     }
     commit_entered = true;
-    try disk.commitBatch(pendings, null, null, &batch, options.commit_step);
+    try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);
     return .{ .committed = committed };
+}
+
+fn openCommit(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, options: BatchOptions) !commit_plan.Opened {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var rels: std.ArrayList([]const u8) = .empty;
+    for (prepared) |p| {
+        try rels.append(arena, p.rel);
+        if (p.source_rel) |from| try rels.append(arena, from);
+    }
+    for (options.doc_edits) |edit| try rels.append(arena, try relativeUnder(arena, root, edit.file_abs));
+    return commit_plan.Session.open(gpa, io, root, options.commit, rels.items);
+}
+
+fn commitChanges(gpa: Allocator, prepared: []const Prepared, doc_prepared: []const Prepared) ![]commit_plan.Change {
+    var changes: std.ArrayList(commit_plan.Change) = .empty;
+    errdefer changes.deinit(gpa);
+    for (prepared) |p| {
+        if (p.source_rel) |from| try changes.append(gpa, .{ .rel = from, .content = null });
+        try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source(), .mode_from = p.source_rel });
+    }
+    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });
+    return changes.toOwnedSlice(gpa);
 }
 
 fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, edits: []const Edit, doc_prepared: []const Prepared) ![]Committed {
@@ -251,18 +287,20 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
     return committed;
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, edits: []const Edit, options: BatchOptions) !runner.ShadowRun {
-    const files = try shadow.trackedFiles(gpa, io, root);
-    defer gpa.free(files);
-    defer shadow.freeFileList(gpa, files);
-
-    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, options.gate_tree, options.trace);
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, edits: []const Edit, options: BatchOptions, session: *commit_plan.Session) !runner.ShadowRun {
+    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
     defer workspace.finish();
+    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
     for (prepared) |p| {
         if (p.source_rel) |from| try workspace.deleteFile(from);
         if (p.action == .delete_file) try workspace.deleteFile(p.rel) else try workspace.writeFile(p.rel, p.source());
     }
     for (doc_prepared) |p| try workspace.writeFile(p.rel, p.source());
+    {
+        const changes = try commitChanges(gpa, prepared, doc_prepared);
+        defer gpa.free(changes);
+        try runner.deriveGate(gpa, io, root, location, session, changes);
+    }
 
     var wanted: usize = prepared.len;
     for (prepared) |p| {
@@ -285,7 +323,7 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
         built += 1;
     }
-    if (try runner.runCommandRules(gpa, io, root, location.shadow, targets[0..built], options.limits, options.allow_repo_memory)) |gated| return gated;
+    if (try runner.runCommandRulesFor(gpa, io, root, runner.gateDir(location, session), targets[0..built], null, options.limits, options.allow_repo_memory)) |gated| return gated;
 
-    return runner.runStages(gpa, io, location.shadow, options.typecheck_command, options.test_command, options.limits);
+    return runner.runStages(gpa, io, runner.gateDir(location, session), options.typecheck_command, options.test_command, options.limits);
 }

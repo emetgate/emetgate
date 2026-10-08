@@ -1,4 +1,6 @@
 const std = @import("std");
+const commit_intent = @import("../platform/commit_intent.zig");
+const commit_plan = @import("../platform/commit_plan.zig");
 const telemetry = @import("telemetry.zig");
 const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
@@ -199,9 +201,20 @@ pub const tool_defs = [_]Tool{
     },
 };
 
+pub fn finishPendingCommits(gpa: Allocator, io: std.Io, root: []const u8) void {
+    const dir = commit_intent.dirOf(gpa, root) catch return;
+    defer gpa.free(dir);
+    std.Io.Dir.cwd().access(io, dir, .{}) catch return;
+    const lock = shadow.Lock.acquire(io, root) catch return;
+    defer lock.release();
+    const found = commit_plan.recoverFound(gpa, io, root) catch return;
+    if (found.left != 0) std.debug.print("emetgate: recover left as found ({s}): {s}\n", .{ found.reason orelse "", found.names() });
+}
+
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
     const root: ?[]u8 = runner.repoRoot(gpa, io) catch null;
     defer if (root) |r| gpa.free(r);
+    if (root) |r| finishPendingCommits(gpa, io, r);
     const workspace: ?[]u8 = if (root) |r| std.fmt.allocPrint(gpa, "{s}\\{s}", .{ r, shadow.workspace_dir }) catch null else null;
     defer if (workspace) |ws| gpa.free(ws);
     var observer: ?telemetry.Observer = if (workspace) |ws| .{ .workspace_abs = ws } else null;
@@ -285,7 +298,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
         return true;
     }
     if (std.mem.eql(u8, method, "tools/list")) {
-        try writeToolsList(out, request_id);
+        try writeToolsList(out, request_id, policy.commit);
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
@@ -366,7 +379,17 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
     try js.endObject();
 }
 
-fn writeToolsList(out: *Writer, id: Value) !void {
+pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc" };
+const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
+
+fn commits(tool: []const u8) bool {
+    for (commit_tools) |name| {
+        if (std.mem.eql(u8, name, tool)) return true;
+    }
+    return false;
+}
+
+fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
     try js.beginObject();
     try envelope(&js, id);
@@ -395,23 +418,36 @@ fn writeToolsList(out: *Writer, id: Value) !void {
             try js.write(prop.desc);
             try js.endObject();
         }
+        const with_message = commit and commits(tool.name);
+        if (with_message) try writeCommitProp(&js);
         try js.endObject();
         try js.objectField("required");
         try js.beginArray();
         for (tool.props) |prop| {
             if (!prop.optional) try js.write(prop.name);
         }
+        if (with_message) try js.write(commit_prop.name);
         try js.endArray();
         try js.endObject();
         try js.endObject();
     }
-    try writeBatchToolDef(&js);
+    try writeBatchToolDef(&js, commit);
     try js.endArray();
     try js.endObject();
     try js.endObject();
 }
 
-fn writeBatchToolDef(js: *std.json.Stringify) !void {
+fn writeCommitProp(js: *std.json.Stringify) !void {
+    try js.objectField(commit_prop.name);
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write(commit_prop.ty);
+    try js.objectField("description");
+    try js.write(commit_prop.desc);
+    try js.endObject();
+}
+
+fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();
     try js.objectField("name");
     try js.write("emetgate_try_batch");
@@ -481,10 +517,12 @@ fn writeBatchToolDef(js: *std.json.Stringify) !void {
     try js.endArray();
     try js.endObject();
     try js.endObject();
+    if (commit) try writeCommitProp(js);
     try js.endObject();
     try js.objectField("required");
     try js.beginArray();
     try js.write("edits");
+    if (commit) try js.write(commit_prop.name);
     try js.endArray();
     try js.endObject();
     try js.endObject();

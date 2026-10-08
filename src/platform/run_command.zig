@@ -161,7 +161,7 @@ pub fn runInShadow(gpa: Allocator, io: std.Io, options: Options) !sandbox.Report
     defer if (options.blocked) |blocked| {
         blocked.* = trace.blocked;
     };
-    var workspace = try runner.prepareShadow(gpa, io, options.root_abs, location, files, options.linked, options.gate_tree, &trace);
+    var workspace = try runner.prepareShadow(gpa, io, options.root_abs, location, location.shadow, files, options.linked, options.gate_tree, &trace, null);
     if (options.used) |used| workspace.reportTo(used);
     defer workspace.finish();
     return switch (try runner.runStages(gpa, io, location.shadow, null, options.command, options.limits)) {

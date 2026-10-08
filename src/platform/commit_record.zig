@@ -5,7 +5,7 @@ const own_dir = @import("own_dir.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
-const WidePath = [std.fs.max_path_bytes:0]u16;
+pub const WidePath = [std.fs.max_path_bytes:0]u16;
 
 pub const Tag = [16]u8;
 

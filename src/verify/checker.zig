@@ -83,7 +83,8 @@ const State = struct {
     digest: ?Hash,
     bytes: ?[]const u8,
     known: bool,
-    driven: bool = false,
+    form: Form = .{},
+    from_parent: bool = false,
 };
 
 const Files = struct {
@@ -123,8 +124,8 @@ const Checker = struct {
     fn state(self: *Checker, path: []const u8) !*State {
         const slot = try self.states.getOrPut(self.arena, path);
         if (!slot.found_existing) {
-            const form = try self.formOf(self.source.before_text, path, try self.source.before(self.source.context, path));
-            slot.value_ptr.* = .{ .digest = digestOf(form.bytes), .bytes = form.bytes, .known = form.available, .driven = form.driven };
+            const bytes = try self.source.before(self.source.context, path);
+            slot.value_ptr.* = .{ .digest = digestOf(bytes), .bytes = bytes, .known = true, .form = try self.formOf(self.source.before_text, path, bytes), .from_parent = true };
         }
         return slot.value_ptr;
     }
@@ -190,12 +191,22 @@ const Checker = struct {
     }
 };
 
+pub fn symbolHashIn(arena: Allocator, runtime: *Runtime, path: []const u8, bytes: []const u8, ref_text: []const u8) !?Hash {
+    var c: Checker = .{ .arena = arena, .runtime = runtime, .source = undefined, .files = .{ .arena = arena } };
+    return c.symbolHash(path, bytes, ref_text) catch |err| switch (err) {
+        error.Unparsable => null,
+        else => |e| e,
+    };
+}
+
 const Known = struct {
     path: []const u8,
     before: ?[]const u8,
     after: ?[]const u8,
     before_known: bool,
     after_known: bool,
+    before_form: Form = .{},
+    after_form: Form = .{},
 };
 
 fn lessHash(_: void, a: Hash, b: Hash) bool {
@@ -246,31 +257,36 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
         if (!found) outcome.raise(.mismatch, "a written file is not a subject");
     }
 
+    const stored = r.form == .stored;
     var known: std.ArrayList(Known) = .empty;
     for (r.files) |f| {
         const st = try c.state(f.path);
-        var entry: Known = .{ .path = f.path, .before = st.bytes, .after = null, .before_known = st.known, .after_known = false };
-        if (st.driven and (!st.known or !eqlOptional(st.digest, f.before))) {
+        var entry: Known = .{ .path = f.path, .before = st.bytes, .after = null, .before_known = st.known, .after_known = false, .before_form = st.form };
+        const checked_out = st.from_parent and !stored;
+        const before_digest: ?Hash = if (checked_out) digestOf(st.form.bytes) else st.digest;
+        if (checked_out and st.form.driven and (!st.form.available or !eqlOptional(before_digest, f.before))) {
             entry.before_known = false;
             outcome.raise(.unverified, not_checked_out);
-        } else if (!eqlOptional(st.digest, f.before)) outcome.raise(.mismatch, "the before digest does not match the parent commit or the previous receipt");
+        } else if (!eqlOptional(before_digest, f.before)) outcome.raise(.mismatch, "the before digest does not match the parent commit or the previous receipt");
         if (last.get(f.path).? == index) {
-            const form = try c.formOf(c.source.after_text, f.path, try c.source.after(c.source.context, f.path));
-            const bytes = form.bytes;
-            if (!form.available) {
+            const bytes = try c.source.after(c.source.context, f.path);
+            const form = try c.formOf(c.source.after_text, f.path, bytes);
+            const judged: ?[]const u8 = if (stored) bytes else form.bytes;
+            if (!stored and !form.available) {
                 outcome.raise(.unverified, not_checked_out);
                 try c.files.raise(f.path, .unverified, not_checked_out);
-            } else if (eqlOptional(digestOf(bytes), f.after)) {
+            } else if (eqlOptional(digestOf(judged), f.after)) {
                 entry.after = bytes;
                 entry.after_known = true;
+                entry.after_form = form;
                 for (r.subjects) |s| {
-                    if (std.mem.eql(u8, s.path, f.path) and !std.mem.eql(u8, &receipt.sha256(bytes.?), &s.sha256)) outcome.raise(.mismatch, "a subject's sha256 does not match the commit");
+                    if (std.mem.eql(u8, s.path, f.path) and !std.mem.eql(u8, &receipt.sha256(judged.?), &s.sha256)) outcome.raise(.mismatch, "a subject's sha256 does not match the commit");
                 }
             } else {
                 try c.files.raise(f.path, .unverified, "the file changed after the receipt, outside the gate");
             }
         }
-        st.* = .{ .digest = f.after, .bytes = entry.after, .known = entry.after_known };
+        st.* = .{ .digest = f.after, .bytes = entry.after, .known = entry.after_known, .form = entry.after_form };
         try known.append(c.arena, entry);
     }
 
@@ -280,14 +296,17 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
         } else unreachable;
         inline for (.{ .{ "before", "the symbol hash before the change does not match" }, .{ "after", "the symbol hash after the change does not match" } }) |side| {
             const is_known = @field(k, side[0] ++ "_known");
-            const bytes = @field(k, side[0]);
+            const form: Form = @field(k, side[0] ++ "_form");
+            const bytes = form.bytes;
             const claimed = @field(s, side[0]);
             if (!is_known) {
                 outcome.raise(.unverified, "an intermediate state inside the commit is not available");
+            } else if (!form.available) {
+                outcome.raise(.unverified, not_checked_out);
             } else if (bytes) |b| {
                 const actual = c.symbolHash(s.path, b, s.ref) catch |err| switch (err) {
                     error.Unparsable => blk: {
-                        outcome.raise(.mismatch, "a file does not parse");
+                        if (form.driven) outcome.raise(.unverified, not_checked_out) else outcome.raise(.mismatch, "a file does not parse");
                         break :blk claimed;
                     },
                     else => |e| return e,
@@ -333,11 +352,19 @@ fn allKnown(known: []const Known) bool {
 
 fn checkSymmetry(c: *Checker, r: Receipt, known: []const Known, outcome: *Outcome) !void {
     if (!allKnown(known)) return outcome.raise(.unverified, "an intermediate state inside the commit is not available");
+    for (known) |k| {
+        for ([_]Form{ k.before_form, k.after_form }) |form| {
+            if (!form.available) return outcome.raise(.unverified, not_checked_out);
+            if (!form.driven) continue;
+            const snapshot = (try c.parse(k.path, form.bytes orelse continue)) orelse return outcome.raise(.unverified, not_checked_out);
+            snapshot.destroy();
+        }
+    }
     switch (r.operation) {
         .rename => {
             for (known) |k| {
-                const before = k.before orelse return outcome.raise(.mismatch, "a rename created or deleted a file");
-                const after = k.after orelse return outcome.raise(.mismatch, "a rename created or deleted a file");
+                const before = k.before_form.bytes orelse return outcome.raise(.mismatch, "a rename created or deleted a file");
+                const after = k.after_form.bytes orelse return outcome.raise(.mismatch, "a rename created or deleted a file");
                 if (!try c.alphaEqual(k.path, before, after)) outcome.raise(.mismatch, "a statement's alpha hash changed");
             }
         },
@@ -345,7 +372,7 @@ fn checkSymmetry(c: *Checker, r: Receipt, known: []const Known, outcome: *Outcom
             var a: std.ArrayList(Hash) = .empty;
             var b: std.ArrayList(Hash) = .empty;
             for (known) |k| {
-                if (!try c.hashes(k.path, k.before, &a) or !try c.hashes(k.path, k.after, &b)) return outcome.raise(.mismatch, "a file does not parse");
+                if (!try c.hashes(k.path, k.before_form.bytes, &a) or !try c.hashes(k.path, k.after_form.bytes, &b)) return outcome.raise(.mismatch, "a file does not parse");
             }
             if (!sameMultiset(a.items, b.items)) outcome.raise(.mismatch, "the symbol and declaration hashes before and after the move differ");
         },
@@ -353,7 +380,7 @@ fn checkSymmetry(c: *Checker, r: Receipt, known: []const Known, outcome: *Outcom
             for (known) |k| {
                 var a: std.ArrayList(Hash) = .empty;
                 var b: std.ArrayList(Hash) = .empty;
-                if (!try c.hashes(k.path, k.before, &a) or !try c.hashes(k.path, k.after, &b)) return outcome.raise(.mismatch, "a file does not parse");
+                if (!try c.hashes(k.path, k.before_form.bytes, &a) or !try c.hashes(k.path, k.after_form.bytes, &b)) return outcome.raise(.mismatch, "a file does not parse");
                 for (r.symbols) |s| {
                     if (!std.mem.eql(u8, s.path, k.path)) continue;
                     if (s.before != null and s.after != null) return outcome.raise(.mismatch, "a symmetry receipt changes a symbol body");

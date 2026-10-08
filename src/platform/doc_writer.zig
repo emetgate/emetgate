@@ -9,6 +9,7 @@ const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
 const rules = @import("rules.zig");
+const commit_plan = @import("commit_plan.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -30,6 +31,7 @@ pub const Options = struct {
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
     commit_step: ?*const disk.Step = null,
+    commit: ?*commit_plan.Request = null,
 };
 
 pub const Trace = struct {
@@ -69,6 +71,12 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     defer lock.release();
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
+    var session = switch (try commit_plan.Session.open(gpa, io, root, options.commit, &.{rel})) {
+        .ok => |opened| opened,
+        .violated => |report| return .{ .rule_violation = report },
+        .failed => |failure| return .{ .rule_check_failed = failure },
+    };
+    defer session.deinit(gpa);
 
     const source = std.Io.Dir.cwd().readFileAlloc(io, options.file_abs, gpa, .limited(docnode.max_bytes + 1)) catch |err| switch (err) {
         error.StreamTooLong => return error.DocTooLarge,
@@ -88,23 +96,19 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
     defer location.deinit(gpa);
 
-    const files = try shadow.trackedFiles(gpa, io, root);
-    defer gpa.free(files);
-    defer shadow.freeFileList(gpa, files);
-
-    var workspace = try runner.prepareShadow(gpa, io, root, location, files, options.linked, options.gate_tree, if (trace) |t| &t.gate else null);
+    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, if (trace) |t| &t.gate else null, &session);
     defer workspace.finish();
-    try workspace.writeFile(rel, applied.source);
-
-    if (try runner.runCommandRules(gpa, io, root, location.shadow, &.{}, options.limits, options.allow_repo_memory)) |gated| {
+    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits, options.allow_repo_memory)) |gated| {
         return switch (gated) {
             .rule_violation => |report| .{ .rule_violation = report },
             .rule_check_failed => |failure| .{ .rule_check_failed = failure },
             else => unreachable,
         };
     }
+    try workspace.writeFile(rel, applied.source);
+    try runner.deriveGate(gpa, io, root, location, &session, &.{.{ .rel = rel, .content = applied.source }});
 
-    const staged = try runner.runStages(gpa, io, location.shadow, options.typecheck_command, options.test_command, options.limits);
+    const staged = try runner.runStages(gpa, io, runner.gateDir(location, &session), options.typecheck_command, options.test_command, options.limits);
     switch (staged) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation, .rule_check_failed => unreachable,
@@ -113,7 +117,11 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
             defer report.deinit(gpa);
             const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
             defer gpa.free(journal_dir);
-            try disk.replaceReporting(gpa, io, options.file_abs, applied.source, base_hash, null, journal_dir, options.commit_step);
+            const change = [_]commit_plan.Change{.{ .rel = rel, .content = applied.source }};
+            try session.prepare(gpa, io, root, &change);
+            var pendings = [1]disk.Pending{try disk.prepare(gpa, io, options.file_abs, applied.source, base_hash)};
+            const journal = disk.Batch.init(gpa, io, journal_dir);
+            try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);
             return .{ .committed = applied.hash };
         },
     }

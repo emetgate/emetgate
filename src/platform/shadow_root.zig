@@ -14,8 +14,12 @@ pub const Location = struct {
     base: []u8,
     workspace: []u8,
     shadow: []u8,
+    committed: []u8 = &.{},
+    committed_shadow: []u8 = &.{},
 
     pub fn deinit(self: Location, gpa: Allocator) void {
+        gpa.free(self.committed_shadow);
+        gpa.free(self.committed);
         gpa.free(self.shadow);
         gpa.free(self.workspace);
         gpa.free(self.base);
@@ -33,7 +37,11 @@ pub fn locate(gpa: Allocator, root_abs: []const u8, override: ?[]const u8) !Loca
     const workspace = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ base, &key });
     errdefer gpa.free(workspace);
     const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\shadow", .{workspace});
-    return .{ .base = base, .workspace = workspace, .shadow = shadow_abs };
+    errdefer gpa.free(shadow_abs);
+    const committed = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ workspace, shadow.committed_dir });
+    errdefer gpa.free(committed);
+    const committed_shadow = try std.fmt.allocPrint(gpa, "{s}\\shadow", .{committed});
+    return .{ .base = base, .workspace = workspace, .shadow = shadow_abs, .committed = committed, .committed_shadow = committed_shadow };
 }
 
 pub fn displayRoot(gpa: Allocator, override: ?[]const u8) ![]u8 {
@@ -116,9 +124,7 @@ pub fn sweep(gpa: Allocator, io: std.Io, base_abs: []const u8, keep_abs: []const
         defer gpa.free(workspace);
         if (std.ascii.eqlIgnoreCase(workspace, keep_abs)) continue;
         if (!try isStale(gpa, io, workspace)) continue;
-        const shadow_abs = try std.fmt.allocPrint(gpa, "{s}\\shadow", .{workspace});
-        defer gpa.free(shadow_abs);
-        shadow.remove(io, base_abs, shadow_abs) catch continue;
+        shadow.removeWorkspace(io, base_abs, workspace) catch continue;
         removed += 1;
     }
     return removed;

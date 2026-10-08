@@ -305,3 +305,60 @@ test "gate tree rights: a working directory that cannot be listed is named in th
     try expectHas(healed, "\"status\":\"ran\"");
     try expectHas(healed, kept_field);
 }
+
+const head_field = "\"gate_tree\":{\"kind\":\"kept\",\"tracked_files\":\"head\",\"private_copies\":0}";
+
+fn tryCommitting(policy: server.Policy, root_abs: []const u8, body: []const u8) ![]u8 {
+    const file = try std.fmt.allocPrint(gpa, "{s}\\calc.ts", .{root_abs});
+    defer gpa.free(file);
+    const hash = symbol.formatHash(try hashOfTwo(file));
+    return callTool(policy, "emetgate_try", .{ .file = file, .symbol = "two", .hash = hash[0..], .body = body, .message = "fix: another two" });
+}
+
+fn gitIn(root_abs: []const u8, args: []const []const u8) !void {
+    var argv: [8][]const u8 = undefined;
+    argv[0] = "git";
+    @memcpy(argv[1..][0..args.len], args);
+    const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    errdefer std.debug.print("{s}{s}", .{ result.stdout, result.stderr });
+    try testing.expect(result.term == .exited and result.term.exited == 0);
+}
+
+test "gate tree rights: committing calls in a repository the user may modify but not fully control are tested on HEAD in the kept tree, before and after HEAD moves" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try newRepo();
+    defer repo.deinit();
+    defer restoreInherited(repo.root_abs);
+    try grantModifyOnly(&repo);
+
+    var policy = keptPolicy(repo.root_abs);
+    policy.commit = true;
+    const refused = try tryCommitting(policy, repo.root_abs, "{\n  return 1 + 1;\n}");
+    defer gpa.free(refused);
+    try expectHas(refused, "\"status\":\"rejected\"");
+    try expectHas(refused, head_field);
+    try expectFile(&repo, "repo/calc.ts", calc);
+
+    policy.test_command = "findstr two notes.txt";
+    const landed = try tryCommitting(policy, repo.root_abs, "{\n  return 1 + 1;\n}");
+    defer gpa.free(landed);
+    try expectHas(landed, "\"status\":\"committed\"");
+    try expectFile(&repo, "repo/calc.ts", "export function two(): number {\n  return 1 + 1;\n}\n");
+
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.txt", .data = "line one\nline moved\n" });
+    try gitIn(repo.root_abs, &.{ "commit", "-q", "-am", "user: notes" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.txt", .data = notes });
+
+    const stale = try tryCommitting(policy, repo.root_abs, "{\n  return 2 + 0;\n}");
+    defer gpa.free(stale);
+    try expectHas(stale, "\"status\":\"rejected\"");
+    try expectHas(stale, head_field);
+
+    policy.test_command = "findstr moved notes.txt";
+    const moved = try tryCommitting(policy, repo.root_abs, "{\n  return 2 + 0;\n}");
+    defer gpa.free(moved);
+    try expectHas(moved, "\"status\":\"committed\"");
+    try expectFile(&repo, "repo/notes.txt", notes);
+}

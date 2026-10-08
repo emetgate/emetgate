@@ -372,6 +372,10 @@ pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
     try js.beginObject();
     try js.objectField("kind");
     try js.write(@tagName(tree.mode));
+    if (tree.source == .head) {
+        try js.objectField("tracked_files");
+        try js.write("head");
+    }
     switch (tree.mode) {
         .kept => {
             try js.objectField("private_copies");
@@ -1081,7 +1085,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.WrittenButNotIndexed => 30,
         error.ScopeUnresolved => 31,
         error.NothingInScope => 32,
-        error.EnforceWithoutCheck => 33,
+        error.EnforceWithoutCheck, error.MessageRuleWithScope => 33,
         error.InvalidDecision => 34,
         error.DecisionNotActive => 35,
         error.MemoryBusy => 36,
@@ -1111,6 +1115,8 @@ pub fn exitCode(err: anyerror) u8 {
         error.NoClobber, error.CaseOnlyRename => 51,
         error.DynamicPathUse, error.FileMoveUnresolved, error.ServiceMismatch => 52,
         error.AmbiguousNode => 56,
+        error.CommitNotEnabled, error.MissingCommitMessage, error.CommitMessageEmpty, error.CommitMessageTooLong, error.CommitMessageNotUtf8, error.CommitMessageNul => 58,
+        error.DetachedHead, error.NoCommitYet, error.OperationInProgress, error.SigningNotSupported, error.NoCommitIdentity, error.TargetHasUncommittedChanges, error.TargetNotInHead, error.TargetSkipWorktree, error.IndexLocked, error.IndexChanged, error.NothingToCommit, error.BranchMoved, error.BranchUpdateRefused, error.CommitStillPending, error.TrackedNamesDifferOnlyInCase, error.GateTreeNotHead, error.GateTreeNotDerived => 59,
         error.OverlappingNodes, error.NoNodeEdits, error.TooManyNodeEdits, error.MixedEditForms => 57,
         else => 1,
     };

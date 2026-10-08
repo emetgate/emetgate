@@ -1,4 +1,5 @@
 const std = @import("std");
+const commit_plan = @import("../platform/commit_plan.zig");
 const symbol = @import("../engine/symbol.zig");
 const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
@@ -56,7 +57,7 @@ pub fn callMove(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn recordMove(gpa: Allocator, io: std.Io, root: []const u8, source_rel: []const u8, target_rel: []const u8, sym: []const u8, hash: symbol.Hash, plan: move_batch.Plan, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer) !void {
+fn recordMove(gpa: Allocator, io: std.Io, root: []const u8, source_rel: []const u8, target_rel: []const u8, sym: []const u8, hash: symbol.Hash, plan: move_batch.Plan, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, request: ?*commit_plan.Request) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -73,11 +74,13 @@ fn recordMove(gpa: Allocator, io: std.Io, root: []const u8, source_rel: []const 
         .typecheck_command = typecheck_command,
         .test_ms = test_ms,
         .version = receipt_note.version,
-    }, w, true);
+    }, w, true, request);
 }
 
 fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try policy_mod.trustedTestCommand(args, policy);
+    var commit = try policy_mod.commitRequest(args, policy, runtime);
+    defer if (commit) |request| request.deinit(gpa);
     const hash = try symbol.parseHash(a.hash);
     const place = try repo.jail(gpa, io, policy.root, a.file);
     defer place.deinit(gpa);
@@ -97,6 +100,7 @@ fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?
         .gate_tree = policy.treeChoice(),
         .trace = &event.trace,
         .language_service = policy.language_service,
+        .commit = if (commit) |*request| request else null,
     });
     defer outcome.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
@@ -127,7 +131,8 @@ fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?
                 .imports_added = outcome.plan.imports_added,
                 .files = files,
             }, note);
-            try recordMove(gpa, io, place.root, place.rel, target.rel, a.symbol, hash, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w);
+            try recordMove(gpa, io, place.root, place.rel, target.rel, a.symbol, hash, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w, if (commit) |*made| made else null);
+            try receipt_note.commit(gpa, io, place.root, commit, w);
             return false;
         },
         .rejected => |report| {
