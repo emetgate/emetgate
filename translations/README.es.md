@@ -24,6 +24,8 @@ https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
 **Comprueba cada escritura.** Un cambio nombra un símbolo y el hash del código en el que se basó. Emetgate coloca el nuevo cuerpo en su sitio, vuelve a analizar el archivo, ejecuta tus reglas y luego ejecuta tu comprobación de tipos y tus pruebas sobre una copia del repositorio dentro de un sandbox. Si algún paso falla, no se escribe nada. Cada commit deja un recibo que `emetgate verify` puede volver a comprobar más tarde sin confiar en el proceso que lo escribió.
 
+**Confirma lo que verificó.** Con `--commit`, un cambio que pasa la puerta no solo se escribe, sino que se confirma en git. La confirmación contiene exactamente el árbol sobre el que se ejecutaron tus pruebas, de modo que lo verificado y lo confirmado son lo mismo. `emetgate verify` reproduce los recibos contra ella, y `emetgate recover` termina o revierte una confirmación que un fallo dejó a medias.
+
 **Lee código para el modelo.** `emetgate_explore` responde a una pregunta sobre la base de código con definiciones enteras y números de línea. `emetgate_evidence` devuelve el código completo de los símbolos que nombras. También hay herramientas para símbolos, archivos, búsqueda y git; la lista está en [REFERENCE.md](../REFERENCE.md#mcp-tools).
 
 **Guarda tus reglas.** Añades una regla una vez desde la línea de comandos. El modelo puede leer las reglas y no puede cambiarlas ni eliminarlas.
