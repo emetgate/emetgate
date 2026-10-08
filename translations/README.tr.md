@@ -16,7 +16,7 @@
 
 Kod yazan bir model ile kaynak ağacınız arasında duran bir kapı. Model bir değişiklik önerir, Emetgate onu denetler ve değişiklik ancak denetimler geçerse diske ulaşır.
 
-Claude Code için MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript ve JavaScript projelerinde.
+MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript ve JavaScript projelerinde. Claude Code ile geliştirilip test edilir, ve kapı araçları diğer MCP istemcilerinde de çalışır.
 
 https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
@@ -65,6 +65,8 @@ Lockdown altında kuralı doğrudan isteme de yazabilirsiniz. Cevabı Emetgate v
 ```
 
 Bundan sonra her yazma konuşma dökümünde işaretlenir: kapı geçirdiyse yeşil **אמת**, reddettiyse kırmızı **מת**.
+
+Emetgate bir MCP sunucusudur, bu yüzden başka istemciler de araçlarını kullanabilir. Kod okuma ve kurallarınıza ya da testlerinize takılan bir değişikliği reddetme, Codex, opencode, Gemini CLI ve Qoder'da da doğrulandı. Kilit modu, `/rule` ve işaretler yalnızca Claude Code'dadır; başka bir istemcide model kapının dışında da düzenleme yapabilir, orada Emetgate bir ölçüm aracıdır, kapalı-güvenli bir denetleyici değil.
 
 ## Ölçümler
 

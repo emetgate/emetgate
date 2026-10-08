@@ -16,7 +16,7 @@
 
 位于编码模型与你的源码树之间的一道闸门。模型提出修改，Emetgate 进行检查，只有检查通过，修改才会落盘。
 
-它作为 Claude Code 的 MCP 服务器运行，支持 Windows 上的 TypeScript 和 JavaScript 项目。
+它作为 MCP 服务器运行，支持 Windows 上的 TypeScript 和 JavaScript 项目。它用 Claude Code 开发和测试，其闸门工具也可在其他 MCP 客户端中使用。
 
 https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
@@ -65,6 +65,8 @@ claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "
 ```
 
 此后每次写入都会在对话记录中标记：闸门放行时为绿色的 **אמת**，拒绝时为红色的 **מת**。
+
+Emetgate 是 MCP 服务器，因此其他客户端也能使用它的工具。读取代码、以及拒绝未通过你的规则或测试的更改，也已在 Codex、opencode、Gemini CLI 和 Qoder 中验证。锁定、`/rule` 和标记仅限 Claude Code；在其他客户端中，模型仍可在闸门之外编辑，因此那里 Emetgate 是测量工具，而非故障关闭的监视器。
 
 ## 测量结果
 
