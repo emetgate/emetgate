@@ -24,6 +24,8 @@ https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
 **It checks every write.** A change names a symbol and the hash of the code it was based on. Emetgate puts the new body in place, reparses the file, runs your rules, then runs your typecheck and your tests on a copy of the repository inside a sandbox. If any step fails, nothing is written. Each commit leaves a receipt that `emetgate verify` can check again later without trusting the process that wrote it.
 
+**It commits what it verified.** Under `--commit`, a change that passes the gate is committed to git, not only written. The commit holds exactly the tree your tests ran on, so what was verified and what was committed are the same thing. `emetgate verify` replays the receipts against it, and `emetgate recover` finishes or rolls back a commit that a crash left half-done.
+
 **It reads code for the model.** `emetgate_explore` answers a question about the codebase with whole definitions and line numbers. `emetgate_evidence` returns the full code of the symbols you name. There are also tools for symbols, files, search and git; the list is in [REFERENCE.md](REFERENCE.md#mcp-tools).
 
 **It keeps your rules.** You add a rule once from the command line. The model can read the rules and cannot change or remove them.

@@ -24,6 +24,8 @@ https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
 
 **Her yazmayı denetler.** Bir değişiklik bir sembolü ve dayandığı kodun hash'ini belirtir. Emetgate yeni gövdeyi yerine koyar, dosyayı yeniden ayrıştırır, kurallarınızı çalıştırır, sonra tip denetiminizi ve testlerinizi deponun korumalı alandaki bir kopyasında çalıştırır. Herhangi bir adım başarısız olursa hiçbir şey yazılmaz. Her commit bir makbuz bırakır; `emetgate verify` onu, yazan sürece güvenmeden sonradan yeniden denetleyebilir.
 
+**Doğruladığını işler.** `--commit` ile, kapıdan geçen bir değişiklik yalnızca yazılmaz, git'e de işlenir. İşlenen commit, testlerinizin koştuğu ağacın tam olarak kendisini tutar; yani doğrulanan ile işlenen aynı şeydir. `emetgate verify` makbuzları ona karşı yeniden oynatır, `emetgate recover` ise bir çökmenin yarım bıraktığı commit'i tamamlar ya da geri alır.
+
 **Model için kod okur.** `emetgate_explore`, kod tabanı hakkındaki bir soruyu bütün tanımlarla ve satır numaralarıyla cevaplar. `emetgate_evidence`, adını verdiğiniz sembollerin tam kodunu döndürür. Semboller, dosyalar, arama ve git için de araçlar vardır; liste [REFERENCE.md](../REFERENCE.md#mcp-tools) içindedir.
 
 **Kurallarınızı tutar.** Bir kuralı komut satırından bir kez eklersiniz. Model kuralları okuyabilir; değiştiremez ve kaldıramaz.
