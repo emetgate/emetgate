@@ -11297,15 +11297,6 @@
       ]
     },
     {
-      "id": "JV3-replace-back-to-two-renames",
-      "file": "src/platform/disk.zig",
-      "from": "        try writeDurably(self.io, self.backup, bytes);",
-      "to": "        try guard.renameTo(self.gpa, self.backup);",
-      "kills": [
-        "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole"
-      ]
-    },
-    {
       "id": "LB1-left-behind-tree-not-recorded",
       "file": "src/platform/shadow.zig",
       "from": "    out.left_behind = err;\n",

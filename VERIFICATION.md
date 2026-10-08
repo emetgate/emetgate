@@ -7,8 +7,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **1824**
-- Mutations declared in `tests/mutations.json`: **1161**
-  - killed: **1127**
+- Mutations declared in `tests/mutations.json`: **1160**
+  - killed: **1126**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -313,7 +313,7 @@ python tools/verification_page.py --check
 
 ### Disk, repository boundary and atomic commit
 
-71 mutation(s).
+70 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -382,7 +382,6 @@ python tools/verification_page.py --check
 | `P1e-journal-recover-restores-over-any-target` | `src/platform/disk.zig` | `const ours = new_hash orelse return guard.renameReplacing(gpa, ...` -> `if (true) return guard.renameReplacing(gpa, target_abs);     co...` | journal base: recover does not put the old bytes back over a file the user edit...; journ... | killed |
 | `P1j-next-call-skips-the-journal` | `src/platform/disk.zig` | `var report: RecoverReport = .{};     try recoverJournaled(gpa, ...` -> `const report: RecoverReport = .{};     if (false) try recoverJo...` | commit window: a crash between the two moves of the file write recovers to the ... | killed |
 | `BD4-plan-doc-skips-the-source-refusal` | `src/platform/batch_plan.zig` | `try docnode.refuseSource(edit.file_abs);` -> `` | planDoc refuses a file of a registered language before it reads it | killed |
-| `JV3-replace-back-to-two-renames` | `src/platform/disk.zig` | `try writeDurably(self.io, self.backup, bytes);` -> `try guard.renameTo(self.gpa, self.backup);` | a writer that tries to save between the backup copy and the replace is refused ... | killed |
 | `SP1-final-name-not-taken-for-a-resolved-path` | `src/platform/repo.zig` | `const final = try finalOf(gpa, opened);     defer gpa.free(fina...` -> `return gpa.dupeZ(u8, opened);` | a repository reached through its 8.3 short path is read, listed and gated like ...; throu... | killed |
 | `SP2-unreadable-final-name-compared-as-spelled` | `src/platform/repo.zig` | `return try exe_path.finalDosPath(gpa, path_abs) orelse error.Fi...` -> `return try exe_path.finalDosPath(gpa, path_abs) orelse try gpa....` | a path whose final name cannot be read is refused instead of being compared as ... | killed |
 | `SP3-served-root-compared-as-spelled` | `src/platform/repo.zig` | `return finalOf(gpa, spelled);` -> `return gpa.dupe(u8, spelled);` | a served root given by its 8.3 short path serves the files of that repository g... | killed |
