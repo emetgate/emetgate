@@ -176,6 +176,7 @@ test {
     _ = @import("tests/commit_window.zig");
     _ = @import("tests/journal_base.zig");
     _ = @import("tests/frozen.zig");
+    _ = @import("tests/every_write.zig");
     _ = @import("tests/message_base.zig");
     _ = @import("tests/verify_filtered_commit.zig");
     _ = @import("tests/run_tool.zig");
