@@ -99,7 +99,6 @@ pub fn judge(gpa: Allocator, io: std.Io, root_abs: []const u8, changes: []const 
     if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
     }
-    for (changes) |change| try confirmClaim(change);
     for (changes) |change| {
         const gated = try scopeKept(gpa, enforced.rules, change);
         if (gated != .ok) return gated;
@@ -174,6 +173,7 @@ pub fn confirmClaim(change: Change) error{UntouchedClaimFalse}!void {
     const holes = change.holes orelse return;
     const base = change.base orelse return error.UntouchedClaimFalse;
     const after = change.after orelse return error.UntouchedClaimFalse;
+    if (base.source.len > std.math.maxInt(u32) or after.source.len > std.math.maxInt(u32)) return error.UntouchedClaimFalse;
     var old_at: u32 = 0;
     var new_at: u32 = 0;
     for (holes) |hole| {
@@ -227,6 +227,7 @@ fn dropViolations(gpa: Allocator, list: *std.ArrayList(Violation)) void {
 }
 
 fn judgeChange(gpa: Allocator, all: []const Rule, change: Change) !Gate {
+    try confirmClaim(change);
     const after = change.after orelse return .ok;
     const everything = [_]Hole{.{
         .old = .{ .start = 0, .end = if (change.base) |base| @intCast(base.source.len) else 0 },
@@ -1211,6 +1212,98 @@ test "a command rule is kept out of the ast gate, which would otherwise fail clo
     try testing.expectEqualStrings("src/other.ts", (try firstCovered(scoped[0], &.{ "src/a.ts", "src/other.ts" })).?);
     try testing.expectEqualStrings("src/a.ts", (try firstCovered(.{ .id = "command", .check = "cmd:exit 0" }, &.{"src/a.ts"})).?);
     try testing.expectEqual(@as(?[]const u8, null), try firstCovered(.{ .id = "command", .check = "cmd:exit 0" }, &.{}));
+}
+
+fn judgeSources(old: ?[]const u8, new: []const u8, holes: ?[]const Hole, all: []const Rule) !Gate {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const base: ?*Snapshot = if (old) |text| try Snapshot.fromSource(runtime, test_util.language, try testing.allocator.dupe(u8, text)) else null;
+    defer if (base) |b| b.destroy();
+    const after = try Snapshot.fromSource(runtime, test_util.language, try testing.allocator.dupe(u8, new));
+    defer after.destroy();
+    return judgeChange(testing.allocator, all, .{ .rel = "src/a.ts", .base = base, .after = after, .holes = holes });
+}
+
+const kept_old = "// kept\nfunction f() {\n  return 1;\n}\n";
+const kept_new = "// kept\nfunction f() {\n  return 22;\n}\n";
+const no_comments = [_]Rule{.{ .id = "r", .check = "no_comment" }};
+
+fn changedAt(comptime old: []const u8, comptime new: []const u8, comptime was: []const u8, comptime now: []const u8) Hole {
+    const old_at: u32 = @intCast(std.mem.indexOf(u8, old, was).?);
+    const new_at: u32 = @intCast(std.mem.indexOf(u8, new, now).?);
+    return .{ .old = .{ .start = old_at, .end = old_at + @as(u32, @intCast(was.len)) }, .new = .{ .start = new_at, .end = new_at + @as(u32, @intCast(now.len)) } };
+}
+
+test "a write that hands over no claim is judged in full, and one whose claim holds keeps what it did not touch" {
+    const whole = (try reportOf(try judgeSources(kept_old, kept_new, null, &no_comments))).?;
+    defer whole.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), whole.violations.len);
+    try testing.expectEqualStrings("// kept", whole.violations[0].text);
+
+    const hole = changedAt(kept_old, kept_new, "1", "22");
+    try testing.expect(try judgeSources(kept_old, kept_new, &.{hole}, &no_comments) == .ok);
+    const created = (try reportOf(try judgeSources(null, kept_new, null, &no_comments))).?;
+    defer created.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), created.violations.len);
+}
+
+test "a claim of untouched bytes that the bytes do not bear out refuses the write by name" {
+    const hole = changedAt(kept_old, kept_new, "1", "22");
+    const narrow: Hole = .{ .old = hole.old, .new = .{ .start = hole.new.start, .end = hole.new.start + 1 } };
+    try testing.expectError(error.UntouchedClaimFalse, judgeSources(kept_old, kept_new, &.{narrow}, &no_comments));
+    const early: Hole = .{ .old = .{ .start = 0, .end = 1 }, .new = .{ .start = 0, .end = 1 } };
+    try testing.expectError(error.UntouchedClaimFalse, judgeSources(kept_old, kept_new, &.{early}, &no_comments));
+    const shifted: Hole = .{ .old = .{ .start = hole.old.start + 1, .end = hole.old.end + 1 }, .new = .{ .start = hole.new.start + 1, .end = hole.new.end + 1 } };
+    try testing.expectError(error.UntouchedClaimFalse, judgeSources(kept_old, kept_new, &.{shifted}, &no_comments));
+    try testing.expectError(error.UntouchedClaimFalse, judgeSources(kept_old, kept_new, &.{ hole, early }, &no_comments));
+    try testing.expectError(error.UntouchedClaimFalse, judgeSources(null, kept_new, &.{hole}, &no_comments));
+    const beyond: Hole = .{ .old = hole.old, .new = .{ .start = hole.new.start, .end = @intCast(kept_new.len + 1) } };
+    try testing.expectError(error.UntouchedClaimFalse, judgeSources(kept_old, kept_new, &.{beyond}, &no_comments));
+}
+
+test "a text after the change is old only at the place it held before, and a text the change overlaps is new" {
+    const old = "function f() {\n  return 1;\n}\n// kept\n";
+    const new = "function f() {\n  return 1000;\n}\n// kept\n";
+    try testing.expect(try judgeSources(old, new, &.{changedAt(old, new, "1", "1000")}, &no_comments) == .ok);
+
+    const grown = "function f() {\n  return 1; // new\n}\n// kept\n";
+    const report = (try reportOf(try judgeSources(old, grown, &.{changedAt(old, grown, "1;", "1; // new")}, &no_comments))).?;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    try testing.expectEqualStrings("// new", report.violations[0].text);
+}
+
+test "a scope is left by a file that moves out, a file that is removed and a symbol that no longer resolves, and by nothing else" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const with = try Snapshot.fromSource(runtime, test_util.language, try testing.allocator.dupe(u8, "function f() {\n  return 1;\n}\n"));
+    defer with.destroy();
+    const without = try Snapshot.fromSource(runtime, test_util.language, try testing.allocator.dupe(u8, "function g() {\n  return 1;\n}\n"));
+    defer without.destroy();
+    const gpa = testing.allocator;
+    const file = try where_mod.parse("src/a.ts");
+    const dir = try where_mod.parse("src/");
+    const sym = try where_mod.parse("src/a.ts#f");
+
+    try testing.expect(try leaves(gpa, file, .{ .rel = "src/b.ts", .from = "src/a.ts", .base = with, .after = with }));
+    try testing.expect(try leaves(gpa, dir, .{ .rel = "lib/a.ts", .from = "src/a.ts", .base = with, .after = with }));
+    try testing.expect(!try leaves(gpa, dir, .{ .rel = "src/b.ts", .from = "src/a.ts", .base = with, .after = with }));
+    try testing.expect(!try leaves(gpa, file, .{ .rel = "src/a.ts", .from = "lib/a.ts", .base = with, .after = with }));
+    try testing.expect(try leaves(gpa, file, .{ .rel = "src/a.ts", .removed = true }));
+    try testing.expect(try leaves(gpa, sym, .{ .rel = "src/a.ts", .removed = true }));
+    try testing.expect(!try leaves(gpa, dir, .{ .rel = "src/a.ts", .removed = true }));
+    try testing.expect(try leaves(gpa, sym, .{ .rel = "src/a.ts", .base = with, .after = without }));
+    try testing.expect(!try leaves(gpa, sym, .{ .rel = "src/a.ts", .base = with, .after = with }));
+    try testing.expect(!try leaves(gpa, sym, .{ .rel = "src/a.ts", .base = without, .after = without }));
+    try testing.expect(!try leaves(gpa, sym, .{ .rel = "src/a.ts", .after = without }));
+    try testing.expect(!try leaves(gpa, file, .{ .rel = "src/a.ts", .base = with, .after = without }));
+
+    const gated = try scopeKept(gpa, &.{.{ .id = "r9", .check = "forbid:x", .where = "src/a.ts#f" }}, .{ .rel = "src/a.ts", .base = with, .after = without });
+    const report = (try reportOf(gated)).?;
+    defer report.deinit(gpa);
+    try testing.expectEqualStrings("r9", report.violations[0].rule);
+    try testing.expectEqualStrings("src/a.ts", report.violations[0].file);
+    try testing.expectEqualStrings(scope_left ++ "src/a.ts#f", report.violations[0].text);
 }
 
 test "a message rule is kept out of the code gate, which would otherwise fail closed on it" {

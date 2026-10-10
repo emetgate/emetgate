@@ -10211,7 +10211,8 @@
       "from": "    if (!try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
       "to": "    if (false and !try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
       "kills": [
-        "commit protocol: staged bytes that were tampered with are never written, whether or not the record was changed to match"
+        "commit protocol: staged bytes that were tampered with are never written, whether or not the record was changed to match",
+        "recovery: a hand-made intent record is not applied when the staged bytes, the blob or the commit do not tie together"
       ],
       "note": "a crafted intent record could write bytes the commit does not hold"
     },
@@ -11429,6 +11430,259 @@
       "to": "        const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0xAAAAAAA8));",
       "kills": [
         "a pool that was never started, and one torn down twice, closes no handle it does not hold"
+      ]
+    },
+    {
+      "id": "EW1-write-without-a-claim-is-let-through",
+      "file": "src/platform/rules.zig",
+      "from": "    const holes: []const Hole = change.holes orelse &everything;",
+      "to": "    const holes: []const Hole = change.holes orelse if (change.base == null) &everything else return .ok;",
+      "kills": [
+        "a write that hands over no claim is judged in full, and one whose claim holds keeps what it did not touch"
+      ],
+      "note": "the default before v0.6.1: a writer that said nothing about its file was not checked"
+    },
+    {
+      "id": "EW2-batch-skips-an-edit-without-a-ref",
+      "file": "src/platform/batch.zig",
+      "from": "        for (prepared, judged[0..prepared.len]) |p, *slot| slot.* = changeOf(p);",
+      "to": "        for (prepared, edits[0..prepared.len], judged[0..prepared.len]) |p, edit, *slot| slot.* = if (edit.ref_text.len == 0) .{ .rel = p.rel } else changeOf(p);",
+      "kills": [
+        "every write: a file move into the scope of a rule it breaks is refused",
+        "every write: a file move whose rewritten import is a forbidden text is refused",
+        "other modules: a rename that puts a forbidden name into another module is refused",
+        "write invariant: after any accepted write through a served write tool a scan finds no violation it did not find before"
+      ],
+      "note": "the hole of v0.5.2 to v0.6.0: rename, move and file move rewrite files with no symbol ref"
+    },
+    {
+      "id": "EW3-claim-trusted-without-the-comparison",
+      "file": "src/platform/rules.zig",
+      "from": "    try confirmClaim(change);\n    const after = change.after orelse return .ok;",
+      "to": "    if (false) try confirmClaim(change);\n    const after = change.after orelse return .ok;",
+      "kills": [
+        "a claim of untouched bytes that the bytes do not bear out refuses the write by name"
+      ]
+    },
+    {
+      "id": "EW4-claim-gap-not-compared",
+      "file": "src/platform/rules.zig",
+      "from": "        if (!std.mem.eql(u8, base.source[old_at..hole.old.start], after.source[new_at..hole.new.start])) return error.UntouchedClaimFalse;",
+      "to": "        if (false and !std.mem.eql(u8, base.source[old_at..hole.old.start], after.source[new_at..hole.new.start])) return error.UntouchedClaimFalse;",
+      "kills": [
+        "a claim of untouched bytes that the bytes do not bear out refuses the write by name"
+      ]
+    },
+    {
+      "id": "EW5-claim-tail-not-compared",
+      "file": "src/platform/rules.zig",
+      "from": "    if (!std.mem.eql(u8, base.source[old_at..], after.source[new_at..])) return error.UntouchedClaimFalse;",
+      "to": "    if (false and !std.mem.eql(u8, base.source[old_at..], after.source[new_at..])) return error.UntouchedClaimFalse;",
+      "kills": [
+        "a claim of untouched bytes that the bytes do not bear out refuses the write by name"
+      ]
+    },
+    {
+      "id": "EW6-claim-without-a-base-accepted",
+      "file": "src/platform/rules.zig",
+      "from": "    const base = change.base orelse return error.UntouchedClaimFalse;",
+      "to": "    const base = change.base orelse return;",
+      "kills": [
+        "a claim of untouched bytes that the bytes do not bear out refuses the write by name"
+      ]
+    },
+    {
+      "id": "EW7-file-entering-a-scope-is-treated-as-old",
+      "file": "src/platform/rules.zig",
+      "from": "        const covered = if (scope) |w| w.coversFile(change.before()) else true;",
+      "to": "        const covered = if (scope) |w| w.coversFile(change.rel) else true;",
+      "kills": [
+        "every write: a file move into the scope of a rule it breaks is refused",
+        "added rules: a file moved into the scope is added in full"
+      ]
+    },
+    {
+      "id": "EW8-batch-drops-the-path-a-file-came-from",
+      "file": "src/platform/batch.zig",
+      "from": ".from = p.source_rel, .base = p.base,",
+      "to": ".from = if (false) p.source_rel else null, .base = p.base,",
+      "kills": [
+        "every write: a file move that carries a comment into a no_comment scope is refused",
+        "leaving a scope: a file move that takes the file out of a rule scoped to it is refused"
+      ]
+    },
+    {
+      "id": "EW9-scope-exit-let-through",
+      "file": "src/platform/rules.zig",
+      "from": "        if (!try leaves(gpa, try where_mod.parse(where), change)) continue;",
+      "to": "        if (!(false and try leaves(gpa, try where_mod.parse(where), change))) continue;",
+      "kills": [
+        "leaving a scope: a file move that takes the file out of a rule scoped to it is refused",
+        "leaving a scope: a rename of the symbol a rule is scoped to is refused",
+        "leaving a scope: a move of the symbol a rule is scoped to is refused",
+        "leaving a scope: a batch that deletes the file a rule is scoped to is refused",
+        "leaving a scope: a batch that deletes the symbol a rule is scoped to is refused",
+        "leaving a scope: a file move out of a directory a rule is scoped to is refused"
+      ]
+    },
+    {
+      "id": "EW10-moved-file-may-leave-a-scope",
+      "file": "src/platform/rules.zig",
+      "from": "    if (change.from != null and !scope.coversFile(change.rel)) return true;",
+      "to": "    if (false and change.from != null and !scope.coversFile(change.rel)) return true;",
+      "kills": [
+        "leaving a scope: a file move out of a directory a rule is scoped to is refused",
+        "a scope is left by a file that moves out, a file that is removed and a symbol that no longer resolves, and by nothing else"
+      ]
+    },
+    {
+      "id": "EW11-removed-file-may-leave-a-scope",
+      "file": "src/platform/rules.zig",
+      "from": "    if (change.removed) return scope.base != .dir;",
+      "to": "    if (change.removed) return false and scope.base != .dir;",
+      "kills": [
+        "leaving a scope: a batch that deletes the file a rule is scoped to is refused",
+        "a scope is left by a file that moves out, a file that is removed and a symbol that no longer resolves, and by nothing else"
+      ]
+    },
+    {
+      "id": "EW12-batch-does-not-say-a-file-is-removed",
+      "file": "src/platform/batch.zig",
+      "from": ".removed = p.action == .delete_file,",
+      "to": ".removed = false and p.action == .delete_file,",
+      "kills": [
+        "leaving a scope: a batch that deletes the file a rule is scoped to is refused"
+      ]
+    },
+    {
+      "id": "EW13-symbol-that-no-longer-resolves-is-not-an-exit",
+      "file": "src/platform/rules.zig",
+      "from": "    _ = symbolSpan(gpa, after, ref_text) catch |err| switch (err) {\n        error.OutOfMemory => return error.OutOfMemory,\n        else => return true,\n    };",
+      "to": "    _ = symbolSpan(gpa, after, ref_text) catch |err| switch (err) {\n        error.OutOfMemory => return error.OutOfMemory,\n        else => return false,\n    };",
+      "kills": [
+        "leaving a scope: a rename of the symbol a rule is scoped to is refused",
+        "leaving a scope: a move of the symbol a rule is scoped to is refused",
+        "leaving a scope: a batch that deletes the symbol a rule is scoped to is refused"
+      ]
+    },
+    {
+      "id": "EW14-directory-scope-cannot-lose-a-file-by-deletion",
+      "file": "src/platform/rules.zig",
+      "from": "    if (change.removed) return scope.base != .dir;",
+      "to": "    if (change.removed) return true or scope.base != .dir;",
+      "kills": [
+        "a scope is left by a file that moves out, a file that is removed and a symbol that no longer resolves, and by nothing else"
+      ]
+    },
+    {
+      "id": "EW15-command-rule-gets-no-target-from-a-batch",
+      "file": "src/platform/batch.zig",
+      "from": "    for (prepared) |p| {\n        targets[built] = p.rel;\n        built += 1;\n    }",
+      "to": "    for (prepared) |p| {\n        if (false) targets[built] = p.rel;\n        if (false) built += 1;\n    }",
+      "kills": [
+        "command rules: one with no scope runs on a rename and on a symbol move",
+        "command rules: one scoped to another symbol of the file runs on a rename"
+      ]
+    },
+    {
+      "id": "EW17-command-rule-with-no-scope-needs-a-covered-path",
+      "file": "src/platform/rules.zig",
+      "from": "        const w = scope orelse return path;\n        if (w.coversFile(path)) return path;",
+      "to": "        const w = scope orelse continue;\n        if (w.coversFile(path)) return path;",
+      "kills": [
+        "command rules: one with no scope runs on a file move",
+        "cmd rule: a non-zero exit is a violation carrying the output of the command, and nothing is written"
+      ]
+    },
+    {
+      "id": "EW18-command-rule-gets-no-target-from-a-symbol-edit",
+      "file": "src/platform/runner.zig",
+      "from": "options, &session, command, &.{rel})) {",
+      "to": "options, &session, command, &.{})) {",
+      "kills": [
+        "cmd rule: a non-zero exit is a violation carrying the output of the command, and nothing is written"
+      ]
+    },
+    {
+      "id": "EW19-command-rule-gets-no-target-from-write-doc",
+      "file": "src/platform/doc_writer.zig",
+      "from": "runner.gateDir(location, &session), &.{rel}, null, options.limits",
+      "to": "runner.gateDir(location, &session), &.{}, null, options.limits",
+      "kills": [
+        "documents: a command rule runs on write_doc and on a document edit of a batch, and the syntax forms do not"
+      ]
+    },
+    {
+      "id": "EW20-command-rule-gets-no-target-from-a-batch-document",
+      "file": "src/platform/batch.zig",
+      "from": "    for (doc_prepared) |p| {\n        targets[built] = p.rel;\n        built += 1;\n    }",
+      "to": "    for (doc_prepared) |p| {\n        if (false) targets[built] = p.rel;\n        if (false) built += 1;\n    }",
+      "kills": [
+        "documents: a command rule runs on write_doc and on a document edit of a batch, and the syntax forms do not"
+      ]
+    },
+    {
+      "id": "EW21-untouched-old-text-is-counted-as-new",
+      "file": "src/platform/rules.zig",
+      "from": "                if (try k.isOld(gpa, rule, hit.span, limits)) continue;",
+      "to": "                if (false and try k.isOld(gpa, rule, hit.span, limits)) continue;",
+      "kills": [
+        "old text: a symbol edit, a rename, a symbol move and a file move are written although the file already breaks the rule elsewhere",
+        "a write that hands over no claim is judged in full, and one whose claim holds keeps what it did not touch"
+      ]
+    },
+    {
+      "id": "EW22-text-the-change-overlaps-is-counted-as-old",
+      "file": "src/platform/rules.zig",
+      "from": "            if (hit.start < hole.new.end and hole.new.start < hit.end) return false;",
+      "to": "            if (false and hit.start < hole.new.end and hole.new.start < hit.end) return false;",
+      "kills": [
+        "old text: a body that keeps a text the rule forbids is refused, and a deleted symbol beside it is not held to it"
+      ]
+    },
+    {
+      "id": "EW23-old-place-not-shifted-by-the-change-before-it",
+      "file": "src/platform/rules.zig",
+      "from": "            if (hole.new.end <= hit.start) shift +=",
+      "to": "            if (false and hole.new.end <= hit.start) shift +=",
+      "kills": [
+        "a text after the change is old only at the place it held before, and a text the change overlaps is new"
+      ]
+    },
+    {
+      "id": "EW24-untouched-node-is-old-without-a-match-before",
+      "file": "src/platform/rules.zig",
+      "from": "            if (@as(i64, old.span.start) == @as(i64, hit.start) + shift and @as(i64, old.span.end) == @as(i64, hit.end) + shift) return true;\n        }\n        return false;",
+      "to": "            if (@as(i64, old.span.start) == @as(i64, hit.start) + shift and @as(i64, old.span.end) == @as(i64, hit.end) + shift) return true;\n        }\n        return true;",
+      "kills": [
+        "old text: a rename that turns a node it did not touch into a match is refused"
+      ]
+    },
+    {
+      "id": "EW25-claims-ignored-every-file-judged-in-full",
+      "file": "src/platform/rules.zig",
+      "from": "    const holes: []const Hole = change.holes orelse &everything;",
+      "to": "    const holes: []const Hole = if (false) change.holes.? else &everything;",
+      "kills": [
+        "old text: a symbol edit, a rename, a symbol move and a file move are written although the file already breaks the rule elsewhere"
+      ]
+    },
+    {
+      "id": "EW26-rename-claims-the-new-name-untouched",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    for (sorted, placed, holes) |old, new, *hole| hole.* = .{ .old = old, .new = new };",
+      "to": "    for (sorted, placed, holes) |old, new, *hole| hole.* = .{ .old = old, .new = .{ .start = new.start, .end = new.start } };",
+      "kills": [
+        "every write: a rename to a forbidden name is refused and nothing is written"
+      ]
+    },
+    {
+      "id": "EW27-recovery-does-not-tie-the-blob-to-the-commit",
+      "file": "src/platform/commit_intent.zig",
+      "from": "        if (!std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;",
+      "to": "        if (false and !std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;",
+      "kills": [
+        "recovery: a hand-made intent record is not applied when the staged bytes, the blob or the commit do not tie together"
       ]
     }
   ]

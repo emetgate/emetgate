@@ -292,14 +292,11 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         try runner.deriveGate(gpa, io, root, location, session, changes);
     }
 
-    const targets = try gpa.alloc([]const u8, prepared.len * 2 + doc_prepared.len);
+    const targets = try gpa.alloc([]const u8, prepared.len + doc_prepared.len);
     defer gpa.free(targets);
     var built: usize = 0;
     for (prepared) |p| {
         targets[built] = p.rel;
-        built += 1;
-        const from = p.source_rel orelse continue;
-        targets[built] = from;
         built += 1;
     }
     for (doc_prepared) |p| {

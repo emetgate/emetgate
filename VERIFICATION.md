@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1856**
-- Mutations declared in `tests/mutations.json`: **1160**
-  - killed: **1126**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1867**
+- Mutations declared in `tests/mutations.json`: **1186**
+  - killed: **1152**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -179,7 +179,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-126 mutation(s).
+132 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -309,6 +309,12 @@ python tools/verification_page.py --check
 | `CD7-fresh-checkout-not-compared` | `src/platform/runner.zig` | `slot.* = std.mem.eql(u8, tested, fresh);` -> `slot.* = true or std.mem.eql(u8, tested, fresh);` | commit derive: a file of the store rewritten in place is found before the test ...; commi... | killed |
 | `LB1-left-behind-tree-not-recorded` | `src/platform/shadow.zig` | `out.left_behind = err;` -> `out.left_behind = if (false) err else null;` | a full copy that cannot be removed after the call is named in the report, and t...; gate ... | killed |
 | `LB2-edit-gate-does-not-report-the-tree` | `src/platform/runner.zig` | `workspace.reportTo(&t.tree.?);` -> `workspace.report = null;` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `EW2-batch-skips-an-edit-without-a-ref` | `src/platform/batch.zig` | `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` -> `for (prepared, edits[0..prepared.len], judged[0..prepared.len])...` | every write: a file move into the scope of a rule it breaks is refused; every write: a fi... | killed |
+| `EW8-batch-drops-the-path-a-file-came-from` | `src/platform/batch.zig` | `.from = p.source_rel, .base = p.base,` -> `.from = if (false) p.source_rel else null, .base = p.base,` | every write: a file move that carries a comment into a no_comment scope is refu...; leavi... | killed |
+| `EW12-batch-does-not-say-a-file-is-removed` | `src/platform/batch.zig` | `.removed = p.action == .delete_file,` -> `.removed = false and p.action == .delete_file,` | leaving a scope: a batch that deletes the file a rule is scoped to is refused | killed |
+| `EW15-command-rule-gets-no-target-from-a-batch` | `src/platform/batch.zig` | `for (prepared) \|p\| {         targets[built] = p.rel;         ...` -> `for (prepared) \|p\| {         if (false) targets[built] = p.re...` | command rules: one with no scope runs on a rename and on a symbol move; command rules: on... | killed |
+| `EW18-command-rule-gets-no-target-from-a-symbol-edit` | `src/platform/runner.zig` | `options, &session, command, &.{rel})) {` -> `options, &session, command, &.{})) {` | cmd rule: a non-zero exit is a violation carrying the output of the command, an... | killed |
+| `EW20-command-rule-gets-no-target-from-a-batch-document` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| {         targets[built] = p.rel;     ...` -> `for (doc_prepared) \|p\| {         if (false) targets[built] = ...` | documents: a command rule runs on write_doc and on a document edit of a batch, ... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -390,7 +396,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-127 mutation(s).
+144 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -521,6 +527,23 @@ python tools/verification_page.py --check
 | `RA3-empty-list-says-nothing` | `src/protocol/rule_command.zig` | `if (decisions.len == 0) return out.writeAll(nothing_kept);` -> `if (false and decisions.len == 0) return out.writeAll(nothing_k...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
 | `RA4-forget-says-nothing` | `src/protocol/rule_command.zig` | `if (voice == .spoken) try out.print("rule forgotten: {s}\n", .{...` -> `if (false and voice == .spoken) try out.print("rule forgotten: ...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
 | `RA5-list-columns-not-padded` | `src/protocol/rule_command.zig` | `try out.splatByteAll(' ', width - cell.len + 2);` -> `try out.splatByteAll(' ', (width - cell.len) * 0 + 2);` | prompt hook: /rule list answers with the rows emetgate rule list prints | killed |
+| `EW1-write-without-a-claim-is-let-through` | `src/platform/rules.zig` | `const holes: []const Hole = change.holes orelse &everything;` -> `const holes: []const Hole = change.holes orelse if (change.base...` | a write that hands over no claim is judged in full, and one whose claim holds k... | killed |
+| `EW3-claim-trusted-without-the-comparison` | `src/platform/rules.zig` | `try confirmClaim(change);     const after = change.after orelse...` -> `if (false) try confirmClaim(change);     const after = change.a...` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW4-claim-gap-not-compared` | `src/platform/rules.zig` | `if (!std.mem.eql(u8, base.source[old_at..hole.old.start], after...` -> `if (false and !std.mem.eql(u8, base.source[old_at..hole.old.sta...` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW5-claim-tail-not-compared` | `src/platform/rules.zig` | `if (!std.mem.eql(u8, base.source[old_at..], after.source[new_at...` -> `if (false and !std.mem.eql(u8, base.source[old_at..], after.sou...` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW6-claim-without-a-base-accepted` | `src/platform/rules.zig` | `const base = change.base orelse return error.UntouchedClaimFals...` -> `const base = change.base orelse return;` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW7-file-entering-a-scope-is-treated-as-old` | `src/platform/rules.zig` | `const covered = if (scope) \|w\| w.coversFile(change.before()) ...` -> `const covered = if (scope) \|w\| w.coversFile(change.rel) else ...` | every write: a file move into the scope of a rule it breaks is refused; added rules: a fi... | killed |
+| `EW9-scope-exit-let-through` | `src/platform/rules.zig` | `if (!try leaves(gpa, try where_mod.parse(where), change)) conti...` -> `if (!(false and try leaves(gpa, try where_mod.parse(where), cha...` | leaving a scope: a file move that takes the file out of a rule scoped to it is ...; leavi... | killed |
+| `EW10-moved-file-may-leave-a-scope` | `src/platform/rules.zig` | `if (change.from != null and !scope.coversFile(change.rel)) retu...` -> `if (false and change.from != null and !scope.coversFile(change....` | leaving a scope: a file move out of a directory a rule is scoped to is refused; a scope i... | killed |
+| `EW11-removed-file-may-leave-a-scope` | `src/platform/rules.zig` | `if (change.removed) return scope.base != .dir;` -> `if (change.removed) return false and scope.base != .dir;` | leaving a scope: a batch that deletes the file a rule is scoped to is refused; a scope is... | killed |
+| `EW13-symbol-that-no-longer-resolves-is-not-an-exit` | `src/platform/rules.zig` | `_ = symbolSpan(gpa, after, ref_text) catch \|err\| switch (err)...` -> `_ = symbolSpan(gpa, after, ref_text) catch \|err\| switch (err)...` | leaving a scope: a rename of the symbol a rule is scoped to is refused; leaving a scope: ... | killed |
+| `EW14-directory-scope-cannot-lose-a-file-by-deletion` | `src/platform/rules.zig` | `if (change.removed) return scope.base != .dir;` -> `if (change.removed) return true or scope.base != .dir;` | a scope is left by a file that moves out, a file that is removed and a symbol t... | killed |
+| `EW17-command-rule-with-no-scope-needs-a-covered-path` | `src/platform/rules.zig` | `const w = scope orelse return path;         if (w.coversFile(pa...` -> `const w = scope orelse continue;         if (w.coversFile(path)...` | command rules: one with no scope runs on a file move; cmd rule: a non-zero exit is a viol... | killed |
+| `EW21-untouched-old-text-is-counted-as-new` | `src/platform/rules.zig` | `if (try k.isOld(gpa, rule, hit.span, limits)) continue;` -> `if (false and try k.isOld(gpa, rule, hit.span, limits)) continu...` | old text: a symbol edit, a rename, a symbol move and a file move are written al...; a wri... | killed |
+| `EW22-text-the-change-overlaps-is-counted-as-old` | `src/platform/rules.zig` | `if (hit.start < hole.new.end and hole.new.start < hit.end) retu...` -> `if (false and hit.start < hole.new.end and hole.new.start < hit...` | old text: a body that keeps a text the rule forbids is refused, and a deleted s... | killed |
+| `EW23-old-place-not-shifted-by-the-change-before-it` | `src/platform/rules.zig` | `if (hole.new.end <= hit.start) shift +=` -> `if (false and hole.new.end <= hit.start) shift +=` | a text after the change is old only at the place it held before, and a text the... | killed |
+| `EW24-untouched-node-is-old-without-a-match-before` | `src/platform/rules.zig` | `if (@as(i64, old.span.start) == @as(i64, hit.start) + shift and...` -> `if (@as(i64, old.span.start) == @as(i64, hit.start) + shift and...` | old text: a rename that turns a node it did not touch into a match is refused | killed |
+| `EW25-claims-ignored-every-file-judged-in-full` | `src/platform/rules.zig` | `const holes: []const Hole = change.holes orelse &everything;` -> `const holes: []const Hole = if (false) change.holes.? else &eve...` | old text: a symbol edit, a rename, a symbol move and a file move are written al... | killed |
 
 ### Scan
 
@@ -656,7 +679,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-603 mutation(s).
+606 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1178,7 +1201,7 @@ python tools/verification_page.py --check
 | `PV13-recover-overwrites-a-hand-edit` | `src/platform/commit_intent.zig` | `if (base != null and !same(now, base)) return .left;` -> `if (false and base != null and !same(now, base)) return .left;` | commit window: recover leaves a file whose line ends the user changed after the... | killed |
 | `PV14-targets-not-measured-again-before-the-branch-moves` | `src/platform/commit_plan.zig` | `if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUnco...` -> `if (false and !sameHash(was.raw, p.base_hash)) return error.Tar...` | commit window: a file renamed over the target after its measurement is kept, an... | killed |
 | `PV15-unpublished-index-not-reported` | `src/platform/commit_plan.zig` | `plan.unfinished = commit_intent.index_not_published;` -> `` | commit protocol: a publish that is refused a few times is retried, and one that... | killed |
-| `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe... | killed |
+| `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe...; recov... | killed |
 | `PV18-pending-commit-not-finished-before-the-next` | `src/platform/commit_plan.zig` | `const found = try recoverFound(gpa, io, root);` -> `const found: commit_intent.Report = .{};` | commit protocol: recover never removes or replaces an index lock it does not ow... | killed |
 | `PV22-receipt-digests-taken-from-the-working-tree` | `src/protocol/receipt_note.zig` | `if (made.oid) \|oid\| bound.commit = .{ .base = made.base.?, .o...` -> `if (made.oid) \|oid\| bound.commit = if (oid.len == 0) .{ .base...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
 | `PV23-receipt-symbol-hashes-taken-from-the-working-tree` | `src/platform/receipts.zig` | `const runtime = self.made.runtime orelse return claimed;` -> `const runtime = self.made.runtime orelse return claimed;       ...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
@@ -1263,6 +1286,9 @@ python tools/verification_page.py --check
 | `EP11-final-name-without-a-drive-accepted` | `src/platform/exe_path.zig` | `if (rest.len < 3 or rest[1] != ':' or rest[2] != '\\') return n...` -> `if (false and (rest.len < 3 or rest[1] != ':' or rest[2] != '\\...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
 | `WP1-pool-keeps-its-closed-event` | `src/platform/worker_pool.zig` | `self.done = null;         self.count = 0;         return unclos...` -> `self.count = 0;         return unclosed;` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
 | `WP2-pool-never-started-closes-a-handle` | `src/platform/worker_pool.zig` | `const done = self.done orelse return 0;` -> `const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0...` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
+| `EW19-command-rule-gets-no-target-from-write-doc` | `src/platform/doc_writer.zig` | `runner.gateDir(location, &session), &.{rel}, null, options.limi...` -> `runner.gateDir(location, &session), &.{}, null, options.limits` | documents: a command rule runs on write_doc and on a document edit of a batch, ... | killed |
+| `EW26-rename-claims-the-new-name-untouched` | `src/platform/rename_batch.zig` | `for (sorted, placed, holes) \|old, new, *hole\| hole.* = .{ .ol...` -> `for (sorted, placed, holes) \|old, new, *hole\| hole.* = .{ .ol...` | every write: a rename to a forbidden name is refused and nothing is written | killed |
+| `EW27-recovery-does-not-tie-the-blob-to-the-commit` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, item.blob, after)) return error.CorruptInt...` -> `if (false and !std.mem.eql(u8, item.blob, after)) return error....` | recovery: a hand-made intent record is not applied when the staged bytes, the b... | killed |
 
 ## What this system does not prove
 
