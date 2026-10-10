@@ -50,6 +50,10 @@ pub const useful_chance = [_]f64{ 0.009, 0.012, 0.031, 0.045, 0.094, 0.110, 0.19
 pub const explore_description = "Returns the code that matches a question: every definition of each named symbol, then the functions and top-level constants ranked by term statistics over names, paths and bodies, each one whole with a number on every line, and the addresses of named or matching ones left out.";
 pub const evidence_description = "Returns the full code of up to 6 functions by qualified name (Class.method or function), as plain text.";
 
+pub const Phase = enum(u8) { idle, building, ready, failed };
+
+pub const waited_note = "waited for the fact store build";
+
 pub const Session = struct {
     gpa: Allocator,
     io: std.Io,
@@ -66,6 +70,12 @@ pub const Session = struct {
     term_docs: std.ArrayList(Fn) = .empty,
     term_files: std.ArrayList(TermFile) = .empty,
     store_override: ?[]const u8 = null,
+    seam_override: ?io_seam.Seam = null,
+    phase: std.atomic.Value(Phase) = .init(.idle),
+    cancel: std.atomic.Value(bool) = .init(false),
+    worker: ?std.Thread = null,
+    failure: ?anyerror = null,
+    waited: bool = false,
 
     pub fn create(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8) !*Session {
         const self = try gpa.create(Session);
@@ -74,6 +84,8 @@ pub const Session = struct {
     }
 
     pub fn destroy(self: *Session) void {
+        self.cancel.store(true, .release);
+        _ = self.settle();
         if (self.repo) |r| r.deinit();
         if (self.store_path) |p| self.gpa.free(p);
         self.real.deinit();
@@ -82,9 +94,43 @@ pub const Session = struct {
     }
 
     pub fn build(self: *Session) !void {
+        self.phase.store(.building, .release);
+        run(self);
+        if (self.failure) |err| return err;
+    }
+
+    pub fn start(self: *Session) void {
+        self.phase.store(.building, .release);
+        self.worker = std.Thread.spawn(.{}, run, .{self}) catch return run(self);
+    }
+
+    pub fn settle(self: *Session) bool {
+        const worker = self.worker orelse return false;
+        const building = self.phase.load(.acquire) == .building;
+        worker.join();
+        self.worker = null;
+        return building;
+    }
+
+    pub fn takeNote(self: *Session) ?[]const u8 {
+        defer self.waited = false;
+        if (self.phase.load(.acquire) == .failed) return @errorName(self.failure orelse error.Unexpected);
+        return if (self.waited) waited_note else null;
+    }
+
+    fn run(self: *Session) void {
+        self.load() catch |err| {
+            self.failure = err;
+            self.phase.store(.failed, .release);
+            return;
+        };
+        self.phase.store(.ready, .release);
+    }
+
+    fn load(self: *Session) !void {
         const arena = self.arena_state.allocator();
         self.store_path = if (self.store_override) |p| try self.gpa.dupe(u8, p) else fact_store.defaultStorePath(self.gpa, self.root) catch null;
-        const repo = try fact_store.Repo.open(self.gpa, self.real.seam(), self.runtime, .{ .root_abs = self.root, .store_path = self.store_path });
+        const repo = try fact_store.Repo.open(self.gpa, self.seam_override orelse self.real.seam(), self.runtime, .{ .root_abs = self.root, .store_path = self.store_path, .cancel = &self.cancel });
         self.repo = repo;
         _ = try repo.refresh();
         for (repo.store.files.items) |state| {
@@ -163,7 +209,26 @@ pub const Session = struct {
     }
 
     fn ready(self: *Session) bool {
-        return self.repo != null;
+        if (self.settle()) self.waited = true;
+        if (self.phase.load(.acquire) == .failed) self.retry();
+        return self.phase.load(.acquire) == .ready;
+    }
+
+    fn retry(self: *Session) void {
+        if (self.repo) |r| r.deinit();
+        self.repo = null;
+        if (self.store_path) |p| self.gpa.free(p);
+        self.store_path = null;
+        _ = self.arena_state.reset(.free_all);
+        self.names = .empty;
+        self.symbols = .empty;
+        self.part_df = .empty;
+        self.terms = null;
+        self.term_docs = .empty;
+        self.term_files = .empty;
+        self.failure = null;
+        self.phase.store(.building, .release);
+        run(self);
     }
 
     fn addName(self: *Session, arena: Allocator, name: []const u8, path: []const u8) !void {

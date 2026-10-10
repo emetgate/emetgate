@@ -13,6 +13,11 @@ const MemberTraits = profile_mod.MemberTraits;
 pub const FunctionKind = functions_mod.FunctionKind;
 pub const Function = functions_mod.Function;
 pub const Span = functions_mod.Span;
+
+pub const Hole = struct {
+    old: Span,
+    new: Span,
+};
 pub const classify = functions_mod.classify;
 pub const collectFunctions = functions_mod.collectFunctions;
 pub const Accessor = ref_mod.Accessor;

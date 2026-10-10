@@ -20,15 +20,16 @@ pub fn prepareCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []cons
 pub const Plan = struct {
     applied: cas.Applied,
     base_hash: ?symbol.Hash,
+    base: ?*Snapshot = null,
 };
 
 pub fn planAbsent(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, rel: []const u8, ref: symbol.Ref, new_body: []const u8) !Plan {
     try repo.refuseInternal(rel);
     if (!try exists(io, file_abs)) return .{ .applied = try prepareCreate(gpa, io, runtime, root, file_abs, rel, ref, new_body), .base_hash = null };
     const base = try Snapshot.load(runtime, io, .cwd(), file_abs);
-    defer base.destroy();
+    errdefer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
-    return .{ .applied = try cas.insert(base, .{ .ref = ref, .new_body = new_body }), .base_hash = symbol.hashOf(base.source) };
+    return .{ .applied = try cas.insert(base, .{ .ref = ref, .new_body = new_body }), .base_hash = symbol.hashOf(base.source), .base = base };
 }
 
 fn exists(io: std.Io, path_abs: []const u8) !bool {

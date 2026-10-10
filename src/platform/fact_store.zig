@@ -79,7 +79,13 @@ pub const Options = struct {
     store_path: ?[]const u8 = null,
     threads: usize = worker_pool.max_threads,
     max_file_bytes: usize = default_max_file_bytes,
+    cancel: ?*const std.atomic.Value(bool) = null,
 };
+
+fn canceled(flag: ?*const std.atomic.Value(bool)) bool {
+    const set = flag orelse return false;
+    return set.load(.acquire);
+}
 
 pub fn defaultStorePath(gpa: Allocator, root_abs: []const u8) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -147,6 +153,7 @@ const Job = struct {
     previous: []const ?facts.Hash,
     outcomes: []Outcome,
     metas: []Meta,
+    cancel: ?*const std.atomic.Value(bool) = null,
     next: std.atomic.Value(usize) = .init(0),
     failure: std.atomic.Value(u16) = .init(0),
     phase_ns: [4]std.atomic.Value(u64) = @splat(.init(0)),
@@ -170,13 +177,15 @@ const Job = struct {
         while (true) {
             const i = self.next.fetchAdd(1, .monotonic);
             if (i >= self.paths.len) return;
-            self.one(i, &parser, &scratch) catch |err| {
-                _ = self.failure.cmpxchgStrong(0, @intFromError(err), .acq_rel, .monotonic);
-                self.next.store(self.paths.len, .monotonic);
-                return;
-            };
+            if (canceled(self.cancel)) return self.stop(error.Canceled);
+            self.one(i, &parser, &scratch) catch |err| return self.stop(err);
             _ = scratch.reset(.retain_capacity);
         }
+    }
+
+    fn stop(self: *Job, err: anyerror) void {
+        _ = self.failure.cmpxchgStrong(0, @intFromError(err), .acq_rel, .monotonic);
+        self.next.store(self.paths.len, .monotonic);
     }
 
     fn failed(self: *const Job) ?anyerror {
@@ -552,7 +561,7 @@ pub const Repo = struct {
             outcome.* = .pending;
             m.* = .{ .stamp = stamped.stamps[i] orelse .{} };
         }
-        var job: Job = .{ .gpa = self.gpa, .clock = self.seam.clock, .fs = self.fs, .runtime = self.runtime, .root_abs = self.options.root_abs, .max_file_bytes = self.options.max_file_bytes, .paths = todo_paths, .previous = previous, .outcomes = outcomes, .metas = metas };
+        var job: Job = .{ .gpa = self.gpa, .clock = self.seam.clock, .fs = self.fs, .runtime = self.runtime, .root_abs = self.options.root_abs, .max_file_bytes = self.options.max_file_bytes, .paths = todo_paths, .previous = previous, .outcomes = outcomes, .metas = metas, .cancel = self.options.cancel };
         self.runJob(&job, Job.run, todo_paths.len);
         if (job.failed()) |err| {
             discardOutcomes(self.gpa, outcomes);
@@ -615,6 +624,7 @@ pub const Repo = struct {
         const dirty = report.full_link or report.relinked != 0 or report.rehashed != 0 or report.removed != 0 or report.extracted != 0;
         if (self.options.store_path) |path| {
             if (dirty or self.load != .loaded) {
+                if (canceled(self.options.cancel)) return error.Canceled;
                 started = self.seam.clock.monotonic();
                 self.written_ns = self.seam.clock.realtime();
                 report.store_bytes = try fact_file.save(self, path);

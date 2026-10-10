@@ -40,6 +40,7 @@ pub const Applied = struct {
     snapshot: *Snapshot,
     hash: symbol.Hash,
     body: Span,
+    hole: symbol.Hole,
 };
 
 const utf8_bom = "\xEF\xBB\xBF";
@@ -72,7 +73,7 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
     try rejectPlaceholder(base.profile, patched_target.body);
     try expectUntouchedOutside(before.*, after.*, cut, slot);
 
-    return .{ .snapshot = next, .hash = patched_target.hash, .body = slot };
+    return .{ .snapshot = next, .hash = patched_target.hash, .body = slot, .hole = .{ .old = cut, .new = slot } };
 }
 
 pub fn propose(base: *Snapshot, ref: symbol.Ref, expected: symbol.Expected, new_body: []const u8) Error!Applied {
@@ -109,7 +110,7 @@ pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
     const end: Span = .{ .start = @intCast(base.source.len), .end = @intCast(base.source.len) };
     try expectUntouchedOutside(before.*, after.*, end, slot);
 
-    return .{ .snapshot = next, .hash = declared.hash, .body = slot };
+    return .{ .snapshot = next, .hash = declared.hash, .body = slot, .hole = .{ .old = end, .new = .{ .start = end.start, .end = @intCast(source.len) } } };
 }
 
 pub fn create(runtime: *Runtime, profile: *const Profile, insertion: Insertion) Error!Applied {
@@ -124,8 +125,9 @@ pub fn create(runtime: *Runtime, profile: *const Profile, insertion: Insertion) 
 
     const slot: Span = .{ .start = 0, .end = @intCast(new_body.len) };
     const declared = try expectSoleDeclaration(profile, next.tree.root(), after.*, slot, insertion.ref);
+    const none: Span = .{ .start = 0, .end = 0 };
 
-    return .{ .snapshot = next, .hash = declared.hash, .body = slot };
+    return .{ .snapshot = next, .hash = declared.hash, .body = slot, .hole = .{ .old = none, .new = .{ .start = 0, .end = @intCast(source.len) } } };
 }
 
 const Declared = struct {

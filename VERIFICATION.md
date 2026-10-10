@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1824**
-- Mutations declared in `tests/mutations.json`: **1160**
-  - killed: **1126**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1875**
+- Mutations declared in `tests/mutations.json`: **1194**
+  - killed: **1160**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -33,7 +33,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
   - `tests/redteam_write_doc.zig`: 8
-- Security findings recorded in README's Security History: **10**
+- Security findings recorded in README's Security History: **11**
 
 ## Reproducing this
 
@@ -62,7 +62,7 @@ python tools/verification_page.py --check
 | `C3-coverage-start-window-check-disabled` | `src/engine/coverage.zig` | `if (candidate.start < node_start or candidate.start > body_star...` -> `if (candidate.start < node_start and candidate.start > body_sta...` | a range that ends with the body but starts inside it does not count for the sym... | killed |
 | `C4-coverage-surrogate-middle-accepted` | `src/engine/coverage.zig` | `if (len == 4) try index.append(gpa, invalid_unit);` -> `` | a surrogate pair counts as two UTF-16 units before a later function; utf16 index maps uni... | killed |
 | `C5-coverage-default-not-called` | `src/engine/coverage.zig` | `@memset(out, .unknown);` -> `@memset(out, .not_called);` | a symbol with no V8 function is unknown, never not_called; offsets from a transpiled sour... | killed |
-| `G6-rules-body-span-empty` | `src/engine/cas.zig` | `.hash = patched_target.hash, .body = slot };` -> `.hash = patched_target.hash, .body = .{ .start = slot.start, .e...` | rules: an enforced no_comment rule rejects a commented body before the tests run; rules: ... | killed |
+| `G6-rules-body-claimed-untouched` | `src/engine/cas.zig` | `.body = slot, .hole = .{ .old = cut, .new = slot } };` -> `.body = slot, .hole = .{ .old = cut, .new = .{ .start = slot.st...` | rules: an enforced no_comment rule rejects a commented body before the tests run; rules: ... | killed |
 | `R1-checks-unknown-check-skipped` | `src/engine/checks.zig` | `const check = find(checks, invocation.name) orelse return error...` -> `const check = find(checks, invocation.name) orelse checks[0];` | an unknown check name is refused before any check runs | killed |
 | `R2-checks-use-strict-prologue-position-ignored` | `src/engine/checks.zig` | `if (!isStringStatement(profile, sibling)) return false;` -> `` | no_comment allows a use strict directive only in the directive prologue | killed |
 | `R3-checks-use-strict-exemption-removed` | `src/engine/checks.zig` | `return !isDirective(profile, tree, node);` -> `return !isDirective(profile, tree, node) or true;` | no_comment allows a use strict directive only in the directive prologue | killed |
@@ -179,7 +179,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-127 mutation(s).
+132 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -216,8 +216,8 @@ python tools/verification_page.py --check
 | `MR2-batch-duplicate-file-allowed` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {             _ = p;         }      ...` | a batch cannot edit the same file twice | killed |
 | `SELF-a-compile-error-is-not-a-kill` | `src/platform/batch.zig` | `for (prepared.items) \|p\| {             if (std.ascii.eqlIgnor...` -> `for (prepared.items) \|p\| {         }         const planned = ...` | control: removing the line leaves an unused capture, which must not count as killed | control |
 | `T1-typecheck-failure-ignored` | `src/platform/runner.zig` | `if (!checked.passed()) return .{ .typecheck = checked };` -> `` | typecheck: a failing typecheck rejects before the tests run and leaves disk unt...; typec... | killed |
-| `G1-rules-gate-skipped-for-single-edit` | `src/platform/runner.zig` | `applied.snapshot.tree, applied.body, options.allow_repo_memory)...` -> `applied.snapshot.tree, applied.body, options.allow_repo_memory)...` | rules: an enforced no_comment rule rejects a commented body before the tests run | killed |
-| `G2-rules-gate-skipped-for-batch` | `src/platform/batch.zig` | `p.body, options.allow_repo_memory)) {             .ok => {},   ...` -> `p.body, options.allow_repo_memory)) {             .ok => {},   ...` | rules: one violating edit rejects the whole batch and leaves disk untouched | killed |
+| `G1-rules-gate-skipped-for-single-edit` | `src/platform/runner.zig` | `.holes = &.{applied.hole} }}, options.allow_repo_memory)) {    ...` -> `.holes = &.{applied.hole} }}, options.allow_repo_memory)) {    ...` | rules: an enforced no_comment rule rejects a commented body before the tests run | killed |
+| `G2-rules-gate-skipped-for-batch` | `src/platform/batch.zig` | `judged, options.allow_repo_memory)) {             .ok => {},   ...` -> `judged, options.allow_repo_memory)) {             .ok => {},   ...` | rules: one violating edit rejects the whole batch and leaves disk untouched | killed |
 | `SB1-sandbox-spawns-with-caller-token` | `src/platform/sandbox.zig` | `win.CreateProcessAsUserW(token.handle,` -> `win.CreateProcessAsUserW(if (false) token.handle else null,` | redteam sandbox: a passing test command cannot write outside the shadow, and on...; redte... | killed |
 | `SB2-sandbox-integrity-label-not-set` | `src/platform/sandbox.zig` | `if (faulted(.label) or win.SetTokenInformation(restricted, win....` -> `_ = &label;` | redteam sandbox: a passing test command cannot write outside the shadow, and on...; redte... | killed |
 | `SB3-sandbox-child-integrity-check-removed` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | redteam sandbox: every failure to build the low-integrity token refuses to run ...; redte... | killed |
@@ -225,9 +225,9 @@ python tools/verification_page.py --check
 | `SB5-shadow-low-integrity-write-not-granted` | `src/platform/shadow.zig` | `try grantLowIntegrityWrite(options.shadow_abs);` -> `` | redteam sandbox: a passing test command cannot write outside the shadow, and on... | killed |
 | `NF1-create-not-added-to-index` | `src/platform/runner.zig` | `try repo.addToIndex(gpa, io, root, rel);` -> `` | new file: a later proposal to another file runs in a shadow that contains the c...; new f... | killed |
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
-| `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.gate(gpa, io, root, rel, ref, created.snapsho...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
+| `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel, .after...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
 | `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     if (o...` -> `if (options.trace) \|t\| t.test_ms = report.duration_ns / std.t...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
-| `SP34-batch-gates-with-first-ref` | `src/platform/batch.zig` | `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` -> `if (!p.addsCode() or edit.ref_text.len == 0) continue;         ...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
+| `SP34-batch-judges-only-its-first-file` | `src/platform/batch.zig` | `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` -> `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
 | `CR1-crash-threshold-removed` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR2-crash-threshold-counts-own-kill` | `src/platform/sandbox.zig` | `const ntstatus_error_floor: u32 = 0xC0000000;` -> `const ntstatus_error_floor: u32 = 0xDEAD;` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
 | `CR3-crash-threshold-exclusive` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor)` -> `return if (code > ntstatus_error_floor)` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
@@ -244,7 +244,7 @@ python tools/verification_page.py --check
 | `RM10-command-gate-forces-trust` | `src/platform/runner.zig` | `.allow_repo_memory = allow_repo_memory, .message = message });` -> `.allow_repo_memory = allow_repo_memory or true, .message = mess...` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
 | `RM11-batch-forces-trust` | `src/platform/batch.zig` | `targets[0..built], null, options.limits, options.allow_repo_mem...` -> `targets[0..built], null, options.limits, true)) \|gated\|` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep... | killed |
 | `RM12-batch-drops-the-flag` | `src/platform/batch.zig` | `targets[0..built], null, options.limits, options.allow_repo_mem...` -> `targets[0..built], null, options.limits, false)) \|gated\|` | redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run in a... | killed |
-| `Q22-batch-trusts-a-committed-query-rule` | `src/platform/batch.zig` | `p.body, options.allow_repo_memory)) {` -> `p.body, true)) {` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
+| `Q22-batch-trusts-a-committed-query-rule` | `src/platform/batch.zig` | `judged, options.allow_repo_memory)) {` -> `judged, true)) {` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
 | `LW1-completion-wait-removed` | `src/platform/sandbox.zig` | `if (now >= until) return true;` -> `if (now >= now) return true;` | a detached worker that ends within the grace is waited for through the job, not... | killed |
 | `LW2-grace-zero` | `src/platform/sandbox.zig` | `const leftover_grace_ns = 2 * std.time.ns_per_s;` -> `const leftover_grace_ns = 0;` | a worker that holds the pipe and ends within the grace is waited for, not repor...; a det... | killed |
 | `LW3-console-host-counted` | `src/platform/sandbox.zig` | `if (console_host != null and pid == console_host.?) continue;` -> `if (console_host == null and pid == 0) continue;` | the exited command's own console host is not a leftover, any other process in t... | killed |
@@ -258,7 +258,6 @@ python tools/verification_page.py --check
 | `SR6-workspace-key-not-checked` | `src/platform/shadow.zig` | `if (!shadow_root.isKey(first)) return error.ShadowOutsideWorksp...` -> `_ = first;` | shadow paths outside <shadow root>\<repo key>\ are refused before anything is d... | killed |
 | `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
-| `NC9-node-rule-gate-on-empty-span` | `src/platform/batch.zig` | `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` -> `switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.prof...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 | `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
 | `SL18-lockdown-launches-without-the-hook` | `src/platform/lockdown.zig` | `const hooked = try lockdown_slash.extend(gpa, locked, slash);` -> `const hooked = try gpa.dupe([]const u8, locked);` | lockdown slash: the launched claude gets the hook settings and the command dire...; lockd... | killed |
 | `LM7-lockdown-launches-without-the-marks` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (false and marks.wanted) try lockdo...` | lockdown marks: the launched claude gets the plugin directory right after the l... | killed |
@@ -310,10 +309,16 @@ python tools/verification_page.py --check
 | `CD7-fresh-checkout-not-compared` | `src/platform/runner.zig` | `slot.* = std.mem.eql(u8, tested, fresh);` -> `slot.* = true or std.mem.eql(u8, tested, fresh);` | commit derive: a file of the store rewritten in place is found before the test ...; commi... | killed |
 | `LB1-left-behind-tree-not-recorded` | `src/platform/shadow.zig` | `out.left_behind = err;` -> `out.left_behind = if (false) err else null;` | a full copy that cannot be removed after the call is named in the report, and t...; gate ... | killed |
 | `LB2-edit-gate-does-not-report-the-tree` | `src/platform/runner.zig` | `workspace.reportTo(&t.tree.?);` -> `workspace.report = null;` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `EW2-batch-skips-an-edit-without-a-ref` | `src/platform/batch.zig` | `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` -> `for (prepared, edits[0..prepared.len], judged[0..prepared.len])...` | every write: a file move into the scope of a rule it breaks is refused; every write: a fi... | killed |
+| `EW8-batch-drops-the-path-a-file-came-from` | `src/platform/batch.zig` | `.from = p.source_rel, .base = p.base,` -> `.from = if (false) p.source_rel else null, .base = p.base,` | every write: a file move that carries a comment into a no_comment scope is refu...; leavi... | killed |
+| `EW12-batch-does-not-say-a-file-is-removed` | `src/platform/batch.zig` | `.removed = p.action == .delete_file,` -> `.removed = false and p.action == .delete_file,` | leaving a scope: a batch that deletes the file a rule is scoped to is refused | killed |
+| `EW15-command-rule-gets-no-target-from-a-batch` | `src/platform/batch.zig` | `for (prepared) \|p\| {         targets[built] = p.rel;         ...` -> `for (prepared) \|p\| {         if (false) targets[built] = p.re...` | command rules: one with no scope runs on a rename and on a symbol move; command rules: on... | killed |
+| `EW18-command-rule-gets-no-target-from-a-symbol-edit` | `src/platform/runner.zig` | `options, &session, command, &.{rel})) {` -> `options, &session, command, &.{})) {` | cmd rule: a non-zero exit is a violation carrying the output of the command, an... | killed |
+| `EW20-command-rule-gets-no-target-from-a-batch-document` | `src/platform/batch.zig` | `for (doc_prepared) \|p\| {         targets[built] = p.rel;     ...` -> `for (doc_prepared) \|p\| {         if (false) targets[built] = ...` | documents: a command rule runs on write_doc and on a document edit of a batch, ... | killed |
 
 ### Disk, repository boundary and atomic commit
 
-70 mutation(s).
+71 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -367,6 +372,7 @@ python tools/verification_page.py --check
 | `DF4-recovery-dir-flush-dropped` | `src/platform/disk.zig` | `fn flushTouched(path_abs: []const u8) bool {     flushParent(pa...` -> `fn flushTouched(path_abs: []const u8) bool {     _ = path_abs;` | dir flush rec: a restore made by recovery is durable before the journal that as... | killed |
 | `DF5-recovery-journal-delete-flush-dropped` | `src/platform/disk.zig` | `commit_record.flushDir(journal_dir) catch return;` -> `` | dir flush dropJ: recovery that loses a journal deletion after removing the comm... | killed |
 | `NC8-node-delete-reference-check-skipped` | `src/platform/batch_plan.zig` | `if (ref.container.len != 0) continue;` -> `if (ref.container.len == 0) continue;` | redteam node: deleting a function that is still called is refused unless the ca... | killed |
+| `NC9-node-edit-claims-nothing-changed` | `src/platform/batch_plan.zig` | `for (applied.placed) \|placed\| try list.append(gpa, .{ .old = ...` -> `for (applied.placed) \|placed\| try list.append(gpa, .{ .old = ...` | node edit: a top-level statement is still held to a file-scoped enforced rule | killed |
 | `JR1-file-of-a-nested-repository-accepted-under-the-cached-root` | `src/platform/repo.zig` | `if (try entryExists(gpa, io, dir, ".git")) return true;` -> `if (false) return true;` | read tools refuse a file of a nested repository, worktree or bare repository un...; purpl... | killed |
 | `JR2-only-the-file-directory-is-checked-for-a-nested-repository` | `src/platform/repo.zig` | `dir = std.fs.path.dirname(dir) orelse return error.FileOutsideR...` -> `dir = root;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
 | `JR3-nested-bare-repository-not-recognized` | `src/platform/repo.zig` | `return try entryExists(gpa, io, dir, "objects") and try entryEx...` -> `return false;` | read tools refuse a file of a nested repository, worktree or bare repository un... | killed |
@@ -390,7 +396,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-125 mutation(s).
+144 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -402,6 +408,7 @@ python tools/verification_page.py --check
 | `G8-rules-column-off-by-one` | `src/platform/rules.zig` | `.col = offset - self.starts[lo] + 1 };` -> `.col = offset - self.starts[lo] };` | violation positions hold at the edges: first and last line, empty lines, CRLF, ...; the l... | killed |
 | `G9-rules-rule-id-not-recorded` | `src/platform/rules.zig` | `fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, a...` -> `fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, a...` | rules: an enforced no_comment rule rejects a commented body before the tests run; every v... | killed |
 | `SC4-scan-ledger-read-through-recall` | `src/platform/rules.zig` | `return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));` -> `return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));` | scan: a torn ledger stops the ledger scan by name, --check still runs, and noth...; scan:... | killed |
+| `SC10-scan-span-misses-first-byte` | `src/platform/rules.zig` | `const whole: symbol.Span = .{ .start = 0,` -> `const whole: symbol.Span = .{ .start = 1,` | scan: one violation names its file, line, column, rule and text, and exits 10; scan: a to... | killed |
 | `SP1-where-glob-guard-removed` | `src/platform/where.zig` | `if (std.mem.indexOfAny(u8, text, "*?[]{}") != null) return erro...` -> `` | every rejected where is refused under its own name; where: remember and supersede refuse ... | killed |
 | `SP2-where-absolute-guard-removed` | `src/platform/where.zig` | `if (text[0] == '/' or text[0] == '\\' or std.mem.indexOfScalar(...` -> `` | every rejected where is refused under its own name; where: remember and supersede refuse ... | killed |
 | `SP3-where-parent-segment-guard-removed` | `src/platform/where.zig` | `if (std.mem.eql(u8, segment, "..")) return error.WhereParentSeg...` -> `` | every rejected where is refused under its own name; where: remember and supersede refuse ... | killed |
@@ -419,9 +426,10 @@ python tools/verification_page.py --check
 | `SP15-where-directory-covers-everything` | `src/platform/where.zig` | `.dir => \|p\| rel.len > p.len and samePath(p, rel[0..p.len]),` -> `.dir => \|p\| p.len != 0,` | a file where covers only that file and a directory where covers what is under it; scope: ... | killed |
 | `SP16-where-symbol-ignores-ref` | `src/platform/where.zig` | `return scoped.eql(ref);` -> `return scoped.eql(ref) or true;` | a symbol where covers only proposals to that symbol; scope: a symbol-scoped rule blocks o... | killed |
 | `SP17-where-file-match-ignored` | `src/platform/where.zig` | `.file => \|p\| samePath(p, rel),` -> `.file => \|p\| p.len != 0,` | a file where covers only that file and a directory where covers what is under it; scope: ... | killed |
-| `SP18-gate-where-ignored` | `src/platform/rules.zig` | `if (try covers(rule, file, ref)) try list.append(gpa, rule);` -> `if (try covers(rule, file, ref) or true) try list.append(gpa, r...` | scope: a rule whose where names another file does not block the proposal; scope: a symbol... | killed |
-| `SP19-gate-evaluates-all-rules` | `src/platform/rules.zig` | `return evaluateLimited(gpa, file, profile, tree, span, applicab...` -> `return evaluateLimited(gpa, file, profile, tree, span, enforced...` | scope: a rule whose where names another file does not block the proposal; scope: a symbol... | killed |
+| `SP18-gate-where-ignored` | `src/platform/rules.zig` | `if (!w.coversFile(change.rel)) continue;         }         cons...` -> `if (false and !w.coversFile(change.rel)) continue;         }   ...` | scope: a rule whose where names another file does not block the proposal | killed |
+| `SP19-gate-judges-the-whole-file-for-a-symbol-scope` | `src/platform/rules.zig` | `const span = judgedSpan(gpa, scope, after) catch` -> `const span = judgedSpan(gpa, null, after) catch` | scope: a symbol-scoped rule blocks only a proposal to that symbol; scope: a batch applies... | killed |
 | `SP20-ledger-rule-drops-where` | `src/platform/rules.zig` | `, .where = decision.where });` -> `});` | scope: a rule whose where names another file does not block the proposal; scope: a rule s... | killed |
+| `SP24-scan-symbol-span-is-whole-file` | `src/platform/rules.zig` | `return .{ .start = target.body.startByte(), .end = target.body....` -> `_ = target;     return .{ .start = 0, .end = @intCast(snapshot....` | scope: a symbol scope ignores the same text in another symbol of the same file; scope: a ... | killed |
 | `EX1-exclusions-ignored` | `src/platform/where.zig` | `return self.base.coversFile(rel) and !self.excludes(rel);` -> `return self.base.coversFile(rel);` | exclusion: src/ !__tests__/ drops the test directories and keeps production code; exclusi... | killed |
 | `EX2-dir-name-only-first-component` | `src/platform/where.zig` | `start = i + 1;` -> `start = i;` | exclusion: src/ !__tests__/ drops the test directories and keeps production code; exclusi... | killed |
 | `EX3-slashed-exclusion-as-segment` | `src/platform/where.zig` | `std.mem.indexOfScalar(u8, name, '/') == null) return .{ .dir_na...` -> `std.mem.indexOfScalar(u8, name, '/') != name.len) return .{ .di...` | exclusion: a slashed exclusion is a prefix and leaves a same-named segment else...; exclu... | killed |
@@ -439,7 +447,7 @@ python tools/verification_page.py --check
 | `EX15-exclusion-whitespace-accepted` | `src/platform/where.zig` | `if (std.mem.indexOfAny(u8, text, " \t") != null) return error.W...` -> `` | every rejected exclusion is refused under its own name | killed |
 | `EX16-exclusions-unvalidated` | `src/platform/where.zig` | `try validateExclusion(body[0..end]);` -> `` | every rejected exclusion is refused under its own name; where: remember and supersede ref... | killed |
 | `EX17-symbol-where-ignores-exclusions` | `src/platform/where.zig` | `if (!self.coversFile(rel)) return false;` -> `if (!self.base.coversFile(rel)) return false;` | scope: at the gate an excluded file is not blocked and a file left in scope is; exclusion... | killed |
-| `CMD4-command-scope-ignored` | `src/platform/rules.zig` | `if (try covers(rule, target.file, target.ref)) return target.fi...` -> `if (try covers(rule, target.file, target.ref) or true) return t...` | cmd rule: a scope that excludes the file keeps the command from running at all | killed |
+| `CMD4-command-scope-ignored` | `src/platform/rules.zig` | `if (w.coversFile(path)) return path;     }     return null;` -> `if (w.coversFile(path) or true) return path;     }     return n...` | cmd rule: a scope that excludes the file keeps the command from running at all | killed |
 | `CMD6-crash-counted-as-a-violation` | `src/platform/rules.zig` | `.crashed, .timed_out, .output_limit => .crashed,     }; }  pub ...` -> `.crashed => .violated,         .timed_out, .output_limit => .cr...` | a command verdict has three outcomes: pass, violation, and no verdict at all; cmd rule: a... | killed |
 | `CMD8-command-not-found-called-a-violation` | `src/platform/rules.zig` | `if (!try resolvable(gpa, io, options.shadow_abs, head))` -> `if (false and !try resolvable(gpa, io, options.shadow_abs, head...` | cmd rule: a command that does not exist is not a verdict either | killed |
 | `RO4-skeleton-shows-rules-scoped-elsewhere` | `src/platform/rules.zig` | `if (!scope.coversFile(rel)) continue;` -> `if (!scope.coversFile(rel) and false) continue;` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
@@ -454,7 +462,7 @@ python tools/verification_page.py --check
 | `RM17-model-may-pass-allow-repo-memory` | `src/protocol/policy.zig` | `or tool_result.getField(a, "allow_repo_memory") != null` -> `` | redteam ledger: the model cannot pass allow_repo_memory, and nothing runs when ... | killed |
 | `RM18-policy-flag-never-set` | `src/protocol/policy.zig` | `policy.allow_repo_memory = true;` -> `policy.allow_repo_memory = false;` | serve policy comes only from the command line emetgate was started with | killed |
 | `RM19-policy-flag-accepted-twice` | `src/protocol/policy.zig` | `if (policy.allow_repo_memory) return null;` -> `` | serve policy comes only from the command line emetgate was started with | killed |
-| `Q1-scope-keeps-nodes-that-leave-the-span` | `src/engine/query.zig` | `if (node.startByte() < span.start or node.endByte() > span.end)...` -> `if (node.startByte() > node.endByte()) continue;` | q: only nodes wholly inside the span are reported; redteam query: at the gate a node that... | killed |
+| `Q1-scope-keeps-nodes-that-leave-the-span` | `src/engine/query.zig` | `if (node.startByte() < span.start or node.endByte() > span.end)...` -> `if (node.startByte() > node.endByte()) continue;` | q: only nodes wholly inside the span are reported | killed |
 | `Q2-pattern-without-violation-accepted` | `src/engine/query.zig` | `c.ts_query_capture_quantifier_for_id(raw, index, violation) == ...` -> `false` | q: every pattern must capture @violation | killed |
 | `Q3-eq-predicate-ignored` | `src/engine/query.zig` | `if (same == p.negate) return false;` -> `if (same == p.negate and false) return false;` | q: #eq? and #not-eq? compare a capture with a string; q: #eq? and #not-eq? compare two ca... | killed |
 | `Q4-any-of-predicate-ignored` | `src/engine/query.zig` | `} else return false;` -> `}` | q: #any-of? accepts a capture equal to one of the strings | killed |
@@ -468,7 +476,7 @@ python tools/verification_page.py --check
 | `Q18-empty-match-captures-sliced` | `src/engine/query.zig` | `if (match.capture_count == 0) &[_]c.TSQueryCapture{} else match...` -> `match.captures[0..match.capture_count];` | q: a match that captured no node is skipped instead of crashing | killed |
 | `Q19-predicate-comparisons-not-charged` | `src/engine/query.zig` | `if (budget.* < cost) return error.BudgetExceeded;     budget.* ...` -> `_ = .{ budget, cost };` | q: comparing captures with each other counts against the budget; q: string comparisons co... | killed |
 | `Q20-predicate-compared-bytes-not-charged` | `src/engine/query.zig` | `try charge(budget, 1 + @min(a.len, b.len));` -> `try charge(budget, 1);` | q: string comparisons count their bytes against the budget | killed |
-| `Q21-committed-query-rule-runs-without-flag` | `src/platform/rules.zig` | `if (!allow_repo_memory and anyQuery(applicable)) {` -> `if (allow_repo_memory and anyQuery(applicable)) {` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
+| `Q21-committed-query-rule-runs-without-flag` | `src/platform/rules.zig` | `if (!allow_repo_memory and try anyQueryOn(enforced.rules, chang...` -> `if (allow_repo_memory and try anyQueryOn(enforced.rules, change...` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
 | `Q23-repeated-capture-accepted` | `src/engine/query.zig` | `if (repeatsCapture(own) or capturedGroupRepeats(own)) {` -> `if (false and repeatsCapture(own) or capturedGroupRepeats(own))...` | q: a capture repeated with + or * is refused, one with ? or an uncaptured repea...; redte... | killed |
 | `Q24-capture-count-unlimited` | `src/engine/query.zig` | `if (captureCount(own) > max_captures_per_pattern) {` -> `if (captureCount(own) > max_captures_per_pattern * 1000) {` | q: more than eight captures in one pattern are refused, predicate arguments do ...; redte... | killed |
 | `Q25-predicate-arguments-counted-as-captures` | `src/engine/query.zig` | `i = if (next < text.len and text[next] == '#') predicateEnd(tex...` -> `i += 1;` | q: more than eight captures in one pattern are refused, predicate arguments do ... | killed |
@@ -494,7 +502,7 @@ python tools/verification_page.py --check
 | `SR3-model-picks-the-shadow-root` | `src/protocol/policy.zig` | `or tool_result.getField(a, "shadow_root") != null` -> `` | purple C7: a shadow root supplied by the model is refused and nothing is create... | killed |
 | `AD1-added-counts-what-was-there` | `src/platform/rules.zig` | `if (isAdded(rule) and takeText(&old_texts, tree.source[hit.span...` -> `if (isAdded(rule) and false) continue;` | an added rule counts only what the change adds: a kept comment passes and a new... | killed |
 | `AD2-added-masked-by-a-copy-elsewhere` | `src/platform/rules.zig` | `_ = takeText(&old_texts, tree.source[hit.span.start..hit.span.e...` -> `_ = tree.source[hit.span.start..hit.span.end];` | an added rule counts copies: a second copy of a text that the file already hold... | killed |
-| `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = old orelse "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
+| `AD3-gate-never-reads-the-file-before` | `src/platform/rules.zig` | `before = .{ .source = if (known) \|base\| base.source else "" };` -> `before = .unknown;` | rules: an enforced added rule lets a comment that was already there stay and re... | killed |
 | `SL10-rule-unknown-check-names-nothing` | `src/protocol/rule_command.zig` | `error.UnknownCheck => try writeCheckNames(err_out),` -> `error.UnknownCheck => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
 | `SL11-rule-unknown-id-lists-nothing` | `src/protocol/rule_command.zig` | `error.DecisionNotActive => try list(voice, gpa, io, root_abs, ....` -> `error.DecisionNotActive => {},` | prompt hook: a refused rule answers with the error name and the names that exis... | killed |
 | `PL1-model-may-name-the-tree` | `src/protocol/policy.zig` | `"shadow_root", "allow_run", "shadow_tree", "shadow_private" };` -> `"shadow_root", "allow_run" };` | a tool call that names the tree choice is refused like one that names a test co... | killed |
@@ -519,10 +527,27 @@ python tools/verification_page.py --check
 | `RA3-empty-list-says-nothing` | `src/protocol/rule_command.zig` | `if (decisions.len == 0) return out.writeAll(nothing_kept);` -> `if (false and decisions.len == 0) return out.writeAll(nothing_k...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
 | `RA4-forget-says-nothing` | `src/protocol/rule_command.zig` | `if (voice == .spoken) try out.print("rule forgotten: {s}\n", .{...` -> `if (false and voice == .spoken) try out.print("rule forgotten: ...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
 | `RA5-list-columns-not-padded` | `src/protocol/rule_command.zig` | `try out.splatByteAll(' ', width - cell.len + 2);` -> `try out.splatByteAll(' ', (width - cell.len) * 0 + 2);` | prompt hook: /rule list answers with the rows emetgate rule list prints | killed |
+| `EW1-write-without-a-claim-is-let-through` | `src/platform/rules.zig` | `const holes: []const Hole = change.holes orelse &everything;` -> `const holes: []const Hole = change.holes orelse if (change.base...` | a write that hands over no claim is judged in full, and one whose claim holds k... | killed |
+| `EW3-claim-trusted-without-the-comparison` | `src/platform/rules.zig` | `try confirmClaim(change);     const after = change.after orelse...` -> `if (false) try confirmClaim(change);     const after = change.a...` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW4-claim-gap-not-compared` | `src/platform/rules.zig` | `if (!std.mem.eql(u8, base.source[old_at..hole.old.start], after...` -> `if (false and !std.mem.eql(u8, base.source[old_at..hole.old.sta...` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW5-claim-tail-not-compared` | `src/platform/rules.zig` | `if (!std.mem.eql(u8, base.source[old_at..], after.source[new_at...` -> `if (false and !std.mem.eql(u8, base.source[old_at..], after.sou...` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW6-claim-without-a-base-accepted` | `src/platform/rules.zig` | `const base = change.base orelse return error.UntouchedClaimFals...` -> `const base = change.base orelse return;` | a claim of untouched bytes that the bytes do not bear out refuses the write by ... | killed |
+| `EW7-file-entering-a-scope-is-treated-as-old` | `src/platform/rules.zig` | `const covered = if (scope) \|w\| w.coversFile(change.before()) ...` -> `const covered = if (scope) \|w\| w.coversFile(change.rel) else ...` | every write: a file move into the scope of a rule it breaks is refused; added rules: a fi... | killed |
+| `EW9-scope-exit-let-through` | `src/platform/rules.zig` | `if (!try leaves(gpa, try where_mod.parse(where), change)) conti...` -> `if (!(false and try leaves(gpa, try where_mod.parse(where), cha...` | leaving a scope: a file move that takes the file out of a rule scoped to it is ...; leavi... | killed |
+| `EW10-moved-file-may-leave-a-scope` | `src/platform/rules.zig` | `if (change.from != null and !scope.coversFile(change.rel)) retu...` -> `if (false and change.from != null and !scope.coversFile(change....` | leaving a scope: a file move out of a directory a rule is scoped to is refused; a scope i... | killed |
+| `EW11-removed-file-may-leave-a-scope` | `src/platform/rules.zig` | `if (change.removed) return scope.base != .dir;` -> `if (change.removed) return false and scope.base != .dir;` | leaving a scope: a batch that deletes the file a rule is scoped to is refused; a scope is... | killed |
+| `EW13-symbol-that-no-longer-resolves-is-not-an-exit` | `src/platform/rules.zig` | `_ = symbolSpan(gpa, after, ref_text) catch \|err\| switch (err)...` -> `_ = symbolSpan(gpa, after, ref_text) catch \|err\| switch (err)...` | leaving a scope: a rename of the symbol a rule is scoped to is refused; leaving a scope: ... | killed |
+| `EW14-directory-scope-cannot-lose-a-file-by-deletion` | `src/platform/rules.zig` | `if (change.removed) return scope.base != .dir;` -> `if (change.removed) return true or scope.base != .dir;` | a scope is left by a file that moves out, a file that is removed and a symbol t... | killed |
+| `EW17-command-rule-with-no-scope-needs-a-covered-path` | `src/platform/rules.zig` | `const w = scope orelse return path;         if (w.coversFile(pa...` -> `const w = scope orelse continue;         if (w.coversFile(path)...` | command rules: one with no scope runs on a file move; cmd rule: a non-zero exit is a viol... | killed |
+| `EW21-untouched-old-text-is-counted-as-new` | `src/platform/rules.zig` | `if (try k.isOld(gpa, rule, hit.span, limits)) continue;` -> `if (false and try k.isOld(gpa, rule, hit.span, limits)) continu...` | old text: a symbol edit, a rename, a symbol move and a file move are written al...; a wri... | killed |
+| `EW22-text-the-change-overlaps-is-counted-as-old` | `src/platform/rules.zig` | `if (hit.start < hole.new.end and hole.new.start < hit.end) retu...` -> `if (false and hit.start < hole.new.end and hole.new.start < hit...` | old text: a body that keeps a text the rule forbids is refused, and a deleted s... | killed |
+| `EW23-old-place-not-shifted-by-the-change-before-it` | `src/platform/rules.zig` | `if (hole.new.end <= hit.start) shift +=` -> `if (false and hole.new.end <= hit.start) shift +=` | a text after the change is old only at the place it held before, and a text the... | killed |
+| `EW24-untouched-node-is-old-without-a-match-before` | `src/platform/rules.zig` | `if (@as(i64, old.span.start) == @as(i64, hit.start) + shift and...` -> `if (@as(i64, old.span.start) == @as(i64, hit.start) + shift and...` | old text: a rename that turns a node it did not touch into a match is refused | killed |
+| `EW25-claims-ignored-every-file-judged-in-full` | `src/platform/rules.zig` | `const holes: []const Hole = change.holes orelse &everything;` -> `const holes: []const Hole = if (false) change.holes.? else &eve...` | old text: a symbol edit, a rename, a symbol move and a file move are written al... | killed |
 
 ### Scan
 
-40 mutation(s).
+38 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -533,18 +558,16 @@ python tools/verification_page.py --check
 | `SC7-scan-unreadable-stops-scan` | `src/platform/scan.zig` | `unreadable.appendAssumeCapacity(.{ .file = try gpa.dupe(u8, fil...` -> `return err;` | scan: an unreadable tracked file is warned about, counted, and does not stop th...; scan:... | killed |
 | `SC8-scan-parse-errors-skipped` | `src/platform/scan.zig` | `parse_errors.appendAssumeCapacity(try gpa.dupe(u8, file));     ...` -> `parse_errors.appendAssumeCapacity(try gpa.dupe(u8, file));     ...` | scan: a file with parse errors is still scanned, flagged, and does not stop the...; scan:... | killed |
 | `SC9-scan-parse-errors-not-flagged` | `src/platform/scan.zig` | `parse_errors.appendAssumeCapacity(try gpa.dupe(u8, file));` -> `` | scan: a file with parse errors is still scanned, flagged, and does not stop the...; scan:... | killed |
-| `SC10-scan-span-misses-first-byte` | `src/platform/scan.zig` | `const whole: symbol.Span = .{ .start = 0,` -> `const whole: symbol.Span = .{ .start = 1,` | scan: one violation names its file, line, column, rule and text, and exits 10; scan: a to... | killed |
 | `SC11-scan-violations-exit-zero` | `src/protocol/scan_command.zig` | `return if (result.violations.len == 0) 0 else violations_exit_c...` -> `return 0;` | scan: one violation names its file, line, column, rule and text, and exits 10; scan: viol... | killed |
 | `SC13-scan-torn-ledger-not-reread` | `src/platform/scan.zig` | `pause.call(pause.context, io);             return rules.peek(gp...` -> `_ = pause;             return err;` | scan: a ledger torn on the first read but whole on the second is scanned after ...; scan:... | killed |
 | `SP21-scan-out-of-scope-files-scanned` | `src/platform/scan.zig` | `if (!covers(scopes, file)) {             out_of_scope += 1;    ...` -> `_ = &out_of_scope;` | scope: a rule scoped to src/queue.js reports nothing although the text occurs 1...; scope... | killed |
-| `SP22-scan-rule-where-not-rechecked` | `src/platform/scan.zig` | `if (!w.coversFile(file)) continue;` -> `` | scope: each rule in one scan keeps its own where | killed |
+| `SP22-scan-rule-where-not-rechecked` | `src/platform/scan.zig` | `if (!w.coversFile(file)) continue;` -> `if (false and !w.coversFile(file)) continue;` | scope: each rule in one scan keeps its own where | killed |
 | `SP23-scan-unscoped-rule-treated-as-scoped` | `src/platform/scan.zig` | `const w = scope orelse return true;` -> `const w = scope orelse continue;` | scope: a rule without where scans the whole repository as before | killed |
-| `SP24-scan-symbol-span-is-whole-file` | `src/platform/scan.zig` | `return .{ .start = target.body.startByte(), .end = target.body....` -> `_ = target;     return .{ .start = 0, .end = @intCast(snapshot....` | scope: a symbol scope ignores the same text in another symbol of the same file; scope: a ... | killed |
 | `SP26-scan-in-without-check-accepted` | `src/protocol/scan_command.zig` | `} else if (in != null) return null;` -> `}` | scope: --in is refused without --check, twice, or without a value | killed |
 | `SP27-scan-in-dropped` | `src/protocol/scan_command.zig` | `.check = .{ .spec = spec, .where = in } };` -> `.check = .{ .spec = spec, .where = null } };` | scope: --in narrows an ad-hoc check and the json report counts files outside it; scope: a... | killed |
 | `SU1-scanner-unresolved-scope-not-refused` | `src/platform/scan.zig` | `if (try firstUnresolvedIn(gpa, io, runtime, root, files, list) ...` -> `` | scope: the scanner itself refuses an unresolved scope | killed |
 | `SU2-scan-command-unresolved-precheck-removed` | `src/protocol/scan_command.zig` | `if (unresolved) \|bad\| {` -> `if (if (true) @as(?scan.Unresolved, null) else unresolved) \|ba...` | scope: a ledger rule whose where names a deleted file stops the scan with Scope...; scope... | killed |
-| `SU3-scope-symbol-not-resolved` | `src/platform/scan.zig` | `_ = try symbolSpan(gpa, snapshot, ref_text);` -> `if (false) _ = try symbolSpan(gpa, snapshot, ref_text);` | scope: a ledger rule whose where names a missing symbol stops the scan with Sco...; scope... | killed |
+| `SU3-scope-symbol-not-resolved` | `src/platform/scan.zig` | `_ = try rules.symbolSpan(gpa, snapshot, ref_text);` -> `if (false) _ = try rules.symbolSpan(gpa, snapshot, ref_text);` | scope: a ledger rule whose where names a missing symbol stops the scan with Sco...; scope... | killed |
 | `SU4-scope-file-presence-not-checked` | `src/platform/scan.zig` | `} else return switch (scope.base) {         .dir => error.NoTra...` -> `} else return;` | scope: a ledger rule whose where names a deleted file stops the scan with Scope...; scope... | killed |
 | `ST5-scan-tool-refusal-not-reported` | `src/protocol/scan_command.zig` | `if (options.refusal) \|name\| name.* = @errorName(err);` -> `if (options.refusal) \|name\| if (false) { name.* = @errorName(...` | scan tool: a malformed check is refused by its existing error name; scan tool: an invalid... | killed |
 | `EX18-resolution-applies-exclusions` | `src/platform/scan.zig` | `if (scope.base.coversFile(file)) break file;` -> `if (scope.coversFile(file)) break file;` | nothing in scope: a scope excluding its only file resolves, so it is not ScopeU... | killed |
@@ -656,7 +679,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-603 mutation(s).
+614 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1178,7 +1201,7 @@ python tools/verification_page.py --check
 | `PV13-recover-overwrites-a-hand-edit` | `src/platform/commit_intent.zig` | `if (base != null and !same(now, base)) return .left;` -> `if (false and base != null and !same(now, base)) return .left;` | commit window: recover leaves a file whose line ends the user changed after the... | killed |
 | `PV14-targets-not-measured-again-before-the-branch-moves` | `src/platform/commit_plan.zig` | `if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUnco...` -> `if (false and !sameHash(was.raw, p.base_hash)) return error.Tar...` | commit window: a file renamed over the target after its measurement is kept, an... | killed |
 | `PV15-unpublished-index-not-reported` | `src/platform/commit_plan.zig` | `plan.unfinished = commit_intent.index_not_published;` -> `` | commit protocol: a publish that is refused a few times is retried, and one that... | killed |
-| `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe... | killed |
+| `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe...; recov... | killed |
 | `PV18-pending-commit-not-finished-before-the-next` | `src/platform/commit_plan.zig` | `const found = try recoverFound(gpa, io, root);` -> `const found: commit_intent.Report = .{};` | commit protocol: recover never removes or replaces an index lock it does not ow... | killed |
 | `PV22-receipt-digests-taken-from-the-working-tree` | `src/protocol/receipt_note.zig` | `if (made.oid) \|oid\| bound.commit = .{ .base = made.base.?, .o...` -> `if (made.oid) \|oid\| bound.commit = if (oid.len == 0) .{ .base...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
 | `PV23-receipt-symbol-hashes-taken-from-the-working-tree` | `src/platform/receipts.zig` | `const runtime = self.made.runtime orelse return claimed;` -> `const runtime = self.made.runtime orelse return claimed;       ...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
@@ -1263,6 +1286,17 @@ python tools/verification_page.py --check
 | `EP11-final-name-without-a-drive-accepted` | `src/platform/exe_path.zig` | `if (rest.len < 3 or rest[1] != ':' or rest[2] != '\\') return n...` -> `if (false and (rest.len < 3 or rest[1] != ':' or rest[2] != '\\...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
 | `WP1-pool-keeps-its-closed-event` | `src/platform/worker_pool.zig` | `self.done = null;         self.count = 0;         return unclos...` -> `self.count = 0;         return unclosed;` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
 | `WP2-pool-never-started-closes-a-handle` | `src/platform/worker_pool.zig` | `const done = self.done orelse return 0;` -> `const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0...` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
+| `FR1-server-builds-the-fact-store-before-the-first-reply` | `src/protocol/server.zig` | `ms.start();` -> `ms.build() catch {};` | first reply: initialize and tools/list are answered while the fact store of the... | killed |
+| `FR2-background-build-runs-on-the-calling-thread` | `src/protocol/map_tools.zig` | `self.worker = std.Thread.spawn(.{}, run, .{self}) catch return ...` -> `run(self);` | first reply: initialize and tools/list are answered while the fact store of the... | killed |
+| `FR3-call-does-not-wait-for-the-fact-store` | `src/protocol/map_tools.zig` | `if (self.settle()) self.waited = true;` -> `` | first reply: an explore call that arrives while the fact store is being built w...; first... | killed |
+| `FR4-half-built-fact-store-taken-as-ready` | `src/protocol/map_tools.zig` | `return self.phase.load(.acquire) == .ready;` -> `return self.repo != null;` | first reply: a fact store build that fails leaves explore and evidence refused ... | killed |
+| `FR5-closing-does-not-cancel-the-build` | `src/protocol/map_tools.zig` | `self.cancel.store(true, .release);         _ = self.settle();` -> `_ = self.settle();` | first reply: closing the session while the fact store is being built stops the ... | killed |
+| `FR6-build-does-not-see-the-cancel-flag` | `src/protocol/map_tools.zig` | `.store_path = self.store_path, .cancel = &self.cancel });` -> `.store_path = self.store_path });` | first reply: closing the session while the fact store is being built stops the ... | killed |
+| `FR7-canceled-refresh-reads-every-file` | `src/platform/fact_store.zig` | `if (canceled(self.cancel)) return self.stop(error.Canceled);` -> `` | first reply: a refresh canceled while it reads the files stops before the next ...; first... | killed |
+| `FR8-canceled-refresh-writes-the-store` | `src/platform/fact_store.zig` | `if (canceled(self.options.cancel)) return error.Canceled;` -> `` | first reply: a refresh canceled after the last file is read does not write the ... | killed |
+| `FR9-failed-fact-store-build-never-tried-again` | `src/protocol/map_tools.zig` | `if (self.phase.load(.acquire) == .failed) self.retry();` -> `` | first reply: a call after a fact store build that failed builds the store again... | killed |
+| `EW19-command-rule-gets-no-target-from-write-doc` | `src/platform/doc_writer.zig` | `runner.gateDir(location, &session), &.{rel}, null, options.limi...` -> `runner.gateDir(location, &session), &.{}, null, options.limits` | documents: a command rule runs on write_doc and on a document edit of a batch, ... | killed |
+| `EW26-rename-claims-the-new-name-untouched` | `src/platform/rename_batch.zig` | `for (sorted, placed, holes) \|old, new, *hole\| hole.* = .{ .ol...` -> `for (sorted, placed, holes) \|old, new, *hole\| hole.* = .{ .ol...` | every write: a rename to a forbidden name is refused and nothing is written | killed |
 
 ## What this system does not prove
 

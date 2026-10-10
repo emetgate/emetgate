@@ -376,7 +376,28 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     try proveOwnImports(w, before, after, request, moved, afters.items[0]);
 
     const created = try missingDirs(w, request.to_abs);
-    return build(gpa, root, request, files.items, afters.items, created, .{ .resolver = resolver, .fallback = fallback, .users = users, .rewritten = rewritten, .interface_change = interface_change }, &afters);
+    const result = try build(gpa, root, request, files.items, afters.items, created, .{ .resolver = resolver, .fallback = fallback, .users = users, .rewritten = rewritten, .interface_change = interface_change }, &afters);
+    for (result.prepared) |p| {
+        const base = p.base orelse continue;
+        for (opened.items, 0..) |held, i| {
+            if (held != base) continue;
+            _ = opened.swapRemove(i);
+            break;
+        }
+    }
+    return result;
+}
+
+fn rewriteHoles(gpa: Allocator, rewrites: []const Rewrite) ![]symbol.Hole {
+    const holes = try gpa.alloc(symbol.Hole, rewrites.len);
+    var shift: i64 = 0;
+    for (rewrites, holes) |r, *hole| {
+        const start: u32 = @intCast(@as(i64, r.start) + shift);
+        const end: u32 = start + @as(u32, @intCast(r.text.len));
+        shift += @as(i64, @intCast(r.text.len)) - @as(i64, r.end - r.start);
+        hole.* = .{ .old = .{ .start = r.start, .end = r.end }, .new = .{ .start = start, .end = end } };
+    }
+    return holes;
 }
 
 fn proveUnchanged(before: *Snapshot, after: *Snapshot) !void {
@@ -449,6 +470,7 @@ fn build(gpa: Allocator, root: []const u8, request: Request, files: []const File
     errdefer for (prepared[0..built], edits[0..built]) |p, e| {
         gpa.free(p.rel);
         if (p.source_rel) |s| gpa.free(s);
+        if (p.holes) |h| gpa.free(h);
         gpa.free(e.file_abs);
         if (e.move_source) |s| gpa.free(s);
     };
@@ -462,6 +484,8 @@ fn build(gpa: Allocator, root: []const u8, request: Request, files: []const File
         const abs = try gpa.dupe(u8, target);
         errdefer gpa.free(abs);
         const move_source: ?[]const u8 = if (moved) try gpa.dupe(u8, request.from_abs) else null;
+        errdefer if (move_source) |m| gpa.free(m);
+        const holes = try rewriteHoles(gpa, f.rewrites.items);
         const base = symbol.hashOf(f.snapshot.source);
         prepared[i] = .{
             .rel = rel,
@@ -470,6 +494,8 @@ fn build(gpa: Allocator, root: []const u8, request: Request, files: []const File
             .hash = symbol.hashOf(after.source),
             .snapshot = after,
             .source_rel = source_rel,
+            .base = f.snapshot,
+            .holes = holes,
         };
         edits[i] = .{ .file_abs = abs, .ref_text = "", .expected_hash = .{ .present = base }, .move_source = move_source };
         built = i + 1;

@@ -176,6 +176,10 @@ test {
     _ = @import("tests/commit_window.zig");
     _ = @import("tests/journal_base.zig");
     _ = @import("tests/frozen.zig");
+    _ = @import("tests/every_write.zig");
+    _ = @import("tests/every_write_scope.zig");
+    _ = @import("tests/write_invariant.zig");
+    _ = @import("tests/every_write_old.zig");
     _ = @import("tests/message_base.zig");
     _ = @import("tests/verify_filtered_commit.zig");
     _ = @import("tests/run_tool.zig");
@@ -203,6 +207,7 @@ test {
     _ = @import("tests/map_region_rank.zig");
     _ = @import("tests/map_explore.zig");
     _ = @import("tests/map_tools.zig");
+    _ = @import("tests/first_reply.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");

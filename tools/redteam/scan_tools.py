@@ -25,6 +25,8 @@ INJECTION_PATTERNS = [
 ]
 
 MAX_DESCRIPTION_CHARS = 2000
+STDERR_TAIL_LINES = 20
+MAX_ERROR_FIELD_CHARS = 600
 
 
 def write_config(exe):
@@ -59,7 +61,11 @@ def run_inspect(config, verbose):
     )
     if verbose:
         print(result.stderr, file=sys.stderr)
-    return json.loads(result.stdout)
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        report = None
+    return report, result.stderr, result.returncode
 
 
 def has_zero_width(text):
@@ -85,6 +91,88 @@ def collect_tools(report):
             for tool in signature.get("tools", []) or []:
                 tools.append(tool)
     return tools
+
+
+def last_line(text):
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    return lines[-1].strip() if lines else ""
+
+
+def clip(text):
+    text = " ".join((text or "").split())
+    if len(text) <= MAX_ERROR_FIELD_CHARS:
+        return text
+    return text[:MAX_ERROR_FIELD_CHARS] + " ..."
+
+
+def describe_error(where, error):
+    lines = [f"scanner error for {where}: {error.get('message') or '<no message>'}"]
+    for label, value in (
+        ("category", error.get("category")),
+        ("exception", error.get("exception")),
+        ("cause", last_line(error.get("traceback"))),
+        ("server output", clip(error.get("server_output"))),
+    ):
+        if value:
+            lines.append(f"  {label}: {value}")
+    return lines
+
+
+def collect_errors(report):
+    lines = []
+    for key, entry in report.items():
+        if not isinstance(entry, dict):
+            continue
+        if isinstance(entry.get("error"), dict):
+            lines.extend(describe_error(f"config {key}", entry["error"]))
+        for server in entry.get("servers", []) or []:
+            if isinstance(server.get("error"), dict):
+                lines.extend(describe_error(f"server {server.get('name', '<unnamed>')}", server["error"]))
+    return lines
+
+
+def stderr_tail(stderr):
+    lines = [line for line in (stderr or "").splitlines() if line.strip()]
+    if not lines:
+        return []
+    tail = lines[-STDERR_TAIL_LINES:]
+    return [f"scanner stderr, last {len(tail)} line(s):"] + [f"  {line}" for line in tail]
+
+
+def evaluate(report, stderr, returncode, out, err):
+    if report is None:
+        print(f"the scanner printed no JSON report (exit code {returncode})", file=err)
+        for line in stderr_tail(stderr):
+            print(line, file=err)
+        return 2
+
+    tools = collect_tools(report)
+    errors = collect_errors(report)
+    for line in errors:
+        print(line, file=err)
+    if errors or not tools:
+        for line in stderr_tail(stderr):
+            print(line, file=err)
+    if not tools:
+        print("no tools discovered; the server did not start or advertised nothing", file=err)
+        return 2
+
+    findings = []
+    for tool in tools:
+        findings.extend(check_tool(tool))
+
+    print(f"mcp tool scan: {len(tools)} tool(s) inspected", file=out)
+    for tool in tools:
+        print(f"  {tool.get('name')}", file=out)
+
+    if findings:
+        print(f"FINDINGS: {len(findings)}", file=out)
+        for finding in findings:
+            print(f"  {finding}", file=out)
+        return 1
+
+    print("no injection-style patterns, invisible characters or oversized descriptions found", file=out)
+    return 0
 
 
 def check_tool(tool):
@@ -131,28 +219,8 @@ def main():
             return 2
         config = write_config(exe)
 
-    report = run_inspect(config, args.verbose)
-    tools = collect_tools(report)
-    if not tools:
-        print("no tools discovered; the server did not start or advertised nothing", file=sys.stderr)
-        return 2
-
-    findings = []
-    for tool in tools:
-        findings.extend(check_tool(tool))
-
-    print(f"mcp tool scan: {len(tools)} tool(s) inspected")
-    for tool in tools:
-        print(f"  {tool.get('name')}")
-
-    if findings:
-        print(f"FINDINGS: {len(findings)}")
-        for finding in findings:
-            print(f"  {finding}")
-        return 1
-
-    print("no injection-style patterns, invisible characters or oversized descriptions found")
-    return 0
+    report, stderr, returncode = run_inspect(config, args.verbose)
+    return evaluate(report, stderr, returncode, sys.stdout, sys.stderr)
 
 
 if __name__ == "__main__":
