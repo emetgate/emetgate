@@ -223,8 +223,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
 }
 
 fn changeOf(p: Prepared) rules.Change {
-    const claimed = p.holes != null or p.action == .create;
-    return .{ .rel = p.rel, .base = p.base, .after = if (claimed and p.addsCode()) p.snapshot else null, .holes = p.holes };
+    return .{ .rel = p.rel, .base = p.base, .after = p.snapshot, .holes = p.holes };
 }
 
 fn openCommit(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, options: BatchOptions) !commit_plan.Opened {

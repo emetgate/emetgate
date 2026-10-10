@@ -197,11 +197,13 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
-    defer base.destroy();
+    errdefer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const removed = try removal.remove(base, ref, expected);
     errdefer removed.snapshot.destroy();
     const declaration = (try (try base.symbols()).resolve(ref)).declaration;
+    const offset = try nameOffset(gpa, base, ref.name, declaration);
+    const holes = try gpa.dupe(symbol.Hole, &.{.{ .old = removed.cut, .new = .{ .start = removed.cut.start, .end = removed.cut.start } }});
     return .{
         .rel = rel,
         .action = .delete_symbol,
@@ -210,7 +212,9 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
         .snapshot = removed.snapshot,
         .removed = symmetry.inspect(base, removed.cut),
         .removed_span = declaration,
-        .name_offset = try nameOffset(gpa, base, ref.name, declaration),
+        .name_offset = offset,
+        .base = base,
+        .holes = holes,
     };
 }
 

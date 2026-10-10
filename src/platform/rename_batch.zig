@@ -161,10 +161,12 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     for (locations.files.items) |located| {
         const declaring = tsserver.sameFile(located.abs, request.file_abs);
         const file_base = try Snapshot.load(runtime, io, .cwd(), located.abs);
-        defer file_base.destroy();
+        errdefer file_base.destroy();
         const renamed = try rename.apply(gpa, file_base, old, request.new_name, located.spans.items);
-        gpa.free(renamed.spans);
+        defer gpa.free(renamed.spans);
         errdefer renamed.snapshot.destroy();
+        const holes = try renamedHoles(gpa, located.spans.items, renamed.spans);
+        errdefer gpa.free(holes);
         regions += renamed.regions_checked;
         symbols += renamed.symbols_checked;
         var body: Span = .{ .start = 0, .end = 0 };
@@ -190,6 +192,8 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             .hash = symbol.hashOf(renamed.snapshot.source),
             .snapshot = renamed.snapshot,
             .body = body,
+            .base = file_base,
+            .holes = holes,
         };
         edits[built] = .{
             .file_abs = abs,
@@ -209,6 +213,20 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         .new_ref = new_ref_text,
         .new_hash = new_hash orelse return error.IncompleteRename,
     };
+}
+
+fn spanBefore(_: void, a: Span, b: Span) bool {
+    return a.start < b.start;
+}
+
+fn renamedHoles(gpa: Allocator, proposed: []const Span, placed: []const Span) ![]symbol.Hole {
+    if (proposed.len != placed.len) return error.IncompleteRename;
+    const sorted = try gpa.dupe(Span, proposed);
+    defer gpa.free(sorted);
+    std.mem.sort(Span, sorted, {}, spanBefore);
+    const holes = try gpa.alloc(symbol.Hole, sorted.len);
+    for (sorted, placed, holes) |old, new, *hole| hole.* = .{ .old = old, .new = new };
+    return holes;
 }
 
 const Target = struct {

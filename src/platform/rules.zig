@@ -93,6 +93,7 @@ pub fn judge(gpa: Allocator, io: std.Io, root_abs: []const u8, changes: []const 
     if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
     }
+    for (changes) |change| try confirmClaim(change);
     for (changes) |change| {
         const gated = try judgeChange(gpa, enforced.rules, change);
         if (gated != .ok) return gated;
@@ -159,6 +160,23 @@ const Kept = struct {
     }
 };
 
+pub fn confirmClaim(change: Change) error{UntouchedClaimFalse}!void {
+    const holes = change.holes orelse return;
+    const base = change.base orelse return error.UntouchedClaimFalse;
+    const after = change.after orelse return error.UntouchedClaimFalse;
+    var old_at: u32 = 0;
+    var new_at: u32 = 0;
+    for (holes) |hole| {
+        if (hole.old.start < old_at or hole.new.start < new_at) return error.UntouchedClaimFalse;
+        if (hole.old.end < hole.old.start or hole.new.end < hole.new.start) return error.UntouchedClaimFalse;
+        if (hole.old.end > base.source.len or hole.new.end > after.source.len) return error.UntouchedClaimFalse;
+        if (!std.mem.eql(u8, base.source[old_at..hole.old.start], after.source[new_at..hole.new.start])) return error.UntouchedClaimFalse;
+        old_at = hole.old.end;
+        new_at = hole.new.end;
+    }
+    if (!std.mem.eql(u8, base.source[old_at..], after.source[new_at..])) return error.UntouchedClaimFalse;
+}
+
 fn dropViolations(gpa: Allocator, list: *std.ArrayList(Violation)) void {
     for (list.items) |v| freeViolation(gpa, v);
     list.clearRetainingCapacity();
@@ -170,7 +188,7 @@ fn judgeChange(gpa: Allocator, all: []const Rule, change: Change) !Gate {
         .old = .{ .start = 0, .end = if (change.base) |base| @intCast(base.source.len) else 0 },
         .new = .{ .start = 0, .end = @intCast(after.source.len) },
     }};
-    const holes: []const Hole = change.holes orelse if (change.base == null) &everything else return .ok;
+    const holes: []const Hole = change.holes orelse &everything;
 
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);

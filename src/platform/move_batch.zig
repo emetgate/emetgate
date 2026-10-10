@@ -607,7 +607,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const target_new = try applyEdits(arena, target_text, target_edits.items);
 
     var outputs: std.ArrayList(Output) = .empty;
-    try outputs.append(arena, .{ .abs = request.file_abs, .before = source, .text = source_new });
+    try outputs.append(arena, .{ .abs = request.file_abs, .before = source, .text = source_new, .holes = try holesOf(arena, source_edits.items) });
     const moved_start: u32 = @intCast(std.mem.lastIndexOf(u8, target_new, moved_text).?);
     const moved_span: Span = .{ .start = moved_start, .end = moved_start + @as(u32, @intCast(moved_text.len)) };
     try outputs.append(arena, .{ .abs = request.target_abs, .before = target, .text = target_new, .creates = !target_exists, .ref_text = request.ref_text, .body = moved_span, .holes = try holesOf(arena, target_edits.items) });
@@ -632,7 +632,8 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             try edits_u.append(arena, .{ .start = other.entry.statement.start, .end = lineEndAfter(user.snapshot.source, other.entry.statement.end), .text = try std.mem.concat(arena, u8, &.{ replaced, added_text }) });
             imports_added += 1;
         }
-        try outputs.append(arena, .{ .abs = user.abs, .before = user.snapshot, .text = try applyEdits(arena, user.snapshot.source, edits_u.items) });
+        const user_new = try applyEdits(arena, user.snapshot.source, edits_u.items);
+        try outputs.append(arena, .{ .abs = user.abs, .before = user.snapshot, .text = user_new, .holes = try holesOf(arena, edits_u.items) });
     }
 
     var afters: std.ArrayList(*Snapshot) = .empty;
