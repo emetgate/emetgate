@@ -1,0 +1,33 @@
+{
+  "silent.json": {
+    "client": "silent.json",
+    "path": "silent.json",
+    "servers": [
+      {
+        "name": "emetgate",
+        "config_path": "silent.json",
+        "server": {
+          "command": "python",
+          "args": [
+            "-c",
+            "import time; time.sleep(30)"
+          ],
+          "type": "stdio",
+          "env": null,
+          "binary_identifier": null
+        },
+        "signature": null,
+        "error": {
+          "message": "could not start server",
+          "exception": null,
+          "traceback": "Traceback (most recent call last):\n  File \"**REDACTED**\", line 118, in receive\n    return self.receive_nowait()\n           ~~~~~~~~~~~~~~~~~~~^^\n  File \"**REDACTED**\", line 113, in receive_nowait\n    raise WouldBlock\nanyio._core._exceptions.WouldBlock\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"**REDACTED**\", line 488, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"**REDACTED**\", line 229, in _check_server_pass\n    return await _check_server()\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"**REDACTED**\", line 178, in _check_server\n    async with ClientSession(read, write) as session:\n               ~~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"**REDACTED**\", line 238, in __aexit__\n    return await self._task_group.__aexit__(exc_type, exc_val, exc_tb)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"**REDACTED**\", line 851, in __aexit__\n    raise exc_val\n  File \"**REDACTED**\", line 179, in _check_server\n    meta = await session.initialize()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"**REDACTED**\", line 183, in initialize\n    result = await self.send_request(\n             ^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<16 lines>...\n    )\n    ^\n  File \"**REDACTED**\", line 292, in send_request\n    response_or_error = await response_stream_reader.receive()\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"**REDACTED**\", line 126, in receive\n    await receive_event.wait()\n  File \"**REDACTED**\", line 1936, in wait\n    await self._event.wait()\n  File \"**REDACTED**\", line 213, in wait\n    await fut\nasyncio.exceptions.CancelledError\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"**REDACTED**\", line 287, in _inspect_stdio_server\n    signature, _ = await check_server(\n                   ^^^^^^^^^^^^^^^^^^^\n    ...<7 lines>...\n    )\n    ^\n  File \"**REDACTED**\", line 245, in check_server\n    result = await asyncio.wait_for(\n             ^^^^^^^^^^^^^^^^^^^^^^^\n    ...<9 lines>...\n    )\n    ^\n  File \"**REDACTED**\", line 487, in wait_for\n    async with timeouts.timeout(timeout):\n               ~~~~~~~~~~~~~~~~^^^^^^^^^\n  File \"**REDACTED**\", line 114, in __aexit__\n    raise TimeoutError from exc_val\nTimeoutError\n",
+          "is_failure": true,
+          "category": "server_startup",
+          "server_output": ">>> SENT: SessionMessage(message=JSONRPCMessage(root=JSONRPCRequest(method='initialize', params={'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': {'name': 'mcp', 'version': '0.1.0'}}, jsonrpc='2.0', id=0)), metadata=None)"
+        }
+      }
+    ],
+    "skills": [],
+    "error": null
+  }
+}
