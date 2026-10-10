@@ -21,9 +21,15 @@ pub const Hole = symbol.Hole;
 
 pub const Change = struct {
     rel: []const u8,
+    from: ?[]const u8 = null,
     base: ?*Snapshot = null,
     after: ?*Snapshot = null,
+    removed: bool = false,
     holes: ?[]const Hole = null,
+
+    pub fn before(self: Change) []const u8 {
+        return self.from orelse self.rel;
+    }
 };
 
 pub const Rule = struct {
@@ -94,6 +100,10 @@ pub fn judge(gpa: Allocator, io: std.Io, root_abs: []const u8, changes: []const 
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
     }
     for (changes) |change| try confirmClaim(change);
+    for (changes) |change| {
+        const gated = try scopeKept(gpa, enforced.rules, change);
+        if (gated != .ok) return gated;
+    }
     for (changes) |change| {
         const gated = try judgeChange(gpa, enforced.rules, change);
         if (gated != .ok) return gated;
@@ -177,6 +187,40 @@ pub fn confirmClaim(change: Change) error{UntouchedClaimFalse}!void {
     if (!std.mem.eql(u8, base.source[old_at..], after.source[new_at..])) return error.UntouchedClaimFalse;
 }
 
+pub const scope_left = "leaves the scope ";
+
+fn leaves(gpa: Allocator, scope: where_mod.Where, change: Change) Allocator.Error!bool {
+    if (!scope.coversFile(change.before())) return false;
+    if (change.from != null and !scope.coversFile(change.rel)) return true;
+    if (change.removed) return scope.base != .dir;
+    const ref_text = switch (scope.base) {
+        .symbol => |s| s.ref,
+        else => return false,
+    };
+    const base = change.base orelse return false;
+    _ = symbolSpan(gpa, base, ref_text) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
+    const after = change.after orelse return true;
+    _ = symbolSpan(gpa, after, ref_text) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return true,
+    };
+    return false;
+}
+
+fn scopeKept(gpa: Allocator, all: []const Rule, change: Change) !Gate {
+    for (all) |rule| {
+        const where = rule.where orelse continue;
+        if (!try leaves(gpa, try where_mod.parse(where), change)) continue;
+        const text = try std.mem.concat(gpa, u8, &.{ scope_left, where });
+        defer gpa.free(text);
+        return violatedGate(gpa, rule, change.before(), text);
+    }
+    return .ok;
+}
+
 fn dropViolations(gpa: Allocator, list: *std.ArrayList(Violation)) void {
     for (list.items) |v| freeViolation(gpa, v);
     list.clearRetainingCapacity();
@@ -207,12 +251,14 @@ fn judgeChange(gpa: Allocator, all: []const Rule, change: Change) !Gate {
             },
             else => |e| return e,
         };
+        const covered = if (scope) |w| w.coversFile(change.before()) else true;
+        const known: ?*Snapshot = if (covered) change.base else null;
         var kept: ?Kept = null;
         defer if (kept) |k| k.deinit(gpa);
         var before: Before = .unknown;
         if (isAdded(rule)) {
-            before = .{ .source = if (change.base) |base| base.source else "" };
-        } else if (change.base) |base| {
+            before = .{ .source = if (known) |base| base.source else "" };
+        } else if (known) |base| {
             if (judgedSpan(gpa, scope, base)) |was| {
                 kept = .{ .base = base, .span = was, .holes = holes };
             } else |err| switch (err) {

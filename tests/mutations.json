@@ -8576,7 +8576,7 @@
     {
       "id": "AD3-gate-never-reads-the-file-before",
       "file": "src/platform/rules.zig",
-      "from": "            before = .{ .source = if (change.base) |base| base.source else \"\" };",
+      "from": "            before = .{ .source = if (known) |base| base.source else \"\" };",
       "to": "            before = .unknown;",
       "kills": [
         "rules: an enforced added rule lets a comment that was already there stay and rejects only the new one"
