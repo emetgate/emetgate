@@ -1210,6 +1210,17 @@ tracked files, compares directory stamps, re-reads only changed files (a file st
 content hash changed, and relinks only the files whose links read a file whose exports or
 definitions changed.
 
+`emetgate mcp` runs this refresh on a background thread that it starts before it reads the
+first message, so `initialize` and `tools/list` are answered without waiting for the store.
+`emetgate_explore` and `emetgate_evidence` wait for a refresh that is still running and then
+answer from the whole store; the telemetry event of such a call carries the reason `waited for
+the fact store build`. The other tools do not read the store and answer while it is being
+built. If the build fails, the next call to either tool builds the store once more before it
+answers; if that fails too, the tool refuses with `explore is unavailable` or `evidence is
+unavailable` and the event names the error. Neither tool answers from the part that was read.
+When the client closes the server during the build, the build stops before it reads the next
+file and writes no store, and the next start builds it again.
+
 Answers use the answer algebra (`complete`, `partial`, `refused`) with a certificate over the
 snapshot: an RFC 9162 Merkle root over each file's path and SHA-256. `callers` and `refs` are
 `complete` only when nothing could bind to the subject without being resolved: no reference
