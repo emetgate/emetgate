@@ -11434,6 +11434,80 @@
       "kills": [
         "a pool that was never started, and one torn down twice, closes no handle it does not hold"
       ]
+    },
+    {
+      "id": "FR1-server-builds-the-fact-store-before-the-first-reply",
+      "file": "src/protocol/server.zig",
+      "from": "            ms.start();",
+      "to": "            ms.build() catch {};",
+      "kills": [
+        "first reply: initialize and tools/list are answered while the fact store of the repository is still being built"
+      ]
+    },
+    {
+      "id": "FR2-background-build-runs-on-the-calling-thread",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        self.worker = std.Thread.spawn(.{}, run, .{self}) catch return run(self);",
+      "to": "        run(self);",
+      "kills": [
+        "first reply: initialize and tools/list are answered while the fact store of the repository is still being built"
+      ]
+    },
+    {
+      "id": "FR3-call-does-not-wait-for-the-fact-store",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        if (self.settle()) self.waited = true;\n        return self.phase.load(.acquire) == .ready;",
+      "to": "        return self.phase.load(.acquire) == .ready;",
+      "kills": [
+        "first reply: an explore call that arrives while the fact store is being built waits for it and answers from the whole store",
+        "first reply: an evidence call that arrives while the fact store is being built waits for it and answers from the whole store"
+      ]
+    },
+    {
+      "id": "FR4-half-built-fact-store-taken-as-ready",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        return self.phase.load(.acquire) == .ready;",
+      "to": "        return self.repo != null;",
+      "kills": [
+        "first reply: a fact store build that fails leaves explore and evidence refused instead of answered from the part that was read"
+      ]
+    },
+    {
+      "id": "FR5-closing-does-not-cancel-the-build",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        self.cancel.store(true, .release);\n        _ = self.settle();",
+      "to": "        _ = self.settle();",
+      "kills": [
+        "first reply: closing the session while the fact store is being built stops the build and writes no store"
+      ]
+    },
+    {
+      "id": "FR6-build-does-not-see-the-cancel-flag",
+      "file": "src/protocol/map_tools.zig",
+      "from": ".store_path = self.store_path, .cancel = &self.cancel });",
+      "to": ".store_path = self.store_path });",
+      "kills": [
+        "first reply: closing the session while the fact store is being built stops the build and writes no store"
+      ]
+    },
+    {
+      "id": "FR7-canceled-refresh-reads-every-file",
+      "file": "src/platform/fact_store.zig",
+      "from": "            if (canceled(self.cancel)) return self.stop(error.Canceled);\n",
+      "to": "",
+      "kills": [
+        "first reply: a refresh canceled while it reads the files stops before the next file",
+        "first reply: closing the session while the fact store is being built stops the build and writes no store"
+      ]
+    },
+    {
+      "id": "FR8-canceled-refresh-writes-the-store",
+      "file": "src/platform/fact_store.zig",
+      "from": "                if (canceled(self.options.cancel)) return error.Canceled;\n",
+      "to": "",
+      "kills": [
+        "first reply: a refresh canceled after the last file is read does not write the store"
+      ]
     }
   ]
 }

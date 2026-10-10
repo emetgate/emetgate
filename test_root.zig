@@ -203,6 +203,7 @@ test {
     _ = @import("tests/map_region_rank.zig");
     _ = @import("tests/map_explore.zig");
     _ = @import("tests/map_tools.zig");
+    _ = @import("tests/first_reply.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
     _ = @import("tests/redteam_rename.zig");
