@@ -125,26 +125,11 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         .failed => |failure| return .{ .rule_check_failed = failure },
     };
     defer session.deinit(gpa);
-    for (prepared, edits[0..prepared.len]) |p, edit| {
-        if (p.nodes) |applied| {
-            const snapshot = applied.snapshot;
-            for (applied.units) |unit| {
-                if (!unit.checked()) continue;
-                const ref = try unit.parseRef(gpa);
-                defer ref.deinit(gpa);
-                switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, unit.span, options.allow_repo_memory)) {
-                    .ok => {},
-                    .violated => |report| return .{ .rule_violation = report },
-                    .failed => |failure| return .{ .rule_check_failed = failure },
-                }
-            }
-            continue;
-        }
-        if (!p.addsCode() or edit.ref_text.len == 0) continue;
-        const ref = try symbol.Ref.parse(gpa, edit.ref_text);
-        defer ref.deinit(gpa);
-        const snapshot = p.snapshot.?;
-        switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, p.body, options.allow_repo_memory)) {
+    {
+        const judged = try gpa.alloc(rules.Change, prepared.len);
+        defer gpa.free(judged);
+        for (prepared, judged) |p, *slot| slot.* = changeOf(p);
+        switch (try rules.judge(gpa, io, root, judged, options.allow_repo_memory)) {
             .ok => {},
             .violated => |report| return .{ .rule_violation = report },
             .failed => |failure| return .{ .rule_check_failed = failure },
@@ -235,6 +220,11 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     commit_entered = true;
     try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);
     return .{ .committed = committed };
+}
+
+fn changeOf(p: Prepared) rules.Change {
+    const claimed = p.holes != null or p.action == .create;
+    return .{ .rel = p.rel, .base = p.base, .after = if (claimed and p.addsCode()) p.snapshot else null, .holes = p.holes };
 }
 
 fn openCommit(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Prepared, options: BatchOptions) !commit_plan.Opened {

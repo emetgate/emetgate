@@ -233,7 +233,7 @@ test "redteam query: an enforced q: rule rejects a matching body with start and 
     try repo.expectPristine();
 }
 
-test "redteam query: at the gate a node that encloses the body is not reported, one inside it is" {
+test "redteam query: at the gate a node that encloses the changed body is reported with the one inside it" {
     try skipOffWindows();
     var repo = try Repo.init();
     defer repo.deinit();
@@ -245,8 +245,9 @@ test "redteam query: at the gate a node that encloses the body is not reported, 
     defer result.deinit(testing.allocator);
     try testing.expect(result == .rule_violation);
     const violations = result.rule_violation.violations;
-    try testing.expectEqual(@as(usize, 1), violations.len);
-    try testing.expectEqualStrings("return a - b;", violations[0].text);
+    try testing.expectEqual(@as(usize, 2), violations.len);
+    try testing.expect(std.mem.endsWith(u8, violations[0].text, "{\n  return a - b;\n}"));
+    try testing.expectEqualStrings("return a - b;", violations[1].text);
     try repo.expectPristine();
 }
 

@@ -49,8 +49,12 @@ pub const Prepared = struct {
     name_offset: ?u32 = null,
     doc_source: ?[]u8 = null,
     nodes: ?node_cas.Applied = null,
+    base: ?*Snapshot = null,
+    holes: ?[]symbol.Hole = null,
 
     pub fn deinit(self: Prepared, gpa: Allocator) void {
+        if (self.base) |b| b.destroy();
+        if (self.holes) |h| gpa.free(h);
         if (self.source_rel) |s| gpa.free(s);
         if (self.nodes) |applied| {
             applied.deinit();
@@ -108,29 +112,66 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edi
     };
 }
 
-fn planNodes(io: std.Io, runtime: *Runtime, edit: Edit, rel: []u8) !Prepared {
+fn holeBefore(_: void, a: symbol.Hole, b: symbol.Hole) bool {
+    if (a.old.start != b.old.start) return a.old.start < b.old.start;
+    return a.old.end < b.old.end;
+}
+
+fn nodeHoles(gpa: Allocator, applied: node_cas.Applied) ![]symbol.Hole {
+    var list: std.ArrayList(symbol.Hole) = .empty;
+    errdefer list.deinit(gpa);
+    for (applied.placed) |placed| try list.append(gpa, .{ .old = placed.old, .new = placed.new });
+    for (applied.units) |unit| {
+        if (unit.ref.len == 0 or unit.after == null or unit.before == null) continue;
+        try list.append(gpa, .{ .old = unit.was, .new = unit.span });
+    }
+    std.mem.sort(symbol.Hole, list.items, {}, holeBefore);
+    var kept: usize = 0;
+    for (list.items) |hole| {
+        if (kept != 0 and hole.old.start < list.items[kept - 1].old.end) {
+            const last = &list.items[kept - 1];
+            last.old.end = @max(last.old.end, hole.old.end);
+            last.new.start = @min(last.new.start, hole.new.start);
+            last.new.end = @max(last.new.end, hole.new.end);
+            continue;
+        }
+        list.items[kept] = hole;
+        kept += 1;
+    }
+    list.shrinkRetainingCapacity(kept);
+    return list.toOwnedSlice(gpa);
+}
+
+fn planNodes(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u8) !Prepared {
     const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
-    defer base.destroy();
+    errdefer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const applied = try node_cas.apply(base, edit.nodes);
-    return .{ .rel = rel, .action = .write, .base_hash = symbol.hashOf(base.source), .hash = symbol.fileHash(applied.snapshot.source), .snapshot = applied.snapshot, .nodes = applied };
+    errdefer applied.deinit();
+    const holes = try nodeHoles(gpa, applied);
+    return .{ .rel = rel, .action = .write, .base_hash = symbol.hashOf(base.source), .hash = symbol.fileHash(applied.snapshot.source), .snapshot = applied.snapshot, .nodes = applied, .base = base, .holes = holes };
 }
 
 fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
-    if (edit.nodes.len != 0) return planNodes(io, runtime, edit, rel);
+    if (edit.nodes.len != 0) return planNodes(gpa, io, runtime, edit, rel);
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     switch (edit.expected_hash) {
         .present => |expected| {
             const base = try Snapshot.load(runtime, io, .cwd(), edit.file_abs);
-            defer base.destroy();
+            errdefer base.destroy();
             if (base.tree.root().hasError()) return error.SourceHasErrors;
             const applied = try cas.apply(base, .{ .ref = ref, .expected_hash = expected, .new_body = edit.new_body });
-            return .{ .rel = rel, .action = .write, .base_hash = symbol.hashOf(base.source), .hash = applied.hash, .snapshot = applied.snapshot, .body = applied.body };
+            errdefer applied.snapshot.destroy();
+            const holes = try gpa.dupe(symbol.Hole, &.{applied.hole});
+            return .{ .rel = rel, .action = .write, .base_hash = symbol.hashOf(base.source), .hash = applied.hash, .snapshot = applied.snapshot, .body = applied.body, .base = base, .holes = holes };
         },
         .absent => {
             const p = try create.planAbsent(gpa, io, runtime, root, edit.file_abs, rel, ref, edit.new_body);
-            return .{ .rel = rel, .action = if (p.base_hash == null) .create else .insert, .base_hash = p.base_hash, .hash = p.applied.hash, .snapshot = p.applied.snapshot, .body = p.applied.body };
+            errdefer p.applied.snapshot.destroy();
+            errdefer if (p.base) |b| b.destroy();
+            const holes: ?[]symbol.Hole = if (p.base != null) try gpa.dupe(symbol.Hole, &.{p.applied.hole}) else null;
+            return .{ .rel = rel, .action = if (p.base_hash == null) .create else .insert, .base_hash = p.base_hash, .hash = p.applied.hash, .snapshot = p.applied.snapshot, .body = p.applied.body, .base = p.base, .holes = holes };
         },
     }
 }

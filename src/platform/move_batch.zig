@@ -107,6 +107,24 @@ fn applyEdits(arena: Allocator, source: []const u8, edits: []TextEdit) ![]u8 {
     return out.items;
 }
 
+fn holesOf(arena: Allocator, edits: []const TextEdit) ![]symbol.Hole {
+    var out: std.ArrayList(symbol.Hole) = .empty;
+    var shift: i64 = 0;
+    for (edits) |e| {
+        const start: u32 = @intCast(@as(i64, e.start) + shift);
+        const end: u32 = start + @as(u32, @intCast(e.text.len));
+        shift += @as(i64, @intCast(e.text.len)) - @as(i64, e.end - e.start);
+        if (out.items.len != 0 and out.items[out.items.len - 1].old.end == e.start) {
+            const last = &out.items[out.items.len - 1];
+            last.old.end = e.end;
+            last.new.end = end;
+            continue;
+        }
+        try out.append(arena, .{ .old = .{ .start = e.start, .end = e.end }, .new = .{ .start = start, .end = end } });
+    }
+    return out.items;
+}
+
 fn lineEndAfter(source: []const u8, end: u32) u32 {
     var at: usize = end;
     while (at < source.len and (source[at] == ' ' or source[at] == '\t')) at += 1;
@@ -592,7 +610,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     try outputs.append(arena, .{ .abs = request.file_abs, .before = source, .text = source_new });
     const moved_start: u32 = @intCast(std.mem.lastIndexOf(u8, target_new, moved_text).?);
     const moved_span: Span = .{ .start = moved_start, .end = moved_start + @as(u32, @intCast(moved_text.len)) };
-    try outputs.append(arena, .{ .abs = request.target_abs, .before = target, .text = target_new, .creates = !target_exists, .ref_text = request.ref_text, .body = moved_span });
+    try outputs.append(arena, .{ .abs = request.target_abs, .before = target, .text = target_new, .creates = !target_exists, .ref_text = request.ref_text, .body = moved_span, .holes = try holesOf(arena, target_edits.items) });
     var index: usize = 0;
     while (index < users.items.len) : (index += 1) {
         const user = users.items[index];
@@ -663,6 +681,14 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         .moved_hash = moved_hash,
     });
     afters.clearRetainingCapacity();
+    for (result.prepared) |p| {
+        const base = p.base orelse continue;
+        for (opened.items, 0..) |held, i| {
+            if (held != base) continue;
+            _ = opened.swapRemove(i);
+            break;
+        }
+    }
     return result;
 }
 
@@ -673,6 +699,7 @@ const Output = struct {
     creates: bool = false,
     ref_text: []const u8 = "",
     body: Span = .{ .start = 0, .end = 0 },
+    holes: ?[]const symbol.Hole = null,
 };
 
 const Summary = struct {
@@ -774,6 +801,7 @@ fn build(gpa: Allocator, root: []const u8, outputs: []const Output, afters: []co
     var built: usize = 0;
     errdefer for (prepared[0..built], edits[0..built]) |p, e| {
         gpa.free(p.rel);
+        if (p.holes) |h| gpa.free(h);
         gpa.free(e.file_abs);
         gpa.free(e.ref_text);
     };
@@ -785,6 +813,8 @@ fn build(gpa: Allocator, root: []const u8, outputs: []const Output, afters: []co
         const ref_text = try gpa.dupe(u8, o.ref_text);
         errdefer gpa.free(ref_text);
         const base_hash: ?symbol.Hash = if (o.before) |b| symbol.hashOf(b.source) else null;
+        const holes: ?[]symbol.Hole = if (o.holes != null and o.before != null) try gpa.dupe(symbol.Hole, o.holes.?) else null;
+        errdefer if (holes) |h| gpa.free(h);
         prepared[i] = .{
             .rel = rel,
             .action = if (o.creates) .create else .write,
@@ -792,6 +822,8 @@ fn build(gpa: Allocator, root: []const u8, outputs: []const Output, afters: []co
             .hash = symbol.hashOf(after.source),
             .snapshot = after,
             .body = o.body,
+            .base = if (holes != null) o.before else null,
+            .holes = holes,
         };
         edits[i] = .{ .file_abs = abs, .ref_text = ref_text, .expected_hash = if (base_hash) |h| .{ .present = h } else .absent };
         built = i + 1;

@@ -993,8 +993,8 @@
     {
       "id": "G1-rules-gate-skipped-for-single-edit",
       "file": "src/platform/runner.zig",
-      "from": "applied.snapshot.tree, applied.body, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },",
-      "to": "applied.snapshot.tree, applied.body, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| report.deinit(gpa),",
+      "from": ".holes = &.{applied.hole} }}, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },",
+      "to": ".holes = &.{applied.hole} }}, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run"
       ]
@@ -1002,8 +1002,8 @@
     {
       "id": "G2-rules-gate-skipped-for-batch",
       "file": "src/platform/batch.zig",
-      "from": "p.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
-      "to": "p.body, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
+      "from": "judged, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
+      "to": "judged, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
       "kills": [
         "rules: one violating edit rejects the whole batch and leaves disk untouched"
       ]
@@ -1028,10 +1028,10 @@
       ]
     },
     {
-      "id": "G6-rules-body-span-empty",
+      "id": "G6-rules-body-claimed-untouched",
       "file": "src/engine/cas.zig",
-      "from": ".hash = patched_target.hash, .body = slot };",
-      "to": ".hash = patched_target.hash, .body = .{ .start = slot.start, .end = slot.start } };",
+      "from": ".body = slot, .hole = .{ .old = cut, .new = slot } };",
+      "to": ".body = slot, .hole = .{ .old = cut, .new = .{ .start = slot.start, .end = slot.start } } };",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run",
         "rules: one violating edit rejects the whole batch and leaves disk untouched"
@@ -2040,7 +2040,7 @@
     {
       "id": "NF9-create-rules-gate-skipped",
       "file": "src/platform/runner.zig",
-      "from": "    switch (try rules.gate(gpa, io, root, rel, ref, created.snapshot.profile, created.snapshot.tree, created.body, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },\n        .failed => |failure| return .{ .rule_check_failed = failure },\n    }\n",
+      "from": "    switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel, .after = created.snapshot }}, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },\n        .failed => |failure| return .{ .rule_check_failed = failure },\n    }\n",
       "to": "",
       "kills": [
         "new file: a body that breaks a forbid rule is rejected even when the tests pass"
@@ -2183,7 +2183,7 @@
     },
     {
       "id": "SC10-scan-span-misses-first-byte",
-      "file": "src/platform/scan.zig",
+      "file": "src/platform/rules.zig",
       "from": "const whole: symbol.Span = .{ .start = 0,",
       "to": "const whole: symbol.Span = .{ .start = 1,",
       "kills": [
@@ -2398,21 +2398,18 @@
     {
       "id": "SP18-gate-where-ignored",
       "file": "src/platform/rules.zig",
-      "from": "        if (try covers(rule, file, ref)) try list.append(gpa, rule);",
-      "to": "        if (try covers(rule, file, ref) or true) try list.append(gpa, rule);",
+      "from": "            if (!w.coversFile(change.rel)) continue;\n        }\n        const span = judgedSpan",
+      "to": "            if (false and !w.coversFile(change.rel)) continue;\n        }\n        const span = judgedSpan",
       "kills": [
-        "scope: a rule whose where names another file does not block the proposal",
-        "scope: a symbol-scoped rule blocks only a proposal to that symbol",
-        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+        "scope: a rule whose where names another file does not block the proposal"
       ]
     },
     {
-      "id": "SP19-gate-evaluates-all-rules",
+      "id": "SP19-gate-judges-the-whole-file-for-a-symbol-scope",
       "file": "src/platform/rules.zig",
-      "from": "return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, before);",
-      "to": "return evaluateLimited(gpa, file, profile, tree, span, enforced.rules, .{}, before);",
+      "from": "        const span = judgedSpan(gpa, scope, after) catch",
+      "to": "        const span = judgedSpan(gpa, null, after) catch",
       "kills": [
-        "scope: a rule whose where names another file does not block the proposal",
         "scope: a symbol-scoped rule blocks only a proposal to that symbol",
         "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
       ]
@@ -2462,7 +2459,7 @@
     },
     {
       "id": "SP24-scan-symbol-span-is-whole-file",
-      "file": "src/platform/scan.zig",
+      "file": "src/platform/rules.zig",
       "from": "    return .{ .start = target.body.startByte(), .end = target.body.endByte() };",
       "to": "    _ = target;\n    return .{ .start = 0, .end = @intCast(snapshot.source.len) };",
       "kills": [
@@ -2548,12 +2545,12 @@
       ]
     },
     {
-      "id": "SP34-batch-gates-with-first-ref",
+      "id": "SP34-batch-judges-only-its-first-file",
       "file": "src/platform/batch.zig",
-      "from": "        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
-      "to": "        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edits[0].ref_text);",
+      "from": "        for (prepared, judged) |p, *slot| slot.* = changeOf(p);",
+      "to": "        for (prepared, judged) |p, *slot| slot.* = changeOf(if (false) p else prepared[0]);",
       "kills": [
-        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+        "rules: one violating edit rejects the whole batch and leaves disk untouched"
       ]
     },
     {
@@ -2579,8 +2576,8 @@
     {
       "id": "SU3-scope-symbol-not-resolved",
       "file": "src/platform/scan.zig",
-      "from": "    _ = try symbolSpan(gpa, snapshot, ref_text);",
-      "to": "    if (false) _ = try symbolSpan(gpa, snapshot, ref_text);",
+      "from": "    _ = try rules.symbolSpan(gpa, snapshot, ref_text);",
+      "to": "    if (false) _ = try rules.symbolSpan(gpa, snapshot, ref_text);",
       "kills": [
         "scope: a ledger rule whose where names a missing symbol stops the scan with ScopeUnresolved",
         "scope: an empty directory scope or an unparsable symbol file stops the scan with ScopeUnresolved"
@@ -3697,8 +3694,7 @@
       "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;",
       "to": "if (node.startByte() > node.endByte()) continue;",
       "kills": [
-        "q: only nodes wholly inside the span are reported",
-        "redteam query: at the gate a node that encloses the body is not reported, one inside it is"
+        "q: only nodes wholly inside the span are reported"
       ]
     },
     {
@@ -3890,8 +3886,8 @@
     {
       "id": "Q21-committed-query-rule-runs-without-flag",
       "file": "src/platform/rules.zig",
-      "from": "    if (!allow_repo_memory and anyQuery(applicable)) {",
-      "to": "    if (allow_repo_memory and anyQuery(applicable)) {",
+      "from": "    if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {",
+      "to": "    if (allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {",
       "kills": [
         "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -3899,8 +3895,8 @@
     {
       "id": "Q22-batch-trusts-a-committed-query-rule",
       "file": "src/platform/batch.zig",
-      "from": "p.body, options.allow_repo_memory)) {",
-      "to": "p.body, true)) {",
+      "from": "judged, options.allow_repo_memory)) {",
+      "to": "judged, true)) {",
       "kills": [
         "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -6280,10 +6276,10 @@
       ]
     },
     {
-      "id": "NC9-node-rule-gate-on-empty-span",
-      "file": "src/platform/batch.zig",
-      "from": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, unit.span, options.allow_repo_memory)) {",
-      "to": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, .{ .start = 0, .end = 0 }, options.allow_repo_memory)) {",
+      "id": "NC9-node-edit-claims-nothing-changed",
+      "file": "src/platform/batch_plan.zig",
+      "from": "    for (applied.placed) |placed| try list.append(gpa, .{ .old = placed.old, .new = placed.new });",
+      "to": "    for (applied.placed) |placed| try list.append(gpa, .{ .old = placed.old, .new = .{ .start = placed.new.start, .end = placed.new.start } });",
       "kills": [
         "node edit: a top-level statement is still held to a file-scoped enforced rule"
       ]
@@ -8580,8 +8576,8 @@
     {
       "id": "AD3-gate-never-reads-the-file-before",
       "file": "src/platform/rules.zig",
-      "from": "        before = .{ .source = old orelse \"\" };",
-      "to": "        before = .unknown;",
+      "from": "            before = .{ .source = if (change.base) |base| base.source else \"\" };",
+      "to": "            before = .unknown;",
       "kills": [
         "rules: an enforced added rule lets a comment that was already there stay and rejects only the new one"
       ],

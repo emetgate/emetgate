@@ -12,9 +12,19 @@ const where_mod = @import("where.zig");
 const repo = @import("repo.zig");
 const exe_path = @import("exe_path.zig");
 const commit_message = @import("commit_message.zig");
+const Snapshot = @import("../engine/loader.zig").Snapshot;
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
+
+pub const Hole = symbol.Hole;
+
+pub const Change = struct {
+    rel: []const u8,
+    base: ?*Snapshot = null,
+    after: ?*Snapshot = null,
+    holes: ?[]const Hole = null,
+};
 
 pub const Rule = struct {
     id: []const u8,
@@ -77,22 +87,139 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
 
-pub fn gate(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8, ref: symbol.Ref, profile: *const Profile, tree: ts.Tree, span: Span, allow_repo_memory: bool) !Gate {
+pub fn judge(gpa: Allocator, io: std.Io, root_abs: []const u8, changes: []const Change, allow_repo_memory: bool) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
-    const applicable = try applicableTo(gpa, enforced.rules, file, ref);
-    defer gpa.free(applicable);
-    if (!allow_repo_memory and anyQuery(applicable)) {
+    if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
     }
-    var old: ?[]u8 = null;
-    defer if (old) |bytes| gpa.free(bytes);
-    var before: Before = .unknown;
-    if (anyAdded(applicable)) {
-        old = try beforeOf(gpa, io, root_abs, file);
-        before = .{ .source = old orelse "" };
+    for (changes) |change| {
+        const gated = try judgeChange(gpa, enforced.rules, change);
+        if (gated != .ok) return gated;
     }
-    return evaluateLimited(gpa, file, profile, tree, span, applicable, .{}, before);
+    return .ok;
+}
+
+fn anyQueryOn(all: []const Rule, changes: []const Change) !bool {
+    for (all) |rule| {
+        if (!isQuery(rule)) continue;
+        const scope: ?where_mod.Where = if (rule.where) |text| try where_mod.parse(text) else null;
+        for (changes) |change| {
+            if (change.after == null) continue;
+            const w = scope orelse return true;
+            if (w.coversFile(change.rel)) return true;
+        }
+    }
+    return false;
+}
+
+pub fn symbolSpan(gpa: Allocator, snapshot: *Snapshot, ref_text: []const u8) !Span {
+    const ref = try symbol.Ref.parse(gpa, ref_text);
+    defer ref.deinit(gpa);
+    const table = try snapshot.symbols();
+    const target = try table.resolve(ref);
+    return .{ .start = target.body.startByte(), .end = target.body.endByte() };
+}
+
+pub fn judgedSpan(gpa: Allocator, scope: ?where_mod.Where, snapshot: *Snapshot) !Span {
+    const whole: symbol.Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
+    const w = scope orelse return whole;
+    return switch (w.base) {
+        .symbol => |s| symbolSpan(gpa, snapshot, s.ref),
+        else => whole,
+    };
+}
+
+const Kept = struct {
+    base: *Snapshot,
+    span: Span,
+    holes: []const Hole,
+    hits: ?[]checks.Violation = null,
+
+    fn deinit(self: Kept, gpa: Allocator) void {
+        if (self.hits) |hits| gpa.free(hits);
+    }
+
+    fn isOld(self: *Kept, gpa: Allocator, rule: Rule, hit: Span, limits: query.Limits) Allocator.Error!bool {
+        var shift: i64 = 0;
+        for (self.holes) |hole| {
+            if (hit.start < hole.new.end and hole.new.start < hit.end) return false;
+            if (hole.new.end <= hit.start) shift += @as(i64, hole.old.end - hole.old.start) - @as(i64, hole.new.end - hole.new.start);
+        }
+        if (self.hits == null) {
+            self.hits = checks.runLimited(gpa, self.base.profile, self.base.tree, self.span, &.{checks.innerOf(rule.check)}, limits) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return false,
+            };
+        }
+        for (self.hits.?) |old| {
+            if (@as(i64, old.span.start) == @as(i64, hit.start) + shift and @as(i64, old.span.end) == @as(i64, hit.end) + shift) return true;
+        }
+        return false;
+    }
+};
+
+fn dropViolations(gpa: Allocator, list: *std.ArrayList(Violation)) void {
+    for (list.items) |v| freeViolation(gpa, v);
+    list.clearRetainingCapacity();
+}
+
+fn judgeChange(gpa: Allocator, all: []const Rule, change: Change) !Gate {
+    const after = change.after orelse return .ok;
+    const everything = [_]Hole{.{
+        .old = .{ .start = 0, .end = if (change.base) |base| @intCast(base.source.len) else 0 },
+        .new = .{ .start = 0, .end = @intCast(after.source.len) },
+    }};
+    const holes: []const Hole = change.holes orelse if (change.base == null) &everything else return .ok;
+
+    var list: std.ArrayList(Violation) = .empty;
+    defer list.deinit(gpa);
+    errdefer dropViolations(gpa, &list);
+    for (all) |rule| {
+        if (isCommand(rule) or isMessage(rule) or isFrozen(rule)) continue;
+        const scope: ?where_mod.Where = if (rule.where) |text| try where_mod.parse(text) else null;
+        if (scope) |w| {
+            if (!w.coversFile(change.rel)) continue;
+        }
+        const span = judgedSpan(gpa, scope, after) catch |err| switch (err) {
+            error.SymbolNotFound => continue,
+            error.AmbiguousSymbol => {
+                dropViolations(gpa, &list);
+                return failedGate(gpa, rule, change.rel, "scope_ambiguous", rule.where.?);
+            },
+            else => |e| return e,
+        };
+        var kept: ?Kept = null;
+        defer if (kept) |k| k.deinit(gpa);
+        var before: Before = .unknown;
+        if (isAdded(rule)) {
+            before = .{ .source = if (change.base) |base| base.source else "" };
+        } else if (change.base) |base| {
+            if (judgedSpan(gpa, scope, base)) |was| {
+                kept = .{ .base = base, .span = was, .holes = holes };
+            } else |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {},
+            }
+        }
+        switch (try evaluateKept(gpa, change.rel, after.profile, after.tree, span, &.{rule}, .{}, before, if (kept) |*k| k else null)) {
+            .ok => {},
+            .failed => |failure| {
+                dropViolations(gpa, &list);
+                return .{ .failed = failure };
+            },
+            .violated => |report| {
+                defer gpa.free(report.violations);
+                list.appendSlice(gpa, report.violations) catch |err| {
+                    report.deinitItems(gpa);
+                    return err;
+                };
+            },
+        }
+    }
+    const judged = try list.toOwnedSlice(gpa);
+    if (judged.len == 0) return .ok;
+    return .{ .violated = .{ .violations = judged } };
 }
 
 const Counted = union(enum) {
@@ -194,28 +321,10 @@ pub fn evaluateMessage(gpa: Allocator, rules: []const Rule, message: []const u8)
     return .ok;
 }
 
-fn anyAdded(list: []const Rule) bool {
-    for (list) |rule| {
-        if (isAdded(rule)) return true;
-    }
-    return false;
-}
-
-pub const max_before_bytes = 8 * 1024 * 1024;
-
 pub const Before = union(enum) {
     unknown,
     source: []const u8,
 };
-
-fn beforeOf(gpa: Allocator, io: std.Io, root_abs: []const u8, file: []const u8) !?[]u8 {
-    const abs = try std.fs.path.join(gpa, &.{ root_abs, file });
-    defer gpa.free(abs);
-    return std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_before_bytes)) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => |e| return e,
-    };
-}
 
 fn takeText(texts: *std.ArrayList([]const u8), text: []const u8) bool {
     for (texts.items, 0..) |old, i| {
@@ -226,27 +335,10 @@ fn takeText(texts: *std.ArrayList([]const u8), text: []const u8) bool {
     return false;
 }
 
-fn anyQuery(list: []const Rule) bool {
-    for (list) |rule| {
-        if (isQuery(rule)) return true;
-    }
-    return false;
-}
-
 pub fn covers(rule: Rule, file: []const u8, ref: symbol.Ref) !bool {
     const text = rule.where orelse return true;
     const scope = try where_mod.parse(text);
     return scope.coversSymbol(file, ref);
-}
-
-pub fn applicableTo(gpa: Allocator, all: []const Rule, file: []const u8, ref: symbol.Ref) ![]Rule {
-    var list: std.ArrayList(Rule) = .empty;
-    errdefer list.deinit(gpa);
-    for (all) |rule| {
-        if (isCommand(rule)) continue;
-        if (try covers(rule, file, ref)) try list.append(gpa, rule);
-    }
-    return list.toOwnedSlice(gpa);
 }
 
 pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!Gate {
@@ -254,6 +346,10 @@ pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
 }
 
 pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule, limits: query.Limits, before: Before) checks.Error!Gate {
+    return evaluateKept(gpa, file, profile, tree, span, rules, limits, before, null);
+}
+
+fn evaluateKept(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule, limits: query.Limits, before: Before, kept: ?*Kept) checks.Error!Gate {
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
     defer for (list.items) |v| freeViolation(gpa, v);
@@ -304,6 +400,9 @@ pub fn evaluateLimited(gpa: Allocator, file: []const u8, profile: *const Profile
         if (found.len > 0 and lines == null) lines = try Lines.init(gpa, tree.source);
         for (found) |hit| {
             if (isAdded(rule) and takeText(&old_texts, tree.source[hit.span.start..hit.span.end])) continue;
+            if (kept) |k| {
+                if (try k.isOld(gpa, rule, hit.span, limits)) continue;
+            }
             const start = lines.?.position(hit.span.start);
             const end = lines.?.position(hit.span.end);
             const owned = try ownViolation(gpa, rule, file, start, end, shown(tree.source[hit.span.start..hit.span.end]));
@@ -766,6 +865,7 @@ const builtin = @import("builtin");
 const testing = std.testing;
 const alloc_bridge = @import("../engine/alloc_bridge.zig");
 const test_util = @import("../engine/test_util.zig");
+const Runtime = @import("../engine/runtime.zig").Runtime;
 
 fn evaluateSource(source: []const u8, span: Span, rules: []const Rule) !?Report {
     try alloc_bridge.install(testing.allocator);
@@ -1042,13 +1142,17 @@ test "a command rule is kept out of the ast gate, which would otherwise fail clo
     try testing.expect(isCommand(all[1]));
     try testing.expect(!isCommand(all[0]));
 
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const snapshot = try Snapshot.fromSource(runtime, test_util.language, try testing.allocator.dupe(u8, "function f() { /* c */ }\n"));
+    defer snapshot.destroy();
+    const report = (try reportOf(try judgeChange(testing.allocator, &all, .{ .rel = "src/a.ts", .after = snapshot }))).?;
+    defer report.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), report.violations.len);
+    try testing.expectEqualStrings("static", report.violations[0].rule);
+
     const ref = try symbol.Ref.parse(testing.allocator, "add");
     defer ref.deinit(testing.allocator);
-    const applicable = try applicableTo(testing.allocator, &all, "src/a.ts", ref);
-    defer testing.allocator.free(applicable);
-    try testing.expectEqual(@as(usize, 1), applicable.len);
-    try testing.expectEqualStrings("static", applicable[0].id);
-
     const scoped = [_]Rule{.{ .id = "command", .check = "cmd:exit 0", .where = "src/other.ts" }};
     try testing.expect(!try covers(scoped[0], "src/a.ts", ref));
     try testing.expect(try covers(.{ .id = "command", .check = "cmd:exit 0" }, "src/a.ts", ref));
