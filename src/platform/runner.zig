@@ -104,7 +104,7 @@ pub const ShadowRun = union(enum) {
     rule_check_failed: rules.Failure,
 };
 
-pub fn runCommandRulesFor(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const rules.Target, message: ?[]const u8, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
+pub fn runCommandRulesFor(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs: []const u8, targets: []const []const u8, message: ?[]const u8, limits: sandbox.Limits, allow_repo_memory: bool) !?ShadowRun {
     const gated = try rules.commandGate(gpa, io, root, targets, .{ .shadow_abs = shadow_abs, .limits = limits, .allow_repo_memory = allow_repo_memory, .message = message });
     return switch (gated) {
         .ok => null,
@@ -196,7 +196,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer if (scoped_owned) |s| gpa.free(s);
     const command = scoped_owned orelse options.test_command;
 
-    const report = switch (try runInShadow(gpa, io, root, location, rel, applied.snapshot.source, options, &session, command, &.{.{ .file = rel, .ref = ref }})) {
+    const report = switch (try runInShadow(gpa, io, root, location, rel, applied.snapshot.source, options, &session, command, &.{rel})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |report| return .{ .rule_violation = report },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -232,7 +232,7 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     defer location.deinit(gpa);
     if (options.trace) |t| t.* = .{ .gate = .full, .base_len = 0, .new_len = created.snapshot.source.len };
 
-    const report = switch (try runInShadow(gpa, io, root, location, rel, created.snapshot.source, options, session, options.test_command, &.{.{ .file = rel, .ref = ref }})) {
+    const report = switch (try runInShadow(gpa, io, root, location, rel, created.snapshot.source, options, session, options.test_command, &.{rel})) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |report| return .{ .rule_violation = report },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -266,7 +266,7 @@ fn fileExists(io: std.Io, path_abs: []const u8) !bool {
     return true;
 }
 
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *commit_plan.Session, command: []const u8, targets: []const rules.Target) !ShadowRun {
+fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *commit_plan.Session, command: []const u8, targets: []const []const u8) !ShadowRun {
     var workspace = try openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
     defer workspace.finish();
     const gate_abs = gateDir(location, session);

@@ -399,12 +399,6 @@ fn takeText(texts: *std.ArrayList([]const u8), text: []const u8) bool {
     return false;
 }
 
-pub fn covers(rule: Rule, file: []const u8, ref: symbol.Ref) !bool {
-    const text = rule.where orelse return true;
-    const scope = try where_mod.parse(text);
-    return scope.coversSymbol(file, ref);
-}
-
 pub fn evaluate(gpa: Allocator, file: []const u8, profile: *const Profile, tree: ts.Tree, span: Span, rules: []const Rule) checks.Error!Gate {
     return evaluateLimited(gpa, file, profile, tree, span, rules, .{}, .unknown);
 }
@@ -635,11 +629,6 @@ pub const Gate = union(enum) {
     }
 };
 
-pub const Target = struct {
-    file: []const u8,
-    ref: symbol.Ref,
-};
-
 pub const CommandOptions = struct {
     shadow_abs: []const u8,
     limits: sandbox.Limits = .{},
@@ -803,7 +792,7 @@ pub fn resolvable(gpa: Allocator, io: std.Io, cwd: []const u8, head: []const u8)
     return false;
 }
 
-pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const Target, options: CommandOptions) !Gate {
+pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []const []const u8, options: CommandOptions) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
     var staged: ?MessageFile = null;
@@ -816,7 +805,7 @@ pub fn commandGate(gpa: Allocator, io: std.Io, root_abs: []const u8, targets: []
     return gated;
 }
 
-fn commandRules(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []const Rule, targets: []const Target, options: CommandOptions, staged: *?MessageFile) !Gate {
+fn commandRules(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []const Rule, targets: []const []const u8, options: CommandOptions, staged: *?MessageFile) !Gate {
     var trusted = options.allow_repo_memory;
     for (list) |rule| {
         const due = try commandDue(rule, targets, options.message) orelse continue;
@@ -839,7 +828,7 @@ const Due = struct {
     message: ?[]const u8 = null,
 };
 
-fn commandDue(rule: Rule, targets: []const Target, message: ?[]const u8) !?Due {
+fn commandDue(rule: Rule, targets: []const []const u8, message: ?[]const u8) !?Due {
     if (checks.messageCommandOf(rule.check)) |command| {
         const text = message orelse return null;
         return .{ .command = command, .file = message_label, .message = text };
@@ -849,9 +838,11 @@ fn commandDue(rule: Rule, targets: []const Target, message: ?[]const u8) !?Due {
     return .{ .command = command, .file = scoped };
 }
 
-fn firstCovered(rule: Rule, targets: []const Target) !?[]const u8 {
-    for (targets) |target| {
-        if (try covers(rule, target.file, target.ref)) return target.file;
+fn firstCovered(rule: Rule, targets: []const []const u8) !?[]const u8 {
+    const scope: ?where_mod.Where = if (rule.where) |text| try where_mod.parse(text) else null;
+    for (targets) |path| {
+        const w = scope orelse return path;
+        if (w.coversFile(path)) return path;
     }
     return null;
 }
@@ -1215,11 +1206,11 @@ test "a command rule is kept out of the ast gate, which would otherwise fail clo
     try testing.expectEqual(@as(usize, 1), report.violations.len);
     try testing.expectEqualStrings("static", report.violations[0].rule);
 
-    const ref = try symbol.Ref.parse(testing.allocator, "add");
-    defer ref.deinit(testing.allocator);
     const scoped = [_]Rule{.{ .id = "command", .check = "cmd:exit 0", .where = "src/other.ts" }};
-    try testing.expect(!try covers(scoped[0], "src/a.ts", ref));
-    try testing.expect(try covers(.{ .id = "command", .check = "cmd:exit 0" }, "src/a.ts", ref));
+    try testing.expectEqual(@as(?[]const u8, null), try firstCovered(scoped[0], &.{"src/a.ts"}));
+    try testing.expectEqualStrings("src/other.ts", (try firstCovered(scoped[0], &.{ "src/a.ts", "src/other.ts" })).?);
+    try testing.expectEqualStrings("src/a.ts", (try firstCovered(.{ .id = "command", .check = "cmd:exit 0" }, &.{"src/a.ts"})).?);
+    try testing.expectEqual(@as(?[]const u8, null), try firstCovered(.{ .id = "command", .check = "cmd:exit 0" }, &.{}));
 }
 
 test "a message rule is kept out of the code gate, which would otherwise fail closed on it" {

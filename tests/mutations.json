@@ -2547,8 +2547,8 @@
     {
       "id": "SP34-batch-judges-only-its-first-file",
       "file": "src/platform/batch.zig",
-      "from": "        for (prepared, judged) |p, *slot| slot.* = changeOf(p);",
-      "to": "        for (prepared, judged) |p, *slot| slot.* = changeOf(if (false) p else prepared[0]);",
+      "from": "        for (prepared, judged[0..prepared.len]) |p, *slot| slot.* = changeOf(p);",
+      "to": "        for (prepared, judged[0..prepared.len]) |p, *slot| slot.* = changeOf(if (false) p else prepared[0]);",
       "kills": [
         "rules: one violating edit rejects the whole batch and leaves disk untouched"
       ]
@@ -3408,8 +3408,8 @@
     {
       "id": "CMD4-command-scope-ignored",
       "file": "src/platform/rules.zig",
-      "from": "        if (try covers(rule, target.file, target.ref)) return target.file;",
-      "to": "        if (try covers(rule, target.file, target.ref) or true) return target.file;",
+      "from": "        if (w.coversFile(path)) return path;\n    }\n    return null;",
+      "to": "        if (w.coversFile(path) or true) return path;\n    }\n    return null;",
       "kills": [
         "cmd rule: a scope that excludes the file keeps the command from running at all"
       ]

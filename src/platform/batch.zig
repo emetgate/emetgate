@@ -125,17 +125,6 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         .failed => |failure| return .{ .rule_check_failed = failure },
     };
     defer session.deinit(gpa);
-    {
-        const judged = try gpa.alloc(rules.Change, prepared.len);
-        defer gpa.free(judged);
-        for (prepared, judged) |p, *slot| slot.* = changeOf(p);
-        switch (try rules.judge(gpa, io, root, judged, options.allow_repo_memory)) {
-            .ok => {},
-            .violated => |report| return .{ .rule_violation = report },
-            .failed => |failure| return .{ .rule_check_failed = failure },
-        }
-    }
-
     var doc_prepared: std.ArrayList(Prepared) = .empty;
     defer {
         for (doc_prepared.items) |p| p.deinit(gpa);
@@ -157,6 +146,18 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         try doc_prepared.append(gpa, planned);
     }
 
+    {
+        const judged = try gpa.alloc(rules.Change, prepared.len + doc_prepared.items.len);
+        defer gpa.free(judged);
+        for (prepared, judged[0..prepared.len]) |p, *slot| slot.* = changeOf(p);
+        for (doc_prepared.items, judged[prepared.len..]) |p, *slot| slot.* = .{ .rel = p.rel };
+        switch (try rules.judge(gpa, io, root, judged, options.allow_repo_memory)) {
+            .ok => {},
+            .violated => |report| return .{ .rule_violation = report },
+            .failed => |failure| return .{ .rule_check_failed = failure },
+        }
+    }
+
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
     defer location.deinit(gpa);
 
@@ -166,7 +167,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         for (doc_prepared.items) |p| new_total += p.source().len;
         t.* = .{ .gate = .full, .new_len = new_total };
     }
-    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, edits, options, &session)) {
+    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, options, &session)) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |violated| return .{ .rule_violation = violated },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -276,7 +277,7 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
     return committed;
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, edits: []const Edit, options: BatchOptions, session: *commit_plan.Session) !runner.ShadowRun {
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, options: BatchOptions, session: *commit_plan.Session) !runner.ShadowRun {
     var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
     defer workspace.finish();
     if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
@@ -291,25 +292,18 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         try runner.deriveGate(gpa, io, root, location, session, changes);
     }
 
-    var wanted: usize = prepared.len;
-    for (prepared) |p| {
-        if (p.nodes) |applied| wanted += applied.units.len;
-    }
-    const targets = try gpa.alloc(rules.Target, wanted);
+    const targets = try gpa.alloc([]const u8, prepared.len * 2 + doc_prepared.len);
     defer gpa.free(targets);
     var built: usize = 0;
-    defer for (targets[0..built]) |target| target.ref.deinit(gpa);
-    for (prepared, edits[0..prepared.len]) |p, edit| {
-        if (p.nodes) |applied| {
-            for (applied.units) |unit| {
-                if (!unit.checked()) continue;
-                targets[built] = .{ .file = p.rel, .ref = try unit.parseRef(gpa) };
-                built += 1;
-            }
-            continue;
-        }
-        if (!p.addsCode() or edit.ref_text.len == 0) continue;
-        targets[built] = .{ .file = p.rel, .ref = try symbol.Ref.parse(gpa, edit.ref_text) };
+    for (prepared) |p| {
+        targets[built] = p.rel;
+        built += 1;
+        const from = p.source_rel orelse continue;
+        targets[built] = from;
+        built += 1;
+    }
+    for (doc_prepared) |p| {
+        targets[built] = p.rel;
         built += 1;
     }
     if (try runner.runCommandRulesFor(gpa, io, root, runner.gateDir(location, session), targets[0..built], null, options.limits, options.allow_repo_memory)) |gated| return gated;

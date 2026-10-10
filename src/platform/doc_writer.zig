@@ -91,6 +91,12 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     const applied = try applyDoc(gpa, parser, source, options);
     defer gpa.free(applied.source);
 
+    switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel }}, options.allow_repo_memory)) {
+        .ok => {},
+        .violated => |report| return .{ .rule_violation = report },
+        .failed => |failure| return .{ .rule_check_failed = failure },
+    }
+
     if (trace) |t| t.* = .{ .base_len = source.len, .new_len = applied.source.len };
 
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
@@ -107,6 +113,13 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     }
     try workspace.writeFile(rel, applied.source);
     try runner.deriveGate(gpa, io, root, location, &session, &.{.{ .rel = rel, .content = applied.source }});
+    if (try runner.runCommandRulesFor(gpa, io, root, runner.gateDir(location, &session), &.{rel}, null, options.limits, options.allow_repo_memory)) |gated| {
+        return switch (gated) {
+            .rule_violation => |report| .{ .rule_violation = report },
+            .rule_check_failed => |failure| .{ .rule_check_failed = failure },
+            else => unreachable,
+        };
+    }
 
     const staged = try runner.runStages(gpa, io, runner.gateDir(location, &session), options.typecheck_command, options.test_command, options.limits);
     switch (staged) {
