@@ -211,32 +211,73 @@ pub fn finishPendingCommits(gpa: Allocator, io: std.Io, root: []const u8) void {
     if (found.left != 0) std.debug.print("emetgate: recover left as found ({s}): {s}\n", .{ found.reason orelse "", found.names() });
 }
 
+pub const Served = struct {
+    gpa: Allocator,
+    io: std.Io,
+    root: ?[]u8,
+    workspace: ?[]u8,
+    observer: ?telemetry.Observer,
+    mirror: mirror_mod.Mirror,
+    tree_cache: tree_cache_mod.TreeCache,
+    search: search_session_mod.Session,
+    language_service: tsserver.Session,
+    map_session: ?*map_tools.Session,
+    policy: Policy,
+
+    pub const Options = struct {
+        root: ?[]const u8 = null,
+        fact_store: ?[]const u8 = null,
+    };
+
+    pub fn open(self: *Served, gpa: Allocator, io: std.Io, runtime: *Runtime, policy: Policy, options: Options) void {
+        const root: ?[]u8 = if (options.root) |given| gpa.dupe(u8, given) catch null else runner.repoRoot(gpa, io) catch null;
+        if (root) |r| finishPendingCommits(gpa, io, r);
+        const workspace: ?[]u8 = if (root) |r| std.fmt.allocPrint(gpa, "{s}\\{s}", .{ r, shadow.workspace_dir }) catch null else null;
+        self.* = .{
+            .gpa = gpa,
+            .io = io,
+            .root = root,
+            .workspace = workspace,
+            .observer = if (workspace) |ws| .{ .workspace_abs = ws } else null,
+            .mirror = .init(gpa, policy.mirror_enabled),
+            .tree_cache = .init(gpa),
+            .search = search_session_mod.Session.init(gpa, io, root, .{}),
+            .language_service = .{ .gpa = gpa, .io = io, .root = root },
+            .map_session = if (root) |r| map_tools.Session.create(gpa, io, runtime, r) catch null else null,
+            .policy = policy,
+        };
+        self.policy.root = root;
+        self.policy.mirror = &self.mirror;
+        self.policy.tree_cache = &self.tree_cache;
+        self.policy.search_session = &self.search;
+        self.policy.language_service = &self.language_service;
+        self.policy.map_session = self.map_session;
+        if (self.map_session) |ms| {
+            ms.store_override = options.fact_store;
+            ms.start();
+        }
+    }
+
+    pub fn close(self: *Served) void {
+        if (self.map_session) |ms| ms.destroy();
+        self.language_service.deinit();
+        self.search.deinit();
+        self.tree_cache.deinit();
+        self.mirror.deinit();
+        if (self.workspace) |ws| self.gpa.free(ws);
+        if (self.root) |r| self.gpa.free(r);
+    }
+
+    pub fn handle(self: *Served, runtime: *Runtime, line: []const u8, out: *Writer) !bool {
+        const observer: ?*telemetry.Observer = if (self.observer) |*o| o else null;
+        return handleMessageObserved(self.gpa, self.io, runtime, line, out, observer, self.policy);
+    }
+};
+
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
-    const root: ?[]u8 = runner.repoRoot(gpa, io) catch null;
-    defer if (root) |r| gpa.free(r);
-    if (root) |r| finishPendingCommits(gpa, io, r);
-    const workspace: ?[]u8 = if (root) |r| std.fmt.allocPrint(gpa, "{s}\\{s}", .{ r, shadow.workspace_dir }) catch null else null;
-    defer if (workspace) |ws| gpa.free(ws);
-    var observer: ?telemetry.Observer = if (workspace) |ws| .{ .workspace_abs = ws } else null;
-    const observer_ptr: ?*telemetry.Observer = if (observer) |*o| o else null;
-    var served = policy;
-    served.root = root;
-    var session_mirror: mirror_mod.Mirror = .init(gpa, policy.mirror_enabled);
-    defer session_mirror.deinit();
-    served.mirror = &session_mirror;
-    var session_tree_cache: tree_cache_mod.TreeCache = .init(gpa);
-    defer session_tree_cache.deinit();
-    served.tree_cache = &session_tree_cache;
-    var session_search = search_session_mod.Session.init(gpa, io, root, .{});
-    defer session_search.deinit();
-    served.search_session = &session_search;
-    var language_service: tsserver.Session = .{ .gpa = gpa, .io = io, .root = root };
-    defer language_service.deinit();
-    served.language_service = &language_service;
-    const map_session: ?*map_tools.Session = if (root) |r| map_tools.Session.create(gpa, io, runtime, r) catch null else null;
-    defer if (map_session) |ms| ms.destroy();
-    if (map_session) |ms| ms.build() catch {};
-    served.map_session = map_session;
+    var served: Served = undefined;
+    served.open(gpa, io, runtime, policy, .{});
+    defer served.close();
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);
@@ -258,7 +299,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
         const trimmed = if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
         if (trimmed.len == 0) continue;
 
-        if (try handleMessageObserved(gpa, io, runtime, trimmed, out, observer_ptr, served)) {
+        if (try served.handle(runtime, trimmed, out)) {
             try out.writeByte('\n');
             try out.flush();
         }
@@ -337,6 +378,9 @@ fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, argu
     const evidence = std.mem.eql(u8, name, "emetgate_evidence");
     if (!explore and !evidence) return handlers.callTool(gpa, io, runtime, name, arguments, event, policy);
     const session = policy.map_session orelse return .{ .text = try gpa.dupe(u8, "the project map is not available outside a git repository"), .is_error = true };
+    defer if (session.takeNote()) |note| {
+        event.reason = note;
+    };
     return if (explore) session.explore(gpa, arguments) else session.evidenceTool(gpa, arguments);
 }
 
