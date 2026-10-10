@@ -33,7 +33,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - `tests/redteam_run.zig`: 7
   - `tests/redteam_sandbox.zig`: 5
   - `tests/redteam_write_doc.zig`: 8
-- Security findings recorded in README's Security History: **10**
+- Security findings recorded in README's Security History: **11**
 
 ## Reproducing this
 
