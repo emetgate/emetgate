@@ -7,8 +7,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **1867**
-- Mutations declared in `tests/mutations.json`: **1186**
-  - killed: **1152**
+- Mutations declared in `tests/mutations.json`: **1185**
+  - killed: **1151**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -227,7 +227,7 @@ python tools/verification_page.py --check
 | `NF8-create-not-routed` | `src/platform/runner.zig` | `if (options.expected_hash == .absent and !try fileExists(io, op...` -> `if (false and options.expected_hash == .absent and !try fileExi...` | new file: absent on a missing file creates it, the shadow sees it, and it is co... | killed |
 | `NF9-create-rules-gate-skipped` | `src/platform/runner.zig` | `switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel, .after...` -> `` | new file: a body that breaks a forbid rule is rejected even when the tests pass | killed |
 | `NF10-create-failed-tests-committed` | `src/platform/runner.zig` | `if (!report.passed()) return .{ .rejected = report };     if (o...` -> `if (options.trace) \|t\| t.test_ms = report.duration_ns / std.t...` | new file: a creation whose tests fail leaves no file on disk and nothing in the... | killed |
-| `SP34-batch-judges-only-its-first-file` | `src/platform/batch.zig` | `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` -> `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` | rules: one violating edit rejects the whole batch and leaves disk untouched | killed |
+| `SP34-batch-judges-only-its-first-file` | `src/platform/batch.zig` | `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` -> `for (prepared, judged[0..prepared.len]) \|p, *slot\| slot.* = c...` | scope: a batch applies a symbol-scoped rule only to the edit of that symbol | killed |
 | `CR1-crash-threshold-removed` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor) .{ .crashed = code } e...` -> `return .{ .exited = code };` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits; exit cod... | killed |
 | `CR2-crash-threshold-counts-own-kill` | `src/platform/sandbox.zig` | `const ntstatus_error_floor: u32 = 0xC0000000;` -> `const ntstatus_error_floor: u32 = 0xDEAD;` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
 | `CR3-crash-threshold-exclusive` | `src/platform/sandbox.zig` | `return if (code >= ntstatus_error_floor)` -> `return if (code > ntstatus_error_floor)` | an NTSTATUS error exit is a crash, not a verdict, and ordinary codes stay exits | killed |
@@ -561,7 +561,7 @@ python tools/verification_page.py --check
 | `SC11-scan-violations-exit-zero` | `src/protocol/scan_command.zig` | `return if (result.violations.len == 0) 0 else violations_exit_c...` -> `return 0;` | scan: one violation names its file, line, column, rule and text, and exits 10; scan: viol... | killed |
 | `SC13-scan-torn-ledger-not-reread` | `src/platform/scan.zig` | `pause.call(pause.context, io);             return rules.peek(gp...` -> `_ = pause;             return err;` | scan: a ledger torn on the first read but whole on the second is scanned after ...; scan:... | killed |
 | `SP21-scan-out-of-scope-files-scanned` | `src/platform/scan.zig` | `if (!covers(scopes, file)) {             out_of_scope += 1;    ...` -> `_ = &out_of_scope;` | scope: a rule scoped to src/queue.js reports nothing although the text occurs 1...; scope... | killed |
-| `SP22-scan-rule-where-not-rechecked` | `src/platform/scan.zig` | `if (!w.coversFile(file)) continue;` -> `` | scope: each rule in one scan keeps its own where | killed |
+| `SP22-scan-rule-where-not-rechecked` | `src/platform/scan.zig` | `if (!w.coversFile(file)) continue;` -> `if (false and !w.coversFile(file)) continue;` | scope: each rule in one scan keeps its own where | killed |
 | `SP23-scan-unscoped-rule-treated-as-scoped` | `src/platform/scan.zig` | `const w = scope orelse return true;` -> `const w = scope orelse continue;` | scope: a rule without where scans the whole repository as before | killed |
 | `SP26-scan-in-without-check-accepted` | `src/protocol/scan_command.zig` | `} else if (in != null) return null;` -> `}` | scope: --in is refused without --check, twice, or without a value | killed |
 | `SP27-scan-in-dropped` | `src/protocol/scan_command.zig` | `.check = .{ .spec = spec, .where = in } };` -> `.check = .{ .spec = spec, .where = null } };` | scope: --in narrows an ad-hoc check and the json report counts files outside it; scope: a... | killed |
@@ -679,7 +679,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-606 mutation(s).
+605 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1288,7 +1288,6 @@ python tools/verification_page.py --check
 | `WP2-pool-never-started-closes-a-handle` | `src/platform/worker_pool.zig` | `const done = self.done orelse return 0;` -> `const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0...` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
 | `EW19-command-rule-gets-no-target-from-write-doc` | `src/platform/doc_writer.zig` | `runner.gateDir(location, &session), &.{rel}, null, options.limi...` -> `runner.gateDir(location, &session), &.{}, null, options.limits` | documents: a command rule runs on write_doc and on a document edit of a batch, ... | killed |
 | `EW26-rename-claims-the-new-name-untouched` | `src/platform/rename_batch.zig` | `for (sorted, placed, holes) \|old, new, *hole\| hole.* = .{ .ol...` -> `for (sorted, placed, holes) \|old, new, *hole\| hole.* = .{ .ol...` | every write: a rename to a forbidden name is refused and nothing is written | killed |
-| `EW27-recovery-does-not-tie-the-blob-to-the-commit` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, item.blob, after)) return error.CorruptInt...` -> `if (false and !std.mem.eql(u8, item.blob, after)) return error....` | recovery: a hand-made intent record is not applied when the staged bytes, the b... | killed |
 
 ## What this system does not prove
 

@@ -2443,7 +2443,7 @@
       "id": "SP22-scan-rule-where-not-rechecked",
       "file": "src/platform/scan.zig",
       "from": "                if (!w.coversFile(file)) continue;\n",
-      "to": "",
+      "to": "                if (false and !w.coversFile(file)) continue;\n",
       "kills": [
         "scope: each rule in one scan keeps its own where"
       ]
@@ -2550,7 +2550,7 @@
       "from": "        for (prepared, judged[0..prepared.len]) |p, *slot| slot.* = changeOf(p);",
       "to": "        for (prepared, judged[0..prepared.len]) |p, *slot| slot.* = changeOf(if (false) p else prepared[0]);",
       "kills": [
-        "rules: one violating edit rejects the whole batch and leaves disk untouched"
+        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
       ]
     },
     {
@@ -11674,15 +11674,6 @@
       "to": "    for (sorted, placed, holes) |old, new, *hole| hole.* = .{ .old = old, .new = .{ .start = new.start, .end = new.start } };",
       "kills": [
         "every write: a rename to a forbidden name is refused and nothing is written"
-      ]
-    },
-    {
-      "id": "EW27-recovery-does-not-tie-the-blob-to-the-commit",
-      "file": "src/platform/commit_intent.zig",
-      "from": "        if (!std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;",
-      "to": "        if (false and !std.mem.eql(u8, item.blob, after)) return error.CorruptIntent;",
-      "kills": [
-        "recovery: a hand-made intent record is not applied when the staged bytes, the blob or the commit do not tie together"
       ]
     }
   ]

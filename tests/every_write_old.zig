@@ -131,6 +131,10 @@ test "recovery: a hand-made intent record is not applied when the staged bytes, 
         const env = &case.env;
         const root = case.repo.root_abs;
         try enforce(root, "forbid:evil", null);
+        try case.repo.write("src/other.ts", "export const other = 1;\n");
+        _ = try env.git(&.{ "add", "src/other.ts" });
+        _ = try env.git(&.{ "commit", "-q", "-m", "second" });
+        const parent = std.mem.trim(u8, try env.git(&.{ "rev-parse", "HEAD^" }), " \r\n");
         const head = std.mem.trim(u8, try env.head(), " \r\n");
         const branch = std.mem.trim(u8, try env.git(&.{ "symbolic-ref", "HEAD" }), " \r\n");
         const held = std.mem.trim(u8, try env.git(&.{ "rev-parse", "HEAD:src/a.ts" }), " \r\n");
@@ -140,7 +144,7 @@ test "recovery: a hand-made intent record is not applied when the staged bytes, 
         try commit_intent.stage(testing.allocator, testing.io, root, tag, &.{forged});
         try commit_intent.write(testing.allocator, testing.io, root, tag, .{
             .commit = head,
-            .base = head,
+            .base = parent,
             .branch = branch,
             .lock = "00" ** 32,
             .items = &.{.{
