@@ -50,25 +50,25 @@ pub fn expectRefused(env: *Env, reply: Reply, before: Before, check: []const u8)
     try testing.expectEqualStrings(before.listing, try env.git(&.{ "ls-files", "-s" }));
 }
 
-fn body(env: *Env, rel: []const u8, name: []const u8, text: []const u8, commit: bool) !Reply {
+pub fn body(env: *Env, rel: []const u8, name: []const u8, text: []const u8, commit: bool) !Reply {
     const file = try env.abs(rel);
     const hash = try env.hashOf(rel, name);
     if (commit) return env.call("emetgate_try", .{ .file = file, .symbol = name, .hash = hash, .body = text, .message = message }, green, true);
     return env.call("emetgate_try", .{ .file = file, .symbol = name, .hash = hash, .body = text }, green, false);
 }
 
-fn rename(env: *Env, rel: []const u8, name: []const u8, new_name: []const u8, commit: bool) !Reply {
+pub fn rename(env: *Env, rel: []const u8, name: []const u8, new_name: []const u8, commit: bool) !Reply {
     const file = try env.abs(rel);
     const hash = try env.hashOf(rel, name);
     if (commit) return env.call("emetgate_rename", .{ .file = file, .symbol = name, .hash = hash, .new_name = new_name, .message = message }, green, true);
     return env.call("emetgate_rename", .{ .file = file, .symbol = name, .hash = hash, .new_name = new_name }, green, false);
 }
 
-fn move(env: *Env, rel: []const u8, name: []const u8, target: []const u8) !Reply {
+pub fn move(env: *Env, rel: []const u8, name: []const u8, target: []const u8) !Reply {
     return env.call("emetgate_move", .{ .file = try env.abs(rel), .symbol = name, .hash = try env.hashOf(rel, name), .target_file = try env.abs(target), .message = message }, green, true);
 }
 
-fn moveFile(env: *Env, from: []const u8, to: []const u8, commit: bool) !Reply {
+pub fn moveFile(env: *Env, from: []const u8, to: []const u8, commit: bool) !Reply {
     const from_abs = try env.abs(from);
     const to_abs = try env.abs(to);
     const hash = try env.fileHash(from);
