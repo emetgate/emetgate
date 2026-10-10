@@ -43,6 +43,7 @@ pub const Unit = struct {
     before: ?Hash,
     after: ?Hash,
     span: Span,
+    was: Span = .{ .start = 0, .end = 0 },
 
     pub fn checked(self: Unit) bool {
         return self.ref.len == 0 or self.after != null;
@@ -360,7 +361,7 @@ fn changedUnits(a: Allocator, before: symbol.Table, after: symbol.Table, holes: 
             if (twin == null) twin = old;
         }
         if (unchanged) continue;
-        try units.append(a, .{ .ref = try refText(a, new.ref), .before = if (twin) |t| t.hash else null, .after = new.hash, .span = bodySpan(new) });
+        try units.append(a, .{ .ref = try refText(a, new.ref), .before = if (twin) |t| t.hash else null, .after = new.hash, .span = bodySpan(new), .was = if (twin) |t| bodySpan(t) else .{ .start = 0, .end = 0 } });
     }
     for (before.symbols) |old| {
         var kept = false;

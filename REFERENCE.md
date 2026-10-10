@@ -106,13 +106,13 @@ at all.
 
 | Form | Meaning |
 |---|---|
-| `no_comment`, `forbid:<text>`, `no_literal:<option>` | Built-in AST checks, run against the proposed body in memory |
+| `no_comment`, `forbid:<text>`, `no_literal:<option>` | Built-in AST checks, run in memory against the file the write produces; see [What a write is checked against](#what-a-write-is-checked-against) |
 | `q:<tree-sitter query>` | A tree-sitter query, run in process against the parsed file; see [The `q:` query predicate](#the-q-query-predicate) |
 | `added:<check>` | A built-in check or a `q:` query, counted only where the change adds it; see below |
 | `cmd:<command line>` | A command, run in the shadow copy inside the sandbox |
 | `frozen` | No code is read. The paths in the rule's `--in` scope cannot change through a gated call; see below |
 
-`added:` in front of a built-in check or a query makes the rule judge the change, not the code: its violations are those of the file after the change minus those of the file on disk, matched by their text. Under `added:no_comment` a body that keeps a comment that was already there passes and a body that adds one is refused with that one comment as the violation; a second copy of a text the file already holds counts as added, and every violation of a new file is added. `added:` does not take a `cmd:` check. `emetgate scan` and `emetgate_scan` measure code, not a change, and report nothing for an `added:` rule.
+`added:` in front of a built-in check or a query makes the rule judge the change, not the code: its violations are those of the file after the change minus those of the content the writer started from, matched by their text. For a moved file that content is the file at its old path, and it counts only when the rule covered that path; a file that comes into the rule's scope has nothing before it. Under `added:no_comment` a body that keeps a comment that was already there passes and a body that adds one is refused with that one comment as the violation; a second copy of a text the file already holds counts as added, and every violation of a new file is added. `added:` does not take a `cmd:` check. `emetgate scan` and `emetgate_scan` measure code, not a change, and report nothing for an `added:` rule.
 
 ```
 emetgate rule add "no new comments" --check added:no_comment --enforce
@@ -144,6 +144,69 @@ A command runs through `cmd.exe /c`, so it must be something `cmd.exe` can start
 or `.bat` script, an `.exe`, or an interpreter named explicitly (`cmd:node scripts/no-raw-sql.js`).
 A POSIX script such as `./scripts/no-raw-sql.sh` does not run there: `cmd.exe` exits 1 on it,
 which the gate would report as a violation on every proposal.
+
+### What a write is checked against
+
+Every file a gated write produces is new in full. A writer may tell the gate which byte
+ranges it changed; the gate compares everything outside those ranges with the content the
+writer started from, byte for byte, and only bytes that compare equal count as untouched. A
+claim that does not hold ends the call with `UntouchedClaimFalse` and nothing is written; it
+is never widened to "the whole file is new", because a wrong claim is a defect in the writer.
+A writer that makes no claim has its whole file judged.
+
+A match of a rule in the new file is old, and does not block the write, only when all three
+hold: it lies wholly in untouched bytes, the rule already covered the file at the path it had
+before the write, and the same rule matched the content before the write at the same place.
+Every other match is a violation. So a comment that was in the file before a `no_comment`
+rule was adopted does not stop an edit elsewhere in that file, a `q:` match that contains
+changed bytes is new, and a node the write did not touch is new when it matches only because
+of what the write changed beside it. `emetgate scan` and the gate use the same code to decide
+which range of a file a rule judges: the whole file, or the body of the symbol for a rule
+scoped to `file#symbol`. A rule scoped to a symbol judges that symbol's body in the new file
+whichever symbol the call names.
+
+| Tool and edit | What counts as changed |
+|---|---|
+| `emetgate_try`, `emetgate_try_batch`: a symbol body | the whole new body |
+| the same with `hash: absent` | the added declaration; a new file in full |
+| `emetgate_try`, `emetgate_try_batch`: nodes | each replaced node, and the whole body of every symbol whose hash changed |
+| `emetgate_try_batch`: `op: delete` on a symbol | the place the declaration was cut from; a match that spans it is new |
+| `emetgate_try_batch`: `op: delete` on a file | nothing is judged; see leaving a scope below |
+| `emetgate_rename` | every occurrence of the new name, in every file the rename rewrites |
+| `emetgate_move` | in the target, the moved declaration and the imports derived for it; in the source and in each user file, every import line the move rewrites or adds |
+| `emetgate_move_file` | every import specifier the move rewrites, in the moved file and in the files that import it |
+| `emetgate_write_doc`, `"kind": "doc"` | the syntax forms do not apply to a file that is not of a registered language; `cmd:` rules, `frozen` and the message rules do |
+
+**Entering a scope.** Content that comes under a rule through the write is new there in full:
+a file moved into the rule's directory, a declaration moved into a file the rule covers. An
+`added:` rule counts all of it as added.
+
+**Leaving a scope.** A write that takes a file out of the scope of an enforced rule is
+refused: a file move whose old path the rule covers and whose new path it does not, the
+deletion of the file a rule is scoped to (by path or by `file#symbol`), and a rename, a move,
+a deletion or a node edit after which the symbol a rule is scoped to no longer resolves in
+its file. The refusal is a `rule_violation` that names the rule, its check and the path, with
+the text `leaves the scope <scope>`. A rule is emptied by its owner, with `emetgate rule
+supersede` or `emetgate rule forget`, not through the gate. Deleting a file under a directory
+scope is not refused, and neither is moving one declaration out of a directory scope; see
+Limits.
+
+**Commands.** A `cmd:` rule is due when the write changes a path its scope covers; a rule
+scoped to `file#symbol` is due on every write to that file, and a rule with no scope on every
+write, document writes included. The command sees the tree and gives the verdict; it is not
+told what is new.
+
+**Refusal.** A rename, a move or a file move that breaks an enforced rule is refused whole,
+like a batch: no file of it is written. When a rule forbids text the kernel itself derives
+(an import path that climbs two directories, for example), that move cannot be made through
+the gate until the rule or the target changes.
+
+**Recovery.** Finishing an interrupted commit after a crash writes working files without
+running the rules again: the content passed the gate before the commit record was written,
+and the working tree is being brought level with a commit that already exists. Three ties are
+checked before a byte is written: the staged bytes hash to the value in the record, git
+stores those bytes as the blob the record names, and that blob is what the commit on the
+branch holds at that path. A record made by hand that fails any of them is not applied.
 
 ### What a command predicate is allowed to see
 
@@ -203,9 +266,11 @@ only appears inside a comment. `forbid:` cannot make that distinction.
 - **`@violation` is required.** Every pattern in the query must capture `@violation`. A query
   with a pattern that does not is refused with `QueryMissingViolation`, and the pattern is
   printed.
-- **Scope.** At the edit gate only nodes that lie wholly inside the proposed body count. A node
-  that starts or ends outside it is dropped, even when the body overlaps it. `scan` checks the
-  whole file, or the symbol body with `--in file#symbol`.
+- **Scope.** The gate and `scan` both run the query over the whole file, or over the symbol
+  body with `--in file#symbol`; inside that range only nodes that lie wholly in it count. At
+  the gate a match is then old or new as described under "What a write is checked against":
+  a node that contains changed bytes is new, so a function a query already matched cannot be
+  edited inside while the rule stands.
 - **Languages.** When the rule is added, the query is compiled against every language profile.
   It must compile for at least one, and `rule add` prints on stderr each language it does not
   compile for. At the gate the query is compiled against the edited file's language. If it does
@@ -935,8 +1000,8 @@ The JSON is canonical ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785), keys 
 
 Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the exit code is 0 only when everything is verified, so "not measured" is never reported green. In CI, `emetgate verify HEAD --test "<the project's test command>"` after `git fetch origin refs/notes/emetgate:refs/notes/emetgate` can run as a status check; that step is documented here, not shipped.
 
-**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,798 non-blank lines of Zig in 24 files, 794 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->470 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, `merged` and the merge rules included, plus one more verdict, `consistent` (exit code 55). For a merge it keeps git's merged tree in a temporary directory of the system, not in the repository. It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
-**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,798 non-blank lines of Zig in 24 files, 794 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->470 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, plus one more verdict, `consistent` (exit code 55). It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
+**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,802 non-blank lines of Zig in 24 files, 794 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->470 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, `merged` and the merge rules included, plus one more verdict, `consistent` (exit code 55). For a merge it keeps git's merged tree in a temporary directory of the system, not in the repository. It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
+**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->2,802 non-blank lines of Zig in 24 files, 794 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->470 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, plus one more verdict, `consistent` (exit code 55). It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
 
 ### Search
 
@@ -1401,6 +1466,8 @@ Findings against the gate, oldest first.
 
 **F9 — Emetgate's own folder could be read through its short name, and a repository reached through a short path refused its own files.** Up to v0.5.2 the jail compared paths as they were spelled. `realPathFileAlloc` does not expand a Windows short (8.3) name, so a path given as `EMETGA~1/ledger.ndjson` did not start with `.emetgate` as text and `emetgate_read_file` with `raw:true` returned the ledger. A write through the same name was refused (`UnsafePath`), and `GIT~1/...` was refused only by the nested-repository check, as `FileOutsideRepo`. The same comparison failed the other way when the working directory was spelled with a short name: git reports the repository root by its long name, the file kept the short one, and every tool answered `FileOutsideRepo` for the repository's own files. That is how it was found: the nightly attack corpus runs in the runner's temp folder, `C:\Users\RUNNER~1\...`, and had failed every night since 26 September behind an unrelated error of its runner. Fixed on `fix/short-path-root`: the served root and every path are compared by their final long name, a path whose final name cannot be read is refused, and both aliases answer `InternalPath`. `tests/short_path_jail.zig` serves a repository through its short path and checks that a path outside, a junction, a nested repository, a subst drive and the two aliases are still refused; mutants `SP1` to `SP5` and `EP9` to `EP11` guard it. Not tried against v0.5.2: creating a new file under the short name.
 
+**F10 — a rename, a move and a file move wrote text an enforced rule forbids.** In every release that has `emetgate_rename`, `emetgate_move` or `emetgate_move_file`, from v0.2.0 to v0.6.0, the gate judged the range a writer handed it and nothing else, and a file a writer rewrote without naming a symbol was not judged at all. The other files of a rename, the source and user files of a move, the imports the kernel derives and a moved file as a whole reached disk without a check; in the declaring file of a rename only the function body was read, so the new name itself was not. A `cmd:` rule ran only for a file edited under a symbol name, so it did not run on a file move at all, and a rule scoped to another symbol of the same file did not run. An `added:` rule compared against the target path on disk. A write could also take the file or the symbol a rule was scoped to out of that scope, after which the rule covered nothing and `emetgate scan` stopped with `ScopeUnresolved`. The release notes of v0.5.2 to v0.6.0 named the first part as a limit that had been read and not tested. Found by a review of the rule loop and proven with twenty-one scripts against the published v0.6.0, without `--commit` as well. Fixed in v0.6.1 by reversing the default: every file a write produces is new except the bytes a writer claims and the gate confirms, content that enters a scope is new there, a write that leaves a scope is refused, and a command rule is due for every path a write changes (see "What a write is checked against"). Each proven case is a test (`tests/every_write.zig`, `tests/every_write_scope.zig`, `tests/every_write_old.zig`), and `tests/write_invariant.zig` runs seeded operations through every write tool the server lists and requires that a scan finds nothing new after an accepted write.
+
 ## Nightly attacker
 
 Every night, before a finding reaches this list by hand, an automated attacker tries to break the
@@ -1471,7 +1538,8 @@ The verification guarantees have the following limits:
 - **Committing gate.** Tracked files of a committing call come from emetgate's own checkout of `HEAD`; what that rests on, and what it does not cover (untracked and ignored files of a linked directory, the system-wide attributes file, two names that differ only in case), is listed under "The gate tests the tree the commit will hold".
 - **Kept tree.** A test command cannot write a tracked file in place (see "The kept tree" for `--shadow-private` and `--shadow-tree copy`). Whether a working file may be linked is decided when the link is made: a file whose integrity label is lowered afterwards stays linked until its name changes. A tracked symlink is copied by following it and a submodule entry is left out, in both trees. The fallbacks for another volume and for a volume without hard links are tested through a seam, not on such a volume.
 - **Repository ledger.** With `--allow-repo-memory`, a committed ledger's `cmd:` rules run under the same confinement as the test command: they cannot write outside the shadow copy, but they can read and reach the network. Pass the flag only for a ledger you have reviewed. Without the flag only execution is withheld; the text of every rule in a committed ledger is still shown to the model in `emetgate_skeleton`, so a hostile rule text is data the model reads, not a command anything runs.
-- **Documents.** No rule is applied to a doc edit (`emetgate_write_doc`, `"kind": "doc"`): a JSON, Markdown or other text file that is not of a registered language is gated by the test command and its own syntax check only. Before this version the same held for a source file edited that way, which is now refused (F8 in Security history).
+- **Documents.** The syntax forms (`no_comment`, `forbid:`, `no_literal:`, `q:` and their `added:` forms) are not applied to a doc edit (`emetgate_write_doc`, `"kind": "doc"`): a JSON, Markdown or other text file that is not of a registered language has no tree for them to read. `cmd:` rules, `frozen` and the message rules do apply to it. A source file edited that way is refused (F8 in Security history).
+- **Rules on a write.** What the gate judges is listed under "What a write is checked against". It does not cover: a write path added later that does not call the one entry (nothing in the compiler stops that yet; the invariant test covers only tools the server lists); the working files recovery finishes after a crash, which are tied to the commit and not judged again; a declaration moved out of a directory scope and a file deleted under one, neither of which is refused; a rule adopted after the content was written, which is `scan`'s job; text outside any changed range whose syntax node changes kind because of a change beside it, unless a rule matches it; and anything written by another tool. A declaration that already breaks a rule cannot be moved into a file under that rule even when the rule also covered its old file, because the moved text is new in the target. A `cmd:` rule cannot tell old from new: on a tree that already fails it, it refuses every write its scope covers.
 - **Taste.** Architecture, API design and user experience are not properties a kernel can check.
 
 ## Installing

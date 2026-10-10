@@ -139,7 +139,7 @@ fn resolveScope(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io.Dir,
     };
     const snapshot = try Snapshot.load(runtime, io, root, file);
     defer snapshot.destroy();
-    _ = try symbolSpan(gpa, snapshot, ref_text);
+    _ = try rules.symbolSpan(gpa, snapshot, ref_text);
 }
 
 const LoadedFile = struct {
@@ -218,16 +218,11 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
             parse_errors.appendAssumeCapacity(try gpa.dupe(u8, file));
         }
 
-        const whole: symbol.Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
         for (list, scopes) |*rule, scope| {
-            var span = whole;
             if (scope) |w| {
                 if (!w.coversFile(file)) continue;
-                switch (w.base) {
-                    .symbol => |s| span = try symbolSpan(gpa, snapshot, s.ref),
-                    else => {},
-                }
             }
+            const span = try rules.judgedSpan(gpa, scope, snapshot);
             const report = switch (try rules.evaluateLimited(gpa, file, snapshot.profile, snapshot.tree, span, rule[0..1], limits, .unknown)) {
                 .ok => continue,
                 .violated => |report| report,
@@ -273,12 +268,4 @@ pub fn scan(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8,
         .violations = try violations.toOwnedSlice(gpa),
         .check_failures = owned_failures,
     };
-}
-
-fn symbolSpan(gpa: Allocator, snapshot: *Snapshot, ref_text: []const u8) !symbol.Span {
-    const ref = try symbol.Ref.parse(gpa, ref_text);
-    defer ref.deinit(gpa);
-    const table = try snapshot.symbols();
-    const target = try table.resolve(ref);
-    return .{ .start = target.body.startByte(), .end = target.body.endByte() };
 }
