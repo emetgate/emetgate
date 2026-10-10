@@ -210,7 +210,25 @@ pub const Session = struct {
 
     fn ready(self: *Session) bool {
         if (self.settle()) self.waited = true;
+        if (self.phase.load(.acquire) == .failed) self.retry();
         return self.phase.load(.acquire) == .ready;
+    }
+
+    fn retry(self: *Session) void {
+        if (self.repo) |r| r.deinit();
+        self.repo = null;
+        if (self.store_path) |p| self.gpa.free(p);
+        self.store_path = null;
+        _ = self.arena_state.reset(.free_all);
+        self.names = .empty;
+        self.symbols = .empty;
+        self.part_df = .empty;
+        self.terms = null;
+        self.term_docs = .empty;
+        self.term_files = .empty;
+        self.failure = null;
+        self.phase.store(.building, .release);
+        run(self);
     }
 
     fn addName(self: *Session, arena: Allocator, name: []const u8, path: []const u8) !void {

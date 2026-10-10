@@ -93,7 +93,7 @@ const Gate = struct {
     open: std.atomic.Value(bool) = .init(false),
     released_by: ?*const std.atomic.Value(bool) = null,
     gave_up: std.atomic.Value(bool) = .init(false),
-    fail_listing: bool = false,
+    failing_listings: std.atomic.Value(usize) = .init(0),
     source_reads: std.atomic.Value(usize) = .init(0),
     creates: std.atomic.Value(usize) = .init(0),
     cancel_at_read: usize = 0,
@@ -147,7 +147,10 @@ const Gate = struct {
             }
             pause(1);
         }
-        if (self.fail_listing) return error.GitFailed;
+        if (self.failing_listings.load(.acquire) != 0) {
+            _ = self.failing_listings.fetchSub(1, .acq_rel);
+            return error.GitFailed;
+        }
         return self.inner.tracked(root, gpa);
     }
 
@@ -317,7 +320,8 @@ test "first reply: an evidence call that arrives while the fact store is being b
 test "first reply: a fact store build that fails leaves explore and evidence refused instead of answered from the part that was read" {
     var repo = try Repo.make(small_files, small_functions);
     defer repo.close();
-    var gate: Gate = .{ .inner = undefined, .fail_listing = true };
+    var gate: Gate = .{ .inner = undefined };
+    gate.failing_listings.store(std.math.maxInt(usize), .release);
     gate.open.store(true, .release);
     const session = try gated(&repo, &gate);
     defer session.destroy();
@@ -337,6 +341,33 @@ test "first reply: a fact store build that fails leaves explore and evidence ref
     try testing.expectEqualStrings("evidence is unavailable: the repository could not be read", evidence.text.?);
     try testing.expectEqualStrings("GitFailed", session.takeNote().?);
     try testing.expect(!repo.storeWritten());
+}
+
+test "first reply: a call after a fact store build that failed builds the store again and answers from the whole store" {
+    var repo = try Repo.make(small_files, small_functions);
+    defer repo.close();
+    var gate: Gate = .{ .inner = undefined };
+    gate.failing_listings.store(1, .release);
+    gate.open.store(true, .release);
+    const session = try gated(&repo, &gate);
+    defer session.destroy();
+
+    session.start();
+    _ = session.settle();
+    const phase_after_start = session.phase.load(.acquire);
+    const written_after_start = repo.storeWritten();
+    var explore: Call = .{ .session = session };
+    defer explore.free();
+    explore.run();
+
+    try testing.expectEqual(map_tools.Phase.failed, phase_after_start);
+    try testing.expect(!written_after_start);
+    try testing.expectEqual(map_tools.Phase.ready, session.phase.load(.acquire));
+    try testing.expect(!explore.is_error);
+    try testing.expect(std.mem.indexOf(u8, explore.text.?, "src/part0.ts:6 step0x1") != null);
+    try testing.expect(std.mem.indexOf(u8, explore.text.?, "const scaled = input * 3;") != null);
+    try testing.expect(repo.storeWritten());
+    try testing.expect(session.takeNote() == null);
 }
 
 test "first reply: closing the session while the fact store is being built stops the build and writes no store" {

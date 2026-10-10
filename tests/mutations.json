@@ -11456,8 +11456,8 @@
     {
       "id": "FR3-call-does-not-wait-for-the-fact-store",
       "file": "src/protocol/map_tools.zig",
-      "from": "        if (self.settle()) self.waited = true;\n        return self.phase.load(.acquire) == .ready;",
-      "to": "        return self.phase.load(.acquire) == .ready;",
+      "from": "        if (self.settle()) self.waited = true;\n",
+      "to": "",
       "kills": [
         "first reply: an explore call that arrives while the fact store is being built waits for it and answers from the whole store",
         "first reply: an evidence call that arrives while the fact store is being built waits for it and answers from the whole store"
@@ -11507,6 +11507,15 @@
       "to": "",
       "kills": [
         "first reply: a refresh canceled after the last file is read does not write the store"
+      ]
+    },
+    {
+      "id": "FR9-failed-fact-store-build-never-tried-again",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        if (self.phase.load(.acquire) == .failed) self.retry();\n",
+      "to": "",
+      "kills": [
+        "first reply: a call after a fact store build that failed builds the store again and answers from the whole store"
       ]
     }
   ]

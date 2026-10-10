@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1831**
-- Mutations declared in `tests/mutations.json`: **1168**
-  - killed: **1134**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1832**
+- Mutations declared in `tests/mutations.json`: **1169**
+  - killed: **1135**
   - equivalent: **7**
   - defense in depth: **8**
   - open: **5**
@@ -656,7 +656,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-611 mutation(s).
+612 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1265,12 +1265,13 @@ python tools/verification_page.py --check
 | `WP2-pool-never-started-closes-a-handle` | `src/platform/worker_pool.zig` | `const done = self.done orelse return 0;` -> `const done = self.done orelse @as(windows.HANDLE, @ptrFromInt(0...` | a pool that was never started, and one torn down twice, closes no handle it doe... | killed |
 | `FR1-server-builds-the-fact-store-before-the-first-reply` | `src/protocol/server.zig` | `ms.start();` -> `ms.build() catch {};` | first reply: initialize and tools/list are answered while the fact store of the... | killed |
 | `FR2-background-build-runs-on-the-calling-thread` | `src/protocol/map_tools.zig` | `self.worker = std.Thread.spawn(.{}, run, .{self}) catch return ...` -> `run(self);` | first reply: initialize and tools/list are answered while the fact store of the... | killed |
-| `FR3-call-does-not-wait-for-the-fact-store` | `src/protocol/map_tools.zig` | `if (self.settle()) self.waited = true;         return self.phas...` -> `return self.phase.load(.acquire) == .ready;` | first reply: an explore call that arrives while the fact store is being built w...; first... | killed |
+| `FR3-call-does-not-wait-for-the-fact-store` | `src/protocol/map_tools.zig` | `if (self.settle()) self.waited = true;` -> `` | first reply: an explore call that arrives while the fact store is being built w...; first... | killed |
 | `FR4-half-built-fact-store-taken-as-ready` | `src/protocol/map_tools.zig` | `return self.phase.load(.acquire) == .ready;` -> `return self.repo != null;` | first reply: a fact store build that fails leaves explore and evidence refused ... | killed |
 | `FR5-closing-does-not-cancel-the-build` | `src/protocol/map_tools.zig` | `self.cancel.store(true, .release);         _ = self.settle();` -> `_ = self.settle();` | first reply: closing the session while the fact store is being built stops the ... | killed |
 | `FR6-build-does-not-see-the-cancel-flag` | `src/protocol/map_tools.zig` | `.store_path = self.store_path, .cancel = &self.cancel });` -> `.store_path = self.store_path });` | first reply: closing the session while the fact store is being built stops the ... | killed |
 | `FR7-canceled-refresh-reads-every-file` | `src/platform/fact_store.zig` | `if (canceled(self.cancel)) return self.stop(error.Canceled);` -> `` | first reply: a refresh canceled while it reads the files stops before the next ...; first... | killed |
 | `FR8-canceled-refresh-writes-the-store` | `src/platform/fact_store.zig` | `if (canceled(self.options.cancel)) return error.Canceled;` -> `` | first reply: a refresh canceled after the last file is read does not write the ... | killed |
+| `FR9-failed-fact-store-build-never-tried-again` | `src/protocol/map_tools.zig` | `if (self.phase.load(.acquire) == .failed) self.retry();` -> `` | first reply: a call after a fact store build that failed builds the store again... | killed |
 
 ## What this system does not prove
 
