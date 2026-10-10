@@ -178,6 +178,7 @@ test {
     _ = @import("tests/frozen.zig");
     _ = @import("tests/every_write.zig");
     _ = @import("tests/every_write_scope.zig");
+    _ = @import("tests/write_invariant.zig");
     _ = @import("tests/message_base.zig");
     _ = @import("tests/verify_filtered_commit.zig");
     _ = @import("tests/run_tool.zig");

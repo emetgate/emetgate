@@ -191,7 +191,7 @@ test "every write: without commits a rename and a file move that break a rule ar
 
 const z_src = "export function main(y) {\n  const z = y;\n  return z;\n}\n";
 
-fn nodeAddress(env: *Env, rel: []const u8, name: []const u8, wanted: []const u8) ![]const u8 {
+pub fn nodeAddress(env: *Env, rel: []const u8, name: []const u8, wanted: []const u8) ![]const u8 {
     const listing = try env.call("emetgate_read_symbol", .{ .file = try env.abs(rel), .symbol = name, .nodes = true }, green, false);
     try testing.expect(!listing.is_error);
     const text = (try listing.field(env.arena(), "nodes")).?.string;
