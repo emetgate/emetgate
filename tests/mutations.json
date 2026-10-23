@@ -5103,6 +5103,24 @@
       ]
     },
     {
+      "id": "VB1-branch-missing-receipt-not-floored",
+      "file": "src/platform/verify_branch.zig",
+      "from": "    const floored = if (!has_receipt) contribution.worse(.partial) else contribution;",
+      "to": "    const floored = contribution;",
+      "kills": [
+        "verify --branch: a missing receipt makes the branch partial, not green"
+      ]
+    },
+    {
+      "id": "VB2-branch-mismatch-reported-verified",
+      "file": "src/platform/verify_branch.zig",
+      "from": "        .mismatch => .broken,",
+      "to": "        .mismatch => .verified,",
+      "kills": [
+        "verify --branch: a forged receipt note makes the branch broken and shifts the chain tip"
+      ]
+    },
+    {
       "id": "JV1-v2-journal-writes-no-intents",
       "file": "src/platform/journal.zig",
       "from": "    for (intents) |intent| try writeIntent(&js, intent);",

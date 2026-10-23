@@ -22,6 +22,7 @@ const facts_command = emetgate.facts_command;
 const map_command = emetgate.map_command;
 const find_command = emetgate.find_command;
 const verify_run = emetgate.verify_run;
+const verify_branch = emetgate.verify_branch;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
 
@@ -38,6 +39,7 @@ const usage =
     \\       emetgate hook prompt
     \\       emetgate recover [--shadow-root <dir>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
+    \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
     \\       emetgate lockdown [--no-marks] [<claude args>...]
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
@@ -162,6 +164,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         exitWithUsage();
     }
     if (std.mem.eql(u8, command, "verify")) {
+        if (parseVerifyBranch(args[2..])) |branch| return verifyBranchCmd(init, runtime, branch.options, branch.json, out);
         const options = parseVerify(args[2..]) orelse exitWithUsage();
         return verifyCmd(init, runtime, options.options, options.json, out);
     }
@@ -571,6 +574,46 @@ fn parseVerify(args: []const [:0]const u8) ?VerifyArgs {
     }
     if (parsed.options.commit.len == 0) return null;
     return parsed;
+}
+
+const VerifyBranchArgs = struct { options: verify_branch.Options, json: bool };
+
+fn parseVerifyBranch(args: []const [:0]const u8) ?VerifyBranchArgs {
+    var parsed: VerifyBranchArgs = .{ .options = .{}, .json = false };
+    var saw_branch = false;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg: []const u8 = args[i];
+        if (std.mem.eql(u8, arg, "--branch") or std.mem.eql(u8, arg, "--range")) {
+            if (i + 1 >= args.len) return null;
+            i += 1;
+            const range = verify_branch.parseRange(args[i]);
+            parsed.options.base = range.base;
+            parsed.options.head = range.head;
+            saw_branch = true;
+        } else if (std.mem.eql(u8, arg, "--json")) {
+            parsed.json = true;
+        } else if (std.mem.eql(u8, arg, "--skip-tests")) {
+            parsed.options.skip_tests = true;
+        } else if (std.mem.eql(u8, arg, "--test") or std.mem.eql(u8, arg, "--typecheck")) {
+            if (i + 1 >= args.len) return null;
+            i += 1;
+            if (arg[2] == 't' and arg[3] == 'e') parsed.options.test_command = args[i] else parsed.options.typecheck_command = args[i];
+        } else return null;
+    }
+    if (!saw_branch) return null;
+    return parsed;
+}
+
+fn verifyBranchCmd(init: std.process.Init, runtime: *Runtime, options: verify_branch.Options, json: bool, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = try runner.repoRoot(gpa, init.io);
+    defer gpa.free(root);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const result = try verify_branch.run(gpa, arena_state.allocator(), init.io, runtime, root, options);
+    if (json) try verify_branch.writeJson(out, result) else try verify_branch.writeText(out, result);
+    return verify_branch.exitCode(result.verdict);
 }
 
 fn verifyCmd(init: std.process.Init, runtime: *Runtime, options: verify_run.Options, json: bool, out: *std.Io.Writer) !u8 {
