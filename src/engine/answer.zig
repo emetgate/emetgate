@@ -96,6 +96,11 @@ pub const Rule = enum { binary, internal, too_large };
 
 pub const Exclusions = std.EnumArray(Rule, u32);
 
+pub const Excluded = struct {
+    path: []const u8,
+    rule: Rule,
+};
+
 pub fn covers(prefix: []const u8, path: []const u8) bool {
     if (prefix.len == 0) return true;
     if (path.len < prefix.len) return false;
@@ -203,6 +208,7 @@ pub const Certificate = struct {
     scope: Scope,
     semantics: Semantics,
     budgets: []const Budget = &.{},
+    excluded_paths: []const Excluded = &.{},
 };
 
 pub const Refusal = struct {
@@ -237,6 +243,27 @@ fn declares(budgets: []const Budget, limit: Limit) bool {
     return false;
 }
 
+fn byteLimit(budgets: []const Budget) ?u64 {
+    for (budgets) |budget| {
+        if (budget.limit == .file_bytes) return budget.max;
+    }
+    return null;
+}
+
+fn excludedPathsProblem(cert: Certificate) ?[]const u8 {
+    const listed = cert.excluded_paths;
+    if (listed.len == 0) return null;
+    var counts = Exclusions.initFill(0);
+    for (listed, 0..) |entry, i| {
+        if (i != 0 and std.mem.order(u8, listed[i - 1].path, entry.path) != .lt) return "excluded paths are not in strict path order";
+        counts.set(entry.rule, counts.get(entry.rule) + 1);
+    }
+    for (std.enums.values(Rule)) |rule| {
+        if (counts.get(rule) != cert.scope.excluded.get(rule)) return "excluded paths do not match the excluded counts";
+    }
+    return null;
+}
+
 pub fn inconsistency(cert: Certificate, missing: []const Missing) ?[]const u8 {
     const in_scope = cert.scope.inScope() orelse return "excluded files outnumber listed files";
     for (cert.budgets, 0..) |budget, i| {
@@ -245,6 +272,8 @@ pub fn inconsistency(cert: Certificate, missing: []const Missing) ?[]const u8 {
             if (earlier.limit == budget.limit) return "a limit is declared twice";
         }
     }
+    if (cert.scope.excluded.get(.too_large) != 0 and byteLimit(cert.budgets) == null) return "large files were excluded without a declared byte limit";
+    if (excludedPathsProblem(cert)) |problem| return problem;
     var accounted: u64 = cert.scope.evaluated;
     var unresolved: u64 = 0;
     for (missing, 0..) |entry, i| {
@@ -335,13 +364,19 @@ pub fn Answer(comptime T: type) type {
                     if (r.detail.len != 0) try w.print(" ({s})", .{r.detail});
                 },
                 .complete => |c| {
-                    try w.print("\u{2713} {d} {s} in ", .{ count, noun });
+                    try w.writeAll("\u{2713} ");
+                    try writeCount(w, count);
+                    try w.print(" {s} in ", .{noun});
                     try writeFiles(w, c.cert.scope.evaluated);
                     try writeRoot(w, c.cert.snapshot.root);
                     try writeNotes(w, c.cert);
                 },
                 .partial => |p| {
-                    try w.print("partial: {d} {s} in {d} of ", .{ count, noun, p.cert.scope.evaluated });
+                    try w.writeAll("partial: ");
+                    try writeCount(w, count);
+                    try w.print(" {s} in ", .{noun});
+                    try writeCount(w, p.cert.scope.evaluated);
+                    try w.writeAll(" of ");
                     try writeFiles(w, p.cert.scope.inScope() orelse 0);
                     try writeRoot(w, p.cert.snapshot.root);
                     try writeMissingSummary(w, p.missing);
@@ -369,8 +404,42 @@ pub fn Answer(comptime T: type) type {
     };
 }
 
+fn writeCount(w: *Writer, n: u64) Writer.Error!void {
+    var buf: [27]u8 = undefined;
+    var i: usize = buf.len;
+    var rest = n;
+    var digits: usize = 0;
+    while (true) {
+        if (digits != 0 and digits % 3 == 0) {
+            i -= 1;
+            buf[i] = ',';
+        }
+        i -= 1;
+        buf[i] = @intCast('0' + rest % 10);
+        rest /= 10;
+        digits += 1;
+        if (rest == 0) break;
+    }
+    try w.writeAll(buf[i..]);
+}
+
+fn writeBytes(w: *Writer, bytes: u64) Writer.Error!void {
+    const mib = 1024 * 1024;
+    if (bytes != 0 and bytes % mib == 0) {
+        try writeCount(w, bytes / mib);
+        return w.writeAll(" MiB");
+    }
+    if (bytes != 0 and bytes % 1024 == 0) {
+        try writeCount(w, bytes / 1024);
+        return w.writeAll(" KiB");
+    }
+    try writeCount(w, bytes);
+    try w.writeAll(" B");
+}
+
 fn writeFiles(w: *Writer, count: u64) Writer.Error!void {
-    try w.print("{d} {s}", .{ count, if (count == 1) "file" else "files" });
+    try writeCount(w, count);
+    try w.writeAll(if (count == 1) " file" else " files");
 }
 
 fn writeRoot(w: *Writer, root: Digest) Writer.Error!void {
@@ -388,19 +457,36 @@ fn writeMissingSummary(w: *Writer, missing: []const Missing) Writer.Error!void {
     for (std.enums.values(Reason)) |reason| {
         const count = counts.get(reason);
         if (count == 0) continue;
-        try w.print("{s} {d} {s}", .{ if (first) "; missing" else ",", count, @tagName(reason) });
+        try w.writeAll(if (first) "; missing " else ", ");
         first = false;
+        try writeCount(w, count);
+        try w.print(" {s}", .{@tagName(reason)});
     }
 }
 
 fn writeNotes(w: *Writer, cert: Certificate) Writer.Error!void {
     switch (cert.semantics) {
-        .text => |text| if (text.filtered != 0) try w.print("; {d} hidden by kinds", .{text.filtered}),
+        .text => |text| if (text.filtered != 0) {
+            try w.writeAll("; ");
+            try writeCount(w, text.filtered);
+            try w.writeAll(" hidden by kinds");
+        },
         .listing, .facts => {},
     }
+    var first = true;
     for (std.enums.values(Rule)) |rule| {
         const count = cert.scope.excluded.get(rule);
-        if (count != 0) try w.print("; skipped {d} {s}", .{ count, @tagName(rule) });
+        if (count == 0) continue;
+        try w.writeAll(if (first) "; excluded " else ", ");
+        first = false;
+        try writeCount(w, count);
+        switch (rule) {
+            .binary, .internal => try w.print(" {s}", .{@tagName(rule)}),
+            .too_large => {
+                try w.writeAll(" > ");
+                try writeBytes(w, byteLimit(cert.budgets) orelse 0);
+            },
+        }
     }
 }
 
@@ -433,6 +519,17 @@ fn writeCertificateBody(js: *Stringify, cert: Certificate, missing: []const Miss
         try js.write(cert.scope.excluded.get(rule));
     }
     try js.endObject();
+    try js.objectField("excluded_paths");
+    try js.beginArray();
+    for (cert.excluded_paths) |entry| {
+        try js.beginObject();
+        try js.objectField("path");
+        try js.write(entry.path);
+        try js.objectField("rule");
+        try js.write(@tagName(entry.rule));
+        try js.endObject();
+    }
+    try js.endArray();
     try js.objectField("evaluated");
     try js.write(cert.scope.evaluated);
     try js.objectField("in_scope");
@@ -746,7 +843,63 @@ test "hits hidden by a kinds filter and skipped binary files are counted in the 
     cert.scope.excluded.set(.binary, 1);
     const text = try statusText(Answer(Hits).finish(&.{}, cert, &.{}), 0);
     defer testing.allocator.free(text);
-    try testing.expect(std.mem.endsWith(u8, text, "; 7 hidden by kinds; skipped 1 binary"));
+    try testing.expect(std.mem.endsWith(u8, text, "; 7 hidden by kinds; excluded 1 binary"));
+}
+
+test "files above the byte limit are an excluded rule named with its limit and never a missing file" {
+    var cert = textCert(28_912, 29_361);
+    cert.scope.excluded.set(.binary, 412);
+    cert.scope.excluded.set(.too_large, 37);
+    cert.budgets = &.{.{ .limit = .file_bytes, .max = 1024 * 1024, .used = 1000 }};
+    const answer = Answer(Hits).finish(&.{}, cert, &.{});
+    try testing.expectEqual(Status.complete, answer.status());
+    const text = try statusText(answer, 0);
+    defer testing.allocator.free(text);
+    const hex = std.fmt.bytesToHex(contentDigest("root")[0..2].*, .lower);
+    const expected = try std.fmt.allocPrint(testing.allocator, "\u{2713} 0 matches in 28,912 files @{s}; excluded 412 binary, 37 > 1 MiB", .{&hex});
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, text);
+    cert.budgets = &.{};
+    const unlimited = Answer(Hits).finish(&.{}, cert, &.{});
+    try testing.expectEqualStrings("large files were excluded without a declared byte limit", unlimited.refused.detail);
+}
+
+test "excluded paths, when listed, match the excluded counts and come in path order" {
+    var cert = textCert(1, 4);
+    cert.scope.excluded.set(.binary, 2);
+    cert.scope.excluded.set(.too_large, 1);
+    cert.budgets = &.{.{ .limit = .file_bytes, .max = 100, .used = 5 }};
+    cert.excluded_paths = &.{ .{ .path = "a.png", .rule = .binary }, .{ .path = "b.lock", .rule = .too_large }, .{ .path = "c.png", .rule = .binary } };
+    const listed = Answer(Hits).finish(&.{}, cert, &.{});
+    try testing.expectEqual(Status.complete, listed.status());
+    const json = try certificateText(listed);
+    defer testing.allocator.free(json);
+    try testing.expect(std.mem.indexOf(u8, json, "\"excluded_paths\":[{\"path\":\"a.png\",\"rule\":\"binary\"}") != null);
+    cert.excluded_paths = &.{ .{ .path = "a.png", .rule = .binary }, .{ .path = "b.lock", .rule = .too_large } };
+    try testing.expectEqualStrings("excluded paths do not match the excluded counts", Answer(Hits).finish(&.{}, cert, &.{}).refused.detail);
+    cert.excluded_paths = &.{ .{ .path = "c.png", .rule = .binary }, .{ .path = "b.lock", .rule = .too_large }, .{ .path = "a.png", .rule = .binary } };
+    try testing.expectEqualStrings("excluded paths are not in strict path order", Answer(Hits).finish(&.{}, cert, &.{}).refused.detail);
+    cert.budgets = &.{.{ .limit = .file_bytes, .max = 1536, .used = 5 }};
+    cert.excluded_paths = &.{};
+    const odd = try statusText(Answer(Hits).finish(&.{}, cert, &.{}), 0);
+    defer testing.allocator.free(odd);
+    try testing.expect(std.mem.endsWith(u8, odd, "; excluded 2 binary, 1 > 1,536 B"));
+}
+
+test "counts in the status are grouped by thousands" {
+    const cases = [_]struct { n: u64, text: []const u8 }{
+        .{ .n = 0, .text = "0" },
+        .{ .n = 999, .text = "999" },
+        .{ .n = 1000, .text = "1,000" },
+        .{ .n = 1_234_567, .text = "1,234,567" },
+        .{ .n = std.math.maxInt(u64), .text = "18,446,744,073,709,551,615" },
+    };
+    for (cases) |case| {
+        var out: Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        try writeCount(&out.writer, case.n);
+        try testing.expectEqualStrings(case.text, out.written());
+    }
 }
 
 fn certificateText(answer: Answer(Hits)) ![]u8 {

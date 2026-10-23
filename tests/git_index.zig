@@ -24,13 +24,24 @@ fn expectMatchesLsFiles(root: []const u8) !void {
     defer gpa.free(index_path);
     const names = (try git_index.readTracked(gpa, testing.io, index_path)) orelse return error.NotRead;
     defer git_index.freeList(gpa, names);
-    const listed = try git(root, &.{ "ls-files", "-z" });
+    const listed = try git(root, &.{ "ls-files", "-z", "--deduplicate" });
     defer gpa.free(listed);
+    const staged = try git(root, &.{ "ls-files", "-z", "-s" });
+    defer gpa.free(staged);
+    var submodules: std.StringHashMapUnmanaged(void) = .empty;
+    defer submodules.deinit(gpa);
+    var entries = std.mem.tokenizeScalar(u8, staged, 0);
+    while (entries.next()) |entry| {
+        const tab = std.mem.indexOfScalar(u8, entry, '\t') orelse continue;
+        if (std.mem.startsWith(u8, entry, "160000 ")) try submodules.put(gpa, entry[tab + 1 ..], {});
+    }
     var expected = std.mem.tokenizeScalar(u8, listed, 0);
     var n: usize = 0;
-    while (expected.next()) |name| : (n += 1) {
+    while (expected.next()) |name| {
+        if (submodules.contains(name)) continue;
         if (n >= names.len) return error.TooFewNames;
         try testing.expectEqualStrings(name, names[n]);
+        n += 1;
     }
     try testing.expectEqual(n, names.len);
 }
@@ -77,7 +88,7 @@ test "git index reader: version 4 prefix compression and an intent-to-add entry 
     try expectMatchesLsFiles(fx.root);
 }
 
-test "git index reader: a merge conflict lists its path once per stage, as git ls-files does" {
+test "git index reader: a merge conflict lists its path once, as git ls-files --deduplicate does" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fx = try Fixture.init();
     defer fx.deinit();

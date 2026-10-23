@@ -1,10 +1,108 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const exe_path = @import("exe_path.zig");
 
 const Allocator = std.mem.Allocator;
+const windows = std.os.windows;
 const max_git_output = 64 * 1024;
+
+const SpinLock = struct {
+    held: std.atomic.Value(bool) = .init(false),
+
+    fn lock(self: *SpinLock) void {
+        while (self.held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) std.atomic.spinLoopHint();
+    }
+
+    fn unlock(self: *SpinLock) void {
+        self.held.store(false, .release);
+    }
+};
+
+const Names = struct {
+    guard: SpinLock = .{},
+    cwd: [std.fs.max_path_bytes]u8 = undefined,
+    cwd_len: usize = 0,
+    root: [std.fs.max_path_bytes]u8 = undefined,
+    root_len: usize = 0,
+    root_nt: [windows.PATH_MAX_WIDE]u16 = undefined,
+    root_nt_len: usize = 0,
+};
+
+var names: Names = .{};
+
+fn cwdReal(gpa: Allocator, io: std.Io) ![:0]u8 {
+    names.guard.lock();
+    if (names.cwd_len != 0) {
+        defer names.guard.unlock();
+        return gpa.dupeZ(u8, names.cwd[0..names.cwd_len]);
+    }
+    names.guard.unlock();
+    const real = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", gpa);
+    names.guard.lock();
+    defer names.guard.unlock();
+    if (names.cwd_len == 0 and real.len <= names.cwd.len) {
+        @memcpy(names.cwd[0..real.len], real);
+        names.cwd_len = real.len;
+    }
+    return real;
+}
+
+fn ntName(path: []const u8, buf: []u16) ?[]const u16 {
+    return exe_path.finalName(buf, path);
+}
+
+fn sameWideIgnoreCase(a: []const u16, b: []const u16) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        const lx: u16 = if (x < 128) std.ascii.toLower(@intCast(x)) else x;
+        const ly: u16 = if (y < 128) std.ascii.toLower(@intCast(y)) else y;
+        if (lx != ly) return false;
+    }
+    return true;
+}
+
+fn rootNt(root: []const u8, out: []u16) ?[]const u16 {
+    names.guard.lock();
+    if (names.root_len == root.len and std.mem.eql(u8, names.root[0..names.root_len], root)) {
+        defer names.guard.unlock();
+        if (names.root_nt_len > out.len) return null;
+        @memcpy(out[0..names.root_nt_len], names.root_nt[0..names.root_nt_len]);
+        return out[0..names.root_nt_len];
+    }
+    names.guard.unlock();
+    const nt = ntName(root, out) orelse return null;
+    names.guard.lock();
+    defer names.guard.unlock();
+    if (root.len <= names.root.len and nt.len <= names.root_nt.len) {
+        @memcpy(names.root[0..root.len], root);
+        names.root_len = root.len;
+        @memcpy(names.root_nt[0..nt.len], nt);
+        names.root_nt_len = nt.len;
+    }
+    return nt;
+}
+
+fn fastRealPath(gpa: Allocator, root: []const u8, path: []const u8) !?[:0]u8 {
+    if (builtin.os.tag != .windows) return null;
+    var target_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    const target = ntName(path, &target_buf) orelse return null;
+    var root_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    const root_nt = rootNt(root, &root_buf) orelse return null;
+    if (target.len < root_nt.len or !sameWideIgnoreCase(target[0..root_nt.len], root_nt)) return null;
+    const rest = target[root_nt.len..];
+    const tail_len = std.unicode.calcWtf8Len(rest);
+    const out = try gpa.allocSentinel(u8, root.len + tail_len, 0);
+    @memcpy(out[0..root.len], root);
+    _ = std.unicode.wtf16LeToWtf8(out[root.len..], rest);
+    return out;
+}
+
+fn realPath(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8) ![:0]u8 {
+    if (try fastRealPath(gpa, root, path)) |abs| return abs;
+    return std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
+}
 
 pub const Jailed = struct {
     root: []u8,

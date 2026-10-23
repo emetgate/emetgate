@@ -11758,6 +11758,744 @@
       "kills": [
         "every write: a rename to a forbidden name is refused and nothing is written"
       ]
+    },
+    {
+      "id": "G6-rules-body-span-empty",
+      "file": "src/engine/cas.zig",
+      "from": ".hash = patched_target.hash, .body = slot };",
+      "to": ".hash = patched_target.hash, .body = .{ .start = slot.start, .end = slot.start } };",
+      "kills": [
+        "rules: an enforced no_comment rule rejects a commented body before the tests run",
+        "rules: one violating edit rejects the whole batch and leaves disk untouched"
+      ]
+    },
+    {
+      "id": "SP19-gate-evaluates-all-rules",
+      "file": "src/platform/rules.zig",
+      "from": "return evaluate(gpa, file, profile, tree, span, applicable);",
+      "to": "return evaluate(gpa, file, profile, tree, span, enforced.rules);",
+      "kills": [
+        "scope: a rule whose where names another file does not block the proposal",
+        "scope: a symbol-scoped rule blocks only a proposal to that symbol",
+        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+      ]
+    },
+    {
+      "id": "SP34-batch-gates-with-first-ref",
+      "file": "src/platform/batch.zig",
+      "from": "        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
+      "to": "        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edits[0].ref_text);",
+      "kills": [
+        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+      ]
+    },
+    {
+      "id": "JV3-replace-back-to-two-renames",
+      "file": "src/platform/disk.zig",
+      "from": "        try writeDurably(self.io, self.backup, bytes);",
+      "to": "        try guard.renameTo(self.gpa, self.backup);",
+      "kills": [
+        "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole"
+      ]
+    },
+    {
+      "id": "NC9-node-rule-gate-on-empty-span",
+      "file": "src/platform/batch.zig",
+      "from": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, unit.span, options.allow_repo_memory)) {",
+      "to": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, .{ .start = 0, .end = 0 }, options.allow_repo_memory)) {",
+      "kills": [
+        "node edit: a top-level statement is still held to a file-scoped enforced rule"
+      ]
+    },
+    {
+      "id": "ANS18-large-files-excluded-without-a-limit",
+      "file": "src/engine/answer.zig",
+      "from": "    if (cert.scope.excluded.get(.too_large) != 0 and byteLimit(cert.budgets) == null) return \"large files were excluded without a declared byte limit\";",
+      "to": "    if (cert.scope.excluded.get(.too_large) != 0 and byteLimit(cert.budgets) == null and false) return \"large files were excluded without a declared byte limit\";",
+      "kills": [
+        "files above the byte limit are an excluded rule named with its limit and never a missing file"
+      ]
+    },
+    {
+      "id": "ANS19-excluded-path-counts-unchecked",
+      "file": "src/engine/answer.zig",
+      "from": "        if (counts.get(rule) != cert.scope.excluded.get(rule)) return \"excluded paths do not match the excluded counts\";",
+      "to": "        if (counts.get(rule) != cert.scope.excluded.get(rule) and false) return \"excluded paths do not match the excluded counts\";",
+      "kills": [
+        "excluded paths, when listed, match the excluded counts and come in path order"
+      ]
+    },
+    {
+      "id": "ANS20-status-hides-the-byte-limit",
+      "file": "src/engine/answer.zig",
+      "from": "                try w.writeAll(\" > \");\n                try writeBytes(w, byteLimit(cert.budgets) orelse 0);",
+      "to": "                try w.writeAll(\" too_large\");",
+      "kills": [
+        "files above the byte limit are an excluded rule named with its limit and never a missing file"
+      ]
+    },
+    {
+      "id": "ANS21-counts-not-grouped-by-thousands",
+      "file": "src/engine/answer.zig",
+      "from": "        if (digits != 0 and digits % 3 == 0) {",
+      "to": "        if (digits != 0 and digits % 3 == 0 and false) {",
+      "kills": [
+        "counts in the status are grouped by thousands"
+      ]
+    },
+    {
+      "id": "CT1-change-time-not-compared",
+      "file": "src/platform/search_index.zig",
+      "from": "    return a.mtime_ns == b.mtime_ns and a.ctime_ns == b.ctime_ns and a.size == b.size;",
+      "to": "    return a.mtime_ns == b.mtime_ns and a.size == b.size;",
+      "kills": [
+        "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved"
+      ]
+    },
+    {
+      "id": "SR6-racy-stamp-not-smudged",
+      "file": "src/platform/search_index.zig",
+      "from": "    if (!isRacy(stamp, read_ns)) return stamp;",
+      "to": "    if (!isRacy(stamp, read_ns) or true) return stamp;",
+      "kills": [
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp",
+        "a full refresh re-reads a file the running session read inside the racy window, though it was rewritten with its old size and both of its old times"
+      ]
+    },
+    {
+      "id": "RS2-read-time-not-taken",
+      "file": "src/platform/search_index.zig",
+      "from": "prepared.stamp = smudgedIfRacy(prepared.stamp, wallNow(self.io));",
+      "to": "prepared.stamp = smudgedIfRacy(prepared.stamp, 0 * wallNow(self.io));",
+      "kills": [
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp",
+        "a full refresh re-reads a file the running session read inside the racy window, though it was rewritten with its old size and both of its old times"
+      ]
+    },
+    {
+      "id": "RS4-racy-entry-kept-with-its-real-stamp",
+      "file": "src/platform/search_index.zig",
+      "from": "    return .{ .mtime_ns = smudged_mtime_ns, .ctime_ns = stamp.ctime_ns, .size = stamp.size };",
+      "to": "    return .{ .mtime_ns = stamp.mtime_ns, .ctime_ns = stamp.ctime_ns, .size = stamp.size };",
+      "kills": [
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session",
+        "a file read within three seconds of its last change keeps a smudged stamp and an older file keeps its real stamp",
+        "a full refresh re-reads a file the running session read inside the racy window, though it was rewritten with its old size and both of its old times"
+      ]
+    },
+    {
+      "id": "TL1-file-of-exactly-the-limit-excluded",
+      "file": "src/platform/search_index.zig",
+      "from": "    if (stamp.size > max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
+      "to": "    if (stamp.size >= max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
+      "kills": [
+        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
+      ]
+    },
+    {
+      "id": "PF1-stamp-reads-the-creation-time",
+      "file": "src/platform/stat_scan.zig",
+      "from": "            const write = std.mem.readInt(i64, rec[24..32], .little);",
+      "to": "            const write = std.mem.readInt(i64, rec[8..16], .little);",
+      "kills": [
+        "a file rewritten with its old size and change time but a new last-write time is read again by the next session"
+      ]
+    },
+    {
+      "id": "HS1-header-sum-not-checked",
+      "file": "src/platform/search_index_file.zig",
+      "from": "        if (!std.mem.eql(u8, &headerSum(bytes, sums), &header.header_sum)) return error.Corrupt;",
+      "to": "",
+      "kills": [
+        "index v4: any flipped byte is refused at open or at verify, and another version is named"
+      ]
+    },
+    {
+      "id": "IF1-index-file-version-not-named",
+      "file": "src/platform/search_index_file.zig",
+      "from": "        if (bytes.len >= 8 and std.mem.startsWith(u8, bytes, \"EMGIDX\\x00\") and bytes[7] != magic[7]) return error.Version;",
+      "to": "",
+      "kills": [
+        "index v4: any flipped byte is refused at open or at verify, and another version is named"
+      ]
+    },
+    {
+      "id": "VF1-loaded-index-not-verified",
+      "file": "src/platform/search_session.zig",
+      "from": "                if (image.view.verify(self.poolPtr())) {",
+      "to": "                if (true) {",
+      "kills": [
+        "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
+      ]
+    },
+    {
+      "id": "RU1-unreadable-file-never-retried",
+      "file": "src/platform/search_session.zig",
+      "from": "        try self.retryUnreadable(root);\n",
+      "to": "",
+      "kills": [
+        "search answers: a file locked during one search is read by the next search of the same session once the lock is gone"
+      ]
+    },
+    {
+      "id": "MR1-root-cache-ignores-writes",
+      "file": "src/platform/search_session.zig",
+      "from": "            tree.tree.update(at, answer.pathLeafHash(.{ .path = tree.paths[at], .digest = digest }));",
+      "to": "            _ = answer.pathLeafHash(.{ .path = tree.paths[at], .digest = digest });",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "VA1-vanished-file-skipped-quietly",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            .deleted => {\n                try self.missing.append(gpa, .{ .path = path, .reason = .vanished });\n                return true;\n            },",
+      "to": "            .deleted => .binary,",
+      "kills": [
+        "search answers: a tracked file deleted from the work tree makes the answer partial as vanished"
+      ]
+    },
+    {
+      "id": "TL2-large-file-counted-as-binary",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            .large => .too_large,",
+      "to": "            .large => .binary,",
+      "kills": [
+        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
+      ]
+    },
+    {
+      "id": "UC1-unclassified-file-not-reported",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {",
+      "to": "            } else if (false) {",
+      "kills": [
+        "a file that did not parse cleanly is searched through a live parse, and a kinds filter on it makes the answer partial as unclassified"
+      ]
+    },
+    {
+      "id": "PO1-elias-fano-low-bits-dropped",
+      "file": "src/engine/postings.zig",
+      "from": "        return @intCast((@as(u64, high_value) << low) | low_value);",
+      "to": "        return @intCast((@as(u64, high_value) << low) | (low_value & 0));",
+      "kills": [
+        "postings: an encoded list iterates back to the same ids for sparse and dense shapes",
+        "postings: intersect returns exactly the ids every list holds inside the range"
+      ]
+    },
+    {
+      "id": "PO2-intersect-skips-an-equal-candidate",
+      "file": "src/engine/postings.zig",
+      "from": "                candidate = iters[0].nextAtLeast(at) orelse return;",
+      "to": "                candidate = iters[0].nextAtLeast(at + 1) orelse return;",
+      "kills": [
+        "postings: intersect returns exactly the ids every list holds inside the range"
+      ]
+    },
+    {
+      "id": "GI4-conflict-stages-listed-each",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (names.items.len != 0 and std.mem.eql(u8, names.items[names.items.len - 1], name)) continue;\n",
+      "to": "",
+      "kills": [
+        "a conflicted path is listed once and a submodule entry is not listed as a file",
+        "search answers: a search in the middle of a merge conflict answers from the conflicted file instead of failing",
+        "git index reader: a merge conflict lists its path once, as git ls-files --deduplicate does"
+      ]
+    },
+    {
+      "id": "GI5-submodule-listed-as-a-file",
+      "file": "src/platform/git_index.zig",
+      "from": "        if (mode & 0o170000 == 0o160000) continue;\n",
+      "to": "        _ = mode;\n",
+      "kills": [
+        "a conflicted path is listed once and a submodule entry is not listed as a file"
+      ]
+    },
+    {
+      "id": "SA6-changed-file-given-as-dir-left-out",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        if (self.file) return change_watch.samePath(f, self.rel);\n",
+      "to": "",
+      "kills": [
+        "search answers: a file given as dir is searched by itself after it changed in the session"
+      ]
+    },
+    {
+      "id": "RB1-reply-size-budget-ignored",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (request.full) null else reply_budget",
+      "to": "if (request.full) null else null",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB2-cut-reply-reported-complete",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (cut != 0) try addMatchLimit(gpa, &result, cut);",
+      "to": "    _ = cut;",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB3-groups-not-ranked",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    try rankGroups(gpa, result.groups.items, used_query);",
+      "to": "    if (false) try rankGroups(gpa, result.groups.items, used_query);",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB4-offset-ignored",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    var skip = offset;",
+      "to": "    var skip = offset * 0;",
+      "kills": [
+        "search answers: detail full lifts the size budget and offset pages through the ranked hits without overlap"
+      ]
+    },
+    {
+      "id": "RB5-comment-groups-before-code",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        if (a.code != b.code) return a.code;",
+      "to": "        if (a.code != b.code) return b.code;",
+      "kills": [
+        "search answers: a reply over the size budget shows the best groups first, says what it left out and is partial"
+      ]
+    },
+    {
+      "id": "RB6-unknown-detail-read-as-compact",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (std.mem.eql(u8, field.string, \"compact\")) return false;\n    return error.UnknownDetail;",
+      "to": "    if (std.mem.eql(u8, field.string, \"compact\")) return false;\n    return false;",
+      "kills": [
+        "search answers: an unknown detail or a negative offset is refused"
+      ]
+    },
+    {
+      "id": "RB7-negative-offset-accepted",
+      "file": "src/protocol/search_v1.zig",
+      "from": "if (field != .integer or field.integer < 0 or field.integer > max_offset) return error.InvalidOffset;",
+      "to": "if (field != .integer or field.integer < -1 or field.integer > max_offset) return error.InvalidOffset;",
+      "kills": [
+        "search answers: an unknown detail or a negative offset is refused"
+      ]
+    },
+    {
+      "id": "MR2-delta-write-not-journaled",
+      "file": "src/platform/search_session.zig",
+      "from": "        got.value_ptr.* = prepared;\n        self.commit(gpa, copy);",
+      "to": "        got.value_ptr.* = prepared;\n        gpa.free(copy);",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "MR3-added-file-left-out-of-the-root",
+      "file": "src/platform/search_session.zig",
+      "from": "                if (current != null) return false;\n",
+      "to": "",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "MR4-deleted-file-kept-in-the-root",
+      "file": "src/platform/search_session.zig",
+      "from": "            const digest = current orelse return false;",
+      "to": "            const digest = current orelse continue;",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "MR5-tree-update-stops-at-the-first-level",
+      "file": "src/engine/merkle_tree.zig",
+      "from": "            if (at >= here.len) break;",
+      "to": "            if (at >= here.len or level > 1) break;",
+      "kills": [
+        "merkle tree: updating any leaf gives the root a fresh build gives"
+      ]
+    },
+    {
+      "id": "MR6-root-folds-the-wrong-way",
+      "file": "src/engine/merkle_tree.zig",
+      "from": "            acc = answer.nodeHash(blocks[i], acc);",
+      "to": "            acc = answer.nodeHash(acc, blocks[i]);",
+      "kills": [
+        "merkle tree: the root of every size up to 70 matches the RFC 9162 tree hash"
+      ]
+    },
+    {
+      "id": "WT1-watcher-started-on-the-warm-thread",
+      "file": "src/platform/search_session.zig",
+      "from": "        self.startWatcher();\n        self.warm_thread = std.Thread.spawn(.{}, warmTask, .{self}) catch null;",
+      "to": "        self.warm_thread = std.Thread.spawn(.{}, warmTask, .{self}) catch null;",
+      "kills": [
+        "search freshness: a session warmed on a background thread keeps its watcher after that thread ends"
+      ]
+    },
+    {
+      "id": "JF1-root-prefix-not-compared",
+      "file": "src/platform/repo.zig",
+      "from": "    if (target.len < root_nt.len or !sameWideIgnoreCase(target[0..root_nt.len], root_nt)) return null;",
+      "to": "    if (target.len < root_nt.len) return null;",
+      "kills": [
+        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
+      ]
+    },
+    {
+      "id": "JF2-cached-root-name-reused-for-another-root",
+      "file": "src/platform/repo.zig",
+      "from": "    if (names.root_len == root.len and std.mem.eql(u8, names.root[0..names.root_len], root)) {",
+      "to": "    if (names.root_len != 0) {",
+      "kills": [
+        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
+      ]
+    },
+    {
+      "id": "NC1-node-index-rebuilt-every-call",
+      "file": "src/engine/node_cas.zig",
+      "from": "    snapshot.node_hashes = index.hashes;",
+      "to": "    _ = &snapshot.node_hashes;",
+      "kills": [
+        "a snapshot builds its node index once and annotates from it like a fresh build"
+      ]
+    },
+    {
+      "id": "WP1-unstarted-pool-closes-an-undefined-handle",
+      "file": "src/platform/worker_pool.zig",
+      "from": "        if (self.done) |done| windows.CloseHandle(done);",
+      "to": "        windows.CloseHandle(self.done.?);",
+      "kills": [
+        "a pool that never started is released without closing a handle it does not own"
+      ]
+    },
+    {
+      "id": "CR1-carriage-return-kept-in-the-line",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        const text_end = if (end > start and self.bytes[end - 1] == '\\r') end - 1 else end;",
+      "to": "        const text_end = end;",
+      "kills": [
+        "a regex sees the line of a CRLF file without its carriage return, as rg --crlf does"
+      ]
+    },
+    {
+      "id": "LD1-added-path-not-prepared",
+      "file": "src/platform/search_session.zig",
+      "from": "                .lt => {\n                    try fresh.append(self.gpa, wanted[i]);",
+      "to": "                .lt => {\n                    _ = &fresh;",
+      "kills": [
+        "search freshness: a git add and a git rm that change the tracked set are picked up without waiting"
+      ]
+    },
+    {
+      "id": "LD2-removed-path-kept",
+      "file": "src/platform/search_session.zig",
+      "from": "                .gt => {\n                    try gone.append(self.gpa, try self.gpa.dupe(u8, current.items[j]));",
+      "to": "                .gt => {\n                    _ = &gone;",
+      "kills": [
+        "search freshness: a git add and a git rm that change the tracked set are picked up without waiting"
+      ]
+    },
+    {
+      "id": "BL1-base-leaf-hash-of-another-file",
+      "file": "src/platform/search_session.zig",
+      "from": ".hash = hashes[id], .owned = false",
+      "to": ".hash = hashes[0], .owned = false",
+      "kills": [
+        "search answers: the snapshot root is the Merkle root of the searched files and follows writes, an added file and a deleted file in the same session"
+      ]
+    },
+    {
+      "id": "ES1-reconciled-file-left-without-spans",
+      "file": "src/platform/search_session.zig",
+      "from": "        try self.applyPrepared(root, todo_paths.items, todo_seen.items, true);",
+      "to": "        try self.applyPrepared(root, todo_paths.items, todo_seen.items, false);",
+      "kills": [
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+      ]
+    },
+    {
+      "id": "LK1-locked-read-waits-in-std",
+      "file": "src/platform/search_index.zig",
+      "from": "    const bytes = open_nowait.readFileAlloc(gpa, abs, max_indexed_file_bytes) catch |err| return .{",
+      "to": "    const bytes = std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), abs, gpa, .limited(max_indexed_file_bytes + 1)) catch |err| return .{",
+      "kills": [
+        "search answers: a changed file another handle holds without sharing is named unreadable within 50 ms, never vanished, and read once released"
+      ]
+    },
+    {
+      "id": "LK2-locked-stat-waits-in-std",
+      "file": "src/platform/search_index.zig",
+      "from": "    const stat = try open_nowait.stat(abs);\n    return .{\n        .stamp = .{ .mtime_ns = stat.mtime_ns, .ctime_ns = stat.ctime_ns, .size = stat.size },\n        .kind = switch (stat.kind) {\n            .file => .file,\n            .directory => .directory,\n            .link => .other,\n        },\n    };",
+      "to": "    const stat = try std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), abs, .{ .follow_symlinks = false });\n    return .{\n        .stamp = .{ .mtime_ns = @intCast(stat.mtime.nanoseconds), .ctime_ns = @intCast(stat.ctime.nanoseconds), .size = stat.size },\n        .kind = switch (stat.kind) {\n            .file => .file,\n            .directory => .directory,\n            else => .other,\n        },\n    };",
+      "kills": [
+        "search answers: a changed file another handle holds without sharing is named unreadable within 50 ms, never vanished, and read once released"
+      ]
+    },
+    {
+      "id": "LK3-busy-file-called-deleted",
+      "file": "src/platform/search_index.zig",
+      "from": "    return if (err == error.FileNotFound) .deleted else .unreadable;",
+      "to": "    if (err == error.FileNotFound) return .deleted;\n    return .deleted;",
+      "kills": [
+        "only a missing file is called deleted; a busy, denied or failing one is unreadable",
+        "search answers: a changed file another handle holds without sharing is named unreadable within 50 ms, never vanished, and read once released"
+      ]
+    },
+    {
+      "id": "LK4-dir-file-stat-waits-in-std",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    const stat = open_nowait.stat(abs) catch return false;",
+      "to": "    const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), abs, .{}) catch return false;",
+      "kills": [
+        "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms"
+      ]
+    },
+    {
+      "id": "LK5-jail-name-waits-in-std",
+      "file": "src/platform/repo.zig",
+      "from": "    return exe_path.finalName(buf, path);",
+      "to": "    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .allow_directory = true }) catch return null;\n    defer windows.CloseHandle(file.handle);\n    return std.Io.Threaded.GetFinalPathNameByHandle(file.handle, .{ .volume_name = .Nt }, buf) catch null;",
+      "kills": [
+        "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms"
+      ]
+    },
+    {
+      "id": "SE1-removed-base-file-listed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (corpus.delta.isRemoved(id)) continue;\n            const p = view.path(id);\n            result.listed += 1;",
+      "to": "            const p = view.path(id);\n            result.listed += 1;",
+      "kills": [
+        "search answers: a file deleted or untracked after it was indexed is neither found nor evaluated, in the session, after a restart and when it changed while no session ran"
+      ]
+    },
+    {
+      "id": "SE2-removed-base-file-searched",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (corpus.delta.isRemoved(cid) or view.stateOf(cid) != .indexed) continue;",
+      "to": "            if (view.stateOf(cid) != .indexed) continue;",
+      "kills": [
+        "search answers: a file deleted or untracked after it was indexed is neither found nor evaluated, in the session, after a restart and when it changed while no session ran"
+      ]
+    },
+    {
+      "id": "SE3-untracked-base-file-kept-at-load",
+      "file": "src/platform/search_session.zig",
+      "from": "            if (!matched.isSet(id)) try self.delta.markRemoved(self.gpa, id, v.count(), v.path(id));",
+      "to": "            if (!matched.isSet(id)) continue;",
+      "kills": [
+        "search answers: a file deleted or untracked after it was indexed is neither found nor evaluated, in the session, after a restart and when it changed while no session ran"
+      ]
+    },
+    {
+      "id": "LK6-read-file-waits-in-std",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    const bytes = try open_nowait.readFileAlloc(gpa, place.abs, max_read_source_bytes);",
+      "to": "    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, place.abs, gpa, .limited(max_read_source_bytes));",
+      "kills": [
+        "read_file on a file another handle holds without sharing fails as busy within 50 ms"
+      ]
+    },
+    {
+      "id": "LP1-long-path-without-prefix",
+      "file": "src/platform/open_nowait.zig",
+      "from": "    const long = path.len >= long_from and std.ascii.isAlphabetic(path[0]) and path[1] == ':';",
+      "to": "    const long = false and path.len >= long_from and std.ascii.isAlphabetic(path[0]) and path[1] == ':';",
+      "kills": [
+        "search answers: a tracked file whose path runs past 260 characters is searched, read and refreshed like any other",
+        "open nowait: a path past the old 260 character limit is stat-ed and read"
+      ]
+    },
+    {
+      "id": "TX1-repeated-line-not-in-legend",
+      "file": "src/protocol/search_text.zig",
+      "from": "        if ((counts.get(text) orelse 0) < 2 or ids.contains(text)) continue;",
+      "to": "        if (text.len != 0 or ids.contains(text)) continue;",
+      "kills": [
+        "search text: a line text met twice or more is written once in a legend and referenced by number",
+        "search text: a reply lists each file once, its lines as line:text, a starred definition, a legend for repeated lines and a check mark"
+      ]
+    },
+    {
+      "id": "TX2-long-line-not-cut",
+      "file": "src/protocol/search_text.zig",
+      "from": "    if (body.len <= width) return gpa.dupe(u8, body);",
+      "to": "    if (body.len <= width or width != 0) return gpa.dupe(u8, body);",
+      "kills": [
+        "search text: a long line is cut to a window around the match and says so with an ellipsis at each cut end",
+        "search text: a line over 120 characters shows the match inside a window cut with an ellipsis"
+      ]
+    },
+    {
+      "id": "TX3-total-counts-only-collected-hits",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            result.total += found_here;",
+      "to": "            result.total += item.hits.items.len;",
+      "kills": [
+        "search text: pages carry the exact total and the next offset, and together they hold every match once"
+      ]
+    },
+    {
+      "id": "TX4-next-offset-not-said",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (more) try w.print(\"; next offset:{d}\", .{page.skipped + page.shown});",
+      "to": "    if (more and page.shown == 0) try w.print(\"; next offset:{d}\", .{page.skipped + page.shown});",
+      "kills": [
+        "search text: pages carry the exact total and the next offset, and together they hold every match once"
+      ]
+    },
+    {
+      "id": "TX5-unsupported-regex-not-delegated",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    var result = if (compiled != null) try runQuery(&corpus, query, &timer) else try delegateQuery(&corpus, pattern, &outcome.detail.writer);",
+      "to": "    var result = if (compiled != null) try runQuery(&corpus, query, &timer) else return error.InvalidRegex;",
+      "kills": [
+        "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds, and only the structured reply names ripgrep"
+      ]
+    },
+    {
+      "id": "TX6-check-mark-over-missing-files",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (!paged and missing_count == 0 and verdict.status() == .complete) {",
+      "to": "    if (!paged) {",
+      "kills": [
+        "search text: a file another handle holds without sharing turns the check mark into partial with its name"
+      ]
+    },
+    {
+      "id": "RG1-pattern-error-read-as-no-match",
+      "file": "src/platform/rg_search.zig",
+      "from": "        if (code == 2 and result.stdout.len == 0 and isPatternError(result.stderr)) {",
+      "to": "        if (code == 2 and result.stdout.len == 0 and isPatternError(result.stderr) and code != 2) {",
+      "kills": [
+        "rg search: hits come back per file in line order with the match column, and a pattern rg rejects is named",
+        "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds, and only the structured reply names ripgrep"
+      ]
+    },
+    {
+      "id": "TX7-model-face-obeys-format",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    const format = if (face.internals) parseFormat(args, face.format) catch |err| return failAs(gpa, face.format, err, event) else face.format;",
+      "to": "    const format = parseFormat(args, face.format) catch |err| return failAs(gpa, face.format, err, event);",
+      "kills": [
+        "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
+      ]
+    },
+    {
+      "id": "TX8-served-face-takes-internals",
+      "file": "src/protocol/policy.zig",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false };",
+      "to": "    var policy: Policy = .{ .search_text = true };",
+      "kills": [
+        "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
+      ]
+    },
+    {
+      "id": "TX9-model-schema-offers-certificate",
+      "file": "src/protocol/server.zig",
+      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },",
+      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
+      "kills": [
+        "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
+      ]
+    },
+    {
+      "id": "FT1-search-text-reply-footed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    event.footer = format != .text;",
+      "to": "    event.footer = true;",
+      "kills": [
+        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
+      ]
+    },
+    {
+      "id": "FT2-footer-switch-ignored",
+      "file": "src/protocol/telemetry.zig",
+      "from": "    if (!event.footer) return null;",
+      "to": "",
+      "kills": [
+        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
+      ]
+    },
+    {
+      "id": "FT3-text-failure-footed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    event.footer = false;",
+      "to": "",
+      "kills": [
+        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
+      ]
+    },
+    {
+      "id": "DL1-delegation-named-in-text",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (result.hidden() != 0) try w.print(\"; {d} hidden by kinds\", .{result.hidden()});",
+      "to": "    if (result.hidden() != 0) try w.print(\"; {d} hidden by kinds\", .{result.hidden()});\n    if (result.delegated) try w.writeAll(\"; delegated to rg\");",
+      "kills": [
+        "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds, and only the structured reply names ripgrep"
+      ]
+    },
+    {
+      "id": "LF1-size-limit-back-to-one-mib",
+      "file": "src/platform/search_index.zig",
+      "from": "pub const max_indexed_file_bytes: usize = 16 * 1024 * 1024;",
+      "to": "pub const max_indexed_file_bytes: usize = 1 * 1024 * 1024;",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF2-large-file-parsed-at-index",
+      "file": "src/platform/search_index.zig",
+      "from": "    const blob: []u8 = if (want_spans and bytes.len <= max_parsed_file_bytes) try spanBlob(gpa, rel, bytes) else &.{};",
+      "to": "    const blob: []u8 = if (want_spans) try spanBlob(gpa, rel, bytes) else &.{};",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF3-large-file-parsed-live",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (parsed and (wants_spans or wants_doc)) {",
+      "to": "            if (wants_spans or wants_doc) {",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF4-large-source-classified-as-code",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (!parsed and wants_spans) item.unclassified = true;",
+      "to": "",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF5-too-large-entry-reused",
+      "file": "src/platform/search_session.zig",
+      "from": "                    if (live.kind == .file and search_index.sameStamp(v.record(b).stamp(), live.stamp) and !search_index.mustReread(v.stateOf(b), live.stamp)) {",
+      "to": "                    if (live.kind == .file and search_index.sameStamp(v.record(b).stamp(), live.stamp)) {",
+      "kills": [
+        "search text: a file an older index left out as too large is read again once the size limit admits it"
+      ]
+    },
+    {
+      "id": "LF6-reread-rule-inverted",
+      "file": "src/platform/search_index.zig",
+      "from": "    return state == .large and stamp.size <= max_indexed_file_bytes;",
+      "to": "    return state == .large and stamp.size > max_indexed_file_bytes;",
+      "kills": [
+        "an entry left out as too large is read again once the size limit admits it",
+        "search text: a file an older index left out as too large is read again once the size limit admits it"
+      ]
     }
   ]
 }

@@ -93,11 +93,20 @@ pub const Query = struct {
     }
 
     pub fn matchLine(self: Query, scratch: []u32, line: []const u8) Match {
+        var steps: u64 = 0;
+        return self.matchLineCounting(scratch, line, &steps);
+    }
+
+    pub fn matchLineCounting(self: Query, scratch: []u32, line: []const u8, most_steps: *u64) Match {
         const first = self.earliestLiteral(line);
         if (self.literals.len != 0 and first == null) return .none;
         const re = self.re orelse return .{ .hit = first.? };
         var budget: u64 = line_budget;
-        const matched = re.isMatchIn(scratch, line, &budget) catch return .over_budget;
+        const matched = re.isMatchIn(scratch, line, &budget) catch {
+            most_steps.* = line_budget;
+            return .over_budget;
+        };
+        most_steps.* = @max(most_steps.*, line_budget - budget);
         if (!matched) return .none;
         return .{ .hit = first orelse .{ .col = 0, .text = "" } };
     }

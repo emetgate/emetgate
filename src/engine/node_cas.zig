@@ -394,9 +394,24 @@ fn lineLeading(source: []const u8, pos: u32) bool {
     return true;
 }
 
+pub fn snapshotIndex(snapshot: *Snapshot) Allocator.Error!Index {
+    if (snapshot.node_hashes) |hashes| return .{ .hashes = hashes };
+    const index = try Index.build(snapshot.runtime.gpa, snapshot.tree);
+    snapshot.node_hashes = index.hashes;
+    return index;
+}
+
 pub fn annotate(gpa: Allocator, tree: ts.Tree, region: Span) Allocator.Error![]u8 {
     const index = try Index.build(gpa, tree);
     defer index.deinit(gpa);
+    return annotateWith(gpa, tree, index, region);
+}
+
+pub fn annotateSnapshot(gpa: Allocator, snapshot: *Snapshot, region: Span) Allocator.Error![]u8 {
+    return annotateWith(gpa, snapshot.tree, try snapshotIndex(snapshot), region);
+}
+
+fn annotateWith(gpa: Allocator, tree: ts.Tree, index: Index, region: Span) Allocator.Error![]u8 {
 
     var leading: std.AutoHashMapUnmanaged(u32, ts.Node) = .empty;
     defer leading.deinit(gpa);
@@ -455,6 +470,22 @@ fn addressOf(snapshot: *Snapshot, text: []const u8, kind: []const u8) ![symbol.h
 fn applyOne(base: *Snapshot, text: []const u8, kind: []const u8, replacement: []const u8) !Applied {
     const address = try addressOf(base, text, kind);
     return apply(base, &.{.{ .address = address[0..min_address_len], .text = replacement }});
+}
+
+test "a snapshot builds its node index once and annotates from it like a fresh build" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotOf(runtime, "function f(a: number) {\n  const x = a + 1;\n  return x * 2;\n}\n");
+    defer snapshot.destroy();
+    const first = try snapshotIndex(snapshot);
+    const second = try snapshotIndex(snapshot);
+    try testing.expectEqual(first.hashes.ptr, second.hashes.ptr);
+    const region: Span = .{ .start = 0, .end = @intCast(snapshot.source.len) };
+    const cached = try annotateSnapshot(testing.allocator, snapshot, region);
+    defer testing.allocator.free(cached);
+    const fresh = try annotate(testing.allocator, snapshot.tree, region);
+    defer testing.allocator.free(fresh);
+    try testing.expectEqualStrings(fresh, cached);
 }
 
 test "a statement is replaced through its node hash and every byte outside it stays as it was" {
