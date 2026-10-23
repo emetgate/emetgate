@@ -623,6 +623,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | `emetgate_write_doc` | Verify, gate and commit a hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section or a text line range; a file of a registered language is refused (`UseSymbolToolsForSource`); can commit together with a code edit in `emetgate_try_batch` |
 | `emetgate_read_file` | A JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim or a line range of it, source files included; confined to the repository |
 | `emetgate_list`, `emetgate_search` | Reads confined to the repository |
+| `emetgate_find` | Every place a literal text occurs in the project's files, from a prebuilt index (see Find) |
 | `emetgate_scan` | Measure one check expression against the repository, optionally within a `where` scope; writes nothing |
 | `emetgate_git` | Read-only `status`, `diff`, `log` or `show`, with a fixed argument list and safe overrides so nothing configured in the repository (pager, external diff, textconv, fsmonitor, a `clean`/`smudge` filter) can run; output is capped |
 | `emetgate_run` | Run one command from the allowlist the user gave (`--allow-run`) in a shadow copy, under the test gate's sandbox; nothing reaches the working tree and output is capped |
@@ -721,6 +722,7 @@ The first two flags give the session the `/rule` command and are described under
 | `emetgate_read_file` | Reads one file inside the repository |
 | `emetgate_list` | Runs `git ls-files` with a fixed argument list |
 | `emetgate_search` | Reads tracked files; its only write is its own index cache under `%LOCALAPPDATA%\emetgate\index` |
+| `emetgate_find` | Reads the files `git ls-files` lists; its only write is its own index under `%LOCALAPPDATA%\emetgate\find` |
 | `emetgate_scan` | Measures one check in memory, writes nothing and does not read the ledger; a `cmd:` check is refused as not static, so no command runs |
 | `emetgate_git` | Runs `status`, `diff`, `log` or `show` with a fixed argument list, `--no-optional-locks` and no pager, external diff, textconv or fsmonitor |
 | `emetgate_mutate` | Builds the changed source in memory; it runs no command and writes nothing |
@@ -1241,6 +1243,38 @@ lookaround, or counted `{n,m}` repetition, see `src/engine/regex.zig`) bounds wh
 profile data (declaration span, call-site field), not a full tags.scm implementation, and
 can miss less direct reference shapes (e.g. an identifier passed as a callback rather than
 called directly stays untagged, not mistagged).
+
+### Find
+
+`emetgate_find` (`src/protocol/find_tools.zig`, index in `src/platform/emet_file.zig`)
+returns every place a literal text occurs in the files git lists for the repository
+(tracked and untracked, not ignored): any bytes, any language, any encoding, case folded
+by Unicode. The reply gives the hit and file counts, the 20 files with the most hits and
+the first 40 hits with their lines, so its size does not grow with the number of hits.
+
+The index is one `.emet` file per repository under `%LOCALAPPDATA%\emetgate\find`: a
+suffix array over the folded text with a wavelet matrix that maps each suffix to its
+file, plus the size and modification time of every file. A search is a binary search
+over the suffix array and a walk of the wavelet matrix, so its cost depends on the
+pattern and the number of files hit, not on the size of the repository.
+
+The index is built once in the background and kept. Changed files do not rebuild it:
+the server watches the working tree, hides the indexed copy of a changed or removed file
+and indexes the current copies of the changed files in a small in-memory index searched
+together with the large one. Only when more than 256 files or 4 MB have changed is the
+whole index built again, in the background, and swapped in when ready. A file git
+ignores never enters either index. When the server starts it compares every indexed
+file's size and modification time against the disk, reading each directory once.
+
+```
+emetgate find <pattern> [--root <dir>]
+emetgate find build [--root <dir>]
+emetgate find bench <pattern>... [--root <dir>]
+```
+
+On n8n (29,129 files, 204 MB of text, a 2.5 GB index) the index builds in about 105 s,
+the first search after the server starts takes about 1 s, and a search then takes
+0.1 to 0.25 ms at the median and under 0.5 ms at p99.
 
 ### Fact store
 

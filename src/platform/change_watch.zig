@@ -306,6 +306,10 @@ pub const Watcher = struct {
             if (now >= deadline) return self.fail(error.Timeout);
             _ = try self.poll(@intCast(@min(deadline - now, std.math.maxInt(u32) - 1)));
         }
+        return self.drain();
+    }
+
+    pub fn drain(self: *Watcher) SyncError!Dirty {
         while (try self.poll(0)) {}
         if (self.dead) return self.fail(error.NotWatching);
         if (self.overflowed) return self.fail(error.Overflow);
