@@ -10,6 +10,7 @@ const commit_plan = @import("../platform/commit_plan.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const read_budget_mod = @import("read_budget.zig");
 const map_tools = @import("map_tools.zig");
+const find_tools = @import("find_tools.zig");
 const shadow = @import("../platform/shadow.zig");
 
 const Value = std.json.Value;
@@ -29,6 +30,7 @@ pub const Policy = struct {
     search_session: ?*search_session_mod.Session = null,
     language_service: ?*tsserver.Session = null,
     map_session: ?*map_tools.Session = null,
+    find_session: ?*find_tools.Session = null,
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
     commit: bool = false,
