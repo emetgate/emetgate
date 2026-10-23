@@ -18,6 +18,7 @@ named in `license`.
 | `tree-sitter-zig` | https://github.com/tree-sitter-grammars/tree-sitter-zig | not recorded | not recorded | MIT | `42ccaa3` (2026-09-24) |
 | `pure_python_blake3` | https://github.com/oconnor663/pure_python_blake3 | master | `3fde72eabfc6aa4ea7fa727bdfb852f396f90a17` | CC0-1.0 | U3 Python checker (2026-09-27) |
 | `blake3-test-vectors` | https://github.com/BLAKE3-team/BLAKE3 (`test_vectors/test_vectors.json`, `LICENSE_CC0`) | master | `6aab490a26124663329dfd3961b8469f8fdb158b` | CC0-1.0 | U3 Python checker (2026-09-27) |
+| `pcre2` | https://github.com/PCRE2Project/pcre2 (library sources, `deps/sljit`, `LICENCE.md` kept as `LICENSE`) | 10.49 | `6f9d7c1373262c541324a16a358785b33ef116cf` | BSD-3-Clause WITH PCRE2-exception | the regex engine for `emetgate_search` and `#match?` (2026-10-23) |
 
 "Version" and "upstream commit" are filled in only where the commit message
 that first added the directory stated one; nobody pinned an exact upstream
@@ -25,7 +26,7 @@ commit hash at vendoring time for any of these, so that column is honest
 about being unrecorded rather than guessed. `tree-sitter-markdown` and
 `tree-sitter-zig` are grammars published under the community
 `tree-sitter-grammars` GitHub organization, not the official `tree-sitter`
-one; the other four are official.
+one; the other four are official. `pcre2` keeps only what the 8-bit library needs: `src/` without the test and POSIX wrapper files, and the `sljit` JIT compiler.
 
 Going forward, vendoring a new or updated grammar should record the exact
 upstream commit hash (`git ls-remote <repo> <tag-or-branch>` at copy time) in

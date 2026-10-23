@@ -2,6 +2,7 @@ const std = @import("std");
 const manifest = @import("build.zig.zon");
 
 const ts_core_root = "vendor/tree-sitter/lib";
+const pcre2_root = "vendor/pcre2";
 
 const Grammar = struct {
     root: []const u8,
@@ -25,6 +26,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const tree_sitter = buildTreeSitter(b, target, optimize);
+    const pcre2 = buildPcre2(b, target, optimize);
 
     const c_api = b.addTranslateC(.{
         .root_source_file = b.path("src/c.h"),
@@ -32,6 +34,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     c_api.addIncludePath(b.path(ts_core_root ++ "/include"));
+    c_api.addIncludePath(pcre2.header_dir);
 
     const c_module = c_api.createModule();
     const version_values = b.addOptions();
@@ -48,6 +51,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     emetgate.linkLibrary(tree_sitter);
+    emetgate.linkLibrary(pcre2.library);
 
     const probe = b.addExecutable(.{
         .name = "sandbox-probe",
@@ -57,7 +61,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .probe = probe };
+    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .pcre2 = pcre2.library, .probe = probe };
     const src_bench = srcModule(b, common, true);
 
     const exe = b.addExecutable(.{
@@ -155,6 +159,7 @@ const TestModuleOptions = struct {
     c_module: *std.Build.Module,
     version_module: *std.Build.Module,
     tree_sitter: *std.Build.Step.Compile,
+    pcre2: *std.Build.Step.Compile,
     probe: *std.Build.Step.Compile,
 };
 
@@ -178,6 +183,7 @@ fn srcModule(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.
         },
     });
     module.linkLibrary(options.tree_sitter);
+    module.linkLibrary(options.pcre2);
     return module;
 }
 
@@ -195,6 +201,7 @@ fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
     });
     module.addImport("emetgate", module);
     module.linkLibrary(options.tree_sitter);
+    module.linkLibrary(options.pcre2);
     return module;
 }
 
@@ -512,4 +519,106 @@ fn buildTreeSitter(
         .name = "tree-sitter-grammars",
         .root_module = module,
     });
+}
+
+const Pcre2 = struct {
+    library: *std.Build.Step.Compile,
+    header_dir: std.Build.LazyPath,
+};
+
+fn buildPcre2(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) Pcre2 {
+    const rt = target.result;
+    const jit = switch (rt.cpu.arch) {
+        .x86_64, .aarch64 => true,
+        else => false,
+    };
+    const headers = b.addWriteFiles();
+    _ = headers.addCopyFile(b.path(pcre2_root ++ "/src/pcre2.h.generic"), "pcre2.h");
+    const config_h = b.addConfigHeader(.{
+        .style = .{ .cmake = b.path(pcre2_root ++ "/src/config-cmake.h.in") },
+        .include_path = "config.h",
+    }, .{
+        .HAVE_ASSERT_H = true,
+        .HAVE_SYS_STAT_H = true,
+        .HAVE_SYS_TYPES_H = true,
+        .HAVE_UNISTD_H = rt.os.tag != .windows,
+        .HAVE_WINDOWS_H = rt.os.tag == .windows,
+        .HAVE_BUILTIN_MUL_OVERFLOW = true,
+        .HAVE_BUILTIN_UNREACHABLE = true,
+        .HAVE_ATTRIBUTE_UNINITIALIZED = true,
+        .SUPPORT_PCRE2_8 = true,
+        .SUPPORT_UNICODE = true,
+        .SUPPORT_JIT = jit,
+        .PCRE2_EXPORT = "",
+        .PCRE2_LINK_SIZE = 2,
+        .PCRE2_PARENS_NEST_LIMIT = 250,
+        .PCRE2_HEAP_LIMIT = 20000000,
+        .PCRE2_MAX_VARLOOKBEHIND = 255,
+        .PCRE2_MATCH_LIMIT = 10000000,
+        .PCRE2_MATCH_LIMIT_DEPTH = "MATCH_LIMIT",
+        .PCRE2GREP_BUFSIZE = 20480,
+        .PCRE2GREP_MAX_BUFSIZE = 1048576,
+        .NEWLINE_DEFAULT = 2,
+    });
+
+    const module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    module.addCMacro("HAVE_CONFIG_H", "");
+    module.addCMacro("PCRE2_CODE_UNIT_WIDTH", "8");
+    module.addCMacro("PCRE2_STATIC", "");
+    module.addConfigHeader(config_h);
+    module.addIncludePath(headers.getDirectory());
+    module.addIncludePath(b.path(pcre2_root ++ "/src"));
+    module.addCSourceFile(.{
+        .file = b.addWriteFiles().addCopyFile(b.path(pcre2_root ++ "/src/pcre2_chartables.c.dist"), "pcre2_chartables.c"),
+        .flags = c_flags,
+    });
+    module.addCSourceFiles(.{
+        .root = b.path(pcre2_root ++ "/src"),
+        .files = &.{
+            "pcre2_auto_possess.c",
+            "pcre2_chkdint.c",
+            "pcre2_compile.c",
+            "pcre2_compile_cgroup.c",
+            "pcre2_compile_class.c",
+            "pcre2_config.c",
+            "pcre2_context.c",
+            "pcre2_convert.c",
+            "pcre2_dfa_match.c",
+            "pcre2_error.c",
+            "pcre2_extuni.c",
+            "pcre2_find_bracket.c",
+            "pcre2_jit_compile.c",
+            "pcre2_maketables.c",
+            "pcre2_match.c",
+            "pcre2_match_data.c",
+            "pcre2_match_next.c",
+            "pcre2_newline.c",
+            "pcre2_ord2utf.c",
+            "pcre2_pattern_info.c",
+            "pcre2_script_run.c",
+            "pcre2_serialize.c",
+            "pcre2_string_utils.c",
+            "pcre2_study.c",
+            "pcre2_substitute.c",
+            "pcre2_substring.c",
+            "pcre2_tables.c",
+            "pcre2_ucd.c",
+            "pcre2_valid_utf.c",
+            "pcre2_xclass.c",
+        },
+        .flags = c_flags,
+    });
+
+    return .{
+        .library = b.addLibrary(.{ .name = "pcre2-8", .root_module = module }),
+        .header_dir = headers.getDirectory(),
+    };
 }

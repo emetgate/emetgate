@@ -3754,22 +3754,163 @@
       ]
     },
     {
-      "id": "Q8-regex-backreference-read-as-literal",
+      "id": "RX1-regex-unsupported-escape-read-as-syntax",
       "file": "src/engine/regex.zig",
-      "from": "'1'...'9' => self.unsupported(\"backreference\", at, 2),",
-      "to": "'1'...'9' => self.single(ch),",
+      "from": "c.PCRE2_ERROR_UNSUPPORTED_ESCAPE_SEQUENCE, c.PCRE2_ERROR_POSIX_NO_SUPPORT_COLLATING => error.RegexUnsupported,",
+      "to": "c.PCRE2_ERROR_UNSUPPORTED_ESCAPE_SEQUENCE, c.PCRE2_ERROR_POSIX_NO_SUPPORT_COLLATING => error.RegexSyntax,",
       "kills": [
-        "regex refuses every construct outside the subset by name",
-        "rule: a q: check without @violation, with an unknown predicate or a directive is refused by name"
+        "regex refuses escapes PCRE2 does not implement as unsupported",
+        "q: a regex PCRE2 refuses is refused with the text up to where it stopped"
       ]
     },
     {
-      "id": "Q9-regex-lazy-quantifier-not-named",
+      "id": "RX2-regex-limit-read-as-no-match",
       "file": "src/engine/regex.zig",
-      "from": "if (after == '?') return self.unsupported(\"lazy quantifier\", at, 2);",
+      "from": "        if (rc < 0) return error.BudgetExceeded;",
+      "to": "        if (rc < 0) return null;",
+      "kills": [
+        "a catastrophic pattern stops at the match limit instead of running away",
+        "a counted match charges the text and every pattern step, and running out is an error, never a miss"
+      ]
+    },
+    {
+      "id": "RX3-regex-callout-step-uncharged",
+      "file": "src/engine/regex.zig",
+      "from": "    budget.* -= 1;\n    return 0;",
+      "to": "    return 0;",
+      "kills": [
+        "a counted match charges the text and every pattern step, and running out is an error, never a miss"
+      ]
+    },
+    {
+      "id": "RX4-regex-text-uncharged",
+      "file": "src/engine/regex.zig",
+      "from": "        if (budget.* < text.len + 1) return error.BudgetExceeded;\n        budget.* -= text.len + 1;\n",
       "to": "",
       "kills": [
-        "regex refuses every construct outside the subset by name"
+        "a counted match charges the text and every pattern step, and running out is an error, never a miss"
+      ]
+    },
+    {
+      "id": "RX5-regex-span-starts-at-its-end",
+      "file": "src/engine/regex.zig",
+      "from": "        const start = @min(ovector[0], ovector[1]);",
+      "to": "        const start = ovector[1];",
+      "kills": [
+        "regex reports where a match starts and ends in bytes",
+        "a regex line match reports where the match starts and the text it matched"
+      ]
+    },
+    {
+      "id": "RX6-regex-error-at-keeps-invalid-utf8",
+      "file": "src/engine/regex.zig",
+      "from": "    return if (std.unicode.utf8ValidateSlice(window)) window else \"\";",
+      "to": "    return window;",
+      "kills": [
+        "regex refuses invalid UTF-8 in the pattern and points at nothing inside it"
+      ]
+    },
+    {
+      "id": "RH1-hint-ignores-top-level-alternation",
+      "file": "src/engine/regex_hint.zig",
+      "from": "            .alternation => if (depth == 0) return pattern[0..0],",
+      "to": "            .alternation => {},",
+      "kills": [
+        "longestLiteralChunk never returns text a match can do without"
+      ]
+    },
+    {
+      "id": "RH2-hint-keeps-an-optional-character",
+      "file": "src/engine/regex_hint.zig",
+      "from": "            .optional => if (run) |r| keep(&best, pattern[r..last]),",
+      "to": "            .optional => if (run) |r| keep(&best, pattern[r..t.start]),",
+      "kills": [
+        "longestLiteralChunk never returns text a match can do without",
+        "every line a regex matches contains one of its required literals"
+      ]
+    },
+    {
+      "id": "RH3-required-literals-keep-a-branch-without-literal",
+      "file": "src/engine/regex_hint.zig",
+      "from": "        if (literal.len == 0) return out[0..0];\n",
+      "to": "",
+      "kills": [
+        "requiredLiterals gives nothing when one branch can match without any literal"
+      ]
+    },
+    {
+      "id": "RH4-hint-reads-a-flag-group-as-literal",
+      "file": "src/engine/regex_hint.zig",
+      "from": "            if (std.mem.indexOfScalar(u8, \"imnsxJUar^-)\", pattern[t.end + 1]) != null) return false;\n",
+      "to": "",
+      "kills": [
+        "longestLiteralChunk gives nothing for constructs that change what a literal means",
+        "every line a regex matches contains one of its required literals"
+      ]
+    },
+    {
+      "id": "RH5-hint-reads-a-code-escape-as-literal",
+      "file": "src/engine/regex_hint.zig",
+      "from": "            if (std.mem.indexOfScalar(u8, \"xocNgkpPQ\", c) != null) return false;\n",
+      "to": "",
+      "kills": [
+        "longestLiteralChunk gives nothing for constructs that change what a literal means"
+      ]
+    },
+    {
+      "id": "RH6-hint-unwraps-a-lookaround-group",
+      "file": "src/engine/regex_hint.zig",
+      "from": "    if (!noncapturing and pattern.len > 1 and (pattern[1] == '?' or pattern[1] == '*')) return pattern;\n",
+      "to": "",
+      "kills": [
+        "requiredLiterals gives nothing when one branch can match without any literal"
+      ]
+    },
+    {
+      "id": "RH7-hint-class-ends-at-a-leading-bracket",
+      "file": "src/engine/regex_hint.zig",
+      "from": "    if (i < p.len and p[i] == ']') i += 1;\n",
+      "to": "",
+      "kills": [
+        "longestLiteralChunk skips over a character class rather than splitting inside it"
+      ]
+    },
+    {
+      "id": "TQ1-regex-budget-overrun-read-as-no-match",
+      "file": "src/engine/text_query.zig",
+      "from": "            error.BudgetExceeded => return .over_budget,",
+      "to": "            error.BudgetExceeded => return .none,",
+      "kills": [
+        "a line that exhausts the regex step budget is reported, never read as no match",
+        "search answers: a line that runs out of regex steps makes the answer partial and names the file"
+      ]
+    },
+    {
+      "id": "TQ2-regex-hit-column-at-line-start",
+      "file": "src/engine/text_query.zig",
+      "from": "        return .{ .hit = .{ .col = @intCast(span.start), .text = line[span.start..span.end] } };",
+      "to": "        return .{ .hit = .{ .col = 0, .text = line[span.start..span.end] } };",
+      "kills": [
+        "a regex line match reports where the match starts and the text it matched",
+        "a regex with flags has no required literal and still matches at the real column"
+      ]
+    },
+    {
+      "id": "SA9-search-reads-an-empty-line-after-the-last-newline",
+      "file": "src/protocol/search_v1.zig",
+      "from": "        if (self.pos >= self.bytes.len) return null;",
+      "to": "        if (self.pos > self.bytes.len) return null;",
+      "kills": [
+        "search answers: a regex takes the PCRE2 dialect and never matches the empty line after the last newline"
+      ]
+    },
+    {
+      "id": "SA10-search-regex-refusal-without-its-message",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            outcome.regex = diag;\n",
+      "to": "",
+      "kills": [
+        "search answers: a regex PCRE2 refuses is answered with its message and the text up to where it stopped"
       ]
     },
     {
@@ -3779,17 +3920,6 @@
       "to": "if (false) {",
       "kills": [
         "q: a query that outruns its operation budget fails instead of passing"
-      ]
-    },
-    {
-      "id": "Q11-regex-budget-ignored",
-      "file": "src/engine/regex.zig",
-      "from": "if (budget.* == 0) return error.BudgetExceeded;",
-      "to": "if (false) return error.BudgetExceeded;",
-      "kills": [
-        "running out of budget is an error and never a miss",
-        "q: regex work counts against the same budget",
-        "redteam query: a q: rule that outruns its budget rejects the proposal and is not a violation"
       ]
     },
     {
@@ -3959,42 +4089,6 @@
       ]
     },
     {
-      "id": "Q28-regex-vim-word-boundary-read-as-literal",
-      "file": "src/engine/regex.zig",
-      "from": "            '<', '>' => if (in_class) self.single(ch) else self.unsupported(\"word boundary\", at, 2),\n",
-      "to": "",
-      "kills": [
-        "regex refuses GNU and Vim word boundaries and buffer anchors instead of reading them as literals"
-      ]
-    },
-    {
-      "id": "Q29-regex-shorthand-range-start-accepted",
-      "file": "src/engine/regex.zig",
-      "from": "            if (lo.len != 1 or lo[0].lo != lo[0].hi) return self.syntax(\"class shorthand as a range start\"",
-      "to": "            if (false and (lo.len != 1 or lo[0].lo != lo[0].hi)) return self.syntax(\"class shorthand as a range start\"",
-      "kills": [
-        "regex refuses a class shorthand as the start of a range, as RE2 does"
-      ]
-    },
-    {
-      "id": "Q30-regex-invalid-utf8-pattern-read-as-replacement",
-      "file": "src/engine/regex.zig",
-      "from": "        const code_point = std.unicode.utf8Decode(rest[0..len]) catch return self.invalidUtf8();",
-      "to": "        const code_point = std.unicode.utf8Decode(rest[0..len]) catch 0xFFFD;",
-      "kills": [
-        "regex refuses invalid UTF-8 in the pattern"
-      ]
-    },
-    {
-      "id": "Q31-regex-error-at-ends-inside-a-character",
-      "file": "src/engine/regex.zig",
-      "from": "            while (end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;\n",
-      "to": "            while (false and end < self.pattern.len and isContinuation(self.pattern[end])) end += 1;\n",
-      "kills": [
-        "regex errors point at whole characters, never into the middle of one"
-      ]
-    },
-    {
       "id": "Q32-violation-text-uncut",
       "file": "src/platform/rules.zig",
       "from": "shown(tree.source[hit.span.start..hit.span.end])",
@@ -4125,24 +4219,6 @@
         "violation positions hold at the edges: first and last line, empty lines, CRLF, multibyte columns, multiline nodes",
         "the line index gives the same line and column as a scan from the start, at every offset",
         "scope: a no_literal rule scoped to one symbol reports only its literal options"
-      ]
-    },
-    {
-      "id": "RX1-class-probe-uncharged",
-      "file": "src/engine/regex.zig",
-      "from": "    while (lo < hi) {\n        try spend(budget);\n",
-      "to": "    while (lo < hi) {\n        _ = budget;\n",
-      "kills": [
-        "a class of many ranges is searched in logarithmic steps and every step is charged"
-      ]
-    },
-    {
-      "id": "RX2-class-search-wrong-half",
-      "file": "src/engine/regex.zig",
-      "from": "        if (code_point < ranges[mid].lo) {\n",
-      "to": "        if (code_point > ranges[mid].lo) {\n",
-      "kills": [
-        "a class of many ranges is searched in logarithmic steps and every step is charged"
       ]
     },
     {
@@ -6414,26 +6490,6 @@
       ]
     },
     {
-      "id": "RH1-hint-ignores-top-level-alternation",
-      "file": "src/engine/regex_hint.zig",
-      "from": "    if (hasTopLevelAlternation(pattern)) return pattern[0..0];\n",
-      "to": "",
-      "kills": [
-        "longestLiteralChunk never returns text a match can do without",
-        "a regex whose literal parts are optional or alternatives still finds every file that matches"
-      ]
-    },
-    {
-      "id": "RH2-hint-keeps-an-optional-character",
-      "file": "src/engine/regex_hint.zig",
-      "from": "                    if (i > r) best.close(run, i - 1);",
-      "to": "                    if (i > r) best.close(run, i);",
-      "kills": [
-        "longestLiteralChunk never returns text a match can do without",
-        "a regex whose literal parts are optional or alternatives still finds every file that matches"
-      ]
-    },
-    {
       "id": "SW5-index-loaded-before-the-watcher-starts",
       "file": "src/platform/search_session.zig",
       "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
@@ -7653,27 +7709,6 @@
       "to": "    return false;",
       "kills": [
         "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth"
-      ]
-    },
-    {
-      "id": "TQ1-regex-budget-overrun-read-as-no-match",
-      "file": "src/engine/text_query.zig",
-      "from": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .over_budget;",
-      "to": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .none;",
-      "kills": [
-        "a line that exhausts the regex step budget is reported, never read as no match",
-        "search answers: a line that runs out of regex steps makes the answer partial and names the file"
-      ]
-    },
-    {
-      "id": "RH3-required-literals-keep-only-the-first-branch",
-      "file": "src/engine/regex_hint.zig",
-      "from": "    return out[0..n];\n}\n\nfn unwrapGroup",
-      "to": "    return out[0..@min(n, 1)];\n}\n\nfn unwrapGroup",
-      "kills": [
-        "every line a regex matches contains one of its required literals",
-        "requiredLiterals gives one literal per top-level branch, also inside one enclosing group",
-        "search answers: a regex alternation over many files finds every match a line by line scan finds"
       ]
     },
     {
