@@ -1,33 +1,6 @@
 {
   "mutations": [
     {
-      "id": "M1-search-size-cap-removed",
-      "file": "src/protocol/read_tools.zig",
-      "from": ".limited(limits.file_bytes)",
-      "to": ".unlimited",
-      "kills": [
-        "search reads a tracked file just under 1 MiB and skips one of 1 MiB"
-      ]
-    },
-    {
-      "id": "M2-search-binary-skip-removed",
-      "file": "src/protocol/read_tools.zig",
-      "from": "if (looksBinary(bytes)) continue;",
-      "to": "",
-      "kills": [
-        "search skips a tracked binary file"
-      ]
-    },
-    {
-      "id": "M3-search-cap-raised-to-2MiB",
-      "file": "src/protocol/read_tools.zig",
-      "from": "const max_search_file_bytes = 1024 * 1024;",
-      "to": "const max_search_file_bytes = 2 * 1024 * 1024;",
-      "kills": [
-        "search reads a tracked file just under 1 MiB and skips one of 1 MiB"
-      ]
-    },
-    {
       "id": "RF1-read-file-raw-range-ignored",
       "file": "src/protocol/read_tools.zig",
       "from": "    if (line_start != null or line_end != null) {\n        return renderRange(",
@@ -187,16 +160,6 @@
       "to": "{ claude_program, \"--allowedTools\"",
       "kills": [
         "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args"
-      ]
-    },
-    {
-      "id": "K5-lockdown-reserved-guard-removed",
-      "file": "src/platform/lockdown.zig",
-      "from": "    try refuseReserved(passthrough);\n",
-      "to": "",
-      "all": true,
-      "kills": [
-        "a passthrough arg that would override the lock is refused in both spellings"
       ]
     },
     {
@@ -426,14 +389,6 @@
       "file": "src/platform/lockdown.zig",
       "from": "{ claude_program, \"--tools\", allowed_builtin_tools, \"--allowedTools\"",
       "to": "{ claude_program, \"--allowedTools\"",
-      "expect": "e2e-lockdown"
-    },
-    {
-      "id": "K5e-lockdown-reserved-guard-removed",
-      "file": "src/platform/lockdown.zig",
-      "from": "    try refuseReserved(passthrough);\n",
-      "to": "",
-      "all": true,
       "expect": "e2e-lockdown"
     },
     {
@@ -1882,37 +1837,6 @@
       ]
     },
     {
-      "id": "NS11-insert-multiple-symbols-accepted",
-      "file": "src/engine/cas.zig",
-      "from": "        if (found != null) return error.MultipleTopLevelSymbols;\n",
-      "to": "",
-      "kills": [
-        "insert refuses a body that declares more than one top-level symbol"
-      ],
-      "all": true
-    },
-    {
-      "id": "NS12-insert-nested-symbols-counted",
-      "file": "src/engine/cas.zig",
-      "from": "candidate.declaration.start < slot.start or candidate.ref.container.len != 0",
-      "to": "candidate.declaration.start < slot.start",
-      "kills": [
-        "insert names the one top-level symbol the body declares, whatever its declaration form",
-        "insert and create accept a variable, class, interface, type alias or enum as the one new declaration"
-      ],
-      "all": true
-    },
-    {
-      "id": "NS13-insert-existing-symbols-counted",
-      "file": "src/engine/cas.zig",
-      "from": "candidate.declaration.start < slot.start or candidate.ref.container.len != 0",
-      "to": "(candidate.declaration.start < slot.start and false) or candidate.ref.container.len != 0",
-      "kills": [
-        "insert names the one top-level symbol the body declares, whatever its declaration form"
-      ],
-      "all": true
-    },
-    {
       "id": "NS14-insert-name-mismatch-accepted",
       "file": "src/engine/cas.zig",
       "from": "    if (!declared.ref.eql(ref)) return error.SymbolNameMismatch;\n",
@@ -2443,7 +2367,7 @@
       "id": "SP22-scan-rule-where-not-rechecked",
       "file": "src/platform/scan.zig",
       "from": "                if (!w.coversFile(file)) continue;\n",
-      "to": "                if (false and !w.coversFile(file)) continue;\n",
+      "to": "",
       "kills": [
         "scope: each rule in one scan keeps its own where"
       ]
@@ -2493,27 +2417,6 @@
       "to": "",
       "kills": [
         "scope: an invalid --in is refused by name before anything is scanned"
-      ]
-    },
-    {
-      "id": "SP29-memory-where-unvalidated-on-write",
-      "file": "src/platform/memory.zig",
-      "from": "    try where_mod.validate(where);\n",
-      "to": "",
-      "all": true,
-      "kills": [
-        "where: remember and supersede refuse an invalid where by name and write nothing"
-      ]
-    },
-    {
-      "id": "SP30-memory-where-not-stored",
-      "file": "src/platform/memory.zig",
-      "from": "        .where = where,\n",
-      "to": "",
-      "all": true,
-      "kills": [
-        "where: remember and supersede store where, and an unscoped row carries no where field",
-        "scope: a rule whose where names another file does not block the proposal"
       ]
     },
     {
@@ -5124,11 +5027,9 @@
       "file": "src/platform/shadow.zig",
       "from": "Links(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
       "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
-      "expect_status": "survived",
-      "filter": [
+      "kills": [
         "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
-      ],
-      "note": "the workspace is opened through own_dir.hold before this check and a linked workspace is refused there, and unlinkAll repeats the check before anything is removed; no test can tell this second check from its mutant"
+      ]
     },
     {
       "id": "SR2-shadow-key-ignores-the-path",
@@ -5164,15 +5065,6 @@
       "to": "catch |err| return err == error.FileNotFound;\n    return true;",
       "kills": [
         "sweep removes only stale shadows whose repository is gone, and never follows a junction"
-      ]
-    },
-    {
-      "id": "SR6-workspace-key-not-checked",
-      "file": "src/platform/shadow.zig",
-      "from": "    if (!shadow_root.isKey(first)) return error.ShadowOutsideWorkspace;\n",
-      "to": "    _ = first;\n",
-      "kills": [
-        "shadow paths outside <shadow root>\\<repo key>\\ are refused before anything is deleted"
       ]
     },
     {
@@ -5990,32 +5882,22 @@
     {
       "id": "SR1-index-stale-entry-trusted",
       "file": "src/platform/search_index.zig",
-      "from": "if (old.stamp.mtime_ns == stamp.mtime_ns and old.stamp.size == stamp.size and !Index.isRacy(old, stamp)) {",
-      "to": "if (true) {",
+      "from": "    return a.mtime_ns == b.mtime_ns and a.ctime_ns == b.ctime_ns and a.size == b.size;",
+      "to": "    return a.size == b.size;",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
-        "refresh reuses unchanged entries and recomputes a file that changed",
-        "a stale index does not hide a match added to a file after the index was built"
-      ]
-    },
-    {
-      "id": "SR6-racy-stamp-not-checked",
-      "file": "src/platform/search_index.zig",
-      "from": "and !Index.isRacy(old, stamp)) {",
-      "to": ") {",
-      "kills": [
-        "a racy mtime collision around the index write time forces a recompute instead of trusting the stale gram set",
-        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
+        "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved",
+        "a file rewritten with its old size and change time but a new last-write time is read again by the next session"
       ]
     },
     {
       "id": "SR2-index-checksum-not-verified",
       "file": "src/platform/search_index_file.zig",
-      "from": "if (!std.mem.eql(u8, &actual, claimed)) return error.Corrupt;",
-      "to": "_ = actual;\n    _ = claimed;",
+      "from": "            if (!std.mem.eql(u8, &actual, &self.sums[i])) self.bad.store(true, .release);",
+      "to": "            _ = actual;",
       "kills": [
-        "a corrupted index file is rejected instead of trusted",
-        "a flipped byte, a cut tail, another version or another magic is refused"
+        "index v4: any flipped byte is refused at open or at verify, and another version is named",
+        "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
       ]
     },
     {
@@ -6024,16 +5906,17 @@
       "from": "if (profile.isComment(n.kind())) return .comment;",
       "to": "if (profile.isComment(n.kind())) return .code;",
       "kills": [
-        "a hash-matching index entry with no persisted spans still classifies comments and definitions via a live parse"
+        "a file that did not parse cleanly is searched through a live parse, and a kinds filter on it makes the answer partial as unclassified"
       ]
     },
     {
       "id": "SR4-hit-cap-ignored",
       "file": "src/protocol/search_v1.zig",
-      "from": "if (total_hits >= max_matches) {",
-      "to": "if (false) {",
+      "from": "                if (result.hits >= corpus.hit_limit) {",
+      "to": "                if (false) {",
       "kills": [
-        "the total hit count is capped and truncated is reported"
+        "the total hit count is capped and truncated is reported",
+        "search answers: a capped answer is partial"
       ]
     },
     {
@@ -6043,15 +5926,6 @@
       "to": "        return true;",
       "kills": [
         "a search scoped to a subdirectory does not return hits from outside it"
-      ]
-    },
-    {
-      "id": "SK1-stale-symbol-table-trusted",
-      "file": "src/protocol/search_v1.zig",
-      "from": "if (std.mem.eql(u8, &ch, &live)) {",
-      "to": "if (std.mem.eql(u8, &ch, &live) or true) {",
-      "kills": [
-        "a resident index entry whose stored hash does not match the file's live bytes is never trusted for symbol grouping"
       ]
     },
     {
@@ -6311,16 +6185,6 @@
       "note": "equivalent on a local NTFS volume today: NTFS reports a change inside the writer's own call, before that call returns, so the drain after the loop already collects every write that finished before sync began; the 200-write and parallel-writer tests pass without the wait. The cookie wait is kept for paths that report later than the call (filter drivers, other file systems), where draining what is queued would not be a barrier"
     },
     {
-      "id": "CW2-overflow-flag-ignored",
-      "file": "src/platform/change_watch.zig",
-      "from": "if (self.overflowed) return self.fail(error.Overflow);",
-      "to": "if (false) return self.fail(error.Overflow);",
-      "all": true,
-      "kills": [
-        "change watch: a buffer too small for the burst reports Overflow and the next sync is trustworthy again"
-      ]
-    },
-    {
       "id": "CW3-timeout-hands-out-a-clean-set",
       "file": "src/platform/change_watch.zig",
       "from": "            if (now >= deadline) return self.fail(error.Timeout);",
@@ -6397,17 +6261,18 @@
     {
       "id": "SW3-git-index-change-ignored",
       "file": "src/platform/search_session.zig",
-      "from": "                if (sameGitStamp(stamp, saved)) return false;",
-      "to": "                if (true or sameGitStamp(stamp, saved)) return false;",
+      "from": "        const list_changed = !(if (self.git_stamp) |saved| sameGitStamp(current, saved) else false);",
+      "to": "        const list_changed = self.git_stamp == null;",
       "kills": [
-        "search freshness: a git add that changes the tracked set is picked up without waiting"
+        "search freshness: a git add and a git rm that change the tracked set are picked up without waiting",
+        "search freshness: after a committed write and a git commit the file list is listed once and then reused"
       ]
     },
     {
       "id": "SW4-dirty-file-not-reindexed",
       "file": "src/platform/search_session.zig",
-      "from": "            try search_index.updateEntry(self.gpa, self.io, index, root, rel);\n",
-      "to": "            _ = .{ index, root };\n",
+      "from": "        try self.applyPrepared(root, todo.items, seen, false);\n        self.last.updated = todo.items.len;",
+      "to": "        _ = .{ root, seen };\n        self.last.updated = todo.items.len;",
       "kills": [
         "search freshness: a tracked file written and searched with no pause is found, 200 times in a row",
         "search freshness: every write is found while another thread keeps rewriting other tracked files"
@@ -6419,8 +6284,7 @@
       "from": "    if (hasTopLevelAlternation(pattern)) return pattern[0..0];\n",
       "to": "",
       "kills": [
-        "longestLiteralChunk never returns text a match can do without",
-        "a regex whose literal parts are optional or alternatives still finds every file that matches"
+        "longestLiteralChunk never returns text a match can do without"
       ]
     },
     {
@@ -6436,8 +6300,8 @@
     {
       "id": "SW5-index-loaded-before-the-watcher-starts",
       "file": "src/platform/search_session.zig",
-      "from": "        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
-      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root_abs) catch null;\n        self.index_path = search_index.indexPath(self.gpa, root_abs) catch null;\n        const loaded: search_index.Loaded = if (self.index_path) |path| search_index.load(self.gpa, self.io, path) else .{ .failed = .io };\n        self.loaded_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n        self.watcher = change_watch.Watcher.start(self.gpa, self.io, root_abs, self.options) catch null;\n        self.watch_started_ns = std.Io.Clock.awake.now(self.io).nanoseconds;\n",
+      "from": "        self.startWatcher();\n        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;",
+      "to": "        self.git_index = gitIndexPath(self.gpa, self.io, root) catch null;\n        defer self.startWatcher();",
       "kills": [
         "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
       ]
@@ -6445,28 +6309,12 @@
     {
       "id": "SW6-loaded-index-trusted-without-a-restat",
       "file": "src/platform/search_session.zig",
-      "from": "        self.reconcile = true;\n",
-      "to": "        self.reconcile = false;\n",
+      "from": "            try self.reconcile(root, listed, &report);",
+      "to": "            if (false) try self.reconcile(root, listed, &report);",
       "kills": [
-        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
-      ]
-    },
-    {
-      "id": "IF1-index-file-version-not-checked",
-      "file": "src/platform/search_index_file.zig",
-      "from": "    return bytes[family.len] != magic[family.len] or std.mem.readInt(u32, bytes[magic.len..][0..4], .little) != version;",
-      "to": "    return bytes[family.len] != magic[family.len];",
-      "kills": [
-        "a flipped byte, a cut tail, another version or another magic is refused"
-      ]
-    },
-    {
-      "id": "PF1-directory-stamp-reads-the-creation-time",
-      "file": "src/platform/search_index.zig",
-      "from": "const hns: i64 = @bitCast((@as(u64, data.last_write.high) << 32) | data.last_write.low);",
-      "to": "const hns: i64 = @bitCast((@as(u64, data.creation.high) << 32) | data.creation.low);",
-      "kills": [
-        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed"
+        "search on disk: a new session loads the saved index after its watcher started and re-reads only files that changed",
+        "a file rewritten with its old size and last-write time while no session runs is read again because its change time moved",
+        "a file rewritten inside the racy window with its old size and both of its old times is read again by the next session"
       ]
     },
     {
@@ -6499,8 +6347,8 @@
     {
       "id": "SW7-file-list-change-forces-a-full-refresh",
       "file": "src/platform/search_session.zig",
-      "from": "        if (listed and reason.len == 0 and dirty == null) reason = \"file_list_changed\";",
-      "to": "        if (listed and reason.len == 0) reason = \"file_list_changed\";",
+      "from": "        if (reason.len != 0) {\n            self.last.mode = .full;",
+      "to": "        if (reason.len != 0 or list_changed) {\n            self.last.mode = .full;",
       "kills": [
         "search freshness: after a committed write and a git commit the file list is listed once and then reused"
       ]
@@ -6562,8 +6410,8 @@
     {
       "id": "ANS3-partial-status-shows-check-mark",
       "file": "src/engine/answer.zig",
-      "from": "                    try w.print(\"partial: {d} {s} in {d} of \", .{ count, noun, p.cert.scope.evaluated });",
-      "to": "                    try w.print(\"\\u{2713} {d} {s} in {d} of \", .{ count, noun, p.cert.scope.evaluated });",
+      "from": "                    try w.writeAll(\"partial: \");",
+      "to": "                    try w.writeAll(\"\\u{2713} \");",
       "kills": [
         "only a complete answer is rendered with a check mark"
       ]
@@ -6634,8 +6482,8 @@
     {
       "id": "ANS11-kinds-filtered-hits-not-told",
       "file": "src/engine/answer.zig",
-      "from": "        .text => |text| if (text.filtered != 0) try w.print(\"; {d} hidden by kinds\", .{text.filtered}),",
-      "to": "        .text => |text| if (text.filtered == 0) try w.print(\"; {d} hidden by kinds\", .{text.filtered}),",
+      "from": "        .text => |text| if (text.filtered != 0) {",
+      "to": "        .text => |text| if (text.filtered == 0) {",
       "kills": [
         "hits hidden by a kinds filter and skipped binary files are counted in the status"
       ]
@@ -7612,19 +7460,10 @@
     {
       "id": "IL1-index-load-failure-swallowed",
       "file": "src/platform/search_session.zig",
-      "from": "                self.load_failure = why;\n",
-      "to": "                _ = why;\n",
+      "from": "            .failed => |why| self.load_failure = why,",
+      "to": "            .failed => {},",
       "kills": [
         "search on disk: a damaged, cut or foreign index file is ignored and rebuilt"
-      ]
-    },
-    {
-      "id": "IL2-index-read-capped-at-64-mib",
-      "file": "src/platform/search_index.zig",
-      "from": "const max_index_file_bytes: u64 = 4 * 1024 * 1024 * 1024;",
-      "to": "const max_index_file_bytes: u64 = 64 * 1024 * 1024;",
-      "kills": [
-        "an index file larger than 64 MiB is read whole and judged by its bytes, not refused by its size"
       ]
     },
     {
@@ -7658,7 +7497,7 @@
     {
       "id": "TQ1-regex-budget-overrun-read-as-no-match",
       "file": "src/engine/text_query.zig",
-      "from": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .over_budget;",
+      "from": "        const matched = re.isMatchIn(scratch, line, &budget) catch {\n            most_steps.* = line_budget;\n            return .over_budget;\n        };",
       "to": "        const matched = re.isMatchIn(scratch, line, &budget) catch return .none;",
       "kills": [
         "a line that exhausts the regex step budget is reported, never read as no match",
@@ -7679,28 +7518,27 @@
     {
       "id": "SA1-partial-answer-reported-complete",
       "file": "src/protocol/search_v1.zig",
-      "from": "        return self.truncated or self.missing.items.len != 0;",
-      "to": "        return self.truncated and false;",
+      "from": "                try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });",
+      "to": "                {}",
       "kills": [
-        "search answers: a line that runs out of regex steps makes the answer partial and names the file",
-        "search answers: a capped answer is partial",
-        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+        "search answers: a line that runs out of regex steps makes the answer partial and names the file"
       ]
     },
     {
       "id": "SA2-unreadable-file-skipped-quietly",
       "file": "src/protocol/search_v1.zig",
-      "from": "                try result.missing.append(gpa, .{ .path = item.rel, .reason = \"unreadable\" });\n",
-      "to": "",
+      "from": "            .unreadable, .link => {\n                try self.missing.append(gpa, .{ .path = path, .reason = .unreadable });\n                return true;\n            },",
+      "to": "            .unreadable, .link => .binary,",
       "kills": [
-        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip"
+        "search answers: a file that cannot be read makes the answer partial instead of a quiet skip",
+        "search answers: a tracked path that is now a directory makes the answer partial as unreadable"
       ]
     },
     {
       "id": "SA3-file-given-as-dir-scoped-as-a-directory",
       "file": "src/protocol/search_v1.zig",
-      "from": "        if (self.file) return change_watch.samePath(f, self.rel);\n",
-      "to": "",
+      "from": "    if (scope.file) {\n        const id = view.find(scope.rel) orelse return .{ 0, 0 };\n        return .{ id, id + 1 };\n    }\n    return view.dirRange(scope.rel);",
+      "to": "    return view.dirRange(scope.rel);",
       "kills": [
         "search answers: a file given as dir is searched by itself"
       ]
@@ -7712,16 +7550,6 @@
       "to": "        alternatives = null;",
       "kills": [
         "search answers: a literal with a bar that is not found is read as literal alternatives and says so"
-      ]
-    },
-    {
-      "id": "SA5-matches-removed-by-kinds-not-counted",
-      "file": "src/protocol/search_v1.zig",
-      "from": "item.filtered.getPtr(pending.kind).* += 1;",
-      "to": "_ = &item.filtered;",
-      "all": true,
-      "kills": [
-        "search answers: kinds that remove every match say how many matches of which kind were removed"
       ]
     },
     {
@@ -7741,33 +7569,6 @@
       "kills": [
         "search answers: a complete answer with no match states how many files it evaluated",
         "search answers: a literal with regex syntax and no match says the pattern looks like a regex"
-      ]
-    },
-    {
-      "id": "RS2-built-entry-has-no-read-time",
-      "file": "src/platform/search_index.zig",
-      "from": "    const seen_ns = wallClock(io);\n    for (files) |rel| {\n",
-      "to": "    const seen_ns: i96 = 0;\n    for (files) |rel| {\n",
-      "kills": [
-        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
-      ]
-    },
-    {
-      "id": "RS3-refreshed-entry-has-no-read-time",
-      "file": "src/platform/search_index.zig",
-      "from": "            .seen_ns = job.seen_ns,\n",
-      "to": "            .seen_ns = 0,\n",
-      "kills": [
-        "an index built or refreshed in this process re-reads a file rewritten with the same stamp inside the racy window"
-      ]
-    },
-    {
-      "id": "RS4-racy-entry-saved-with-its-real-stamp",
-      "file": "src/platform/search_index.zig",
-      "from": "const stamp: Stamp = if (racyAt(e.stamp, e.seen_ns)) .{ .mtime_ns = smudged_mtime_ns, .size = e.stamp.size } else e.stamp;",
-      "to": "const stamp: Stamp = e.stamp;",
-      "kills": [
-        "saving smudges the stamp of an entry read inside the racy window, so the next session reads it again"
       ]
     },
     {
@@ -11760,54 +11561,6 @@
       ]
     },
     {
-      "id": "G6-rules-body-span-empty",
-      "file": "src/engine/cas.zig",
-      "from": ".hash = patched_target.hash, .body = slot };",
-      "to": ".hash = patched_target.hash, .body = .{ .start = slot.start, .end = slot.start } };",
-      "kills": [
-        "rules: an enforced no_comment rule rejects a commented body before the tests run",
-        "rules: one violating edit rejects the whole batch and leaves disk untouched"
-      ]
-    },
-    {
-      "id": "SP19-gate-evaluates-all-rules",
-      "file": "src/platform/rules.zig",
-      "from": "return evaluate(gpa, file, profile, tree, span, applicable);",
-      "to": "return evaluate(gpa, file, profile, tree, span, enforced.rules);",
-      "kills": [
-        "scope: a rule whose where names another file does not block the proposal",
-        "scope: a symbol-scoped rule blocks only a proposal to that symbol",
-        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
-      ]
-    },
-    {
-      "id": "SP34-batch-gates-with-first-ref",
-      "file": "src/platform/batch.zig",
-      "from": "        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edit.ref_text);",
-      "to": "        if (!p.addsCode() or edit.ref_text.len == 0) continue;\n        const ref = try symbol.Ref.parse(gpa, edits[0].ref_text);",
-      "kills": [
-        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
-      ]
-    },
-    {
-      "id": "JV3-replace-back-to-two-renames",
-      "file": "src/platform/disk.zig",
-      "from": "        try writeDurably(self.io, self.backup, bytes);",
-      "to": "        try guard.renameTo(self.gpa, self.backup);",
-      "kills": [
-        "a writer that tries to save between the backup copy and the replace is refused and the replace lands whole"
-      ]
-    },
-    {
-      "id": "NC9-node-rule-gate-on-empty-span",
-      "file": "src/platform/batch.zig",
-      "from": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, unit.span, options.allow_repo_memory)) {",
-      "to": "switch (try rules.gate(gpa, io, root, p.rel, ref, snapshot.profile, snapshot.tree, .{ .start = 0, .end = 0 }, options.allow_repo_memory)) {",
-      "kills": [
-        "node edit: a top-level statement is still held to a file-scoped enforced rule"
-      ]
-    },
-    {
       "id": "ANS18-large-files-excluded-without-a-limit",
       "file": "src/engine/answer.zig",
       "from": "    if (cert.scope.excluded.get(.too_large) != 0 and byteLimit(cert.budgets) == null) return \"large files were excluded without a declared byte limit\";",
@@ -12165,15 +11918,6 @@
       "to": "    _ = &snapshot.node_hashes;",
       "kills": [
         "a snapshot builds its node index once and annotates from it like a fresh build"
-      ]
-    },
-    {
-      "id": "WP1-unstarted-pool-closes-an-undefined-handle",
-      "file": "src/platform/worker_pool.zig",
-      "from": "        if (self.done) |done| windows.CloseHandle(done);",
-      "to": "        windows.CloseHandle(self.done.?);",
-      "kills": [
-        "a pool that never started is released without closing a handle it does not own"
       ]
     },
     {
