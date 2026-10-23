@@ -1016,8 +1016,8 @@ test "scan trust: --allow-repo-memory twice is a usage error" {
 
 const long_string_file = "const s = \"" ++ "a" ** 20_000 ++ "\";\n";
 
-fn slowMatch(comptime optional: usize) []const u8 {
-    return "q:((string_fragment) @violation (#match? @violation \"" ++ "a?" ** optional ++ "b\"))";
+fn slowMatch(comptime repeats: usize) []const u8 {
+    return std.fmt.comptimePrint("q:((string_fragment) @violation (#match? @violation \"(?:a|b){{{d}}}[!?]\"))", .{repeats});
 }
 
 test "scan: a call budget shared by every file turns the files it cannot pay for into check failures" {
@@ -1029,7 +1029,7 @@ test "scan: a call budget shared by every file turns the files it cannot pay for
         .{ .path = "d.ts", .data = long_string_file },
     });
     defer repo.deinit();
-    const check = slowMatch(20);
+    const check = slowMatch(35);
 
     const limited = try runScanWith(&repo, .{ .source = .{ .check = .{ .spec = check, .where = null } }, .json = true, .call_operations = 5_000_000 });
     defer limited.deinit();
