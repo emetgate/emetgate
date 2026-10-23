@@ -612,7 +612,7 @@ pub const Session = struct {
             if (id) |b| {
                 matched.set(b);
                 if (s) |live| {
-                    if (live.kind == .file and search_index.sameStamp(v.record(b).stamp(), live.stamp)) {
+                    if (live.kind == .file and search_index.sameStamp(v.record(b).stamp(), live.stamp) and !search_index.mustReread(v.stateOf(b), live.stamp)) {
                         report.reused += 1;
                         continue;
                     }
@@ -1103,7 +1103,7 @@ pub const Session = struct {
                 id += 1;
             } else {
                 var input = extra[e].input();
-                if (input.state == .indexed and input.spans.len == 0) {
+                if (input.state == .indexed and input.spans.len == 0 and input.content.len <= search_index.max_parsed_file_bytes) {
                     try blobs.ensureUnusedCapacity(self.gpa, 1);
                     const blob = try search_index.spanBlob(self.gpa, input.path, input.content);
                     blobs.appendAssumeCapacity(blob);

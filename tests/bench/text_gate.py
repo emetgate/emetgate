@@ -13,6 +13,7 @@ from n8n_profile import DEFAULT_EXE, PROJECT_ROOT, McpSession
 SCOREBOARD = os.path.join(PROJECT_ROOT, "eval", "scoreboard")
 RG_ARGS = ["-n", "--no-heading", "--with-filename", "--hidden", "--no-config", "--path-separator", "/", "-g", "!.git", "-g", "!.emetgate", "-g", "!.serena"]
 MAX_PAGES = 200
+REPEATS = 5
 
 
 def rg_exe():
@@ -30,7 +31,11 @@ def rg_run(rg, repo, query):
     args = [rg, *RG_ARGS]
     args += ["-e", query["pattern"]] if query.get("regex") else ["-F", "-e", query["pattern"]]
     args.append(".")
-    done = subprocess.run(args, cwd=repo, capture_output=True)
+    times = []
+    for _ in range(REPEATS):
+        started = time.perf_counter()
+        done = subprocess.run(args, cwd=repo, capture_output=True)
+        times.append((time.perf_counter() - started) * 1000)
     text = done.stdout.decode("utf-8", "replace")
     hits = set()
     for line in text.splitlines():
@@ -42,7 +47,7 @@ def rg_run(rg, repo, query):
         if path.startswith("./"):
             path = path[2:]
         hits.add((path, int(line[first + 1:second])))
-    return text, hits
+    return text, hits, statistics.median(times)
 
 
 def parse_reply(text):
@@ -101,8 +106,9 @@ def measure(exe, repo_name, rg):
     try:
         session.call("emetgate_search", {"pattern": "warmup_token_absent_q"})
         for q in queries:
-            rg_text, rg_hits = rg_run(rg, repo, q)
-            pages, hits, ms = emetgate_run(session, q)
+            rg_text, rg_hits, rg_ms = rg_run(rg, repo, q)
+            pages, hits, first_ms = emetgate_run(session, q)
+            ms = statistics.median([first_ms] + [emetgate_run(session, q)[2] for _ in range(REPEATS - 1)])
             first = pages[0] if pages else ""
             total_chars = sum(len(p) for p in pages)
             rows.append({
@@ -121,6 +127,8 @@ def measure(exe, repo_name, rg):
                 "ratio_first": round(len(first) / len(rg_text), 3) if rg_text else None,
                 "status": first.split("\n")[-1][:200],
                 "ms": round(ms, 2),
+                "rg_ms": round(rg_ms, 2),
+                "ms_ratio": round(ms / rg_ms, 3) if rg_ms else None,
             })
     finally:
         session.close()
@@ -136,6 +144,10 @@ def measure(exe, repo_name, rg):
         "chars_all": sum(r["all_pages_chars"] for r in with_hits),
         "chars_rg": sum(r["rg_chars"] for r in with_hits),
         "calls_max": max((r["calls"] for r in rows), default=0),
+        "rows_chars_over_rg": sum(1 for r in with_hits if r["ratio_all"] > 1),
+        "ms_ratio_median": round(statistics.median(r["ms_ratio"] for r in rows), 3) if rows else None,
+        "ms_ratio_max": max((r["ms_ratio"] for r in rows), default=None),
+        "rows_ms_over_rg": sum(1 for r in rows if r["ms_ratio"] > 1),
     }
     summary["ratio_total"] = round(summary["chars_all"] / summary["chars_rg"], 3) if summary["chars_rg"] else None
     return summary, rows
@@ -155,7 +167,7 @@ def main():
         print(json.dumps(summary, ensure_ascii=False), flush=True)
         for r in rows:
             flag = "" if r["identical"] else "  NOT IDENTICAL"
-            print(f"  {r['id']:12} {r['hits']:4} hits  rg {r['rg_chars']:6}  ours {r['all_pages_chars']:6} in {r['calls']} call(s)  ratio {r['ratio_all']}{flag}")
+            print(f"  {r['id']:12} {r['hits']:4} hits  rg {r['rg_chars']:6}  ours {r['all_pages_chars']:6} in {r['calls']} call(s)  ratio {r['ratio_all']}  ms {r['ms']} vs rg {r['rg_ms']}{flag}")
     if args.json:
         with open(args.json, "w", encoding="utf-8", newline="\n") as f:
             json.dump(out, f, indent=2, ensure_ascii=False)

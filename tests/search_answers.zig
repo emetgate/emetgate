@@ -622,13 +622,13 @@ test "search answers: a tracked path that is now a directory makes the answer pa
     try testing.expectEqualStrings("unreadable", missing[0].object.get("reason").?.string);
 }
 
-test "search answers: a tracked file of exactly 1 MiB is searched and one a byte larger is excluded as too large" {
-    const mib = 1024 * 1024;
-    const at_cap = try gpa.alloc(u8, mib);
+test "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large" {
+    const limit = search_index.max_indexed_file_bytes;
+    const at_cap = try gpa.alloc(u8, limit);
     defer gpa.free(at_cap);
     @memset(at_cap, 'x');
     @memcpy(at_cap[0..10], "capneedle\n");
-    const over_cap = try gpa.alloc(u8, mib + 1);
+    const over_cap = try gpa.alloc(u8, limit + 1);
     defer gpa.free(over_cap);
     @memset(over_cap, 'x');
     @memcpy(over_cap[0..10], "capneedle\n");
@@ -645,7 +645,7 @@ test "search answers: a tracked file of exactly 1 MiB is searched and one a byte
     try testing.expectEqualStrings("complete", answer.status());
     try testing.expectEqual(@as(usize, 1), answer.groups().len);
     try testing.expectEqualStrings("at_cap.txt", answer.groups()[0].object.get("file").?.string);
-    try testing.expect(std.mem.endsWith(u8, answer.line(), "; excluded 1 > 1 MiB"));
+    try testing.expect(std.mem.endsWith(u8, answer.line(), "; excluded 1 > 16 MiB"));
     const listed = answer.get("certificate").?.object.get("scope").?.object.get("excluded_paths").?.array.items;
     try testing.expectEqual(@as(usize, 1), listed.len);
     try testing.expectEqualStrings("over_cap.txt", listed[0].object.get("path").?.string);

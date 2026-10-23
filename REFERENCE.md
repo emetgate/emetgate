@@ -670,7 +670,10 @@ Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the
 
 `emetgate_search` (`src/protocol/search_v1.zig`) finds a literal substring or, with
 `regex:true`, a regular expression (`src/engine/regex.zig`) in the git-tracked text files
-under `dir`, which may name a directory or one file.
+under `dir`, which may name a directory or one file. A file up to 16 MiB is indexed and
+searched; a file over 1 MiB is searched line by line without a parse, so its lines carry no
+definition mark and, under a `kinds` filter, a source file of that size is named
+`unclassified`. A binary file, a file over 16 MiB and the internal paths are left out.
 
 **The reply.** Inside `emetgate mcp` the reply is plain text (`src/protocol/search_text.zig`),
 shaped to cost fewer characters than ripgrep's own output for the same pattern:
@@ -707,8 +710,9 @@ docs/notes.md
   Otherwise it starts with `partial:` and lists the matches shown with the exact total
   (`matches 1-145 of 300`), then each file that could not be read or fully evaluated with
   its reason, then `; next offset:145` when more matches follow. Other notes join with `; `:
-  `read as literal alternatives: a|b`, `7 hidden by kinds`, `delegated to rg`, `index
-  rebuilt: ...`.
+  `read as literal alternatives: a|b`, `7 hidden by kinds`, `index rebuilt: ...`. Nothing
+  follows the status: unlike the other tools, a text search reply carries no `emetgate ...`
+  session footer.
 
 The text has one reading on Windows, where `:`, `|` and `*` cannot appear in a file name: a
 line that starts with digits followed by `:`, `|` or `*` is a hit, a line that starts with
@@ -733,8 +737,9 @@ boundaries `\b`, counted repetition `{n,m}`, non-capturing groups `(?:...)`, loo
 backreferences) is not refused to the model: the same tracked text files in scope, after
 the same refresh, are searched by ripgrep (`src/platform/rg_search.zig`: `rg --json
 --no-config --no-ignore --hidden --crlf -e <pattern> -- <files>`, started by its absolute
-path from a PATH entry outside the repository and the working directory) and the status
-says `delegated to rg`. A pattern ripgrep rejects too answers `error: InvalidRegex:
+path from a PATH entry outside the repository and the working directory). The text reply
+reads as any other, since the hits are the same; only the structured reply says
+`delegated:"rg"`. A pattern ripgrep rejects too answers `error: InvalidRegex:
 <ripgrep's message>`; with no ripgrep on PATH the answer is `error: RegexNeedsRipgrep`.
 `kinds` cannot be applied to a delegated pattern (`KindsNeedAnIndexedPattern`).
 
@@ -747,7 +752,7 @@ but obeys `format:"json"` (an unknown format is `UnknownFormat`), and a call the
 `certificate:true` or `stats:true` gets the structured reply as well. It starts
 with `answer`, one line built by `src/engine/answer.zig` (`✓ 18 matches in 157 files @3fa2`
 or `partial: 31 matches in 120 of 157 files @3fa2; missing 37 match_limit`, with `;
-excluded 412 binary, 37 > 1 MiB` when a declared rule left files out), then `status`,
+excluded 412 binary, 2 > 16 MiB` when a declared rule left files out), then `status`,
 `groups` (by enclosing symbol with its ref and content hash, by JSON pointer in a `.json`
 file, by heading in a `.md` file; each hit with `line`, `kind`, `role` and `text`),
 `truncated`, `total` (the exact number of matches, with `total_exact:false` when a `kinds`
@@ -1006,7 +1011,8 @@ Cold and warm search are faster than both rg and git grep in every scenario. Bui
 the index the first time is not: it reads, grams and parses every tracked file on up to 8
 threads, about 0.1 s for express's 215 files and 1.3 s for eslint's 2362, once per
 repository. Between warm and floor are the grouping and the JSON reply; on eslint the cold
-search also re-reads the 43 files the index leaves out (binary or over 1 MiB) to see
+search also re-reads the 43 files the index then left out (binary or over 1 MiB, the size
+limit when this was measured) to see
 whether they changed. Two `+edit` rows are at token
 parity against the best-case range a model cannot reach without reading the file first:
 ripgrep's output for a rare name is already near the minimum, and emetgate adds a fixed

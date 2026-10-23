@@ -6,6 +6,9 @@ const search_index = @import("emetgate").search_index;
 const search_session = @import("emetgate").search_session;
 const rg_search = @import("emetgate").rg_search;
 const exe_path = @import("emetgate").exe_path;
+const telemetry = @import("emetgate").telemetry;
+const search_index_file = @import("emetgate").search_index_file;
+const index_map = @import("emetgate").index_map;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -73,6 +76,10 @@ fn search(runtime: *Runtime, session: ?*search_session.Session, root: []const u8
 }
 
 fn searchServed(runtime: *Runtime, session: ?*search_session.Session, root: []const u8, flags: []const []const u8, args: anytype) !Reply {
+    return searchObserved(runtime, session, root, flags, null, args);
+}
+
+fn searchObserved(runtime: *Runtime, session: ?*search_session.Session, root: []const u8, flags: []const []const u8, observer: ?*telemetry.Observer, args: anytype) !Reply {
     var policy = server.parsePolicy(flags) orelse return error.RefusedFlags;
     policy.root = root;
     policy.search_session = session;
@@ -82,7 +89,7 @@ fn searchServed(runtime: *Runtime, session: ?*search_session.Session, root: []co
     try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_search", .arguments = args } });
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, policy);
+    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, observer, policy);
     const parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.written(), .{});
     defer parsed.deinit();
     const result = parsed.value.object.get("result") orelse return error.NotAToolResult;
@@ -244,9 +251,10 @@ test "search text: pages carry the exact total and the next offset, and together
     defer body.deinit(gpa);
     var names: [3][2][]const u8 = undefined;
     var storage: [3][]u8 = undefined;
+    const per_file = [3]usize{ 250, 30, 20 };
     for (0..3) |f| {
         body.clearRetainingCapacity();
-        for (0..100) |i| try body.print(gpa, "pagedneedle number {d} in file {d}\n", .{ i, f });
+        for (0..per_file[f]) |i| try body.print(gpa, "pagedneedle number {d} in file {d}\n", .{ i, f });
         storage[f] = try gpa.dupe(u8, body.items);
         names[f] = .{ switch (f) {
             0 => "a.txt",
@@ -294,7 +302,7 @@ test "search text: pages carry the exact total and the next offset, and together
     }
 }
 
-test "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds and says so" {
+test "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds, and only the structured reply names ripgrep" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init(&.{
         .{ "src/a.js", "forget(1);\nforgetful(2);\nnever forget\nsess.id = 1;\nPath.join();\ntrailing whitespace\ntrail\n" },
@@ -311,17 +319,108 @@ test "search text: a regex the index cannot run is searched by ripgrep with the 
         defer reply.deinit();
         errdefer std.debug.print("{s}:\n{s}\n", .{ pattern, reply.text });
         try testing.expect(!reply.is_error);
-        try testing.expect(std.mem.endsWith(u8, reply.text, "; delegated to rg"));
+        try testing.expect(std.mem.endsWith(u8, reply.text, "\n\u{2713}"));
         const ours = try spotsOf(arena, try arena.dupe(u8, reply.text));
         const theirs = try rgSpots(arena, repo.root, pattern);
         try testing.expect(theirs.len != 0);
         try expectSameSpots(arena, theirs, ours);
     }
 
+    const structured = try searchServed(runtime, null, repo.root, &.{"--search-internals"}, .{ .pattern = "\\bforget\\b", .regex = true, .dir = repo.root, .format = "json" });
+    defer structured.deinit();
+    try testing.expect(std.mem.indexOf(u8, structured.text, "\"delegated\":\"rg\"") != null);
+
     const broken = try search(runtime, null, repo.root, .{ .pattern = "(?:unclosed", .regex = true, .dir = repo.root });
     defer broken.deinit();
     try testing.expect(broken.is_error);
     try testing.expect(std.mem.startsWith(u8, broken.text, "error: InvalidRegex: "));
+}
+
+test "search text: a text reply and a text error carry no session footer, while the structured reply keeps it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init(&golden_files);
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const workspace = try std.fmt.allocPrint(gpa, "{s}\\.emetgate", .{repo.root});
+    defer gpa.free(workspace);
+    var observer: telemetry.Observer = .{ .workspace_abs = workspace };
+
+    const plain = try search(runtime, null, repo.root, .{ .pattern = "greet", .dir = repo.root });
+    defer plain.deinit();
+    const observed = try searchObserved(runtime, null, repo.root, &.{}, &observer, .{ .pattern = "greet", .dir = repo.root });
+    defer observed.deinit();
+    try testing.expectEqualStrings(plain.text, observed.text);
+    const broken = try searchObserved(runtime, null, repo.root, &.{}, &observer, .{ .pattern = "(?:unclosed", .regex = true, .dir = repo.root });
+    defer broken.deinit();
+    try testing.expect(broken.is_error);
+    try testing.expect(std.mem.startsWith(u8, broken.text, "error: InvalidRegex: "));
+    try testing.expect(std.mem.indexOf(u8, broken.text, "\nemetgate ") == null);
+    const unknown = try searchObserved(runtime, null, repo.root, &.{"--search-internals"}, &observer, .{ .pattern = "greet", .dir = repo.root, .format = "xml" });
+    defer unknown.deinit();
+    try testing.expectEqualStrings("error: UnknownFormat", unknown.text);
+    const structured = try searchObserved(runtime, null, repo.root, &.{"--search-internals"}, &observer, .{ .pattern = "greet", .dir = repo.root, .format = "json" });
+    defer structured.deinit();
+    try testing.expect(std.mem.indexOf(u8, structured.text, "\nemetgate \u{2713} search") != null);
+}
+
+fn bigFile(head: []const u8, filler: []const u8) ![]u8 {
+    var body: std.ArrayList(u8) = .empty;
+    errdefer body.deinit(gpa);
+    try body.appendSlice(gpa, head);
+    while (body.items.len <= search_index.max_parsed_file_bytes) try body.appendSlice(gpa, filler);
+    return body.toOwnedSlice(gpa);
+}
+
+test "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified" {
+    const source = try bigFile("// bigneedle in a comment\nconst bigneedle = 1;\n", "const filler = 0;\n");
+    defer gpa.free(source);
+    const notes = try bigFile("# Notes\n\nThe bigneedle section.\n", "Some words of a long changelog.\n");
+    defer gpa.free(notes);
+    var repo = try Repo.init(&.{ .{ "big.ts", source }, .{ "CHANGELOG.md", notes } });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const reply = try search(runtime, null, repo.root, .{ .pattern = "bigneedle", .dir = repo.root });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(std.mem.indexOf(u8, reply.text, "big.ts\n1:// bigneedle in a comment\n2:const bigneedle = 1;\n") != null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "CHANGELOG.md\n3:The bigneedle section.\n") != null);
+    try testing.expect(std.mem.endsWith(u8, reply.text, "\n\u{2713}"));
+
+    const kinds = try search(runtime, null, repo.root, .{ .pattern = "bigneedle", .dir = repo.root, .kinds = &[_][]const u8{"code"} });
+    defer kinds.deinit();
+    errdefer std.debug.print("{s}\n", .{kinds.text});
+    try testing.expect(std.mem.endsWith(u8, kinds.text, "\npartial: big.ts unclassified"));
+}
+
+test "search text: a file an older index left out as too large is read again once the size limit admits it" {
+    const big = try bigFile("rereadneedle\n", "more text of a file over the parse limit\n");
+    defer gpa.free(big);
+    var repo = try Repo.init(&.{ .{ "big.txt", big }, .{ "small.txt", "other\n" } });
+    defer repo.deinit();
+    const abs = try std.fmt.allocPrint(gpa, "{s}\\big.txt", .{repo.root});
+    defer gpa.free(abs);
+    const seen = try search_index.statOne(abs);
+    const dir = try search_index.indexDir(gpa, repo.root);
+    defer gpa.free(dir);
+    try std.Io.Dir.cwd().createDirPath(testing.io, dir);
+    const now: i64 = @intCast(std.Io.Clock.real.now(testing.io).nanoseconds);
+    const inputs = [_]search_index_file.Input{.{ .path = "big.txt", .stamp = seen.stamp, .state = .large }};
+    const image = try search_index_file.build(gpa, &inputs, .{ .written_ns = now, .git_stamp = null }, null);
+    defer gpa.free(image);
+    try index_map.publish(gpa, testing.io, dir, image, index_map.newTag(testing.io));
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var session = search_session.Session.init(gpa, testing.io, repo.root, .{});
+    defer session.deinit();
+    const reply = try searchServed(runtime, &session, repo.root, &.{"--search-internals"}, .{ .pattern = "rereadneedle", .dir = repo.root, .stats = true });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"refresh_reason\":\"loaded_from_disk\"") != null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"file\":\"big.txt\"") != null);
 }
 
 extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: std.os.windows.DWORD, share: std.os.windows.DWORD, security: ?*anyopaque, disposition: std.os.windows.DWORD, flags: std.os.windows.DWORD, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;

@@ -16,7 +16,8 @@ const worker_pool = @import("worker_pool.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const max_indexed_file_bytes: usize = 1 * 1024 * 1024;
+pub const max_indexed_file_bytes: usize = 16 * 1024 * 1024;
+pub const max_parsed_file_bytes: usize = 1 * 1024 * 1024;
 pub const racy_window_ns: i64 = 3 * std.time.ns_per_s;
 
 pub const Stamp = index_file.Stamp;
@@ -79,6 +80,10 @@ pub fn sameStamp(a: Stamp, b: Stamp) bool {
     return a.mtime_ns == b.mtime_ns and a.ctime_ns == b.ctime_ns and a.size == b.size;
 }
 
+pub fn mustReread(state: FileState, stamp: Stamp) bool {
+    return state == .large and stamp.size <= max_indexed_file_bytes;
+}
+
 fn looksBinary(bytes: []const u8) bool {
     return std.mem.indexOfScalar(u8, bytes, 0) != null;
 }
@@ -136,7 +141,7 @@ pub fn prepareOne(gpa: Allocator, root_abs: []const u8, rel: []const u8, seen: ?
         gpa.free(bytes);
         return .{ .path = path, .stamp = stamp, .state = .binary };
     }
-    const blob: []u8 = if (want_spans) try spanBlob(gpa, rel, bytes) else &.{};
+    const blob: []u8 = if (want_spans and bytes.len <= max_parsed_file_bytes) try spanBlob(gpa, rel, bytes) else &.{};
     errdefer gpa.free(blob);
     const grams: []u24 = if (want_grams) try trigramsOfAlloc(gpa, bytes) else &.{};
     return .{ .path = path, .stamp = stamp, .state = .indexed, .content = bytes, .digest = index_file.contentDigest(bytes), .spans = blob, .grams = grams };
@@ -213,6 +218,12 @@ pub fn sortByPath(prepared: []Prepared) void {
 }
 
 const testing = std.testing;
+
+test "an entry left out as too large is read again once the size limit admits it" {
+    try testing.expect(mustReread(.large, .{ .mtime_ns = 1, .ctime_ns = 2, .size = max_indexed_file_bytes }));
+    try testing.expect(!mustReread(.large, .{ .mtime_ns = 1, .ctime_ns = 2, .size = max_indexed_file_bytes + 1 }));
+    try testing.expect(!mustReread(.indexed, .{ .mtime_ns = 1, .ctime_ns = 2, .size = 10 }));
+}
 
 test "prepareOne reads a source file into content, hash, grams and a span blob that decodes to its symbols" {
     var tmp = testing.tmpDir(.{});

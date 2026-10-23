@@ -366,9 +366,11 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
                     break :blk .{ .spans = null, .doc = null };
                 },
             };
+            const parsed = item.content.len <= search_index.max_parsed_file_bytes;
             const wants_spans = registry.forPath(item.path) != null and decoded.?.spans == null;
             const wants_doc = search_index.doc_spans.kindFor(item.path) != null and decoded.?.doc == null;
-            if (wants_spans or wants_doc) {
+            if (!parsed and wants_spans) item.unclassified = true;
+            if (parsed and (wants_spans or wants_doc)) {
                 item.needs_live_parse = true;
                 item.matched_lines = 0;
                 item.over_budget_lines = 0;
@@ -557,6 +559,7 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
 
 pub fn callSearchAs(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, session: ?*search_session.Session, face: Face) !ToolResult {
     const format = if (face.internals) parseFormat(args, face.format) catch |err| return failAs(gpa, face.format, err, event) else face.format;
+    event.footer = format != .text;
     const pattern = requireString(args, "pattern") catch |err| return failAs(gpa, format, err, event);
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
     const is_regex = if (args) |a| getBool(a, "regex") orelse false else false;
@@ -633,6 +636,7 @@ fn failAs(gpa: Allocator, format: Format, err: anyerror, event: *telemetry.Event
 
 fn textFailure(gpa: Allocator, err: anyerror, detail: []const u8, event: *telemetry.Event) !ToolResult {
     event.fail(@errorName(err));
+    event.footer = false;
     const text = if (detail.len != 0)
         try std.fmt.allocPrint(gpa, "error: {s}: {s}", .{ @errorName(err), detail })
     else
@@ -1091,7 +1095,6 @@ fn writeText(gpa: Allocator, w: *Writer, result: *const Result, shown: []const S
         for (alts, 0..) |a, i| try w.print("{s}{s}", .{ if (i == 0) "" else "|", a });
     }
     if (result.hidden() != 0) try w.print("; {d} hidden by kinds", .{result.hidden()});
-    if (result.delegated) try w.writeAll("; delegated to rg");
     if (outcome.index_load) |why| if (why != .missing) try w.print("; index {s}", .{search_session.rebuildNote(why)});
     for (outcome.events[0..outcome.event_count]) |e| try w.print("; {s} {s}", .{ e.what, e.err });
     if (more) try w.print("; next offset:{d}", .{page.skipped + page.shown});

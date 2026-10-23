@@ -7840,7 +7840,7 @@
       "from": "    if (stamp.size > max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "to": "    if (stamp.size >= max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "kills": [
-        "search answers: a tracked file of exactly 1 MiB is searched and one a byte larger is excluded as too large"
+        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
       ]
     },
     {
@@ -7912,7 +7912,7 @@
       "from": "            .large => .too_large,",
       "to": "            .large => .binary,",
       "kills": [
-        "search answers: a tracked file of exactly 1 MiB is searched and one a byte larger is excluded as too large"
+        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
       ]
     },
     {
@@ -8260,6 +8260,190 @@
       "kills": [
         "search answers: a tracked file whose path runs past 260 characters is searched, read and refreshed like any other",
         "open nowait: a path past the old 260 character limit is stat-ed and read"
+      ]
+    },
+    {
+      "id": "TX1-repeated-line-not-in-legend",
+      "file": "src/protocol/search_text.zig",
+      "from": "        if ((counts.get(text) orelse 0) < 2 or ids.contains(text)) continue;",
+      "to": "        if (text.len != 0 or ids.contains(text)) continue;",
+      "kills": [
+        "search text: a line text met twice or more is written once in a legend and referenced by number",
+        "search text: a reply lists each file once, its lines as line:text, a starred definition, a legend for repeated lines and a check mark"
+      ]
+    },
+    {
+      "id": "TX2-long-line-not-cut",
+      "file": "src/protocol/search_text.zig",
+      "from": "    if (body.len <= width) return gpa.dupe(u8, body);",
+      "to": "    if (body.len <= width or width != 0) return gpa.dupe(u8, body);",
+      "kills": [
+        "search text: a long line is cut to a window around the match and says so with an ellipsis at each cut end",
+        "search text: a line over 120 characters shows the match inside a window cut with an ellipsis"
+      ]
+    },
+    {
+      "id": "TX3-total-counts-only-collected-hits",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            result.total += found_here;",
+      "to": "            result.total += item.hits.items.len;",
+      "kills": [
+        "search text: pages carry the exact total and the next offset, and together they hold every match once"
+      ]
+    },
+    {
+      "id": "TX4-next-offset-not-said",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (more) try w.print(\"; next offset:{d}\", .{page.skipped + page.shown});",
+      "to": "    if (more and page.shown == 0) try w.print(\"; next offset:{d}\", .{page.skipped + page.shown});",
+      "kills": [
+        "search text: pages carry the exact total and the next offset, and together they hold every match once"
+      ]
+    },
+    {
+      "id": "TX5-unsupported-regex-not-delegated",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    var result = if (compiled != null) try runQuery(&corpus, query, &timer) else try delegateQuery(&corpus, pattern, &outcome.detail.writer);",
+      "to": "    var result = if (compiled != null) try runQuery(&corpus, query, &timer) else return error.InvalidRegex;",
+      "kills": [
+        "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds, and only the structured reply names ripgrep"
+      ]
+    },
+    {
+      "id": "TX6-check-mark-over-missing-files",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (!paged and missing_count == 0 and verdict.status() == .complete) {",
+      "to": "    if (!paged) {",
+      "kills": [
+        "search text: a file another handle holds without sharing turns the check mark into partial with its name"
+      ]
+    },
+    {
+      "id": "RG1-pattern-error-read-as-no-match",
+      "file": "src/platform/rg_search.zig",
+      "from": "        if (code == 2 and result.stdout.len == 0 and isPatternError(result.stderr)) {",
+      "to": "        if (code == 2 and result.stdout.len == 0 and isPatternError(result.stderr) and code != 2) {",
+      "kills": [
+        "rg search: hits come back per file in line order with the match column, and a pattern rg rejects is named",
+        "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds, and only the structured reply names ripgrep"
+      ]
+    },
+    {
+      "id": "TX7-model-face-obeys-format",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    const format = if (face.internals) parseFormat(args, face.format) catch |err| return failAs(gpa, face.format, err, event) else face.format;",
+      "to": "    const format = parseFormat(args, face.format) catch |err| return failAs(gpa, face.format, err, event);",
+      "kills": [
+        "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
+      ]
+    },
+    {
+      "id": "TX8-served-face-takes-internals",
+      "file": "src/protocol/policy.zig",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false };",
+      "to": "    var policy: Policy = .{ .search_text = true };",
+      "kills": [
+        "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
+      ]
+    },
+    {
+      "id": "TX9-model-schema-offers-certificate",
+      "file": "src/protocol/server.zig",
+      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },",
+      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
+      "kills": [
+        "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
+      ]
+    },
+    {
+      "id": "FT1-search-text-reply-footed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    event.footer = format != .text;",
+      "to": "    event.footer = true;",
+      "kills": [
+        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
+      ]
+    },
+    {
+      "id": "FT2-footer-switch-ignored",
+      "file": "src/protocol/telemetry.zig",
+      "from": "    if (!event.footer) return null;",
+      "to": "",
+      "kills": [
+        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
+      ]
+    },
+    {
+      "id": "FT3-text-failure-footed",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    event.footer = false;",
+      "to": "",
+      "kills": [
+        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
+      ]
+    },
+    {
+      "id": "DL1-delegation-named-in-text",
+      "file": "src/protocol/search_v1.zig",
+      "from": "    if (result.hidden() != 0) try w.print(\"; {d} hidden by kinds\", .{result.hidden()});",
+      "to": "    if (result.hidden() != 0) try w.print(\"; {d} hidden by kinds\", .{result.hidden()});\n    if (result.delegated) try w.writeAll(\"; delegated to rg\");",
+      "kills": [
+        "search text: a regex the index cannot run is searched by ripgrep with the same hits rg finds, and only the structured reply names ripgrep"
+      ]
+    },
+    {
+      "id": "LF1-size-limit-back-to-one-mib",
+      "file": "src/platform/search_index.zig",
+      "from": "pub const max_indexed_file_bytes: usize = 16 * 1024 * 1024;",
+      "to": "pub const max_indexed_file_bytes: usize = 1 * 1024 * 1024;",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF2-large-file-parsed-at-index",
+      "file": "src/platform/search_index.zig",
+      "from": "    const blob: []u8 = if (want_spans and bytes.len <= max_parsed_file_bytes) try spanBlob(gpa, rel, bytes) else &.{};",
+      "to": "    const blob: []u8 = if (want_spans) try spanBlob(gpa, rel, bytes) else &.{};",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF3-large-file-parsed-live",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (parsed and (wants_spans or wants_doc)) {",
+      "to": "            if (wants_spans or wants_doc) {",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF4-large-source-classified-as-code",
+      "file": "src/protocol/search_v1.zig",
+      "from": "            if (!parsed and wants_spans) item.unclassified = true;",
+      "to": "",
+      "kills": [
+        "search text: a text file over the parse limit is searched line by line without a parse, and a kinds filter names a source file of that size unclassified"
+      ]
+    },
+    {
+      "id": "LF5-too-large-entry-reused",
+      "file": "src/platform/search_session.zig",
+      "from": "                    if (live.kind == .file and search_index.sameStamp(v.record(b).stamp(), live.stamp) and !search_index.mustReread(v.stateOf(b), live.stamp)) {",
+      "to": "                    if (live.kind == .file and search_index.sameStamp(v.record(b).stamp(), live.stamp)) {",
+      "kills": [
+        "search text: a file an older index left out as too large is read again once the size limit admits it"
+      ]
+    },
+    {
+      "id": "LF6-reread-rule-inverted",
+      "file": "src/platform/search_index.zig",
+      "from": "    return state == .large and stamp.size <= max_indexed_file_bytes;",
+      "to": "    return state == .large and stamp.size > max_indexed_file_bytes;",
+      "kills": [
+        "an entry left out as too large is read again once the size limit admits it",
+        "search text: a file an older index left out as too large is read again once the size limit admits it"
       ]
     }
   ]
