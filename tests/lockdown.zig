@@ -116,7 +116,37 @@ test "a lock override is refused before .mcp.json is looked up" {
     var parent: std.process.Environ.Map = .init(testing.allocator);
     defer parent.deinit();
     try testing.expectError(error.LockdownFlagOverride, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, "C:/tools/emetgate.exe", &.{ "--tools", "default" }));
-    try testing.expectError(error.McpConfigMissing, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+    try testing.expectError(error.LocalAppDataUnavailable, lockdown.launchIn(testing.allocator, testing.io, tmp.dir, &parent, lockdown.claude_program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+}
+
+test "without a .mcp.json lockdown serves the running emetgate from its own config" {
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "project");
+    try tmp.dir.createDirPath(testing.io, "state");
+    var project = try tmp.dir.openDir(testing.io, "project", .{});
+    defer project.close(testing.io);
+    const state = try tmp.dir.realPathFileAlloc(testing.io, "state", gpa);
+    defer gpa.free(state);
+    const exe = "C:\\tools\\emetgate.exe";
+
+    const own = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe);
+    defer gpa.free(own);
+    try testing.expect(std.mem.startsWith(u8, own, state));
+    const config = try std.Io.Dir.cwd().readFileAlloc(testing.io, own, gpa, .limited(lockdown.max_mcp_config_bytes));
+    defer gpa.free(config);
+    const name = try lockdown.emetgateServer(gpa, config);
+    defer gpa.free(name);
+    try testing.expectEqualStrings("emetgate", name);
+    try testing.expect(std.mem.indexOf(u8, config, "C:\\\\tools\\\\emetgate.exe") != null);
+    try testing.expectError(error.McpConfigMissing, lockdown.resolveMcpConfig(gpa, testing.io, project));
+
+    try project.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = emetgate_config });
+    const found = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe);
+    defer gpa.free(found);
+    try testing.expect(std.mem.endsWith(u8, found, ".mcp.json"));
+    try testing.expect(!std.mem.startsWith(u8, found, state));
 }
 
 test "ordinary claude args pass through the lock" {
@@ -210,6 +240,9 @@ test "lockdown refuses a .mcp.json without exactly one emetgate server" {
     try tmp.dir.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = "{\"mcpServers\":{\"docs\":{\"command\":\"node\",\"args\":[\"docs-server.js\"]}}}" });
     var parent: std.process.Environ.Map = .init(gpa);
     defer parent.deinit();
+    const local = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(local);
+    try parent.put("LOCALAPPDATA", local);
     try testing.expectError(error.NoEmetgateServer, lockdown.launchIn(gpa, testing.io, tmp.dir, &parent, lockdown.claude_program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
 }
 
