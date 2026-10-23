@@ -3779,8 +3779,7 @@
       "from": "    budget.* -= 1;\n    return 0;",
       "to": "    return 0;",
       "kills": [
-        "a counted match charges the text and every pattern step, and running out is an error, never a miss",
-        "q: regex work counts against the same budget"
+        "a counted match charges the text and every pattern step, and running out is an error, never a miss"
       ]
     },
     {
