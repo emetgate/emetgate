@@ -473,6 +473,15 @@ fn writeNotes(w: *Writer, cert: Certificate) Writer.Error!void {
         },
         .listing, .facts => {},
     }
+    // Facts semantics (evidence / relation answers) name a skipped file by its
+    // rule, one note per rule; the search surfaces name the declared limit instead.
+    if (cert.semantics == .facts) {
+        for (std.enums.values(Rule)) |rule| {
+            const count = cert.scope.excluded.get(rule);
+            if (count != 0) try w.print("; skipped {d} {s}", .{ count, @tagName(rule) });
+        }
+        return;
+    }
     var first = true;
     for (std.enums.values(Rule)) |rule| {
         const count = cert.scope.excluded.get(rule);

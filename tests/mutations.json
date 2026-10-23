@@ -1094,8 +1094,8 @@
     {
       "id": "R6-checks-span-boundary-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (node.endByte() <= span.start or node.startByte() >= span.end) {",
-      "to": "if (node.endByte() <= span.start and node.startByte() >= span.end) {",
+      "from": "if (node.endByte() <= span.start or node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {",
+      "to": "if (node.endByte() <= span.start and node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {",
       "kills": [
         "no_comment ignores comments outside the span",
         "no_comment flags a comment inside the span even when others sit outside it"
@@ -1719,8 +1719,8 @@
     {
       "id": "PC7-forbid-ignores-span-end",
       "file": "src/engine/checks.zig",
-      "from": "const body = tree.source[span.start..span.end];",
-      "to": "const body = tree.source[span.start..];",
+      "from": "const body = tree.source[span.start..span.end];\n    var from: usize = 0;",
+      "to": "const body = tree.source[span.start..];\n    var from: usize = 0;",
       "kills": [
         "forbid reports every occurrence inside the span and none outside it"
       ]
@@ -7112,8 +7112,8 @@
     {
       "id": "EV17-large-file-not-excluded",
       "file": "src/engine/evidence.zig",
-      "from": "error.TooLarge => try self.excluded.put(self.arena, path, {}),",
-      "to": "error.TooLarge => try self.unread.put(self.arena, path, .unreadable),",
+      "from": "try self.excluded.put(self.arena, path, {});",
+      "to": "try self.unread.put(self.arena, path, .unreadable);",
       "kills": [
         "evidence: a target whose file grew over the size limit is excluded by the declared rule and the limit is named"
       ],

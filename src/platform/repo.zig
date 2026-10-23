@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const exe_path = @import("exe_path.zig");
+const open_nowait = @import("open_nowait.zig");
 
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
@@ -132,7 +133,13 @@ pub fn finalOf(gpa: Allocator, path_abs: []const u8) ![]u8 {
 }
 
 pub fn finalPath(gpa: Allocator, io: std.Io, path: []const u8) ![:0]u8 {
-    const opened = try std.Io.Dir.cwd().realPathFileAlloc(io, path, gpa);
+    _ = io;
+    // Resolve without waiting on a sharing conflict: the standard realpath
+    // retries for seconds on a file another handle holds without sharing, which
+    // would make read_file and a dir-as-file search stall instead of answering
+    // at once. The no-wait resolver opens only for attributes, which does not
+    // conflict, so a held file still resolves immediately.
+    const opened = try open_nowait.realPath(gpa, path);
     defer gpa.free(opened);
     const final = try finalOf(gpa, opened);
     defer gpa.free(final);
