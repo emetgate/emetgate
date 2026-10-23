@@ -15,6 +15,7 @@ const tree_cache_mod = @import("../engine/tree_cache.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const map_tools = @import("map_tools.zig");
+const find_tools = @import("find_tools.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -163,6 +164,11 @@ pub const tool_defs = [_]Tool{
         },
     },
     .{
+        .name = "emetgate_find",
+        .description = find_tools.description,
+        .props = &.{.{ .name = "pattern", .desc = "text to find, 1 to 4096 bytes" }},
+    },
+    .{
         .name = "emetgate_scan",
         .description = "Returns the violations of one check expression in the git-tracked files, at most 100; writes nothing.",
         .props = &.{
@@ -222,6 +228,7 @@ pub const Served = struct {
     search: search_session_mod.Session,
     language_service: tsserver.Session,
     map_session: ?*map_tools.Session,
+    find_session: ?*find_tools.Session,
     policy: Policy,
 
     pub const Options = struct {
@@ -244,6 +251,7 @@ pub const Served = struct {
             .search = search_session_mod.Session.init(gpa, io, root, .{}),
             .language_service = .{ .gpa = gpa, .io = io, .root = root },
             .map_session = if (root) |r| map_tools.Session.create(gpa, io, runtime, r) catch null else null,
+            .find_session = if (root) |r| find_tools.Session.create(gpa, io, r) catch null else null,
             .policy = policy,
         };
         self.policy.root = root;
@@ -252,13 +260,16 @@ pub const Served = struct {
         self.policy.search_session = &self.search;
         self.policy.language_service = &self.language_service;
         self.policy.map_session = self.map_session;
+        self.policy.find_session = self.find_session;
         if (self.map_session) |ms| {
             ms.store_override = options.fact_store;
             ms.start();
         }
+        if (self.find_session) |fs| fs.start();
     }
 
     pub fn close(self: *Served) void {
+        if (self.find_session) |fs| fs.destroy();
         if (self.map_session) |ms| ms.destroy();
         self.language_service.deinit();
         self.search.deinit();

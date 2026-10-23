@@ -15,6 +15,8 @@ pub const Entry = struct {
     name: []const u16,
     id: Id,
     kind: Kind,
+    size: u64,
+    write_time: i64,
 };
 
 pub const Error = error{ ScanFailed, ScanIsLink, ScanBusy, ScanDenied, NameTooLong, InvalidWtf8, Unsupported };
@@ -144,7 +146,13 @@ pub const Reader = struct {
             const name_bytes = std.mem.readInt(u32, base[60..64], .little);
             const name_ptr: [*]const u16 = @ptrCast(@alignCast(base[win.extd_name_offset..].ptr));
             const name = name_ptr[0 .. name_bytes / 2];
-            var entry: Entry = .{ .name = name, .id = undefined, .kind = kindOf(attributes) };
+            var entry: Entry = .{
+                .name = name,
+                .id = undefined,
+                .kind = kindOf(attributes),
+                .size = std.mem.readInt(u64, base[40..48], .little),
+                .write_time = std.mem.readInt(i64, base[24..32], .little),
+            };
             @memcpy(&entry.id, base[72..88]);
             if (next_offset == 0) self.filled = false else self.offset += next_offset;
             if (isDot(name)) continue;

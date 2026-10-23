@@ -381,6 +381,7 @@ const served_tools = [_][]const u8{
     "emetgate_read_file",
     "emetgate_list",
     "emetgate_search",
+    "emetgate_find",
     "emetgate_scan",
     "emetgate_git",
     "emetgate_run",

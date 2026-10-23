@@ -13,6 +13,7 @@ const policy_mod = @import("policy.zig");
 const read_tools = @import("read_tools.zig");
 const read_budget = @import("read_budget.zig");
 const search_v1 = @import("search_v1.zig");
+const find_tools = @import("find_tools.zig");
 const git_tools = @import("git_tools.zig");
 const rename_tool = @import("rename_tool.zig");
 const move_tool = @import("move_tool.zig");
@@ -81,6 +82,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arg
     if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror);
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearch(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session);
+    if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
     if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_run")) return run_tool.callRun(gpa, io, args, event, policy);
