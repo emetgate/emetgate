@@ -12,6 +12,7 @@ ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|.*\|\s*([A-Za-z0-9. ]+?)\s*\|[^|]*\|$"
 LICENSE_PREFIXES = {
     "MIT": "MIT License",
     "CC0-1.0": "Creative Commons Legal Code",
+    "BSD-3-Clause WITH PCRE2-exception": "PCRE2 Licence",
 }
 
 
