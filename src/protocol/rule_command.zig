@@ -204,8 +204,8 @@ fn explainQuery(gpa: Allocator, decided: Decided, err_out: *Writer) !void {
 }
 
 fn writeProblem(err_out: *Writer, err: query.CompileError, diag: query.Diagnostic) !void {
-    if (diag.what.len == 0) return err_out.print("{t}\n", .{err});
-    try err_out.print("{t}: {s}: \"{s}\"\n", .{ err, diag.what, diag.at() });
+    if (diag.what().len == 0) return err_out.print("{t}\n", .{err});
+    try err_out.print("{t}: {s}: \"{s}\"\n", .{ err, diag.what(), diag.at() });
 }
 
 fn list(voice: Voice, gpa: Allocator, io: std.Io, root_abs: []const u8, listing: Listing, out: *Writer) !void {

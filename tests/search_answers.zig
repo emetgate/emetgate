@@ -257,7 +257,6 @@ test "search answers: a line that runs out of regex steps makes the answer parti
     const long = try gpa.alloc(u8, 300_000);
     defer gpa.free(long);
     @memset(long, 'a');
-    long[long.len - 1] = 'z';
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "long.txt", .data = long });
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "short.txt", .data = "abz\n" });
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
@@ -268,7 +267,7 @@ test "search answers: a line that runs out of regex steps makes the answer parti
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var answer = try search(runtime, root, .{ .pattern = "(a|b|c|d|e|f|g|h)*z", .dir = root, .regex = true });
+    var answer = try search(runtime, root, .{ .pattern = "^(a|aa)+[!?]|b", .dir = root, .regex = true });
     defer answer.deinit();
     try testing.expectEqualStrings("partial", answer.status());
     const missing = answer.get("missing").?.array.items;
@@ -277,6 +276,58 @@ test "search answers: a line that runs out of regex steps makes the answer parti
     try testing.expectEqualStrings("regex_step_budget", missing[0].object.get("reason").?.string);
     try testing.expectEqual(@as(i64, 1), answer.scope("evaluated"));
     try testing.expectEqual(@as(usize, 1), answer.hitCount());
+}
+
+fn hitLines(answer: *Answer, out: []i64) []i64 {
+    var n: usize = 0;
+    for (answer.groups()) |g| for (g.object.get("hits").?.array.items) |h| {
+        out[n] = h.object.get("line").?.integer;
+        n += 1;
+    };
+    std.mem.sort(i64, out[0..n], {}, std.sort.asc(i64));
+    return out[0..n];
+}
+
+test "search answers: a regex takes the PCRE2 dialect and never matches the empty line after the last newline" {
+    var repo = try Repo.init(&.{.{ "a.ts", "const SaveButton = 1;\nconst Saves = 2;\n\nlet ŞEKİL = 3;\n" }});
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const Case = struct { pattern: []const u8, lines: []const i64 };
+    const cases = [_]Case{
+        .{ .pattern = "(?:function|const)\\s+\\w*Button\\b", .lines = &.{1} },
+        .{ .pattern = "(?<=const )Saves\\b", .lines = &.{2} },
+        .{ .pattern = "(?i)const\\s+save", .lines = &.{ 1, 2 } },
+        .{ .pattern = "^$", .lines = &.{3} },
+        .{ .pattern = "\\b\\p{Lu}{5}\\b", .lines = &.{4} },
+        .{ .pattern = "(\\w)\\1", .lines = &.{1} },
+        .{ .pattern = "= [[:digit:]]{1};$", .lines = &.{ 1, 2, 4 } },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("pattern: {s}\n", .{case.pattern});
+        var answer = try search(runtime, repo.root, .{ .pattern = case.pattern, .dir = repo.root, .regex = true });
+        defer answer.deinit();
+        try testing.expectEqualStrings("complete", answer.status());
+        var buf: [8]i64 = undefined;
+        try testing.expectEqualSlices(i64, case.lines, hitLines(&answer, &buf));
+    }
+}
+
+test "search answers: a regex PCRE2 refuses is answered with its message and the text up to where it stopped" {
+    var repo = try Repo.init(&.{.{ "a.ts", "foo(1);\n" }});
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var answer = try search(runtime, repo.root, .{ .pattern = "foo(", .dir = repo.root, .regex = true });
+    defer answer.deinit();
+    try testing.expect(answer.is_error);
+    try testing.expectEqualStrings("InvalidRegex", answer.errorName());
+    const message = answer.get("message").?.string;
+    errdefer std.debug.print("message: {s}\n", .{message});
+    try testing.expect(std.mem.indexOf(u8, message, "missing closing parenthesis") != null);
+    try testing.expect(std.mem.indexOf(u8, message, "at byte 4, after \"foo(\"") != null);
 }
 
 test "search answers: a file that cannot be read makes the answer partial instead of a quiet skip" {

@@ -15,7 +15,7 @@ SOURCE = "export function add(a: number, b: number): number {\n  return a + b;\n
 BODIES = ["{\n  return a + b;\n}", "{\n  return b + a;\n}"]
 TEST_CMD = "exit 0"
 RULE_Q = 'q:((call_expression function: (identifier) @violation) (#match? @violation "^(eval|scrape.*Api)$"))'
-BUDGET_Q = 'q:((string_fragment) @violation (#match? @violation "' + "a?" * 1500 + 'b"))'
+BUDGET_Q = 'q:((string_fragment) @violation (#match? @violation "^(a|aa)+[!?]"))'
 
 
 def run(argv, cwd):

@@ -31,6 +31,7 @@ const getBool = tool_result.getBool;
 const getStringArray = tool_result.getStringArray;
 const success = tool_result.success;
 const failure = tool_result.failure;
+const failureMessage = tool_result.failureMessage;
 
 pub const max_file_bytes = 1024 * 1024;
 pub const max_matches = 200;
@@ -311,16 +312,16 @@ fn runWorkers(shared: *Shared, pool: ?*worker_pool.Pool) !void {
 }
 
 fn workerLoop(shared: *Shared) void {
-    const scratch = shared.gpa.alloc(u32, shared.query.scratchLen()) catch {
-        shared.fail(error.OutOfMemory);
+    const work = shared.query.scratch(shared.gpa) catch |err| {
+        shared.fail(err);
         return;
     };
-    defer shared.gpa.free(scratch);
+    defer work.deinit(shared.gpa);
     while (true) {
         const i = shared.next.fetchAdd(1, .monotonic);
         if (i >= shared.work.len) return;
         if (shared.failure_lock.load(.acquire)) return;
-        scanFile(shared, &shared.work[i], scratch) catch |err| {
+        scanFile(shared, &shared.work[i], &work) catch |err| {
             shared.fail(err);
             return;
         };
@@ -334,7 +335,7 @@ fn lap(io: std.Io, timed: bool, since: *i96) u64 {
     return @intCast(now - since.*);
 }
 
-fn scanFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
+fn scanFile(shared: *Shared, item: *FileWork, work: *const text_query.Scratch) !void {
     const gpa = shared.gpa;
     var since: i96 = if (shared.timed) std.Io.Clock.awake.now(shared.io).nanoseconds else 0;
     const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ shared.root, item.rel });
@@ -358,7 +359,7 @@ fn scanFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
         return;
     }
 
-    const probed = probe(shared.query, scratch, bytes);
+    const probed = try probe(shared.query, work, bytes);
     item.probe_ns = lap(shared.io, shared.timed, &since);
     if (!probed.hit) {
         item.over_budget_lines = probed.over_budget;
@@ -389,19 +390,19 @@ fn scanFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
         return;
     }
 
-    try collectHits(shared, item, bytes, scratch, fast_spans, fast_doc);
+    try collectHits(shared, item, bytes, work, fast_spans, fast_doc);
     item.state = .fast;
     item.classify_ns = lap(shared.io, shared.timed, &since);
 }
 
 const Probe = struct { hit: bool = false, over_budget: u32 = 0 };
 
-fn probe(query: *const Query, scratch: []u32, bytes: []const u8) Probe {
+fn probe(query: *const Query, work: *const text_query.Scratch, bytes: []const u8) Allocator.Error!Probe {
     var out: Probe = .{};
     if (!query.mayMatchText(bytes)) return out;
     var it = LineIter.init(bytes);
     while (it.next()) |line| {
-        switch (query.matchLine(scratch, line.text)) {
+        switch (try query.matchLine(work, line.text)) {
             .hit => {
                 out.hit = true;
                 return out;
@@ -413,12 +414,12 @@ fn probe(query: *const Query, scratch: []u32, bytes: []const u8) Probe {
     return out;
 }
 
-fn collectHits(shared: *Shared, item: *FileWork, bytes: []const u8, scratch: []u32, spans: ?*const search_index.kind_spans.FileSpans, doc: ?search_index.doc_spans.DocSpans) !void {
+fn collectHits(shared: *Shared, item: *FileWork, bytes: []const u8, work: *const text_query.Scratch, spans: ?*const search_index.kind_spans.FileSpans, doc: ?search_index.doc_spans.DocSpans) !void {
     const gpa = shared.gpa;
     var it = LineIter.init(bytes);
     while (it.next()) |line| {
         if (item.hits.items.len > max_matches) return;
-        const found = switch (shared.query.matchLine(scratch, line.text)) {
+        const found = switch (try shared.query.matchLine(work, line.text)) {
             .none => continue,
             .over_budget => {
                 item.over_budget_lines += 1;
@@ -459,7 +460,6 @@ const LineIter = struct {
     bytes: []const u8,
     pos: usize = 0,
     number: u32 = 0,
-    done: bool = false,
 
     const Line = struct { text: []const u8, start: u32, number: u32 };
 
@@ -468,12 +468,9 @@ const LineIter = struct {
     }
 
     fn next(self: *LineIter) ?Line {
-        if (self.done) return null;
+        if (self.pos >= self.bytes.len) return null;
         const start = self.pos;
-        const end = std.mem.indexOfScalarPos(u8, self.bytes, start, '\n') orelse blk: {
-            self.done = true;
-            break :blk self.bytes.len;
-        };
+        const end = std.mem.indexOfScalarPos(u8, self.bytes, start, '\n') orelse self.bytes.len;
         self.pos = end + 1;
         self.number += 1;
         return .{ .text = self.bytes[start..end], .start = @intCast(start), .number = self.number };
@@ -523,12 +520,12 @@ fn slowFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_ca
         md_tree = parser.parseIn(markdown_heading.grammar(), bytes) catch null;
     }
 
-    const scratch = try gpa.alloc(u32, query.scratchLen());
-    defer gpa.free(scratch);
+    const work = try query.scratch(gpa);
+    defer work.deinit(gpa);
     var it = LineIter.init(bytes);
     while (it.next()) |line| {
         if (item.hits.items.len > max_matches) break;
-        const found = switch (query.matchLine(scratch, line.text)) {
+        const found = switch (try query.matchLine(&work, line.text)) {
             .none => continue,
             .over_budget => {
                 item.over_budget_lines += 1;
@@ -621,6 +618,10 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     var outcome: Outcome = .{};
     renderSearch(gpa, io, runtime, root, tree_cache, session, pattern, dir, is_regex, kinds, &outcome, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
+        if (outcome.regex) |*d| {
+            var line: [512]u8 = undefined;
+            return failureMessage(gpa, &buffer, err, regexMessage(&line, d), event);
+        }
         return failure(gpa, &buffer, err, event);
     };
     if (outcome.event_count != 0) event.reason = outcome.events[0].what;
@@ -629,7 +630,13 @@ pub fn callSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     return success(gpa, &buffer);
 }
 
+fn regexMessage(buf: []u8, d: *const regex_mod.Diagnostic) []const u8 {
+    if (d.at.len == 0) return std.fmt.bufPrint(buf, "{s} at byte {d}", .{ d.what(), d.offset }) catch d.what();
+    return std.fmt.bufPrint(buf, "{s} at byte {d}, after \"{s}\"", .{ d.what(), d.offset, d.at }) catch d.what();
+}
+
 const Outcome = struct {
+    regex: ?regex_mod.Diagnostic = null,
     index_load: ?search_index.LoadFailure = null,
     partial: bool = false,
     events: [4]Event = undefined,
@@ -800,9 +807,13 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         .kinds = kind_set,
     };
 
-    var query = if (is_regex) Query.regex(gpa, pattern, null) catch |err| switch (err) {
+    var diag: regex_mod.Diagnostic = .{};
+    var query = if (is_regex) Query.regex(gpa, pattern, &diag) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => return error.InvalidRegex,
+        else => {
+            outcome.regex = diag;
+            return error.InvalidRegex;
+        },
     } else try Query.literal(gpa, pattern);
     defer query.deinit(gpa);
     if (timer) |*t| _ = t.lap();

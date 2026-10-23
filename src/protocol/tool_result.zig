@@ -18,6 +18,13 @@ pub fn failure(gpa: Allocator, buffer: *std.Io.Writer.Allocating, err: anyerror,
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };
 }
 
+pub fn failureMessage(gpa: Allocator, buffer: *std.Io.Writer.Allocating, err: anyerror, message: []const u8, event: *telemetry.Event) !ToolResult {
+    event.fail(@errorName(err));
+    buffer.clearRetainingCapacity();
+    try wire.writeErrorMessage(&buffer.writer, @errorName(err), wire.exitCode(err), message);
+    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };
+}
+
 pub fn dupTrim(gpa: Allocator, bytes: []const u8) ![]u8 {
     const end = if (bytes.len > 0 and bytes[bytes.len - 1] == '\n') bytes.len - 1 else bytes.len;
     return gpa.dupe(u8, bytes[0..end]);

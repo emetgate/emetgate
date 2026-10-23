@@ -17,6 +17,14 @@ pub const Match = union(enum) {
     over_budget,
 };
 
+pub const Scratch = struct {
+    matcher: ?regex_mod.Matcher = null,
+
+    pub fn deinit(self: Scratch, gpa: Allocator) void {
+        if (self.matcher) |m| m.deinit(gpa);
+    }
+};
+
 pub const Query = struct {
     mode: Mode,
     pattern: []const u8,
@@ -71,8 +79,9 @@ pub const Query = struct {
         gpa.free(self.literals);
     }
 
-    pub fn scratchLen(self: Query) usize {
-        return if (self.re) |re| re.scratchLen() else 0;
+    pub fn scratch(self: Query, gpa: Allocator) Allocator.Error!Scratch {
+        if (self.re == null) return .{};
+        return .{ .matcher = try regex_mod.Matcher.init(gpa, line_budget) };
     }
 
     pub fn mayMatchFile(self: Query, file_trigrams: []const u24) bool {
@@ -92,14 +101,14 @@ pub const Query = struct {
         return false;
     }
 
-    pub fn matchLine(self: Query, scratch: []u32, line: []const u8) Match {
-        const first = self.earliestLiteral(line);
-        if (self.literals.len != 0 and first == null) return .none;
-        const re = self.re orelse return .{ .hit = first.? };
-        var budget: u64 = line_budget;
-        const matched = re.isMatchIn(scratch, line, &budget) catch return .over_budget;
-        if (!matched) return .none;
-        return .{ .hit = first orelse .{ .col = 0, .text = "" } };
+    pub fn matchLine(self: Query, work: *const Scratch, line: []const u8) Allocator.Error!Match {
+        const re = self.re orelse return if (self.earliestLiteral(line)) |hit| .{ .hit = hit } else .none;
+        if (!self.mayMatchText(line)) return .none;
+        const span = work.matcher.?.find(re, line) catch |err| switch (err) {
+            error.BudgetExceeded => return .over_budget,
+            error.OutOfMemory => |e| return e,
+        } orelse return .none;
+        return .{ .hit = .{ .col = @intCast(span.start), .text = line[span.start..span.end] } };
     }
 
     fn earliestLiteral(self: Query, line: []const u8) ?Hit {
@@ -125,41 +134,55 @@ const testing = std.testing;
 test "a literal query finds the text at its column and nothing else" {
     const q = try Query.literal(testing.allocator, "continueOnFail");
     defer q.deinit(testing.allocator);
-    try testing.expectEqual(Match{ .hit = .{ .col = 7, .text = "continueOnFail" } }, q.matchLine(&.{}, "  this.continueOnFail()"));
-    try testing.expectEqual(Match.none, q.matchLine(&.{}, "continuesOnError"));
+    try testing.expectEqual(Match{ .hit = .{ .col = 7, .text = "continueOnFail" } }, try q.matchLine(&.{}, "  this.continueOnFail()"));
+    try testing.expectEqual(Match.none, try q.matchLine(&.{}, "continuesOnError"));
 }
 
 test "literal alternatives split on every bar and refuse an empty part" {
     const q = (try Query.alternatives(testing.allocator, "handleNodeExecutionError(|continueExecution")).?;
     defer q.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), q.literals.len);
-    try testing.expectEqualStrings("continueExecution", q.matchLine(&.{}, "if (!continueExecution) {").hit.text);
-    try testing.expectEqualStrings("handleNodeExecutionError(", q.matchLine(&.{}, "x = handleNodeExecutionError(a)").hit.text);
-    try testing.expectEqual(Match.none, q.matchLine(&.{}, "handleNodeExecutionError;"));
+    try testing.expectEqualStrings("continueExecution", (try q.matchLine(&.{}, "if (!continueExecution) {")).hit.text);
+    try testing.expectEqualStrings("handleNodeExecutionError(", (try q.matchLine(&.{}, "x = handleNodeExecutionError(a)")).hit.text);
+    try testing.expectEqual(Match.none, try q.matchLine(&.{}, "handleNodeExecutionError;"));
     try testing.expect(try Query.alternatives(testing.allocator, "a || b") == null);
     try testing.expect(try Query.alternatives(testing.allocator, "plain") == null);
 }
 
-test "a regex line match reports the column of its required literal" {
-    const q = try Query.regex(testing.allocator, "continuesOnError\\(|onError ===", null);
+test "a regex line match reports where the match starts and the text it matched" {
+    const q = try Query.regex(testing.allocator, "continuesOnError\\(|node\\.\\w+ ===", null);
     defer q.deinit(testing.allocator);
-    const scratch = try testing.allocator.alloc(u32, q.scratchLen());
-    defer testing.allocator.free(scratch);
-    const got = q.matchLine(scratch, "    if (node.onError === 'stop') {");
-    try testing.expectEqual(@as(u32, 13), got.hit.col);
-    try testing.expectEqual(Match.none, q.matchLine(scratch, "    continuesOnError = 1;"));
+    const work = try q.scratch(testing.allocator);
+    defer work.deinit(testing.allocator);
+    const got = try q.matchLine(&work, "    if (node.onError === 'stop') {");
+    try testing.expectEqual(@as(u32, 8), got.hit.col);
+    try testing.expectEqualStrings("node.onError ===", got.hit.text);
+    try testing.expectEqual(Match.none, try q.matchLine(&work, "    continuesOnError = 1;"));
+}
+
+test "a regex with flags has no required literal and still matches at the real column" {
+    const q = try Query.regex(testing.allocator, "\\bfoo\\d{2}\\b", null);
+    defer q.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), q.literals.len);
+    const work = try q.scratch(testing.allocator);
+    defer work.deinit(testing.allocator);
+    try testing.expectEqual(@as(u32, 4), (try q.matchLine(&work, "x = foo42;")).hit.col);
+    try testing.expectEqual(Match.none, try q.matchLine(&work, "x = foo4;"));
+    const flags = try Query.regex(testing.allocator, "(?i)FOO", null);
+    defer flags.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), flags.literals.len);
+    const flag_work = try flags.scratch(testing.allocator);
+    defer flag_work.deinit(testing.allocator);
+    try testing.expectEqual(@as(u32, 2), (try flags.matchLine(&flag_work, "a foo")).hit.col);
 }
 
 test "a line that exhausts the regex step budget is reported, never read as no match" {
-    const q = try Query.regex(testing.allocator, "(a|b|c|d|e|f|g|h)*z", null);
+    const q = try Query.regex(testing.allocator, "^(a|aa)+z", null);
     defer q.deinit(testing.allocator);
-    const scratch = try testing.allocator.alloc(u32, q.scratchLen());
-    defer testing.allocator.free(scratch);
-    const line = try testing.allocator.alloc(u8, 200_000);
-    defer testing.allocator.free(line);
-    @memset(line, 'a');
-    line[line.len - 1] = 'z';
-    try testing.expectEqual(Match.over_budget, q.matchLine(scratch, line));
+    const work = try q.scratch(testing.allocator);
+    defer work.deinit(testing.allocator);
+    const line = "a" ** 200 ++ "!z";
+    try testing.expectEqual(Match.over_budget, try q.matchLine(&work, line));
 }
 
 test "the trigram filter keeps a file that holds any one of the alternatives" {
