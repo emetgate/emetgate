@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/aleph.svg" alt="Emetgate" width="190">
 </p>
 
 <p align="center">
@@ -14,131 +14,159 @@
 
 # Emetgate
 
-Kod yazan bir model ile kaynak ağacınız arasında duran bir kapı. Model bir değişiklik önerir, Emetgate onu denetler ve değişiklik ancak denetimler geçerse diske ulaşır.
+LLM'ler hızlı ve yeteneklidir — saatlerce sürecek iş dakikalar içinde. Ama kurallarınıza uyup uymamaları kendilerine kalmış: bir model "bunu asla kullanma" ifadesini okuyup yine de kullanabilir.
 
-MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript ve JavaScript projelerinde. Claude Code ile geliştirilip test edilir, ve kapı araçları diğer MCP istemcilerinde de çalışır.
+Alışılmış cevap daha iyi bir istem, daha uzun bir `AGENTS.md`'dir — modelden uymasının *istendiği* kurallar. Emetgate başka bir yol tutar: model ile kaynak ağacınız arasında bir katman. Atlayabileceği bir yönerge değil — geçmek zorunda olduğu bir kapı. Model bir değişiklik önerir; çekirdek onu doğrular; geçmediği sürece hiçbir şey diske ulaşmaz.
 
-https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
+Bir MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript, JavaScript ve Zig için. Aşağıda her yetenek parçalarına ayrılıyor — her parçanın ne olduğu ve burada ne yaptığı. Altında kodu ve gerçek çıktısı olmayan hiçbir iddia yok.
 
-## Ne yapar
+## Kapı
 
-**Her yazmayı denetler.** Bir değişiklik bir sembolü ve dayandığı kodun hash'ini belirtir. Emetgate yeni gövdeyi yerine koyar, dosyayı yeniden ayrıştırır, kurallarınızı çalıştırır, sonra tip denetiminizi ve testlerinizi deponun korumalı alandaki bir kopyasında çalıştırır. Herhangi bir adım başarısız olursa hiçbir şey yazılmaz. Her commit bir makbuz bırakır; `emetgate verify` onu, yazan sürece güvenmeden sonradan yeniden denetleyebilir.
-
-**Doğruladığını işler.** `--commit` ile, kapıdan geçen bir değişiklik yalnızca yazılmaz, git'e de işlenir. İşlenen commit, testlerinizin koştuğu ağacın tam olarak kendisini tutar; yani doğrulanan ile işlenen aynı şeydir. `emetgate verify` makbuzları ona karşı yeniden oynatır, `emetgate recover` ise bir çökmenin yarım bıraktığı commit'i tamamlar ya da geri alır.
-
-**Model için kod okur.** `emetgate_explore`, kod tabanı hakkındaki bir soruyu bütün tanımlarla ve satır numaralarıyla cevaplar. `emetgate_evidence`, adını verdiğiniz sembollerin tam kodunu döndürür. Semboller, dosyalar, arama ve git için de araçlar vardır; liste [REFERENCE.md](../REFERENCE.md#mcp-tools) içindedir.
-
-**Kurallarınızı tutar.** Bir kuralı komut satırından bir kez eklersiniz. Model kuralları okuyabilir; değiştiremez ve kaldıramaz.
+Bir değişiklik bir sembolü ve dayandığı kodun hash'ini belirtir. Emetgate yeni gövdeyi yerine koyar, dosyayı yeniden ayrıştırır, kurallarınızı çalıştırır, sonra tip denetiminizi ve testlerinizi deponun bir korumalı alan içindeki kopyasında çalıştırır. Her adım geçerse değişiklik yazılır ve bir makbuza bağlanır; herhangi bir adım başarısız olursa hiçbir şey yazılmaz.
 
 ```
-emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
-emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
+proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
+                  └── any step fails ─▶ nothing is written (מת)
 ```
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
-    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
-  </picture>
-</p>
+| parça | ne olduğu | burada ne yaptığı |
+| --- | --- | --- |
+| gölge çalışma alanı | deponun yalıtılmış bir kopyası | önerilen yazma önce burada uygulanır, böylece testler ve tip denetimi gerçek ağaca dokunmadan koşar; başarısızlıkta disk hiç değişmemiştir |
+| tree-sitter | artımlı bir ayrıştırıcı | değişikliğin gerçekten ayrıştığını ve ağacı bozmadığını göstermek için dosyayı yeniden ayrıştırır |
+| in-toto makbuzu | bir tedarik zinciri köken (provenance) formatı | geçen her yazmayı, neyin neyden, hangi testlerle üretildiğine dair imzalı bir kayda bağlar — sonradan denetlenebilir |
+
+## Arama
+
+İki motor: hız için bir düz dizin, kanıt için sertifikalı bir motor.
+
+### `emetgate_find` — düz metin araması
+
+Diske geri gitmeden düz metin ve dizinlenebilir desen araması. Sıcakta milisaniyenin altında.
+
+| parça | ne olduğu | burada ne yaptığı |
+| --- | --- | --- |
+| sonek dizisi (SA-IS) | doğrusal zamanda kurulan, metnin her sonekinin sıralı dizisi | bir literali tek bir `O(m·log n)` ikili aramada, tüm eşleşmeleriyle birlikte bulur |
+| iki dalgacık ağacı (wavelet tree) | dizi üzerinde konum→dosya ve tekrar-zinciri haritaları | hangi eşleşmenin hangi dosyada olduğunu, dosyayı diskten yeniden okumadan söyler |
+| mmap'lenmiş `.emet` dizini | belleğe eşlenmiş tek bir dizin dosyası | arama sırasında dosyalar yeniden açılmaz; sıcakta `~0.7–1 ms` |
+
+### `emetgate_search` — sertifikalı arama
+
+Sonuçla birlikte, hiçbir şeyi kaçırmadığının kanıtını da taşıyan arama.
+
+| parça | ne olduğu | burada ne yaptığı |
+| --- | --- | --- |
+| trigram postingleri | sıkıştırılmış bir ters dizin (Elias-Fano / bitmap) | tüm depoyu taramadan aday dosyaları hızla daraltır |
+| RFC 9162 Merkle ağacı | okunan her dosyanın SHA-256'sı üzerinde bir kök | yanıt kökü taşır, böylece tam ya da kısmi bir cevap iddia değil kanıtlanabilir olur |
+| kapalı-güvenli (fail-closed) | sayılar tutmazsa sertifika `InconsistentCertificate` olarak reddedilir | yanlış bir "tam" asla gösterilmez; kuşku varsa sessiz kalır |
+| NTFS değişiklik bariyeri | `ReadDirectoryChangesW` ile dosya-değişiklik bildirimi | yalnızca değişen bir dosya yeniden okunur (tazelik); kıyaslamada sıfır kaçırma |
+| ripgrep'e devretme | dizinin sunamayacağı bir regex (`\b`, lookaround…) | ripgrep'e devredilir; yanıt `delegated: rg` der — yetenek kaybı yok |
+
+Yanıt bir iddia değil kanıt taşır — gerçek çıktı:
+
+```
+$ search "InconsistentCertificate"
+✓ 6 matches in 429 files            # complete, with the Merkle root
+$ search "Allocator"
+partial: matches 1-46 of 1617; next offset:46
+$ search "zzzNeverOccurs"
+✓ no match in 569 files              # even zero is proven
+```
+
+> sıcak ~1.5–3.5 ms · soğuk (dizin kurulumu) 661 ms · ripgrep ile satır satır eşit
+
+## Kurallar
+
+Bir kez koyduğunuz bir politika her yazmada tutulur. Model kuralları okur ve değiştiremez.
+
+| parça | ne olduğu | burada ne yaptığı |
+| --- | --- | --- |
+| tree-sitter sorguları | sözdizim ağacı üzerinde yapısal eşleşmeler | kapsam/sembol/yorum denetimleri: `no_comment`, `require_comment`, `max_function_lines`, `forbid_import`… |
+| regex motoru (bütçeli) | adım-sınırlı bir eşleştirici | `forbid_regex` / `no_todo`: değişen kapsamda bir desen veya işaret avı |
+| `ledger.ndjson` | yalnızca ekleme yapılan bir kural defteri (`.emetgate/`) | kurallar burada yaşar; model okur ama yazamaz — politika insana ait kalır |
+| commit-mesajı denetimi | bir mesaj-yüzeyi kuralı | `message:conventional`: conventional commit'ler commit anında tutulur |
+
+```
+emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
+emetgate rule add "document exports"  --check require_comment --in src/ --enforce
+```
+
+## Doğrulanmış Git
+
+`emetgate verify --branch base..head` bir dalın tüm geçmişini yeniden oynatır ve kurcalamayı belli eden bir karar döndürür.
+
+| parça | ne olduğu | burada ne yaptığı |
+| --- | --- | --- |
+| blake3 hash zinciri | her sertifika = blake3(parent ‖ oid ‖ verdict ‖ receipt) | tek bir commit'i yeniden oynatın, zincirin ucu kayar — kurcalama belli olur |
+| CAS ref'leri + özel dizin | çalışma ağacına dokunmadan write-tree / commit-tree | kapıdan geçmiş, makbuzlu bir commit — düzenleyicinizi rahatsız etmeden |
+| TLA⁺ model denetimi | commit günlüğünün biçimsel bir modeli | bir çökmenin yarım bıraktığı bir commit tutarlı bir duruma döner — kanıtlanmış |
+| in-toto makbuzları | commit'e bağlı köken (`refs/notes/emetgate`) | makbuz yok → `partial` (kapalı-güvenli); uydurma "verified" yok |
+| git rev-list yeniden oynatma | `base..head` aralığını dolaşır | her biri için tek-commit doğrulamasını yeniden koşar, zinciri örer |
+
+```
+$ emetgate verify --branch main..HEAD
+branch partial: 48 commit(s)          # no receipt → fail-closed
+  a179a7f unverified (no receipt)  cert 84c2…
+
+# tamper with one receipt:
+branch broken: 1 commit(s)
+  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
+```
+
+## Nasıl test edilir
+
+| parça | ne olduğu | burada ne yaptığı |
+| --- | --- | --- |
+| mutasyon testi | kodu bilerek bozar ve paketin bunu fark edip etmediğine bakar | testlerin yalnızca geçtiğini değil, bir hatayı *yakaladığını* kanıtlar |
+| TLA⁺ | commit günlüğünün bir model denetimi | çökme kurtarmasının doğruluğu, koddan ayrı olarak gerekçelendirilmiş |
+| fuzz & kırmızı takım | rastgele mutasyon artı saldırı derlemleri | beklenmedik veya düşmanca girdide çökme ya da kaçış yok |
+| ripgrep eşitlik kapısı | her koşuda isabet kümesini rg ile karşılaştırır | arama "hızlı ama yanlış" olamaz; satır satır denetlenir |
+
+Motor için: 61 mutant bugün: 54 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan koruma, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
+
+## Ölçülen
+
+| yüzey | ölçü | sonuç |
+| --- | --- | --- |
+| tam test paketi | geçti / kaldı / sızdırdı | 1908 / 0 / 0 |
+| arama eşitliği | rg satırları = emetgate | 1617=1617 · 6=6 · 2=2 |
+| arama sıcak | medyan | 1.5–3.5 ms |
+| find sıcak | medyan | 0.7–1.0 ms |
+| doğrulama (kurcalanmış makbuz) | karar | broken (yakalandı) |
+
+```
+python tests/bench/n8n_search.py   ·   zig build test
+```
 
 ## Kurulum
 
-Her sürüm, `emetgate.exe` dosyasını ve SHA-256 değerini [sürümler sayfasında](https://github.com/emetgate/emetgate/releases) yayımlar.
-
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:USERPROFILE\emetgate\$f" }
-(Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:USERPROFILE\emetgate\emetgate.exe.sha256").Split(" ")[0]
+```
 claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
 ```
 
-İkili dosya kod imzalı değildir; bu yüzden SmartScreen ilk çalıştırmada uyarır. Bunun yerine sağlama toplamını karşılaştırın.
+Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`, ajanı yalnızca emetgate araçlarıyla, kapalı-güvenli olarak başlatır.
 
-`emetgate lockdown`, Claude Code'u yalnızca Emetgate'in araçlarıyla başlatır; böylece her yazma kapıdan geçer.
+## Daha derine
 
-Lockdown altında kuralı doğrudan isteme de yazabilirsiniz. Cevabı Emetgate verir ve satır modele hiç ulaşmaz:
-
-```
-/rule add "no comments in source" --check no_comment --enforce
-/rule list
-```
-
-Bundan sonra her yazma konuşma dökümünde işaretlenir: kapı geçirdiyse yeşil **אמת**, reddettiyse kırmızı **מת**.
-
-Emetgate bir MCP sunucusudur, bu yüzden başka istemciler de araçlarını kullanabilir. Kod okuma ve kurallarınıza ya da testlerinize takılan bir değişikliği reddetme, Codex, opencode, Gemini CLI ve Qoder'da da doğrulandı. Kilit modu, `/rule` ve işaretler yalnızca Claude Code'dadır; başka bir istemcide model kapının dışında da düzenleme yapabilir, orada Emetgate bir ölçüm aracıdır, kapalı-güvenli bir denetleyici değil.
-
-## Ölçümler
-
-Dört depo hakkında 15 soruyu Emetgate, Serena, codebase-memory-mcp ve Claude Code'un kendi araçlarıyla sordum: aynı model (`claude-sonnet-5-5`), her koşu için deponun taze bir kopyası, ek istem yok, soru başına üç koşu. Puan, cevap anahtarındaki maddelerden cevabın adını andıklarının oranıdır; anahtarları hiçbir araç çalışmadan önce yazdım.
-
-| Araç | Puan | Token | Maliyet |
-|---|---:|---:|---:|
-| Emetgate | 240/252 | 86.7k | $0.132 |
-| Serena | 242/252 | 143.8k | $0.143 |
-| Claude Code'un kendi araçları | 234/252 | 171.4k | $0.150 |
-| codebase-memory-mcp | 246/252 | 178.5k | $0.204 |
-
-Bu sette Emetgate en az token'ı harcıyor ve en ucuzu. En doğrusu değil: iki araç daha yüksek puan alıyor. 252 maddede iki maddelik fark, koşudan koşuya oynamanın içinde kalır; yani bu koşular araçları puana göre sıralamaz.
-
-Ayrıca dört araca üç soru daha elle sordum, her biri tek koşu. Emetgate yine en az token'ı harcadı; Claude Code'un kendi araçları ise daha ucuz ve daha hızlıydı:
-
-<p align="center">
-  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
-</p>
-
-Kaydedilen 345 oturumun maliyet hakkında gösterdikleri:
-
-- Bir oturumun maliyetini dört token sayısı belirler ve önbelleğe yazılan bir token, oradan okunan bir token'ın 20 katı tutar. Daha az token her zaman daha düşük fatura demek değildir.
-- Fazladan bir model çağrısı, yaklaşık 8,000 karakterlik araç çıktısı kadar tutar.
-- Model kendi istediğini yazar. Kendi araç çağrısında adını verdiği bir madde %98.5 oranında cevaba girdi; yalnızca bir cevapta gördüğü madde %90.5 oranında.
-
-Oturumlar, sorular, cevap anahtarları ve bu sayıları üreten betik [tests/bench/neutral](../tests/bench/neutral) içindedir. Tam cevaplarıyla birlikte elle yapılan test [tests/bench/hand](../tests/bench/hand) içindedir. Tekil okuma, düzenleme ve aramaların token sayıları [REFERENCE.md](../REFERENCE.md) içindedir.
-
-## Kapı nasıl test edilir
-
-- **Mutasyon testi.** Her koruma bilerek bozulur ve en az bir testin başarısız olması gerekir. Motor için bugün 61 mutant var: 54 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan korumalar, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
-- **Model denetimi.** Commit günlüğü TLA+ ile tanımlandı ve kurtarma sırasındaki çökmeler dahil TLC ile denetlendi.
-- **Çökme testleri.** Toplu işler her adımdan sonra kesilir ve kurtarılır.
-- **Kırmızı takım ve fuzz paketleri**: MCP yüzeyine, korumalı alana, günlüğe ve ayrıştırıcılara karşı.
-
-Kapıya karşı bulgular ve düzeltmeleri [REFERENCE.md](../REFERENCE.md#security-history) içinde listelenir.
+- [REFERENCE.md](../REFERENCE.md) — her araç
+- [VERIFICATION.md](../VERIFICATION.md) — makbuzlar ve kanıt
+- [docs/experiments/tla](../docs/experiments/tla) — TLA⁺ modelleri
+- [tests/bench](../tests/bench) — kıyaslamalar
 
 ## Sınırlar
 
-- Yalnızca Windows. Yalnızca TypeScript, JavaScript ve Zig.
-- Kapıdan geçmek, kodun ayrıştırıldığı, sınırlar içinde kaldığı ve testlerinizi geçtiği anlamına gelir. Kodun doğru olduğu anlamına gelmez; test kapısı testleriniz kadar güçlüdür.
-- Korumalı alan, kopyanın dışına yazmayı engeller. Okumayı ve ağ erişimini engellemez.
-- Kapının dışında yapılan değişiklikler kapsanmaz. Lockdown bunun içindir.
-- Node.js 24.15.0 ve öncesi, Windows loopback bağlantılarında aralıklı olarak çöker; 24.16.0 veya sonrasını kullanın.
+Yalnızca Windows; TypeScript, JavaScript ve Zig. Korumalı alan yazmaları engeller, okumaları ya da ağı değil. Kapıdan geçmek, bir değişikliğin ayrıştığını ve *sizin* testlerinizi geçtiğini kanıtlar — yalnızca o testler kadar güçlüdür. Kıyaslamalar bizim kendi kıyaslamalarımız, tek bir makineden ve yeniden üretilebilir.
 
 ## İsim nereden geliyor
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
-  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+  <img src="../assets/golem-ales-light.jpg" alt="1899 tarihli bir kalem çizimi: Haham Loew elini kaldırır ve golemin yüzü dumanda belirir, alnında İbranice harfler" width="220" align="left">
 </picture>
 
-Prag Golemi efsanesinde Haham Loew, kilden bir figürün alnına **אמת** (*emet*, hakikat) yazar ve figür canlanır. İlk harf silinince **מת** (*met*, ölü) kalır ve golem durur.
-
-Emetgate her yazmayı aynı kelimeyle işaretler: kapı geçirdiyse tam, reddettiyse ilk harfi silinmiş.
-
-<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+Prag efsanesinde golem, alnındaki **אמת** (*emet*, "hakikat") kelimesiyle hayata gelir. İlk harfi silin, **אמת** **מת** (*met*, "ölü") olur — golem durur. Kapı, bir değişiklik tuttuğunda ilk harfi yazar; başarısız bir test onu siler.
 
 <br clear="left">
 
-## Derleme
-
-Zig 0.16.0. tree-sitter ve gramerler depoya alınmıştır.
-
-```sh
-zig build                  # zig-out/bin/emetgate
-zig build test             # all tests
-tools/accept.ps1 <ref>     # tests three times, then the mutants on lines changed since <ref>
-```
-
 ## Lisans
 
-MIT. `vendor/` altındaki depoya alınmış gramerler kendi MIT lisanslarını korur.
-
-<p align="center"><a href="../README.md">English</a> · <b>Türkçe</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
+MIT. Bkz. [LICENSE](../LICENSE).
