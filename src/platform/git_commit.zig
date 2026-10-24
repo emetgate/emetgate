@@ -368,7 +368,7 @@ fn surveyWith(git: Git, rels: []const []const u8, icase: bool) !Survey {
     return .{ .paths = paths, .index = index };
 }
 
-fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList(Measured), gpa: Allocator) !void {
+fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList(Measured), gpa: Allocator, pre_written: bool) !void {
     for (seen.paths) |path| {
         var stages: usize = 0;
         for (seen.index) |entry| {
@@ -385,11 +385,20 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
             const head_entry = in_head orelse return error.TargetNotInHead;
             const index_entry = in_index orelse return error.TargetHasUncommittedChanges;
             if (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.mem.eql(u8, index_entry.mode, head_entry.mode)) return error.TargetHasUncommittedChanges;
-            const path_arg = try std.fmt.allocPrint(git.arena, "--path={s}", .{path});
-            const stored = try git.fed(&.{ "hash-object", "--stdin", path_arg }, bytes);
-            if (!std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;
+            // `pre_written` callers (emetgate commit) commit content a gate already
+            // wrote into the working tree, so the working-tree copy is expected to
+            // differ from HEAD. The index must still be clean (checked above).
+            if (!pre_written) {
+                const path_arg = try std.fmt.allocPrint(git.arena, "--path={s}", .{path});
+                const stored = try git.fed(&.{ "hash-object", "--stdin", path_arg }, bytes);
+                if (!std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;
+            }
             raw = symbol.hashOf(bytes);
-        } else if (in_head != null or in_index != null) return error.TargetHasUncommittedChanges;
+        } else if (in_head != null or in_index != null) {
+            // A gate may commit a deletion: the working-tree file is already gone
+            // while HEAD still carries it. The index must match HEAD.
+            if (!(pre_written and in_head != null and in_index != null and std.mem.eql(u8, in_index.?.oid, in_head.?.oid))) return error.TargetHasUncommittedChanges;
+        }
         const list = out orelse continue;
         var one: Measured = .{ .path = try gpa.dupe(u8, path), .raw = raw };
         errdefer gpa.free(one.path);
@@ -556,6 +565,17 @@ fn settings(git: Git) !Settings {
 }
 
 pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8) !Head {
+    return preflightImpl(gpa, io, root, rels, false);
+}
+
+/// Like `preflight`, but tolerates committed paths whose working-tree copy a
+/// gate already wrote (so it differs from HEAD). The git index must still be
+/// clean against HEAD — only unstaged, gate-written content is allowed.
+pub fn preflightWritten(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8) !Head {
+    return preflightImpl(gpa, io, root, rels, true);
+}
+
+fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8, pre_written: bool) !Head {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -589,7 +609,7 @@ pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
         }
         measured.deinit(gpa);
     }
-    try measure(git, held.items, try surveyWith(git, rels, set.icase), &measured, gpa);
+    try measure(git, held.items, try surveyWith(git, rels, set.icase), &measured, gpa, pre_written);
 
     const oid = try gpa.dupe(u8, known.oid);
     errdefer gpa.free(oid);

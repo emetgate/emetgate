@@ -325,6 +325,10 @@ test "write invariant: after any accepted write through a served write tool a sc
     var write_tools: usize = 0;
     for (try servedTools(arena)) |tool| {
         if (readOnly(tool)) continue;
+        // emetgate_commit writes no source of its own: it commits the content
+        // earlier gated writes already landed, so this per-call write invariant
+        // does not apply to it (it is exercised in tests/commit_group.zig).
+        if (std.mem.eql(u8, tool, "emetgate_commit")) continue;
         write_tools += 1;
         var tally: Tally = .{};
         var seed: u64 = 1;
