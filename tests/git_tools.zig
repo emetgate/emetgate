@@ -215,3 +215,120 @@ test "git diff caps output at a line count and marks it truncated" {
     try testing.expect(body.value.object.get("truncated").?.bool);
     try testing.expect(body.value.object.get("lines_shown").?.integer < body.value.object.get("lines_total").?.integer);
 }
+
+// --- symbol-level diff / show / blame --------------------------------------
+
+fn findChange(body: Value, ref: []const u8) ?[]const u8 {
+    const files = body.object.get("symbol_changes") orelse return null;
+    for (files.array.items) |file| {
+        const syms = file.object.get("symbols") orelse continue;
+        for (syms.array.items) |sym| {
+            if (std.mem.eql(u8, sym.object.get("ref").?.string, ref)) {
+                return sym.object.get("change").?.string;
+            }
+        }
+    }
+    return null;
+}
+
+test "symbol diff reports a changed function body at the symbol level" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("x.ts", "export function foo(): number {\n  return 1;\n}\n");
+    try repo.commitAll("add foo");
+    try repo.writeFile("x.ts", "export function foo(): number {\n  return 2;\n}\n");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("changed", findChange(body.value, "foo").?);
+}
+
+test "symbol diff reports an added function and an added type" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("x.ts", "export function foo(): number {\n  return 1;\n}\n");
+    try repo.commitAll("add foo");
+    try repo.writeFile("x.ts", "export function foo(): number {\n  return 1;\n}\nexport function bar(): void {}\nexport type Baz = string;\n");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("added", findChange(body.value, "bar").?);
+    try testing.expectEqualStrings("added", findChange(body.value, "Baz").?);
+    // foo was untouched, so it is not listed.
+    try testing.expect(findChange(body.value, "foo") == null);
+}
+
+test "symbol diff flags a comment-only change as a non-symbol change" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("x.ts", "export function foo(): number {\n  return 1;\n}\n");
+    try repo.commitAll("add foo");
+    try repo.writeFile("x.ts", "// a leading comment\nexport function foo(): number {\n  return 1;\n}\n");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(findChange(body.value, "foo") == null);
+    const files = body.value.object.get("symbol_changes").?.array;
+    try testing.expect(files.items.len == 1);
+    try testing.expect(files.items[0].object.get("non_symbol_change").?.bool);
+    try testing.expect(files.items[0].object.get("mapped").?.bool);
+}
+
+test "symbol blame maps a symbol to the commit that last changed it" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("x.ts", "export function foo(): number {\n  return 1;\n}\n");
+    try repo.commitAll("add foo");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const file_abs = try std.fmt.allocPrint(gpa, "{s}/x.ts", .{repo.root_abs});
+    defer gpa.free(file_abs);
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    const blame = body.value.object.get("symbol_blame").?;
+    try testing.expect(blame.object.get("mapped").?.bool);
+    const syms = blame.object.get("symbols").?.array;
+    var found = false;
+    for (syms.items) |sym| {
+        if (std.mem.eql(u8, sym.object.get("ref").?.string, "foo")) {
+            found = true;
+            try testing.expectEqualStrings("add foo", sym.object.get("summary").?.string);
+        }
+    }
+    try testing.expect(found);
+}
+
+test "symbol blame requires a file path" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("x.ts", "export function foo(): number {\n  return 1;\n}\n");
+    try repo.commitAll("add foo");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    try expectError(runtime, repo.root_abs, .{ .sub = "blame", .path = repo.root_abs }, "MissingPath");
+}
