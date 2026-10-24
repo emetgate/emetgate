@@ -111,6 +111,7 @@ pub const commit_derive = @import("platform/commit_derive.zig");
 pub const commit_names = @import("platform/commit_names.zig");
 pub const commit_refusal = @import("platform/commit_refusal.zig");
 pub const commit_plan = @import("platform/commit_plan.zig");
+pub const commit_group = @import("platform/commit_group.zig");
 pub const commit_intent = @import("platform/commit_intent.zig");
 pub const own_dir = @import("platform/own_dir.zig");
 pub const text_checks = @import("engine/text_checks.zig");

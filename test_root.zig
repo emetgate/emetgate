@@ -113,6 +113,7 @@ pub const commit_derive = src.commit_derive;
 pub const commit_names = src.commit_names;
 pub const commit_refusal = src.commit_refusal;
 pub const commit_plan = src.commit_plan;
+pub const commit_group = src.commit_group;
 pub const commit_intent = src.commit_intent;
 pub const own_dir = src.own_dir;
 pub const text_checks = src.text_checks;
@@ -276,6 +277,7 @@ test {
     _ = @import("tests/commit_batch_crash.zig");
     _ = @import("tests/commit_protocol.zig");
     _ = @import("tests/commit_on_write.zig");
+    _ = @import("tests/commit_group.zig");
     _ = @import("tests/commit_write_doc.zig");
     _ = @import("tests/message_command.zig");
     _ = @import("tests/git_commit.zig");

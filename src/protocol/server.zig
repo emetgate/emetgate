@@ -179,6 +179,11 @@ pub const tool_defs = [_]Tool{
         },
     },
     .{
+        .name = "emetgate_commit",
+        .description = "Commits the pending gated changes as ONE verified commit. Every prior gated write left a receipt under .emetgate/; this groups those receipts, checks the working tree still matches each one byte for byte (refusing with the file list if any changed outside the gate), builds a single commit from HEAD, and chains + attaches the receipts as its note so that emetgate verify --branch returns \"verified\". It reuses the existing evidence and never re-runs the typecheck or tests.",
+        .props = &.{.{ .name = "message", .desc = "commit message for the grouped changes" }},
+    },
+    .{
         .name = "emetgate_git",
         .description = "Returns read-only git output: status, diff (staged:true for the staged diff), log or show. Output is capped.",
         .props = &.{

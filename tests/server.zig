@@ -75,11 +75,14 @@ test "tools/list offers the commit message on the tools that commit only when co
         const schema = tool.object.get("inputSchema").?.object;
         var commits = false;
         for (committing) |expected| commits = commits or std.mem.eql(u8, expected, name);
+        // emetgate_commit always carries a required message, independent of the
+        // --commit flag: committing the pending gated changes is its whole job.
+        const always = std.mem.eql(u8, name, "emetgate_commit");
         var required = false;
         for (schema.get("required").?.array.items) |field| required = required or std.mem.eql(u8, field.string, "message");
         errdefer std.debug.print("{s}\n", .{name});
-        try testing.expectEqual(commits, schema.get("properties").?.object.get("message") != null);
-        try testing.expectEqual(commits, required);
+        try testing.expectEqual(commits or always, schema.get("properties").?.object.get("message") != null);
+        try testing.expectEqual(commits or always, required);
         if (commits) offered += 1;
     }
     try testing.expectEqual(committing.len, offered);
@@ -383,6 +386,7 @@ const served_tools = [_][]const u8{
     "emetgate_search",
     "emetgate_find",
     "emetgate_scan",
+    "emetgate_commit",
     "emetgate_git",
     "emetgate_run",
     "emetgate_write_doc",
