@@ -21,7 +21,8 @@ pub const Pool = struct {
         if (builtin.os.tag != .windows) return;
         const cpus = std.Thread.getCpuCount() catch 1;
         const extra = @min(@min(wanted, max_threads), cpus) -| 1;
-        self.done = win.CreateEventW(null, .FALSE, .FALSE, null) orelse return;
+        const done = win.CreateEventW(null, .FALSE, .FALSE, null) orelse return;
+        self.done = done;
         var i: usize = 0;
         while (i < extra) : (i += 1) {
             self.go[i] = win.CreateEventW(null, .FALSE, .FALSE, null) orelse break;
@@ -103,6 +104,14 @@ const Counter = struct {
         }
     }
 };
+
+test "a pool that never started is released without closing a handle it does not own" {
+    var pool: Pool = .{};
+    pool.deinit();
+    var counter: Counter = .{};
+    pool.run(4, Counter.work, &counter);
+    for (&counter.seen) |*s| try testing.expectEqual(@as(u8, 1), s.load(.monotonic));
+}
 
 test "a pool runs a task on its helpers and the caller, and every item is done exactly once, round after round" {
     var pool: Pool = undefined;

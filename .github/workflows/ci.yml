@@ -40,6 +40,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - name: Install ripgrep
+        run: choco install ripgrep -y --no-progress
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
@@ -71,6 +73,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - name: Install ripgrep
+        run: choco install ripgrep -y --no-progress
       - name: Require a clean working tree
         shell: pwsh
         run: |

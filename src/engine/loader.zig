@@ -14,6 +14,7 @@ pub const Snapshot = struct {
     source: []const u8,
     tree: ts.Tree,
     table: ?symbol.Table = null,
+    node_hashes: ?[]symbol.Hash = null,
 
     pub const CreateError = ts.Error || std.mem.Allocator.Error;
     pub const LoadError = error{UnsupportedLanguage} || std.Io.Dir.ReadFileAllocError || ts.Error;
@@ -37,6 +38,7 @@ pub const Snapshot = struct {
     pub fn destroy(self: *Snapshot) void {
         const runtime = self.runtime;
         if (self.table) |table| table.deinit();
+        if (self.node_hashes) |hashes| runtime.gpa.free(hashes);
         self.tree.deinit();
         runtime.gpa.free(self.source);
         self.* = undefined;

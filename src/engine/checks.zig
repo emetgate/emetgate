@@ -8,6 +8,7 @@ const isOneOf = @import("functions.zig").isOneOf;
 const query = @import("query.zig");
 const lang = @import("lang/registry.zig");
 const text_checks = @import("text_checks.zig");
+const regex = @import("regex.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -34,7 +35,16 @@ pub const registry = [_]Check{
     .{ .name = "forbid", .collect = forbid, .takes_argument = true },
     .{ .name = "no_literal", .collect = noLiteral, .takes_argument = true },
     .{ .name = query_name, .collect = queryCheck, .takes_argument = true },
+    .{ .name = "forbid_regex", .collect = forbidRegex, .takes_argument = true },
+    .{ .name = "require", .collect = require, .takes_argument = true },
+    .{ .name = "require_comment", .collect = requireComment },
+    .{ .name = "no_todo", .collect = noTodo },
+    .{ .name = "max_function_lines", .collect = maxFunctionLines, .takes_argument = true },
+    .{ .name = "forbid_import", .collect = forbidImport, .takes_argument = true },
 };
+
+/// Markers that `no_todo` forbids anywhere in the changed content (case-insensitive).
+const todo_markers = [_][]const u8{ "TODO", "FIXME", "XXX" };
 
 pub const query_name = "q";
 
@@ -240,6 +250,174 @@ fn queryCheck(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span
     for (found.items) |s| out.appendAssumeCapacity(.{ .check = query_name, .span = s });
 }
 
+
+// forbid_regex: the regex form of forbid. A match of the pattern anywhere in the
+// changed span is a single violation spanning that span. Language-agnostic.
+fn forbidRegex(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, limits: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
+    _ = profile;
+    const pattern = arg orelse return;
+    const re = regex.Regex.compile(gpa, pattern, null) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // A malformed or unsupported pattern cannot run against this input.
+        error.RegexSyntax, error.RegexUnsupported => return error.QueryMalformed,
+    };
+    defer re.deinit(gpa);
+    const body = tree.source[span.start..span.end];
+    var budget: u64 = limits.operations;
+    const hit = re.isMatch(gpa, body, &budget) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.BudgetExceeded => return error.QueryBudgetExceeded,
+    };
+    if (hit) try out.append(gpa, .{ .check = "forbid_regex", .span = span });
+}
+
+// require: the changed span must contain the literal text. Its absence is one
+// violation at the start of the span. The inverse of forbid. Language-agnostic.
+fn require(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
+    _ = profile;
+    const needle = arg orelse return;
+    const body = tree.source[span.start..span.end];
+    if (std.mem.indexOf(u8, body, needle) == null) {
+        try out.append(gpa, .{ .check = "require", .span = .{ .start = span.start, .end = span.start } });
+    }
+}
+
+// no_todo: TODO / FIXME / XXX markers (case-insensitive) are forbidden in the
+// changed content. Each occurrence is its own violation. Language-agnostic.
+fn noTodo(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
+    _ = profile;
+    _ = arg;
+    const body = tree.source[span.start..span.end];
+    for (todo_markers) |marker| {
+        var from: usize = 0;
+        while (std.ascii.indexOfIgnoreCasePos(body, from, marker)) |at| : (from = at + marker.len) {
+            const start: u32 = span.start + @as(u32, @intCast(at));
+            try out.append(gpa, .{ .check = "no_todo", .span = .{ .start = start, .end = start + @as(u32, @intCast(marker.len)) } });
+        }
+    }
+}
+
+// require_comment: every named definition (function / method / class) in the
+// scope must be immediately preceded by a comment. One without is a violation.
+// Needs tree-sitter definition nodes: works for TS/JS/TSX (and any profile whose
+// function/container node kinds are populated); never silently passes.
+fn requireComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
+    _ = arg;
+    var walker = traversal.Walker.init(tree.root());
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        if (node.endByte() <= span.start or node.startByte() >= span.end) {
+            walker.skipChildren();
+            continue;
+        }
+        if (node.startByte() < span.start or node.endByte() > span.end) continue;
+        if (!isNamedDefinition(profile, node)) continue;
+        if (precededByComment(profile, node)) continue;
+        try out.append(gpa, .{ .check = "require_comment", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+    }
+}
+
+// A named function/generator/method with a name, or a class declaration with one.
+fn isNamedDefinition(profile: *const Profile, node: ts.Node) bool {
+    if (profile.functionKind(node.kind())) |kind| {
+        switch (kind) {
+            .declaration, .generator_declaration, .method => return node.childByField("name") != null,
+            else => return false,
+        }
+    }
+    // A class declaration is a container named from a field (not an object literal,
+    // which is named from its binding).
+    if (profile.containerName(node.kind())) |source| {
+        if (source == .binding) return false;
+        if (std.mem.indexOf(u8, node.kind(), "class") == null) return false;
+        return node.childByField("name") != null;
+    }
+    return false;
+}
+
+// Does a comment sit immediately before this definition (or its export wrapper)?
+fn precededByComment(profile: *const Profile, node: ts.Node) bool {
+    var anchor = node;
+    if (anchor.parent()) |parent| {
+        if (isOneOf(parent.kind(), profile.export_wrappers)) anchor = parent;
+    }
+    const previous = anchor.prevNamedSibling() orelse return false;
+    return profile.isComment(previous.kind());
+}
+
+// max_function_lines:<n>: a function whose body spans more than n lines is a
+// violation. Detects function nodes from the language profile (TS/JS/TSX; any
+// profile with function node kinds). The body is the "body" field when present,
+// otherwise the whole function node.
+fn maxFunctionLines(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
+    const text = arg orelse return;
+    const limit = std.fmt.parseInt(usize, text, 10) catch return error.QueryMalformed;
+    if (limit == 0) return error.QueryMalformed;
+    var walker = traversal.Walker.init(tree.root());
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        if (node.endByte() <= span.start or node.startByte() >= span.end) {
+            walker.skipChildren();
+            continue;
+        }
+        if (node.startByte() < span.start or node.endByte() > span.end) continue;
+        if (profile.functionKind(node.kind()) == null) continue;
+        const body = node.childByField("body") orelse node;
+        const lines = std.mem.count(u8, tree.source[body.startByte()..body.endByte()], "\n") + 1;
+        if (lines > limit) try out.append(gpa, .{ .check = "max_function_lines", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+    }
+}
+
+// forbid_import:<module>: importing the named module/package is a violation.
+// Catches `import ... from 'module'`, bare `import 'module'`, `require('module')`
+// and dynamic `import('module')`. Needs module syntax from the profile: works for
+// TS/JS/TSX. A language without module support (e.g. Zig) is refused, not silently
+// passed.
+fn forbidImport(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
+    const module = arg orelse return;
+    const m = profile.modules orelse return error.QueryNotForLanguage;
+    var walker = traversal.Walker.init(tree.root());
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        if (node.endByte() <= span.start or node.startByte() >= span.end) {
+            walker.skipChildren();
+            continue;
+        }
+        if (node.startByte() < span.start or node.endByte() > span.end) continue;
+        if (isKind(node, m.import_statement)) {
+            const source = node.childByField(m.source_field) orelse continue;
+            if (std.mem.eql(u8, unquote(tree.text(source)), module)) {
+                try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+            }
+        } else if (isKind(node, profile.call.node)) {
+            if (callImportsModule(profile, tree, node, module)) {
+                try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+            }
+        }
+    }
+}
+
+// A `require("module")` or dynamic `import("module")` call for the named module.
+fn callImportsModule(profile: *const Profile, tree: ts.Tree, node: ts.Node, module: []const u8) bool {
+    const callee = node.childByField(profile.call.function_field) orelse return false;
+    const name = tree.text(callee);
+    if (!std.mem.eql(u8, name, "require") and !std.mem.eql(u8, name, "import")) return false;
+    const arguments = node.childByField(profile.call.arguments_field) orelse return false;
+    if (arguments.namedChildCount() != 1) return false;
+    const first = arguments.namedChild(0) orelse return false;
+    if (!isOneOf(first.kind(), profile.strings)) return false;
+    return std.mem.eql(u8, unquote(tree.text(first)), module);
+}
+
+fn unquote(text: []const u8) []const u8 {
+    if (text.len < 2) return text;
+    const quote = text[0];
+    if ((quote == '"' or quote == '\'' or quote == '`') and text[text.len - 1] == quote) return text[1 .. text.len - 1];
+    return text;
+}
 
 fn keyName(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) []const u8 {
     if (!isKind(key, shape.quoted_key)) return tree.text(key);
@@ -650,4 +828,131 @@ test "a static-only caller refuses a command check by its own name" {
     try testing.expectError(error.UnknownCheck, validateStatic(testing.allocator, "added:frbid:x"));
     try testing.expectEqualStrings("forbid:x", innerOf("added:forbid:x"));
     try testing.expectEqualStrings("forbid:x", innerOf("forbid:x"));
+}
+
+fn expectCheck(v: []const Violation, name: []const u8) !void {
+    for (v) |hit| try testing.expectEqualStrings(name, hit.check);
+}
+
+test "forbid_regex flags a span that matches the pattern and passes one that does not" {
+    const dirty = "function f() { const n = 1234; }\n";
+    const v = try runSpecs(dirty, wholeSource(dirty), &.{"forbid_regex:[0-9]+"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 1), v.len);
+    try expectCheck(v, "forbid_regex");
+    try testing.expectEqual(@as(u32, 0), v[0].span.start);
+    try testing.expectEqual(@as(u32, dirty.len), v[0].span.end);
+
+    const clean = "function f() { const s = x; }\n";
+    const c = try runSpecs(clean, wholeSource(clean), &.{"forbid_regex:[0-9]+"});
+    defer testing.allocator.free(c);
+    try testing.expectEqual(@as(usize, 0), c.len);
+}
+
+test "forbid_regex scans only the changed span and refuses a malformed pattern" {
+    const source = "const n = 99;\nfunction f() { return x; }\n";
+    const v = try runSpecs(source, try spanOf(source, "{ return x; }"), &.{"forbid_regex:[0-9]+"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 0), v.len);
+
+    try testing.expectError(error.QueryMalformed, runSpecs("const x = 1;\n", wholeSource("const x = 1;\n"), &.{"forbid_regex:(unclosed"}));
+}
+
+test "require flags a span missing the literal and passes one that holds it" {
+    const lacks = "function f() { return 1; }\n";
+    const v = try runSpecs(lacks, wholeSource(lacks), &.{"require:Copyright"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 1), v.len);
+    try expectCheck(v, "require");
+    try testing.expectEqual(@as(u32, 0), v[0].span.start);
+    try testing.expectEqual(@as(u32, 0), v[0].span.end);
+
+    const has = "// Copyright ACME\nfunction f() { return 1; }\n";
+    const c = try runSpecs(has, wholeSource(has), &.{"require:Copyright"});
+    defer testing.allocator.free(c);
+    try testing.expectEqual(@as(usize, 0), c.len);
+}
+
+test "no_todo flags TODO, FIXME and XXX in any case and passes clean content" {
+    const dirty = "function f() {\n  // todo later\n  g(); // FIXME\n  return 1; // XXX\n}\n";
+    const v = try runSpecs(dirty, wholeSource(dirty), &.{"no_todo"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 3), v.len);
+    try expectCheck(v, "no_todo");
+
+    const clean = "function f() { return 1; }\n";
+    const c = try runSpecs(clean, wholeSource(clean), &.{"no_todo"});
+    defer testing.allocator.free(c);
+    try testing.expectEqual(@as(usize, 0), c.len);
+}
+
+test "require_comment flags an undocumented definition and passes a documented one" {
+    const bare = "function f() { return 1; }\n";
+    const v = try runSpecs(bare, wholeSource(bare), &.{"require_comment"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 1), v.len);
+    try expectCheck(v, "require_comment");
+
+    const doc = "// does a thing\nfunction f() { return 1; }\n";
+    const d = try runSpecs(doc, wholeSource(doc), &.{"require_comment"});
+    defer testing.allocator.free(d);
+    try testing.expectEqual(@as(usize, 0), d.len);
+}
+
+test "require_comment sees through an export wrapper and judges methods and classes" {
+    const exported = "// c\nexport function f() { return 1; }\n";
+    const e = try runSpecs(exported, wholeSource(exported), &.{"require_comment"});
+    defer testing.allocator.free(e);
+    try testing.expectEqual(@as(usize, 0), e.len);
+
+    // The class has no comment (one violation); its method does (no violation).
+    const mixed = "class C {\n  // m\n  m() { return 1; }\n}\n";
+    const v = try runSpecs(mixed, wholeSource(mixed), &.{"require_comment"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 1), v.len);
+    try testing.expectEqualStrings("class", mixed[v[0].span.start .. v[0].span.start + 5]);
+}
+
+test "max_function_lines flags a body over the limit and passes one within it" {
+    const long = "function f() {\n  a;\n  b;\n  c;\n}\n";
+    const v = try runSpecs(long, wholeSource(long), &.{"max_function_lines:3"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 1), v.len);
+    try expectCheck(v, "max_function_lines");
+
+    const short = "function f() {\n  a;\n}\n";
+    const s = try runSpecs(short, wholeSource(short), &.{"max_function_lines:3"});
+    defer testing.allocator.free(s);
+    try testing.expectEqual(@as(usize, 0), s.len);
+}
+
+test "max_function_lines refuses a non-numeric or zero limit" {
+    const source = "function f() { return 1; }\n";
+    try testing.expectError(error.QueryMalformed, runSpecs(source, wholeSource(source), &.{"max_function_lines:x"}));
+    try testing.expectError(error.QueryMalformed, runSpecs(source, wholeSource(source), &.{"max_function_lines:0"}));
+}
+
+test "forbid_import flags an import, a require and a dynamic import of the named module" {
+    const es = "import { x } from \"lodash\";\n";
+    const a = try runSpecs(es, wholeSource(es), &.{"forbid_import:lodash"});
+    defer testing.allocator.free(a);
+    try testing.expectEqual(@as(usize, 1), a.len);
+    try expectCheck(a, "forbid_import");
+
+    const req = "const x = require(\"lodash\");\n";
+    const b = try runSpecs(req, wholeSource(req), &.{"forbid_import:lodash"});
+    defer testing.allocator.free(b);
+    try testing.expectEqual(@as(usize, 1), b.len);
+
+    const dyn = "async function f() { await import(\"lodash\"); }\n";
+    const c = try runSpecs(dyn, wholeSource(dyn), &.{"forbid_import:lodash"});
+    defer testing.allocator.free(c);
+    try testing.expectEqual(@as(usize, 1), c.len);
+}
+
+test "forbid_import ignores a different module and a bare matching string" {
+    const other = "import { x } from \"ramda\";\nconst s = \"lodash\";\n";
+    const v = try runSpecs(other, wholeSource(other), &.{"forbid_import:lodash"});
+    defer testing.allocator.free(v);
+    try testing.expectEqual(@as(usize, 0), v.len);
 }

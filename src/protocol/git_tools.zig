@@ -186,10 +186,60 @@ fn render(gpa: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: 
     };
     if (!ok) return error.GitCommandFailed;
 
-    try writeResult(gpa, w, sub, path, result.stdout);
+    const annotated: []const []const u8 = if (std.mem.eql(u8, sub, "log"))
+        annotatedCommits(gpa, io, git, place.root) catch &.{}
+    else
+        &.{};
+    defer if (annotated.len != 0) {
+        for (annotated) |oid| gpa.free(oid);
+        gpa.free(annotated);
+    };
+
+    try writeResult(gpa, w, sub, path, result.stdout, annotated);
 }
 
-fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, stdout: []const u8) !void {
+/// Column ② — proof-aware reading: the full object ids of every commit that
+/// carries an emetgate receipt note (refs/notes/emetgate). Used to flag each
+/// log line as receipt-backed or not. Best-effort: a missing notes ref yields
+/// an empty set rather than an error.
+fn annotatedCommits(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8) ![]const []const u8 {
+    const argv = [_][]const u8{ git, "--no-pager", "notes", "--ref=emetgate", "list" };
+    const limit: std.Io.Limit = .limited(max_git_output_bytes);
+    const result = std.process.run(gpa, io, .{
+        .argv = &argv,
+        .cwd = .{ .path = root },
+        .stdout_limit = limit,
+        .stderr_limit = limit,
+    }) catch return &.{};
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    const exited = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!exited) return &.{};
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (list.items) |oid| gpa.free(oid);
+        list.deinit(gpa);
+    }
+    var lines = std.mem.tokenizeAny(u8, result.stdout, "\r\n");
+    while (lines.next()) |line| {
+        // Each line is "<note-object> <annotated-commit-object>".
+        const space = std.mem.lastIndexOfScalar(u8, line, ' ') orelse continue;
+        const commit = std.mem.trim(u8, line[space + 1 ..], " \t");
+        if (commit.len == 0) continue;
+        try list.append(gpa, try gpa.dupe(u8, commit));
+    }
+    return list.toOwnedSlice(gpa);
+}
+
+fn isAnnotated(annotated: []const []const u8, oid: []const u8) bool {
+    for (annotated) |known| if (std.mem.eql(u8, known, oid)) return true;
+    return false;
+}
+
+fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8) !void {
     var lines = std.mem.splitScalar(u8, stdout, '\n');
     var kept: std.ArrayList([]const u8) = .empty;
     defer kept.deinit(gpa);
@@ -222,6 +272,25 @@ fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, s
     try js.write(total);
     try js.objectField("truncated");
     try js.write(truncated);
+    if (std.mem.eql(u8, sub, "log")) {
+        try js.objectField("commits");
+        try js.beginArray();
+        for (kept.items) |line| {
+            if (line.len == 0) continue;
+            const tab = std.mem.indexOfScalar(u8, line, '\t') orelse line.len;
+            const oid = line[0..tab];
+            try js.beginObject();
+            try js.objectField("commit");
+            try js.write(oid);
+            try js.objectField("verification");
+            // v1 proof-mark: a receipt note is attached ("verified") or not
+            // ("unverified"). Replaying the receipt is the job of
+            // `emetgate verify` / `verify --branch`; here we only read the ref.
+            try js.write(if (isAnnotated(annotated, oid)) "verified" else "unverified");
+            try js.endObject();
+        }
+        try js.endArray();
+    }
     try js.endObject();
     try w.writeByte('\n');
 }

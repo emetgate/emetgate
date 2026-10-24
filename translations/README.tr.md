@@ -97,7 +97,7 @@ Oturumlar, sorular, cevap anahtarları ve bu sayıları üreten betik [tests/ben
 
 ## Kapı nasıl test edilir
 
-- **Mutasyon testi.** Her koruma bilerek bozulur ve en az bir testin başarısız olması gerekir. Motor için bugün 64 mutant var: 57 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan korumalar, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
+- **Mutasyon testi.** Her koruma bilerek bozulur ve en az bir testin başarısız olması gerekir. Motor için bugün 61 mutant var: 54 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan korumalar, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
 - **Model denetimi.** Commit günlüğü TLA+ ile tanımlandı ve kurtarma sırasındaki çökmeler dahil TLC ile denetlendi.
 - **Çökme testleri.** Toplu işler her adımdan sonra kesilir ve kurtarılır.
 - **Kırmızı takım ve fuzz paketleri**: MCP yüzeyine, korumalı alana, günlüğe ve ayrıştırıcılara karşı.
