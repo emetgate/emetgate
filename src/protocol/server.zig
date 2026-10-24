@@ -180,10 +180,10 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_git",
-        .description = "Returns read-only git output: status, diff (staged:true for the staged diff), log or show. Output is capped.",
+        .description = "Returns read-only git output: status, diff (staged:true for the staged diff), log, show or blame. The raw git output is capped. For diff and show the reply also carries symbol_changes: per file, which functions/types/methods were added, removed or changed (plus non_symbol_change for edits outside any symbol, and mapped:false when a side could not be parsed). For blame it carries symbol_blame: the commit that last changed each symbol. blame requires a single file path.",
         .props = &.{
-            .{ .name = "sub", .desc = "one of: status, diff, log, show" },
-            .{ .name = "path", .desc = "limit to this file or directory inside the repo", .optional = true },
+            .{ .name = "sub", .desc = "one of: status, diff, log, show, blame" },
+            .{ .name = "path", .desc = "limit to this file or directory inside the repo (required for blame)", .optional = true },
             .{ .name = "staged", .desc = "diff only: true for the staged (--cached) diff instead of the working tree", .optional = true, .ty = "boolean" },
             .{ .name = "n", .desc = "log only: how many commits, newest first (default 20, at most 200)", .optional = true, .ty = "integer" },
             .{ .name = "commit", .desc = "show only: a commit hash (4 to 40 hex characters) or HEAD, optionally with ~N or ^N", .optional = true },

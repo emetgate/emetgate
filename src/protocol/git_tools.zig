@@ -3,6 +3,8 @@ const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
 const exe_path = @import("../platform/exe_path.zig");
+const git_symbols = @import("git_symbols.zig");
+const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -23,6 +25,7 @@ const max_argv = 24;
 pub const Error = error{
     UnknownGitSubcommand,
     MissingCommit,
+    MissingPath,
     InvalidCommit,
     InvalidCount,
     GitCommandFailed,
@@ -83,20 +86,20 @@ fn getBool(args: ?Value, key: []const u8) bool {
     };
 }
 
-pub fn callGit(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
+pub fn callGit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const sub = try requireString(args, "sub");
     event.label = "git";
     event.file = sub;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    render(gpa, io, root, sub, args, &buffer.writer) catch |err| {
+    render(gpa, io, runtime, root, sub, args, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn render(gpa: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: ?Value, w: *Writer) !void {
+fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub: []const u8, args: ?Value, w: *Writer) !void {
     const path = if (args) |a| getString(a, "path") else null;
     const place = try repo.jail(gpa, io, root, path orelse ".");
     defer place.deinit(gpa);
@@ -112,6 +115,7 @@ fn render(gpa: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: 
     argv[0] = git;
 
     var count_buf: [8]u8 = undefined;
+    var show_commit: ?[]const u8 = null;
     if (std.mem.eql(u8, sub, "status")) {
         argv[n] = "status";
         n += 1;
@@ -150,6 +154,7 @@ fn render(gpa: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: 
     } else if (std.mem.eql(u8, sub, "show")) {
         const commit = (if (args) |a| getString(a, "commit") else null) orelse return error.MissingCommit;
         if (!isValidCommit(commit)) return error.InvalidCommit;
+        show_commit = commit;
         argv[n] = "show";
         n += 1;
         argv[n] = "--no-color";
@@ -159,6 +164,12 @@ fn render(gpa: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: 
         argv[n] = "--no-textconv";
         n += 1;
         argv[n] = commit;
+        n += 1;
+    } else if (std.mem.eql(u8, sub, "blame")) {
+        // blame has no unambiguous --no-color (it collides with
+        // --no-color-lines); color is already off via the -c prefix.
+        if (path == null or place.rel.len == 0) return error.MissingPath;
+        argv[n] = "blame";
         n += 1;
     } else {
         return error.UnknownGitSubcommand;
@@ -195,7 +206,61 @@ fn render(gpa: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: 
         gpa.free(annotated);
     };
 
-    try writeResult(gpa, w, sub, path, result.stdout, annotated);
+    // Symbol-level view: diff and show map their changed line ranges to the
+    // enclosing symbols; blame maps each symbol to the commit that last
+    // touched it. Best-effort — a failure here leaves the raw git output intact.
+    var summary: ?git_symbols.Summary = null;
+    defer if (summary) |*s| s.deinit();
+    var blame: ?git_symbols.BlameReport = null;
+    defer if (blame) |*b| b.deinit();
+
+    if (std.mem.eql(u8, sub, "diff")) {
+        // An empty rev means the index: `git show :<path>`. For the working
+        // tree the new side is read from disk (null rev).
+        const sides: git_symbols.Sides = if (getBool(args, "staged"))
+            .{ .old_rev = "HEAD", .new_rev = "" }
+        else
+            .{ .old_rev = "", .new_rev = null };
+        summary = git_symbols.analyzeDiff(gpa, io, runtime, git, place.root, sides, result.stdout) catch null;
+    } else if (std.mem.eql(u8, sub, "show")) {
+        const parent = try std.fmt.allocPrint(gpa, "{s}^", .{show_commit.?});
+        defer gpa.free(parent);
+        const sides: git_symbols.Sides = .{ .old_rev = parent, .new_rev = show_commit.? };
+        summary = git_symbols.analyzeDiff(gpa, io, runtime, git, place.root, sides, result.stdout) catch null;
+    }
+
+    var porcelain: ?[]u8 = null;
+    defer if (porcelain) |p| gpa.free(p);
+    if (std.mem.eql(u8, sub, "blame")) {
+        porcelain = blamePorcelain(gpa, io, git, place.root, place.rel) catch null;
+        if (porcelain) |text|
+            blame = git_symbols.analyzeBlame(gpa, io, runtime, place.root, place.rel, text) catch null;
+    }
+
+    try writeResult(gpa, w, sub, path, result.stdout, annotated, if (summary) |*s| s else null, if (blame) |*b| b else null);
+}
+
+/// Second blame pass in machine-readable form, used only to map symbols to the
+/// commit that last changed them. Best-effort: a failure returns null and the
+/// raw blame stays the whole answer.
+fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rel: []const u8) !?[]u8 {
+    const argv = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "--", rel };
+    const result = std.process.run(gpa, io, .{
+        .argv = &argv,
+        .cwd = .{ .path = root },
+        .stdout_limit = .limited(max_git_output_bytes * 8),
+        .stderr_limit = .limited(max_git_output_bytes),
+    }) catch return null;
+    defer gpa.free(result.stderr);
+    const ok = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!ok) {
+        gpa.free(result.stdout);
+        return null;
+    }
+    return result.stdout;
 }
 
 /// Column ② — proof-aware reading: the full object ids of every commit that
@@ -239,7 +304,7 @@ fn isAnnotated(annotated: []const []const u8, oid: []const u8) bool {
     return false;
 }
 
-fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8) !void {
+fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8, summary: ?*const git_symbols.Summary, blame: ?*const git_symbols.BlameReport) !void {
     var lines = std.mem.splitScalar(u8, stdout, '\n');
     var kept: std.ArrayList([]const u8) = .empty;
     defer kept.deinit(gpa);
@@ -291,6 +356,80 @@ fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, s
         }
         try js.endArray();
     }
+    if (summary) |s| try writeSymbolSummary(&js, s.*);
+    if (blame) |b| try writeBlameSummary(&js, b.*);
     try js.endObject();
     try w.writeByte('\n');
+}
+
+fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !void {
+    try js.objectField("symbol_changes");
+    try js.beginArray();
+    for (summary.files) |file| {
+        try js.beginObject();
+        try js.objectField("path");
+        try js.write(file.path);
+        try js.objectField("status");
+        try js.write(file.status);
+        try js.objectField("mapped");
+        try js.write(file.mapped);
+        try js.objectField("non_symbol_change");
+        try js.write(file.non_symbol_change);
+        if (file.note) |note| {
+            try js.objectField("note");
+            try js.write(note);
+        }
+        try js.objectField("symbols");
+        try js.beginArray();
+        for (file.symbols) |sym| {
+            try js.beginObject();
+            try js.objectField("ref");
+            try js.write(sym.ref);
+            try js.objectField("kind");
+            try js.write(sym.kind);
+            try js.objectField("change");
+            try js.write(@tagName(sym.change));
+            try js.endObject();
+        }
+        try js.endArray();
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.objectField("symbol_changes_truncated");
+    try js.write(summary.truncated);
+}
+
+fn writeBlameSummary(js: *std.json.Stringify, blame: git_symbols.BlameReport) !void {
+    try js.objectField("symbol_blame");
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(blame.file);
+    try js.objectField("mapped");
+    try js.write(blame.mapped);
+    if (blame.note) |note| {
+        try js.objectField("note");
+        try js.write(note);
+    }
+    try js.objectField("symbols");
+    try js.beginArray();
+    for (blame.symbols) |sym| {
+        try js.beginObject();
+        try js.objectField("ref");
+        try js.write(sym.ref);
+        try js.objectField("kind");
+        try js.write(sym.kind);
+        try js.objectField("commit");
+        try js.write(sym.commit);
+        try js.objectField("summary");
+        try js.write(sym.summary);
+        try js.objectField("author");
+        try js.write(sym.author);
+        try js.objectField("line_start");
+        try js.write(sym.start_line);
+        try js.objectField("line_end");
+        try js.write(sym.end_line);
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.endObject();
 }
