@@ -97,7 +97,7 @@ Las sesiones, las preguntas, las claves de respuestas y el script que produce es
 
 ## Cómo se prueba la puerta
 
-- **Pruebas de mutación.** Cada guarda se rompe a propósito y al menos una prueba debe fallar. Para el motor hay hoy 64 mutantes: 57 eliminados, 4 demostrados equivalentes, 2 guardas redundantes mantenidas como defensa en profundidad, 1 abierto. La lista está en [VERIFICATION.md](../VERIFICATION.md).
+- **Pruebas de mutación.** Cada guarda se rompe a propósito y al menos una prueba debe fallar. Para el motor hay hoy 61 mutantes: 54 eliminados, 4 demostrados equivalentes, 2 guardas redundantes mantenidas como defensa en profundidad, 1 abierto. La lista está en [VERIFICATION.md](../VERIFICATION.md).
 - **Verificación de modelos.** El diario de commits está especificado en TLA+ y comprobado con TLC, incluidas las caídas durante la recuperación.
 - **Pruebas de caída.** Los lotes se cortan después de cada paso y se recuperan.
 - **Suites de red team y de fuzzing** contra la superficie MCP, el sandbox, el diario y los analizadores.
