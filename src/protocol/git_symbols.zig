@@ -110,7 +110,11 @@ fn reportFile(gpa: Allocator, arena: Allocator, io: std.Io, runtime: *Runtime, g
 
     // Pick a language profile from whichever path exists; a file of no
     // registered language carries no symbols, so the raw diff is the view.
-    const lang_path = fd.new_path orelse fd.old_path.?;
+    // A binary file or a pure rename/mode change produces no --- / +++ lines,
+    // so neither path is set. There is nothing textual to map; keep the raw
+    // diff as the answer rather than crashing on the missing path.
+    const lang_path = fd.new_path orelse (fd.old_path orelse
+        return .{ .path = display, .status = status, .symbols = &.{}, .mapped = true, .non_symbol_change = false, .note = "no symbols: binary or rename-only change" });
     const profile = registry.forPath(lang_path) orelse
         return .{ .path = display, .status = status, .symbols = &.{}, .mapped = true, .non_symbol_change = fd.new_ranges.items.len + fd.old_ranges.items.len > 0, .note = "no symbols: unsupported language" };
 
