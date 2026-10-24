@@ -76,10 +76,10 @@ SEARCH_COUNTS = ["files_candidates", "files_read", "files_parsed", "files_fast_c
 
 
 class McpSession:
-    def __init__(self, exe, cwd):
+    def __init__(self, exe, cwd, internals=False):
         self.started = time.perf_counter()
         self.proc = subprocess.Popen(
-            [exe, "mcp"],
+            [exe, "mcp", *(["--search-internals"] if internals else [])],
             cwd=cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -174,7 +174,7 @@ def new_sessions(exe, repo, count, delay_s):
     rows = []
     for i in range(count):
         tool, args = FIRST_CALLS[i % len(FIRST_CALLS)]
-        session = McpSession(exe, repo)
+        session = McpSession(exe, repo, internals=True)
         try:
             if delay_s:
                 time.sleep(delay_s)
@@ -187,7 +187,7 @@ def new_sessions(exe, repo, count, delay_s):
 
 
 def warm(exe, repo, runs):
-    session = McpSession(exe, repo)
+    session = McpSession(exe, repo, internals=True)
     samples = {i: [] for i in range(len(CALLS))}
     pings = []
     pids = set()
@@ -233,7 +233,7 @@ def git_grep_lines(repo, args, pattern_args, path):
 
 
 def differential(exe, repo):
-    session = McpSession(exe, repo)
+    session = McpSession(exe, repo, internals=True)
     rows = []
     seen = set()
     try:

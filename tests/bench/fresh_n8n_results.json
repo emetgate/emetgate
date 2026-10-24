@@ -1,0 +1,528 @@
+{
+  "date": "2026-10-02",
+  "repo": "n8n",
+  "rows": [
+    {
+      "scenario": "baseline: search with no write before it",
+      "rounds": 200,
+      "extra_p50_ms": 0.307,
+      "extra_p99_ms": 0.533,
+      "e2e_p50_ms": 1.223,
+      "e2e_p99_ms": 1.797,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.251,
+        "list_ms": 0.051,
+        "index_refresh_ms": 0.001,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.225,
+        "match_ms": 0,
+        "parse_ms": 0,
+        "root_ms": 0.002,
+        "json_ms": 0,
+        "total_ms": 0.659,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 0.3
+    },
+    {
+      "scenario": "save in place (write + close)",
+      "rounds": 200,
+      "extra_p50_ms": 0.507,
+      "extra_p99_ms": 0.929,
+      "e2e_p50_ms": 2.147,
+      "e2e_p99_ms": 5.229,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.246,
+        "list_ms": 0.052,
+        "index_refresh_ms": 0.203,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.236,
+        "match_ms": 0.003,
+        "parse_ms": 0.641,
+        "root_ms": 0.007,
+        "json_ms": 0,
+        "total_ms": 1.552,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "stale_old_token_hits": 19
+      },
+      "wall_s": 0.6
+    },
+    {
+      "scenario": "save by rename over the file",
+      "rounds": 200,
+      "extra_p50_ms": 0.768,
+      "extra_p99_ms": 1.137,
+      "e2e_p50_ms": 2.632,
+      "e2e_p99_ms": 5.73,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.323,
+        "list_ms": 0.054,
+        "index_refresh_ms": 0.38,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.257,
+        "match_ms": 0.003,
+        "parse_ms": 0.744,
+        "root_ms": 0.009,
+        "json_ms": 0,
+        "total_ms": 1.933,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "stale_old_token_hits": 19
+      },
+      "wall_s": 0.9
+    },
+    {
+      "scenario": "create a file and git add it",
+      "rounds": 200,
+      "extra_p50_ms": 14.373,
+      "extra_p99_ms": 25.08,
+      "e2e_p50_ms": 24.232,
+      "e2e_p99_ms": 40.226,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.424,
+        "list_ms": 9.815,
+        "index_refresh_ms": 4.097,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.295,
+        "match_ms": 0.002,
+        "parse_ms": 0.132,
+        "root_ms": 7.473,
+        "json_ms": 0,
+        "total_ms": 23.315,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "git_add_p50_ms": 53.2
+      },
+      "wall_s": 31.8
+    },
+    {
+      "scenario": "git rm and delete the file",
+      "rounds": 200,
+      "extra_p50_ms": 14.121,
+      "extra_p99_ms": 24.392,
+      "e2e_p50_ms": 23.824,
+      "e2e_p99_ms": 40.81,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.36,
+        "list_ms": 9.813,
+        "index_refresh_ms": 4.016,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.297,
+        "match_ms": 0,
+        "parse_ms": 0,
+        "root_ms": 7.429,
+        "json_ms": 0,
+        "total_ms": 22.878,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 31.8
+    },
+    {
+      "scenario": "create a file without git add (outside the tracked scope)",
+      "rounds": 10,
+      "extra_p50_ms": 0.433,
+      "extra_p99_ms": 2.002,
+      "e2e_p50_ms": 1.571,
+      "e2e_p99_ms": 3.269,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.362,
+        "list_ms": 0.065,
+        "index_refresh_ms": 0.009,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.3,
+        "match_ms": 0,
+        "parse_ms": 0,
+        "root_ms": 0.003,
+        "json_ms": 0,
+        "total_ms": 0.883,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 31.8
+    },
+    {
+      "scenario": "delete a tracked file from disk",
+      "rounds": 200,
+      "extra_p50_ms": 0.354,
+      "extra_p99_ms": 0.55,
+      "e2e_p50_ms": 8.389,
+      "e2e_p99_ms": 9.411,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.259,
+        "list_ms": 0.057,
+        "index_refresh_ms": 0.037,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.282,
+        "match_ms": 0,
+        "parse_ms": 0,
+        "root_ms": 6.764,
+        "json_ms": 0,
+        "total_ms": 7.56,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 4.5
+    },
+    {
+      "scenario": "put the deleted file back",
+      "rounds": 200,
+      "extra_p50_ms": 0.485,
+      "extra_p99_ms": 1.6,
+      "e2e_p50_ms": 8.964,
+      "e2e_p99_ms": 20.422,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.309,
+        "list_ms": 0.059,
+        "index_refresh_ms": 0.107,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.301,
+        "match_ms": 0.002,
+        "parse_ms": 0.183,
+        "root_ms": 6.809,
+        "json_ms": 0,
+        "total_ms": 8.108,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 4.5
+    },
+    {
+      "scenario": "git mv a tracked file",
+      "rounds": 200,
+      "extra_p50_ms": 15.247,
+      "extra_p99_ms": 28.075,
+      "e2e_p50_ms": 27.893,
+      "e2e_p99_ms": 59.633,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.411,
+        "list_ms": 9.621,
+        "index_refresh_ms": 5.157,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.329,
+        "match_ms": 0.007,
+        "parse_ms": 2.879,
+        "root_ms": 7.23,
+        "json_ms": 0,
+        "total_ms": 27.014,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 66.9
+    },
+    {
+      "scenario": "rename a tracked file without git (old path vanished, new path untracked)",
+      "rounds": 20,
+      "extra_p50_ms": 14.952,
+      "extra_p99_ms": 28.557,
+      "e2e_p50_ms": 24.31,
+      "e2e_p99_ms": 44.12,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.408,
+        "list_ms": 9.656,
+        "index_refresh_ms": 4.999,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.3,
+        "match_ms": 0,
+        "parse_ms": 0,
+        "root_ms": 7.198,
+        "json_ms": 0,
+        "total_ms": 23.248,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 66.9
+    },
+    {
+      "scenario": "git mv a directory of 15 tracked files",
+      "rounds": 50,
+      "extra_p50_ms": 14.964,
+      "extra_p99_ms": 18.917,
+      "e2e_p50_ms": 17.067,
+      "e2e_p99_ms": 22.877,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.41,
+        "list_ms": 9.279,
+        "index_refresh_ms": 5.236,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.032,
+        "match_ms": 0.059,
+        "parse_ms": 0.489,
+        "root_ms": 0.022,
+        "json_ms": 0,
+        "total_ms": 16.339,
+        "warm_wait_ms": 0
+      },
+      "notes": {},
+      "wall_s": 6.3
+    },
+    {
+      "scenario": "git checkout of 59 changed files, first search",
+      "rounds": 40,
+      "extra_p50_ms": 34.138,
+      "extra_p99_ms": 46.797,
+      "e2e_p50_ms": 51.61,
+      "e2e_p99_ms": 89.489,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 1.597,
+        "list_ms": 10.111,
+        "index_refresh_ms": 22.532,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.595,
+        "match_ms": 0.502,
+        "parse_ms": 2.202,
+        "root_ms": 7.824,
+        "json_ms": 0,
+        "total_ms": 50.407,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "compared_with_git_grep": 20,
+        "changed_files": 59
+      },
+      "wall_s": 30.4
+    },
+    {
+      "scenario": "git checkout of 523 changed files, first search",
+      "rounds": 40,
+      "extra_p50_ms": 172.708,
+      "extra_p99_ms": 233.022,
+      "e2e_p50_ms": 260.752,
+      "e2e_p99_ms": 359.403,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.393,
+        "list_ms": 9.79,
+        "index_refresh_ms": 162.569,
+        "refresh_work_ms": 96.74,
+        "filter_ms": 1.214,
+        "match_ms": 0.412,
+        "parse_ms": 79.949,
+        "root_ms": 9.04,
+        "json_ms": 0,
+        "total_ms": 259.557,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "compared_with_git_grep": 20,
+        "changed_files": 523
+      },
+      "wall_s": 52.8
+    },
+    {
+      "scenario": "100 files changed while no server ran, first search right after initialize",
+      "rounds": 30,
+      "extra_p50_ms": 233.889,
+      "extra_p99_ms": 277.236,
+      "e2e_p50_ms": 152.381,
+      "e2e_p99_ms": 173.995,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.664,
+        "list_ms": 0.129,
+        "index_refresh_ms": 92.792,
+        "refresh_work_ms": 41.646,
+        "filter_ms": 0.343,
+        "match_ms": 0.445,
+        "parse_ms": 0.271,
+        "root_ms": 7.902,
+        "json_ms": 0,
+        "total_ms": 151.382,
+        "warm_wait_ms": 140.394
+      },
+      "notes": {
+        "initialize_p50_ms": 49.3,
+        "warm_wait_p50_ms": 140.4,
+        "warmup_p50_ms": 141.6,
+        "warmup_p99_ms": 163.2
+      },
+      "wall_s": 58.7
+    },
+    {
+      "scenario": "100 files changed while no server ran, first search after a 3 s pause",
+      "rounds": 30,
+      "extra_p50_ms": 93.629,
+      "extra_p99_ms": 108.152,
+      "e2e_p50_ms": 11.28,
+      "e2e_p99_ms": 16.174,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.544,
+        "list_ms": 0.111,
+        "index_refresh_ms": 92.983,
+        "refresh_work_ms": 39.586,
+        "filter_ms": 0.352,
+        "match_ms": 0.545,
+        "parse_ms": 0.262,
+        "root_ms": 7.283,
+        "json_ms": 0,
+        "total_ms": 10.057,
+        "warm_wait_ms": 0.004
+      },
+      "notes": {
+        "initialize_p50_ms": 45.4,
+        "warm_wait_p50_ms": 0.0,
+        "warmup_p50_ms": 141.1,
+        "warmup_p99_ms": 154.8
+      },
+      "wall_s": 144.9
+    },
+    {
+      "scenario": "save in place while another thread rewrites other tracked files",
+      "rounds": 200,
+      "extra_p50_ms": 1.873,
+      "extra_p99_ms": 2.952,
+      "e2e_p50_ms": 4.603,
+      "e2e_p99_ms": 9.593,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.357,
+        "list_ms": 0.057,
+        "index_refresh_ms": 1.446,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.308,
+        "match_ms": 0.004,
+        "parse_ms": 1.294,
+        "root_ms": 0.05,
+        "json_ms": 0,
+        "total_ms": 3.774,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "background_writes": 3170
+      },
+      "wall_s": 1.2
+    },
+    {
+      "scenario": "writer keeps its handle open (append), search after close",
+      "rounds": 40,
+      "extra_p50_ms": 0.282,
+      "extra_p99_ms": 0.649,
+      "e2e_p50_ms": 1.465,
+      "e2e_p99_ms": 2.738,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.238,
+        "list_ms": 0.042,
+        "index_refresh_ms": 0.002,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.327,
+        "match_ms": 0.003,
+        "parse_ms": 0.065,
+        "root_ms": 0.002,
+        "json_ms": 0,
+        "total_ms": 0.809,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "found": {
+          "after_write": 0,
+          "after_write_250ms": 0,
+          "after_flush": 40,
+          "after_close": 40
+        },
+        "notification_after_write": {
+          "events": 0,
+          "of": 40,
+          "p50_ms": null
+        },
+        "notification_after_flush": {
+          "events": 40,
+          "of": 40,
+          "p50_ms": 0.33
+        },
+        "notification_after_close": {
+          "events": 0,
+          "of": 40,
+          "p50_ms": null
+        },
+        "directory_entry_size_moved_before_close": 0,
+        "live_size_moved_before_close": 40
+      },
+      "wall_s": 14.9
+    },
+    {
+      "scenario": "writer keeps its handle open (overwrite), search after close",
+      "rounds": 40,
+      "extra_p50_ms": 0.417,
+      "extra_p99_ms": 0.963,
+      "e2e_p50_ms": 1.769,
+      "e2e_p99_ms": 3.749,
+      "misses": 0,
+      "first_misses": [],
+      "stage_p50_ms": {
+        "sync_ms": 0.348,
+        "list_ms": 0.056,
+        "index_refresh_ms": 0.003,
+        "refresh_work_ms": 0,
+        "filter_ms": 0.354,
+        "match_ms": 0.002,
+        "parse_ms": 0.08,
+        "root_ms": 0.002,
+        "json_ms": 0,
+        "total_ms": 1.045,
+        "warm_wait_ms": 0
+      },
+      "notes": {
+        "found": {
+          "after_write": 1,
+          "after_write_250ms": 1,
+          "after_flush": 40,
+          "after_close": 40
+        },
+        "notification_after_write": {
+          "events": 0,
+          "of": 40,
+          "p50_ms": null
+        },
+        "notification_after_flush": {
+          "events": 40,
+          "of": 40,
+          "p50_ms": 0.3
+        },
+        "notification_after_close": {
+          "events": 0,
+          "of": 40,
+          "p50_ms": null
+        },
+        "directory_entry_size_moved_before_close": 0,
+        "live_size_moved_before_close": 0
+      },
+      "wall_s": 14.9
+    }
+  ]
+}

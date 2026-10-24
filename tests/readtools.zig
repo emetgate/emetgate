@@ -122,6 +122,48 @@ test "read_file returns a JSON key tree by default, and a pointer's subtree with
     try testing.expectEqualStrings("\"^4.0.0\"", value_body.value.object.get("value").?.string);
 }
 
+extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: std.os.windows.DWORD, share: std.os.windows.DWORD, security: ?*anyopaque, disposition: std.os.windows.DWORD, flags: std.os.windows.DWORD, template: ?std.os.windows.HANDLE) callconv(.winapi) std.os.windows.HANDLE;
+
+fn holdWithoutSharing(path: []const u8) !std.os.windows.HANDLE {
+    var wide: [std.os.windows.PATH_MAX_WIDE:0]u16 = undefined;
+    const len = try std.unicode.wtf8ToWtf16Le(&wide, path);
+    wide[len] = 0;
+    for (0..200) |_| {
+        const handle = CreateFileW(&wide, 0x80000000, 0, null, 3, 0x80, null);
+        if (handle != std.os.windows.INVALID_HANDLE_VALUE) return handle;
+        try std.Io.sleep(testing.io, .fromMilliseconds(5), .awake);
+    }
+    return error.HoldFailed;
+}
+
+test "read_file on a file another handle holds without sharing fails as busy within 50 ms" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "held.txt", .data = "held text\n" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "held.txt", testing.allocator);
+    defer testing.allocator.free(path);
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const holder = try holdWithoutSharing(path);
+    defer std.os.windows.CloseHandle(holder);
+
+    var line: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer line.deinit();
+    var js: std.json.Stringify = .{ .writer = &line.writer };
+    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_read_file", .arguments = .{ .file = path } } });
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    const started = std.Io.Clock.awake.now(testing.io).nanoseconds;
+    _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
+    const elapsed = std.Io.Clock.awake.now(testing.io).nanoseconds - started;
+    errdefer std.debug.print("{s}\n", .{out.written()});
+    try testing.expect(std.mem.indexOf(u8, out.written(), "FileBusy") != null);
+    try testing.expect(elapsed < 50 * std.time.ns_per_ms);
+}
+
 test "read_file refuses malformed JSON instead of serving a partial key tree" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -293,6 +335,54 @@ test "read tools refuse a path outside the repo" {
     try expectToolError(runtime, "emetgate_read_file", .{ .file = outside }, "FileOutsideRepo");
     try expectToolError(runtime, "emetgate_list", .{ .dir = "C:\\Windows" }, "FileOutsideRepo");
     try expectToolError(runtime, "emetgate_search", .{ .pattern = "fonts", .dir = "C:\\Windows" }, "FileOutsideRepo");
+}
+
+test "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "r");
+    try tmp.dir.createDirPath(testing.io, "x/y");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "r/a.txt", .data = "inside\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "x/y/f.txt", .data = "outside secret\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, "r", testing.allocator);
+    defer testing.allocator.free(root);
+    try commitAll(root);
+    const outside = try tmp.dir.realPathFileAlloc(testing.io, "x/y/f.txt", testing.allocator);
+    defer testing.allocator.free(outside);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    for ([_][]const u8{ "emetgate_read_file", "emetgate_search" }) |tool| {
+        var reply = if (std.mem.eql(u8, tool, "emetgate_read_file"))
+            try callToolServed(runtime, root, tool, .{ .file = outside })
+        else
+            try callToolServed(runtime, root, tool, .{ .pattern = "secret", .dir = outside });
+        defer reply.deinit();
+        try testing.expect(reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expectEqualStrings("FileOutsideRepo", body.value.object.get("error").?.string);
+    }
+
+    try tmp.dir.createDirPath(testing.io, "s");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "s/b.txt", .data = "other repo\n" });
+    const other = try tmp.dir.realPathFileAlloc(testing.io, "s", testing.allocator);
+    defer testing.allocator.free(other);
+    try commitAll(other);
+    const first = try tmp.dir.realPathFileAlloc(testing.io, "r/a.txt", testing.allocator);
+    defer testing.allocator.free(first);
+    {
+        var reply = try callToolServed(runtime, root, "emetgate_read_file", .{ .file = first });
+        defer reply.deinit();
+        try testing.expect(!reply.is_error);
+    }
+    var reply = try callToolServed(runtime, other, "emetgate_read_file", .{ .file = first });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("FileOutsideRepo", body.value.object.get("error").?.string);
 }
 
 test "read tools refuse a file of a nested repository, worktree or bare repository under the served root, at any depth" {
@@ -605,65 +695,10 @@ fn gitIn(root: []const u8, args: []const []const u8) !void {
     }
 }
 
-fn searchedFiles(root: []const u8, limits: read_tools.SearchLimits) !std.json.Parsed(Value) {
-    var out: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer out.deinit();
-    try read_tools.searchIn(testing.allocator, testing.io, root, "", "needle", limits, &out.writer);
-    return std.json.parseFromSlice(Value, testing.allocator, out.written(), .{ .allocate = .alloc_always });
-}
-
-fn matchedFile(parsed: Value, name: []const u8) bool {
-    for (parsed.object.get("matches").?.array.items) |m| {
-        if (std.mem.eql(u8, m.object.get("file").?.string, name)) return true;
-    }
-    return false;
-}
-
 fn commitAll(root: []const u8) !void {
     try git_fixture.initRepo(root);
     try gitIn(root, &.{ "add", "." });
     try gitIn(root, &.{ "commit", "-q", "-m", "init" });
-}
-
-test "search reads a tracked file just under 1 MiB and skips one of 1 MiB" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const mib = 1024 * 1024;
-    const under_cap = try testing.allocator.alloc(u8, mib - 1);
-    defer testing.allocator.free(under_cap);
-    @memset(under_cap, 'x');
-    @memcpy(under_cap[0..7], "needle\n");
-    const at_cap = try testing.allocator.alloc(u8, mib);
-    defer testing.allocator.free(at_cap);
-    @memset(at_cap, 'x');
-    @memcpy(at_cap[0..7], "needle\n");
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "under_cap.txt", .data = under_cap });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "at_cap.txt", .data = at_cap });
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(root);
-    try commitAll(root);
-
-    var result = try searchedFiles(root, .{});
-    defer result.deinit();
-    try testing.expect(matchedFile(result.value, "under_cap.txt"));
-    try testing.expect(!matchedFile(result.value, "at_cap.txt"));
-}
-
-test "search skips a tracked binary file" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "text.txt", .data = "needle here\n" });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "blob.bin", .data = "needle\x00binary\n" });
-    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(root);
-    try commitAll(root);
-
-    var result = try searchedFiles(root, .{});
-    defer result.deinit();
-    try testing.expect(matchedFile(result.value, "text.txt"));
-    try testing.expect(!matchedFile(result.value, "blob.bin"));
 }
 
 test "internal workspace and git paths are refused, others pass" {

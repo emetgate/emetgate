@@ -97,7 +97,7 @@ The sessions, questions, answer keys and the script that produces these numbers 
 
 ## How the gate is tested
 
-- **Mutation testing.** Each guard is broken on purpose and at least one test must fail. For the engine: <!-- generated:engine-mutant-summary -->64 mutants today: 57 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
+- **Mutation testing.** Each guard is broken on purpose and at least one test must fail. For the engine: <!-- generated:engine-mutant-summary -->61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
 - **Model checking.** The commit journal is specified in TLA+ and checked with TLC, including crashes during recovery.
 - **Crash tests.** Batches are cut after every step and recovered.
 - **Red-team and fuzz suites** against the MCP surface, the sandbox, the journal and the parsers.

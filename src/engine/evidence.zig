@@ -400,7 +400,10 @@ const Builder = struct {
                 error.Changed => try self.unread.put(self.arena, path, .changed_since_snapshot),
                 error.Vanished => try self.unread.put(self.arena, path, .vanished),
                 error.Unreadable => try self.unread.put(self.arena, path, .unreadable),
-                error.TooLarge => try self.excluded.put(self.arena, path, {}),
+                error.TooLarge => {
+                    try self.excluded.put(self.arena, path, {});
+                    self.too_large = true;
+                },
             }
             return null;
         };

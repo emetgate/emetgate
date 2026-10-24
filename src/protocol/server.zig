@@ -155,12 +155,14 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_search",
-        .description = "Returns the places where a literal pattern, or with regex:true a regular expression, occurs in git-tracked text files, case-sensitive. Hits are grouped by file and by enclosing symbol with its content hash, JSON pointer or Markdown heading, and tagged code, comment or string and definition or reference. At most 200 hits; files of 1 MiB or more are skipped.",
+        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in the git-tracked text files under dir, a directory or one file. The reply is plain text: each file path on its own line, then its matching lines as line:text, with a * after the line number on a definition; leading spaces are dropped and a line over 120 characters is cut around the match with \u{2026} at each cut. A text met on more than one line is written once in a legend line |N text, and those lines read line|N. The last line is \u{2713} when every tracked text file in scope was searched and every match is shown; otherwise it starts with partial: and names the matches shown (matches A-B of T), the files that could not be read or fully evaluated, and next offset:N to page on. Binary files, files over 16 MiB and internal paths are excluded. A regular expression the index cannot run (for example \\b or {n,m}) is searched by ripgrep over the same files. The reply holds about 5000 characters; detail:\"full\" lifts that to 200 matches. A write is in the answer once its writer has closed or flushed the file.",
         .props = &.{
             .{ .name = "pattern", .desc = "text or, with regex:true, a regular expression to find" },
-            .{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true },
-            .{ .name = "regex", .desc = "true when pattern is a regular expression", .optional = true, .ty = "boolean" },
-            .{ .name = "kinds", .desc = "kinds to keep: code, comment, string", .optional = true, .ty = "array" },
+            .{ .name = "dir", .desc = "directory or file inside the repo; defaults to the repo root", .optional = true },
+            .{ .name = "regex", .desc = "treat pattern as a regular expression instead of a literal substring", .optional = true, .ty = "boolean" },
+            .{ .name = "kinds", .desc = "keep only hits of these kinds, e.g. [\"code\"] to skip comments and strings", .optional = true, .ty = "array" },
+            .{ .name = "offset", .desc = "skip this many ranked hits, to page through a long answer", .optional = true, .ty = "integer" },
+            .{ .name = "detail", .desc = "\"full\" lifts the reply size budget (up to 200 hits); the default is \"compact\"", .optional = true },
         },
     },
     .{
@@ -261,6 +263,7 @@ pub const Served = struct {
         self.policy.language_service = &self.language_service;
         self.policy.map_session = self.map_session;
         self.policy.find_session = self.find_session;
+        self.search.start();
         if (self.map_session) |ms| {
             ms.store_override = options.fact_store;
             ms.start();

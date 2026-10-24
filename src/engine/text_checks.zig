@@ -8,7 +8,7 @@ pub const Hit = struct { start: usize, end: usize };
 
 pub const Error = error{ UnknownCheck, MissingCheckArgument, EmptyCheckArgument, UnexpectedCheckArgument };
 
-const Kind = enum { forbid, forbid_any_case, require, require_any_case, max_lines, max_subject, max_line };
+const Kind = enum { forbid, forbid_any_case, require, require_any_case, max_lines, max_subject, max_line, conventional };
 
 const Named = struct { name: []const u8, kind: Kind };
 
@@ -20,7 +20,11 @@ pub const registry = [_]Named{
     .{ .name = "max_lines", .kind = .max_lines },
     .{ .name = "max_subject", .kind = .max_subject },
     .{ .name = "max_line", .kind = .max_line },
+    .{ .name = "conventional", .kind = .conventional },
 };
+
+/// The commit types Conventional Commits recognises for the subject line.
+const conventional_types = [_][]const u8{ "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert" };
 
 const Resolved = struct { kind: Kind, arg: []const u8, limit: usize = 0 };
 
@@ -32,8 +36,12 @@ pub fn of(spec: []const u8) ?[]const u8 {
 fn takesNumber(kind: Kind) bool {
     return switch (kind) {
         .max_lines, .max_subject, .max_line => true,
-        .forbid, .forbid_any_case, .require, .require_any_case => false,
+        .forbid, .forbid_any_case, .require, .require_any_case, .conventional => false,
     };
+}
+
+fn takesArgument(kind: Kind) bool {
+    return kind != .conventional;
 }
 
 fn resolve(inner: []const u8) Error!Resolved {
@@ -42,6 +50,10 @@ fn resolve(inner: []const u8) Error!Resolved {
     const kind = for (registry) |entry| {
         if (std.mem.eql(u8, entry.name, name)) break entry.kind;
     } else return error.UnknownCheck;
+    if (!takesArgument(kind)) {
+        if (colon != null) return error.UnexpectedCheckArgument;
+        return .{ .kind = kind, .arg = "" };
+    }
     const arg = if (colon) |at| inner[at + 1 ..] else return error.MissingCheckArgument;
     if (arg.len == 0) return error.EmptyCheckArgument;
     if (!takesNumber(kind)) return .{ .kind = kind, .arg = arg };
@@ -121,8 +133,34 @@ pub fn run(gpa: Allocator, inner: []const u8, text: []const u8) (Error || Alloca
                 start = nl + 1;
             }
         },
+        .conventional => {
+            const end = lineEnd(text, 0);
+            if (!isConventionalSubject(text[0..end])) try hits.append(gpa, .{ .start = 0, .end = end });
+        },
     }
     return hits.toOwnedSlice(gpa);
+}
+
+// A Conventional Commits subject: `type(scope)?!?: description`, where type is one
+// of the recognised set, an optional scope is any non-empty text in parentheses, an
+// optional `!` marks a breaking change, and a non-empty description follows ": ".
+fn isConventionalSubject(subject: []const u8) bool {
+    var i: usize = 0;
+    while (i < subject.len and std.ascii.isAlphabetic(subject[i])) i += 1;
+    const kind = subject[0..i];
+    const known = for (conventional_types) |t| {
+        if (std.mem.eql(u8, t, kind)) break true;
+    } else false;
+    if (!known) return false;
+    if (i < subject.len and subject[i] == '(') {
+        const close = std.mem.indexOfScalarPos(u8, subject, i + 1, ')') orelse return false;
+        if (close == i + 1) return false; // an empty scope "()" is not allowed
+        i = close + 1;
+    }
+    if (i < subject.len and subject[i] == '!') i += 1;
+    if (i + 1 >= subject.len or subject[i] != ':' or subject[i + 1] != ' ') return false;
+    i += 2;
+    return i < subject.len; // the description must not be empty
 }
 
 const testing = std.testing;
@@ -147,9 +185,29 @@ test "text checks: an unknown name, a missing or empty argument and a bad number
     try testing.expectError(error.UnexpectedCheckArgument, validate("max_lines:one"));
     try testing.expectError(error.UnexpectedCheckArgument, validate("max_subject:0"));
     for (registry) |entry| {
+        if (!takesArgument(entry.kind)) continue;
         var buf: [64]u8 = undefined;
         try validate(try std.fmt.bufPrint(&buf, "{s}:1", .{entry.name}));
     }
+}
+
+test "text checks: conventional takes no argument and is refused one" {
+    try validate("conventional");
+    try testing.expectError(error.UnexpectedCheckArgument, validate("conventional:x"));
+}
+
+test "text checks: conventional accepts well-formed subjects and rejects the rest" {
+    try expectHits("conventional", "feat: add thing", &.{});
+    try expectHits("conventional", "fix(parser): handle x", &.{});
+    try expectHits("conventional", "feat!: breaking change", &.{});
+    try expectHits("conventional", "chore(ci)!: bump deps", &.{});
+    try expectHits("conventional", "feat: ok\n\na longer body line", &.{});
+    try expectHits("conventional", "added a thing", &.{.{ .start = 0, .end = 13 }});
+    try expectHits("conventional", "feat add thing", &.{.{ .start = 0, .end = 14 }});
+    try expectHits("conventional", "feat:no space", &.{.{ .start = 0, .end = 13 }});
+    try expectHits("conventional", "feat: ", &.{.{ .start = 0, .end = 6 }});
+    try expectHits("conventional", "feat(): empty scope", &.{.{ .start = 0, .end = 19 }});
+    try expectHits("conventional", "Feat: capitalised type", &.{.{ .start = 0, .end = 22 }});
 }
 
 test "text checks: forbid reports every place the exact text stands" {

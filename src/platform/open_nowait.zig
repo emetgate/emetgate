@@ -38,6 +38,31 @@ pub fn stat(path: []const u8) Error!Stat {
     };
 }
 
+pub const RealPathError = Error || error{ OutOfMemory, InputOutput };
+
+/// Resolve `path` to its canonical absolute form without ever waiting on a
+/// sharing conflict: the handle is opened for FILE_READ_ATTRIBUTES with full
+/// sharing, so a file another handle holds without sharing still resolves at
+/// once (a file held for data access is not a conflict for attributes). This is
+/// the no-wait counterpart of the standard realpath, which retries for seconds.
+pub fn realPath(gpa: Allocator, path: []const u8) RealPathError![:0]u8 {
+    const handle = try openAttributes(path, true);
+    defer windows.CloseHandle(handle);
+    var wide: WidePath = undefined;
+    const n = win.GetFinalPathNameByHandleW(handle, &wide, wide.len, 0);
+    if (n == 0) return error.InputOutput;
+    if (n >= wide.len) return error.NameTooLong;
+    const long_prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\");
+    const unc_prefix = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\UNC\\");
+    var units: []u16 = wide[0..n];
+    if (std.mem.startsWith(u16, units, unc_prefix)) {
+        units = units[unc_prefix.len - 2 ..];
+        units[0] = '\\';
+        units[1] = '\\';
+    } else if (std.mem.startsWith(u16, units, long_prefix)) units = units[long_prefix.len..];
+    return std.unicode.wtf16LeToWtf8AllocZ(gpa, units) catch return error.OutOfMemory;
+}
+
 pub fn readFileAlloc(gpa: Allocator, path: []const u8, max_bytes: usize) ReadError![]u8 {
     var wide: WidePath = undefined;
     const name = try toWide(&wide, path);
@@ -180,6 +205,7 @@ const win = struct {
     extern "kernel32" fn GetFileSizeEx(file: windows.HANDLE, size: *i64) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn ReadFile(file: windows.HANDLE, buffer: [*]u8, len: windows.DWORD, read: *windows.DWORD, overlapped: ?*anyopaque) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetFinalPathNameByHandleW(file: windows.HANDLE, buffer: [*]u16, size: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
 };
 

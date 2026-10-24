@@ -26,6 +26,7 @@ pub const Event = struct {
     chars_emetgate: ?usize = null,
     chars_fullfile: ?usize = null,
     chars_sr: ?usize = null,
+    footer: bool = true,
 
     pub fn fail(self: *Event, name: []const u8) void {
         self.outcome = .failed;
@@ -95,6 +96,7 @@ fn ensureIgnored(gpa: Allocator, io: std.Io, workspace_abs: []const u8) void {
 pub fn observe(gpa: Allocator, io: std.Io, observer: *Observer, event: Event, text: []const u8) ?[]u8 {
     observer.session.tally(event);
     observer.record(gpa, io, event);
+    if (!event.footer) return null;
     var buffer: Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     buffer.writer.writeAll(text) catch return null;
