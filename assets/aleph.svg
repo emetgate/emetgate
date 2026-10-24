@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300" role="img" aria-label="Emetgate">
+  <defs>
+    <linearGradient id="em" x1="0" y1="1" x2="0.35" y2="0">
+      <stop offset="0%" stop-color="#8f2f08"/>
+      <stop offset="42%" stop-color="#ff7a24"/>
+      <stop offset="78%" stop-color="#ffb347"/>
+      <stop offset="100%" stop-color="#ffe9c4"/>
+    </linearGradient>
+    <filter id="gl" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <text x="150" y="232" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-weight="800" font-size="250" fill="url(#em)" filter="url(#gl)">&#1488;<animate attributeName="opacity" dur="6s" repeatCount="indefinite" values="0.5;1;0.82;1;0.5" keyTimes="0;0.3;0.55;0.8;1"/></text>
+</svg>

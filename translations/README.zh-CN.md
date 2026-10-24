@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/aleph.svg" alt="Emetgate" width="190">
 </p>
 
 <p align="center">
@@ -14,131 +14,159 @@
 
 # Emetgate
 
-位于编码模型与你的源码树之间的一道闸门。模型提出修改，Emetgate 进行检查，只有检查通过，修改才会落盘。
+大语言模型既快又能干 —— 几小时的活儿几分钟就干完。但它们是否遵守你的规则，取决于它们自己：模型可以读到"绝不要用这个"，然后照用不误。
 
-它作为 MCP 服务器运行，支持 Windows 上的 TypeScript 和 JavaScript 项目。它用 Claude Code 开发和测试，其闸门工具也可在其他 MCP 客户端中使用。
+惯常的答案是更好的提示词、更长的 `AGENTS.md` —— 这些规则只是*请求*模型去遵守。Emetgate 走的是另一条路：在模型与你的源码树之间加一层。不是一条它可以跳过的指令 —— 而是一道它必须通过的闸门。模型提出一次修改；内核对其进行验证；除非通过，否则任何内容都不会落盘。
 
-https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
+它作为 MCP 服务器运行，在 Windows 上，面向 TypeScript、JavaScript 和 Zig。下面把每项能力拆成各个部分 —— 每个部分是什么，以及它在这里做什么。没有代码和其下的真实输出，就没有任何主张。
 
-## 它做什么
+## 闸门
 
-**检查每一次写入。** 一次修改要指明符号，以及它所基于代码的哈希。Emetgate 把新的函数体放到位，重新解析文件，运行你的规则，然后在沙箱内的仓库副本上运行你的类型检查和测试。任何一步失败，都不会写入任何内容。每次提交都会留下一份收据，`emetgate verify` 之后可以重新检查它，而无需信任当初写入的进程。
-
-**提交它所验证的内容。** 使用 `--commit` 时，通过闸门的更改不仅被写入，还会提交到 git。提交保存的正是测试所依据的那棵树，因此验证的内容与提交的内容是同一个。`emetgate verify` 对其重放回执，`emetgate recover` 则完成或回滚崩溃时留下的半成品提交。
-
-**替模型读代码。** `emetgate_explore` 用完整的定义和行号回答关于代码库的问题。`emetgate_evidence` 返回你点名的符号的完整代码。另外还有针对符号、文件、搜索和 git 的工具；列表见 [REFERENCE.md](../REFERENCE.md#mcp-tools)。
-
-**保存你的规则。** 规则只需从命令行添加一次。模型可以读取规则，但不能更改或删除。
+一次修改要指明一个符号，以及它所基于代码的哈希。Emetgate 把新的函数体放到位，重新解析文件，运行你的规则，然后在沙箱内的仓库副本上运行你的类型检查和测试。如果每一步都通过，修改就被写入并绑定到一份收据；如果任何一步失败，就不会写入任何内容。
 
 ```
-emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
-emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
+proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
+                  └── any step fails ─▶ nothing is written (מת)
 ```
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
-    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
-  </picture>
-</p>
+| 部分 | 它是什么 | 它在这里做什么 |
+| --- | --- | --- |
+| 影子工作区 | 仓库的一个隔离副本 | 提议的写入先在这里应用，于是测试和类型检查在不触碰真实目录树的情况下运行；失败时磁盘从未改变 |
+| tree-sitter | 一个增量解析器 | 重新解析文件，表明修改确实能解析，且没有破坏语法树 |
+| in-toto 收据 | 一种供应链溯源格式 | 把每一次通过的写入绑定到一条签名记录：由什么构建出什么、用了哪些测试 —— 之后可核验 |
+
+## 搜索
+
+两个引擎：求速度的字面量索引，和求证明的认证引擎。
+
+### `emetgate_find` —— 字面量搜索
+
+无需回到磁盘的纯文本与可索引模式搜索。热态时亚毫秒。
+
+| 部分 | 它是什么 | 它在这里做什么 |
+| --- | --- | --- |
+| 后缀数组 (SA-IS) | 以线性时间构建的、文本所有后缀的有序数组 | 用一次 `O(m·log n)` 二分查找一次性找到某个字面量及其全部匹配 |
+| 两棵小波树 (wavelet tree) | 数组之上的 位置→文件 与 重复链 映射 | 告诉你哪个匹配在哪个文件里，而无需从磁盘重新读取文件 |
+| mmap 的 `.emet` 索引 | 一个内存映射的索引文件 | 搜索期间文件不会被重新打开；热态 `~0.7–1 ms` |
+
+### `emetgate_search` —— 认证搜索
+
+随结果一并给出“没有遗漏任何内容”之证明的搜索。
+
+| 部分 | 它是什么 | 它在这里做什么 |
+| --- | --- | --- |
+| 三元组倒排 (trigram postings) | 一个压缩的倒排索引 (Elias-Fano / 位图) | 不扫描整个仓库就快速收窄候选文件 |
+| RFC 9162 默克尔树 | 对读取的每个文件的 SHA-256 取根 | 回复携带该根，于是完整或部分的答案是可证明的，而非断言 |
+| 失败即关闭 (fail-closed) | 若数字对不上，证书以 `InconsistentCertificate` 被拒 | 错误的“完整”绝不会被展示；存疑时保持沉默 |
+| NTFS 变更屏障 | 经由 `ReadDirectoryChangesW` 的文件变更通知 | 只有变更过的文件才被重新读取（新鲜度）；基准测试中零遗漏 |
+| 委托给 ripgrep | 索引无法服务的正则 (`\b`、lookaround…) | 交给 ripgrep；回复写明 `delegated: rg` —— 能力无损失 |
+
+回复携带的是证明，而非主张 —— 真实输出：
+
+```
+$ search "InconsistentCertificate"
+✓ 6 matches in 429 files            # complete, with the Merkle root
+$ search "Allocator"
+partial: matches 1-46 of 1617; next offset:46
+$ search "zzzNeverOccurs"
+✓ no match in 569 files              # even zero is proven
+```
+
+> 热态 ~1.5–3.5 ms · 冷态（构建索引）661 ms · 与 ripgrep 逐行一致
+
+## 规则
+
+你设定一次的策略，在每一次写入时都被坚持。模型读取规则，且无法更改它们。
+
+| 部分 | 它是什么 | 它在这里做什么 |
+| --- | --- | --- |
+| tree-sitter 查询 | 语法树之上的结构化匹配 | 跨度/符号/注释检查：`no_comment`、`require_comment`、`max_function_lines`、`forbid_import`… |
+| 正则引擎（带预算） | 一个带步数上限的匹配器 | `forbid_regex` / `no_todo`：在变更跨度内查找某个模式或标记 |
+| `ledger.ndjson` | 一本只追加的规则簿 (`.emetgate/`) | 规则住在这里；模型能读却不能写 —— 策略归人所有 |
+| 提交消息检查 | 一条消息面规则 | `message:conventional`：在提交时坚持 conventional commits |
+
+```
+emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
+emetgate rule add "document exports"  --check require_comment --in src/ --enforce
+```
+
+## 已验证的 Git
+
+`emetgate verify --branch base..head` 重放一个分支的全部历史，并返回一个可察觉篡改的裁决。
+
+| 部分 | 它是什么 | 它在这里做什么 |
+| --- | --- | --- |
+| blake3 哈希链 | 每份证书 = blake3(parent ‖ oid ‖ verdict ‖ receipt) | 重放一个提交，链尖就会移动 —— 篡改可察觉 |
+| CAS 引用 + 私有索引 | 不触碰工作目录树的 write-tree / commit-tree | 一次经过闸门、带收据的提交 —— 而不打扰你的编辑器 |
+| TLA⁺ 模型检查 | 提交日志的一个形式模型 | 崩溃留下的半成品提交会回到一致状态 —— 已证明 |
+| in-toto 收据 | 绑定到提交的溯源 (`refs/notes/emetgate`) | 没有收据 → `partial`（失败即关闭）；没有伪造的“verified” |
+| git rev-list 重放 | 遍历 `base..head` 区间 | 对每个提交重跑单提交验证，织成那条链 |
+
+```
+$ emetgate verify --branch main..HEAD
+branch partial: 48 commit(s)          # no receipt → fail-closed
+  a179a7f unverified (no receipt)  cert 84c2…
+
+# tamper with one receipt:
+branch broken: 1 commit(s)
+  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
+```
+
+## 如何测试
+
+| 部分 | 它是什么 | 它在这里做什么 |
+| --- | --- | --- |
+| 变异测试 | 故意弄坏代码，看测试套件是否察觉 | 证明测试*抓得住*一个缺陷，而不只是能通过 |
+| TLA⁺ | 对提交日志的一次模型检查 | 崩溃恢复的正确性，与代码分开论证 |
+| 模糊测试与红队 | 随机变异加攻击语料 | 对意外或敌意输入不崩溃、不逃逸 |
+| ripgrep 一致性闸门 | 每次运行都把命中集与 rg 比对 | 搜索不能“快却是错的”；逐行核对 |
+
+就引擎而言：61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open。列表在 [VERIFICATION.md](../VERIFICATION.md) 中。
+
+## 已测量
+
+| 面 | 度量 | 结果 |
+| --- | --- | --- |
+| 完整测试套件 | 通过 / 失败 / 泄漏 | 1908 / 0 / 0 |
+| 搜索一致性 | rg 行数 = emetgate | 1617=1617 · 6=6 · 2=2 |
+| 搜索热态 | 中位数 | 1.5–3.5 ms |
+| find 热态 | 中位数 | 0.7–1.0 ms |
+| 验证（被篡改的收据） | 裁决 | broken（已抓住） |
+
+```
+python tests/bench/n8n_search.py   ·   zig build test
+```
 
 ## 安装
 
-每个版本都会在[发布页面](https://github.com/emetgate/emetgate/releases)上提供 `emetgate.exe` 及其 SHA-256。
-
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:USERPROFILE\emetgate\$f" }
-(Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:USERPROFILE\emetgate\emetgate.exe.sha256").Split(" ")[0]
+```
 claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
 ```
 
-该二进制文件没有代码签名，因此首次运行时 SmartScreen 会发出警告。请改为比对校验和。
+Windows · TypeScript / JavaScript / Zig。`emetgate lockdown` 让智能体仅带 emetgate 工具启动，失败即关闭。
 
-`emetgate lockdown` 启动的 Claude Code 只带有 Emetgate 的工具，因此每次写入都要经过闸门。
+## 深入了解
 
-在 lockdown 下，你也可以直接在提示符中输入规则。由 Emetgate 作答，这一行不会到达模型：
-
-```
-/rule add "no comments in source" --check no_comment --enforce
-/rule list
-```
-
-此后每次写入都会在对话记录中标记：闸门放行时为绿色的 **אמת**，拒绝时为红色的 **מת**。
-
-Emetgate 是 MCP 服务器，因此其他客户端也能使用它的工具。读取代码、以及拒绝未通过你的规则或测试的更改，也已在 Codex、opencode、Gemini CLI 和 Qoder 中验证。锁定、`/rule` 和标记仅限 Claude Code；在其他客户端中，模型仍可在闸门之外编辑，因此那里 Emetgate 是测量工具，而非故障关闭的监视器。
-
-## 测量结果
-
-我就四个仓库提了 15 个问题，分别通过 Emetgate、Serena、codebase-memory-mcp 和 Claude Code 自带工具来回答：同一模型（`claude-sonnet-5-5`），每次运行使用仓库的全新副本，没有额外提示词，每个问题运行三次。得分是答案要点中被回答点名的比例；答案要点是我在任何工具运行之前写好的。
-
-| 工具 | 得分 | Token | 费用 |
-|---|---:|---:|---:|
-| Emetgate | 240/252 | 86.7k | $0.132 |
-| Serena | 242/252 | 143.8k | $0.143 |
-| Claude Code 自带工具 | 234/252 | 171.4k | $0.150 |
-| codebase-memory-mcp | 246/252 | 178.5k | $0.204 |
-
-在这组测试中，Emetgate 使用的 token 最少，费用也最低。它不是最准确的：有两个工具得分更高。252 分中两分的差距落在多次运行之间的波动范围内，所以这些运行并不能按得分给工具排名。
-
-我还手动向四个工具各输入了另外三个问题，每个问题只运行一次。Emetgate 使用的 token 依然最少，而 Claude Code 自带工具更便宜也更快：
-
-<p align="center">
-  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
-</p>
-
-记录下来的 345 个会话在费用方面说明了什么：
-
-- 一个会话的费用由四个 token 计数决定，而写入缓存的一个 token 的价格是从缓存读取的一个 token 的 20 倍。token 更少并不总是意味着账单更低。
-- 多一次模型调用的费用，大约相当于 8,000 个字符的工具输出。
-- 模型会写下它自己要求的内容。它在自己的工具调用中点名的要点，有 98.5% 进入了回答；只在工具回复中看到的要点，为 90.5%。
-
-会话、问题、答案要点以及生成这些数字的脚本见 [tests/bench/neutral](../tests/bench/neutral)。手动测试及其完整回答见 [tests/bench/hand](../tests/bench/hand)。单次读取、编辑和搜索的 token 数见 [REFERENCE.md](../REFERENCE.md)。
-
-## 闸门如何被测试
-
-- **变异测试。** 故意破坏每一项防护，并且必须至少有一个测试失败。引擎部分目前有 61 个变异体：54 个被杀死，4 个被证明等价，2 个是作为纵深防御保留的冗余防护，1 个未解决。清单见 [VERIFICATION.md](../VERIFICATION.md)。
-- **模型检查。** 提交日志用 TLA+ 描述，并用 TLC 检查，包括恢复过程中的崩溃。
-- **崩溃测试。** 批次在每一步之后被截断并恢复。
-- **红队和模糊测试套件**，针对 MCP 接口、沙箱、日志和解析器。
-
-针对闸门的发现及其修复列在 [REFERENCE.md](../REFERENCE.md#security-history) 中。
+- [REFERENCE.md](../REFERENCE.md) —— 每一个工具
+- [VERIFICATION.md](../VERIFICATION.md) —— 收据与证明
+- [docs/experiments/tla](../docs/experiments/tla) —— TLA⁺ 模型
+- [tests/bench](../tests/bench) —— 基准测试
 
 ## 局限
 
-- 仅支持 Windows。仅支持 TypeScript、JavaScript 和 Zig。
-- 通过闸门意味着代码可以解析、没有越界，并且通过了你的测试。这并不意味着代码是正确的；测试闸门的强度取决于你的测试。
-- 沙箱阻止向副本之外写入。它不阻止读取或网络访问。
-- 在闸门之外所做的修改不在覆盖范围内。lockdown 正是为此而设。
-- Node.js 24.15.0 及更早版本在 Windows 回环连接上会间歇性崩溃；请使用 24.16.0 或更高版本。
+仅 Windows；TypeScript、JavaScript 和 Zig。沙箱阻挡写入，而非读取或网络。通过闸门，证明的是一次修改能解析并通过*你的*测试 —— 它只和那些测试一样强。基准测试是我们自己的，出自一台机器，且可复现。
 
 ## 名字的由来
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
-  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+  <img src="../assets/golem-ales-light.jpg" alt="一幅 1899 年的钢笔画：拉比勒夫举起手，傀儡的脸在烟雾中成形，额上有希伯来字母" width="220" align="left">
 </picture>
 
-在布拉格魔像的传说中，拉比勒夫在泥人的额头上写下 **אמת**（*emet*，真理），泥人便活了过来。抹去第一个字母，剩下 **מת**（*met*，死亡），魔像随即停下。
-
-Emetgate 用同一个词标记每一次写入：闸门放行时是完整的词，拒绝时第一个字母被抹去。
-
-<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+在布拉格传说中，傀儡（golem）因额上的 **אמת**（*emet*，“真理”）一词而获得生命。抹去第一个字母，**אמת** 便成了 **מת**（*met*，“死亡”）—— 傀儡静止下来。当一次修改成立时，闸门写下第一个字母；一次失败的测试则抹去它。
 
 <br clear="left">
 
-## 构建
-
-Zig 0.16.0。tree-sitter 和各语法随仓库一起提供。
-
-```sh
-zig build                  # zig-out/bin/emetgate
-zig build test             # all tests
-tools/accept.ps1 <ref>     # tests three times, then the mutants on lines changed since <ref>
-```
-
 ## 许可证
 
-MIT。`vendor/` 下随仓库附带的语法保留其各自的 MIT 许可证。
-
-<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></p>
+MIT。见 [LICENSE](../LICENSE)。

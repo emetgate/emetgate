@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Emetgate" width="640">
+  <img src="assets/aleph.svg" alt="Emetgate" width="190">
 </p>
 
 <p align="center">
@@ -14,131 +14,159 @@
 
 # Emetgate
 
-A gate between a coding model and your source tree. The model proposes a change, Emetgate checks it, and the change reaches disk only if the checks pass.
+LLMs are fast and capable — hours of work in minutes. But whether they follow your rules is up to them: a model can read "never use this" and use it anyway.
 
-It runs as an MCP server, on Windows, for TypeScript and JavaScript projects. It is built and tested with Claude Code, and its gate tools also work in other MCP clients.
+The usual answer is a better prompt, a longer `AGENTS.md` — rules the model is *asked* to obey. Emetgate takes the other path: a layer between the model and your source tree. Not an instruction it can skip — a gate it has to pass. The model proposes a change; the kernel verifies it; nothing reaches disk unless it passes.
 
-https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
+It runs as an MCP server, on Windows, for TypeScript, JavaScript and Zig. Below, each capability is broken into its parts — what each part is, and what it does here. No claim without the code and the real output under it.
 
-## What it does
+## The gate
 
-**It checks every write.** A change names a symbol and the hash of the code it was based on. Emetgate puts the new body in place, reparses the file, runs your rules, then runs your typecheck and your tests on a copy of the repository inside a sandbox. If any step fails, nothing is written. Each commit leaves a receipt that `emetgate verify` can check again later without trusting the process that wrote it.
-
-**It commits what it verified.** Under `--commit`, a change that passes the gate is committed to git, not only written. The commit holds exactly the tree your tests ran on, so what was verified and what was committed are the same thing. `emetgate verify` replays the receipts against it, and `emetgate recover` finishes or rolls back a commit that a crash left half-done.
-
-**It reads code for the model.** `emetgate_explore` answers a question about the codebase with whole definitions and line numbers. `emetgate_evidence` returns the full code of the symbols you name. There are also tools for symbols, files, search and git; the list is in [REFERENCE.md](REFERENCE.md#mcp-tools).
-
-**It keeps your rules.** You add a rule once from the command line. The model can read the rules and cannot change or remove them.
+A change names a symbol and the hash of the code it was based on. Emetgate puts the new body in place, reparses the file, runs your rules, then runs your typecheck and your tests on a copy of the repository inside a sandbox. If every step passes it is written and bound to a receipt; if any step fails, nothing is written.
 
 ```
-emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
-emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
+proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
+                  └── any step fails ─▶ nothing is written (מת)
 ```
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/gate-dark.svg">
-    <img src="assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
-  </picture>
-</p>
+| part | what it is | what it does here |
+| --- | --- | --- |
+| shadow workspace | an isolated copy of the repository | the proposed write is applied here first, so tests and typecheck run without touching the real tree; on failure the disk never changed |
+| tree-sitter | an incremental parser | reparses the file to show the change actually parses, and did not break the tree |
+| in-toto receipt | a supply-chain provenance format | binds each passing write to a signed record of what was built from what, with which tests — checkable later |
 
-## Install
+## Search
 
-Each release publishes `emetgate.exe` and its SHA-256 on the [releases page](https://github.com/emetgate/emetgate/releases).
+Two engines: a literal index for speed, and a certified engine for proof.
 
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:USERPROFILE\emetgate\$f" }
-(Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:USERPROFILE\emetgate\emetgate.exe.sha256").Split(" ")[0]
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+### `emetgate_find` — literal search
+
+Plain-text and indexable-pattern search, without going back to disk. Sub-ms warm.
+
+| part | what it is | what it does here |
+| --- | --- | --- |
+| suffix array (SA-IS) | the sorted array of every suffix of the text, built in linear time | finds a literal in one `O(m·log n)` binary search, with all its matches at once |
+| two wavelet trees | position→file and repeat-chain maps over the array | tells which match sits in which file, without re-reading the file from disk |
+| mmap'd `.emet` index | one memory-mapped index file | files are not reopened during a search; `~0.7–1 ms` warm |
+
+### `emetgate_search` — certified search
+
+Search that carries, with the result, a proof that it missed nothing.
+
+| part | what it is | what it does here |
+| --- | --- | --- |
+| trigram postings | a compressed inverted index (Elias-Fano / bitmap) | narrows the candidate files fast, without scanning the whole repo |
+| RFC 9162 Merkle tree | a root over the SHA-256 of every file read | the reply carries the root, so a complete or partial answer is provable, not asserted |
+| fail-closed | the certificate is refused as `InconsistentCertificate` if the numbers do not add up | a wrong "complete" is never shown; when in doubt it stays silent |
+| NTFS change barrier | file-change notice via `ReadDirectoryChangesW` | only a changed file is re-read (freshness); zero misses in the benchmark |
+| ripgrep delegation | a regex the index cannot serve (`\b`, lookaround…) | is handed to ripgrep; the reply says `delegated: rg` — no loss of capability |
+
+The reply carries proof, not a claim — real output:
+
+```
+$ search "InconsistentCertificate"
+✓ 6 matches in 429 files            # complete, with the Merkle root
+$ search "Allocator"
+partial: matches 1-46 of 1617; next offset:46
+$ search "zzzNeverOccurs"
+✓ no match in 569 files              # even zero is proven
 ```
 
-The binary is not code-signed, so SmartScreen warns on first run. Compare the checksum instead.
+> warm ~1.5–3.5 ms · cold (index build) 661 ms · line-for-line parity with ripgrep
 
-`emetgate lockdown` starts Claude Code with only Emetgate's tools, so every write goes through the gate.
+## Rules
 
-Under lockdown you can also type a rule into the prompt. Emetgate answers it and the line never reaches the model:
+A policy you set once is held on every write. The model reads the rules and cannot change them.
+
+| part | what it is | what it does here |
+| --- | --- | --- |
+| tree-sitter queries | structural matches over the syntax tree | span/symbol/comment checks: `no_comment`, `require_comment`, `max_function_lines`, `forbid_import`… |
+| regex engine (budgeted) | a step-limited matcher | `forbid_regex` / `no_todo`: a pattern or marker hunt in the changed span |
+| `ledger.ndjson` | an append-only rule book (`.emetgate/`) | rules live here; the model reads them but cannot write them — policy stays human |
+| commit-message check | a message-surface rule | `message:conventional`: conventional commits held at commit time |
 
 ```
-/rule add "no comments in source" --check no_comment --enforce
-/rule list
+emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
+emetgate rule add "document exports"  --check require_comment --in src/ --enforce
 ```
 
-Each write is then marked in the transcript: **אמת** in green when the gate passed it, **מת** in red when it refused.
+## Verified Git
 
-Emetgate is an MCP server, so other clients can use its tools too. Reading code, and refusing a change that fails your rules or tests, is verified in Codex, opencode, Gemini CLI and Qoder as well. Lockdown, `/rule` and the marks are Claude Code only; in another client the model can still edit outside the gate, so there Emetgate is a measurement tool, not a fail-closed monitor.
+`emetgate verify --branch base..head` replays a branch's whole history and returns a tamper-evident verdict.
+
+| part | what it is | what it does here |
+| --- | --- | --- |
+| blake3 hash chain | each cert = blake3(parent ‖ oid ‖ verdict ‖ receipt) | replay one commit and the chain tip shifts — tamper-evident |
+| CAS refs + private index | write-tree / commit-tree without touching the working tree | a gated, receipted commit — without disturbing your editor |
+| TLA⁺ model-checking | a formal model of the commit journal | a commit a crash left half-done returns to a consistent state — proven |
+| in-toto receipts | provenance bound to the commit (`refs/notes/emetgate`) | no receipt → `partial` (fail-closed); no fabricated "verified" |
+| git rev-list replay | walks the `base..head` range | re-runs the single-commit verify for each, weaving the chain |
+
+```
+$ emetgate verify --branch main..HEAD
+branch partial: 48 commit(s)          # no receipt → fail-closed
+  a179a7f unverified (no receipt)  cert 84c2…
+
+# tamper with one receipt:
+branch broken: 1 commit(s)
+  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
+```
+
+## How it's tested
+
+| part | what it is | what it does here |
+| --- | --- | --- |
+| mutation testing | breaks the code on purpose and checks the suite notices | proves the tests *catch* a fault, not just that they pass |
+| TLA⁺ | a model-check of the commit journal | the correctness of crash-recovery, argued apart from the code |
+| fuzz & red-team | random mutation plus attack corpora | no crash or escape on unexpected or hostile input |
+| ripgrep parity gate | compares the hit-set against rg on every run | search cannot be "fast but wrong"; checked line for line |
+
+For the engine: <!-- generated:engine-mutant-summary -->61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
 
 ## Measured
 
-I asked 15 questions about four repositories through Emetgate, Serena, codebase-memory-mcp and Claude Code's own tools: the same model (`claude-sonnet-5-5`), a fresh copy of the repository for every run, no extra prompt, three runs per question. The score is the share of answer-key points the answer names; I wrote the keys before any tool ran.
+| surface | measure | result |
+| --- | --- | --- |
+| full test suite | pass / fail / leaked | 1908 / 0 / 0 |
+| search parity | rg lines = emetgate | 1617=1617 · 6=6 · 2=2 |
+| search warm | median | 1.5–3.5 ms |
+| find warm | median | 0.7–1.0 ms |
+| verify (tampered receipt) | verdict | broken (caught) |
 
-| Tool | Score | Tokens | Cost |
-|---|---:|---:|---:|
-| Emetgate | 240/252 | 86.7k | $0.132 |
-| Serena | 242/252 | 143.8k | $0.143 |
-| Claude Code's own tools | 234/252 | 171.4k | $0.150 |
-| codebase-memory-mcp | 246/252 | 178.5k | $0.204 |
+```
+python tests/bench/n8n_search.py   ·   zig build test
+```
 
-Emetgate uses the fewest tokens and costs the least in this set. It is not the most accurate: two tools score higher. A gap of two points in 252 is inside the run-to-run spread, so these runs do not rank the tools on score.
+## Install
 
-I also typed three more questions into the four tools by hand, one run each. Emetgate again used the fewest tokens, and Claude Code's own tools were cheaper and faster:
+```
+claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+```
 
-<p align="center">
-  <img src="tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
-</p>
+Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` starts the agent with only the emetgate tools, fail-closed.
 
-What the 345 recorded sessions showed about cost:
+## Dig deeper
 
-- A session's cost is fixed by four token counts, and a token written to the cache costs 20 times a token read from it. Fewer tokens does not always mean a lower bill.
-- One more model call costs about as much as 8,000 characters of tool output.
-- The model writes what it asked for. A key point it named in its own tool call reached the answer 98.5% of the time; one it only saw in a reply, 90.5%.
-
-The sessions, questions, answer keys and the script that produces these numbers are in [tests/bench/neutral](tests/bench/neutral). The hand test with its full answers is in [tests/bench/hand](tests/bench/hand). Token counts for single reads, edits and searches are in [REFERENCE.md](REFERENCE.md).
-
-## How the gate is tested
-
-- **Mutation testing.** Each guard is broken on purpose and at least one test must fail. For the engine: <!-- generated:engine-mutant-summary -->61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
-- **Model checking.** The commit journal is specified in TLA+ and checked with TLC, including crashes during recovery.
-- **Crash tests.** Batches are cut after every step and recovered.
-- **Red-team and fuzz suites** against the MCP surface, the sandbox, the journal and the parsers.
-
-Findings against the gate and their fixes are listed in [REFERENCE.md](REFERENCE.md#security-history).
+- [REFERENCE.md](REFERENCE.md) — every tool
+- [VERIFICATION.md](VERIFICATION.md) — receipts & proof
+- [docs/experiments/tla](docs/experiments/tla) — the TLA⁺ models
+- [tests/bench](tests/bench) — the benchmarks
 
 ## Limits
 
-- Windows only. TypeScript, JavaScript and Zig only.
-- Passing the gate means the code parses, stays in bounds and passes your tests. It does not mean the code is correct, and the test gate is as strong as your tests.
-- The sandbox blocks writes outside the copy. It does not block reads or network access.
-- Changes made outside the gate are not covered. That is what lockdown is for.
-- Node.js 24.15.0 and earlier crash intermittently on Windows loopback connections; use 24.16.0 or later.
+Windows only; TypeScript, JavaScript and Zig. The sandbox blocks writes, not reads or the network. Passing the gate proves a change parses and passes *your* tests — it is only as strong as those tests. The benchmarks are our own, from one machine, and reproducible.
 
 ## Where the name comes from
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/golem-ales-dark.jpg">
-  <img src="assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+  <img src="assets/golem-ales-light.jpg" alt="A 1899 pen drawing: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
 </picture>
 
-In the legend of the Golem of Prague, Rabbi Loew writes **אמת** (*emet*, truth) on the forehead of a figure of clay and it comes to life. Erase the first letter and **מת** (*met*, dead) is left, and the golem stops.
-
-Emetgate marks every write with the same word: whole when the gate passed it, the first letter gone when it refused.
-
-<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+In the Prague legend, the golem is brought to life by the word **אמת** (*emet*, "truth") on its forehead. Erase the first letter and **אמת** becomes **מת** (*met*, "dead") — the golem falls still. The gate writes the first letter when a change holds; a failing test erases it.
 
 <br clear="left">
 
-## Build
-
-Zig 0.16.0. tree-sitter and the grammars are vendored.
-
-```sh
-zig build                  # zig-out/bin/emetgate
-zig build test             # all tests
-tools/accept.ps1 <ref>     # tests three times, then the mutants on lines changed since <ref>
-```
-
 ## License
 
-MIT. The vendored grammars under `vendor/` keep their own MIT licenses.
-
-<p align="center"><b>English</b> · <a href="translations/README.tr.md">Türkçe</a> · <a href="translations/README.ko.md">한국어</a> · <a href="translations/README.zh-CN.md">简体中文</a> · <a href="translations/README.es.md">Español</a></p>
+MIT. See [LICENSE](LICENSE).

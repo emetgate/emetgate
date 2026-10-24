@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/aleph.svg" alt="Emetgate" width="190">
 </p>
 
 <p align="center">
@@ -14,131 +14,159 @@
 
 # Emetgate
 
-Una puerta entre un modelo que escribe código y tu árbol de fuentes. El modelo propone un cambio, Emetgate lo comprueba y el cambio llega al disco solo si las comprobaciones pasan.
+Los LLM son rápidos y capaces: horas de trabajo en minutos. Pero si siguen tus reglas o no, depende de ellos: un modelo puede leer "nunca uses esto" y usarlo de todos modos.
 
-Funciona como servidor MCP, en Windows, para proyectos de TypeScript y JavaScript. Está desarrollado y probado con Claude Code, y sus herramientas de puerta también funcionan en otros clientes MCP.
+La respuesta habitual es un mejor prompt, un `AGENTS.md` más largo: reglas que al modelo se le *pide* obedecer. Emetgate toma el otro camino: una capa entre el modelo y tu árbol de fuentes. No una instrucción que pueda saltarse, sino una puerta que tiene que pasar. El modelo propone un cambio; el núcleo lo verifica; nada llega al disco salvo que pase.
 
-https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
+Funciona como servidor MCP, en Windows, para TypeScript, JavaScript y Zig. Abajo, cada capacidad se descompone en sus partes: qué es cada parte y qué hace aquí. Ninguna afirmación sin el código y la salida real debajo.
 
-## Qué hace
+## La puerta
 
-**Comprueba cada escritura.** Un cambio nombra un símbolo y el hash del código en el que se basó. Emetgate coloca el nuevo cuerpo en su sitio, vuelve a analizar el archivo, ejecuta tus reglas y luego ejecuta tu comprobación de tipos y tus pruebas sobre una copia del repositorio dentro de un sandbox. Si algún paso falla, no se escribe nada. Cada commit deja un recibo que `emetgate verify` puede volver a comprobar más tarde sin confiar en el proceso que lo escribió.
-
-**Confirma lo que verificó.** Con `--commit`, un cambio que pasa la puerta no solo se escribe, sino que se confirma en git. La confirmación contiene exactamente el árbol sobre el que se ejecutaron tus pruebas, de modo que lo verificado y lo confirmado son lo mismo. `emetgate verify` reproduce los recibos contra ella, y `emetgate recover` termina o revierte una confirmación que un fallo dejó a medias.
-
-**Lee código para el modelo.** `emetgate_explore` responde a una pregunta sobre la base de código con definiciones enteras y números de línea. `emetgate_evidence` devuelve el código completo de los símbolos que nombras. También hay herramientas para símbolos, archivos, búsqueda y git; la lista está en [REFERENCE.md](../REFERENCE.md#mcp-tools).
-
-**Guarda tus reglas.** Añades una regla una vez desde la línea de comandos. El modelo puede leer las reglas y no puede cambiarlas ni eliminarlas.
+Un cambio nombra un símbolo y el hash del código en el que se basó. Emetgate coloca el nuevo cuerpo en su sitio, vuelve a analizar el archivo, ejecuta tus reglas y luego ejecuta tu comprobación de tipos y tus pruebas sobre una copia del repositorio dentro de un sandbox. Si cada paso pasa, se escribe y se vincula a un recibo; si algún paso falla, no se escribe nada.
 
 ```
-emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
-emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
+proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
+                  └── any step fails ─▶ nothing is written (מת)
 ```
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
-    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
-  </picture>
-</p>
+| parte | qué es | qué hace aquí |
+| --- | --- | --- |
+| espacio de trabajo en sombra | una copia aislada del repositorio | la escritura propuesta se aplica primero aquí, de modo que las pruebas y la comprobación de tipos corren sin tocar el árbol real; al fallar, el disco nunca cambió |
+| tree-sitter | un analizador incremental | vuelve a analizar el archivo para mostrar que el cambio sí se analiza y no rompió el árbol |
+| recibo in-toto | un formato de procedencia de cadena de suministro | vincula cada escritura que pasa a un registro firmado de qué se construyó a partir de qué, y con qué pruebas: comprobable más tarde |
+
+## Búsqueda
+
+Dos motores: un índice literal para la velocidad y un motor certificado para la prueba.
+
+### `emetgate_find` — búsqueda literal
+
+Búsqueda de texto plano y de patrones indexables, sin volver al disco. En caliente, por debajo del milisegundo.
+
+| parte | qué es | qué hace aquí |
+| --- | --- | --- |
+| arreglo de sufijos (SA-IS) | el arreglo ordenado de cada sufijo del texto, construido en tiempo lineal | encuentra un literal en una sola búsqueda binaria `O(m·log n)`, con todas sus coincidencias a la vez |
+| dos árboles wavelet | mapas posición→archivo y de cadena de repeticiones sobre el arreglo | dice qué coincidencia está en qué archivo, sin releer el archivo desde el disco |
+| índice `.emet` con mmap | un único archivo de índice mapeado en memoria | los archivos no se reabren durante una búsqueda; en caliente `~0.7–1 ms` |
+
+### `emetgate_search` — búsqueda certificada
+
+Una búsqueda que lleva, junto con el resultado, una prueba de que no se perdió nada.
+
+| parte | qué es | qué hace aquí |
+| --- | --- | --- |
+| postings de trigramas | un índice invertido comprimido (Elias-Fano / mapa de bits) | acota rápido los archivos candidatos, sin escanear todo el repositorio |
+| árbol de Merkle RFC 9162 | una raíz sobre el SHA-256 de cada archivo leído | la respuesta lleva la raíz, así una respuesta completa o parcial es demostrable, no afirmada |
+| fallo-cerrado (fail-closed) | el certificado se rechaza como `InconsistentCertificate` si los números no cuadran | nunca se muestra un "completo" erróneo; en caso de duda, calla |
+| barrera de cambios NTFS | aviso de cambio de archivo vía `ReadDirectoryChangesW` | solo se relee un archivo que cambió (frescura); cero fallos en el benchmark |
+| delegación a ripgrep | una regex que el índice no puede servir (`\b`, lookaround…) | se entrega a ripgrep; la respuesta dice `delegated: rg`: sin pérdida de capacidad |
+
+La respuesta lleva una prueba, no una afirmación — salida real:
+
+```
+$ search "InconsistentCertificate"
+✓ 6 matches in 429 files            # complete, with the Merkle root
+$ search "Allocator"
+partial: matches 1-46 of 1617; next offset:46
+$ search "zzzNeverOccurs"
+✓ no match in 569 files              # even zero is proven
+```
+
+> caliente ~1.5–3.5 ms · frío (construcción del índice) 661 ms · paridad línea por línea con ripgrep
+
+## Reglas
+
+Una política que fijas una vez se sostiene en cada escritura. El modelo lee las reglas y no puede cambiarlas.
+
+| parte | qué es | qué hace aquí |
+| --- | --- | --- |
+| consultas tree-sitter | coincidencias estructurales sobre el árbol de sintaxis | comprobaciones de span/símbolo/comentario: `no_comment`, `require_comment`, `max_function_lines`, `forbid_import`… |
+| motor de regex (con presupuesto) | un emparejador con límite de pasos | `forbid_regex` / `no_todo`: búsqueda de un patrón o marcador en el span cambiado |
+| `ledger.ndjson` | un libro de reglas de solo anexado (`.emetgate/`) | las reglas viven aquí; el modelo las lee pero no las escribe: la política sigue siendo humana |
+| comprobación del mensaje de commit | una regla sobre la superficie del mensaje | `message:conventional`: conventional commits sostenidos en el momento del commit |
+
+```
+emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
+emetgate rule add "document exports"  --check require_comment --in src/ --enforce
+```
+
+## Git verificado
+
+`emetgate verify --branch base..head` reproduce toda la historia de una rama y devuelve un veredicto que delata manipulaciones.
+
+| parte | qué es | qué hace aquí |
+| --- | --- | --- |
+| cadena de hashes blake3 | cada cert = blake3(parent ‖ oid ‖ verdict ‖ receipt) | reproduce un commit y la punta de la cadena se desplaza: delata manipulaciones |
+| refs CAS + índice privado | write-tree / commit-tree sin tocar el árbol de trabajo | un commit con puerta y recibo, sin perturbar tu editor |
+| verificación de modelos TLA⁺ | un modelo formal del diario de commits | un commit que un fallo dejó a medias vuelve a un estado consistente: demostrado |
+| recibos in-toto | procedencia vinculada al commit (`refs/notes/emetgate`) | sin recibo → `partial` (fallo-cerrado); sin un "verified" fabricado |
+| reproducción con git rev-list | recorre el rango `base..head` | reejecuta la verificación de un solo commit para cada uno, tejiendo la cadena |
+
+```
+$ emetgate verify --branch main..HEAD
+branch partial: 48 commit(s)          # no receipt → fail-closed
+  a179a7f unverified (no receipt)  cert 84c2…
+
+# tamper with one receipt:
+branch broken: 1 commit(s)
+  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
+```
+
+## Cómo se prueba
+
+| parte | qué es | qué hace aquí |
+| --- | --- | --- |
+| pruebas de mutación | rompe el código a propósito y comprueba que la suite lo note | prueba que las pruebas *atrapan* un fallo, no solo que pasan |
+| TLA⁺ | una verificación de modelo del diario de commits | la corrección de la recuperación tras un fallo, argumentada aparte del código |
+| fuzz y red-team | mutación aleatoria más corpus de ataque | sin caída ni escape ante entrada inesperada u hostil |
+| puerta de paridad con ripgrep | compara el conjunto de aciertos contra rg en cada ejecución | la búsqueda no puede ser "rápida pero errónea"; se verifica línea por línea |
+
+Para el motor: 61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open. La lista está en [VERIFICATION.md](../VERIFICATION.md).
+
+## Medido
+
+| superficie | medida | resultado |
+| --- | --- | --- |
+| suite de pruebas completa | pasa / falla / fugas | 1908 / 0 / 0 |
+| paridad de búsqueda | líneas rg = emetgate | 1617=1617 · 6=6 · 2=2 |
+| búsqueda en caliente | mediana | 1.5–3.5 ms |
+| find en caliente | mediana | 0.7–1.0 ms |
+| verify (recibo manipulado) | veredicto | broken (atrapado) |
+
+```
+python tests/bench/n8n_search.py   ·   zig build test
+```
 
 ## Instalación
 
-Cada versión publica `emetgate.exe` y su SHA-256 en la [página de versiones](https://github.com/emetgate/emetgate/releases).
-
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:USERPROFILE\emetgate\$f" }
-(Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:USERPROFILE\emetgate\emetgate.exe.sha256").Split(" ")[0]
+```
 claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
 ```
 
-El binario no está firmado, así que SmartScreen avisa en la primera ejecución. Compara la suma de comprobación en su lugar.
+Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` arranca el agente solo con las herramientas de emetgate, en fallo-cerrado.
 
-`emetgate lockdown` inicia Claude Code solo con las herramientas de Emetgate, de modo que toda escritura pasa por la puerta.
+## Profundiza
 
-Bajo lockdown también puedes escribir una regla en el prompt. Emetgate responde y la línea nunca llega al modelo:
-
-```
-/rule add "no comments in source" --check no_comment --enforce
-/rule list
-```
-
-Después, cada escritura queda marcada en la transcripción: **אמת** en verde cuando la puerta la aprobó, **מת** en rojo cuando la rechazó.
-
-Emetgate es un servidor MCP, así que otros clientes también pueden usar sus herramientas. Leer código y rechazar un cambio que no pasa tus reglas o pruebas está verificado también en Codex, opencode, Gemini CLI y Qoder. El modo bloqueo, `/rule` y las marcas son solo de Claude Code; en otro cliente el modelo todavía puede editar fuera de la puerta, así que allí Emetgate es una herramienta de medición, no un monitor a prueba de fallos.
-
-## Mediciones
-
-Hice 15 preguntas sobre cuatro repositorios a través de Emetgate, Serena, codebase-memory-mcp y las herramientas propias de Claude Code: el mismo modelo (`claude-sonnet-5-5`), una copia nueva del repositorio en cada ejecución, sin prompt adicional, tres ejecuciones por pregunta. La puntuación es la proporción de puntos de la clave de respuestas que la respuesta nombra; escribí las claves antes de ejecutar ninguna herramienta.
-
-| Herramienta | Puntuación | Tokens | Coste |
-|---|---:|---:|---:|
-| Emetgate | 240/252 | 86.7k | $0.132 |
-| Serena | 242/252 | 143.8k | $0.143 |
-| Herramientas propias de Claude Code | 234/252 | 171.4k | $0.150 |
-| codebase-memory-mcp | 246/252 | 178.5k | $0.204 |
-
-En este conjunto Emetgate usa menos tokens y cuesta menos que las demás. No es la más precisa: dos herramientas puntúan más alto. Una diferencia de dos puntos en 252 queda dentro de la variación entre ejecuciones, así que estas ejecuciones no ordenan las herramientas por puntuación.
-
-También escribí a mano tres preguntas más en las cuatro herramientas, una ejecución cada una. Emetgate volvió a usar menos tokens, y las herramientas propias de Claude Code fueron más baratas y más rápidas:
-
-<p align="center">
-  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
-</p>
-
-Lo que las 345 sesiones grabadas mostraron sobre el coste:
-
-- El coste de una sesión lo fijan cuatro recuentos de tokens, y un token escrito en la caché cuesta 20 veces lo que un token leído de ella. Menos tokens no siempre significa una factura menor.
-- Una llamada más al modelo cuesta más o menos lo mismo que 8,000 caracteres de salida de herramienta.
-- El modelo escribe lo que pidió. Un punto de la clave que nombró en su propia llamada llegó a la respuesta el 98.5% de las veces; uno que solo vio en una respuesta, el 90.5%.
-
-Las sesiones, las preguntas, las claves de respuestas y el script que produce estos números están en [tests/bench/neutral](../tests/bench/neutral). La prueba manual con sus respuestas completas está en [tests/bench/hand](../tests/bench/hand). Los recuentos de tokens de lecturas, ediciones y búsquedas individuales están en [REFERENCE.md](../REFERENCE.md).
-
-## Cómo se prueba la puerta
-
-- **Pruebas de mutación.** Cada guarda se rompe a propósito y al menos una prueba debe fallar. Para el motor hay hoy 61 mutantes: 54 eliminados, 4 demostrados equivalentes, 2 guardas redundantes mantenidas como defensa en profundidad, 1 abierto. La lista está en [VERIFICATION.md](../VERIFICATION.md).
-- **Verificación de modelos.** El diario de commits está especificado en TLA+ y comprobado con TLC, incluidas las caídas durante la recuperación.
-- **Pruebas de caída.** Los lotes se cortan después de cada paso y se recuperan.
-- **Suites de red team y de fuzzing** contra la superficie MCP, el sandbox, el diario y los analizadores.
-
-Los hallazgos contra la puerta y sus correcciones se listan en [REFERENCE.md](../REFERENCE.md#security-history).
+- [REFERENCE.md](../REFERENCE.md) — cada herramienta
+- [VERIFICATION.md](../VERIFICATION.md) — recibos y prueba
+- [docs/experiments/tla](../docs/experiments/tla) — los modelos TLA⁺
+- [tests/bench](../tests/bench) — los benchmarks
 
 ## Límites
 
-- Solo Windows. Solo TypeScript, JavaScript y Zig.
-- Pasar la puerta significa que el código se analiza, se mantiene dentro de sus límites y pasa tus pruebas. No significa que el código sea correcto, y la puerta de pruebas es tan fuerte como tus pruebas.
-- El sandbox bloquea las escrituras fuera de la copia. No bloquea las lecturas ni el acceso a la red.
-- Los cambios hechos fuera de la puerta no están cubiertos. Para eso está lockdown.
-- Node.js 24.15.0 y anteriores fallan de forma intermitente en conexiones loopback de Windows; usa 24.16.0 o posterior.
+Solo Windows; TypeScript, JavaScript y Zig. El sandbox bloquea las escrituras, no las lecturas ni la red. Pasar la puerta prueba que un cambio se analiza y pasa *tus* pruebas: es solo tan fuerte como esas pruebas. Los benchmarks son nuestros, de una sola máquina, y reproducibles.
 
 ## De dónde viene el nombre
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
-  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+  <img src="../assets/golem-ales-light.jpg" alt="Un dibujo a pluma de 1899: el rabino Loew alza la mano y el rostro del golem se forma en el humo, con letras hebreas en la frente" width="220" align="left">
 </picture>
 
-En la leyenda del Gólem de Praga, el rabino Loew escribe **אמת** (*emet*, verdad) en la frente de una figura de barro y esta cobra vida. Si se borra la primera letra queda **מת** (*met*, muerto) y el gólem se detiene.
-
-Emetgate marca cada escritura con la misma palabra: entera cuando la puerta la aprobó, sin la primera letra cuando la rechazó.
-
-<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+En la leyenda de Praga, el golem cobra vida por la palabra **אמת** (*emet*, "verdad") en su frente. Borra la primera letra y **אמת** se convierte en **מת** (*met*, "muerto"): el golem queda inmóvil. La puerta escribe la primera letra cuando un cambio se sostiene; una prueba que falla la borra.
 
 <br clear="left">
 
-## Compilación
-
-Zig 0.16.0. tree-sitter y las gramáticas están incluidos en el repositorio.
-
-```sh
-zig build                  # zig-out/bin/emetgate
-zig build test             # all tests
-tools/accept.ps1 <ref>     # tests three times, then the mutants on lines changed since <ref>
-```
-
 ## Licencia
 
-MIT. Las gramáticas incluidas bajo `vendor/` conservan sus propias licencias MIT.
-
-<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>Español</b></p>
+MIT. Ver [LICENSE](../LICENSE).

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="Emetgate" width="640">
+  <img src="../assets/aleph.svg" alt="Emetgate" width="190">
 </p>
 
 <p align="center">
@@ -14,131 +14,159 @@
 
 # Emetgate
 
-코딩 모델과 소스 트리 사이에 놓이는 게이트입니다. 모델이 변경을 제안하면 Emetgate가 검사하고, 검사를 통과한 변경만 디스크에 기록됩니다.
+LLM은 빠르고 유능합니다 — 몇 시간의 작업을 몇 분 만에. 하지만 그것이 당신의 규칙을 따르는지는 그들에게 달려 있습니다: 모델은 "이것을 절대 쓰지 말라"를 읽고도 그냥 쓸 수 있습니다.
 
-MCP 서버로 실행되며, Windows에서 TypeScript와 JavaScript 프로젝트를 지원합니다. Claude Code로 개발 및 테스트되었으며, 게이트 도구는 다른 MCP 클라이언트에서도 작동합니다.
+흔한 해답은 더 나은 프롬프트, 더 긴 `AGENTS.md` — 모델에게 지키라고 *요청하는* 규칙입니다. Emetgate는 다른 길을 택합니다: 모델과 당신의 소스 트리 사이의 한 계층. 건너뛸 수 있는 지시가 아니라 — 반드시 통과해야 하는 게이트. 모델이 변경을 제안하고, 커널이 그것을 검증하며, 통과하지 못하면 아무것도 디스크에 도달하지 않습니다.
 
-https://github.com/user-attachments/assets/20d0c586-9943-4bc0-80ec-abdd8d2039e0
+MCP 서버로 실행되며, Windows에서 TypeScript, JavaScript, Zig을 지원합니다. 아래에서는 각 기능을 부분으로 나눕니다 — 각 부분이 무엇이며, 여기서 무엇을 하는지. 코드와 그 아래의 실제 출력 없이는 어떤 주장도 하지 않습니다.
 
-## 하는 일
+## 게이트
 
-**모든 쓰기를 검사합니다.** 변경은 심볼과, 그 변경이 기반으로 삼은 코드의 해시를 지정합니다. Emetgate는 새 본문을 제자리에 넣고, 파일을 다시 파싱하고, 규칙을 실행한 다음, 샌드박스 안의 저장소 복사본에서 타입 검사와 테스트를 실행합니다. 어느 단계든 실패하면 아무것도 기록되지 않습니다. 커밋마다 영수증이 남으며, `emetgate verify`는 그것을 기록한 프로세스를 신뢰하지 않고도 나중에 다시 검사할 수 있습니다.
-
-**검증한 것을 커밋합니다.** `--commit`을 사용하면 게이트를 통과한 변경이 기록될 뿐 아니라 git에 커밋됩니다. 커밋은 테스트가 실행된 트리를 정확히 담으므로 검증된 것과 커밋된 것이 같습니다. `emetgate verify`는 영수증을 그에 대해 다시 재생하고, `emetgate recover`는 충돌로 반쯤 남은 커밋을 완료하거나 되돌립니다.
-
-**모델을 위해 코드를 읽습니다.** `emetgate_explore`는 코드베이스에 대한 질문에 전체 정의와 줄 번호로 답합니다. `emetgate_evidence`는 이름을 지정한 심볼의 전체 코드를 반환합니다. 심볼, 파일, 검색, git을 위한 도구도 있으며 목록은 [REFERENCE.md](../REFERENCE.md#mcp-tools)에 있습니다.
-
-**규칙을 지킵니다.** 규칙은 명령줄에서 한 번 추가합니다. 모델은 규칙을 읽을 수 있지만 바꾸거나 제거할 수 없습니다.
+변경은 심볼과, 그 변경이 기반으로 삼은 코드의 해시를 지정합니다. Emetgate는 새 본문을 제자리에 넣고, 파일을 다시 파싱하고, 규칙을 실행한 다음, 샌드박스 안의 저장소 복사본에서 타입 검사와 테스트를 실행합니다. 모든 단계가 통과하면 변경이 기록되고 영수증에 묶입니다; 어느 단계든 실패하면 아무것도 기록되지 않습니다.
 
 ```
-emetgate rule add "no console.log" --check "cmd:npx eslint --rule no-console" --in src/ --enforce
-emetgate rule add "no networkidle waits" --check forbid:networkidle --enforce
+proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
+                  └── any step fails ─▶ nothing is written (מת)
 ```
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="../assets/gate-dark.svg">
-    <img src="../assets/gate-light.svg" alt="A proposed change passes your rules, then the typecheck and tests in a sandbox copy. If both hold it is written with a receipt. If either fails nothing is written." width="780">
-  </picture>
-</p>
+| 부분 | 무엇인지 | 여기서 하는 일 |
+| --- | --- | --- |
+| 섀도 워크스페이스 | 저장소의 격리된 복사본 | 제안된 쓰기가 먼저 여기에 적용되므로 테스트와 타입 검사가 실제 트리를 건드리지 않고 실행됩니다; 실패 시 디스크는 전혀 바뀌지 않았습니다 |
+| tree-sitter | 증분 파서 | 변경이 실제로 파싱되고 트리를 깨뜨리지 않았음을 보이기 위해 파일을 다시 파싱합니다 |
+| in-toto 영수증 | 공급망 출처(provenance) 형식 | 통과한 각 쓰기를, 무엇으로부터 무엇이 어떤 테스트로 만들어졌는지에 대한 서명된 기록에 묶습니다 — 나중에 검사 가능 |
+
+## 검색
+
+두 개의 엔진: 속도를 위한 리터럴 색인과, 증명을 위한 인증 엔진.
+
+### `emetgate_find` — 리터럴 검색
+
+디스크로 되돌아가지 않는 평문 및 색인 가능한 패턴 검색. 워밍 시 밀리초 미만.
+
+| 부분 | 무엇인지 | 여기서 하는 일 |
+| --- | --- | --- |
+| 접미사 배열 (SA-IS) | 선형 시간에 구축되는, 텍스트 모든 접미사의 정렬 배열 | 리터럴을 단 한 번의 `O(m·log n)` 이진 검색으로, 모든 일치와 함께 찾습니다 |
+| 두 개의 웨이블릿 트리 | 배열 위의 위치→파일 및 반복-체인 맵 | 어느 일치가 어느 파일에 있는지, 파일을 디스크에서 다시 읽지 않고 알려줍니다 |
+| mmap된 `.emet` 색인 | 메모리 매핑된 단일 색인 파일 | 검색 중 파일이 다시 열리지 않습니다; 워밍 시 `~0.7–1 ms` |
+
+### `emetgate_search` — 인증 검색
+
+결과와 함께, 아무것도 놓치지 않았다는 증명을 함께 전달하는 검색.
+
+| 부분 | 무엇인지 | 여기서 하는 일 |
+| --- | --- | --- |
+| 트라이그램 포스팅 | 압축된 역색인 (Elias-Fano / 비트맵) | 저장소 전체를 스캔하지 않고 후보 파일을 빠르게 좁힙니다 |
+| RFC 9162 머클 트리 | 읽은 모든 파일의 SHA-256 위의 루트 | 응답이 루트를 전달하므로, 완전하거나 부분적인 답이 주장이 아니라 증명 가능합니다 |
+| 실패-시-닫힘(fail-closed) | 숫자가 맞지 않으면 인증서가 `InconsistentCertificate`로 거부됩니다 | 잘못된 "완전"은 결코 표시되지 않습니다; 의심스러우면 침묵합니다 |
+| NTFS 변경 장벽 | `ReadDirectoryChangesW`를 통한 파일-변경 알림 | 변경된 파일만 다시 읽힙니다(신선도); 벤치마크에서 누락 없음 |
+| ripgrep 위임 | 색인이 제공할 수 없는 정규식 (`\b`, lookaround…) | ripgrep에 넘겨집니다; 응답은 `delegated: rg`라고 말합니다 — 기능 손실 없음 |
+
+응답은 주장이 아니라 증명을 전달합니다 — 실제 출력:
+
+```
+$ search "InconsistentCertificate"
+✓ 6 matches in 429 files            # complete, with the Merkle root
+$ search "Allocator"
+partial: matches 1-46 of 1617; next offset:46
+$ search "zzzNeverOccurs"
+✓ no match in 569 files              # even zero is proven
+```
+
+> 워밍 ~1.5–3.5 ms · 콜드(색인 구축) 661 ms · ripgrep과 한 줄 한 줄 동일
+
+## 규칙
+
+한 번 설정한 정책이 모든 쓰기에서 지켜집니다. 모델은 규칙을 읽을 수 있고 바꿀 수 없습니다.
+
+| 부분 | 무엇인지 | 여기서 하는 일 |
+| --- | --- | --- |
+| tree-sitter 쿼리 | 구문 트리 위의 구조적 일치 | 범위/심볼/주석 검사: `no_comment`, `require_comment`, `max_function_lines`, `forbid_import`… |
+| 정규식 엔진(예산제) | 단계 제한이 있는 매처 | `forbid_regex` / `no_todo`: 변경된 범위에서 패턴 또는 마커 탐색 |
+| `ledger.ndjson` | 추가 전용 규칙 장부 (`.emetgate/`) | 규칙이 여기에 있습니다; 모델은 읽지만 쓸 수 없습니다 — 정책은 사람의 것으로 남습니다 |
+| 커밋-메시지 검사 | 메시지-표면 규칙 | `message:conventional`: conventional commit이 커밋 시점에 지켜집니다 |
+
+```
+emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
+emetgate rule add "document exports"  --check require_comment --in src/ --enforce
+```
+
+## 검증된 Git
+
+`emetgate verify --branch base..head`는 브랜치의 전체 이력을 다시 재생하고 변조가 드러나는 판정을 반환합니다.
+
+| 부분 | 무엇인지 | 여기서 하는 일 |
+| --- | --- | --- |
+| blake3 해시 체인 | 각 인증서 = blake3(parent ‖ oid ‖ verdict ‖ receipt) | 커밋 하나를 다시 재생하면 체인 끝이 이동합니다 — 변조가 드러남 |
+| CAS 참조 + 비공개 색인 | 작업 트리를 건드리지 않는 write-tree / commit-tree | 게이트를 통과한, 영수증이 붙은 커밋 — 편집기를 방해하지 않고 |
+| TLA⁺ 모델 검사 | 커밋 저널의 형식 모델 | 충돌이 반쯤 남긴 커밋이 일관된 상태로 돌아옵니다 — 증명됨 |
+| in-toto 영수증 | 커밋에 묶인 출처 (`refs/notes/emetgate`) | 영수증 없음 → `partial`(실패-시-닫힘); 조작된 "verified" 없음 |
+| git rev-list 재생 | `base..head` 범위를 순회 | 각각에 대해 단일-커밋 검증을 다시 실행하며 체인을 엮습니다 |
+
+```
+$ emetgate verify --branch main..HEAD
+branch partial: 48 commit(s)          # no receipt → fail-closed
+  a179a7f unverified (no receipt)  cert 84c2…
+
+# tamper with one receipt:
+branch broken: 1 commit(s)
+  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
+```
+
+## 어떻게 테스트되는가
+
+| 부분 | 무엇인지 | 여기서 하는 일 |
+| --- | --- | --- |
+| 뮤테이션 테스트 | 코드를 일부러 망가뜨리고 스위트가 알아채는지 확인 | 테스트가 단지 통과하는 것이 아니라 결함을 *잡아낸다*는 것을 증명합니다 |
+| TLA⁺ | 커밋 저널의 모델 검사 | 충돌 복구의 정확성을, 코드와 별개로 논증 |
+| 퍼즈 & 레드팀 | 무작위 뮤테이션과 공격 코퍼스 | 예상치 못하거나 적대적인 입력에서 충돌이나 탈출 없음 |
+| ripgrep 동등성 게이트 | 매 실행마다 히트 집합을 rg와 비교 | 검색이 "빠르지만 틀릴" 수 없습니다; 한 줄 한 줄 검사 |
+
+엔진의 경우: 61 mutant 오늘: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open. 목록은 [VERIFICATION.md](../VERIFICATION.md)에 있습니다.
+
+## 측정값
+
+| 표면 | 측정 | 결과 |
+| --- | --- | --- |
+| 전체 테스트 스위트 | 통과 / 실패 / 누출 | 1908 / 0 / 0 |
+| 검색 동등성 | rg 줄 = emetgate | 1617=1617 · 6=6 · 2=2 |
+| 검색 워밍 | 중앙값 | 1.5–3.5 ms |
+| find 워밍 | 중앙값 | 0.7–1.0 ms |
+| 검증(변조된 영수증) | 판정 | broken (잡힘) |
+
+```
+python tests/bench/n8n_search.py   ·   zig build test
+```
 
 ## 설치
 
-각 릴리스는 `emetgate.exe`와 그 SHA-256을 [릴리스 페이지](https://github.com/emetgate/emetgate/releases)에 게시합니다.
-
-```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:USERPROFILE\emetgate\$f" }
-(Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:USERPROFILE\emetgate\emetgate.exe.sha256").Split(" ")[0]
+```
 claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
 ```
 
-바이너리는 코드 서명이 되어 있지 않아 첫 실행 때 SmartScreen이 경고합니다. 대신 체크섬을 비교하십시오.
+Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`은 에이전트를 emetgate 도구만으로, 실패-시-닫힘으로 시작합니다.
 
-`emetgate lockdown`은 Emetgate의 도구만으로 Claude Code를 시작하므로 모든 쓰기가 게이트를 거칩니다.
+## 더 깊이
 
-lockdown 상태에서는 프롬프트에 규칙을 직접 입력할 수도 있습니다. Emetgate가 응답하며 그 줄은 모델에 전달되지 않습니다:
-
-```
-/rule add "no comments in source" --check no_comment --enforce
-/rule list
-```
-
-이후 모든 쓰기는 대화 기록에 표시됩니다. 게이트가 통과시키면 초록색 **אמת**, 거부하면 빨간색 **מת**입니다.
-
-Emetgate는 MCP 서버이므로 다른 클라이언트도 그 도구를 사용할 수 있습니다. 코드를 읽고, 규칙이나 테스트를 통과하지 못하는 변경을 거부하는 것은 Codex, opencode, Gemini CLI, Qoder에서도 검증되었습니다. 잠금, `/rule`, 표시는 Claude Code 전용입니다. 다른 클라이언트에서는 모델이 게이트 밖에서도 편집할 수 있으므로, 거기서 Emetgate는 측정 도구이지 fail-closed 모니터가 아닙니다.
-
-## 측정 결과
-
-네 개의 저장소에 대한 질문 15개를 Emetgate, Serena, codebase-memory-mcp, Claude Code 자체 도구로 물었습니다. 같은 모델(`claude-sonnet-5-5`), 실행마다 저장소의 새 복사본, 추가 프롬프트 없음, 질문당 세 번 실행입니다. 점수는 정답 키의 항목 가운데 답변이 이름을 언급한 비율이며, 정답 키는 어떤 도구도 실행하기 전에 제가 작성했습니다.
-
-| 도구 | 점수 | 토큰 | 비용 |
-|---|---:|---:|---:|
-| Emetgate | 240/252 | 86.7k | $0.132 |
-| Serena | 242/252 | 143.8k | $0.143 |
-| Claude Code 자체 도구 | 234/252 | 171.4k | $0.150 |
-| codebase-memory-mcp | 246/252 | 178.5k | $0.204 |
-
-이 세트에서 Emetgate는 토큰을 가장 적게 쓰고 비용도 가장 낮습니다. 가장 정확하지는 않습니다. 두 도구의 점수가 더 높습니다. 252점 가운데 두 점 차이는 실행마다 달라지는 폭 안에 있으므로, 이 실행들로는 도구의 점수 순위를 매길 수 없습니다.
-
-또한 네 도구에 질문 세 개를 직접 더 입력했고, 각각 한 번씩 실행했습니다. Emetgate는 이번에도 토큰을 가장 적게 썼고, Claude Code 자체 도구가 더 저렴하고 더 빨랐습니다:
-
-<p align="center">
-  <img src="../tests/bench/hand/three-questions.png" alt="Three questions, four tools, one model: tokens, API time and cost of each tool" width="900">
-</p>
-
-기록된 345개 세션이 비용에 대해 보여 준 것:
-
-- 한 세션의 비용은 네 가지 토큰 수로 정해지며, 캐시에 쓰는 토큰 하나는 캐시에서 읽는 토큰 하나의 20배입니다. 토큰이 적다고 해서 항상 청구액이 낮은 것은 아닙니다.
-- 모델 호출이 한 번 늘어나는 비용은 도구 출력 약 8,000자와 비슷합니다.
-- 모델은 자신이 요청한 것을 씁니다. 자신의 도구 호출에서 이름을 지정한 항목은 98.5%가 답변에 들어갔고, 응답에서 보기만 한 항목은 90.5%였습니다.
-
-세션, 질문, 정답 키와 이 숫자들을 만들어 내는 스크립트는 [tests/bench/neutral](../tests/bench/neutral)에 있습니다. 전체 답변이 포함된 직접 테스트는 [tests/bench/hand](../tests/bench/hand)에 있습니다. 개별 읽기, 편집, 검색의 토큰 수는 [REFERENCE.md](../REFERENCE.md)에 있습니다.
-
-## 게이트는 어떻게 테스트되는가
-
-- **변이 테스트.** 각 가드를 일부러 망가뜨리고, 적어도 하나의 테스트가 실패해야 합니다. 엔진에는 현재 변이체 61개가 있습니다: 54개 제거됨, 4개는 동등함이 증명됨, 2개는 심층 방어로 유지하는 중복 가드, 1개 미해결. 목록은 [VERIFICATION.md](../VERIFICATION.md)에 있습니다.
-- **모델 검사.** 커밋 저널은 TLA+로 명세되어 있으며, 복구 중의 크래시를 포함해 TLC로 검사했습니다.
-- **크래시 테스트.** 배치를 모든 단계 뒤에서 끊고 복구합니다.
-- **레드팀 및 퍼즈 스위트**: MCP 표면, 샌드박스, 저널, 파서를 대상으로 합니다.
-
-게이트에 대해 발견된 문제와 수정 내용은 [REFERENCE.md](../REFERENCE.md#security-history)에 정리되어 있습니다.
+- [REFERENCE.md](../REFERENCE.md) — 모든 도구
+- [VERIFICATION.md](../VERIFICATION.md) — 영수증과 증명
+- [docs/experiments/tla](../docs/experiments/tla) — TLA⁺ 모델
+- [tests/bench](../tests/bench) — 벤치마크
 
 ## 한계
 
-- Windows 전용입니다. TypeScript, JavaScript, Zig만 지원합니다.
-- 게이트를 통과했다는 것은 코드가 파싱되고, 범위 안에 머물며, 테스트를 통과한다는 뜻입니다. 코드가 올바르다는 뜻은 아니며, 테스트 게이트는 여러분의 테스트만큼만 강합니다.
-- 샌드박스는 복사본 밖으로의 쓰기를 막습니다. 읽기나 네트워크 접근은 막지 않습니다.
-- 게이트 밖에서 이루어진 변경은 다루지 않습니다. lockdown은 그것을 위한 것입니다.
-- Node.js 24.15.0 및 그 이전 버전은 Windows 루프백 연결에서 간헐적으로 크래시가 발생합니다. 24.16.0 이상을 사용하십시오.
+Windows 전용; TypeScript, JavaScript, Zig. 샌드박스는 읽기나 네트워크가 아니라 쓰기를 막습니다. 게이트를 통과한다는 것은 변경이 파싱되고 *당신의* 테스트를 통과함을 증명합니다 — 그 테스트만큼만 강합니다. 벤치마크는 우리 자신의 것이며, 한 대의 기계에서, 재현 가능합니다.
 
 ## 이름의 유래
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
-  <img src="../assets/golem-ales-light.jpg" alt="A pen drawing from 1899: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
+  <img src="../assets/golem-ales-light.jpg" alt="1899년 펜 드로잉: 랍비 뢰브가 손을 들자 골렘의 얼굴이 연기 속에서 형성되고, 이마에 히브리 문자가 있다" width="220" align="left">
 </picture>
 
-프라하의 골렘 전설에서 랍비 뢰브는 진흙으로 빚은 형상의 이마에 **אמת** (*에메트*, 진실)를 쓰고, 형상은 살아납니다. 첫 글자를 지우면 **מת** (*메트*, 죽음)가 남고 골렘은 멈춥니다.
-
-Emetgate는 모든 쓰기를 같은 단어로 표시합니다. 게이트가 통과시키면 온전한 단어로, 거부하면 첫 글자가 지워진 단어로 표시합니다.
-
-<sub>Mikoláš Aleš, <i>Rabbi Loew and the Golem</i>, 1899. Public domain.</sub>
+프라하 전설에서 골렘은 이마의 **אמת**(*emet*, "진실")라는 단어로 생명을 얻습니다. 첫 글자를 지우면 **אמת**는 **מת**(*met*, "죽음")가 됩니다 — 골렘이 멈춥니다. 게이트는 변경이 유지될 때 첫 글자를 쓰고; 실패한 테스트가 그것을 지웁니다.
 
 <br clear="left">
 
-## 빌드
-
-Zig 0.16.0. tree-sitter와 문법은 저장소에 포함되어 있습니다.
-
-```sh
-zig build                  # zig-out/bin/emetgate
-zig build test             # all tests
-tools/accept.ps1 <ref>     # tests three times, then the mutants on lines changed since <ref>
-```
-
 ## 라이선스
 
-MIT. `vendor/` 아래에 포함된 문법은 각자의 MIT 라이선스를 유지합니다.
-
-<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <b>한국어</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.es.md">Español</a></p>
+MIT. [LICENSE](../LICENSE) 참조.
