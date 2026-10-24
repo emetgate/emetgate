@@ -165,12 +165,12 @@
     {
       "id": "K5b-lockdown-launch-guard-only-removed",
       "file": "src/platform/lockdown.zig",
-      "from": "    try refuseReserved(passthrough);\n    const config_abs",
-      "to": "    const config_abs",
+      "from": "    try refuseReserved(passthrough);\n    const local_app_data",
+      "to": "    const local_app_data",
       "kills": [
         "a lock override is refused before .mcp.json is looked up"
       ],
-      "note": "without the launch-level guard a missing .mcp.json is reported instead of the override"
+      "note": "without the launch-level guard a missing LOCALAPPDATA is reported instead of the override"
     },
     {
       "id": "F1-lockdown-mcp-config-last",

@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1941**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **1942**
 - Mutations declared in `tests/mutations.json`: **1249**
   - killed: **1217**
   - equivalent: **7**
@@ -183,7 +183,7 @@ python tools/verification_page.py --check
 | `K1-lockdown-tools-default` | `src/platform/lockdown.zig` | `pub const allowed_builtin_tools = "";` -> `pub const allowed_builtin_tools = "default";` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th... | killed |
 | `K2-lockdown-strict-mcp-removed` | `src/platform/lockdown.zig` | `, mcp_config_abs, "--strict-mcp-config" };` -> `, mcp_config_abs };` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th...; a pos... | killed |
 | `K3-lockdown-tools-flag-removed` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools"` | lockdown argv allows no built-in tool and only the strict .mcp.json servers, th... | killed |
-| `K5b-lockdown-launch-guard-only-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);     const config_abs` -> `const config_abs` | a lock override is refused before .mcp.json is looked up | killed |
+| `K5b-lockdown-launch-guard-only-removed` | `src/platform/lockdown.zig` | `try refuseReserved(passthrough);     const local_app_data` -> `const local_app_data` | a lock override is refused before .mcp.json is looked up | killed |
 | `F1-lockdown-mcp-config-last` | `src/platform/lockdown.zig` | `"--mcp-config", mcp_config_abs, "--strict-mcp-config" }` -> `"--strict-mcp-config", "--mcp-config", mcp_config_abs }` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
 | `F2-lockdown-tools-last` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools", allowed_tools, "--mcp-confi...` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
 | `N1-lockdown-missing-config-guard-removed` | `src/platform/lockdown.zig` | `error.FileNotFound => return error.McpConfigMissing,` -> `error.FileNotFound => return gpa.dupeZ(u8, mcp_config_name),` | lockdown refuses to launch when the directory has no .mcp.json | killed |
