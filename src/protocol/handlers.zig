@@ -1,5 +1,6 @@
 const std = @import("std");
 const commit_plan = @import("../platform/commit_plan.zig");
+const commit_group = @import("../platform/commit_group.zig");
 const commit_refusal = @import("../platform/commit_refusal.zig");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
@@ -74,6 +75,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arg
     if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_commit")) return callCommit(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_rename")) return rename_tool.callRename(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
@@ -578,6 +580,93 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
             event.outcome = .rejected;
             event.reason = wire.rule_check_crashed_reason;
             try wire.writeRuleCheckFailed(w, crashed, note);
+            return true;
+        },
+    }
+}
+
+const commit_message = @import("../platform/commit_message.zig");
+
+fn callCommit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    event.label = "commit";
+    event.mutating = true;
+    const message = try requireString(args, "message");
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    const is_error = commitInto(gpa, io, runtime, message, policy, &buffer.writer, event) catch |err| blk: {
+        if (err == error.OutOfMemory) return err;
+        event.fail(@errorName(err));
+        buffer.clearRetainingCapacity();
+        try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
+        break :blk true;
+    };
+    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+    try commit_message.check(message);
+    const root = try repo.servedRoot(gpa, io, policy.root);
+    defer gpa.free(root);
+    const result = try commit_group.commit(gpa, io, root, .{
+        .message = message,
+        .shadow_root = policy.shadow_root,
+        .gate_tree = policy.treeChoice(),
+        .runtime = runtime,
+    });
+    defer result.deinit(gpa);
+    var js: std.json.Stringify = .{ .writer = w };
+    switch (result) {
+        .committed => |c| {
+            event.outcome = .committed;
+            event.edits = c.files;
+            try js.beginObject();
+            try js.objectField("status");
+            try js.write("committed");
+            try js.objectField("commit");
+            try js.write(c.oid);
+            try js.objectField("base");
+            try js.write(c.base);
+            try js.objectField("files");
+            try js.write(c.files);
+            try js.objectField("receipts");
+            try js.write(c.receipts);
+            try js.endObject();
+            return false;
+        },
+        .nothing_pending => {
+            event.outcome = .rejected;
+            event.reason = "nothing_pending";
+            try js.beginObject();
+            try js.objectField("status");
+            try js.write("error");
+            try js.objectField("error");
+            try js.write("NothingToCommit");
+            try js.endObject();
+            return true;
+        },
+        .drift => {
+            // commit_group already noted the uncertified paths; callTool adds them
+            // to the reply as a "paths" list.
+            event.outcome = .rejected;
+            event.reason = "uncertified";
+            try js.beginObject();
+            try js.objectField("status");
+            try js.write("error");
+            try js.objectField("error");
+            try js.write("UncertifiedChanges");
+            try js.endObject();
+            return true;
+        },
+        .rule_violation => |report| {
+            event.outcome = .rejected;
+            event.reason = "rule_violation";
+            try wire.writeRuleViolation(w, report);
+            return true;
+        },
+        .rule_check_failed => |crashed| {
+            event.outcome = .rejected;
+            event.reason = wire.rule_check_crashed_reason;
+            try wire.writeRuleCheckFailed(w, crashed, null);
             return true;
         },
     }

@@ -23,6 +23,8 @@ const map_command = emetgate.map_command;
 const find_command = emetgate.find_command;
 const verify_run = emetgate.verify_run;
 const verify_branch = emetgate.verify_branch;
+const commit_group = emetgate.commit_group;
+const commit_message = emetgate.commit_message;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
 
@@ -41,6 +43,7 @@ const usage =
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
+    \\       emetgate commit -m <message> [--shadow-root <dir>]
     \\       emetgate lockdown [--no-marks] [<claude args>...]
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
     \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
@@ -170,6 +173,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (std.mem.eql(u8, command, "receipts") and args.len >= 3 and std.mem.eql(u8, args[2], "attach") and args.len <= 4) {
         return attachCmd(init, runtime, if (args.len == 4) args[3] else "HEAD", out);
+    }
+    if (std.mem.eql(u8, command, "commit")) {
+        const parsed = parseCommit(args[2..]) orelse exitWithUsage();
+        return commitCmd(init, runtime, parsed, out);
     }
     if (std.mem.eql(u8, command, "facts")) {
         const options = facts_command.parse(args[2..]) orelse exitWithUsage();
@@ -634,6 +641,64 @@ fn attachCmd(init: std.process.Init, runtime: *Runtime, commit: []const u8, out:
     const attached = try receipts.attach(gpa, init.io, root, commit);
     try out.print("attached {d} receipt(s) to {s} under refs/notes/{s}\n", .{ attached.count, commit, receipts.notes_ref });
     return 0;
+}
+
+const CommitArgs = struct { message: []const u8, shadow_root: ?[]const u8 = null };
+
+fn parseCommit(args: []const [:0]const u8) ?CommitArgs {
+    var parsed: CommitArgs = .{ .message = "" };
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg: []const u8 = args[i];
+        if (std.mem.eql(u8, arg, "-m") or std.mem.eql(u8, arg, "--message")) {
+            if (parsed.message.len != 0 or i + 1 >= args.len) return null;
+            i += 1;
+            parsed.message = args[i];
+        } else if (std.mem.eql(u8, arg, "--shadow-root")) {
+            if (parsed.shadow_root != null or i + 1 >= args.len) return null;
+            i += 1;
+            if (args[i].len == 0) return null;
+            parsed.shadow_root = args[i];
+        } else return null;
+    }
+    commit_message.check(parsed.message) catch return null;
+    return parsed;
+}
+
+fn commitCmd(init: std.process.Init, runtime: *Runtime, parsed: CommitArgs, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = try runner.repoRoot(gpa, init.io);
+    defer gpa.free(root);
+    const result = try commit_group.commit(gpa, init.io, root, .{
+        .message = parsed.message,
+        .shadow_root = parsed.shadow_root,
+        .runtime = runtime,
+    });
+    defer result.deinit(gpa);
+    switch (result) {
+        .committed => |c| {
+            try out.print("committed {s} ({d} file(s), {d} receipt(s) attached under refs/notes/{s})\n", .{ c.oid, c.files, c.receipts, receipts.notes_ref });
+            return 0;
+        },
+        .nothing_pending => {
+            try out.writeAll("nothing to commit: no pending gated changes\n");
+            return 1;
+        },
+        .drift => |d| {
+            try out.print("refused: {d} file(s) changed outside the gate and are uncertified:\n", .{d.total});
+            for (d.paths) |p| try out.print("  {s}\n", .{p});
+            if (d.total > d.paths.len) try out.print("  ... and {d} more\n", .{d.total - d.paths.len});
+            return 1;
+        },
+        .rule_violation => {
+            try out.writeAll("refused: a rule forbids this commit\n");
+            return 1;
+        },
+        .rule_check_failed => {
+            try out.writeAll("refused: a rule check could not be run\n");
+            return 1;
+        },
+    }
 }
 
 fn recoverCmd(init: std.process.Init, runtime: *Runtime, shadow_root_dir: ?[]const u8) !u8 {

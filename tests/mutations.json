@@ -9905,8 +9905,8 @@
     {
       "id": "PV4-deleted-tracked-path-accepted-as-new",
       "file": "src/platform/git_commit.zig",
-      "from": "        } else if (in_head != null or in_index != null) return error.TargetHasUncommittedChanges;\n",
-      "to": "        } else if (false and (in_head != null or in_index != null)) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!(pre_written and in_head != null and in_index != null and std.mem.eql(u8, in_index.?.oid, in_head.?.oid))) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and !(pre_written and in_head != null and in_index != null and std.mem.eql(u8, in_index.?.oid, in_head.?.oid))) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "git commit: a tracked file deleted by hand is not a free path to create on"
       ],
