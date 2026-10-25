@@ -41,7 +41,22 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install ripgrep
-        run: choco install ripgrep -y --no-progress
+        shell: pwsh
+        run: |
+          # Fetch ripgrep straight from its GitHub release (pinned, so the hits
+          # the search tests compare against stay deterministic) rather than the
+          # Chocolatey community feed, whose 504s were silently leaving the runner
+          # without rg and failing the ripgrep-backed search tests.
+          $version = "14.1.1"
+          $name = "ripgrep-$version-x86_64-pc-windows-msvc"
+          $url = "https://github.com/BurntSushi/ripgrep/releases/download/$version/$name.zip"
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\rg.zip"
+          Expand-Archive "$env:RUNNER_TEMP\rg.zip" -DestinationPath "$env:RUNNER_TEMP\rg"
+          $dir = "$env:RUNNER_TEMP\rg\$name"
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          # Fail loudly here if rg is not actually runnable, instead of letting a
+          # silent miss resurface later as RegexNeedsRipgrep test failures.
+          & "$dir\rg.exe" --version
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
@@ -74,7 +89,22 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install ripgrep
-        run: choco install ripgrep -y --no-progress
+        shell: pwsh
+        run: |
+          # Fetch ripgrep straight from its GitHub release (pinned, so the hits
+          # the search tests compare against stay deterministic) rather than the
+          # Chocolatey community feed, whose 504s were silently leaving the runner
+          # without rg and failing the ripgrep-backed search tests.
+          $version = "14.1.1"
+          $name = "ripgrep-$version-x86_64-pc-windows-msvc"
+          $url = "https://github.com/BurntSushi/ripgrep/releases/download/$version/$name.zip"
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\rg.zip"
+          Expand-Archive "$env:RUNNER_TEMP\rg.zip" -DestinationPath "$env:RUNNER_TEMP\rg"
+          $dir = "$env:RUNNER_TEMP\rg\$name"
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+          # Fail loudly here if rg is not actually runnable, instead of letting a
+          # silent miss resurface later as RegexNeedsRipgrep test failures.
+          & "$dir\rg.exe" --version
       - name: Require a clean working tree
         shell: pwsh
         run: |
