@@ -453,7 +453,32 @@ const Texts = struct {
 
 pub const Target = union(enum) { file: []const u8, memory: void };
 
+/// Optional build-stage profiler. Null (production) unless set by `find build`.
+pub const BuildProfile = struct {
+    io: Io,
+    last: Io.Timestamp = undefined,
+    read_ns: u64 = 0,
+    ends_ns: u64 = 0,
+    sais_ns: u64 = 0,
+    owner_ns: u64 = 0,
+    emit_ns: u64 = 0,
+    sections_ns: u64 = 0,
+    wavelets_ns: u64 = 0,
+
+    fn lap(p: *BuildProfile) u64 {
+        const now = Io.Timestamp.now(p.io, .awake);
+        const ns: u64 = @intCast(p.last.durationTo(now).nanoseconds);
+        p.last = now;
+        return ns;
+    }
+};
+
+/// Not threadlocal: build() runs on a worker thread while `find build` sets this
+/// from the main thread, and prepare() joins that worker before the fields are read.
+pub var build_profile: ?*BuildProfile = null;
+
 pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, paths: [][]const u8, target: Target, cancel: *const std.atomic.Value(bool)) !Index {
+    if (build_profile) |p| p.last = Io.Timestamp.now(p.io, .awake);
     var root = try Io.Dir.cwd().openDir(io, root_path, .{});
     defer root.close(io);
     std.mem.sort([]const u8, paths, {}, lessPath);
@@ -499,10 +524,12 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
         .path_len = 0,
     });
 
+    if (build_profile) |p| p.read_ns = p.lap();
     const ends = try gpa.alloc(u64, endWords(n));
     defer gpa.free(ends);
     @memset(ends, 0);
     for (t.ends.items) |e| ends[e / 64] |= @as(u64, 1) << @intCast(e % 64);
+    if (build_profile) |p| p.ends_ns = p.lap();
 
     var sa: ?[]u32 = try gpa.alloc(u32, n);
     defer if (sa) |owned| gpa.free(owned);
@@ -515,6 +542,7 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
         try sais(u16, gpa, sym, sa.?, 258);
     }
     try check(cancel);
+    if (build_profile) |p| p.sais_ns = p.lap();
 
     const owner = try gpa.alloc(u32, n);
     defer gpa.free(owner);
@@ -567,6 +595,7 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
     h.size = off;
     try check(cancel);
 
+    if (build_profile) |p| p.owner_ns = p.lap();
     const parts: Parts = .{ .h = &h, .t = &t, .ends = ends, .owner = owner, .prev = prev };
     switch (target) {
         .file => |out_path| {
@@ -578,6 +607,7 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
             var fw = file.writer(io, &wbuf);
             try emit(gpa, &fw.interface, parts, &sa);
             try fw.interface.flush();
+            if (build_profile) |p| p.emit_ns = p.lap();
             file.close(io);
             file_open = false;
             try Io.Dir.cwd().rename(tmp_path, Io.Dir.cwd(), out_path, io);
@@ -617,11 +647,13 @@ fn emit(gpa: Allocator, w: *Io.Writer, parts: Parts, sa: *?[]u32) !void {
     try put(w, &at, h.off_olines, std.mem.sliceAsBytes(t.lines.items));
     try put(w, &at, h.off_stamps, std.mem.sliceAsBytes(t.olines.items));
     try put(w, &at, h.owner.off_zeros, std.mem.sliceAsBytes(t.stamps.items));
+    if (build_profile) |p| p.sections_ns = p.lap();
 
     const other = try gpa.alloc(u32, h.n);
     defer gpa.free(other);
     try writeWavelet(gpa, w, &at, h.owner, h.prev.off_zeros, parts.owner, other);
     try writeWavelet(gpa, w, &at, h.prev, h.size, parts.prev, other);
+    if (build_profile) |p| p.wavelets_ns = p.lap();
 }
 
 fn check(cancel: *const std.atomic.Value(bool)) error{Canceled}!void {

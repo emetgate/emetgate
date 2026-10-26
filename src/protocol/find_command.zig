@@ -64,10 +64,21 @@ pub fn run(gpa: Allocator, io: std.Io, options: Options, out: *Writer) !u8 {
     const session = try find_tools.Session.create(gpa, io, root);
     defer session.destroy();
     const started = Timestamp.now(io, .awake);
+    var bprof: emet_file.BuildProfile = .{ .io = io };
+    if (options.command == .build) emet_file.build_profile = &bprof;
     try session.prepare(if (options.command == .build) .build else .load);
+    emet_file.build_profile = null;
     const ix = session.current().?;
     switch (options.command) {
-        .build => try out.print("{d} files, {d} MB read, index {d} MB, ready in {d} ms\n", .{ ix.h.n_files, ix.h.n_orig >> 20, ix.h.size >> 20, since(io, started) / std.time.ns_per_ms }),
+        .build => {
+            try out.print("{d} files, {d} MB read, index {d} MB, ready in {d} ms\n", .{ ix.h.n_files, ix.h.n_orig >> 20, ix.h.size >> 20, since(io, started) / std.time.ns_per_ms });
+            try out.print("  stages ms: read {d} | ends {d} | sais {d} | owner {d} | emit+write {d} (sections {d} + wavelets {d})\n", .{
+                bprof.read_ns / std.time.ns_per_ms, bprof.ends_ns / std.time.ns_per_ms,
+                bprof.sais_ns / std.time.ns_per_ms, bprof.owner_ns / std.time.ns_per_ms,
+                bprof.emit_ns / std.time.ns_per_ms,
+                bprof.sections_ns / std.time.ns_per_ms, bprof.wavelets_ns / std.time.ns_per_ms,
+            });
+        },
         .search => {
             const t0 = Timestamp.now(io, .awake);
             const answer = try session.search(options.given()[0]);
