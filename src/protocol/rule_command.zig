@@ -23,7 +23,8 @@ pub fn usage(comptime prefix: []const u8) []const u8 {
     return prefix ++ "add <text> [--check <spec>] [--in <where>] [--enforce]\n" ++
         prefix ++ "list [--all] [--json]\n" ++
         prefix ++ "supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\n" ++
-        prefix ++ "forget <id>\n";
+        prefix ++ "forget <id>\n" ++
+        prefix ++ "pick [<numbers> [<path>]]   (pick rules from a catalog; /rule pick alone lists it)\n";
 }
 
 pub const Decided = struct {
