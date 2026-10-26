@@ -1457,6 +1457,26 @@ const Found = struct {
 
 const Span = struct { ix: *const Index, lo: u32, hi: u32, skip: []const u64 };
 
+/// Optional stage profiler for the find hot path. When `profile_sink` is null
+/// (the default, and always so in production) search() takes a handful of
+/// branch-predicted no-ops; it is only set by the `find profile` CLI command.
+pub const Profile = struct {
+    io: Io,
+    range_ns: u64 = 0,
+    collect_ns: u64 = 0,
+    sort_ns: u64 = 0,
+    format_ns: u64 = 0,
+};
+
+pub threadlocal var profile_sink: ?*Profile = null;
+
+fn lapNs(p: *Profile, last: *Io.Timestamp) u64 {
+    const now = Io.Timestamp.now(p.io, .awake);
+    const ns: u64 = @intCast(last.durationTo(now).nanoseconds);
+    last.* = now;
+    return ns;
+}
+
 pub const Scratch = struct {
     heap: [4096]Node = undefined,
     top: [top_files]FileHits = undefined,
@@ -1478,6 +1498,7 @@ fn gather(dst: []Found, len: *usize, ix: *const Index, src: []const FileHits) vo
 }
 
 pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
+    var tlast: Io.Timestamp = if (profile_sink) |p| Io.Timestamp.now(p.io, .awake) else undefined;
     var w = Io.Writer.fixed(&sc.out);
     if (pattern.len == 0 or pattern.len > max_pattern) {
         try w.print("no hits: a pattern holds 1 to {d} bytes\n", .{max_pattern});
@@ -1502,6 +1523,9 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
         spans[n_spans] = .{ .ix = ix, .lo = r[0], .hi = r[1], .skip = skip };
         n_spans += 1;
     }
+    if (profile_sink) |p| {
+        p.range_ns = lapNs(p, &tlast);
+    }
     try w.print("{d} hits in {d} files\n", .{ hits, files });
     if (hits == 0) return .{ .hits = 0, .files = 0, .text = w.buffered() };
 
@@ -1515,9 +1539,15 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
         const n_first = sp.ix.firstFiles(sp.lo, sp.hi, sp.skip, shown_hits, &sc.first);
         gather(&sc.early, &n_early, sp.ix, sc.first[0..n_first]);
     }
+    if (profile_sink) |p| {
+        p.collect_ns = lapNs(p, &tlast);
+    }
     std.mem.sort(Found, sc.heavy[0..n_heavy], {}, Found.heavier);
     std.mem.sort(Found, sc.heavy_bin[0..n_heavy_bin], {}, Found.heavier);
     std.mem.sort(Found, sc.early[0..n_early], {}, Found.earlier);
+    if (profile_sink) |p| {
+        p.sort_ns = lapNs(p, &tlast);
+    }
 
     try w.print("\nmost hits:\n", .{});
     const n_text = @min(n_heavy, top_files);
@@ -1533,15 +1563,19 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
         const ps = sc.positions[0..take];
         for (ps, 0..) |*p, j| p.* = f.ix.sa[f.ix.hitRank(f.fh, @intCast(j))];
         std.mem.sort(u32, ps, {}, std.sort.asc(u32));
+        const fpath = f.path();
         for (ps) |p| {
             const pl = f.ix.place(f.fh.file, p);
             var cut: usize = @min(pl.text.len, shown_line);
             while (cut > 0 and cut < pl.text.len and pl.text[cut] & 0xC0 == 0x80) cut -= 1;
-            try w.print("{s}:{d}:{d}: {s}\n", .{ f.path(), pl.line, pl.col, std.mem.trim(u8, pl.text[0..cut], " \t") });
+            try w.print("{s}:{d}:{d}: {s}\n", .{ fpath, pl.line, pl.col, std.mem.trim(u8, pl.text[0..cut], " \t") });
         }
         shown += take;
     }
     if (hits > shown) try w.print("... and {d} more\n", .{hits - shown});
+    if (profile_sink) |p| {
+        p.format_ns = lapNs(p, &tlast);
+    }
     return .{ .hits = hits, .files = files, .text = w.buffered() };
 }
 
