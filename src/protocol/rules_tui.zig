@@ -218,7 +218,8 @@ pub const Editing = union(enum) { none, scope, path: usize };
 
 pub fn render(out: *Writer, state: *const State, ansi: bool, editing: Editing) !void {
     if (ansi) try out.writeAll(esc.clear_screen ++ esc.hide_cursor);
-    try out.writeAll("emetgate rules  —  Space toggle, ^/v move, Tab scope, Enter save, q cancel\n");
+    // ASCII-only so it renders on any console code page (no UTF-8 CP dependency).
+    try out.writeAll("emetgate rules  -  Space toggle, up/down (or k/j) move, Tab scope, Enter save, q cancel\n");
     if (ansi) try out.writeAll("\r");
 
     var group: []const u8 = "";
@@ -354,6 +355,10 @@ pub const Editor = struct {
             .char => |c| {
                 if (c == ' ') {
                     self.toggleCurrent();
+                } else if (c == 'k' or c == 'K') {
+                    self.state.moveUp(); // vim-style navigation
+                } else if (c == 'j' or c == 'J') {
+                    self.state.moveDown();
                 } else if (c == 'q' or c == 'Q') {
                     return .cancel;
                 }
@@ -636,6 +641,27 @@ test "reducer: down then space checks the second row and stays running" {
     try testing.expectEqual(Outcome.run, out);
     try testing.expect(ed.state.rows[1].checked);
     try testing.expectEqual(@as(usize, 1), ed.state.cursor);
+}
+
+test "reducer: arrows and vim k/j both move the cursor in normal mode" {
+    var ed = Editor.init();
+    _ = ed.feed(.down);
+    _ = ed.feed(.down);
+    try testing.expectEqual(@as(usize, 2), ed.state.cursor);
+    _ = ed.feed(.up);
+    try testing.expectEqual(@as(usize, 1), ed.state.cursor);
+    _ = ed.feed(.{ .char = 'j' });
+    try testing.expectEqual(@as(usize, 2), ed.state.cursor);
+    _ = ed.feed(.{ .char = 'k' });
+    try testing.expectEqual(@as(usize, 1), ed.state.cursor);
+}
+
+test "reducer: j and k are literal text, not navigation, inside a path field" {
+    var ed = Editor.init();
+    _ = ed.feed(.scope);
+    _ = feedAll(&ed, &.{ .{ .char = 's' }, .{ .char = 'r' }, .{ .char = 'c' }, .{ .char = '/' }, .{ .char = 'j' }, .{ .char = 'k' } });
+    try testing.expectEqual(Mode.scope_edit, ed.mode);
+    try testing.expectEqualStrings("src/jk", ed.state.scope.path);
 }
 
 test "reducer: enter saves, esc and q cancel from normal mode" {

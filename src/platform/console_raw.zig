@@ -25,7 +25,6 @@ const std_output_handle: DWORD = 0xFFFFFFF5; // (DWORD)-11
 const enable_processed_input: DWORD = 0x0001;
 const enable_line_input: DWORD = 0x0002;
 const enable_echo_input: DWORD = 0x0004;
-const enable_virtual_terminal_input: DWORD = 0x0200;
 
 // stdout mode flags.
 const enable_processed_output: DWORD = 0x0001;
@@ -101,9 +100,11 @@ pub const Raw = struct {
         if (!GetConsoleMode(handles.out, &out_mode).toBool()) return error.NotATerminal;
 
         // Raw stdin: no line buffering, no echo; also drop processed input so Ctrl+C
-        // arrives as a key event we treat as cancel and still restore cleanly.
-        const raw_in = (in_mode & ~(enable_line_input | enable_echo_input | enable_processed_input)) |
-            enable_virtual_terminal_input;
+        // arrives as a key event we treat as cancel and still restore cleanly. We do
+        // NOT enable ENABLE_VIRTUAL_TERMINAL_INPUT: with VT input on, arrow keys arrive
+        // as ANSI escape byte sequences (ESC [ A / ESC [ B) instead of KEY_EVENT records
+        // with VK_UP/VK_DOWN, and ReadConsoleInputW VK handling would never see them.
+        const raw_in = in_mode & ~(enable_line_input | enable_echo_input | enable_processed_input);
         // VT processing on stdout so the ANSI render (clear, cursor, inverse) works.
         const raw_out = out_mode | enable_virtual_terminal_processing | enable_processed_output;
 
@@ -161,7 +162,10 @@ fn keyDown(vk: WORD, ch: WORD) KeyEventRecord {
     return .{ .bKeyDown = BOOL.fromBool(true), .wRepeatCount = 1, .wVirtualKeyCode = vk, .wVirtualScanCode = 0, .UnicodeChar = ch, .dwControlKeyState = 0 };
 }
 
-test "mapKey maps the virtual keys the checklist reads" {
+test "mapKey maps the navigation virtual keys to semantic keys (arrows come as VK, not VT escapes)" {
+    // With ENABLE_VIRTUAL_TERMINAL_INPUT left OFF, arrows arrive as KEY_EVENT records
+    // carrying VK_UP/VK_DOWN, which is exactly what this maps. The UnicodeChar for an
+    // arrow key is 0, so the VK switch must fire before the char path.
     try testing.expectEqual(rules_tui.Key.up, mapKey(keyDown(vk_up, 0)).?);
     try testing.expectEqual(rules_tui.Key.down, mapKey(keyDown(vk_down, 0)).?);
     try testing.expectEqual(rules_tui.Key.save, mapKey(keyDown(vk_return, 0x0d)).?);
@@ -170,14 +174,19 @@ test "mapKey maps the virtual keys the checklist reads" {
     try testing.expectEqual(rules_tui.Key.backspace, mapKey(keyDown(vk_back, 0x08)).?);
 }
 
-test "mapKey returns printable characters (space and q included) as chars; Ctrl+C cancels" {
-    try testing.expectEqual(rules_tui.Key.cancel, mapKey(keyDown(0, 0x03)).?);
-    switch (mapKey(keyDown(vk_space, 0x20)).?) {
-        .char => |c| try testing.expectEqual(@as(u21, ' '), c),
+fn expectChar(key: ?rules_tui.Key, want: u21) !void {
+    switch (key orelse return error.TestUnexpectedResult) {
+        .char => |c| try testing.expectEqual(want, c),
         else => return error.TestUnexpectedResult,
     }
-    switch (mapKey(keyDown(0, 'q')).?) {
-        .char => |c| try testing.expectEqual(@as(u21, 'q'), c),
-        else => return error.TestUnexpectedResult,
-    }
+}
+
+test "mapKey passes printable characters (space, q, j, k) through as chars so they stay literal while editing" {
+    try testing.expectEqual(rules_tui.Key.cancel, mapKey(keyDown(0, 0x03)).?); // Ctrl+C
+    try expectChar(mapKey(keyDown(vk_space, 0x20)), ' ');
+    try expectChar(mapKey(keyDown(0, 'q')), 'q');
+    try expectChar(mapKey(keyDown(0, 'j')), 'j');
+    try expectChar(mapKey(keyDown(0, 'k')), 'k');
+    // The reducer (rules_tui) turns space->toggle, k/j->up/down and q->cancel in normal
+    // mode, but keeps them literal inside a path field; that is tested there.
 }
