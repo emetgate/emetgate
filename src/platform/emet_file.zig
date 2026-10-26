@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const dir_scan = @import("dir_scan.zig");
+const worker_pool = @import("worker_pool.zig");
 
 const magic = "EMETv006".*;
 const binary_probe = 8000;
@@ -453,7 +454,62 @@ const Texts = struct {
 
 pub const Target = union(enum) { file: []const u8, memory: void };
 
+/// Optional build-stage profiler. Null (production) unless set by `find build`.
+pub const BuildProfile = struct {
+    io: Io,
+    last: Io.Timestamp = undefined,
+    read_ns: u64 = 0,
+    ends_ns: u64 = 0,
+    sais_ns: u64 = 0,
+    owner_ns: u64 = 0,
+    emit_ns: u64 = 0,
+    sections_ns: u64 = 0,
+    wavelets_ns: u64 = 0,
+
+    fn lap(p: *BuildProfile) u64 {
+        const now = Io.Timestamp.now(p.io, .awake);
+        const ns: u64 = @intCast(p.last.durationTo(now).nanoseconds);
+        p.last = now;
+        return ns;
+    }
+};
+
+/// Not threadlocal: build() runs on a worker thread while `find build` sets this
+/// from the main thread, and prepare() joins that worker before the fields are read.
+pub var build_profile: ?*BuildProfile = null;
+
+// Parallel raw file reader. The per-file stat/open/read syscalls are the
+// dominant build cost once the file count is large (tens of thousands), so
+// they are fanned out across the worker pool. Each slot is written once by
+// one worker; decode and index assembly stay serial in path order afterwards,
+// so the resulting index is byte-identical to a serial read.
+const Slurp = struct {
+    root: Io.Dir,
+    io: Io,
+    paths: []const []const u8,
+    gpa: Allocator,
+    raws: []?[]u8,
+    stamps: []Stamp,
+    cancel: *const std.atomic.Value(bool),
+    cursor: std.atomic.Value(usize) = .init(0),
+
+    fn run(ctx: *anyopaque) void {
+        const s: *Slurp = @alignCast(@ptrCast(ctx));
+        while (true) {
+            const i = s.cursor.fetchAdd(1, .monotonic);
+            if (i >= s.paths.len) return;
+            if (s.cancel.load(.acquire)) return;
+            const stat = s.root.statFile(s.io, s.paths[i], .{}) catch continue;
+            if (stat.kind != .file) continue;
+            const raw = s.root.readFileAlloc(s.io, s.paths[i], s.gpa, .unlimited) catch continue;
+            s.raws[i] = raw;
+            s.stamps[i] = .of(stat);
+        }
+    }
+};
+
 pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, paths: [][]const u8, target: Target, cancel: *const std.atomic.Value(bool)) !Index {
+    if (build_profile) |p| p.last = Io.Timestamp.now(p.io, .awake);
     var root = try Io.Dir.cwd().openDir(io, root_path, .{});
     defer root.close(io);
     std.mem.sort([]const u8, paths, {}, lessPath);
@@ -468,20 +524,41 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
     defer t.deinit(gpa);
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
-    var binary: std.ArrayList([]const u8) = .empty;
+
+    // Read every file's raw bytes in parallel; decode + assemble serially below.
+    const raws = try gpa.alloc(?[]u8, kept);
+    defer {
+        for (raws) |maybe| if (maybe) |r| gpa.free(r);
+        gpa.free(raws);
+    }
+    @memset(raws, null);
+    const stamps = try gpa.alloc(Stamp, kept);
+    defer gpa.free(stamps);
+    {
+        var slurp: Slurp = .{ .root = root, .io = io, .paths = paths[0..kept], .gpa = gpa, .raws = raws, .stamps = stamps, .cancel = cancel };
+        var pool: worker_pool.Pool = undefined;
+        pool.start(worker_pool.max_threads);
+        defer _ = pool.release();
+        pool.run(worker_pool.max_threads, Slurp.run, &slurp);
+    }
+    try check(cancel);
+
+    var binary: std.ArrayList(usize) = .empty;
     for ([_]bool{ false, true }) |second| {
-        for (if (second) binary.items else paths[0..kept]) |p| {
+        const count = if (second) binary.items.len else kept;
+        var k: usize = 0;
+        while (k < count) : (k += 1) {
             try check(cancel);
-            const stat = root.statFile(io, p, .{}) catch continue;
-            if (stat.kind != .file) continue;
-            const raw = root.readFileAlloc(io, p, gpa, .unlimited) catch continue;
-            defer gpa.free(raw);
+            const i = if (second) binary.items[k] else k;
+            const raw = raws[i] orelse continue;
             const r = try decode(gpa, raw, &buf);
             if (r.binary and !second) {
-                try binary.append(arena, p);
+                try binary.append(arena, i);
                 continue;
             }
-            try t.add(gpa, p, r.text, .of(stat));
+            try t.add(gpa, paths[i], r.text, stamps[i]);
+            gpa.free(raw);
+            raws[i] = null;
         }
     }
     const n_files: u32 = @intCast(t.rows.items.len);
@@ -499,10 +576,12 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
         .path_len = 0,
     });
 
+    if (build_profile) |p| p.read_ns = p.lap();
     const ends = try gpa.alloc(u64, endWords(n));
     defer gpa.free(ends);
     @memset(ends, 0);
     for (t.ends.items) |e| ends[e / 64] |= @as(u64, 1) << @intCast(e % 64);
+    if (build_profile) |p| p.ends_ns = p.lap();
 
     var sa: ?[]u32 = try gpa.alloc(u32, n);
     defer if (sa) |owned| gpa.free(owned);
@@ -515,6 +594,7 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
         try sais(u16, gpa, sym, sa.?, 258);
     }
     try check(cancel);
+    if (build_profile) |p| p.sais_ns = p.lap();
 
     const owner = try gpa.alloc(u32, n);
     defer gpa.free(owner);
@@ -567,6 +647,7 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
     h.size = off;
     try check(cancel);
 
+    if (build_profile) |p| p.owner_ns = p.lap();
     const parts: Parts = .{ .h = &h, .t = &t, .ends = ends, .owner = owner, .prev = prev };
     switch (target) {
         .file => |out_path| {
@@ -578,6 +659,7 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
             var fw = file.writer(io, &wbuf);
             try emit(gpa, &fw.interface, parts, &sa);
             try fw.interface.flush();
+            if (build_profile) |p| p.emit_ns = p.lap();
             file.close(io);
             file_open = false;
             try Io.Dir.cwd().rename(tmp_path, Io.Dir.cwd(), out_path, io);
@@ -617,11 +699,16 @@ fn emit(gpa: Allocator, w: *Io.Writer, parts: Parts, sa: *?[]u32) !void {
     try put(w, &at, h.off_olines, std.mem.sliceAsBytes(t.lines.items));
     try put(w, &at, h.off_stamps, std.mem.sliceAsBytes(t.olines.items));
     try put(w, &at, h.owner.off_zeros, std.mem.sliceAsBytes(t.stamps.items));
+    if (build_profile) |p| p.sections_ns = p.lap();
 
     const other = try gpa.alloc(u32, h.n);
     defer gpa.free(other);
-    try writeWavelet(gpa, w, &at, h.owner, h.prev.off_zeros, parts.owner, other);
-    try writeWavelet(gpa, w, &at, h.prev, h.size, parts.prev, other);
+    var pool: worker_pool.Pool = undefined;
+    pool.start(worker_pool.max_threads);
+    defer _ = pool.release();
+    try writeWavelet(gpa, w, &at, h.owner, h.prev.off_zeros, parts.owner, other, &pool);
+    try writeWavelet(gpa, w, &at, h.prev, h.size, parts.prev, other, &pool);
+    if (build_profile) |p| p.wavelets_ns = p.lap();
 }
 
 fn check(cancel: *const std.atomic.Value(bool)) error{Canceled}!void {
@@ -795,7 +882,69 @@ fn placeWavelet(off: *u64, n: u64, levels: u64) WaveletPlace {
     return p;
 }
 
-fn writeWavelet(gpa: Allocator, w: *Io.Writer, at: *u64, place: WaveletPlace, end: u64, values: []u32, other: []u32) !void {
+// Per-level parallel work for the wavelet build. The two heavy O(n) passes
+// (set bits + count zeros, then the stable 0/1 reorder) are split into
+// line-aligned chunks that are processed in parallel; chunks own disjoint
+// `lines` so there is no write contention, and no extra large buffers are
+// allocated (the reorder writes in place into the existing `nxt` array).
+// Output is byte-identical to the previous serial builder.
+const LevelWork = struct {
+    cur: []const u32,
+    nxt: []u32,
+    ll: []Line,
+    shift: u6,
+    span: usize,
+    n_chunks: usize,
+    counts: []u32,
+    zero_base: []u32,
+    one_base: []u32,
+    cursor: std.atomic.Value(usize) = .init(0),
+
+    fn countSet(ctx: *anyopaque) void {
+        const w: *LevelWork = @alignCast(@ptrCast(ctx));
+        while (true) {
+            const c = w.cursor.fetchAdd(1, .monotonic);
+            if (c >= w.n_chunks) return;
+            const lo = c * w.span;
+            const hi = @min(lo + w.span, w.cur.len);
+            var z: u32 = 0;
+            var i = lo;
+            while (i < hi) : (i += 1) {
+                const v = w.cur[i];
+                if ((@as(u64, v) >> w.shift) & 1 == 1) {
+                    const at_line = i % line_bits;
+                    w.ll[i / line_bits].bits[at_line / 64] |= @as(u64, 1) << @intCast(at_line % 64);
+                } else z += 1;
+            }
+            w.counts[c] = z;
+        }
+    }
+
+    fn scatter(ctx: *anyopaque) void {
+        const w: *LevelWork = @alignCast(@ptrCast(ctx));
+        while (true) {
+            const c = w.cursor.fetchAdd(1, .monotonic);
+            if (c >= w.n_chunks) return;
+            const lo = c * w.span;
+            const hi = @min(lo + w.span, w.cur.len);
+            var zi = w.zero_base[c];
+            var oi = w.one_base[c];
+            var i = lo;
+            while (i < hi) : (i += 1) {
+                const v = w.cur[i];
+                if ((@as(u64, v) >> w.shift) & 1 == 1) {
+                    w.nxt[oi] = v;
+                    oi += 1;
+                } else {
+                    w.nxt[zi] = v;
+                    zi += 1;
+                }
+            }
+        }
+    }
+};
+
+fn writeWavelet(gpa: Allocator, w: *Io.Writer, at: *u64, place: WaveletPlace, end: u64, values: []u32, other: []u32, pool: *worker_pool.Pool) !void {
     const n = values.len;
     const levels = place.levels;
     const lines = linesFor(n);
@@ -808,30 +957,55 @@ fn writeWavelet(gpa: Allocator, w: *Io.Writer, at: *u64, place: WaveletPlace, en
     const coarse_all = try gpa.alloc(u64, coarse * levels);
     defer gpa.free(coarse_all);
 
+    // Line-aligned chunking: ~4 chunks per worker for load balance, each a
+    // whole number of 448-bit lines so chunks touch disjoint `lines`.
+    const threads = pool.helpers() + 1;
+    const target = @max(threads * 4, 1);
+    var span = (n / target / line_bits + 1) * line_bits;
+    if (span == 0) span = line_bits;
+    const n_chunks = if (n == 0) 1 else (n + span - 1) / span;
+    const counts = try gpa.alloc(u32, n_chunks);
+    defer gpa.free(counts);
+    const zero_base = try gpa.alloc(u32, n_chunks);
+    defer gpa.free(zero_base);
+    const one_base = try gpa.alloc(u32, n_chunks);
+    defer gpa.free(one_base);
+
     var cur = values;
     var nxt = other;
     for (0..levels) |l| {
         const shift: u6 = @intCast(levels - 1 - l);
         const ll = all[l * lines ..][0..lines];
-        var z: usize = 0;
-        for (cur, 0..) |v, i| {
-            if ((@as(u64, v) >> shift) & 1 == 1) {
-                const at_line = i % line_bits;
-                ll[i / line_bits].bits[at_line / 64] |= @as(u64, 1) << @intCast(at_line % 64);
-            } else z += 1;
+        var work: LevelWork = .{
+            .cur = cur,
+            .nxt = nxt,
+            .ll = ll,
+            .shift = shift,
+            .span = span,
+            .n_chunks = n_chunks,
+            .counts = counts,
+            .zero_base = zero_base,
+            .one_base = one_base,
+        };
+        pool.run(worker_pool.max_threads, LevelWork.countSet, &work);
+
+        var ztot: usize = 0;
+        for (counts) |z| ztot += z;
+        zeros[l] = @intCast(ztot);
+        var zacc: u32 = 0;
+        var oacc: u32 = @intCast(ztot);
+        for (0..n_chunks) |c| {
+            const lo = c * span;
+            const len: u32 = @intCast(@min(lo + span, n) - lo);
+            zero_base[c] = zacc;
+            zacc += counts[c];
+            one_base[c] = oacc;
+            oacc += len - counts[c];
         }
-        zeros[l] = @intCast(z);
-        var zi: usize = 0;
-        var oi: usize = z;
-        for (cur) |v| {
-            if ((@as(u64, v) >> shift) & 1 == 1) {
-                nxt[oi] = v;
-                oi += 1;
-            } else {
-                nxt[zi] = v;
-                zi += 1;
-            }
-        }
+
+        work.cursor = .init(0);
+        pool.run(worker_pool.max_threads, LevelWork.scatter, &work);
+
         const lc = coarse_all[l * coarse ..][0..coarse];
         @memset(lc, 0);
         var ones: u64 = 0;
@@ -1457,6 +1631,26 @@ const Found = struct {
 
 const Span = struct { ix: *const Index, lo: u32, hi: u32, skip: []const u64 };
 
+/// Optional stage profiler for the find hot path. When `profile_sink` is null
+/// (the default, and always so in production) search() takes a handful of
+/// branch-predicted no-ops; it is only set by the `find profile` CLI command.
+pub const Profile = struct {
+    io: Io,
+    range_ns: u64 = 0,
+    collect_ns: u64 = 0,
+    sort_ns: u64 = 0,
+    format_ns: u64 = 0,
+};
+
+pub threadlocal var profile_sink: ?*Profile = null;
+
+fn lapNs(p: *Profile, last: *Io.Timestamp) u64 {
+    const now = Io.Timestamp.now(p.io, .awake);
+    const ns: u64 = @intCast(last.durationTo(now).nanoseconds);
+    last.* = now;
+    return ns;
+}
+
 pub const Scratch = struct {
     heap: [4096]Node = undefined,
     top: [top_files]FileHits = undefined,
@@ -1478,6 +1672,7 @@ fn gather(dst: []Found, len: *usize, ix: *const Index, src: []const FileHits) vo
 }
 
 pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
+    var tlast: Io.Timestamp = if (profile_sink) |p| Io.Timestamp.now(p.io, .awake) else undefined;
     var w = Io.Writer.fixed(&sc.out);
     if (pattern.len == 0 or pattern.len > max_pattern) {
         try w.print("no hits: a pattern holds 1 to {d} bytes\n", .{max_pattern});
@@ -1502,6 +1697,9 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
         spans[n_spans] = .{ .ix = ix, .lo = r[0], .hi = r[1], .skip = skip };
         n_spans += 1;
     }
+    if (profile_sink) |p| {
+        p.range_ns = lapNs(p, &tlast);
+    }
     try w.print("{d} hits in {d} files\n", .{ hits, files });
     if (hits == 0) return .{ .hits = 0, .files = 0, .text = w.buffered() };
 
@@ -1515,9 +1713,15 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
         const n_first = sp.ix.firstFiles(sp.lo, sp.hi, sp.skip, shown_hits, &sc.first);
         gather(&sc.early, &n_early, sp.ix, sc.first[0..n_first]);
     }
+    if (profile_sink) |p| {
+        p.collect_ns = lapNs(p, &tlast);
+    }
     std.mem.sort(Found, sc.heavy[0..n_heavy], {}, Found.heavier);
     std.mem.sort(Found, sc.heavy_bin[0..n_heavy_bin], {}, Found.heavier);
     std.mem.sort(Found, sc.early[0..n_early], {}, Found.earlier);
+    if (profile_sink) |p| {
+        p.sort_ns = lapNs(p, &tlast);
+    }
 
     try w.print("\nmost hits:\n", .{});
     const n_text = @min(n_heavy, top_files);
@@ -1533,15 +1737,19 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
         const ps = sc.positions[0..take];
         for (ps, 0..) |*p, j| p.* = f.ix.sa[f.ix.hitRank(f.fh, @intCast(j))];
         std.mem.sort(u32, ps, {}, std.sort.asc(u32));
+        const fpath = f.path();
         for (ps) |p| {
             const pl = f.ix.place(f.fh.file, p);
             var cut: usize = @min(pl.text.len, shown_line);
             while (cut > 0 and cut < pl.text.len and pl.text[cut] & 0xC0 == 0x80) cut -= 1;
-            try w.print("{s}:{d}:{d}: {s}\n", .{ f.path(), pl.line, pl.col, std.mem.trim(u8, pl.text[0..cut], " \t") });
+            try w.print("{s}:{d}:{d}: {s}\n", .{ fpath, pl.line, pl.col, std.mem.trim(u8, pl.text[0..cut], " \t") });
         }
         shown += take;
     }
     if (hits > shown) try w.print("... and {d} more\n", .{hits - shown});
+    if (profile_sink) |p| {
+        p.format_ns = lapNs(p, &tlast);
+    }
     return .{ .hits = hits, .files = files, .text = w.buffered() };
 }
 
