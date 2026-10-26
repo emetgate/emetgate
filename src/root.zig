@@ -130,6 +130,7 @@ pub const where = @import("platform/where.zig");
 pub const wire = @import("protocol/wire.zig");
 pub const scan_command = @import("protocol/scan_command.zig");
 pub const rule_command = @import("protocol/rule_command.zig");
+pub const rule_catalog = @import("protocol/rule_catalog.zig");
 pub const prompt_words = @import("protocol/prompt_words.zig");
 pub const prompt_hook = @import("protocol/prompt_hook.zig");
 pub const facts_command = @import("protocol/facts_command.zig");
