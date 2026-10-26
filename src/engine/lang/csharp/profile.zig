@@ -1,0 +1,178 @@
+const ts = @import("../../tree_sitter.zig");
+const profile_mod = @import("../profile.zig");
+
+const Profile = profile_mod.Profile;
+const FunctionKind = profile_mod.FunctionKind;
+const FunctionNode = profile_mod.FunctionNode;
+const MemberTraits = profile_mod.MemberTraits;
+const Container = profile_mod.Container;
+const LiteralValues = profile_mod.LiteralValues;
+
+extern fn tree_sitter_c_sharp() callconv(.c) ?*const ts.Language;
+
+fn grammar() *const ts.Language {
+    return tree_sitter_c_sharp().?;
+}
+
+const function_nodes = [_]FunctionNode{
+    .{ .node = "method_declaration", .kind = .method },
+    .{ .node = "constructor_declaration", .kind = .method },
+    .{ .node = "local_function_statement", .kind = .declaration },
+};
+
+const containers = [_]Container{
+    .{ .node = "class_declaration", .name = .field },
+    .{ .node = "struct_declaration", .name = .field },
+    .{ .node = "interface_declaration", .name = .field },
+    .{ .node = "enum_declaration", .name = .field },
+    .{ .node = "record_declaration", .name = .field },
+    .{ .node = "namespace_declaration", .name = .field },
+};
+
+const never_matching_literal_values: LiteralValues = .{
+    .pair = "",
+    .key_field = "",
+    .value_field = "",
+    .quoted_key = "",
+    .literals = &.{},
+    .negation_operator_field = "",
+    .negation_operator = "",
+    .negation_argument_field = "",
+    .negatable = &.{},
+    .template = "",
+    .substitution = "",
+};
+
+pub const profile: Profile = .{
+    .name = "csharp",
+    .extensions = &.{".cs"},
+    .grammar = grammar,
+    .functions = &function_nodes,
+    .bindings = &.{},
+    .transparent_wrappers = &.{"parenthesized_expression"},
+    .addressable_names = &.{"identifier"},
+    .dotted_name = "qualified_name",
+    .name_segments = &.{"identifier"},
+    .containers = &containers,
+    .declaration_statements = &.{},
+    .declarator = "",
+    .export_wrappers = &.{},
+    .decorator = "attribute_list",
+    .comments = &.{"comment"},
+    .block = "block",
+    .root = "compilation_unit",
+    .identifier = "identifier",
+    .reference_names = &.{"identifier"},
+    .call = .{ .node = "invocation_expression", .function_field = "function", .arguments_field = "arguments", .arguments = "argument_list", .optional_marker = null },
+    .reexport_specifier = null,
+    .namespace_exports = &.{},
+    .star_token = null,
+    .dynamic_callees = &.{},
+    .dynamic_constructors = &.{},
+    .strings = &.{ "string_literal", "verbatim_string_literal", "raw_string_literal", "interpolated_string_expression" },
+    .class_body = "declaration_list",
+    .bodyless_terminator = ";",
+    .empty_body = "{}",
+    .expression_statement = "expression_statement",
+    .prose_strings = &.{ "string_literal", "verbatim_string_literal", "raw_string_literal" },
+    .directives = &.{},
+    .literal_values = never_matching_literal_values,
+    .memberTraits = memberTraits,
+    .visibility_keywords = &.{},
+};
+
+fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {
+    _ = self;
+    _ = tree;
+    _ = kind;
+    return .{ .is_constructor = isKind(node, "constructor_declaration") };
+}
+
+fn isKind(node: ts.Node, name: []const u8) bool {
+    return std.mem.eql(u8, node.kind(), name);
+}
+
+const std = @import("std");
+const testing = std.testing;
+const alloc_bridge = @import("../../alloc_bridge.zig");
+
+const sample =
+    \\using System;
+    \\
+    \\namespace Demo
+    \\{
+    \\    public class Greeter
+    \\    {
+    \\        // greet
+    \\        public void Greet(string name)
+    \\        {
+    \\            Console.WriteLine("Hello " + name);
+    \\        }
+    \\    }
+    \\}
+;
+
+test "csharp profile maps its node kinds onto a real tree" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const parser = try ts.Parser.init(profile.grammar());
+    defer parser.deinit();
+    const tree = try parser.parse(sample);
+    defer tree.deinit();
+
+    const root = tree.root();
+    try testing.expect(!root.hasError());
+    try testing.expectEqualStrings(profile.root, root.kind());
+
+    // Find the class, its method and the Console.WriteLine call by kind, then
+    // confirm the profile's container / function / call config resolves against
+    // the real tree (names come from the "name" field; calls from Call config).
+    const class = find(root, "class_declaration").?;
+    try testing.expect(profile.containerName(class.kind()) != null);
+    try testing.expectEqualStrings("Greeter", tree.text(class.childByField("name").?));
+
+    const method = find(root, "method_declaration").?;
+    try testing.expectEqual(FunctionKind.method, profile.functionKind(method.kind()).?);
+    try testing.expectEqualStrings("Greet", tree.text(method.childByField("name").?));
+    try testing.expectEqualStrings(profile.block, method.childByField("body").?.kind());
+
+    const call = find(root, profile.call.node).?;
+    try testing.expectEqualStrings("Console.WriteLine", tree.text(call.childByField(profile.call.function_field).?));
+    try testing.expectEqualStrings(profile.call.arguments, call.childByField(profile.call.arguments_field).?.kind());
+}
+
+fn find(node: ts.Node, kind: []const u8) ?ts.Node {
+    if (std.mem.eql(u8, node.kind(), kind)) return node;
+    var i: u32 = 0;
+    while (node.child(i)) |child| : (i += 1) {
+        if (find(child, kind)) |hit| return hit;
+    }
+    return null;
+}
+
+test "csharp profile recognises comments and string literals" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const parser = try ts.Parser.init(profile.grammar());
+    defer parser.deinit();
+    const tree = try parser.parse(sample);
+    defer tree.deinit();
+
+    var saw_comment = false;
+    var saw_string = false;
+    var stack = std.ArrayList(ts.Node).empty;
+    defer stack.deinit(testing.allocator);
+    try stack.append(testing.allocator, tree.root());
+    while (stack.pop()) |node| {
+        if (profile.isComment(node.kind())) saw_comment = true;
+        for (profile.strings) |s| {
+            if (std.mem.eql(u8, s, node.kind())) saw_string = true;
+        }
+        var i: u32 = 0;
+        while (node.child(i)) |child| : (i += 1) try stack.append(testing.allocator, child);
+    }
+    try testing.expect(saw_comment);
+    try testing.expect(saw_string);
+}
