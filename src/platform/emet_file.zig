@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const dir_scan = @import("dir_scan.zig");
+const worker_pool = @import("worker_pool.zig");
 
 const magic = "EMETv006".*;
 const binary_probe = 8000;
@@ -651,8 +652,11 @@ fn emit(gpa: Allocator, w: *Io.Writer, parts: Parts, sa: *?[]u32) !void {
 
     const other = try gpa.alloc(u32, h.n);
     defer gpa.free(other);
-    try writeWavelet(gpa, w, &at, h.owner, h.prev.off_zeros, parts.owner, other);
-    try writeWavelet(gpa, w, &at, h.prev, h.size, parts.prev, other);
+    var pool: worker_pool.Pool = undefined;
+    pool.start(worker_pool.max_threads);
+    defer _ = pool.release();
+    try writeWavelet(gpa, w, &at, h.owner, h.prev.off_zeros, parts.owner, other, &pool);
+    try writeWavelet(gpa, w, &at, h.prev, h.size, parts.prev, other, &pool);
     if (build_profile) |p| p.wavelets_ns = p.lap();
 }
 
@@ -827,7 +831,69 @@ fn placeWavelet(off: *u64, n: u64, levels: u64) WaveletPlace {
     return p;
 }
 
-fn writeWavelet(gpa: Allocator, w: *Io.Writer, at: *u64, place: WaveletPlace, end: u64, values: []u32, other: []u32) !void {
+// Per-level parallel work for the wavelet build. The two heavy O(n) passes
+// (set bits + count zeros, then the stable 0/1 reorder) are split into
+// line-aligned chunks that are processed in parallel; chunks own disjoint
+// `lines` so there is no write contention, and no extra large buffers are
+// allocated (the reorder writes in place into the existing `nxt` array).
+// Output is byte-identical to the previous serial builder.
+const LevelWork = struct {
+    cur: []const u32,
+    nxt: []u32,
+    ll: []Line,
+    shift: u6,
+    span: usize,
+    n_chunks: usize,
+    counts: []u32,
+    zero_base: []u32,
+    one_base: []u32,
+    cursor: std.atomic.Value(usize) = .init(0),
+
+    fn countSet(ctx: *anyopaque) void {
+        const w: *LevelWork = @alignCast(@ptrCast(ctx));
+        while (true) {
+            const c = w.cursor.fetchAdd(1, .monotonic);
+            if (c >= w.n_chunks) return;
+            const lo = c * w.span;
+            const hi = @min(lo + w.span, w.cur.len);
+            var z: u32 = 0;
+            var i = lo;
+            while (i < hi) : (i += 1) {
+                const v = w.cur[i];
+                if ((@as(u64, v) >> w.shift) & 1 == 1) {
+                    const at_line = i % line_bits;
+                    w.ll[i / line_bits].bits[at_line / 64] |= @as(u64, 1) << @intCast(at_line % 64);
+                } else z += 1;
+            }
+            w.counts[c] = z;
+        }
+    }
+
+    fn scatter(ctx: *anyopaque) void {
+        const w: *LevelWork = @alignCast(@ptrCast(ctx));
+        while (true) {
+            const c = w.cursor.fetchAdd(1, .monotonic);
+            if (c >= w.n_chunks) return;
+            const lo = c * w.span;
+            const hi = @min(lo + w.span, w.cur.len);
+            var zi = w.zero_base[c];
+            var oi = w.one_base[c];
+            var i = lo;
+            while (i < hi) : (i += 1) {
+                const v = w.cur[i];
+                if ((@as(u64, v) >> w.shift) & 1 == 1) {
+                    w.nxt[oi] = v;
+                    oi += 1;
+                } else {
+                    w.nxt[zi] = v;
+                    zi += 1;
+                }
+            }
+        }
+    }
+};
+
+fn writeWavelet(gpa: Allocator, w: *Io.Writer, at: *u64, place: WaveletPlace, end: u64, values: []u32, other: []u32, pool: *worker_pool.Pool) !void {
     const n = values.len;
     const levels = place.levels;
     const lines = linesFor(n);
@@ -840,30 +906,55 @@ fn writeWavelet(gpa: Allocator, w: *Io.Writer, at: *u64, place: WaveletPlace, en
     const coarse_all = try gpa.alloc(u64, coarse * levels);
     defer gpa.free(coarse_all);
 
+    // Line-aligned chunking: ~4 chunks per worker for load balance, each a
+    // whole number of 448-bit lines so chunks touch disjoint `lines`.
+    const threads = pool.helpers() + 1;
+    const target = @max(threads * 4, 1);
+    var span = (n / target / line_bits + 1) * line_bits;
+    if (span == 0) span = line_bits;
+    const n_chunks = if (n == 0) 1 else (n + span - 1) / span;
+    const counts = try gpa.alloc(u32, n_chunks);
+    defer gpa.free(counts);
+    const zero_base = try gpa.alloc(u32, n_chunks);
+    defer gpa.free(zero_base);
+    const one_base = try gpa.alloc(u32, n_chunks);
+    defer gpa.free(one_base);
+
     var cur = values;
     var nxt = other;
     for (0..levels) |l| {
         const shift: u6 = @intCast(levels - 1 - l);
         const ll = all[l * lines ..][0..lines];
-        var z: usize = 0;
-        for (cur, 0..) |v, i| {
-            if ((@as(u64, v) >> shift) & 1 == 1) {
-                const at_line = i % line_bits;
-                ll[i / line_bits].bits[at_line / 64] |= @as(u64, 1) << @intCast(at_line % 64);
-            } else z += 1;
+        var work: LevelWork = .{
+            .cur = cur,
+            .nxt = nxt,
+            .ll = ll,
+            .shift = shift,
+            .span = span,
+            .n_chunks = n_chunks,
+            .counts = counts,
+            .zero_base = zero_base,
+            .one_base = one_base,
+        };
+        pool.run(worker_pool.max_threads, LevelWork.countSet, &work);
+
+        var ztot: usize = 0;
+        for (counts) |z| ztot += z;
+        zeros[l] = @intCast(ztot);
+        var zacc: u32 = 0;
+        var oacc: u32 = @intCast(ztot);
+        for (0..n_chunks) |c| {
+            const lo = c * span;
+            const len: u32 = @intCast(@min(lo + span, n) - lo);
+            zero_base[c] = zacc;
+            zacc += counts[c];
+            one_base[c] = oacc;
+            oacc += len - counts[c];
         }
-        zeros[l] = @intCast(z);
-        var zi: usize = 0;
-        var oi: usize = z;
-        for (cur) |v| {
-            if ((@as(u64, v) >> shift) & 1 == 1) {
-                nxt[oi] = v;
-                oi += 1;
-            } else {
-                nxt[zi] = v;
-                zi += 1;
-            }
-        }
+
+        work.cursor = .init(0);
+        pool.run(worker_pool.max_threads, LevelWork.scatter, &work);
+
         const lc = coarse_all[l * coarse ..][0..coarse];
         @memset(lc, 0);
         var ones: u64 = 0;
