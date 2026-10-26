@@ -478,6 +478,36 @@ pub const BuildProfile = struct {
 /// from the main thread, and prepare() joins that worker before the fields are read.
 pub var build_profile: ?*BuildProfile = null;
 
+// Parallel raw file reader. The per-file stat/open/read syscalls are the
+// dominant build cost once the file count is large (tens of thousands), so
+// they are fanned out across the worker pool. Each slot is written once by
+// one worker; decode and index assembly stay serial in path order afterwards,
+// so the resulting index is byte-identical to a serial read.
+const Slurp = struct {
+    root: Io.Dir,
+    io: Io,
+    paths: []const []const u8,
+    gpa: Allocator,
+    raws: []?[]u8,
+    stamps: []Stamp,
+    cancel: *const std.atomic.Value(bool),
+    cursor: std.atomic.Value(usize) = .init(0),
+
+    fn run(ctx: *anyopaque) void {
+        const s: *Slurp = @alignCast(@ptrCast(ctx));
+        while (true) {
+            const i = s.cursor.fetchAdd(1, .monotonic);
+            if (i >= s.paths.len) return;
+            if (s.cancel.load(.acquire)) return;
+            const stat = s.root.statFile(s.io, s.paths[i], .{}) catch continue;
+            if (stat.kind != .file) continue;
+            const raw = s.root.readFileAlloc(s.io, s.paths[i], s.gpa, .unlimited) catch continue;
+            s.raws[i] = raw;
+            s.stamps[i] = .of(stat);
+        }
+    }
+};
+
 pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, paths: [][]const u8, target: Target, cancel: *const std.atomic.Value(bool)) !Index {
     if (build_profile) |p| p.last = Io.Timestamp.now(p.io, .awake);
     var root = try Io.Dir.cwd().openDir(io, root_path, .{});
@@ -494,20 +524,41 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
     defer t.deinit(gpa);
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(gpa);
-    var binary: std.ArrayList([]const u8) = .empty;
+
+    // Read every file's raw bytes in parallel; decode + assemble serially below.
+    const raws = try gpa.alloc(?[]u8, kept);
+    defer {
+        for (raws) |maybe| if (maybe) |r| gpa.free(r);
+        gpa.free(raws);
+    }
+    @memset(raws, null);
+    const stamps = try gpa.alloc(Stamp, kept);
+    defer gpa.free(stamps);
+    {
+        var slurp: Slurp = .{ .root = root, .io = io, .paths = paths[0..kept], .gpa = gpa, .raws = raws, .stamps = stamps, .cancel = cancel };
+        var pool: worker_pool.Pool = undefined;
+        pool.start(worker_pool.max_threads);
+        defer _ = pool.release();
+        pool.run(worker_pool.max_threads, Slurp.run, &slurp);
+    }
+    try check(cancel);
+
+    var binary: std.ArrayList(usize) = .empty;
     for ([_]bool{ false, true }) |second| {
-        for (if (second) binary.items else paths[0..kept]) |p| {
+        const count = if (second) binary.items.len else kept;
+        var k: usize = 0;
+        while (k < count) : (k += 1) {
             try check(cancel);
-            const stat = root.statFile(io, p, .{}) catch continue;
-            if (stat.kind != .file) continue;
-            const raw = root.readFileAlloc(io, p, gpa, .unlimited) catch continue;
-            defer gpa.free(raw);
+            const i = if (second) binary.items[k] else k;
+            const raw = raws[i] orelse continue;
             const r = try decode(gpa, raw, &buf);
             if (r.binary and !second) {
-                try binary.append(arena, p);
+                try binary.append(arena, i);
                 continue;
             }
-            try t.add(gpa, p, r.text, .of(stat));
+            try t.add(gpa, paths[i], r.text, stamps[i]);
+            gpa.free(raw);
+            raws[i] = null;
         }
     }
     const n_files: u32 = @intCast(t.rows.items.len);
