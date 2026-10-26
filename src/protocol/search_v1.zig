@@ -304,20 +304,34 @@ const LineCursor = struct {
     pos: usize = 0,
     counted_to: usize = 0,
     number: u32 = 1,
+    // For a literal query, next() already located the earliest literal on the line it
+    // returns. It records that hit here (column relative to the line, literal text) so
+    // matchFile can reuse it instead of scanning the line a second time with
+    // earliestLiteral. null when the line's earliest literal straddles a trailing '\r'
+    // (so it may fall outside line.text) — a case real patterns never produce, left to
+    // the slow path to keep the result provably identical.
+    hit: ?text_query.Hit = null,
 
     fn next(self: *LineCursor) ?Line {
+        self.hit = null;
         if (self.pos > self.bytes.len) return null;
         var start = self.pos;
+        var found_at: ?usize = null;
+        var found_lit: []const u8 = "";
         if (self.query.literals.len != 0) {
             var first: ?usize = null;
             for (self.query.literals) |lit| {
                 const at = std.mem.indexOfPos(u8, self.bytes, self.pos, lit) orelse continue;
-                if (first == null or at < first.?) first = at;
+                if (first == null or at < first.?) {
+                    first = at;
+                    found_lit = lit;
+                }
             }
             const at = first orelse {
                 self.pos = self.bytes.len + 1;
                 return null;
             };
+            found_at = at;
             start = if (std.mem.lastIndexOfScalar(u8, self.bytes[0..at], '\n')) |nl| nl + 1 else 0;
             if (start < self.pos) start = self.pos;
         } else if (start == self.bytes.len and start != 0) {
@@ -329,15 +343,52 @@ const LineCursor = struct {
         self.counted_to = start;
         self.pos = end + 1;
         const text_end = if (end > start and self.bytes[end - 1] == '\r') end - 1 else end;
+        if (found_at) |at| {
+            if (at + found_lit.len <= text_end) self.hit = .{ .col = @intCast(at - start), .text = found_lit };
+        }
         return .{ .text = self.bytes[start..text_end], .start = @intCast(start), .number = self.number };
     }
 };
+
+// Count the number of lines in `bytes` that contain at least one of `literals`,
+// jumping match-to-match and skipping the rest of each matching line. This is the
+// exact same per-line predicate the main matchFile loop uses for a literal query
+// (earliest literal occurrence decides the line), but without computing line
+// starts, line numbers, snippets or classification — none of which a counting-only
+// pass needs. Literals never contain '\n' or '\r' (patterns are single-line and
+// split on '|'), so a match found before the line's '\n' always lies within the
+// line's text, giving a count identical to the slow path for every real query.
+fn countMatchedLines(bytes: []const u8, literals: []const []const u8) u32 {
+    var count: u32 = 0;
+    var pos: usize = 0;
+    while (pos <= bytes.len) {
+        var first: ?usize = null;
+        for (literals) |lit| {
+            const at = std.mem.indexOfPos(u8, bytes, pos, lit) orelse continue;
+            if (first == null or at < first.?) first = at;
+        }
+        const at = first orelse break;
+        const end = std.mem.indexOfScalarPos(u8, bytes, at, '\n') orelse bytes.len;
+        count += 1;
+        pos = end + 1;
+    }
+    return count;
+}
 
 fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
     const gpa = shared.gpa;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     var decoded: ?span_codec.Decoded = null;
+    // Whole-file counting pass for a literal query: we only need the matched-line
+    // count (count_only implies no kind filter, so no classification is required).
+    // This is the hot path for a super-common token once the 200-hit cap is full.
+    if (shared.count_only and shared.query.re == null and shared.query.literals.len != 0) {
+        const n = countMatchedLines(item.content, shared.query.literals);
+        item.matched_lines += n;
+        item.extra_matches += n;
+        return;
+    }
     var cursor: LineCursor = .{ .bytes = item.content, .query = shared.query };
     while (cursor.next()) |line| {
         const counting = shared.count_only or item.hits.items.len > shared.hit_limit;
@@ -345,7 +396,15 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
             item.capped = true;
             return;
         }
-        const found = switch (shared.query.matchLineCounting(scratch, line.text, &item.most_steps)) {
+        // Mid-file cap reached (kinds == null here, else we returned above): count the
+        // remaining matched lines cheaply instead of walking them one struct at a time.
+        if (counting and shared.query.re == null) {
+            const n = countMatchedLines(item.content[line.start..], shared.query.literals);
+            item.matched_lines += n;
+            item.extra_matches += n;
+            return;
+        }
+        const found = if (shared.query.re == null and cursor.hit != null) cursor.hit.? else switch (shared.query.matchLineCounting(scratch, line.text, &item.most_steps)) {
             .none => continue,
             .over_budget => {
                 item.over_budget_lines += 1;
