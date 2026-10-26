@@ -54,11 +54,19 @@ pub const Row = struct {
     path: ?[]const u8 = null,
 };
 
+// How many checklist rows the viewport shows when the terminal height is unknown.
+// The catalog is taller than most terminals, so the list scrolls (see `top`).
+pub const default_viewport = 20;
+
 pub const State = struct {
     rows: [max_rows]Row = undefined,
     len: usize = 0,
     cursor: usize = 0,
     scope: Scope = .whole_repo,
+    // The scrolling viewport: `top` is the first visible row index and `viewport`
+    // is how many rows fit. The cursor is always kept inside [top, top+viewport).
+    top: usize = 0,
+    viewport: usize = default_viewport,
 
     pub fn init() State {
         var s: State = .{};
@@ -77,10 +85,39 @@ pub const State = struct {
 
     pub fn moveUp(self: *State) void {
         if (self.cursor > 0) self.cursor -= 1;
+        self.keepCursorVisible();
     }
 
     pub fn moveDown(self: *State) void {
         if (self.cursor + 1 < self.len) self.cursor += 1;
+        self.keepCursorVisible();
+    }
+
+    // Set how many rows fit on screen (at least one), then re-anchor the viewport so
+    // the cursor stays visible. The driver derives this from the terminal height.
+    pub fn setViewport(self: *State, rows: usize) void {
+        self.viewport = if (rows < 1) 1 else rows;
+        self.keepCursorVisible();
+    }
+
+    // Standard "keep the cursor in view" scroll: pull `top` down when the cursor
+    // moves above it, push it up when the cursor moves past the bottom edge.
+    fn keepCursorVisible(self: *State) void {
+        if (self.cursor < self.top) {
+            self.top = self.cursor;
+        } else if (self.cursor >= self.top + self.viewport) {
+            self.top = self.cursor + 1 - self.viewport;
+        }
+    }
+
+    // The exclusive end of the visible window, clamped to the row count.
+    pub fn visibleEnd(self: *const State) usize {
+        return @min(self.top + self.viewport, self.len);
+    }
+
+    // The rows currently visible in the viewport.
+    pub fn visible(self: *const State) []const Row {
+        return self.rows[self.top..self.visibleEnd()];
     }
 
     pub fn toggle(self: *State) void {
@@ -222,8 +259,19 @@ pub fn render(out: *Writer, state: *const State, ansi: bool, editing: Editing) !
     try out.writeAll("emetgate rules  -  Space toggle, up/down (or k/j) move, Tab scope, Enter save, q cancel\n");
     if (ansi) try out.writeAll("\r");
 
+    // Only the visible window is drawn; a hint marks rows scrolled out of view. The
+    // group starts empty so the first visible row always prints its group header,
+    // even when the window opens in the middle of a group.
+    if (state.top > 0) {
+        if (ansi) try out.writeAll(esc.clear_line);
+        try out.print("  ... {d} more above\n", .{state.top});
+        if (ansi) try out.writeAll("\r");
+    }
     var group: []const u8 = "";
-    for (state.items(), 0..) |row, i| {
+    const end = state.visibleEnd();
+    var i = state.top;
+    while (i < end) : (i += 1) {
+        const row = state.rows[i];
         if (!std.mem.eql(u8, group, row.entry.group)) {
             if (ansi) try out.writeAll(esc.clear_line);
             try out.print("\n{s}:\n", .{row.entry.group});
@@ -237,10 +285,16 @@ pub fn render(out: *Writer, state: *const State, ansi: bool, editing: Editing) !
         }
         const box: []const u8 = if (row.checked) "[x]" else "[ ]";
         const marker: []const u8 = if (on_cursor) ">" else " ";
-        try out.print("{s} {s} {s}", .{ marker, box, row.entry.label });
+        try out.print("{s} {s} {s}{s}", .{ marker, box, row.entry.label, row.entry.lang.tag() });
         try writeRowScope(out, row, state.scope, editing, i);
         if (ansi and on_cursor) try out.writeAll(esc.reset);
         try out.writeAll("\n");
+        if (ansi) try out.writeAll("\r");
+    }
+    const below = state.len - end;
+    if (below > 0) {
+        if (ansi) try out.writeAll(esc.clear_line);
+        try out.print("  ... {d} more below\n", .{below});
         if (ansi) try out.writeAll("\r");
     }
 
@@ -460,8 +514,8 @@ test "cursor moves within bounds and toggles the current row" {
 test "whereFor: scopable takes batch scope, message takes none, freeze takes its own path" {
     const scope: Scope = .{ .path = "app/" };
     const console = Row{ .entry = rule_catalog.find(1).? }; // scopable
-    const msg = Row{ .entry = rule_catalog.find(5).? }; // message rule
-    const freeze = Row{ .entry = rule_catalog.find(7).?, .path = "src/core" };
+    const msg = Row{ .entry = rule_catalog.find(26).? }; // message rule
+    const freeze = Row{ .entry = rule_catalog.find(30).?, .path = "src/core" };
     try testing.expectEqualStrings("app/", whereFor(console, scope).?);
     try testing.expectEqual(@as(?[]const u8, null), whereFor(msg, scope));
     try testing.expectEqualStrings("src/core", whereFor(freeze, scope).?);
@@ -485,16 +539,16 @@ test "precheck marks enforced rules, seeds scope and freeze path" {
     var s = State.init();
     const decisions = [_]Decision{
         enforced("a", 1, "app/"),
-        enforced("b", 5, null),
-        enforced("c", 7, "src/core"),
+        enforced("b", 26, null),
+        enforced("c", 30, "src/core"),
     };
     precheck(&s, &decisions);
     try testing.expect(s.rows[0].checked);
-    try testing.expect(s.rows[4].checked);
-    try testing.expect(s.rows[6].checked);
+    try testing.expect(s.rows[25].checked);
+    try testing.expect(s.rows[29].checked);
     try testing.expect(!s.rows[1].checked);
     try testing.expectEqualStrings("app/", s.scope.path);
-    try testing.expectEqualStrings("src/core", s.rows[6].path.?);
+    try testing.expectEqualStrings("src/core", s.rows[29].path.?);
 }
 
 fn planOf(s: *const State, decisions: []const Decision) !struct { adds: std.ArrayList(Add), forgets: std.ArrayList(Forget) } {
@@ -584,7 +638,7 @@ test "planChanges: an advisory catalog-check rule is left alone when unchecked" 
 
 test "planChanges: a checked freeze row with no path adds nothing" {
     var s = State.init();
-    s.rows[6].checked = true; // freeze, no path
+    s.rows[29].checked = true; // freeze, no path
     var plan = try planOf(&s, &.{});
     defer plan.adds.deinit(testing.allocator);
     defer plan.forgets.deinit(testing.allocator);
@@ -593,8 +647,8 @@ test "planChanges: a checked freeze row with no path adds nothing" {
 
 test "planChanges: a checked freeze row with a path adds frozen at that path" {
     var s = State.init();
-    s.rows[6].checked = true;
-    s.rows[6].path = "src/core";
+    s.rows[29].checked = true;
+    s.rows[29].path = "src/core";
     var plan = try planOf(&s, &.{});
     defer plan.adds.deinit(testing.allocator);
     defer plan.forgets.deinit(testing.allocator);
@@ -612,9 +666,11 @@ test "render plain text shows checkboxes, cursor marker, groups and scope" {
     try render(&w, &s, false, .none);
     const text = w.buffered();
     try testing.expect(std.mem.indexOf(u8, text, "> [x] no console.log") != null);
-    try testing.expect(std.mem.indexOf(u8, text, "[ ] no eval") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "[ ] no debugger") != null);
     try testing.expect(std.mem.indexOf(u8, text, "Code style:") != null);
     try testing.expect(std.mem.indexOf(u8, text, "scope (code rules): whole repo") != null);
+    // The catalog is taller than the default viewport, so a "more below" hint shows.
+    try testing.expect(std.mem.indexOf(u8, text, "more below") != null);
 }
 
 test "render shows the batch scope only against checked scopable rows" {
@@ -625,7 +681,7 @@ test "render shows the batch scope only against checked scopable rows" {
     s.scope = .{ .path = "app/" };
     try render(&w, &s, false, .none);
     const text = w.buffered();
-    try testing.expect(std.mem.indexOf(u8, text, "no console.log  (in app/)") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "no console.log [js/ts]  (in app/)") != null);
     try testing.expect(std.mem.indexOf(u8, text, "scope (code rules): app/") != null);
 }
 
@@ -699,28 +755,112 @@ test "reducer: backspace trims the scope field, emptying it back to whole repo" 
 
 test "reducer: checking the freeze row drops into its path field and records the path" {
     var ed = Editor.init();
-    ed.state.cursor = 6; // freeze row
+    ed.state.cursor = 29; // freeze row
     _ = ed.feed(.{ .char = ' ' }); // check -> path edit
-    try testing.expectEqual(Mode{ .path_edit = 6 }, ed.mode);
+    try testing.expectEqual(Mode{ .path_edit = 29 }, ed.mode);
     _ = feedAll(&ed, &.{ .{ .char = 's' }, .{ .char = 'r' }, .{ .char = 'c' } });
     _ = ed.feed(.save); // confirm field, not a program save
     try testing.expectEqual(Mode.normal, ed.mode);
-    try testing.expect(ed.state.rows[6].checked);
-    try testing.expectEqualStrings("src", ed.state.rows[6].path.?);
+    try testing.expect(ed.state.rows[29].checked);
+    try testing.expectEqualStrings("src", ed.state.rows[29].path.?);
 }
 
 test "reducer: seed copies precheck paths into owned buffers and they survive edits elsewhere" {
     var ed = Editor.init();
-    const decisions = [_]Decision{ enforced("a", 1, "app/"), enforced("c", 7, "src/core") };
+    const decisions = [_]Decision{ enforced("a", 1, "app/"), enforced("c", 30, "src/core") };
     precheck(&ed.state, &decisions);
     ed.seed();
     // scope slice now points into the editor's own buffer
     try testing.expectEqualStrings("app/", ed.state.scope.path);
-    try testing.expectEqualStrings("src/core", ed.state.rows[6].path.?);
+    try testing.expectEqualStrings("src/core", ed.state.rows[29].path.?);
     // editing the freeze path must not disturb the scope slice
-    ed.state.cursor = 6;
+    ed.state.cursor = 29;
     _ = ed.feed(.scope); // opens... no; cursor doesn't matter, open path edit directly
-    ed.mode = .{ .path_edit = 6 };
+    ed.mode = .{ .path_edit = 29 };
     _ = feedAll(&ed, &.{ .backspace, .backspace, .backspace, .backspace });
     try testing.expectEqualStrings("app/", ed.state.scope.path);
+}
+
+// ---------------------------------------------------------------------------
+// The scrolling viewport: a pure "keep the cursor in view" fold over the row set.
+// ---------------------------------------------------------------------------
+
+test "viewport: moving the cursor past the bottom scrolls the window down" {
+    var s = State.init();
+    s.setViewport(5);
+    try testing.expectEqual(@as(usize, 0), s.top);
+    // Move to row 4 (the last visible one): still no scroll.
+    for (0..4) |_| s.moveDown();
+    try testing.expectEqual(@as(usize, 4), s.cursor);
+    try testing.expectEqual(@as(usize, 0), s.top);
+    // One more step pushes the window so the cursor stays on the bottom edge.
+    s.moveDown();
+    try testing.expectEqual(@as(usize, 5), s.cursor);
+    try testing.expectEqual(@as(usize, 1), s.top);
+    try testing.expectEqual(@as(usize, 6), s.visibleEnd());
+}
+
+test "viewport: moving the cursor back above the top scrolls the window up" {
+    var s = State.init();
+    s.setViewport(5);
+    for (0..10) |_| s.moveDown(); // cursor 10, top 6
+    try testing.expectEqual(@as(usize, 6), s.top);
+    for (0..7) |_| s.moveUp(); // cursor 3, above top
+    try testing.expectEqual(@as(usize, 3), s.cursor);
+    try testing.expectEqual(@as(usize, 3), s.top);
+}
+
+test "viewport: the cursor is always inside the visible window while scrolling the whole list" {
+    var s = State.init();
+    s.setViewport(7);
+    var guard: usize = 0;
+    while (s.cursor + 1 < s.len and guard < 1000) : (guard += 1) {
+        s.moveDown();
+        try testing.expect(s.cursor >= s.top);
+        try testing.expect(s.cursor < s.visibleEnd());
+    }
+    try testing.expectEqual(s.len - 1, s.cursor);
+}
+
+test "viewport: a list shorter than the viewport never scrolls" {
+    var s = State.init();
+    s.setViewport(s.len + 10);
+    for (0..s.len * 2) |_| s.moveDown();
+    try testing.expectEqual(@as(usize, 0), s.top);
+    try testing.expectEqual(s.len, s.visibleEnd());
+    // No "more above/below" hint, and the last group's header still renders.
+    var buf: [8192]u8 = undefined;
+    var w: Writer = .fixed(&buf);
+    try render(&w, &s, false, .none);
+    const text = w.buffered();
+    try testing.expect(std.mem.indexOf(u8, text, "more above") == null);
+    try testing.expect(std.mem.indexOf(u8, text, "more below") == null);
+    try testing.expect(std.mem.indexOf(u8, text, "Architecture:") != null);
+}
+
+test "viewport: render shows the scrolled slice, both hints, and a group header inside the window" {
+    var s = State.init();
+    s.setViewport(6);
+    for (0..s.len - 1) |_| s.moveDown(); // scroll to the bottom (freeze row)
+    var buf: [8192]u8 = undefined;
+    var w: Writer = .fixed(&buf);
+    try render(&w, &s, false, .none);
+    const text = w.buffered();
+    try testing.expect(std.mem.indexOf(u8, text, "more above") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "more below") == null);
+    // The bottom window opens mid-catalog, so its first group header still prints,
+    // and the freeze row (last entry) is visible.
+    try testing.expect(std.mem.indexOf(u8, text, "freeze a path") != null);
+    try testing.expect(std.mem.indexOf(u8, text, "Architecture:") != null);
+    // A row scrolled out of view is not drawn.
+    try testing.expect(std.mem.indexOf(u8, text, "no console.log") == null);
+}
+
+test "setViewport clamps to at least one row and keeps the cursor visible" {
+    var s = State.init();
+    for (0..10) |_| s.moveDown(); // cursor 10
+    s.setViewport(0); // clamped to 1
+    try testing.expectEqual(@as(usize, 1), s.viewport);
+    try testing.expectEqual(@as(usize, 10), s.top);
+    try testing.expectEqual(@as(usize, 11), s.visibleEnd());
 }

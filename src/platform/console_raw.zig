@@ -17,6 +17,29 @@ extern "kernel32" fn GetStdHandle(id: DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn GetConsoleMode(handle: HANDLE, mode: *DWORD) callconv(.winapi) BOOL;
 extern "kernel32" fn SetConsoleMode(handle: HANDLE, mode: DWORD) callconv(.winapi) BOOL;
 extern "kernel32" fn ReadConsoleInputW(handle: HANDLE, buffer: [*]InputRecord, length: DWORD, read: *DWORD) callconv(.winapi) BOOL;
+extern "kernel32" fn GetConsoleScreenBufferInfo(handle: HANDLE, info: *ConsoleScreenBufferInfo) callconv(.winapi) BOOL;
+
+const Coord = extern struct { x: i16, y: i16 };
+const SmallRect = extern struct { left: i16, top: i16, right: i16, bottom: i16 };
+const ConsoleScreenBufferInfo = extern struct {
+    size: Coord,
+    cursor: Coord,
+    attributes: WORD,
+    window: SmallRect,
+    maximum_window_size: Coord,
+};
+
+// The number of visible rows in the console window, so the checklist viewport fits
+// the terminal. Returns null when the size cannot be read (not a console), and the
+// caller falls back to a default.
+pub fn windowRows(handles: Handles) ?usize {
+    if (builtin.os.tag != .windows) return null;
+    var info: ConsoleScreenBufferInfo = undefined;
+    if (!GetConsoleScreenBufferInfo(handles.out, &info).toBool()) return null;
+    const rows = @as(i32, info.window.bottom) - @as(i32, info.window.top) + 1;
+    if (rows <= 0) return null;
+    return @intCast(rows);
+}
 
 const std_input_handle: DWORD = 0xFFFFFFF6; // (DWORD)-10
 const std_output_handle: DWORD = 0xFFFFFFF5; // (DWORD)-11

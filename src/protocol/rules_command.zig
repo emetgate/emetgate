@@ -50,6 +50,13 @@ fn interact(ed: *rules_tui.Editor, handles: console_raw.Handles, out: *Writer) !
     defer out.writeAll(rules_tui.esc.show_cursor) catch {};
     defer out.flush() catch {};
 
+    // Fit the scrolling viewport to the terminal, reserving a few lines for the
+    // header, the scope footer and the scroll hints. Falls back to the default.
+    if (console_raw.windowRows(handles)) |rows| {
+        const reserve = 6;
+        ed.state.setViewport(if (rows > reserve) rows - reserve else 1);
+    }
+
     while (true) {
         try rules_tui.render(out, &ed.state, true, ed.editing());
         try out.flush();
