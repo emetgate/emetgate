@@ -305,6 +305,33 @@ test "git diff folds a big diff under the budget and names the elided span" {
     try testing.expect(so_body.value.object.get("symbol_changes") != null);
 }
 
+test "git diff full caps raw output at the line limit and marks it truncated" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var big_before: std.Io.Writer.Allocating = .init(gpa);
+    defer big_before.deinit();
+    for (0..1500) |i| try big_before.writer.print("line {d}\n", .{i});
+    try repo.writeFile("big.txt", big_before.written());
+    try repo.commitAll("big file");
+
+    var big_after: std.Io.Writer.Allocating = .init(gpa);
+    defer big_after.deinit();
+    for (0..1500) |i| try big_after.writer.print("changed {d}\n", .{i});
+    try repo.writeFile("big.txt", big_after.written());
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .detail = "full" });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(body.value.object.get("truncated").?.bool);
+    try testing.expectEqual(@as(i64, 800), body.value.object.get("lines_shown").?.integer);
+    try testing.expect(body.value.object.get("lines_shown").?.integer < body.value.object.get("lines_total").?.integer);
+}
+
 // --- symbol-level diff / show / blame --------------------------------------
 
 fn findChange(body: Value, ref: []const u8) ?[]const u8 {
