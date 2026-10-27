@@ -801,6 +801,53 @@ pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Expected,
     try writer.writeByte('\n');
 }
 
+pub const FileWrite = struct {
+    file: []const u8,
+    created: bool,
+    replaced: usize,
+    old_hash: ?symbol.Hash,
+    new_hash: symbol.Hash,
+    test_ms: ?u64,
+};
+
+pub fn writeFileCommitted(writer: *Writer, change: FileWrite, note: ?ShadowNote, full: bool) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("committed");
+    if (change.created) {
+        try js.objectField("created");
+        try js.write(true);
+    }
+    if (change.replaced > 1) {
+        try js.objectField("replaced");
+        try js.write(change.replaced);
+    }
+    if (change.test_ms) |ms| {
+        try js.objectField("test_ms");
+        try js.write(ms);
+    }
+    if (full) {
+        try js.objectField("file");
+        try js.write(change.file);
+        if (change.old_hash) |old| {
+            const old_hex = symbol.formatHash(old);
+            try js.objectField("old_hash");
+            try js.write(old_hex[0..]);
+        }
+        const new_hex = symbol.formatHash(change.new_hash);
+        try js.objectField("new_hash");
+        try js.write(new_hex[0..]);
+    }
+    try writeNote(&js, note, full);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub fn writeFileUnchanged(writer: *Writer) !void {
+    try writer.writeAll("{\"status\":\"unchanged\"}\n");
+}
+
 pub fn writeRejected(gpa: Allocator, writer: *Writer, test_cmd: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {
     return writeStageRejected(gpa, writer, rejectionReason(report), "test_cmd", test_cmd, report, note);
 }

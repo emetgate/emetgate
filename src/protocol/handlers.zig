@@ -25,6 +25,7 @@ const node_tool = @import("node_tool.zig");
 const node_cas_mod = @import("../engine/node_cas.zig");
 const batch_mod = @import("../platform/batch.zig");
 const move_file_tool = @import("move_file_tool.zig");
+const edit_tool = @import("edit_tool.zig");
 const run_tool = @import("run_tool.zig");
 const receipt_note = @import("receipt_note.zig");
 const receipts = @import("../platform/receipts.zig");
@@ -88,6 +89,8 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arg
     if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move_file")) return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_edit")) return edit_tool.callEdit(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_write")) return edit_tool.callWrite(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache }));
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearchAs(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session, .{ .format = if (policy.search_text) .text else .json, .internals = policy.search_internals });

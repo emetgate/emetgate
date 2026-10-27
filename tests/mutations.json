@@ -13867,6 +13867,82 @@
       "kills": [
         "a rejected reply caps its test output and diagnostics and says how much it dropped"
       ]
+    },
+    {
+      "id": "FE1-repeated-old-string-accepted",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (matches > 1 and !all) return error.OldStringNotUnique;",
+      "to": "",
+      "kills": [
+        "replaceUnique replaces one exact match and refuses a missing or repeated old string with its count",
+        "emetgate_edit refuses an old_string that is missing or repeated and states the match count"
+      ]
+    },
+    {
+      "id": "FE2-missing-old-string-accepted",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (matches == 0) return error.OldStringNotFound;",
+      "to": "",
+      "kills": [
+        "replaceUnique replaces one exact match and refuses a missing or repeated old string with its count",
+        "emetgate_edit refuses an old_string that is missing or repeated and states the match count"
+      ]
+    },
+    {
+      "id": "FE3-broken-syntax-accepted",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (next.tree.root().hasError() and (base == null or old_clean)) return error.MutationSyntaxInvalid;",
+      "to": "",
+      "kills": [
+        "emetgate_edit refuses a code edit that breaks the syntax of a clean file",
+        "emetgate_write that fails the gate leaves no file and no created directory behind"
+      ]
+    },
+    {
+      "id": "FE4-ignored-new-file-written",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (base == null and try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;",
+      "to": "",
+      "kills": [
+        "emetgate_write refuses binary content and a new file under an ignored path"
+      ]
+    },
+    {
+      "id": "FE5-missing-dirs-not-created",
+      "file": "src/platform/file_edit.zig",
+      "from": "        .created_dirs = if (base == null) options.created_dirs else &.{},",
+      "to": "        .created_dirs = &.{},",
+      "kills": [
+        "emetgate_write creates a code file under missing directories and non-code files at the root"
+      ]
+    },
+    {
+      "id": "FE6-identical-write-gated",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (base) |b| if (std.mem.eql(u8, b, after)) return .{ .root = root, .rel = rel, .before = before_hash, .after = before_hash.?, .created = false, .unchanged = true, .matches = matches.* };",
+      "to": "",
+      "kills": [
+        "emetgate_write creates a code file under missing directories and non-code files at the root"
+      ]
+    },
+    {
+      "id": "FE7-binary-content-written",
+      "file": "src/platform/file_edit.zig",
+      "from": "        try docnode.checkReadable(after);",
+      "to": "",
+      "kills": [
+        "emetgate_write refuses binary content and a new file under an ignored path"
+      ]
+    },
+    {
+      "id": "FE8-crlf-retry-dropped",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (matches.* == 0 and std.mem.indexOf(u8, source, \"\\r\\n\") != null and std.mem.indexOfScalar(u8, old, '\\n') != null and std.mem.indexOfScalar(u8, old, '\\r') == null) {",
+      "to": "    if (false) {",
+      "kills": [
+        "replaceUnique matches a LF old string against a CRLF file and keeps CRLF",
+        "emetgate_edit matches a LF old_string in a CRLF file"
+      ]
     }
   ]
 }
