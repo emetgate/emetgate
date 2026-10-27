@@ -41,7 +41,7 @@ fn hasCount(line: []const u8) bool {
     return false;
 }
 
-fn isSummaryLine(line: []const u8) bool {
+pub fn isSummaryLine(line: []const u8) bool {
     if (!hasCount(line)) return false;
     for (summary_words) |word| {
         if (std.ascii.indexOfIgnoreCase(line, word) != null) return true;
