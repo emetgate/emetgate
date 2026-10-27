@@ -6,6 +6,7 @@ const shadow = @import("shadow.zig");
 const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
+const test_outcome = @import("test_outcome.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const exe_path = @import("exe_path.zig");
@@ -77,8 +78,14 @@ pub const Trace = struct {
     skipped_links: usize = 0,
     tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
+    tests: test_outcome.Summary = .{},
     blocked: gate_tree.Report = .{},
 };
+
+pub fn noteSummary(trace: ?*Trace, report: sandbox.Report) void {
+    const t = trace orelse return;
+    t.tests = test_outcome.summarize(report);
+}
 
 pub const Result = union(enum) {
     committed: symbol.Hash,
@@ -130,7 +137,11 @@ pub fn runCommand(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const 
     const cmd = try exe_path.system(gpa, "cmd.exe");
     defer gpa.free(cmd);
     const argv = [_][]const u8{ cmd, "/d", "/c", command };
-    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits });
+    const temp = try std.fmt.allocPrint(gpa, "{s}-tmp", .{cwd});
+    defer gpa.free(temp);
+    try shadow.freshTemp(io, temp);
+    defer shadow.clearTemp(io, temp) catch {};
+    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp });
 }
 
 pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Result {
@@ -205,6 +216,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
 
     if (!report.passed()) return .{ .rejected = report };
     if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
+    noteSummary(options.trace, report);
     defer report.deinit(gpa);
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
@@ -243,6 +255,7 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     defer report.deinit(gpa);
 
     const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};
+    noteSummary(options.trace, report);
     try session.prepare(gpa, io, root, &change);
     if (options.trace) |t| t.commit_attempted = true;
     if (session.committing()) {
@@ -368,4 +381,51 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
         t.skipped_links = workspace.link_stats.skipped_links;
     }
     return workspace;
+}
+
+const testing = std.testing;
+
+test "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{top});
+    defer testing.allocator.free(work);
+    const temp = try std.fmt.allocPrint(testing.allocator, "{s}-tmp", .{work});
+    defer testing.allocator.free(temp);
+    try shadow.grantLowIntegrityWrite(work);
+
+    const report = try runCommand(testing.allocator, testing.io, work, "echo %TEMP%& echo %TMP%& echo written>%TEMP%\\probe.txt& type %TEMP%\\probe.txt", .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expect(report.passed());
+    const expected = try std.fmt.allocPrint(testing.allocator, "{s}\r\n{s}\r\nwritten\r\n", .{ temp, temp });
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, report.stdout);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, temp, .{}));
+}
+
+test "a stale temp directory that is a junction is removed without touching its target" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "target");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "target/keep.txt", .data = "keep\n" });
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const temp = try std.fmt.allocPrint(testing.allocator, "{s}\\work-tmp", .{top});
+    defer testing.allocator.free(temp);
+    const target = try std.fmt.allocPrint(testing.allocator, "{s}\\target", .{top});
+    defer testing.allocator.free(target);
+    try shadow.createJunction(testing.io, temp, target);
+
+    try shadow.freshTemp(testing.io, temp);
+    try testing.expect(!try shadow.isReparsePoint(temp));
+    try shadow.clearTemp(testing.io, temp);
+    const kept = try tmp.dir.readFileAlloc(testing.io, "target/keep.txt", testing.allocator, .unlimited);
+    defer testing.allocator.free(kept);
+    try testing.expectEqualStrings("keep\n", kept);
 }

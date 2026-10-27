@@ -142,14 +142,17 @@ test "redteam link tree: deleting, renaming or adding files in the shadow never 
     gpa.free(planted);
 }
 
-test "redteam link tree: a junction inside a linked directory is not followed into the shadow" {
+test "redteam link tree: a junction inside a linked directory is mirrored read-only, and writes through it never reach its target" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var victim = try Victim.init();
     defer victim.deinit();
 
-    try testing.expectError(error.FileNotFound, victim.workspace.dir.access(testing.io, "node_modules/pkg/escape", .{}));
-    try testing.expectEqual(@as(usize, 1), victim.workspace.link_stats.skipped_links);
-    const report = try victim.inside("echo BACKDOOR> node_modules\\pkg\\escape\\planted.txt");
+    try testing.expectEqual(@as(usize, 1), victim.workspace.link_stats.mirrored);
+    try testing.expectEqual(@as(usize, 0), victim.workspace.link_stats.skipped_links);
+    const read = try victim.inside("type node_modules\\pkg\\escape\\secret.txt");
+    defer read.deinit(gpa);
+    try testing.expectEqualStrings(secret_src, read.stdout);
+    const report = try victim.inside("echo BACKDOOR> node_modules\\pkg\\escape\\planted.txt & echo BACKDOOR>> node_modules\\pkg\\escape\\secret.txt & del /f /q node_modules\\pkg\\escape\\secret.txt & rd /s /q node_modules\\pkg\\escape");
     defer report.deinit(gpa);
     try victim.expectRealUntouched();
 }

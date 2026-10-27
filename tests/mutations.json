@@ -12258,6 +12258,161 @@
         "an entry left out as too large is read again once the size limit admits it",
         "search text: a file an older index left out as too large is read again once the size limit admits it"
       ]
+    },
+    {
+      "id": "C21-mirror-low-writable-target",
+      "file": "src/platform/link_tree.zig",
+      "from": "    if (!try lowWriteBlocked(&final_w)) return error.LinkTargetLowWritable;",
+      "to": "",
+      "kills": [
+        "a link whose target a low-integrity process could write is skipped, never mirrored"
+      ]
+    },
+    {
+      "id": "C21-top-level-link-not-mirrored",
+      "file": "src/platform/link_tree.zig",
+      "from": "    if (try isLink(source_abs)) return mirror(io, source_abs, dest_abs, stats);",
+      "to": "",
+      "kills": [
+        "a top-level link is mirrored, and a dangling one is skipped"
+      ]
+    },
+    {
+      "id": "C21-inner-link-not-mirrored",
+      "file": "src/platform/link_tree.zig",
+      "from": "    stats.mirrored += 1;",
+      "to": "",
+      "kills": [
+        "build hardlinks every file, recreates every directory and mirrors a reparse point as a junction to the same target",
+        "a top-level link is mirrored, and a dangling one is skipped"
+      ]
+    },
+    {
+      "id": "C21-kept-links-not-mirrored",
+      "file": "src/platform/shadow.zig",
+      "from": "        link_tree.mirror(io, try joinWindows(&link_buf, options.root_abs, link), dest, stats);",
+      "to": "",
+      "kills": [
+        "a node_modules that is a junction is a junction to the same target in the kept and the copied tree, and removal leaves the target",
+        "a link inside a real node_modules is mirrored in the kept tree"
+      ]
+    },
+    {
+      "id": "C21-commit-through-mirrored-junction",
+      "file": "src/platform/shadow.zig",
+      "from": "            if (under_links) try ensureNoLinks(options.shadow_abs, try std.fs.path.join(arena, &.{ options.shadow_abs, entry.path }));",
+      "to": "",
+      "kills": [
+        "a committed file is never copied through a mirrored node_modules junction"
+      ]
+    },
+    {
+      "id": "B19-temp-junction-followed",
+      "file": "src/platform/shadow.zig",
+      "from": "    if (!try isReparsePoint(temp_abs)) {",
+      "to": "    if (true) {",
+      "kills": [
+        "a stale temp directory that is a junction is removed without touching its target"
+      ]
+    },
+    {
+      "id": "B19-temp-env-dropped",
+      "file": "src/platform/runner.zig",
+      "from": "    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp });",
+      "to": "    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits });",
+      "kills": [
+        "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run"
+      ]
+    },
+    {
+      "id": "B19-temp-entry-prefix-match",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (entry.len <= name.len or entry[name.len] != '=') continue;",
+      "to": "        if (entry.len <= name.len) continue;",
+      "kills": [
+        "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest"
+      ]
+    },
+    {
+      "id": "C22-env-error-on-success",
+      "file": "src/platform/test_outcome.zig",
+      "from": "    if (code == 0) return null;",
+      "to": "",
+      "kills": [
+        "a missing command or module is an environment error, a failing test or a relative import is not"
+      ]
+    },
+    {
+      "id": "C22-relative-module-is-env-error",
+      "file": "src/platform/test_outcome.zig",
+      "from": "                if (relativeModule(line)) break;",
+      "to": "",
+      "kills": [
+        "a missing command or module is an environment error, a failing test or a relative import is not"
+      ]
+    },
+    {
+      "id": "C22-env-error-reported-as-failure",
+      "file": "src/protocol/wire.zig",
+      "from": "else if (test_outcome.envError(report) != null) \"test_env_error\" ",
+      "to": "",
+      "kills": [
+        "a test command that could not start is a test_env_error with its first useful line, never tests_failed"
+      ]
+    },
+    {
+      "id": "B18-ansi-digits-count",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (line[index] == 0x1b) {",
+      "to": "        if (false) {",
+      "kills": [
+        "a passing run is summed up by its count lines, oldest first and under the size cap"
+      ]
+    },
+    {
+      "id": "B18-rejected-summary-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (std.mem.eql(u8, reason, \"tests_failed\")) {",
+      "to": "    if (false) {",
+      "kills": [
+        "a test command that could not start is a test_env_error with its first useful line, never tests_failed"
+      ]
+    },
+    {
+      "id": "TF-frames-uncapped",
+      "file": "src/platform/test_outcome.zig",
+      "from": "            if (frames > frames_per_stack) {",
+      "to": "            if (false) {",
+      "kills": [
+        "test output keeps its failure lines, drops repeated stacks and frames past the third, and fits the budget"
+      ]
+    },
+    {
+      "id": "TF-repeated-frames-kept",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (frames != 0 and (try seen.getOrPut(arena, body)).found_existing) {",
+      "to": "        if (false) {",
+      "kills": [
+        "test output keeps its failure lines, drops repeated stacks and frames past the third, and fits the budget"
+      ]
+    },
+    {
+      "id": "TF-pass-lines-kept",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (isPassLine(body)) {",
+      "to": "        if (false) {",
+      "kills": [
+        "test output keeps its failure lines, drops repeated stacks and frames past the third, and fits the budget"
+      ]
+    },
+    {
+      "id": "TF-diagnostics-uncapped",
+      "file": "src/protocol/wire.zig",
+      "from": "        if (shown == max_rejected_diagnostics) break;",
+      "to": "",
+      "kills": [
+        "a rejected reply caps its test output and diagnostics and says how much it dropped"
+      ]
     }
   ]
 }

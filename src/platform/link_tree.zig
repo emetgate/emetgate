@@ -8,12 +8,14 @@ pub const Stats = struct {
     linked: usize = 0,
     copied: usize = 0,
     skipped_links: usize = 0,
+    mirrored: usize = 0,
 };
 
 pub const Error = error{ LinkTreeFailed, LinkTreeUnsupported, NameTooLong, InvalidWtf8 };
 
 pub fn build(io: std.Io, source_abs: []const u8, dest_abs: []const u8, stats: *Stats) !void {
     if (builtin.os.tag != .windows) return error.LinkTreeUnsupported;
+    if (try isLink(source_abs)) return mirror(io, source_abs, dest_abs, stats);
     var source = Dir.openDirAbsolute(io, source_abs, .{ .iterate = true }) catch |err| switch (err) {
         error.NotDir => return placeFile(io, source_abs, dest_abs, stats),
         else => |e| return e,
@@ -48,10 +50,50 @@ pub fn build(io: std.Io, source_abs: []const u8, dest_abs: []const u8, stats: *S
                     const dest_path = try std.fmt.bufPrint(&dest_buf, "{s}\\{s}", .{ dest_abs, child });
                     try placeFile(io, source_path, dest_path, stats);
                 },
-                else => stats.skipped_links += 1,
+                else => {
+                    var source_buf: [std.fs.max_path_bytes]u8 = undefined;
+                    var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
+                    mirror(io, try std.fmt.bufPrint(&source_buf, "{s}\\{s}", .{ source_abs, child }), try std.fmt.bufPrint(&dest_buf, "{s}\\{s}", .{ dest_abs, child }), stats);
+                },
             }
         }
     }
+}
+
+fn isLink(path: []const u8) error{ LinkTreeFailed, NameTooLong, InvalidWtf8 }!bool {
+    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const attributes = win.GetFileAttributesW(try toExtendedWide(&path_w, path));
+    if (attributes == win.invalid_file_attributes) return false;
+    return attributes & win.file_attribute_reparse_point != 0;
+}
+
+pub fn mirror(io: std.Io, link_abs: []const u8, dest_abs: []const u8, stats: *Stats) void {
+    mirrorTarget(io, link_abs, dest_abs, stats) catch {
+        stats.skipped_links += 1;
+        return;
+    };
+    stats.mirrored += 1;
+}
+
+fn mirrorTarget(io: std.Io, link_abs: []const u8, dest_abs: []const u8, stats: *Stats) !void {
+    var link_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const handle = win.CreateFileW(try toExtendedWide(&link_w, link_abs), win.file_read_attributes, win.file_share_all, null, win.open_existing, win.flag_backup_semantics, null);
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.LinkTargetMissing;
+    defer std.os.windows.CloseHandle(handle);
+    var final_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const final_len = win.GetFinalPathNameByHandleW(handle, &final_w, final_w.len, 0);
+    if (final_len == 0 or final_len >= final_w.len) return error.LinkTargetMissing;
+    final_w[final_len] = 0;
+    const local = std.unicode.utf8ToUtf16LeStringLiteral("\\\\?\\");
+    if (final_len < local.len + 3 or !std.mem.eql(u16, final_w[0..local.len], local) or final_w[local.len + 1] != ':') return error.LinkTargetNotLocal;
+    const attributes = win.GetFileAttributesW(&final_w);
+    if (attributes == win.invalid_file_attributes) return error.LinkTargetMissing;
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = target_buf[0..std.unicode.wtf16LeToWtf8(&target_buf, final_w[local.len..final_len])];
+    if (std.fs.path.dirname(dest_abs)) |parent| try Dir.cwd().createDirPath(io, parent);
+    if (attributes & win.file_attribute_directory == 0) return placeFile(io, target, dest_abs, stats);
+    if (!try lowWriteBlocked(&final_w)) return error.LinkTargetLowWritable;
+    try @import("shadow.zig").createJunction(io, dest_abs, target);
 }
 
 fn placeFile(io: std.Io, source_path: []const u8, dest_path: []const u8, stats: *Stats) !void {
@@ -136,6 +178,17 @@ const win = struct {
     const error_not_same_device: windows.DWORD = 17;
     const error_not_supported: windows.DWORD = 50;
     const error_too_many_links: windows.DWORD = 1142;
+    const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
+    const file_attribute_reparse_point: windows.DWORD = 0x00000400;
+    const file_attribute_directory: windows.DWORD = 0x00000010;
+    const file_read_attributes: windows.DWORD = 0x0080;
+    const file_share_all: windows.DWORD = 0x7;
+    const open_existing: windows.DWORD = 3;
+    const flag_backup_semantics: windows.DWORD = 0x02000000;
+
+    extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: windows.DWORD, share: windows.DWORD, security: ?*anyopaque, disposition: windows.DWORD, flags: windows.DWORD, template: ?windows.HANDLE) callconv(.winapi) windows.HANDLE;
+    extern "kernel32" fn GetFinalPathNameByHandleW(handle: windows.HANDLE, path: [*]u16, count: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
 
     extern "kernel32" fn CreateHardLinkW(new_name: [*:0]const u16, existing: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
@@ -209,7 +262,7 @@ const Tree = struct {
     }
 };
 
-test "build hardlinks every file, recreates every directory and never follows a reparse point" {
+test "build hardlinks every file, recreates every directory and mirrors a reparse point as a junction to the same target" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const shadow = @import("shadow.zig");
     var tree = try Tree.init();
@@ -220,13 +273,60 @@ test "build hardlinks every file, recreates every directory and never follows a 
 
     var stats: Stats = .{};
     try build(testing.io, tree.source_abs, tree.dest_abs, &stats);
-    try testing.expectEqual(Stats{ .dirs = 2, .linked = 2, .skipped_links = 1 }, stats);
+    try testing.expectEqual(Stats{ .dirs = 2, .linked = 2, .mirrored = 1 }, stats);
     try tree.expectContent("dest/a.txt", "a\n");
     try tree.expectContent("dest/sub/b.txt", "b\n");
-    try testing.expectError(error.FileNotFound, tree.tmp.dir.access(testing.io, "dest/escape", .{}));
+    try tree.expectContent("dest/escape/secret.txt", "secret\n");
+    var dest_link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try testing.expect(try isLink(try std.fmt.bufPrint(&dest_link_buf, "{s}\\escape", .{tree.dest_abs})));
 
     try tree.tmp.dir.writeFile(testing.io, .{ .sub_path = "source/sub/b.txt", .data = "shared\n" });
     try tree.expectContent("dest/sub/b.txt", "shared\n");
+}
+
+test "a link whose target a low-integrity process could write is skipped, never mirrored" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const shadow = @import("shadow.zig");
+    var tree = try Tree.init();
+    defer tree.deinit();
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = try std.fmt.bufPrint(&target_buf, "{s}\\outside", .{tree.top_abs});
+    try shadow.grantLowIntegrityWrite(target);
+    try shadow.createJunction(testing.io, try std.fmt.bufPrint(&link_buf, "{s}\\escape", .{tree.source_abs}), target);
+
+    var stats: Stats = .{};
+    try build(testing.io, tree.source_abs, tree.dest_abs, &stats);
+    try testing.expectEqual(Stats{ .dirs = 2, .linked = 2, .skipped_links = 1 }, stats);
+    try testing.expectError(error.FileNotFound, tree.tmp.dir.access(testing.io, "dest/escape", .{}));
+}
+
+test "a top-level link is mirrored, and a dangling one is skipped" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const shadow = @import("shadow.zig");
+    var tree = try Tree.init();
+    defer tree.deinit();
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const link = try std.fmt.bufPrint(&link_buf, "{s}\\linked_top", .{tree.top_abs});
+    try shadow.createJunction(testing.io, link, try std.fmt.bufPrint(&target_buf, "{s}\\outside", .{tree.top_abs}));
+
+    var stats: Stats = .{};
+    try build(testing.io, link, tree.dest_abs, &stats);
+    try testing.expectEqual(Stats{ .mirrored = 1 }, stats);
+    try tree.expectContent("dest/secret.txt", "secret\n");
+
+    var dangling_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var gone_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var other_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try tree.tmp.dir.createDirPath(testing.io, "gone");
+    const dangling = try std.fmt.bufPrint(&dangling_buf, "{s}\\dangling", .{tree.top_abs});
+    try shadow.createJunction(testing.io, dangling, try std.fmt.bufPrint(&gone_buf, "{s}\\gone", .{tree.top_abs}));
+    try tree.tmp.dir.deleteDir(testing.io, "gone");
+    stats = .{};
+    try build(testing.io, dangling, try std.fmt.bufPrint(&other_buf, "{s}\\other", .{tree.top_abs}), &stats);
+    try testing.expectEqual(Stats{ .skipped_links = 1 }, stats);
+    try testing.expectError(error.FileNotFound, tree.tmp.dir.access(testing.io, "other", .{}));
 }
 
 test "a file whose label lets a low-integrity process write is copied, never linked" {
