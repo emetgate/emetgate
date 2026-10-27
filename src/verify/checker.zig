@@ -25,6 +25,7 @@ pub const Verdict = enum {
 pub const Text = union(enum) {
     stored,
     driver: []const u8,
+    converted: []const u8,
     unavailable,
 };
 
@@ -46,7 +47,20 @@ const Form = struct {
     bytes: ?[]const u8 = null,
     driven: bool = false,
     available: bool = true,
+    stored: ?[]const u8 = null,
 };
+
+fn storedForm(form: Form) Form {
+    const blob = form.stored orelse return form;
+    return .{ .bytes = blob };
+}
+
+fn formFor(form: Form, digest: ?Hash) Form {
+    if (eqlOptional(digestOf(form.bytes), digest)) return form;
+    const blob = form.stored orelse return form;
+    if (eqlOptional(digestOf(blob), digest)) return .{ .bytes = blob };
+    return form;
+}
 
 pub const Outcome = struct {
     verdict: Verdict = .verified,
@@ -136,6 +150,7 @@ const Checker = struct {
         return switch (try ask(self.source.context, path)) {
             .stored => .{ .bytes = bytes },
             .driver => |text| .{ .bytes = text, .driven = true },
+            .converted => |text| .{ .bytes = text, .stored = bytes },
             .unavailable => .{ .driven = true, .available = false },
         };
     }
@@ -261,16 +276,18 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
     var known: std.ArrayList(Known) = .empty;
     for (r.files) |f| {
         const st = try c.state(f.path);
-        var entry: Known = .{ .path = f.path, .before = st.bytes, .after = null, .before_known = st.known, .after_known = false, .before_form = st.form };
         const checked_out = st.from_parent and !stored;
-        const before_digest: ?Hash = if (checked_out) digestOf(st.form.bytes) else st.digest;
+        const before_form: Form = if (!st.from_parent) st.form else if (stored) storedForm(st.form) else formFor(st.form, f.before);
+        var entry: Known = .{ .path = f.path, .before = st.bytes, .after = null, .before_known = st.known, .after_known = false, .before_form = before_form };
+        const before_digest: ?Hash = if (checked_out) digestOf(before_form.bytes) else st.digest;
         if (checked_out and st.form.driven and (!st.form.available or !eqlOptional(before_digest, f.before))) {
             entry.before_known = false;
             outcome.raise(.unverified, not_checked_out);
         } else if (!eqlOptional(before_digest, f.before)) outcome.raise(.mismatch, "the before digest does not match the parent commit or the previous receipt");
         if (last.get(f.path).? == index) {
             const bytes = try c.source.after(c.source.context, f.path);
-            const form = try c.formOf(c.source.after_text, f.path, bytes);
+            const read = try c.formOf(c.source.after_text, f.path, bytes);
+            const form: Form = if (stored) storedForm(read) else formFor(read, f.after);
             const judged: ?[]const u8 = if (stored) bytes else form.bytes;
             if (!stored and !form.available) {
                 outcome.raise(.unverified, not_checked_out);

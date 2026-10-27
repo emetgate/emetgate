@@ -33,7 +33,7 @@ proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write 
 | --- | --- | --- |
 | shadow workspace | an isolated copy of the repository | the proposed write is applied here first, so tests and typecheck run without touching the real tree; on failure the disk never changed |
 | tree-sitter | an incremental parser | reparses the file to show the change actually parses, and did not break the tree |
-| in-toto receipt | a supply-chain provenance format | binds each passing write to a signed record of what was built from what, with which tests — checkable later |
+| in-toto receipt | a supply-chain provenance format | binds each passing write to a record of what was built from what, with which tests — checkable later (not signed yet) |
 
 ## Search
 
@@ -92,15 +92,14 @@ emetgate rule add "document exports"  --check require_comment --in src/ --enforc
 
 ## Verified Git
 
-`emetgate verify --branch base..head` replays a branch's whole history and returns a tamper-evident verdict.
+`emetgate verify --branch base..head` replays every commit of a range against its receipts and returns one verdict for the range. Receipts are not signed and the chain tip is not stored or published, so this catches a receipt edited inconsistently with its commit; it does not catch a commit rewritten together with a freshly made, consistent receipt.
 
 | part | what it is | what it does here |
 | --- | --- | --- |
-| blake3 hash chain | each cert = blake3(parent ‖ oid ‖ verdict ‖ receipt) | replay one commit and the chain tip shifts — tamper-evident |
+| blake3 hash chain | each cert = blake3(parent ‖ oid ‖ verdict ‖ receipt) | a changed verdict or receipt shifts the tip, which shows only against a tip kept from an earlier run |
 | CAS refs + private index | write-tree / commit-tree without touching the working tree | a gated, receipted commit — without disturbing your editor |
-| TLA⁺ model-checking | a formal model of the commit journal | a commit a crash left half-done returns to a consistent state — proven |
 | in-toto receipts | provenance bound to the commit (`refs/notes/emetgate`) | no receipt → `partial` (fail-closed); no fabricated "verified" |
-| git rev-list replay | walks the `base..head` range | re-runs the single-commit verify for each, weaving the chain |
+| git rev-list replay | walks the `base..head` range | re-runs the single-commit verify for each, weaving the chain; an empty range is `empty` and fails, never green |
 
 ```
 $ emetgate verify --branch main..HEAD
@@ -117,11 +116,10 @@ branch broken: 1 commit(s)
 | part | what it is | what it does here |
 | --- | --- | --- |
 | mutation testing | breaks the code on purpose and checks the suite notices | proves the tests *catch* a fault, not just that they pass |
-| TLA⁺ | a model-check of the commit journal | the correctness of crash-recovery, argued apart from the code |
 | fuzz & red-team | random mutation plus attack corpora | no crash or escape on unexpected or hostile input |
 | ripgrep parity gate | compares the hit-set against rg on every run | search cannot be "fast but wrong"; checked line for line |
 
-For the engine: <!-- generated:engine-mutant-summary -->61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
+For the engine: <!-- generated:engine-mutant-summary -->63 mutants today: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
 
 ## Measured
 
@@ -131,7 +129,7 @@ For the engine: <!-- generated:engine-mutant-summary -->61 mutants today: 54 kil
 | search parity | rg lines = emetgate | 1617=1617 · 6=6 · 2=2 |
 | search warm | median | 1.5–3.5 ms |
 | find warm | median | 0.7–1.0 ms |
-| verify (tampered receipt) | verdict | broken (caught) |
+| verify (hand-edited receipt) | verdict | broken (caught) |
 
 ```
 python tests/bench/n8n_search.py   ·   zig build test
@@ -149,7 +147,6 @@ Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` starts the agent w
 
 - [REFERENCE.md](REFERENCE.md) — every tool
 - [VERIFICATION.md](VERIFICATION.md) — receipts & proof
-- [docs/experiments/tla](docs/experiments/tla) — the TLA⁺ models
 - [tests/bench](tests/bench) — the benchmarks
 
 ## Limits
