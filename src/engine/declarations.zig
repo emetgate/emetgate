@@ -184,18 +184,22 @@ const Collector = struct {
     }
 };
 
-pub fn collect(arena: Allocator, profile: *const Profile, tree: ts.Tree) Allocator.Error![]Declaration {
-    var collector: Collector = .{ .arena = arena, .profile = profile, .tree = tree };
-    const root = tree.root();
+fn descend(collector: *Collector, profile: *const Profile, node: ts.Node) Allocator.Error!void {
     var i: u32 = 0;
-    while (root.namedChild(i)) |child| : (i += 1) {
+    while (node.namedChild(i)) |child| : (i += 1) {
         if (oneOf(child.kind(), profile.export_wrappers)) {
             var j: u32 = 0;
             while (child.namedChild(j)) |inner| : (j += 1) try collector.statement(inner);
             continue;
         }
         try collector.statement(child);
+        if (oneOf(child.kind(), profile.declarations.containers)) try descend(collector, profile, child);
     }
+}
+
+pub fn collect(arena: Allocator, profile: *const Profile, tree: ts.Tree) Allocator.Error![]Declaration {
+    var collector: Collector = .{ .arena = arena, .profile = profile, .tree = tree };
+    try descend(&collector, profile, tree.root());
     markAmbiguous(collector.out.items);
     return collector.out.items;
 }
