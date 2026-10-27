@@ -141,6 +141,15 @@ fn eqlPath(a: []const u8, b: []const u8) bool {
     return true;
 }
 
+fn equalsHead(arena: Allocator, io: std.Io, root: []const u8, rel: []const u8, bytes: ?[]const u8) !bool {
+    const head = receipts.checkedOut(arena, io, root, "HEAD", try receipts.slashed(arena, rel)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
+    if (bytes == null or head == null) return bytes == null and head == null;
+    return std.mem.eql(u8, bytes.?, head.?);
+}
+
 fn backslashed(arena: Allocator, rel: []const u8) ![]u8 {
     const out = try arena.dupe(u8, rel);
     std.mem.replaceScalar(u8, out, '/', '\\');
@@ -170,6 +179,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
             error.OutOfMemory => return error.OutOfMemory,
             else => return err,
         };
+        if (try equalsHead(arena, io, root, item.rel, bytes)) continue;
         const matches = if (item.after) |want|
             bytes != null and std.mem.eql(u8, &receipt.blake3(bytes.?), &want)
         else

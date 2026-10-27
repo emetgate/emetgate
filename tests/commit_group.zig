@@ -142,6 +142,22 @@ test "emetgate_commit: refuses when a file was edited outside the gate" {
     try testing.expectEqualStrings("src/math.ts", result.drift.paths[0]);
 }
 
+test "emetgate_commit: a gated file that git put back to HEAD is skipped, not refused as drift" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+
+    try case.gatedWrite("src/math.ts", "add", "{\n  return b + a;\n}");
+    try case.gatedWrite("src/util.ts", "twice", "{\n  return 2 * x;\n}");
+    try case.repo.write("src/math.ts", add_src);
+
+    var result = try commit_group.commit(testing.allocator, testing.io, case.repo.root_abs, .{ .message = "only util", .runtime = case.runtime });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+    try testing.expectEqual(@as(usize, 1), result.committed.files);
+}
+
 test "emetgate_commit: nothing pending is reported, not committed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
@@ -172,6 +188,7 @@ test "emetgate_commit: the MCP tool commits the pending gated writes" {
     defer parsed.deinit();
     try testing.expectEqualStrings("committed", parsed.value.object.get("status").?.string);
     try testing.expectEqual(@as(i64, 1), parsed.value.object.get("receipts").?.integer);
+    try testing.expect(std.mem.startsWith(u8, parsed.value.object.get("shortstat").?.string, "1 file changed"));
 
     const verdict = try case.verify(base);
     try testing.expectEqual(verify_branch.BranchVerdict.verified, verdict.verdict);

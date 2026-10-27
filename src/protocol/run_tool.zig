@@ -21,7 +21,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Runs an allowlisted command in a sandbox copy, or a toolchain install/build/check in the repo: exit code, failure digest, full_log call; no command lists the allowlist.";
+pub const description = "Runs an allowlisted command in a sandbox copy, or a toolchain install/build/check in the repo; no command lists the allowlist.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,
@@ -125,6 +125,17 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
     return false;
 }
 
+pub const empty_allowlist_fix = "no test command is configured (emetgate mcp --test or --detect-test adds one); toolchain commands run without an entry: " ++ toolchain.families_hint;
+
+pub const git_fix = "git runs through emetgate_git (status, diff, log, show, blame) and emetgate_git_write (args as for git)";
+
+fn isGit(command: []const u8) bool {
+    const trimmed = std.mem.trimStart(u8, command, " \t");
+    const word_end = std.mem.indexOfAny(u8, trimmed, " \t") orelse trimmed.len;
+    const word = trimmed[0..word_end];
+    return std.ascii.eqlIgnoreCase(word, "git") or std.ascii.eqlIgnoreCase(word, "git.exe");
+}
+
 pub const toolchain_fix = "run an allowlisted command, or a toolchain command: " ++ toolchain.families_hint;
 
 fn writeAllowlist(w: *Writer, allowed: []const []const u8) !void {
@@ -134,6 +145,10 @@ fn writeAllowlist(w: *Writer, allowed: []const []const u8) !void {
     try js.write("allowlist");
     try js.objectField("commands");
     try js.write(allowed);
+    if (allowed.len == 0) {
+        try js.objectField("fix");
+        try js.write(empty_allowlist_fix);
+    }
     try js.endObject();
     try w.writeByte('\n');
 }
@@ -151,7 +166,7 @@ fn writeRefused(w: *Writer, command: []const u8, reason: []const u8, allowed: []
     try js.write(allowed);
     if (std.mem.eql(u8, reason, "not_allowed")) {
         try js.objectField("fix");
-        try js.write(toolchain_fix);
+        try js.write(if (isGit(command)) git_fix else toolchain_fix);
     }
     try js.endObject();
     try w.writeByte('\n');

@@ -274,6 +274,7 @@ test {
     _ = @import("tests/read_budget.zig");
     _ = @import("tests/search.zig");
     _ = @import("tests/git_tools.zig");
+    _ = @import("tests/git_write.zig");
     _ = @import("tests/server.zig");
     _ = @import("tests/lockdown.zig");
     _ = @import("tests/lockdown_marks.zig");

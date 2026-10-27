@@ -210,6 +210,7 @@ const gated_tools = [_][]const u8{
     "emetgate_move_file",
     "emetgate_run",
     "emetgate_commit",
+    "emetgate_git_write",
 };
 
 fn listed(list: []const []const u8, name: []const u8) bool {

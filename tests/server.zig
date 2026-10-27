@@ -388,6 +388,7 @@ const served_tools = [_][]const u8{
     "emetgate_scan",
     "emetgate_commit",
     "emetgate_git",
+    "emetgate_git_write",
     "emetgate_run",
     "emetgate_edit",
     "emetgate_write",

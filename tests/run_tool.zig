@@ -98,6 +98,32 @@ test "run tool: the repository's run list counts only with --allow-repo-config" 
     try testing.expectEqual(@as(i64, 0), (try trusted.field("exit_code")).?.integer);
 }
 
+test "run tool: an empty allowlist says how to get a test command and that toolchain commands still run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{}), .{});
+    defer reply.deinit();
+    try testing.expectEqualStrings("allowlist", try reply.string("status"));
+    const fix = try reply.string("fix");
+    try testing.expect(std.mem.indexOf(u8, fix, "--detect-test") != null);
+    try testing.expect(std.mem.indexOf(u8, fix, "cargo") != null);
+
+    var listed = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{});
+    defer listed.deinit();
+    try testing.expect((try listed.field("fix")) == null);
+}
+
+test "run tool: a refused git command points at the git tools" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{}), .{ .command = "git switch -c topic" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, try reply.string("fix"), "emetgate_git_write") != null);
+}
+
 test "run tool: a refusal names the toolchain families the model can run instead" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try fixture.Repo.init(&.{});
