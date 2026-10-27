@@ -92,6 +92,7 @@ const Repo = struct {
                 var it = workspace.iterate();
                 var names: usize = 0;
                 while (try it.next(testing.io)) |entry| {
+                    if (std.mem.eql(u8, entry.name, "shadow-cache")) continue;
                     if (!std.mem.eql(u8, entry.name, shadow_root.marker_name) and !std.mem.eql(u8, entry.name, "shadow")) return false;
                     names += 1;
                 }

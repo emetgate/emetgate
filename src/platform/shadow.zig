@@ -505,6 +505,8 @@ pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     try unlinkAll(base_abs, shadow_abs);
     try ensureNoLinks(base_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
+    var cache_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try clearTemp(io, try std.fmt.bufPrint(&cache_buf, "{s}-cache", .{shadow_abs}));
     if (held) |h| h.close();
 
     const workspace = std.fs.path.dirname(shadow_abs) orelse return;
