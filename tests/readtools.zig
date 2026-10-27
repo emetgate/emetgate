@@ -1108,7 +1108,7 @@ test "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; 
 test "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const source = "/*\n * Copyright 2024 Acme\n * Licensed under MIT\n */\nexport class Box {\n  /**\n   * Opens the box. Carefully.\n   * @returns nothing\n   */\n  open(): void {\n    return;\n  }\n}\n";
+    const source = "/*\n * Copyright 2024 Acme\n * Licensed under MIT\n */\nexport function box(): number {\n  /**\n   * Opens the box. Carefully.\n   * @returns nothing\n   */\n  function open(): void {\n    return;\n  }\n  return 1;\n}\n";
     try tmp.dir.writeFile(testing.io, .{ .sub_path = "box.ts", .data = source });
     const path = try tmp.dir.realPathFileAlloc(testing.io, "box.ts", testing.allocator);
     defer testing.allocator.free(path);
@@ -1119,17 +1119,17 @@ test "skeleton and read_symbol fold doc blocks to one line, name the original li
     defer skel.deinit();
     var skel_body = try skel.payload();
     defer skel_body.deinit();
-    try testing.expectEqualStrings("/* Copyright 2024 Acme */\nexport class Box {\n  /** Opens the box. */\n  open(): void {\n    return;\n  }\n}\n", skel_body.value.object.get("content").?.string);
+    try testing.expectEqualStrings("/* Copyright 2024 Acme */\nexport function box(): number {\n  /** Opens the box. */\n  function open(): void {\n    return;\n  }\n  return 1;\n}\n", skel_body.value.object.get("content").?.string);
     try testing.expectEqualStrings("folded lines 1-4,6-9; emetgate_read_file raw:true has them", skel_body.value.object.get("docs").?.string);
 
-    var short = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "Box" });
+    var short = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "box" });
     defer short.deinit();
     var short_body = try short.payload();
     defer short_body.deinit();
-    try testing.expect(std.mem.indexOf(u8, short_body.value.object.get("body").?.string, "  /** Opens the box. */\n  open(): void {") != null);
+    try testing.expect(std.mem.indexOf(u8, short_body.value.object.get("body").?.string, "  /** Opens the box. */\n  function open(): void {") != null);
     try testing.expectEqualStrings("folded lines 6-9; detail:\"full\" has them", short_body.value.object.get("docs").?.string);
 
-    var full = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "Box", .detail = "full" });
+    var full = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "box", .detail = "full" });
     defer full.deinit();
     var full_body = try full.payload();
     defer full_body.deinit();
