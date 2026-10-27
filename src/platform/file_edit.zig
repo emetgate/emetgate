@@ -175,7 +175,7 @@ pub const Outcome = struct {
     }
 };
 
-fn readBase(gpa: Allocator, io: std.Io, file_abs: []const u8, code: bool) !?[]u8 {
+pub fn readBase(gpa: Allocator, io: std.Io, file_abs: []const u8, code: bool) !?[]u8 {
     const limit: usize = if (code) max_code_bytes else docnode.max_bytes;
     const bytes = std.Io.Dir.cwd().readFileAlloc(io, file_abs, gpa, .limited(limit + 1)) catch |err| switch (err) {
         error.FileNotFound => return null,

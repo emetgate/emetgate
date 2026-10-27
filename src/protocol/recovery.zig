@@ -142,6 +142,7 @@ fn nodeHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, la
 }
 
 pub fn afterBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, items: []const Value, err: anyerror) void {
+    if (err == error.FileExists or err == error.HashMismatch) if (wholeFileHint(gpa, io, root, items)) return;
     if (err != error.HashMismatch and err != error.MissingFileHash and err != error.BodyEscape and err != error.MutationSyntaxInvalid) return;
     for (items, 0..) |item, i| {
         var label_buf: [24]u8 = undefined;
@@ -168,6 +169,23 @@ pub fn afterBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
         symbolHint(gpa, io, runtime, root, label, file, name, text, tool_result.getString(item, "body") orelse "", err);
         if (wire.hasFix()) return;
     }
+}
+
+fn wholeFileHint(gpa: Allocator, io: std.Io, root: ?[]const u8, items: []const Value) bool {
+    for (items, 0..) |item, i| {
+        if (tool_result.getString(item, "symbol") != null or tool_result.getString(item, "old_string") != null) continue;
+        if (tool_result.getField(item, "node") != null or tool_result.getField(item, "nodes") != null) continue;
+        if (tool_result.getField(item, "line_start") != null or tool_result.getField(item, "pointer") != null or tool_result.getField(item, "heading") != null) continue;
+        if (tool_result.getString(item, "op")) |op| if (!std.mem.eql(u8, op, "write")) continue;
+        if (tool_result.getString(item, "content") == null and tool_result.getString(item, "body") == null) continue;
+        const file = tool_result.getString(item, "file") orelse continue;
+        const current = fileHash(gpa, io, root, file) orelse continue;
+        const hex = symbol.formatHash(current);
+        if (tool_result.getString(item, "hash")) |given| if (std.mem.eql(u8, given, &hex)) continue;
+        wire.setFix("edits[{d}]: {s} exists with file_hash {s}; pass it as hash to overwrite the whole file", .{ i, file, &hex });
+        return true;
+    }
+    return false;
 }
 
 pub fn afterWriteDoc(hash_hex: []const u8, err: anyerror) void {

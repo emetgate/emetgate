@@ -40,6 +40,8 @@ const repo = @import("../platform/repo.zig");
 const file_edit = @import("../platform/file_edit.zig");
 const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
+const forgive = @import("forgive.zig");
+const batch_plan = @import("../platform/batch_plan.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -88,7 +90,12 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     return result;
 }
 
-fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u8, given_args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    var forgiven = std.heap.ArenaAllocator.init(gpa);
+    defer forgiven.deinit();
+    const call = try forgive.normalize(forgiven.allocator(), given_name, given_args);
+    const name = call.name;
+    const args = call.args;
     if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_skeleton")) return rawCode(gpa, policy, try callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache));
     if (std.mem.eql(u8, name, "emetgate_read_symbol")) return rawCode(gpa, policy, try callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget));
@@ -524,6 +531,7 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
 
 fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     if (args) |a| if (node_tool.isNodeForm(a)) return node_tool.callTry(gpa, io, runtime, args, event, policy);
+    if (args) |a| if ((itemKind(a) catch .code) != .code) return tryAsBatch(gpa, io, runtime, a, event, policy);
     const file = try requireString(args, "file");
     const sym = try requireString(args, "symbol");
     const hash_hex = try requireString(args, "hash");
@@ -535,6 +543,7 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
     defer buffer.deinit();
     const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, args, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
+        if (err == error.ParentDirectoryMissing) return tryAsBatch(gpa, io, runtime, args.?, event, policy);
         event.fail(@errorName(err));
         recovery.afterSymbolEdit(gpa, io, runtime, policy.root, file, sym, hash_hex, body, err);
         buffer.clearRetainingCapacity();
@@ -546,6 +555,12 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
         break :blk true;
     };
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn tryAsBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, item: Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    return callTryBatch(gpa, io, runtime, try forgive.asBatch(arena_state.allocator(), item), event, policy);
 }
 
 fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, body: []const u8, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
@@ -819,14 +834,73 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
     }
 }
 
-const ItemKind = enum { code, doc };
+const ItemKind = enum { code, doc, text };
 
 fn itemKind(item: Value) !ItemKind {
-    if (isWholeCreate(item)) return .code;
-    const text = getString(item, "kind") orelse return .code;
-    if (std.mem.eql(u8, text, "code")) return .code;
-    if (std.mem.eql(u8, text, "doc")) return .doc;
-    return error.InvalidOp;
+    const declared = getString(item, "kind");
+    var doc = false;
+    if (declared) |text| {
+        if (std.mem.eql(u8, text, "doc")) {
+            doc = true;
+        } else if (!std.mem.eql(u8, text, "code")) return error.InvalidOp;
+    }
+    if (node_tool.isNodeForm(item)) return .code;
+    if (getString(item, "old_string") != null) return .text;
+    const file = getString(item, "file") orelse return if (doc) .doc else .code;
+    const symbol_named = getString(item, "symbol") != null;
+    if (doc or (declared == null and !symbol_named and hasRegion(item))) {
+        if (lang_registry.forPath(file) != null or absentHash(item) or !hasRegion(item)) return .text;
+        return .doc;
+    }
+    if (try itemOp(item) == .delete) return .code;
+    if (!symbol_named and (getString(item, "body") != null or getString(item, "content") != null)) return .text;
+    return .code;
+}
+
+fn hasRegion(item: Value) bool {
+    if (getString(item, "pointer")) |pointer| return pointer.len != 0;
+    return getString(item, "heading") != null or getInt(item, "line_start") != null;
+}
+
+fn absentHash(item: Value) bool {
+    const text = getString(item, "hash") orelse return true;
+    return std.mem.eql(u8, text, "absent");
+}
+
+fn itemExpected(item: Value) !symbol.Expected {
+    const text = getString(item, "hash") orelse return .absent;
+    return symbol.parseExpected(text);
+}
+
+fn itemText(item: Value, index: usize) !batch_plan.Text {
+    if (getString(item, "old_string")) |old| {
+        const new = getString(item, "new_string") orelse return tool_result.missing("edits[{d}].new_string (string)", .{index});
+        return .{ .replace = .{ .old = old, .new = new, .all = tool_result.getBool(item, "replace_all") orelse false } };
+    }
+    const content = getString(item, "content") orelse getString(item, "body") orelse return tool_result.missing("edits[{d}].content (string): the whole new file, or the text for line_start..line_end", .{index});
+    if (!absentHash(item) and hasRegion(item)) return .{ .region = .{ .selector = (try docSelector(item)).selector, .new_text = content } };
+    return .{ .whole = content };
+}
+
+fn jailItem(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, may_create: bool, dirs: *std.ArrayList([]u8)) !repo.Jailed {
+    return repo.jailTarget(gpa, io, root, file, may_create) catch |err| {
+        if (err != error.ParentDirectoryMissing or !may_create) return err;
+        const target = try file_edit.jailWrite(gpa, io, root, file, true);
+        defer target.deinit(gpa);
+        const served = try repo.servedRoot(gpa, io, root);
+        errdefer gpa.free(served);
+        const abs = try gpa.dupeZ(u8, target.abs);
+        errdefer gpa.free(abs);
+        const rel = try repo.relativeTo(gpa, served, abs);
+        errdefer gpa.free(rel);
+        for (target.created_dirs) |dir| {
+            const known = for (dirs.items) |have| {
+                if (std.ascii.eqlIgnoreCase(have, dir)) break true;
+            } else false;
+            if (!known) try dirs.append(gpa, try gpa.dupe(u8, dir));
+        }
+        return .{ .root = served, .abs = abs, .rel = rel, .creates = true };
+    };
 }
 
 fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
@@ -843,11 +917,15 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
                 _ = docSelector(item) catch |err| return if (err == error.MissingArgument) tool_result.missing("edits[{d}]: " ++ selector_missing, .{i}) else err;
             },
             .code => {
-                if (node_tool.isNodeForm(item) or isWholeCreate(item)) continue;
+                if (node_tool.isNodeForm(item)) continue;
                 if (try itemOp(item) == .delete) continue;
-                inline for (.{ "symbol", "hash", "body" }) |field| {
+                inline for (.{ "symbol", "body" }) |field| {
                     if (getString(item, field) == null) return missingCodeField(i, field, file);
                 }
+            },
+            .text => {
+                const text = try itemText(item, i);
+                if (text == .region and getString(item, "hash") == null) return tool_result.missing("edits[{d}].hash (string)", .{i});
             },
         }
     }
@@ -874,38 +952,8 @@ const edits_missing = "edits (non-empty array of objects, one per file)";
 const selector_missing = "pointer, heading, or line_start and line_end (integers)";
 
 fn missingCodeField(index: usize, comptime field: []const u8, file: []const u8) error{MissingArgument} {
-    if (lang_registry.forPath(file) == null) return tool_result.missing("edits[{d}]." ++ field ++ " (string); {s} is not source code, so it needs kind:\"doc\" with hash, content and " ++ selector_missing, .{ index, file });
+    if (lang_registry.forPath(file) == null) return tool_result.missing("edits[{d}]." ++ field ++ " (string); {s} is not source code, so it needs content (the whole file) or kind:\"doc\" with hash, content and " ++ selector_missing, .{ index, file });
     return tool_result.missing("edits[{d}]." ++ field ++ " (string)", .{index});
-}
-
-fn wholeText(item: Value) ?[]const u8 {
-    return getString(item, "content") orelse getString(item, "body");
-}
-
-fn isWholeCreate(item: Value) bool {
-    if (node_tool.isNodeForm(item) or getString(item, "symbol") != null) return false;
-    inline for (.{ "pointer", "heading", "line_start", "line_end", "op" }) |field| {
-        if (getField(item, field) != null) return false;
-    }
-    const hash = getString(item, "hash") orelse return false;
-    return std.mem.eql(u8, hash, "absent") and wholeText(item) != null;
-}
-
-fn jailWhole(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, dirs: *std.ArrayList([]u8)) !repo.Jailed {
-    const target = try file_edit.jailWrite(gpa, io, root, file, true);
-    defer target.deinit(gpa);
-    for (target.created_dirs) |dir| {
-        const seen = for (dirs.items) |known| {
-            if (std.ascii.eqlIgnoreCase(known, dir)) break true;
-        } else false;
-        if (!seen) try dirs.append(gpa, try gpa.dupe(u8, dir));
-    }
-    const served = try repo.servedRoot(gpa, io, root);
-    errdefer gpa.free(served);
-    const abs = try gpa.dupeZ(u8, target.abs);
-    errdefer gpa.free(abs);
-    const rel = try repo.relativeTo(gpa, served, abs);
-    return .{ .root = served, .abs = abs, .rel = rel, .creates = true };
 }
 
 fn itemOp(item: Value) !runner.EditOp {
@@ -931,6 +979,11 @@ fn recordBatch(gpa: Allocator, io: std.Io, root: []const u8, places: []const rep
     var symbols: std.ArrayList(@import("../verify/receipt.zig").SymbolEntry) = .empty;
     var symmetric = true;
     for (places, edits, prepared, before_hashes, committed) |place, edit, p, before, c| {
+        if (edit.text != null) {
+            try files.append(arena, .{ .rel = place.rel, .before = before, .after_abs = place.abs });
+            symmetric = false;
+            continue;
+        }
         if (p.nodes) |applied| {
             try files.append(arena, .{ .rel = place.rel, .before = before, .after_abs = place.abs });
             try node_tool.symbolEntries(arena, place.rel, applied, &symbols);
@@ -972,9 +1025,14 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     var code_count: usize = 0;
     var doc_count: usize = 0;
     for (items) |item| switch (try itemKind(item)) {
-        .code => code_count += 1,
+        .code, .text => code_count += 1,
         .doc => doc_count += 1,
     };
+    var new_dirs: std.ArrayList([]u8) = .empty;
+    defer {
+        for (new_dirs.items) |dir| gpa.free(dir);
+        new_dirs.deinit(gpa);
+    }
 
     const edits = try gpa.alloc(runner.Edit, code_count);
     defer gpa.free(edits);
@@ -992,11 +1050,6 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer gpa.free(node_lists);
     var parsed: usize = 0;
     defer for (node_lists[0..parsed]) |list| gpa.free(list);
-    var new_dirs: std.ArrayList([]u8) = .empty;
-    defer {
-        for (new_dirs.items) |dir| gpa.free(dir);
-        new_dirs.deinit(gpa);
-    }
 
     var ci: usize = 0;
     var di: usize = 0;
@@ -1009,17 +1062,31 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 parsed = i + 1;
                 const op = try itemOp(item);
                 const expected: symbol.Expected = if (getString(item, "hash")) |hash| try symbol.parseExpected(hash) else .absent;
-                const whole = isWholeCreate(item);
-                places[i] = if (whole) try jailWhole(gpa, io, policy.root, file, &new_dirs) else try repo.jailTarget(gpa, io, policy.root, file, !node_form and op == .write and expected == .absent);
+                places[i] = try jailItem(gpa, io, policy.root, file, !node_form and op == .write and expected == .absent, &new_dirs);
                 built = i + 1;
                 if (op == .delete) try repo.refuseLinkAsWritten(gpa, io, file);
                 edits[ci] = .{
                     .file_abs = places[i].abs,
                     .ref_text = getString(item, "symbol") orelse "",
-                    .new_body = (if (whole) wholeText(item) else getString(item, "body")) orelse "",
+                    .new_body = getString(item, "body") orelse "",
                     .expected_hash = expected,
                     .op = op,
                     .nodes = node_lists[i],
+                };
+                order[i] = ci;
+                ci += 1;
+            },
+            .text => {
+                node_lists[i] = &.{};
+                parsed = i + 1;
+                const text = try itemText(item, i);
+                places[i] = try jailItem(gpa, io, policy.root, file, text == .whole, &new_dirs);
+                built = i + 1;
+                edits[ci] = .{
+                    .file_abs = places[i].abs,
+                    .ref_text = "",
+                    .expected_hash = try itemExpected(item),
+                    .text = text,
                 };
                 order[i] = ci;
                 ci += 1;
@@ -1044,7 +1111,9 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         }
     }
 
-    const probe = try std.fmt.allocPrint(gpa, "{s}\\_", .{file_edit.existingAncestor(io, places[0].abs) orelse places[0].root});
+    const anchor = file_edit.existingAncestor(io, places[0].abs) orelse return error.InvalidPath;
+    const in_place = std.mem.eql(u8, anchor, std.fs.path.dirname(places[0].abs) orelse anchor);
+    const probe = if (in_place) try gpa.dupe(u8, places[0].abs) else try std.fmt.allocPrint(gpa, "{s}\\_", .{anchor});
     defer gpa.free(probe);
     const resolved = try runner.resolveTestCommand(gpa, io, probe, given, policy.allow_repo_config);
     defer gpa.free(resolved);
@@ -1053,7 +1122,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
     defer gpa.free(before_hashes);
     for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .created_dirs = @ptrCast(new_dirs.items), .commit = if (commit) |*request| request else null };
+    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs = @ptrCast(new_dirs.items) };
     var planned = try batch_mod.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
     const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits, options);
@@ -1065,7 +1134,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     var sent: usize = 0;
     for (items, node_lists) |item, list| {
         sent += node_tool.sentChars(list);
-        inline for (.{ "symbol", "hash", "body", "content" }) |field| {
+        inline for (.{ "symbol", "hash", "body", "content", "old_string", "new_string" }) |field| {
             if (getString(item, field)) |text| sent += text.len;
         }
     }
@@ -1091,6 +1160,14 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                         .deleted = committed[slot].deleted,
                         .nodes = planned.prepared.items[slot].nodes,
                     },
+                    .text => .{
+                        .file = getString(item, "file").?,
+                        .symbol = "",
+                        .old_hash = if (planned.prepared.items[slot].base_hash) |hash| .{ .present = hash } else .absent,
+                        .new_hash = committed[slot].hash,
+                        .evidence = null,
+                        .deleted = false,
+                    },
                     .doc => .{
                         .file = getString(item, "file").?,
                         .symbol = (docSelector(item) catch unreachable).label,
@@ -1107,7 +1184,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
             const code_committed = try gpa.alloc(@import("../platform/batch.zig").Committed, edits.len);
             defer gpa.free(code_committed);
             for (items, 0..) |item, i| {
-                if (itemKind(item) catch unreachable != .code) continue;
+                if (itemKind(item) catch unreachable == .doc) continue;
                 code_places[order[i]] = places[i];
                 code_committed[order[i]] = committed[order[i]];
             }

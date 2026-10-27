@@ -270,7 +270,7 @@ test "every write: a message rule refuses the commit of a symbol edit, a rename 
 
 const note_src = "# Title\n\nbody text\n";
 
-test "every write: write_doc refuses a source file and a frozen document" {
+test "every write: write_doc gates a source file by its rules and refuses a frozen document" {
     try skipOffWindows();
     var case: Plain = undefined;
     try case.init(&.{ .{ .rel = "src/a.ts", .text = keep_src }, .{ .rel = "docs/note.md", .text = note_src }, ignore });
@@ -280,9 +280,7 @@ test "every write: write_doc refuses a source file and a frozen document" {
     try enforce(case.repo.root_abs, "forbid:evil", null);
     const before = try capture(env);
     const source = try env.call("emetgate_write_doc", .{ .file = try env.abs("src/a.ts"), .hash = try env.fileHash("src/a.ts"), .line_start = std.json.Value{ .integer = 1 }, .line_end = std.json.Value{ .integer = 3 }, .content = "export function already() {\n  const evil = 1; return evil;\n}\n", .message = message }, green, true);
-    errdefer std.debug.print("{s}\n", .{source.text});
-    try testing.expect(source.is_error);
-    try testing.expect(contains(source.text, "UseSymbolToolsForSource"));
+    try expectRefused(env, source, before, "forbid:evil");
     const hash = try env.arena().dupe(u8, &symbol.formatHash(symbol.hashOf(note_src)));
     try expectRefused(env, try env.call("emetgate_write_doc", .{ .file = try env.abs("docs/note.md"), .heading = "Title", .hash = hash, .content = "# Title\n\nevil body\n", .message = message }, green, true), before, "frozen");
     try testing.expectEqualStrings(note_src, try env.read("docs/note.md"));

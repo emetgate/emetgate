@@ -1106,7 +1106,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "MixedEditForms", "use one form: symbol+hash+body, node+text, or nodes" },
     .{ "OverlappingNodes", "two node edits overlap; edit the outer node only" },
     .{ "SymbolExists", "the symbol exists; pass its hash from emetgate_symbols instead of \"absent\"" },
-    .{ "FileExists", "the file exists; edit its symbols with their hashes from emetgate_symbols" },
+    .{ "FileExists", "the file exists; pass its file_hash from emetgate_read_file as hash to overwrite it, or edit its symbols with their hashes from emetgate_symbols" },
     .{ "NoTopLevelSymbol", "with hash \"absent\" body is one complete top-level declaration" },
     .{ "MultipleTopLevelSymbols", "with hash \"absent\" body holds one declaration; add the others as separate edits" },
     .{ "ExtraTopLevelCode", "with hash \"absent\" body holds one declaration and nothing else" },

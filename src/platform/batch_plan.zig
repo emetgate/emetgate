@@ -11,6 +11,8 @@ const create = @import("create.zig");
 const file_edit = @import("file_edit.zig");
 const tsserver = @import("tsserver.zig");
 const rename = @import("../engine/rename.zig");
+const line_range = @import("../engine/line_range.zig");
+const registry = @import("../engine/lang/registry.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -26,6 +28,13 @@ pub const Edit = struct {
     op: Op = .write,
     move_source: ?[]const u8 = null,
     nodes: []const node_cas.Edit = &.{},
+    text: ?Text = null,
+};
+
+pub const Text = union(enum) {
+    whole: []const u8,
+    replace: struct { old: []const u8, new: []const u8, all: bool = false },
+    region: struct { selector: docnode.Selector, new_text: []const u8 },
 };
 
 pub const Action = enum { write, insert, create, delete_symbol, delete_file, move_file, write_doc };
@@ -155,7 +164,7 @@ fn planNodes(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u
 
 fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     if (edit.nodes.len != 0) return planNodes(gpa, io, runtime, edit, rel);
-    if (edit.ref_text.len == 0 and edit.expected_hash == .absent) return planWholeCreate(gpa, io, runtime, edit, rel);
+    if (edit.text) |text| return planText(gpa, io, runtime, edit, text, rel);
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     switch (edit.expected_hash) {
@@ -178,13 +187,55 @@ fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, ed
     }
 }
 
-fn planWholeCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u8) !Prepared {
-    try repo.refuseInternal(rel);
-    std.Io.Dir.cwd().access(io, edit.file_abs, .{}) catch |err| switch (err) {
-        error.FileNotFound => return file_edit.prepare(gpa, runtime, edit.file_abs, rel, null, edit.new_body),
-        else => |e| return e,
+pub fn textAfter(gpa: Allocator, base: ?[]const u8, expected: symbol.Expected, text: Text) ![]u8 {
+    switch (text) {
+        .whole => |content| {
+            if (expected == .absent and base != null) return error.FileExists;
+            if (expected == .present) {
+                const current = base orelse return error.FileNotFound;
+                if (!std.mem.eql(u8, &expected.present, &symbol.fileHash(current))) return error.HashMismatch;
+            }
+            return gpa.dupe(u8, content);
+        },
+        .replace => |r| {
+            var matches: usize = 0;
+            return file_edit.replaceUnique(gpa, base orelse return error.FileNotFound, r.old, r.new, r.all, &matches);
+        },
+        .region => |r| {
+            const current = base orelse return error.FileNotFound;
+            const wanted = switch (expected) {
+                .present => |hash| hash,
+                .absent => return error.HashMismatch,
+            };
+            const parser = ts.Parser.create();
+            defer parser.deinit();
+            const applied = docnode.apply(gpa, parser, current, r.selector, wanted, r.new_text) catch |err| switch (err) {
+                error.HashMismatch => if (std.mem.eql(u8, &wanted, &symbol.fileHash(current))) return regionUnderFileHash(gpa, parser, current, r.selector, r.new_text) else return err,
+                else => |e| return e,
+            };
+            return applied.source;
+        },
+    }
+}
+
+fn regionUnderFileHash(gpa: Allocator, parser: ts.Parser, source: []const u8, selector: docnode.Selector, new_text: []const u8) ![]u8 {
+    const range = switch (selector) {
+        .line_range => |r| r,
+        else => return error.HashMismatch,
     };
-    return error.FileExists;
+    const span = try line_range.byteRangeForLines(source, range.start, range.end);
+    const applied = try docnode.apply(gpa, parser, source, selector, symbol.hashOf(source[span.start..span.end]), new_text);
+    return applied.source;
+}
+
+fn planText(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, text: Text, rel: []u8) !Prepared {
+    try repo.refuseInternal(rel);
+    const code = registry.forPath(edit.file_abs) != null;
+    const base = try file_edit.readBase(gpa, io, edit.file_abs, code);
+    defer if (base) |b| gpa.free(b);
+    const after = try textAfter(gpa, base, edit.expected_hash, text);
+    defer gpa.free(after);
+    return file_edit.prepare(gpa, runtime, edit.file_abs, rel, base, after);
 }
 
 fn planFileDeletion(gpa: Allocator, io: std.Io, edit: Edit, rel: []u8) !Prepared {
