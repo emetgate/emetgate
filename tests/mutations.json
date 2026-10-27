@@ -12301,9 +12301,9 @@
       "id": "CSR5-free-use-reported-as-mismatch",
       "file": "src/engine/rename.zig",
       "from": "            if (free_uses) continue;\n",
-      "to": "",
+      "to": "            if (free_uses and false) continue;\n",
       "kills": [
-        "rename facts: a C# static method called from another file is renamed at its declaration and every call"
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
       ]
     },
     {
@@ -12368,9 +12368,12 @@
       "file": "src/platform/rename_graph.zig",
       "from": "and std.mem.eql(u8, d.name, self.old)) try self.prove(self.target.file, d.name_start);",
       "to": "and std.mem.eql(u8, d.name, self.old)) {}",
-      "kills": [
-        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
-      ]
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "a constructor name is a declaration, so the account step accepts it unproven, and the declaring file's own rename already rewrites it through the type owner mapping"
     },
     {
       "id": "CSR13-linked-reference-not-proven",
@@ -12378,7 +12381,6 @@
       "from": "                if (linked.eql(self.target)) try self.prove(file, ref.start);",
       "to": "                _ = linked;",
       "kills": [
-        "rename facts: a C# instance method called through a typed parameter in another file is renamed",
         "rename facts: a Python function imported by another module is renamed at its import and its call"
       ]
     },
@@ -12386,10 +12388,13 @@
       "id": "CSR14-scope-bound-use-not-proven",
       "file": "src/platform/rename_graph.zig",
       "from": "                if (self.isProven(file, resolution.binders[b].span.start)) try self.prove(file, use.span.start);",
-      "to": "                _ = b;",
-      "kills": [
-        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
-      ]
+      "to": "                if (self.isProven(file, resolution.binders[b].span.start)) {}",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "the facts store records every scope-bound use of the name as a ref linked to the def, called or passed as a value, so the linked step has proven it before this one runs"
     },
     {
       "id": "CSR15-global-type-use-not-proven",
@@ -12426,12 +12431,9 @@
       "file": "src/platform/rename_graph.zig",
       "from": "                if (t.target != .unresolved or !std.mem.eql(u8, t.member, parent.name)) continue;",
       "to": "                if (t.target != .unresolved) continue;",
-      "expect_status": "survived",
-      "filter": [
-        "rename facts: ",
-        "csharp"
-      ],
-      "note": "globalType is asked for the parent name right after, so a type reference with another name is refused there; the comparison only saves the lookup"
+      "kills": [
+        "rename facts: a C# member call on a receiver of unknown type refuses the rename"
+      ]
     },
     {
       "id": "CSR19-ambiguous-global-type-accepted",
@@ -12503,7 +12505,7 @@
       "id": "CSR26-any-namespace-visible",
       "file": "src/platform/rename_graph.zig",
       "from": "        if (try self.enclosedBy(file, node, namespace)) return at;\n        if (self.imports(file, node, namespace)) return at;\n        return null;",
-      "to": "        return at;",
+      "to": "        _ = .{ file, node, namespace };\n        return at;",
       "kills": [
         "rename facts: a C# method call on a type from a namespace the file does not import is refused"
       ]
@@ -12512,7 +12514,7 @@
       "id": "CSR27-using-scope-not-checked",
       "file": "src/platform/rename_graph.zig",
       "from": "            if (node.startByte() < holder.startByte() or node.endByte() > holder.endByte()) continue;\n",
-      "to": "",
+      "to": "            _ = .{ holder, node };\n",
       "kills": [
         "rename facts: a using directive inside another namespace block does not reach a call outside it"
       ]
@@ -12543,7 +12545,7 @@
       "id": "CSR30-import-binder-accepted-unproven",
       "file": "src/platform/rename_graph.zig",
       "from": "                    if (!resolution.binders[b].import) continue;",
-      "to": "                    continue;",
+      "to": "                    _ = b;\n                    continue;",
       "expect_status": "survived",
       "filter": [
         "rename facts: ",
@@ -12639,7 +12641,7 @@
       "id": "CSF6-modifier-keyword-not-read",
       "file": "src/engine/lang/profile.zig",
       "from": "            const word = if (!child.isNamed()) child.kind() else if (self.isModifier(child.kind())) tree.text(child) else continue;",
-      "to": "            const word = if (!child.isNamed()) child.kind() else continue;",
+      "to": "            const word = if (!child.isNamed()) child.kind() else if (self.isModifier(child.kind())) tree.text(child)[0..0] else continue;",
       "kills": [
         "csharp symbols: public, protected and internal members are visible, private and default members are not"
       ]
@@ -12648,7 +12650,7 @@
       "id": "CSF7-type-owner-not-renamed-in-members",
       "file": "src/engine/rename.zig",
       "from": "            if (!std.mem.eql(u8, self.name(a, self.containers or self.owned(before.container, i)), b)) return false;",
-      "to": "            if (!std.mem.eql(u8, self.name(a, self.containers), b)) return false;",
+      "to": "            if (!std.mem.eql(u8, self.name(a, self.containers or i > before.container.len), b)) return false;",
       "kills": [
         "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
       ]

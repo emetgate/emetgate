@@ -494,6 +494,18 @@ test "rename facts: a Python function imported by another module is renamed at i
     try expectSource(planned, "b.py", "from a import plus\n\n\ndef main():\n    return plus(2)\n");
 }
 
+test "rename facts: a Python function imported by another module is renamed where it is passed as a value" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "a.py", .text = "def helper(x):\n    return x + 1\n" },
+        .{ .rel = "b.py", .text = "from a import helper\n\nhandlers = [helper]\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("a.py", "helper", "plus", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "b.py", "from a import plus\n\nhandlers = [plus]\n");
+}
+
 test "rename facts: a Python method called through self is refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case = try Case.init(&.{.{ .rel = "svc.py", .text = "class Svc:\n    def run(self):\n        return 1\n\n    def go(self):\n        return self.run()\n" }});
