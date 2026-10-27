@@ -15634,7 +15634,10 @@
       "from": "                } else if (!graph.hasBase(found)) {",
       "to": "                } else {",
       "expect_status": "survived",
-      "note": "defense in depth: a class with a base that declares the member again is already refused by the hierarchy check before any reference is accounted"
+      "note": "defense in depth: a class with a base that declares the member again is already refused by the hierarchy check before any reference is accounted",
+      "filter": [
+        "rename facts: a same-named C# property of a derived class is refused"
+      ]
     },
     {
       "id": "L6A-alpha-renamed-members-not-apart",
