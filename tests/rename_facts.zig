@@ -648,3 +648,80 @@ test "rename facts: an unproven reference refuses the rename and names every sit
     try testing.expectEqual(@as(usize, 2), sites.count);
     try testing.expectEqualStrings("use.py:2, use.py:6", sites.list());
 }
+
+test "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "m.py", .text = "class A:\n    def run(self):\n        return 1\n" },
+        .{ .rel = "n.py", .text = "from m import A\n\n\ndef f(a: A, k: A = None):\n    return a.run() + k.run()\n\n\ndef g():\n    x = A()\n    return x.run()\n\n\ndef h():\n    return A().run()\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("m.py", "A.run", "go", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "n.py", "from m import A\n\n\ndef f(a: A, k: A = None):\n    return a.go() + k.go()\n\n\ndef g():\n    x = A()\n    return x.go()\n\n\ndef h():\n    return A().go()\n");
+}
+
+test "rename facts: every name of a Python from-import binds, not only the first" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "m.py", .text = "class A:\n    def run(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n" },
+        .{ .rel = "n.py", .text = "from m import A, B\n\n\ndef g(b: B):\n    return b.run()\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("m.py", "B.run", "go", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "n.py", "from m import A, B\n\n\ndef g(b: B):\n    return b.go()\n");
+}
+
+test "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "class A:\n    def run(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef g(c):\n    x = A()\n    if c:\n        x = B()\n    return x.run()\n\n\ndef h():\n    y = A()\n    def inner():\n        nonlocal y\n        y = B()\n    inner()\n    return y.run()\n\n\nz = A()\nz.run()\n" }});
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("m.py", "A.run", "go", true, &sites));
+    try testing.expectEqualStrings("m.py:15, m.py:24, m.py:28", sites.list());
+}
+
+test "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const box =
+        \\namespace App;
+        \\public class Box
+        \\{
+        \\    public int Size { get; set; }
+        \\    public int Twice() => Size * 2;
+        \\}
+        \\
+    ;
+    const user =
+        \\namespace App;
+        \\public class User
+        \\{
+        \\    private Box _b = new Box();
+        \\    public int Get(Box p) { Box b = new(); var d = new Box(); b.Size = 4; return b.Size + d.Size + p.Size + _b.Size; }
+        \\}
+        \\
+    ;
+    var case = try Case.init(&.{ .{ .rel = "A.cs", .text = box }, .{ .rel = "B.cs", .text = user } });
+    defer case.deinit();
+    const planned = try case.plan("A.cs", "App.Box.Size", "Width", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "A.cs",
+        \\namespace App;
+        \\public class Box
+        \\{
+        \\    public int Width { get; set; }
+        \\    public int Twice() => Width * 2;
+        \\}
+        \\
+    );
+    try expectSource(planned, "B.cs",
+        \\namespace App;
+        \\public class User
+        \\{
+        \\    private Box _b = new Box();
+        \\    public int Get(Box p) { Box b = new(); var d = new Box(); b.Width = 4; return b.Width + d.Width + p.Width + _b.Width; }
+        \\}
+        \\
+    );
+}

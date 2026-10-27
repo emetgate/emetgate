@@ -363,6 +363,7 @@ const Extractor = struct {
     }
 
     fn collectShapes(self: *Extractor) Error!void {
+        var written: std.AutoHashMapUnmanaged(u32, void) = .empty;
         var walker = traversal.Walker.init(self.snapshot.tree.root());
         defer walker.deinit();
         while (walker.next()) |entry| {
@@ -374,10 +375,23 @@ const Extractor = struct {
             }
             for (self.f.typed_binders) |site| {
                 if (!std.mem.eql(u8, site.node, kind)) continue;
-                const name = node.childByField(site.name_field) orelse continue;
+                const name = (if (site.name_field.len == 0) node.namedChild(0) else node.childByField(site.name_field)) orelse continue;
                 if (!std.mem.eql(u8, name.kind(), self.profile.identifier)) continue;
                 const declared = (try self.annotatedType(node, site.type_field)) orelse continue;
                 try self.typed_at.put(self.arena, name.startByte(), declared);
+            }
+            for (self.f.constructions) |site| {
+                if (!std.mem.eql(u8, site.node, kind)) continue;
+                const name = node.childByField(site.name_field) orelse continue;
+                if (!std.mem.eql(u8, name.kind(), self.profile.identifier) or self.typed_at.contains(name.startByte())) continue;
+                const built = (try self.builtType(node, name, site)) orelse continue;
+                try self.typed_at.put(self.arena, name.startByte(), built);
+            }
+            for (self.f.writes) |site| {
+                if (!std.mem.eql(u8, site.parent, kind)) continue;
+                const target = node.childByField(site.field) orelse continue;
+                const binder = self.binderOfUse(target.startByte()) orelse continue;
+                try written.put(self.arena, binder, {});
             }
             if (std.mem.eql(u8, kind, self.profile.declarator)) {
                 if (node.childByField("name")) |name| {
@@ -388,6 +402,66 @@ const Extractor = struct {
             }
             if (node.isNamed() and oneOf(kind, self.f.classes)) try self.classShape(node);
         }
+        if (self.f.sole_binder_types) try self.dropRebound(&written);
+    }
+
+    fn dropRebound(self: *Extractor, written: *const std.AutoHashMapUnmanaged(u32, void)) Error!void {
+        const root = self.snapshot.tree.root();
+        var index_at: std.AutoHashMapUnmanaged(u32, usize) = .empty;
+        for (self.every.binders, 0..) |binder, i| try index_at.put(self.arena, binder.span.start, i);
+        var doomed: std.ArrayList(u32) = .empty;
+        var keys = self.typed_at.keyIterator();
+        while (keys.next()) |start| {
+            const i = index_at.get(start.*) orelse {
+                try doomed.append(self.arena, start.*);
+                continue;
+            };
+            const binder = self.every.binders[i];
+            if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);
+        }
+        for (doomed.items) |start| _ = self.typed_at.remove(start);
+    }
+
+    fn soleBinder(self: *const Extractor, index: usize) bool {
+        const binders = self.every.binders;
+        const names = self.every.binder_names;
+        var i = index;
+        while (i > 0 and std.mem.eql(u8, names[i - 1], names[index])) i -= 1;
+        while (i < binders.len and std.mem.eql(u8, names[i], names[index])) : (i += 1) {
+            if (i != index and binders[i].scope.same(binders[index].scope)) return false;
+        }
+        return true;
+    }
+
+    fn builtType(self: *Extractor, node: ts.Node, name: ts.Node, site: profile_mod.Construction) Error!?u32 {
+        if (site.parent_type_field) |field| {
+            if (node.parent()) |holder| if (holder.childByField(field)) |declared| {
+                if (try self.typeRefOfName(declared)) |t| return t;
+            };
+        }
+        var value = (if (site.value_field) |field| node.childByField(field) else self.valueAfter(node, name)) orelse return null;
+        while (oneOf(value.kind(), self.profile.transparent_wrappers)) value = value.namedChild(0) orelse return null;
+        return self.constructionOf(value);
+    }
+
+    fn valueAfter(_: *const Extractor, node: ts.Node, name: ts.Node) ?ts.Node {
+        var i: u32 = 0;
+        while (node.namedChild(i)) |child| : (i += 1) {
+            if (child.startByte() > name.startByte()) return child;
+        }
+        return null;
+    }
+
+    fn constructionOf(self: *Extractor, value: ts.Node) Error!?u32 {
+        if (self.g.new_expression.len != 0 and std.mem.eql(u8, value.kind(), self.g.new_expression)) {
+            const constructor = value.childByField(self.g.new_constructor_field) orelse return null;
+            return self.typeRefOfName(constructor);
+        }
+        if (self.f.calls_construct and std.mem.eql(u8, value.kind(), self.profile.call.node)) {
+            const callee = value.childByField(self.profile.call.function_field) orelse return null;
+            return self.typeRefOfName(callee);
+        }
+        return null;
     }
 
     fn classShape(self: *Extractor, class: ts.Node) Error!void {
@@ -637,6 +711,10 @@ const Extractor = struct {
         if (std.mem.eql(u8, kind, self.g.new_expression)) {
             const constructor = object.childByField(self.g.new_constructor_field) orelse return .{ .unresolved = .property_needs_type };
             const constructed = (try self.typeRefOfName(constructor)) orelse return .{ .unresolved = .property_needs_type };
+            return .{ .member_of_type = constructed };
+        }
+        if (self.f.calls_construct and std.mem.eql(u8, kind, self.profile.call.node)) {
+            const constructed = (try self.constructionOf(object)) orelse return .{ .unresolved = .property_needs_type };
             return .{ .member_of_type = constructed };
         }
         if (std.mem.eql(u8, kind, self.f.this_keyword)) {

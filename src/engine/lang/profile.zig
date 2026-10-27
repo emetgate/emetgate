@@ -225,6 +225,13 @@ pub const TypedBinder = struct {
     type_field: []const u8,
 };
 
+pub const Construction = struct {
+    node: []const u8,
+    name_field: []const u8,
+    value_field: ?[]const u8 = null,
+    parent_type_field: ?[]const u8 = null,
+};
+
 pub const Facts = struct {
     member: []const u8,
     object_field: []const u8,
@@ -260,6 +267,9 @@ pub const Facts = struct {
     using_directive: ?[]const u8 = null,
     receiver_parameter: ?[]const u8 = null,
     member_wrappers: []const []const u8 = &.{},
+    constructions: []const Construction = &.{},
+    calls_construct: bool = false,
+    sole_binder_types: bool = false,
     class_body_field: []const u8 = "body",
     test_files: []const []const u8 = &.{},
     test_definitions: []const TestDefinition = &.{},

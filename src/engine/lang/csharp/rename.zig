@@ -13,6 +13,7 @@ const binder_sites = [_]BinderSite{
     .{ .parent = "enum_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "delegate_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "method_declaration", .field = "name", .scope = .block },
+    .{ .parent = "property_declaration", .field = "name", .scope = .block },
     .{ .parent = "local_function_statement", .field = "name", .scope = .block },
     .{ .parent = "parameter", .field = "name", .scope = .function },
     .{ .parent = "variable_declarator", .field = "name", .scope = .declarator },

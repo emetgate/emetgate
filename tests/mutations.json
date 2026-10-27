@@ -15230,6 +15230,96 @@
       "kills": [
         "python declarations: a decorated class and its annotated fields are declared, and the class span starts at its decorator"
       ]
+    },
+    {
+      "id": "L4H-python-constructions-ignored",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .constructions = &.{.{ .node = \"assignment\", .name_field = \"left\", .value_field = \"right\" }},\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4I-python-calls-do-not-construct",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .calls_construct = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4J-python-typed-parameters-untyped",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .{ .node = \"typed_parameter\", .name_field = \"\", .type_field = \"type\" },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4K-python-binders-not-sole-checked",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .sole_binder_types = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4L-written-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (written.contains(start.*) or ",
+      "to": "if (",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4M-module-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or ",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4N-rebound-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": " or !self.soleBinder(i)) try doomed",
+      "to": ") try doomed",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4O-csharp-constructions-ignored",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .constructions = &.{.{ .node = \"variable_declarator\", .name_field = \"name\", .parent_type_field = \"type\" }},\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed"
+      ]
+    },
+    {
+      "id": "L4P-csharp-property-not-a-binder",
+      "file": "src/engine/lang/csharp/rename.zig",
+      "from": "    .{ .parent = \"property_declaration\", .field = \"name\", .scope = .block },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed"
+      ]
+    },
+    {
+      "id": "L4Q-multi-field-binder-first-only",
+      "file": "src/engine/scope.zig",
+      "from": "            if (!holdsInField(grand, pf, parent)) continue;",
+      "to": "            if (!(grand.childByField(pf) orelse continue).eql(parent)) continue;",
+      "kills": [
+        "rename facts: every name of a Python from-import binds, not only the first"
+      ]
     }
   ]
 }

@@ -65,4 +65,5 @@ pub const csharp: Facts = .{
     .global_types = true,
     .namespaces = &.{"namespace_declaration"},
     .using_directive = "using_directive",
+    .constructions = &.{.{ .node = "variable_declarator", .name_field = "name", .parent_type_field = "type" }},
 };
