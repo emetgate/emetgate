@@ -36,7 +36,7 @@ pub const Options = struct {
     message: []const u8,
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     runtime: ?*Runtime = null,
 };
 

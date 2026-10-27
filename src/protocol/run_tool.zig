@@ -83,7 +83,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
     if (output_digest.logRequest(command)) |id| return output_digest.writeLog(gpa, io, root_abs, id, w);
     const entry = switch (run_command.check(allowed, command)) {
         .refused => |why| {
-            if (why == .not_allowed and run_command.isToolchain(command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);
+            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);
             event.fail("RunRefused");
             try writeRefused(w, command, @tagName(why), allowed);
             return true;

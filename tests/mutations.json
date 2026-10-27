@@ -15379,8 +15379,8 @@
     {
       "id": "L4X-tox-ini-not-a-marker",
       "file": "src/platform/test_command.zig",
-      "from": "    .{ .file = \"tox.ini\", .command = \"python -m pytest\" },\n",
-      "to": "",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"setup.cfg\", \"setup.py\" };",
       "kills": [
         "test detection: each project marker names its test command"
       ]
@@ -15388,8 +15388,8 @@
     {
       "id": "L4Y-setup-cfg-not-a-marker",
       "file": "src/platform/test_command.zig",
-      "from": "    .{ .file = \"setup.cfg\", .command = \"python -m pytest\" },\n",
-      "to": "",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.py\" };",
       "kills": [
         "test detection: each project marker names its test command"
       ]
@@ -15397,10 +15397,109 @@
     {
       "id": "L4Z-setup-py-not-a-marker",
       "file": "src/platform/test_command.zig",
-      "from": "    .{ .file = \"setup.py\", .command = \"python -m pytest\" },\n",
-      "to": "",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\" };",
       "kills": [
         "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L5A-venv-interpreter-without-pyvenv",
+      "file": "src/platform/run_command.zig",
+      "from": "        return inVenv(io, a, real);",
+      "to": "        return true;",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5B-interpreter-outside-project",
+      "file": "src/platform/run_command.zig",
+      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return false;\n",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5C-any-venv-binary",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (!listed) return false;",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5D-local-command-keeps-slashes",
+      "file": "src/platform/run_command.zig",
+      "from": "    std.mem.replaceScalar(u8, owned[start..end], '/', '\\\\');",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5E-venv-not-linked-into-shadow",
+      "file": "src/platform/shadow.zig",
+      "from": "pub const dependency_dirs = [_][]const u8{ \"node_modules\", \".venv\", \"venv\" };",
+      "to": "pub const dependency_dirs = [_][]const u8{\"node_modules\"};",
+      "kills": [
+        "run tool: an untracked project venv is present in the shadow the command runs in"
+      ]
+    },
+    {
+      "id": "L5F-only-dot-venv-detected",
+      "file": "src/platform/test_command.zig",
+      "from": "pub const venv_dirs = [_][]const u8{ \".venv\", \"venv\" };",
+      "to": "pub const venv_dirs = [_][]const u8{\".venv\"};",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5G-requirements-project-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (try requirementsProject(gpa, io, dir)) |run| return pythonCommand(io, dir, run);",
+      "to": "",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5H-requirements-without-tests",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (!any or !hasPythonTests(io, dir)) return null;",
+      "to": "    if (!any) return null;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5I-venv-pytest-unseen",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (listed_pytest or venvHasPytest(io, dir)) return pytest_run;",
+      "to": "    if (listed_pytest) return pytest_run;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5J-pytest-prefix-is-pytest",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, \" \\t=<>!~;[@\", next) != null) return true;",
+      "to": "        return true;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5K-python-marker-ignores-venv",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (dir.access(io, marker, .{})) |_| return pythonCommand(io, dir, pytest_run) else |_| {}",
+      "to": "        if (dir.access(io, marker, .{})) |_| return \"python -m pytest\" else |_| {}",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
     }
   ]

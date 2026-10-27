@@ -138,3 +138,49 @@ test "run tool: toolchain commands that write files or open a shell stay refused
         try testing.expectEqualStrings("refused", try reply.string("status"));
     }
 }
+
+test "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo/.venv/Scripts");
+    try tmp.dir.createDirPath(testing.io, "repo/tools");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/Scripts/python.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/Scripts/pytest.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/pyvenv.cfg", .data = "home = C:\\Python\r\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tools/npm.cmd", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/Scripts/npm.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tools/python.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "pyvenv.cfg", .data = "" });
+    try tmp.dir.createDirPath(testing.io, "x");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "x/python.exe", .data = "" });
+    const base = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(base);
+    const root = try std.fmt.allocPrint(gpa, "{s}\\repo", .{base});
+    defer gpa.free(root);
+    for ([_][]const u8{ ".venv\\Scripts\\python -m pytest -q", ".venv/Scripts/python.exe -m pytest", ".venv\\Scripts\\pytest", ".\\.venv\\Scripts\\python -m pytest", "python -m pytest" }) |command| {
+        errdefer std.debug.print("refused: {s}\n", .{command});
+        try testing.expect(run_command.isToolchainIn(testing.io, root, command));
+    }
+    for ([_][]const u8{ ".venv\\Scripts\\python script.py", "venv\\Scripts\\python -m pytest", "..\\x\\python -m pytest", "C:\\Python\\python -m pytest", "\\python -m pytest", "tools\\npm install", "tools\\python -m pytest", ".venv\\Scripts\\npm install" }) |command| {
+        errdefer std.debug.print("accepted: {s}\n", .{command});
+        try testing.expect(!run_command.isToolchainIn(testing.io, root, command));
+    }
+    const local = try run_command.localCommand(gpa, ".venv/Scripts/python -m pytest a/b.py");
+    defer gpa.free(local);
+    try testing.expectEqualStrings(".venv\\Scripts\\python -m pytest a/b.py", local);
+}
+
+test "run tool: an untracked project venv is present in the shadow the command runs in" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{.{ .name = "show.cmd", .body = "@echo off\r\ntype .venv\\pyvenv.cfg\r\ntype venv\\pyvenv.cfg\r\n" }});
+    defer repo.deinit();
+    try repo.tmp.dir.createDirPath(testing.io, "repo/.venv");
+    try repo.tmp.dir.createDirPath(testing.io, "repo/venv");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/pyvenv.cfg", .data = "home = dot\r\n" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/venv/pyvenv.cfg", .data = "home = plain\r\n" });
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{".\\show.cmd"}), .{ .command = ".\\show.cmd" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings("home = dot\r\nhome = plain\r\n", try reply.string("stdout"));
+}

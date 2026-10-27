@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const Family = enum { node_install, node_tool, python_install, python_tool, dotnet, cargo, go };
 
-pub const families_hint = "npm|pnpm|yarn|bun install|i|ci|add|ls|list; npx|pnpx|bunx <tool>; tsc; eslint; pip install; python -m pip|pytest|mypy|ruff|venv|unittest; uv pip|sync|add|venv|lock; pytest; mypy; ruff check; dotnet restore|build|test|new|add|sln|list; cargo build|check|test|fetch|add|clippy|tree|metadata|generate-lockfile; go build|vet|test|mod|get|list; any of these --version; dotnet --info|--list-sdks|--list-runtimes";
+pub const families_hint = "npm|pnpm|yarn|bun install|i|ci|add|ls|list; npx|pnpx|bunx <tool>; tsc; eslint; pip install; python -m pip|pytest|mypy|ruff|venv|unittest; uv pip|sync|add|venv|lock; pytest; mypy; ruff check; dotnet restore|build|test|new|add|sln|list; cargo build|check|test|fetch|add|clippy|tree|metadata|generate-lockfile; go build|vet|test|mod|get|list; any of these --version; dotnet --info|--list-sdks|--list-runtimes; python, pytest, mypy, ruff or pip may be a path inside the project such as .venv\\Scripts\\python";
 
 const Rule = struct {
     tools: []const []const u8,

@@ -12,6 +12,7 @@ const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
 
 pub const workspace_dir = ".emetgate";
+pub const dependency_dirs = [_][]const u8{ "node_modules", ".venv", "venv" };
 
 const max_git_listing = 64 * 1024 * 1024;
 
