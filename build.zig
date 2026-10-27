@@ -254,7 +254,7 @@ const cli_cases = [_]CliCase{
         .name = "symbols json emits one line with typed fields",
         .args = &.{ "symbols", e2e_fixture, "--json" },
         .exit_code = 0,
-        .stdout_contains = "\"hash\":\"" ++ e2e_add_hash ++ "\",\"kind\":\"function\",\"ref\":\"add\",\"line\":9,\"col\":8,\"ambiguous\":false",
+        .stdout_contains = "\"hash\":\"" ++ e2e_add_hash ++ "\",\"kind\":\"function\",\"ref\":\"add\",\"line\":9,\"col\":8}",
     },
     .{
         .name = "symbols json on a broken source is a typed error payload",
