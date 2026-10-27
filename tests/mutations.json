@@ -14732,6 +14732,148 @@
         "lockdown marks the emetgate server alwaysLoad so Claude Code does not defer its tools behind tool search",
         "without a .mcp.json lockdown serves the running emetgate from its own config"
       ]
+    },
+    {
+      "id": "DG1-vendor-frames-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "                    if ((frame_kept and !python) or isVendorFrame(text)) {",
+      "to": "                    if (frame_kept and !python) {",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing"
+      ]
+    },
+    {
+      "id": "DG2-every-frame-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "                    frame_kept = true;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing"
+      ]
+    },
+    {
+      "id": "DG3-duplicates-not-collapsed",
+      "file": "src/protocol/output_digest.zig",
+      "from": "            if (gop.found_existing) {",
+      "to": "            if (false) {",
+      "kills": [
+        "identical compiler errors and repeated warnings collapse to one line with a count, ANSI codes are stripped",
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+      ]
+    },
+    {
+      "id": "DG4-warnings-keyed-by-location",
+      "file": "src/protocol/output_digest.zig",
+      "from": "            const key = warn orelse text;",
+      "to": "            const key = text;",
+      "kills": [
+        "identical compiler errors and repeated warnings collapse to one line with a count, ANSI codes are stripped"
+      ]
+    },
+    {
+      "id": "DG5-no-cap",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (out.items.len + need > cap - footer_reserve) break;\n",
+      "to": "",
+      "kills": [
+        "a flood of distinct failures stays under the cap and counts the failures it left out",
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+      ]
+    },
+    {
+      "id": "DG6-more-failures-not-counted",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (entry.head) more += 1;\n",
+      "to": "",
+      "kills": [
+        "a flood of distinct failures stays under the cap and counts the failures it left out"
+      ]
+    },
+    {
+      "id": "DG7-ansi-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (line[i] == 0x1b and i + 1 < line.len and line[i + 1] == '[') {",
+      "to": "        if (false) {",
+      "kills": [
+        "identical compiler errors and repeated warnings collapse to one line with a count, ANSI codes are stripped"
+      ]
+    },
+    {
+      "id": "DG8-pass-lines-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (isPass(text)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing",
+        "a cargo panic keeps the panic location and left and right, drops passing tests and the backtrace note"
+      ]
+    },
+    {
+      "id": "DG9-progress-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (isProgress(text)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a pytest failure keeps the assertion and the location, drops the session header, rules and progress"
+      ]
+    },
+    {
+      "id": "DG10-code-context-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (isCodeContext(text)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing"
+      ]
+    },
+    {
+      "id": "DG11-summary-dropped-from-digest",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (out.items.len + summary.len + 1 > cap) break;",
+      "to": "        break;",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing",
+        "a pytest failure keeps the assertion and the location, drops the session header, rules and progress",
+        "a cargo panic keeps the panic location and left and right, drops passing tests and the backtrace note"
+      ]
+    },
+    {
+      "id": "DG12-pass-line-without-summary",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (c.summaries.items.len == 0) return null;\n",
+      "to": "",
+      "kills": [
+        "a passing run with a count line is one line with its duration, a run without one is not"
+      ]
+    },
+    {
+      "id": "DG13-log-request-any-length",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (id.len != id_len) return null;\n",
+      "to": "",
+      "kills": [
+        "a log request names eight hex digits after log and nothing else"
+      ]
+    },
+    {
+      "id": "DG14-log-request-not-served",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    if (output_digest.logRequest(command)) |id| return output_digest.writeLog(gpa, io, root_abs, id, w);\n",
+      "to": "",
+      "kills": [
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+      ]
+    },
+    {
+      "id": "DG15-noise-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (startsAny(text, &noise_starts)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing",
+        "a pytest failure keeps the assertion and the location, drops the session header, rules and progress",
+        "a cargo panic keeps the panic location and left and right, drops passing tests and the backtrace note"
+      ]
     }
   ]
 }

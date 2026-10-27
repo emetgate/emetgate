@@ -135,6 +135,7 @@ pub const memory = @import("platform/memory.zig");
 pub const journal = @import("platform/journal.zig");
 pub const where = @import("platform/where.zig");
 pub const wire = @import("protocol/wire.zig");
+pub const output_digest = @import("protocol/output_digest.zig");
 pub const scan_command = @import("protocol/scan_command.zig");
 pub const rule_command = @import("protocol/rule_command.zig");
 pub const rule_catalog = @import("protocol/rule_catalog.zig");

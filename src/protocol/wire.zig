@@ -4,6 +4,7 @@ const symmetry = @import("../engine/symmetry.zig");
 const node_cas = @import("../engine/node_cas.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const test_outcome = @import("../platform/test_outcome.zig");
+const output_digest = @import("output_digest.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
@@ -1234,18 +1235,13 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
         try js.objectField("diagnostics_dropped");
         try js.write(from_out.len + from_err.len - shown);
     }
-    const err_budget: usize = if (report.stdout.len == 0) test_outcome.output_budget else test_outcome.output_budget / 3;
-    const err_text = try test_outcome.condense(gpa, report.stderr, err_budget);
-    defer gpa.free(err_text.text);
-    const out_text = try test_outcome.condense(gpa, report.stdout, test_outcome.output_budget - @min(err_text.text.len, err_budget));
-    defer gpa.free(out_text.text);
-    try js.objectField("stdout");
-    try js.write(out_text.text);
-    try js.objectField("stderr");
-    try js.write(err_text.text);
-    if (out_text.dropped_lines + err_text.dropped_lines != 0) {
+    const digested = try output_digest.digest(gpa, report.stdout, report.stderr);
+    defer gpa.free(digested.text);
+    try js.objectField("output");
+    try js.write(digested.text);
+    if (digested.dropped_lines != 0) {
         try js.objectField("output_dropped_lines");
-        try js.write(out_text.dropped_lines + err_text.dropped_lines);
+        try js.write(digested.dropped_lines);
     }
     try writeShadowNote(&js, note);
     try js.endObject();

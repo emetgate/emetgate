@@ -4,7 +4,7 @@ const fixture = @import("run_fixture.zig");
 const server = @import("emetgate").server;
 const sandbox = @import("emetgate").sandbox;
 const run_command = @import("emetgate").run_command;
-const run_tool = @import("emetgate").run_tool;
+const output_digest = @import("emetgate").output_digest;
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -125,7 +125,7 @@ test "redteam run: a long command that leaves a child is stopped at the deadline
     try testing.expect(report.duration_ns < 15 * std.time.ns_per_s);
 }
 
-test "redteam run: a flood of output comes back cut to the last lines with a count of the rest" {
+test "redteam run: a flood of output comes back as a capped digest whose full log a log call returns" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try fixture.Repo.init(&.{
         .{ .name = "flood.txt", .body = "flood flood flood flood flood flood flood flood\r\n" ** 4096 },
@@ -136,10 +136,21 @@ test "redteam run: a flood of output comes back cut to the last lines with a cou
     defer reply.deinit();
     errdefer std.debug.print("{s}\n", .{reply.text[0..@min(reply.text.len, 400)]});
     try testing.expectEqualStrings("output_limit", try reply.string("outcome"));
-    const stdout = try reply.string("stdout");
-    try testing.expect(stdout.len <= run_tool.max_output_bytes);
-    try testing.expect(std.mem.count(u8, stdout, "\n") <= run_tool.max_output_lines);
-    try testing.expect((try reply.field("stdout_omitted_lines")).?.integer > 0);
+    const output = try reply.string("output");
+    try testing.expect(output.len <= output_digest.cap);
+    try testing.expect(std.mem.indexOf(u8, output, "flood flood flood \u{00d7}") != null);
+    try testing.expect((try reply.field("output_bytes")).?.integer > output_digest.cap);
+    const full_log = try reply.string("full_log");
+    const quote = std.mem.indexOfScalar(u8, full_log, '"').?;
+    const call = full_log[quote + 1 .. full_log.len - 1];
+    try testing.expect(output_digest.logRequest(call) != null);
+    var log = try fixture.call(fixture.policyWith(repo.root_abs, &.{".\\flood.cmd"}), .{ .command = call });
+    defer log.deinit();
+    try testing.expectEqualStrings("log", try log.string("status"));
+    const text = try log.string("text");
+    try testing.expect(text.len <= output_digest.max_log_bytes);
+    try testing.expect(std.mem.indexOf(u8, text, "flood flood flood") != null);
+    try testing.expect((try log.field("omitted_lines")).?.integer > 0);
 }
 
 test "redteam run: a call that names any policy field is refused before anything runs" {

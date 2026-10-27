@@ -10,6 +10,7 @@ const test_command = @import("../platform/test_command.zig");
 const test_outcome = @import("../platform/test_outcome.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const toolchain = @import("../platform/toolchain.zig");
+const output_digest = @import("output_digest.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -20,7 +21,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Runs an allowlisted command in a sandbox copy, or a toolchain install/build/check in the repo; no command lists the allowlist.";
+pub const description = "Runs an allowlisted command in a sandbox copy, or a toolchain install/build/check in the repo: exit code, failure digest, full_log call; no command lists the allowlist.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,
@@ -79,6 +80,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         try writeAllowlist(w, allowed);
         return false;
     };
+    if (output_digest.logRequest(command)) |id| return output_digest.writeLog(gpa, io, root_abs, id, w);
     const entry = switch (run_command.check(allowed, command)) {
         .refused => |why| {
             if (why == .not_allowed and run_command.isToolchain(command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);
@@ -105,7 +107,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         else => |e| return e,
     };
     defer report.deinit(gpa);
-    try writeRan(w, entry, report, used, "shadow");
+    try writeRan(gpa, io, root_abs, w, entry, report, used, "shadow");
     return false;
 }
 
@@ -119,7 +121,7 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
         else => |e| return e,
     };
     defer report.deinit(gpa);
-    try writeRan(w, command, report, null, "repo");
+    try writeRan(gpa, io, root_abs, w, command, report, null, "repo");
     return false;
 }
 
@@ -155,7 +157,7 @@ fn writeRefused(w: *Writer, command: []const u8, reason: []const u8, allowed: []
     try w.writeByte('\n');
 }
 
-fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report, used: ?shadow.TreeUse, ran_in: []const u8) !void {
+fn writeRan(gpa: Allocator, io: std.Io, root_abs: []const u8, w: *Writer, command: []const u8, report: sandbox.Report, used: ?shadow.TreeUse, ran_in: []const u8) !void {
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
@@ -188,19 +190,10 @@ fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report, used: ?shad
     try js.write(report.killed_leftovers);
     try js.objectField("duration_ms");
     try js.write(report.duration_ns / std.time.ns_per_ms);
-    try writeStream(&js, "stdout", report.stdout);
-    try writeStream(&js, "stderr", report.stderr);
+    try output_digest.writeRunOutput(gpa, io, root_abs, report, &js);
     try wire.writeGateTree(&js, used);
     try js.objectField("truncated");
     try js.write(report.truncated);
     try js.endObject();
     try w.writeByte('\n');
-}
-
-fn writeStream(js: *std.json.Stringify, comptime name: []const u8, bytes: []const u8) !void {
-    const cut = run_command.tail(bytes, max_output_lines, max_output_bytes);
-    try js.objectField(name);
-    try js.write(cut.text);
-    try js.objectField(name ++ "_omitted_lines");
-    try js.write(cut.omitted_lines);
 }
