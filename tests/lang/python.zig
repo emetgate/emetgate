@@ -325,7 +325,7 @@ const with_source = "with open(p) as fh:\n    fh.read()\ntry:\n    pass\nexcept 
 const walrus_source = "def f():\n    if (n := 10) > 5:\n        n\n    [(w := x) for x in xs]\n    return w\n";
 const unpack_source = "a, *rest = c\nfor i, (j, k) in z:\n    k\n[a, b] = rest\nrest\n";
 const match_source = "match v:\n    case [first, *tail]:\n        tail\n    case Point(x=0, y=yy) as whole:\n        whole, yy, x\n    case cap:\n        cap\n    case Color.RED:\n        RED\n    case {\"k\": kv, **others}:\n        kv, others\n    case mod.Klass(z=Color.GREEN):\n        pass\n";
-const import_source = "path = 1\nimport os.path\nimport a.b as c\nfrom m.n import q\nfrom . import r\nfrom .s import t\nos, path, c, q, r, t, n, s\ndef f():\n    import json\n    return json\njson\n";
+const import_source = "path = 1\nimport os.path\nimport a.b as c\nfrom m.n import q\nfrom . import r\nfrom .s import t\nos, path, c, q, r, t, n, s\ndef f():\n    import json\n    return json\njson\ndef g():\n    import u as al\n    return al\nal\n";
 
 test "python scope: global and nonlocal statements make an assignment rebind the outer name" {
     const runtime = try test_util.openRuntime();
@@ -401,6 +401,7 @@ test "python scope: only the bound name of an import binds, and an import inside
     try expectShape(runtime, import_source, "s", ".?");
     try expectShape(runtime, import_source, "t", "aa");
     try expectShape(runtime, import_source, "json", "aa?");
+    try expectShape(runtime, import_source, "al", "aa?");
     try expectImport(runtime, import_source, "os", true);
     try expectImport(runtime, import_source, "r", true);
     try expectImport(runtime, match_source, "cap", false);

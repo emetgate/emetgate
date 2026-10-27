@@ -12437,7 +12437,9 @@
       "to": "        .rest => true,\n",
       "kills": [
         "python scope: only the bound name of an import binds, and an import inside a function stays there"
-      ]
+      ],
+      "expect_status": "survived",
+      "note": "every first element at a rest-position inert site is already taken by a binder site or by the use path before inert sites are consulted, so no Python input reaches it"
     },
     {
       "id": "PY-SC3-sole-position-matches-any",
@@ -12488,7 +12490,7 @@
       "id": "PY-SC8-function-scope-never-crossed",
       "file": "src/engine/scope.zig",
       "from": "        if (!class_scope and oneOf(ancestor.kind(), g.block_scopes)) crossed = true;\n",
-      "to": "",
+      "to": "        if (!class_scope and oneOf(ancestor.kind(), g.block_scopes)) crossed = false;\n",
       "kills": [
         "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
       ]
@@ -12518,8 +12520,7 @@
       "from": "                if (!isRebound(rebound, scope_node, name)) {\n                    const binder",
       "to": "                if (true) {\n                    const binder",
       "kills": [
-        "python scope: global and nonlocal statements make an assignment rebind the outer name",
-        "python rename: a module name is renamed through a global statement"
+        "python scope: global and nonlocal statements make an assignment rebind the outer name"
       ]
     },
     {
@@ -12656,7 +12657,9 @@
       "to": "",
       "kills": [
         "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
-      ]
+      ],
+      "expect_status": "survived",
+      "note": "the general list_splat_pattern site binds the same starred name in the same scope for every unpacking target, so dropping the pattern-scoped site changes no resolution"
     },
     {
       "id": "PY-RN16-comprehension-target-not-binder",
@@ -12760,8 +12763,8 @@
     {
       "id": "PY-PF2-assignment-not-a-binding",
       "file": "src/engine/lang/python/profile.zig",
-      "from": "    .bindings = &bindings,\n",
-      "to": "    .bindings = &.{},\n",
+      "from": ".{ .parent = \"assignment\", .value_field = \"right\", .name_field = \"left\" },",
+      "to": ".{ .parent = \"\", .value_field = \"right\", .name_field = \"left\" },",
       "kills": [
         "python profile treats a lambda as a function named by the assignment that holds it"
       ]
@@ -12770,7 +12773,7 @@
       "id": "PY-PF3-decorator-outside-class-read",
       "file": "src/engine/lang/python/profile.zig",
       "from": "    if (!std.mem.eql(u8, owner.kind(), \"block\") or !std.mem.eql(u8, class.kind(), \"class_definition\")) return .{};\n",
-      "to": "",
+      "to": "    if (!std.mem.eql(u8, owner.kind(), \"block\")) return .{};\n    _ = class;\n",
       "kills": [
         "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
       ]
@@ -12889,7 +12892,7 @@
       "id": "PY-RC4-any-parameter-taken-as-receiver",
       "file": "src/engine/facts_extract.zig",
       "from": "            if (first.startByte() != binder) continue;\n",
-      "to": "",
+      "to": "            if (first.startByte() != binder and false) continue;\n",
       "kills": [
         "python facts: a receiver is only the first parameter of a method directly in the class body"
       ]
@@ -12898,7 +12901,7 @@
       "id": "PY-RC5-function-anywhere-in-class-is-member",
       "file": "src/engine/facts_extract.zig",
       "from": "        return if (body.eql(holder)) class else null;\n",
-      "to": "        return class;\n",
+      "to": "        return if (body.eql(holder) or true) class else null;\n",
       "kills": [
         "python facts: a receiver is only the first parameter of a method directly in the class body"
       ]
@@ -12907,7 +12910,7 @@
       "id": "PY-RC6-receiver-static-flag-dropped",
       "file": "src/engine/facts_extract.zig",
       "from": "\n            is_static = class.is_static;\n",
-      "to": "\n            is_static = false;\n",
+      "to": "\n            is_static = class.is_static and false;\n",
       "kills": [
         "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
       ]
