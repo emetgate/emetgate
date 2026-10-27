@@ -841,20 +841,31 @@ pub const StagedIndex = struct {
     digest: Digest,
 };
 
+fn indexOrNone(arena: Allocator, io: std.Io, index: []const u8) !Digest {
+    if (try digestOf(arena, io, index)) |found| return found;
+    var none: Digest = undefined;
+    Sha256.hash("", &none, .{});
+    return none;
+}
+
+fn copyIndex(arena: Allocator, io: std.Io, index: []const u8, staged_abs: []const u8) !Digest {
+    const base = try indexOrNone(arena, io, index);
+    Dir.deleteFileAbsolute(io, staged_abs) catch {};
+    if (try digestOf(arena, io, index) == null) return base;
+    disk.copyWithTimes(io, index, staged_abs) catch return error.GitFailed;
+    errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
+    const copied = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
+    if (!std.mem.eql(u8, &copied, &base)) return error.IndexChanged;
+    return base;
+}
+
 pub fn stageIndex(gpa: Allocator, io: std.Io, root: []const u8, entries: []const Entry, staged_abs: []const u8) !StagedIndex {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const git = try Git.init(arena, io, root);
-    const index = try indexPath(git);
-    const bytes = Dir.cwd().readFileAlloc(io, index, arena, .limited(max_index_bytes)) catch return error.GitFailed;
-    var base: Digest = undefined;
-    Sha256.hash(bytes, &base, .{});
-    Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    disk.copyWithTimes(io, index, staged_abs) catch return error.GitFailed;
+    const base = try copyIndex(arena, io, try indexPath(git), staged_abs);
     errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    const copied = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
-    if (!std.mem.eql(u8, &copied, &base)) return error.IndexChanged;
     try applyEntries(try git.withIndex(staged_abs), entries);
     const digest = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
     return .{ .base = base, .digest = digest };
@@ -865,14 +876,8 @@ pub fn stageChecked(gpa: Allocator, io: std.Io, root: []const u8, head: Head, en
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const git = try Git.init(arena, io, root);
-    const bytes = Dir.cwd().readFileAlloc(io, head.index, arena, .limited(max_index_bytes)) catch return error.GitFailed;
-    var base: Digest = undefined;
-    Sha256.hash(bytes, &base, .{});
-    Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    disk.copyWithTimes(io, head.index, staged_abs) catch return error.GitFailed;
+    const base = try copyIndex(arena, io, head.index, staged_abs);
     errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    const copied = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
-    if (!std.mem.eql(u8, &copied, &base)) return error.IndexChanged;
 
     var private = try git.withIndex(staged_abs);
     private.hex = head.oid.len;
@@ -908,8 +913,8 @@ pub fn acquireHeld(gpa: Allocator, io: std.Io, head: Head, staged_abs: []const u
         error.PathAlreadyExists => return error.IndexLocked,
         else => return error.GitFailed,
     };
-    const now = try digestOf(arena, io, head.index);
-    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {
+    const now = try indexOrNone(arena, io, head.index);
+    if (!std.mem.eql(u8, &now, &staged.base)) {
         guard.deleteSelf() catch {};
         return error.IndexChanged;
     }
@@ -940,8 +945,8 @@ pub fn acquireIndex(gpa: Allocator, io: std.Io, root: []const u8, staged_abs: []
         error.PathAlreadyExists => return error.IndexLocked,
         else => return error.GitFailed,
     };
-    const now = try digestOf(arena, io, try indexPath(git));
-    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {
+    const now = try indexOrNone(arena, io, try indexPath(git));
+    if (!std.mem.eql(u8, &now, &staged.base)) {
         Dir.deleteFileAbsolute(io, lock) catch {};
         return error.IndexChanged;
     }
@@ -1265,6 +1270,7 @@ pub fn checkoutTree(gpa: Allocator, io: std.Io, root: []const u8, tree: []const 
         if (entry.len < 6) return error.GitFailed;
         if (holdsFile(entry[0..6])) count += 1;
     }
+    try std.Io.Dir.cwd().createDirPath(io, target_abs);
     try checkoutAll(git, private, tree, target_abs);
     return count;
 }

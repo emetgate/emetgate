@@ -10066,8 +10066,8 @@
     {
       "id": "PV10-changed-index-replaced",
       "file": "src/platform/git_commit.zig",
-      "from": "    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {\n        guard.deleteSelf() catch {};",
-      "to": "    if (false and (now == null or !std.mem.eql(u8, &now.?, &staged.base))) {\n        guard.deleteSelf() catch {};",
+      "from": "    if (!std.mem.eql(u8, &now, &staged.base)) {\n        guard.deleteSelf() catch {};",
+      "to": "    if (false and !std.mem.eql(u8, &now, &staged.base)) {\n        guard.deleteSelf() catch {};",
       "kills": [
         "commit window: an entry staged on another file between the index copy and the lock is still staged after the commit lands"
       ],
