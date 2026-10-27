@@ -260,7 +260,7 @@ const cli_cases = [_]CliCase{
         .name = "symbols json on a broken source is a typed error payload",
         .args = &.{ "symbols", "tests/fixtures/broken.ts", "--json" },
         .exit_code = 3,
-        .stdout = "{\"status\":\"error\",\"error\":\"SourceHasErrors\",\"exit_code\":3}\n",
+        .stdout = "{\"status\":\"error\",\"error\":\"SourceHasErrors\",\"exit_code\":3,\"fix\":\"the file does not parse now; fix it first with emetgate_try_batch old_string/new_string or a whole-file item\"}\n",
     },
     .{
         .name = "mutate json emits the transformed source and both hashes on one line",
