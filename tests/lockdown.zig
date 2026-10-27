@@ -148,7 +148,11 @@ test "without a .mcp.json lockdown serves the running emetgate from its own conf
     try project.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = emetgate_config });
     const found = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe, null);
     defer gpa.free(found);
-    try testing.expect(std.mem.endsWith(u8, found, lockdown.project_mcp_config_name));
+    try testing.expect(std.mem.startsWith(u8, std.fs.path.basename(found), lockdown.project_mcp_config_name));
+    try project.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = other_test_config });
+    const other = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe, null);
+    defer gpa.free(other);
+    try testing.expect(!std.mem.eql(u8, found, other));
     const copied = try std.Io.Dir.cwd().readFileAlloc(testing.io, found, gpa, .limited(lockdown.max_mcp_config_bytes));
     defer gpa.free(copied);
     try testing.expect(std.mem.indexOf(u8, copied, "docs-server.js") != null);
@@ -401,3 +405,7 @@ test "lockdown makes a folder outside any repository a git repository once, and 
     try tmp.dir.access(testing.io, "empty/.git/HEAD", .{});
     try testing.expect(!try lockdown.ensureRepo(gpa, testing.io, dir, &env));
 }
+
+const other_test_config =
+    \\{"mcpServers":{"gate":{"command":"C:/tools/Emetgate.EXE","args":["mcp","--test","npm run other"]}}}
+;

@@ -9,7 +9,7 @@ pub const claude_program = "claude";
 pub const allowed_builtin_tools = "";
 pub const mcp_config_name = ".mcp.json";
 pub const own_mcp_config_name = "mcp.json";
-pub const project_mcp_config_name = "project-mcp.json";
+pub const project_mcp_config_name = "project-mcp";
 pub const always_load_field = "alwaysLoad";
 pub const own_server_name = "emetgate";
 pub const own_server_args = [_][]const u8{"mcp"};
@@ -240,10 +240,10 @@ pub fn chooseTest(args: []const []const u8) !TestChoice {
 pub fn chooseMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir, state_dir: []const u8, exe_abs: []const u8, given_test: ?[]const u8) ![:0]u8 {
     const found = resolveMcpConfig(gpa, io, dir) catch |err| switch (err) {
         error.McpConfigMissing => {
-            const own = try std.fs.path.joinZ(gpa, &.{ state_dir, own_mcp_config_name });
-            errdefer gpa.free(own);
             const json = try ownMcpConfigJson(gpa, exe_abs, given_test);
             defer gpa.free(json);
+            const own = try configPath(gpa, state_dir, own_mcp_config_name, json);
+            errdefer gpa.free(own);
             try lockdown_slash.place(gpa, io, own, json);
             return own;
         },
@@ -259,10 +259,17 @@ pub fn chooseMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir, state_dir: [
     const loaded = alwaysLoadConfig(gpa, config) catch return gpa.dupeZ(u8, found);
     const json = loaded orelse return gpa.dupeZ(u8, found);
     defer gpa.free(json);
-    const copy = try std.fs.path.joinZ(gpa, &.{ state_dir, project_mcp_config_name });
+    const copy = try configPath(gpa, state_dir, project_mcp_config_name, json);
     errdefer gpa.free(copy);
     try lockdown_slash.place(gpa, io, copy, json);
     return copy;
+}
+
+fn configPath(gpa: Allocator, state_dir: []const u8, stem: []const u8, json: []const u8) ![:0]u8 {
+    const base = if (std.mem.endsWith(u8, stem, ".json")) stem[0 .. stem.len - ".json".len] else stem;
+    var name_buf: [96]u8 = undefined;
+    const name = try std.fmt.bufPrint(&name_buf, "{s}-{x:0>16}.json", .{ base, std.hash.Wyhash.hash(0, json) });
+    return std.fs.path.joinZ(gpa, &.{ state_dir, name });
 }
 
 pub fn childEnviron(gpa: Allocator, parent: *const std.process.Environ.Map) !std.process.Environ.Map {

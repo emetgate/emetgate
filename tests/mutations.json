@@ -14949,6 +14949,15 @@
       "kills": [
         "a body sent back with its docs folded as read keeps the full docs, a dropped doc stays dropped"
       ]
+    },
+    {
+      "id": "LKC1-shared-lockdown-config-path",
+      "file": "src/platform/lockdown.zig",
+      "from": "std.hash.Wyhash.hash(0, json)",
+      "to": "@as(u64, 0)",
+      "kills": [
+        "without a .mcp.json lockdown serves the running emetgate from its own config"
+      ]
     }
   ]
 }
