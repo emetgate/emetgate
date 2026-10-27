@@ -40,6 +40,7 @@ pub const Case = struct {
     dynamic: ?*rename_batch.DynamicSites = null,
 
     pub fn init(self: *Case, files: []const fixture.File, stub: bool) !void {
+        self.dynamic = null;
         self.repo = try TsRepo.init(files);
         errdefer self.repo.deinit();
         if (stub) try self.repo.installStub();
