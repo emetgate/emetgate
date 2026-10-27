@@ -12285,7 +12285,7 @@
       "id": "DR3-doctor-signed-out-passes",
       "file": "src/platform/doctor.zig",
       "from": "    if (signed_in) return .{ .name = \"login\", .status = .ok, .detail = \"signed in\" };",
-      "to": "    if (true) return .{ .name = \"login\", .status = .ok, .detail = \"signed in\" };",
+      "to": "    if (signed_in or true) return .{ .name = \"login\", .status = .ok, .detail = \"signed in\" };",
       "kills": [
         "doctor: a signed-out claude blocks lockdown with claude auth login, an unreadable status only warns"
       ]
@@ -12313,7 +12313,7 @@
       "id": "DR6-doctor-code-page-never-warns",
       "file": "src/platform/doctor.zig",
       "from": "    if (code_page == 0 or code_page == utf8_code_page) return",
-      "to": "    if (true) return",
+      "to": "    if (code_page == 0 or true) return",
       "kills": [
         "doctor: a non-UTF-8 console code page is a warning with chcp 65001"
       ]
@@ -12355,11 +12355,12 @@
       ]
     },
     {
-      "id": "DR11-doctor-bad-mcp-config-not-reported",
+      "id": "DR11-doctor-bad-mcp-config-only-warns",
       "file": "src/platform/doctor.zig",
-      "from": "            try checks.append(arena, mcpConfigFailure(err));\n            return .{ .name = \"tests\", .status = .fail, .detail = \"skipped: .mcp.json must be fixed first\" };",
-      "to": "            return .{ .name = \"tests\", .status = .fail, .detail = \"skipped: .mcp.json must be fixed first\" };",
+      "from": "    return .{ .name = \".mcp.json\", .status = .fail,",
+      "to": "    return .{ .name = \".mcp.json\", .status = .warn,",
       "kills": [
+        "doctor: no test command blocks lockdown, and the fix names --test",
         "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up"
       ]
     }
