@@ -150,6 +150,9 @@ pub const read_budget = src.read_budget;
 pub const mirror = src.mirror;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
+pub const rules_tui = src.rules_tui;
+pub const rules_command = src.rules_command;
+pub const console_raw = src.console_raw;
 
 comptime {
     for (@typeInfo(src).@"struct".decls) |decl| {
