@@ -11,7 +11,7 @@ const gpa = testing.allocator;
 const Value = std.json.Value;
 
 const app_js = "export function total(a, b) {\n  return a + b;\n}\n";
-const fails_on_broken = "cmd /c \"findstr BROKEN src\\app.js && exit 1 || exit 0\"";
+const fails_on_broken = "(findstr BROKEN src\\app.js >nul && exit 1 || exit 0)";
 
 const Reply = struct {
     parsed: std.json.Parsed(Value),
