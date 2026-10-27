@@ -5,6 +5,7 @@ const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
+const test_command_mod = @import("../platform/test_command.zig");
 const commit_message = @import("../platform/commit_message.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const search_session_mod = @import("../platform/search_session.zig");
@@ -19,6 +20,7 @@ pub const Policy = struct {
     test_command: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
     allow_repo_config: bool = false,
+    detect_test: bool = false,
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
@@ -91,6 +93,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.test_command = command;
+        } else if (std.mem.eql(u8, arg, "--detect-test")) {
+            if (policy.detect_test) return null;
+            policy.detect_test = true;
         } else if (std.mem.eql(u8, arg, "--allow-run")) {
             if (i + 1 >= args.len or policy.allow_run_len == run_command.max_entries) return null;
             i += 1;
@@ -163,7 +168,7 @@ pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestP
     if (args) |a| {
         if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null or tool_result.getField(a, "allow_repo_memory") != null or tool_result.getField(a, "shadow_root") != null) return error.ModelSuppliedTestPolicy;
     }
-    return policy.test_command orelse "";
+    return policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "";
 }
 
 pub fn trustedTypecheckCommand(policy: Policy) []const u8 {

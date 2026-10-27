@@ -239,7 +239,7 @@ test "rename: the tool answers with the class, the resolver, the evidence and ev
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, result.text, .{});
     defer parsed.deinit();
     const body = parsed.value.object;
-    try testing.expectEqualStrings("committed", body.get("status").?.string);
+    try testing.expectEqualStrings("written", body.get("status").?.string);
     try testing.expectEqualStrings("symmetry", body.get("class").?.string);
     try testing.expectEqualStrings("language_service", body.get("resolver").?.string);
     try testing.expectEqualStrings("sum", body.get("new_symbol").?.string);

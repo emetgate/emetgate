@@ -127,6 +127,7 @@ pub const lockdown = @import("platform/lockdown.zig");
 pub const lockdown_marks = @import("platform/lockdown_marks.zig");
 pub const lockdown_slash = @import("platform/lockdown_slash.zig");
 pub const doctor = @import("platform/doctor.zig");
+pub const test_command = @import("platform/test_command.zig");
 pub const memory = @import("platform/memory.zig");
 pub const journal = @import("platform/journal.zig");
 pub const where = @import("platform/where.zig");

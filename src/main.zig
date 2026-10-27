@@ -36,7 +36,7 @@ const usage =
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory] [--search-internals]
+    \\       emetgate mcp [--test <command> | --detect-test] [--typecheck <command>] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory] [--search-internals]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++
@@ -47,7 +47,7 @@ const usage =
     \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
     \\       emetgate commit -m <message> [--shadow-root <dir>]
-    \\       emetgate lockdown [--no-marks] [<claude args>...]
+    \\       emetgate lockdown [--test <command>] [--no-marks] [<claude args>...]
     \\       emetgate doctor   (first run: checks claude, git, the test command and the sandbox; exit 1 if lockdown would not work)
     \\       emetgate --version | help
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
@@ -87,6 +87,12 @@ const usage =
     \\It also loads a plugin from the same place (--plugin-dir) that only draws: it marks
     \\each emetgate write in the transcript as passed or refused. /golem off, /golem on
     \\and /golem scene switch it inside claude; lockdown --no-marks starts without it.
+    \\Without a .mcp.json, lockdown --test <command> sets the server's test command;
+    \\with neither, the server finds one before each write (package.json scripts.test,
+    \\build.zig, Cargo.toml, go.mod, pyproject.toml, pytest.ini, .sln/.csproj) and,
+    \\while there is none, writes land untested with status unverified_no_tests.
+    \\Outside a git repository lockdown runs git init first and says so on stderr.
+    \\User settings and their hooks are not loaded (--setting-sources project).
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
     \\For mutate/try with --hash <hex> (an existing symbol), --body/--body-file is

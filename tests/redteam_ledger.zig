@@ -382,7 +382,7 @@ test "redteam ledger: over mcp only the flag emetgate was started with trusts a 
         const trusted = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .allow_repo_memory = true, .root = clone.root_abs });
         defer gpa.free(trusted);
         errdefer std.debug.print("{s}: {s}\n", .{ tool, trusted });
-        try testing.expect(std.mem.indexOf(u8, trusted, "\\\"status\\\":\\\"committed\\\"") != null);
+        try testing.expect(std.mem.indexOf(u8, trusted, "\\\"status\\\":\\\"written\\\"") != null);
         try testing.expect(clone.markerExists());
     }
 }

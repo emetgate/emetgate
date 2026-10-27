@@ -6,6 +6,7 @@ const tool_result = @import("tool_result.zig");
 const policy_mod = @import("policy.zig");
 const repo = @import("../platform/repo.zig");
 const run_command = @import("../platform/run_command.zig");
+const test_command = @import("../platform/test_command.zig");
 const sandbox = @import("../platform/sandbox.zig");
 
 const Allocator = std.mem.Allocator;
@@ -17,7 +18,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Runs one allowlisted command in a sandbox copy: exit code and last 200 lines per stream; no command lists the allowlist.";
+pub const description = "Runs one allowlisted command (the test command included) in a sandbox copy: exit code and last 200 lines per stream; no command lists the allowlist.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,
@@ -33,6 +34,12 @@ fn loadAllowlist(gpa: Allocator, io: std.Io, root_abs: []const u8, policy: *cons
     var list: Allowlist = .{};
     errdefer list.deinit(gpa);
     try list.items.appendSlice(gpa, policy.allowedRuns());
+    const tests: ?[]const u8 = policy.test_command orelse if (policy.detect_test) try test_command.detectIn(gpa, io, root_abs) else null;
+    if (tests) |command| {
+        if (run_command.validateEntry(command)) |_| {
+            if (run_command.match(list.items.items, command) == null) try list.items.append(gpa, command);
+        } else |_| {}
+    }
     if (policy.allow_repo_config) {
         list.repo_runs = try run_command.repoConfigRuns(gpa, io, root_abs);
         for (list.repo_runs.?.entries()) |entry| {

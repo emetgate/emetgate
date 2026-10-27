@@ -14048,6 +14048,169 @@
         "doctor: no test command blocks lockdown, and the fix names --test",
         "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up"
       ]
+    },
+    {
+      "id": "BLD1-user-settings-loaded",
+      "file": "src/platform/lockdown.zig",
+      "from": "const user_settings_off = [_][]const u8{ setting_sources_flag, setting_sources };",
+      "to": "const user_settings_off = [_][]const u8{};",
+      "kills": [
+        "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args"
+      ]
+    },
+    {
+      "id": "BLD2-setting-sources-not-reserved",
+      "file": "src/platform/lockdown.zig",
+      "from": "    \"--setting-sources\",\n",
+      "to": "",
+      "kills": [
+        "a passthrough arg that would override the lock is refused in both spellings"
+      ]
+    },
+    {
+      "id": "BLD3-own-config-without-detect",
+      "file": "src/platform/lockdown.zig",
+      "from": "    } else try js.write(detect_flag);",
+      "to": "    }",
+      "kills": [
+        "lockdown's own config hands the server --test with a given command and --detect-test without one"
+      ]
+    },
+    {
+      "id": "BLD4-test-with-mcp-json-accepted",
+      "file": "src/platform/lockdown.zig",
+      "from": "    if (given_test != null) {",
+      "to": "    if (false) {",
+      "kills": [
+        "lockdown --test with the project's own .mcp.json is refused, since that config sets the server's arguments"
+      ]
+    },
+    {
+      "id": "BLD5-blank-test-command-accepted",
+      "file": "src/platform/lockdown.zig",
+      "from": "if (args.len < 2 or std.mem.trim(u8, args[1], \" \\t\").len == 0) return error.LockdownTestCommandMissing;",
+      "to": "if (args.len < 2) return error.LockdownTestCommandMissing;",
+      "kills": [
+        "lockdown --test takes the next argument or the joined value and leaves the rest to claude"
+      ]
+    },
+    {
+      "id": "BLD6-git-init-inside-a-repository",
+      "file": "src/platform/lockdown.zig",
+      "from": "    if (try gitSucceeds(gpa, io, git, dir_abs, env, &.{ \"rev-parse\", \"--show-toplevel\" })) return false;",
+      "to": "",
+      "kills": [
+        "lockdown makes a folder outside any repository a git repository once, and leaves a repository alone"
+      ]
+    },
+    {
+      "id": "BLD7-unverified-not-flagged",
+      "file": "src/platform/test_command.zig",
+      "from": "    unverified = true;\n",
+      "to": "",
+      "kills": [
+        "test detection: detect mode resolves per write, falls back to an unverified pass, and reports it once",
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "BLD8-npm-placeholder-counts-as-tests",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (std.mem.indexOf(u8, script.string, npm_placeholder) != null) return false;\n",
+      "to": "",
+      "kills": [
+        "test detection: an empty folder, npm's placeholder script and a package without scripts name no test command"
+      ]
+    },
+    {
+      "id": "BLD9-markers-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "if (dir.access(io, marker.file, .{})) |_| return marker.command else |_| {}",
+      "to": "_ = marker;",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "BLD10-empty-command-detects",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (!detecting) return error.NoTestCommand;\n",
+      "to": "",
+      "kills": [
+        "test detection: detect mode resolves per write, falls back to an unverified pass, and reports it once"
+      ]
+    },
+    {
+      "id": "BLD11-unverified-status-dropped",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (test_command_mod.takeUnverified()) {",
+      "to": "    if (false) {",
+      "kills": [
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "BLD12-commit-not-promoted",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "    try promote(gpa, w);\n",
+      "to": "",
+      "kills": [
+        "commit on write: an accepted try is one commit with the given message and bytes, and its receipt rides on it"
+      ]
+    },
+    {
+      "id": "BLD13-uncommitted-write-says-committed",
+      "file": "src/protocol/wire.zig",
+      "from": "pub const written_status = \"written\";",
+      "to": "pub const written_status = \"committed\";",
+      "kills": [
+        "test detection: a write that ran a test without a commit says written, not committed"
+      ]
+    },
+    {
+      "id": "BLD14-run-allowlist-without-test",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    const tests: ?[]const u8 = policy.test_command orelse if (policy.detect_test) try test_command.detectIn(gpa, io, root_abs) else null;",
+      "to": "    const tests: ?[]const u8 = null;",
+      "kills": [
+        "test detection: the run allowlist carries the given or detected test command"
+      ]
+    },
+    {
+      "id": "BLD15-detect-policy-ignored",
+      "file": "src/protocol/policy.zig",
+      "from": "    return policy.test_command orelse if (policy.detect_test) test_command_mod.detect else \"\";",
+      "to": "    return policy.test_command orelse \"\";",
+      "kills": [
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "BLD16-detect-flag-repeatable",
+      "file": "src/protocol/policy.zig",
+      "from": "            if (policy.detect_test) return null;\n",
+      "to": "",
+      "kills": [
+        "test detection: --detect-test is parsed once"
+      ]
+    },
+    {
+      "id": "BLD17-new-directory-has-no-root",
+      "file": "src/platform/repo.zig",
+      "from": "    return gitToplevel(gpa, io, existingAncestor(io, file_abs) orelse return error.InvalidPath);",
+      "to": "    return gitToplevel(gpa, io, file_abs);",
+      "kills": [
+        "test detection: detect mode resolves per write, falls back to an unverified pass, and reports it once"
+      ]
+    },
+    {
+      "id": "BLD18-no-test-command-without-fix",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (std.mem.eql(u8, name, \"NoTestCommand\")) return no_test_command_fix;\n",
+      "to": "",
+      "kills": [
+        "test detection: a server with no test command and no detection refuses the write with the fix for the user"
+      ]
     }
   ]
 }
