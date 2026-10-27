@@ -126,6 +126,7 @@ const field_declarations = [_]DeclarationShape{
 
 pub const declarations: Declarations = .{
     .types = &type_declarations,
+    .wrappers = &.{"decorated_definition"},
     .variable_statements = &.{"assignment"},
     .value_field = "right",
     .fields = &field_declarations,

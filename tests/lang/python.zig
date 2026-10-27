@@ -447,3 +447,20 @@ test "python declarations: a module-level assignment is a variable and an unpack
     }
     try testing.expectEqualStrings("LIMIT name C size ", names.items);
 }
+
+test "python declarations: a decorated class and its annotated fields are declared, and the class span starts at its decorator" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try snapshotOf(runtime, "@dataclass\nclass P:\n    x: int = 0\n    y: int\n\n\n@deco\ndef f():\n    pass\n");
+    defer snapshot.destroy();
+    const found = try emetgate.declarations.collect(arena.allocator(), python, snapshot.tree);
+    var names: std.ArrayList(u8) = .empty;
+    for (found) |d| {
+        try names.appendSlice(arena.allocator(), snapshot.tree.text(d.name));
+        try names.append(arena.allocator(), ' ');
+    }
+    try testing.expectEqualStrings("P x y ", names.items);
+    try testing.expectEqual(@as(u32, 0), found[0].declaration.start);
+}

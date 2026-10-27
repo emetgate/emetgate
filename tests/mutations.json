@@ -15221,6 +15221,15 @@
       "kills": [
         "rename facts: an unproven reference refuses the rename and names every site it could not prove"
       ]
+    },
+    {
+      "id": "L4G-declaration-wrappers-skipped",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .wrappers = &.{\"decorated_definition\"},",
+      "to": "",
+      "kills": [
+        "python declarations: a decorated class and its annotated fields are declared, and the class span starts at its decorator"
+      ]
     }
   ]
 }

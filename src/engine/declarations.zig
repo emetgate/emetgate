@@ -269,6 +269,14 @@ fn descend(collector: *Collector, profile: *const Profile, node: ts.Node, scope:
             while (child.namedChild(j)) |inner| : (j += 1) try collector.statement(inner, current);
             continue;
         }
+        if (oneOf(child.kind(), profile.declarations.wrappers)) {
+            var j: u32 = 0;
+            while (child.namedChild(j)) |inner| : (j += 1) {
+                try collector.statement(inner, current);
+                if (oneOf(inner.kind(), profile.declarations.containers)) try descend(collector, profile, inner, try collector.within(inner, current));
+            }
+            continue;
+        }
         if (oneOf(child.kind(), profile.file_scoped_containers)) {
             current = try collector.within(child, scope);
             continue;

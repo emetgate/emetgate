@@ -178,6 +178,7 @@ pub const Declarations = struct {
     destructuring: []const []const u8 = &.{},
     static_keyword: ?[]const u8 = null,
     containers: []const []const u8 = &.{},
+    wrappers: []const []const u8 = &.{},
     variable_declarator: []const u8 = "",
     variable_name_field: []const u8 = "name",
     items: Items = .{},
