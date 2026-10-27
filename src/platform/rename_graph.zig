@@ -194,6 +194,7 @@ const Locator = struct {
     parent: ?Place,
     sites: ?*Sites = null,
     proven: std.ArrayList(Place) = .empty,
+    elsewhere: std.ArrayList(Place) = .empty,
 
     fn prove(self: *Locator, file: u32, start: u32) !void {
         const at: Place = .{ .file = file, .index = start };
@@ -288,12 +289,23 @@ const Locator = struct {
                     .member_of_type => |t| st.facts.types[t],
                     else => continue,
                 };
-                if (t.target != .unresolved or !std.mem.eql(u8, t.member, parent.name)) continue;
+                if (t.target != .unresolved) continue;
                 const node = rename.leafAt(snapshot.tree.root(), .{ .start = ref.start, .end = ref.start + @as(u32, @intCast(self.old.len)) }) orelse continue;
-                const found = (try self.globalType(file, node, parent.name)) orelse continue;
-                if (found.eql(parent_at)) try self.prove(file, ref.start);
+                const found = (try self.globalType(file, node, t.member)) orelse continue;
+                if (found.eql(parent_at)) {
+                    try self.prove(file, ref.start);
+                } else if (!graph.hasBase(found)) {
+                    try self.elsewhere.append(self.gpa, .{ .file = file, .index = ref.start });
+                }
             }
         }
+    }
+
+    fn isElsewhere(self: *const Locator, file: u32, start: u32) bool {
+        for (self.elsewhere.items) |known| {
+            if (known.file == file and known.index == start) return true;
+        }
+        return false;
     }
 
     fn globalType(self: *const Locator, file: u32, node: ts.Node, name: []const u8) !?Place {
@@ -387,7 +399,7 @@ const Locator = struct {
             for (leaves) |leaf| {
                 if (self.isProven(file, leaf.span.start)) continue;
                 if (declares(st.facts.defs, leaf.span.start)) continue;
-                if (linkedElsewhere(st, leaf.span.start)) continue;
+                if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;
                 if (resolution.binderAt(leaf.span)) |b| {
                     if (!resolution.binders[b].import) continue;
                 }
@@ -491,6 +503,7 @@ pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, f
 
     var locator: Locator = .{ .gpa = gpa, .graph = &graph, .old = old, .target = target_place, .parent = parent, .sites = sites };
     defer locator.proven.deinit(gpa);
+    defer locator.elsewhere.deinit(gpa);
     try locator.refuseLookalikes();
     try locator.proveLinked();
     if (global_types) try locator.proveGlobal();

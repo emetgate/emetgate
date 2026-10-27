@@ -5331,13 +5331,13 @@
       "from": "        if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;",
       "to": "        if (a.len != b.len) return error.AlphaMismatch;",
       "kills": [
-        "rename: renaming one of two same-named properties in a statement breaks its alpha hash"
+        "rename: renaming one of two free uses of a name breaks its alpha hash"
       ]
     },
     {
       "id": "RN2-symbol-alpha-check-skipped",
       "file": "src/engine/rename.zig",
-      "from": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;",
+      "from": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (std.mem.eql(u8, &b_hash, &try alpha.hashDistinct(gpa, next, a.declaration, next_spans))) matched = true;",
       "to": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (b_hash.len != 0) matched = true;",
       "expect_status": "survived",
       "note": "defense in depth: every symbol a rename touches lies inside a touched top-level statement, and equal name partitions over the statement imply equal ones over any part of it, so the per-symbol comparison only repeats the statement check; it is kept because it also checks that every symbol keeps its ref"
@@ -15590,6 +15590,88 @@
       "to": "        try e.varint(if (b.submodule == facts.none) 0 else b.submodule);",
       "kills": [
         "fact store: a saved store keeps the submodule a Python from-import may name"
+      ]
+    },
+    {
+      "id": "L5V-csharp-initializer-members-not-bound",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (std.mem.eql(u8, kind, initializer.entry)) try self.initializedMember(node, depth, initializer);",
+      "to": "if (std.mem.eql(u8, kind, initializer.entry)) {}",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5W-csharp-with-initializer-not-bound",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .{ .entry = \"with_initializer\", .owner = \"with_expression\", .object_is_owner = false },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5X-csharp-initializer-name-is-a-use",
+      "file": "src/engine/lang/csharp/rename.zig",
+      "from": "    .{ .parent = \"assignment_expression\", .field = \"left\", .grandparent = \"initializer_expression\" },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5Y-member-of-other-class-unaccounted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;",
+      "to": "                if (linkedElsewhere(st, leaf.span.start)) continue;",
+      "kills": [
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+      ]
+    },
+    {
+      "id": "L5Z-member-of-derived-class-set-aside",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                } else if (!graph.hasBase(found)) {",
+      "to": "                } else {",
+      "expect_status": "survived",
+      "note": "defense in depth: a class with a base that declares the member again is already refused by the hierarchy check before any reference is accounted"
+    },
+    {
+      "id": "L6A-alpha-renamed-members-not-apart",
+      "file": "src/engine/alpha.zig",
+      "from": "            const renamed = member and within(distinct, node.startByte(), node.endByte());",
+      "to": "            const renamed = false;",
+      "kills": [
+        "rename: renaming one of two same-named properties keeps the other apart in the alpha hash",
+        "rename facts: same-named Python methods of two classes on one line are told apart by their class",
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+      ]
+    },
+    {
+      "id": "L6B-alpha-renamed-plain-names-apart",
+      "file": "src/engine/alpha.zig",
+      "from": "            const member = oneOf(kind, g.property_kinds) or scope.isProperty(g, node) or scope.isExternal(g, node);",
+      "to": "            const member = true;",
+      "kills": [
+        "rename: renaming one of two free uses of a name breaks its alpha hash"
+      ]
+    },
+    {
+      "id": "L6C-verify-renamed-members-not-apart",
+      "file": "src/verify/checker.zig",
+      "from": "            const hx = alpha.hashDistinct(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }, changed.before) catch return false;",
+      "to": "            const hx = alpha.hashDistinct(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }, &.{}) catch return false;",
+      "kills": [
+        "verify: a rename of one of two same-named methods on a line verifies by alpha hash"
+      ]
+    },
+    {
+      "id": "L6D-region-alpha-new-spans-dropped",
+      "file": "src/engine/rename.zig",
+      "from": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans);",
+      "to": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), &.{});",
+      "kills": [
+        "rename: renaming one of two same-named properties keeps the other apart in the alpha hash"
       ]
     }
   ]

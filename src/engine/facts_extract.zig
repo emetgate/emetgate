@@ -805,6 +805,35 @@ const Extractor = struct {
         }
     }
 
+    fn initializerOwner(self: *const Extractor, depth: usize, initializer: *const profile_mod.Initializer) ?ts.Node {
+        if (depth == 0) return null;
+        const parent = self.path.items[depth - 1].node;
+        const list = initializer.list orelse return if (std.mem.eql(u8, parent.kind(), initializer.owner)) parent else null;
+        if (depth < 2 or !std.mem.eql(u8, parent.kind(), list)) return null;
+        const owner = self.path.items[depth - 2].node;
+        if (!std.mem.eql(u8, owner.kind(), initializer.owner)) return null;
+        const field = initializer.owner_list_field orelse return owner;
+        const held = owner.childByField(field) orelse return null;
+        return if (held.eql(parent)) owner else null;
+    }
+
+    fn initializedMember(self: *Extractor, node: ts.Node, depth: usize, initializer: *const profile_mod.Initializer) Error!void {
+        const owner = self.initializerOwner(depth, initializer) orelse return;
+        const property = (if (initializer.name_field) |field| node.childByField(field) else node.namedChild(0)) orelse return;
+        if (!std.mem.eql(u8, property.kind(), self.profile.identifier)) return;
+        const object = if (initializer.object_is_owner) owner else owner.namedChild(0) orelse return;
+        const start = property.startByte();
+        try self.skipped_uses.put(self.arena, start, {});
+        const name = try self.text(property);
+        const from = try self.ownerAt(node.startByte());
+        if (self.inError()) return self.addRef(.{ .from = from, .kind = .write, .name = name, .start = start, .line = lineOf(property), .target = .{ .unresolved = .parse_error } });
+        const target = try self.memberTarget(self.strip(object));
+        switch (target) {
+            .unresolved => return self.addLoose(name),
+            else => return self.addRef(.{ .from = from, .kind = .write, .name = name, .start = start, .line = lineOf(property), .target = target }),
+        }
+    }
+
     fn qualifiedType(self: *Extractor, node: ts.Node) Error!void {
         const module = node.childByField(self.f.qualified_module_field) orelse return;
         const name = node.childByField(self.f.qualified_name_field) orelse return;
@@ -895,6 +924,9 @@ const Extractor = struct {
                 continue;
             }
             if (std.mem.eql(u8, kind, self.f.member)) try self.member(node, depth, entry.field);
+            for (self.f.initializers) |*initializer| {
+                if (std.mem.eql(u8, kind, initializer.entry)) try self.initializedMember(node, depth, initializer);
+            }
             if (self.f.qualified_type) |qualified| if (std.mem.eql(u8, kind, qualified)) try self.qualifiedType(node);
             if (std.mem.eql(u8, kind, self.profile.call.node)) try self.call(node);
             if (std.mem.eql(u8, kind, self.g.subscript)) self.subscriptRead(node, depth, entry.field);

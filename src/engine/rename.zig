@@ -365,9 +365,9 @@ pub fn applyWith(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const 
     errdefer next.destroy();
     if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;
 
-    const regions = try compareRegions(gpa, checked, next, expanded.targets);
+    const regions = try compareRegions(gpa, checked, next, expanded.targets, renamed.wholes);
     try checkSurvivors(gpa, next, old);
-    const symbols_checked = try compareSymbols(gpa, checked, next, old, new, expanded.targets);
+    const symbols_checked = try compareSymbols(gpa, checked, next, old, new, expanded.targets, renamed.wholes);
 
     return .{ .snapshot = next, .spans = try gpa.dupe(Span, renamed.wholes), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
 }
@@ -408,7 +408,7 @@ fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const S
     return checked;
 }
 
-fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []const Span) Error!usize {
+fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []const Span, next_spans: []const Span) Error!usize {
     const before = base.tree.root();
     const after = next.tree.root();
     if (before.childCount() != after.childCount()) return error.AlphaMismatch;
@@ -422,8 +422,8 @@ fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []con
         if (!touched) continue;
         const twin = after.child(i).?;
         if (!std.mem.eql(u8, statement.kind(), twin.kind())) return error.AlphaMismatch;
-        const a = try alphaHash(gpa, base, nodeSpan(statement));
-        const b = try alphaHash(gpa, next, nodeSpan(twin));
+        const a = try alpha.hashDistinct(gpa, base, nodeSpan(statement), spans);
+        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans);
         if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;
         checked += 1;
     }
@@ -505,7 +505,7 @@ fn functionNameRenamed(gpa: Allocator, snapshot: *const Snapshot, found: symbol.
     return false;
 }
 
-fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const u8, new: []const u8, spans: []const Span) Error!usize {
+fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const u8, new: []const u8, spans: []const Span, next_spans: []const Span) Error!usize {
     const before = try base.symbols();
     const after = next.symbols() catch |err| switch (err) {
         error.SourceHasErrors => return error.MutationSyntaxInvalid,
@@ -524,23 +524,23 @@ fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const
     }
     if (before.symbols.len != after.symbols.len) return error.AlphaMismatch;
     for (before.symbols) |b| {
-        const b_hash = try alphaHash(gpa, base, b.declaration);
+        const b_hash = try alpha.hashDistinct(gpa, base, b.declaration, spans);
         const renamed = try functionNameRenamed(gpa, base, b, spans);
         var matched = false;
         for (after.symbols) |a| {
             if (!mapping.same(b.ref, a.ref, renamed)) continue;
-            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;
+            if (std.mem.eql(u8, &b_hash, &try alpha.hashDistinct(gpa, next, a.declaration, next_spans))) matched = true;
         }
         if (!matched) return error.AlphaMismatch;
     }
     if (before.declarations.len != after.declarations.len) return error.AlphaMismatch;
     for (before.declarations) |b| {
-        const b_hash = try alphaHash(gpa, base, b.declaration);
+        const b_hash = try alpha.hashDistinct(gpa, base, b.declaration, spans);
         const renamed = startsWithin(spans, b.name.startByte());
         var matched = false;
         for (after.declarations) |a| {
             if (a.kind != b.kind or !mapping.same(b.ref, a.ref, renamed)) continue;
-            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;
+            if (std.mem.eql(u8, &b_hash, &try alpha.hashDistinct(gpa, next, a.declaration, next_spans))) matched = true;
         }
         if (!matched) return error.AlphaMismatch;
     }
@@ -660,14 +660,26 @@ test "rename: a wrong rename inside a top-level block that is no symbol is caugh
     try testing.expectEqualStrings("function plus(a: number): number { return a; }\nlet total = plus(1);\n{ const add = 2; total += add; }\n", renamed.snapshot.source);
 }
 
-test "rename: renaming one of two same-named properties in a statement breaks its alpha hash" {
+test "rename: renaming one of two same-named properties keeps the other apart in the alpha hash" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const source = "const o = { run: 1 };\nconst p = { run: 2 };\nconsole.log(o.run + p.run);\n";
     const base = try test_util.snapshotOf(runtime, source);
     defer base.destroy();
     const one = [_]Span{ spanOf(source, "{ run", 0, "run"), spanOf(source, "o.run", 0, "run") };
-    try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "run", "go", &one));
+    const renamed = try apply(testing.allocator, base, "run", "go", &one);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("const o = { go: 1 };\nconst p = { run: 2 };\nconsole.log(o.go + p.run);\n", renamed.snapshot.source);
+}
+
+test "rename: renaming one of two free uses of a name breaks its alpha hash" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "console.log(run, run);\n";
+    const base = try test_util.snapshotOf(runtime, source);
+    defer base.destroy();
+    const one = [_]Span{spanOf(source, "run", 0, "run")};
+    try testing.expectError(error.AlphaMismatch, applyWith(testing.allocator, base, "run", "go", &one, .{ .free_uses = true }));
 }
 
 test "rename: renaming a class and only one of an interface merged with it is refused, renaming both is accepted" {

@@ -818,3 +818,60 @@ test "rename facts: a Python absolute import inside a package reaches the root m
     try testing.expectError(error.RenameUnresolved, ambiguous.planWith("m.py", "helper", "assist", true, &sites));
     try testing.expectEqualStrings("tools/run.py:1", sites.list());
 }
+
+test "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Pt.cs", .text = "namespace App;\npublic record Pt\n{\n    public int X { get; init; }\n}\n" },
+        .{ .rel = "Use.cs", .text = "namespace App;\npublic static class Use\n{\n    public static Pt Move(Pt p) => p with { X = 4 };\n    public static Pt Make(int X) => new Pt() { X = X };\n    public static Pt Bare() => new Pt { X = 1 };\n}\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("Pt.cs", "App.Pt.X", "Left", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "Pt.cs", "namespace App;\npublic record Pt\n{\n    public int Left { get; init; }\n}\n");
+    try expectSource(planned, "Use.cs", "namespace App;\npublic static class Use\n{\n    public static Pt Move(Pt p) => p with { Left = 4 };\n    public static Pt Make(int X) => new Pt() { Left = X };\n    public static Pt Bare() => new Pt { Left = 1 };\n}\n");
+}
+
+test "rename facts: a C# initializer whose type is not written at the new is refused at its line" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Box.cs", .text = "namespace App;\npublic class Box\n{\n    public int Size { get; set; }\n}\n" },
+        .{ .rel = "Use.cs", .text = "namespace App;\npublic static class Use\n{\n    public static Box Make() { Box b = new() { Size = 3 }; return b; }\n}\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("Box.cs", "App.Box.Size", "Width", true, &sites));
+    try testing.expectEqualStrings("Use.cs:4", sites.list());
+}
+
+test "rename facts: a same-named C# property of another class is left alone beside the renamed one" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Box.cs", .text = "namespace App;\npublic class Box\n{\n    public int Size { get; set; }\n}\npublic class Bag\n{\n    public int Size { get; set; }\n}\n" },
+        .{ .rel = "Use.cs", .text = "namespace App;\npublic static class Use\n{\n    public static int Make(Box b, Bag g) => b.Size + g.Size + new Bag { Size = 2 }.Size;\n}\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("Box.cs", "App.Box.Size", "Width", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "Box.cs", "namespace App;\npublic class Box\n{\n    public int Width { get; set; }\n}\npublic class Bag\n{\n    public int Size { get; set; }\n}\n");
+    try expectSource(planned, "Use.cs", "namespace App;\npublic static class Use\n{\n    public static int Make(Box b, Bag g) => b.Width + g.Size + new Bag { Size = 2 }.Size;\n}\n");
+}
+
+test "rename facts: a same-named C# property of a derived class is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Box.cs", .text = "namespace App;\npublic class Box\n{\n    public virtual int Size { get; set; }\n}\npublic class Bag : Box\n{\n    public override int Size { get; set; }\n}\n" },
+        .{ .rel = "Use.cs", .text = "namespace App;\npublic static class Use\n{\n    public static int Make(Box b, Bag g) => b.Size + g.Size;\n}\n" },
+    });
+    defer case.deinit();
+    try testing.expectError(error.RenameUnresolved, case.plan("Box.cs", "App.Box.Size", "Width", true));
+}
+
+test "rename facts: same-named Python methods of two classes on one line are told apart by their class" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "class A:\n    def run(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef main():\n    return A().run() + B().run()\n" }});
+    defer case.deinit();
+    const planned = try case.plan("m.py", "A.run", "go", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "m.py", "class A:\n    def go(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef main():\n    return A().go() + B().run()\n");
+}

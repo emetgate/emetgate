@@ -296,6 +296,30 @@ test "verify: a rename's symmetry receipt verifies by alpha hash without running
     try testing.expectEqualStrings("rename", result.report.receipts[0].operation);
 }
 
+test "verify: a rename of one of two same-named methods on a line verifies by alpha hash" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.repo.write("m.py", "class A:\n    def run(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef main():\n    return A().run() + B().run()\n");
+    try case.commit("methods");
+    const file = try case.repo.abs(case.arena(), "m.py");
+    const hash = symbol.formatHash(try support.hashOfRef(testing.allocator, testing.io, case.runtime, file, "A.run"));
+    var args: std.json.ObjectMap = .empty;
+    try args.put(case.arena(), "file", .{ .string = file });
+    try args.put(case.arena(), "symbol", .{ .string = "A.run" });
+    try args.put(case.arena(), "hash", .{ .string = try case.arena().dupe(u8, &hash) });
+    try args.put(case.arena(), "new_name", .{ .string = "go" });
+    _ = try case.call("emetgate_rename", args, green);
+    const renamed = try case.repo.read("m.py");
+    defer testing.allocator.free(renamed);
+    try testing.expectEqualStrings("class A:\n    def go(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef main():\n    return A().go() + B().run()\n", renamed);
+    try case.commit("rename");
+    _ = try case.attach();
+    const result = try case.verify(.{ .commit = "HEAD", .skip_tests = true });
+    try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
+}
+
 test "verify: a spending change relabelled as a symmetric rename fails the alpha hash" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

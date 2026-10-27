@@ -235,6 +235,15 @@ pub const Construction = struct {
     parent_type_field: ?[]const u8 = null,
 };
 
+pub const Initializer = struct {
+    entry: []const u8,
+    name_field: ?[]const u8 = null,
+    list: ?[]const u8 = null,
+    owner: []const u8,
+    owner_list_field: ?[]const u8 = null,
+    object_is_owner: bool,
+};
+
 pub const Facts = struct {
     member: []const u8,
     object_field: []const u8,
@@ -271,6 +280,7 @@ pub const Facts = struct {
     receiver_parameter: ?[]const u8 = null,
     member_wrappers: []const []const u8 = &.{},
     constructions: []const Construction = &.{},
+    initializers: []const Initializer = &.{},
     calls_construct: bool = false,
     sole_binder_types: bool = false,
     class_body_field: []const u8 = "body",
