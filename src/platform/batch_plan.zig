@@ -263,8 +263,9 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const removed = try removal.remove(base, ref, expected);
     errdefer removed.snapshot.destroy();
-    const declaration = (try (try base.symbols()).resolve(ref)).declaration;
+    const declaration = removed.span;
     const offset = try nameOffset(gpa, base, ref.name, declaration);
+    const local = deletionScope(base, ref, removed);
     const holes = try gpa.dupe(symbol.Hole, &.{.{ .old = removed.cut, .new = .{ .start = removed.cut.start, .end = removed.cut.start } }});
     return .{
         .rel = rel,
@@ -272,12 +273,29 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
         .base_hash = symbol.hashOf(base.source),
         .hash = expected,
         .snapshot = removed.snapshot,
-        .removed = symmetry.inspect(base, removed.cut),
+        .removed = local,
         .removed_span = declaration,
         .name_offset = offset,
         .base = base,
         .holes = holes,
     };
+}
+
+pub fn deletionScope(base: *const Snapshot, ref: symbol.Ref, removed: removal.Removed) ?symmetry.Local {
+    const top_level = ref.container.len == 0 and (removed.role == .symbol or removed.role == .declaration) and !requires(base, removed.span);
+    return switch (removed.role) {
+        .statement, .property => null,
+        else => if (top_level) symmetry.inspect(base, removed.cut) else .{ .parses = true, .no_top_level_effect = true, .exported = false },
+    };
+}
+
+fn requires(base: *const Snapshot, span: symbol.Span) bool {
+    const root = base.tree.root();
+    var i: u32 = 0;
+    while (root.namedChild(i)) |node| : (i += 1) {
+        if (node.startByte() <= span.start and span.start < node.endByte()) return cas.importLike(base.profile, base.tree, node);
+    }
+    return false;
 }
 
 pub fn nameOffset(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, declaration: symbol.Span) !?u32 {
@@ -378,4 +396,29 @@ pub fn quotedAnywhere(gpa: Allocator, io: std.Io, root: []const u8, name: []cons
         }
     }
     return false;
+}
+
+const test_util = @import("../engine/test_util.zig");
+
+fn scopeOf(source: []const u8, ref_text: []const u8) !?symmetry.Local {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotIn(runtime, source, ".js");
+    defer base.destroy();
+    const ref = try symbol.Ref.parse(std.testing.allocator, ref_text);
+    defer ref.deinit(std.testing.allocator);
+    const hash = (try (try base.symbols()).item(ref)).hash;
+    const removed = try removal.remove(base, ref, hash);
+    defer removed.snapshot.destroy();
+    return deletionScope(base, ref, removed);
+}
+
+test "deleting a require binding or a class member has no top-level effect, a bare statement skips the reference scan" {
+    const local = (try scopeOf("const os = require('os');\nfunction f() { return 1; }\n", "os")) orelse return error.TestExpectedLocal;
+    try std.testing.expect(local.no_top_level_effect);
+    const member = (try scopeOf("class C {\n  m() {\n    return 1;\n  }\n}\n", "C.m")) orelse return error.TestExpectedLocal;
+    try std.testing.expect(member.no_top_level_effect);
+    const effect = (try scopeOf("const x = new Map();\nfunction f() { return 1; }\n", "x")) orelse return error.TestExpectedLocal;
+    try std.testing.expect(!effect.no_top_level_effect);
+    try std.testing.expectEqual(@as(?symmetry.Local, null), try scopeOf("module.exports = { a: 1 };\nfunction f() { return 1; }\n", "module.exports"));
 }

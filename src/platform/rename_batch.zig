@@ -48,31 +48,51 @@ pub const Options = struct {
 const Located = struct {
     abs: []u8,
     spans: std.ArrayList(Span) = .empty,
+    kept_keys: std.ArrayList(Span) = .empty,
+    kept_values: std.ArrayList(Span) = .empty,
+
+    fn deinit(self: *Located, gpa: Allocator) void {
+        gpa.free(self.abs);
+        self.spans.deinit(gpa);
+        self.kept_keys.deinit(gpa);
+        self.kept_values.deinit(gpa);
+    }
+
+    fn put(self: *Located, gpa: Allocator, span: Span, keep: rename.Keep) !void {
+        if (containsSpan(self.spans.items, span)) return;
+        try self.spans.append(gpa, span);
+        switch (keep) {
+            .none => {},
+            .key => try self.kept_keys.append(gpa, span),
+            .value => try self.kept_values.append(gpa, span),
+        }
+    }
 };
 
 const Locations = struct {
     files: std.ArrayList(Located) = .empty,
 
     fn deinit(self: *Locations, gpa: Allocator) void {
-        for (self.files.items) |*f| {
-            gpa.free(f.abs);
-            f.spans.deinit(gpa);
-        }
+        for (self.files.items) |*f| f.deinit(gpa);
         self.files.deinit(gpa);
     }
 
     fn add(self: *Locations, gpa: Allocator, abs: []u8, span: Span) !void {
+        return self.addKept(gpa, abs, span, .none);
+    }
+
+    fn addKept(self: *Locations, gpa: Allocator, abs: []u8, span: Span, keep: rename.Keep) !void {
         for (self.files.items) |*f| {
             if (!tsserver.sameFile(f.abs, abs)) continue;
             gpa.free(abs);
-            try f.spans.append(gpa, span);
+            try f.put(gpa, span, keep);
             return;
         }
         {
             errdefer gpa.free(abs);
             try self.files.append(gpa, .{ .abs = abs });
         }
-        try self.files.items[self.files.items.len - 1].spans.append(gpa, span);
+        try self.files.items[self.files.items.len - 1].put(gpa, span, keep);
     }
 
     fn find(self: *const Locations, abs: []const u8) ?*const Located {
@@ -130,7 +150,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         member = found.member;
         free_uses = found.free_uses;
     } else if (session) |s| {
-        switch (try fromService(gpa, io, root, s, request.file_abs, offset, &locations)) {
+        switch (try fromService(gpa, io, root, s, request.file_abs, offset, !request.interface_change, &locations)) {
             .ok => {
                 resolver = .language_service;
                 fallback = null;
@@ -146,7 +166,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const own = locations.find(request.file_abs) orelse return error.IncompleteRename;
     if (!startsAt(own.spans.items, offset)) return error.IncompleteRename;
     const top_name = if (ref.container.len != 0) ref.container[0] else old;
-    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name) or (resolver == .facts and visibleAt(base, offset, old));
+    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name) or (resolver == .facts and visibleAt(base, offset, old)) or try collapsesShorthand(gpa, io, runtime, &locations, old);
     if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
     try refuseDynamic(gpa, io, runtime, root, &locations, old, member);
 
@@ -172,7 +192,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         const declaring = tsserver.sameFile(located.abs, request.file_abs);
         const file_base = try Snapshot.load(runtime, io, .cwd(), located.abs);
         errdefer file_base.destroy();
-        const renamed = try rename.applyWith(gpa, file_base, old, request.new_name, located.spans.items, .{ .free_uses = free_uses });
+        const renamed = try rename.applyWith(gpa, file_base, old, request.new_name, located.spans.items, .{ .free_uses = free_uses, .kept_keys = located.kept_keys.items, .kept_values = located.kept_values.items });
         defer gpa.free(renamed.spans);
         errdefer renamed.snapshot.destroy();
         const holes = try renamedHoles(gpa, located.spans.items, renamed.spans);
@@ -283,7 +303,35 @@ fn startsAt(spans: []const Span, offset: u32) bool {
 
 const ServiceAnswer = union(enum) { ok, unavailable: anyerror };
 
-fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.Session, file_abs: []const u8, offset: u32, locations: *Locations) !ServiceAnswer {
+fn collapsesShorthand(gpa: Allocator, io: std.Io, runtime: *Runtime, locations: *const Locations, old: []const u8) !bool {
+    for (locations.files.items) |located| {
+        const snapshot = try Snapshot.load(runtime, io, .cwd(), located.abs);
+        defer snapshot.destroy();
+        const leaves = try rename.leavesNamed(gpa, snapshot, old);
+        defer gpa.free(leaves);
+        for (leaves) |leaf| {
+            if (!leaf.shorthand or !containsSpan(located.spans.items, leaf.span)) continue;
+            if (containsSpan(located.kept_keys.items, leaf.span) or containsSpan(located.kept_values.items, leaf.span)) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn containsSpan(spans: []const Span, wanted: Span) bool {
+    for (spans) |span| {
+        if (span.start == wanted.start and span.end == wanted.end) return true;
+    }
+    return false;
+}
+
+fn keepOf(location: tsserver.Location) rename.Keep {
+    if (location.prefix.len != 0) return .key;
+    if (location.suffix.len != 0) return .value;
+    return .none;
+}
+
+fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.Session, file_abs: []const u8, offset: u32, keep_keys: bool, locations: *Locations) !ServiceAnswer {
     const client = session.get() catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return .{ .unavailable = err },
@@ -291,17 +339,17 @@ fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.
     const file = try gpa.dupe(u8, file_abs);
     defer gpa.free(file);
     std.mem.replaceScalar(u8, file, '\\', '/');
-    const answer = client.rename(file, offset) catch |err| switch (err) {
+    const answer = client.rename(file, offset, keep_keys) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return .{ .unavailable = err },
     };
     defer answer.deinit();
     if (!answer.value.can_rename or answer.value.locations.len == 0) return error.RenameRefused;
     for (answer.value.locations) |location| {
-        if (location.prefix) return error.ShorthandReference;
+        if (location.prefix.len != 0 and location.suffix.len != 0) return error.ShorthandReference;
         if (location.end < location.start) return error.RenameOutsideRepo;
         const abs = try jailLocation(gpa, io, root, location.file);
-        try locations.add(gpa, abs, .{ .start = location.start, .end = location.end });
+        try locations.addKept(gpa, abs, .{ .start = location.start, .end = location.end }, keepOf(location));
     }
     return .ok;
 }

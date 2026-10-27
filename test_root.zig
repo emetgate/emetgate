@@ -21,6 +21,7 @@ pub const rename = src.rename;
 pub const scope = src.scope;
 pub const alpha = src.alpha;
 pub const declarations = src.declarations;
+pub const statements = src.statements;
 pub const modules = src.modules;
 pub const facts = src.facts;
 pub const facts_extract = src.facts_extract;

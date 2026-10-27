@@ -72,3 +72,9 @@ pub fn loadFixture(runtime: *Runtime, name: []const u8) !*Snapshot {
 fn fixturePath(buf: []u8, name: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, fixture_dir ++ "{s}", .{name});
 }
+
+pub fn snapshotIn(runtime: *Runtime, source: []const u8, ext: []const u8) !*Snapshot {
+    var name_buf: [32]u8 = undefined;
+    const profile = @import("lang/registry.zig").forPath(try std.fmt.bufPrint(&name_buf, "x{s}", .{ext})) orelse return error.UnknownLanguage;
+    return Snapshot.fromSource(runtime, profile, try std.testing.allocator.dupe(u8, source));
+}

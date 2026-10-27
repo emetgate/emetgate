@@ -107,6 +107,26 @@ pub fn writeDeclarations(gpa: Allocator, js: *std.json.Stringify, table: symbol.
         }
         try js.endObject();
     }
+    for (table.statements) |entry| {
+        const point = entry.node.startPoint();
+        const hex = symbol.formatHash(entry.hash);
+        const ref = try std.fmt.allocPrint(gpa, "{f}", .{entry.ref});
+        defer gpa.free(ref);
+        try js.beginObject();
+        try js.objectField("hash");
+        try js.write(hex[0..]);
+        try js.objectField("kind");
+        try js.write(@tagName(entry.kind));
+        try js.objectField("ref");
+        try js.write(ref);
+        try js.objectField("line");
+        try js.write(point.row + 1);
+        try js.objectField("col");
+        try js.write(point.column + 1);
+        try js.objectField("ambiguous");
+        try js.write(entry.ambiguous);
+        try js.endObject();
+    }
     try js.endArray();
 }
 

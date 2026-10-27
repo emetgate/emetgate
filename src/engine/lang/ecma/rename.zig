@@ -115,5 +115,16 @@ pub fn declarations(field: DeclarationShape) Declarations {
         .enum_bare_member = "property_identifier",
         .destructuring = &.{ "object_pattern", "array_pattern" },
         .static_keyword = "static",
+        .items = .{
+            .assignment = "assignment_expression",
+            .member_chain = "member_expression",
+            .imports = &.{"import_statement"},
+            .pattern_names = &.{ "identifier", "shorthand_property_identifier_pattern" },
+            .pattern_skip_fields = &.{ "key", "right" },
+            .object = "object",
+            .property_keys = &.{ "property_identifier", "string", "number" },
+            .require = "require",
+            .member_separator = ',',
+        },
     };
 }

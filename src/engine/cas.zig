@@ -5,6 +5,7 @@ const Snapshot = @import("loader.zig").Snapshot;
 const Profile = @import("lang/profile.zig").Profile;
 const Runtime = @import("runtime.zig").Runtime;
 const test_util = @import("test_util.zig");
+const traversal = @import("traversal.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -72,10 +73,21 @@ fn followLineEnding(gpa: Allocator, body: []const u8, eol: ?[]const u8) Allocato
 }
 
 pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
+    const before = try base.symbols();
+    const target = before.resolve(mutation.ref) catch |err| switch (err) {
+        error.SymbolNotFound => return replaceItem(base, mutation),
+        error.AmbiguousSymbol => return err,
+    };
+    return applyBody(base, mutation, target) catch |err| switch (err) {
+        error.MutationSyntaxInvalid, error.BodyEscape => replaceItem(base, mutation) catch return err,
+        else => return err,
+    };
+}
+
+fn applyBody(base: *Snapshot, mutation: Mutation, target: *const symbol.Symbol) Error!Applied {
     const new_body = try followLineEnding(base.runtime.gpa, normalizeBody(mutation.new_body), crlfOf(base.source));
     defer base.runtime.gpa.free(new_body);
     const before = try base.symbols();
-    const target = try before.resolve(mutation.ref);
     if (!std.mem.eql(u8, &target.hash, &mutation.expected_hash)) return error.HashMismatch;
 
     const cut: Span = .{ .start = target.body.startByte(), .end = target.body.endByte() };
@@ -98,6 +110,162 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
     return .{ .snapshot = next, .hash = patched_target.hash, .body = slot, .hole = .{ .old = cut, .new = slot } };
 }
 
+fn replaceItem(base: *Snapshot, mutation: Mutation) Error!Applied {
+    const before = try base.symbols();
+    const target = try before.item(mutation.ref);
+    if (!std.mem.eql(u8, &mutation.expected_hash, &target.hash)) return error.HashMismatch;
+    const gpa = base.runtime.gpa;
+    const crlf = crlfOf(base.source);
+    const body = try followLineEnding(gpa, normalizeBody(mutation.new_body), crlf);
+    defer gpa.free(body);
+    const text = try shapeText(gpa, base, target.span, body);
+    defer gpa.free(text);
+    return spliceItem(base, mutation.ref, target.span, target.span, text) catch |err| {
+        if (target.role != .property) return err;
+        const value = target.node.childByField(base.profile.declarations.items.pair_value) orelse return err;
+        const value_span: Span = .{ .start = value.startByte(), .end = value.endByte() };
+        return spliceItem(base, mutation.ref, target.span, value_span, text) catch return err;
+    };
+}
+
+fn spliceItem(base: *Snapshot, ref: symbol.Ref, old: Span, cut: Span, text: []const u8) Error!Applied {
+    const before = try base.symbols();
+    const next = try reparse(base, cut, text);
+    errdefer next.destroy();
+    const after = next.symbols() catch |err| switch (err) {
+        error.SourceHasErrors => return error.MutationSyntaxInvalid,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    const slot: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(text.len)) };
+    const grown: Span = .{ .start = old.start, .end = old.end - (cut.end - cut.start) + slot.end - slot.start };
+    const placed = after.item(ref) catch return error.BodyEscape;
+    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;
+    if (placed.body) |body| try rejectPlaceholder(base.profile, body);
+    try expectSameShape(base.tree, next.tree, cut, slot);
+    try expectUntouchedOutside(before.*, after.*, old, grown);
+    return .{ .snapshot = next, .hash = placed.hash, .hole = .{ .old = cut, .new = slot }, .body = slot };
+}
+
+fn reparse(base: *Snapshot, cut: Span, text: []const u8) Error!*Snapshot {
+    const head = base.source[0..cut.start];
+    const tail = base.source[cut.end..];
+    const next = try Snapshot.fromSource(base.runtime, base.profile, try std.mem.concat(base.runtime.gpa, u8, &.{ head, text, tail }));
+    errdefer next.destroy();
+    const broken = next.tree.root().hasError();
+    if (broken) return error.MutationSyntaxInvalid;
+    return next;
+}
+
+fn shapeText(gpa: Allocator, base: *Snapshot, span: Span, body: []const u8) Allocator.Error![]u8 {
+    var text = body;
+    if (text.len > 0 and (text[text.len - 1] == ',' or text[text.len - 1] == ';') and span.end < base.source.len and base.source[span.end] == text[text.len - 1]) text = text[0 .. text.len - 1];
+    const prefix = exportPrefix(base, span, text);
+    const indent = lineIndent(base.source, span.start);
+    const joined = try std.mem.concat(gpa, u8, &.{ prefix, text });
+    defer gpa.free(joined);
+    return reindent(gpa, joined, indent);
+}
+
+fn exportPrefix(base: *Snapshot, span: Span, text: []const u8) []const u8 {
+    const root = base.tree.root();
+    var i: u32 = 0;
+    while (root.namedChild(i)) |node| : (i += 1) {
+        if (node.startByte() != span.start or node.endByte() != span.end) continue;
+        if (!isOneOf(node.kind(), base.profile.export_wrappers)) return "";
+        const keyword = node.child(0) orelse return "";
+        if (std.mem.startsWith(u8, text, base.tree.text(keyword))) return "";
+        var j: u32 = 0;
+        while (node.namedChild(j)) |inner| : (j += 1) {
+            if (base.profile.isComment(inner.kind()) or std.mem.eql(u8, inner.kind(), base.profile.decorator)) continue;
+            return base.source[span.start..inner.startByte()];
+        }
+        return "";
+    }
+    return "";
+}
+
+fn isOneOf(kind: []const u8, kinds: []const []const u8) bool {
+    for (kinds) |candidate| {
+        if (std.mem.eql(u8, candidate, kind)) return true;
+    }
+    return false;
+}
+
+fn lineStart(source: []const u8, at: u32) u32 {
+    var start = at;
+    while (start > 0 and source[start - 1] != '\n') start -= 1;
+    return start;
+}
+
+fn lineIndent(source: []const u8, at: u32) []const u8 {
+    const start = lineStart(source, at);
+    const lead = source[start..at];
+    for (lead) |c| {
+        if (c != ' ' and c != '\t') return "";
+    }
+    return lead;
+}
+
+fn leadingSpace(line: []const u8) usize {
+    var n: usize = 0;
+    while (n < line.len and (line[n] == ' ' or line[n] == '\t')) n += 1;
+    return n;
+}
+
+fn reindent(gpa: Allocator, text: []const u8, indent: []const u8) Allocator.Error![]u8 {
+    const last_break = std.mem.lastIndexOfScalar(u8, text, '\n');
+    const shift = if (last_break) |at| leadingSpace(text[at + 1 ..]) < indent.len else false;
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var index: usize = 0;
+    while (lines.next()) |line| : (index += 1) {
+        if (index != 0) try out.append(gpa, '\n');
+        if (index != 0 and shift and std.mem.trim(u8, line, " \t\r").len != 0) try out.appendSlice(gpa, indent);
+        try out.appendSlice(gpa, line);
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+fn outsideOf(node: ts.Node, region: Span) bool {
+    const start = node.startByte();
+    const end = node.endByte();
+    return end <= region.start or start >= region.end or (start <= region.start and end >= region.end);
+}
+
+fn mapped(at: u32, cut: Span, slot: Span) u32 {
+    return if (at <= cut.start) at else at - cut.end + slot.end;
+}
+
+fn mappedStart(at: u32, cut: Span, slot: Span) u32 {
+    return if (at < cut.end) at else at - cut.end + slot.end;
+}
+
+fn nextOutside(walker: *traversal.Walker, region: Span) ?ts.Node {
+    while (walker.next()) |entry| {
+        if (entry.depth == 0) continue;
+        if (outsideOf(entry.node, region)) return entry.node;
+        walker.skipChildren();
+    }
+    return null;
+}
+
+pub fn expectSameShape(old: ts.Tree, new: ts.Tree, cut: Span, slot: Span) error{BodyEscape}!void {
+    var a = traversal.Walker.init(old.root());
+    defer a.deinit();
+    var b = traversal.Walker.init(new.root());
+    defer b.deinit();
+    while (true) {
+        const x = nextOutside(&a, cut);
+        const y = nextOutside(&b, slot);
+        if (x == null and y == null) return;
+        const p = x orelse return error.BodyEscape;
+        const q = y orelse return error.BodyEscape;
+        if (!std.mem.eql(u8, p.kind(), q.kind())) return error.BodyEscape;
+        if (mappedStart(p.startByte(), cut, slot) != q.startByte() or mapped(p.endByte(), cut, slot) != q.endByte()) return error.BodyEscape;
+    }
+}
+
 pub fn propose(base: *Snapshot, ref: symbol.Ref, expected: symbol.Expected, new_body: []const u8) Error!Applied {
     return switch (expected) {
         .present => |hash| apply(base, .{ .ref = ref, .expected_hash = hash, .new_body = new_body }),
@@ -114,13 +282,18 @@ pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
         error.SymbolNotFound => {},
     }
     if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;
+    if (before.item(insertion.ref)) |_| return error.SymbolExists else |err| if (err == error.AmbiguousSymbol) return error.SymbolExists;
 
     const eol = try lineEnding(base.source);
     const new_body = try followLineEnding(base.runtime.gpa, normalizeBody(insertion.new_body), crlfOf(eol));
     defer base.runtime.gpa.free(new_body);
-    const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) "" else eol;
-    const start: u32 = @intCast(base.source.len + separator.len);
-    const source = try std.mem.concat(base.runtime.gpa, u8, &.{ base.source, separator, new_body, eol });
+    if (classHolding(before.*, insertion.ref)) |class| return insertMember(base, insertion.ref, class, new_body, eol);
+    const place = try placeTopLevel(base, new_body, eol);
+    const gpa = base.runtime.gpa;
+    const text = try std.mem.concat(gpa, u8, &.{ place.lead, new_body, eol });
+    defer gpa.free(text);
+    const start: u32 = place.cut.start + @as(u32, @intCast(place.lead.len));
+    const source = try std.mem.concat(gpa, u8, &.{ base.source[0..place.cut.start], text, base.source[place.cut.end..] });
     const next = try Snapshot.fromSource(base.runtime, base.profile, source);
     errdefer next.destroy();
     const after = next.symbols() catch |err| switch (err) {
@@ -130,10 +303,143 @@ pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
 
     const slot: Span = .{ .start = start, .end = start + @as(u32, @intCast(new_body.len)) };
     const declared = try expectSoleDeclaration(base.profile, next.tree.root(), after.*, slot, insertion.ref);
-    const end: Span = .{ .start = @intCast(base.source.len), .end = @intCast(base.source.len) };
+    const end = place.cut;
+    const region: Span = .{ .start = end.start, .end = end.start + @as(u32, @intCast(text.len)) };
+    try expectSameShape(base.tree, next.tree, end, region);
     try expectUntouchedOutside(before.*, after.*, end, slot);
 
-    return .{ .snapshot = next, .hash = declared.hash, .body = slot, .hole = .{ .old = end, .new = .{ .start = end.start, .end = @intCast(source.len) } } };
+    return .{ .snapshot = next, .hash = declared.hash, .body = slot, .hole = .{ .old = end, .new = region } };
+}
+
+const Place = struct {
+    cut: Span,
+    lead: []const u8,
+};
+
+fn placeTopLevel(base: *Snapshot, new_body: []const u8, eol: []const u8) Error!Place {
+    const probe = try Snapshot.fromSource(base.runtime, base.profile, try base.runtime.gpa.dupe(u8, new_body));
+    defer probe.destroy();
+    const first = firstStatement(base.profile, probe.tree.root());
+    const root = base.tree.root();
+    if (first) |node| if (importLike(base.profile, probe.tree, node)) {
+        var last: ?ts.Node = null;
+        var i: u32 = 0;
+        while (root.namedChild(i)) |child| : (i += 1) {
+            if (importLike(base.profile, base.tree, child)) last = child;
+        }
+        if (last) |anchor| {
+            const at = nextLineStart(base.source, anchor.endByte());
+            return .{ .cut = .{ .start = at, .end = at }, .lead = "" };
+        }
+    };
+    var content: usize = base.source.len;
+    while (content > 0 and std.mem.indexOfScalar(u8, " \t\r\n", base.source[content - 1]) != null) content -= 1;
+    if (content == 0) return .{ .cut = .{ .start = 0, .end = @intCast(base.source.len) }, .lead = "" };
+    const kept = nextLineStart(base.source, @intCast(content));
+    const previous = lastStatement(base.profile, root);
+    const grouped = if (first != null and previous != null) sameGroup(base.profile, base.tree, previous.?, probe.tree, first.?) else false;
+    return .{ .cut = .{ .start = kept, .end = @intCast(base.source.len) }, .lead = if (grouped) "" else eol };
+}
+
+fn nextLineStart(source: []const u8, at: u32) u32 {
+    const newline = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse return @intCast(source.len);
+    return @intCast(newline + 1);
+}
+
+fn firstStatement(profile: *const Profile, root: ts.Node) ?ts.Node {
+    var i: u32 = 0;
+    while (root.namedChild(i)) |child| : (i += 1) {
+        if (!profile.isComment(child.kind())) return child;
+    }
+    return null;
+}
+
+fn lastStatement(profile: *const Profile, root: ts.Node) ?ts.Node {
+    var i = root.namedChildCount();
+    while (i > 0) {
+        i -= 1;
+        const child = root.namedChild(i).?;
+        if (!profile.isComment(child.kind())) return child;
+    }
+    return null;
+}
+
+pub fn importLike(profile: *const Profile, tree: ts.Tree, node: ts.Node) bool {
+    const items = profile.declarations.items;
+    if (isOneOf(node.kind(), items.imports)) return true;
+    const require = items.require orelse return false;
+    if (!isOneOf(node.kind(), profile.declarations.variable_statements)) return false;
+    var i: u32 = 0;
+    while (node.namedChild(i)) |declarator| : (i += 1) {
+        const value = declarator.childByField(profile.declarations.value_field) orelse continue;
+        if (!std.mem.eql(u8, value.kind(), profile.call.node)) return false;
+        const callee = value.childByField(profile.call.function_field) orelse return false;
+        return std.mem.eql(u8, tree.text(callee), require);
+    }
+    return false;
+}
+
+fn sameGroup(profile: *const Profile, old: ts.Tree, previous: ts.Node, new: ts.Tree, first: ts.Node) bool {
+    if (std.mem.indexOfScalar(u8, old.text(previous), '\n') != null or std.mem.indexOfScalar(u8, new.text(first), '\n') != null) return false;
+    if (!std.mem.eql(u8, previous.kind(), first.kind())) return false;
+    return isOneOf(first.kind(), profile.declarations.variable_statements) or isOneOf(first.kind(), profile.declarations.items.imports) or std.mem.eql(u8, first.kind(), profile.expression_statement);
+}
+
+fn classHolding(table: symbol.Table, ref: symbol.Ref) ?ts.Node {
+    if (ref.container.len == 0) return null;
+    const owner: symbol.Ref = .{ .container = ref.container[0 .. ref.container.len - 1], .name = ref.container[ref.container.len - 1] };
+    for (table.declarations) |declaration| {
+        if (declaration.kind == .class and !declaration.ambiguous and declaration.ref.eql(owner)) return declaration.node;
+    }
+    return null;
+}
+
+fn insertMember(base: *Snapshot, ref: symbol.Ref, class: ts.Node, new_body: []const u8, eol: []const u8) Error!Applied {
+    const gpa = base.runtime.gpa;
+    const before = try base.symbols();
+    const body = class.childByField("body") orelse return error.SymbolNameMismatch;
+    const close = body.child(body.childCount() - 1) orelse return error.SymbolNameMismatch;
+    const open = body.child(0) orelse return error.SymbolNameMismatch;
+    var last: ?ts.Node = null;
+    var i: u32 = 0;
+    while (body.namedChild(i)) |member| : (i += 1) {
+        if (!base.profile.isComment(member.kind())) last = member;
+    }
+    const close_line = lineStart(base.source, close.startByte());
+    if (lineIndent(base.source, close.startByte()).len != close.startByte() - close_line) {
+        const cut: Span = .{ .start = close.startByte(), .end = close.startByte() };
+        const text = try std.mem.concat(gpa, u8, &.{ new_body, " " });
+        return finishMember(base, before.*, ref, cut, text, .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(new_body.len)) });
+    }
+    var indent_buf: [256]u8 = undefined;
+    const indent = if (last) |member| lineIndent(base.source, member.startByte()) else std.fmt.bufPrint(&indent_buf, "{s}  ", .{lineIndent(base.source, close.startByte())}) catch "  ";
+    const anchor = if (last) |member| member.endByte() else open.endByte();
+    const cut: Span = .{ .start = nextLineStart(base.source, anchor), .end = close_line };
+    const blank = last != null and (std.mem.indexOfScalar(u8, base.tree.text(last.?), '\n') != null or std.mem.indexOfScalar(u8, new_body, '\n') != null);
+    const lead: []const u8 = if (blank) eol else "";
+    const shaped = try reindent(gpa, new_body, indent);
+    defer gpa.free(shaped);
+    const text = try std.mem.concat(gpa, u8, &.{ lead, indent, shaped, eol });
+    const body_start = cut.start + @as(u32, @intCast(lead.len + indent.len));
+    return finishMember(base, before.*, ref, cut, text, .{ .start = body_start, .end = body_start + @as(u32, @intCast(shaped.len)) });
+}
+
+fn finishMember(base: *Snapshot, before: symbol.Table, ref: symbol.Ref, cut: Span, text: []u8, slot: Span) Error!Applied {
+    const gpa = base.runtime.gpa;
+    defer gpa.free(text);
+    const next = try reparse(base, cut, text);
+    errdefer next.destroy();
+    const after = next.symbols() catch |err| switch (err) {
+        error.SourceHasErrors => return error.MutationSyntaxInvalid,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    const placed = after.item(ref) catch |err| return if (err == error.AmbiguousSymbol) error.SymbolExists else error.SymbolNameMismatch;
+    if (placed.span.start != slot.start or placed.span.end != slot.end) return error.BodyEscape;
+    if (placed.body) |body| try rejectPlaceholder(base.profile, body);
+    const region: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(text.len)) };
+    try expectSameShape(base.tree, next.tree, cut, region);
+    try expectUntouchedOutside(before, after.*, cut, slot);
+    return .{ .snapshot = next, .hash = placed.hash, .body = slot, .hole = .{ .old = cut, .new = region } };
 }
 
 pub fn create(runtime: *Runtime, profile: *const Profile, insertion: Insertion) Error!Applied {
@@ -161,8 +467,8 @@ const Declared = struct {
 
 fn expectSoleDeclaration(profile: *const Profile, root: ts.Node, table: symbol.Table, slot: Span, ref: symbol.Ref) Error!Declared {
     const statements = try topLevelStatementsIn(profile, root, slot);
-    const declared = try soleTopLevelSymbol(table, slot);
-    if (statements != 1) return error.ExtraTopLevelCode;
+    const declared = try soleTopLevelSymbol(table, slot, ref);
+    if (statements != holdersIn(profile, root, table, slot)) return error.ExtraTopLevelCode;
     if (!declared.ref.eql(ref)) return error.SymbolNameMismatch;
     if (declared.body) |body| try rejectPlaceholder(profile, body);
     return declared;
@@ -179,26 +485,55 @@ fn topLevelStatementsIn(profile: *const Profile, root: ts.Node, slot: Span) erro
     var i: u32 = 0;
     while (root.child(i)) |node| : (i += 1) {
         if (node.startByte() < slot.start and node.endByte() > slot.start) return error.BodyEscape;
-        if (node.startByte() < slot.start) continue;
+        if (node.startByte() < slot.start or node.startByte() >= slot.end) continue;
+        if (node.endByte() > slot.end) return error.BodyEscape;
         if (!node.isNamed() or profile.isComment(node.kind())) continue;
         count += 1;
     }
     return count;
 }
 
-fn soleTopLevelSymbol(table: symbol.Table, slot: Span) error{ NoTopLevelSymbol, MultipleTopLevelSymbols }!Declared {
-    var found: ?Declared = null;
-    for (table.symbols) |candidate| {
-        if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;
-        if (found != null) return error.MultipleTopLevelSymbols;
-        found = .{ .ref = candidate.ref, .hash = candidate.hash, .body = candidate.body };
+fn within(span: Span, region: Span) bool {
+    return span.start >= region.start and span.start < region.end;
+}
+
+fn holds(table: symbol.Table, own: Span) bool {
+    inline for (.{ table.symbols, table.declarations, table.statements }) |entries| {
+        for (entries) |candidate| {
+            if (within(candidate.declaration, own)) return true;
+        }
     }
-    for (table.declarations) |candidate| {
-        if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;
-        if (found != null) return error.MultipleTopLevelSymbols;
-        found = .{ .ref = candidate.ref, .hash = candidate.hash, .body = null };
+    return false;
+}
+
+fn holdersIn(profile: *const Profile, root: ts.Node, table: symbol.Table, slot: Span) usize {
+    var count: usize = 0;
+    var i: u32 = 0;
+    while (root.child(i)) |node| : (i += 1) {
+        if (node.startByte() < slot.start or node.startByte() >= slot.end) continue;
+        if (!node.isNamed()) continue;
+        if (profile.isComment(node.kind())) continue;
+        if (holds(table, .{ .start = node.startByte(), .end = node.endByte() })) count += 1;
     }
-    return found orelse error.NoTopLevelSymbol;
+    return count;
+}
+
+fn soleTopLevelSymbol(table: symbol.Table, slot: Span, ref: symbol.Ref) error{ NoTopLevelSymbol, SymbolExists }!Declared {
+    var first: ?Declared = null;
+    var named: ?Declared = null;
+    inline for (.{ table.symbols, table.declarations, table.statements }) |list| {
+        for (list) |candidate| {
+            if (!within(candidate.declaration, slot)) continue;
+            if (candidate.ambiguous) return error.SymbolExists;
+            const found: Declared = .{ .ref = candidate.ref, .hash = candidate.hash, .body = if (@hasField(@TypeOf(candidate), "body")) candidate.body else null };
+            if (first == null) first = found;
+            if (candidate.ref.eql(ref)) {
+                if (named != null) return error.SymbolExists;
+                named = found;
+            }
+        }
+    }
+    return named orelse first orelse error.NoTopLevelSymbol;
 }
 
 fn expectExactSlot(profile: *const Profile, body: ts.Node, slot: Span) error{BodyEscape}!void {
@@ -260,7 +595,7 @@ const testing = std.testing;
 const HashSource = enum { current, stale };
 
 fn currentHash(snapshot: *Snapshot, ref: symbol.Ref) !symbol.Hash {
-    return (try (try snapshot.symbols()).resolve(ref)).hash;
+    return (try (try snapshot.symbols()).item(ref)).hash;
 }
 
 fn mutate(base: *Snapshot, ref_text: []const u8, new_body: []const u8, hash: HashSource) !Applied {
@@ -661,7 +996,6 @@ fn expectInserted(runtime: anytype, source: []const u8, ref_text: []const u8, bo
     const applied = try insertInto(runtime, source, ref_text, body);
     defer applied.snapshot.destroy();
     try testing.expectEqualStrings(expected, applied.snapshot.source);
-    try testing.expectEqualStrings(source, applied.snapshot.source[0..source.len]);
     try testing.expectEqualStrings(normalizeBody(body), applied.snapshot.source[applied.body.start..applied.body.end]);
     try testing.expectEqual(try hashOfRef(applied.snapshot, ref_text), applied.hash);
 }
@@ -712,10 +1046,11 @@ test "insert refuses a body that declares no top-level symbol" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const base = "function add() { return 1; }\n";
-    for ([_][]const u8{ "foo();", "if (x) { y(); }" }) |body| {
+    for ([_][]const u8{ "1 + 2;", "if (x) { y(); }" }) |body| {
         errdefer std.debug.print("accepted body: {s}\n", .{body});
         try testing.expectError(error.NoTopLevelSymbol, insertInto(runtime, base, "x", body));
     }
+    try testing.expectError(error.SymbolNameMismatch, insertInto(runtime, base, "x", "foo();"));
 }
 
 test "insert and create accept a variable, class, interface, type alias or enum as the one new declaration" {
@@ -742,25 +1077,30 @@ test "insert and create accept a variable, class, interface, type alias or enum 
         created.snapshot.destroy();
     }
     try testing.expectError(error.SymbolExists, insertInto(runtime, "const b = 1;\n", "b", "const b = 2;"));
-    try testing.expectError(error.MultipleTopLevelSymbols, insertInto(runtime, base, "a", "const a = 1, b = 2;"));
+    const pair = try insertInto(runtime, base, "a", "const a = 1, b = 2;");
+    pair.snapshot.destroy();
     try testing.expectError(error.SymbolNameMismatch, insertInto(runtime, base, "x", "const y = 1;"));
 }
 
-test "insert refuses a body that declares more than one top-level symbol" {
+test "insert accepts a body of several top-level statements and hashes the one it names" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const base = "function add() { return 1; }\n";
     for ([_][]const u8{ "function a() { return 1; }\nfunction b() { return 2; }", "const a = () => 1, b = () => 2;", "const x = 1;\nfunction a() { return x; }" }) |body| {
-        errdefer std.debug.print("accepted body: {s}\n", .{body});
-        try testing.expectError(error.MultipleTopLevelSymbols, insertInto(runtime, base, "a", body));
+        errdefer std.debug.print("refused body: {s}\n", .{body});
+        const applied = try insertInto(runtime, base, "a", body);
+        defer applied.snapshot.destroy();
+        try testing.expectEqual(try hashOfRef(applied.snapshot, "a"), applied.hash);
     }
+    try testing.expectError(error.SymbolExists, insertInto(runtime, base, "a", "function a() { return 1; }\nfunction add() { return 2; }"));
+    try testing.expectError(error.SymbolExists, insertInto(runtime, base, "a", "function a() { return 1; }\nfunction a() { return 2; }"));
 }
 
 test "insert refuses top-level code beside the one symbol" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const base = "function add() { return 1; }\n";
-    for ([_][]const u8{ "function f() { return 1; }\nfoo();", "function f() { return 1; };" }) |body| {
+    for ([_][]const u8{ "function f() { return 1; }\n1 + 2;", "function f() { return 1; };" }) |body| {
         errdefer std.debug.print("accepted body: {s}\n", .{body});
         try testing.expectError(error.ExtraTopLevelCode, insertInto(runtime, base, "f", body));
     }
@@ -804,7 +1144,9 @@ test "insert appends after the last newline with exactly one blank line added on
     const body = "function f() { return 1; }";
     try expectInserted(runtime, "function add() { return 1; }\n", "f", body, "function add() { return 1; }\n\nfunction f() { return 1; }\n");
     try expectInserted(runtime, "function add() { return 1; }\n\n", "f", body, "function add() { return 1; }\n\nfunction f() { return 1; }\n");
-    try expectInserted(runtime, "function add() { return 1; }\n\n\n", "f", body, "function add() { return 1; }\n\n\nfunction f() { return 1; }\n");
+    try expectInserted(runtime, "function add() { return 1; }\n\n\n", "f", body, "function add() { return 1; }\n\nfunction f() { return 1; }\n");
+    try expectInserted(runtime, "const a = 1;\n", "b", "const b = 2;", "const a = 1;\nconst b = 2;\n");
+    try expectInserted(runtime, "import { a } from './a';\n\nfunction f() { return a; }\n", "b", "import { b } from './b';", "import { a } from './a';\nimport { b } from './b';\n\nfunction f() { return a; }\n");
 }
 
 test "insert follows a CRLF file's line ending and never rewrites the bytes already there" {
@@ -834,10 +1176,72 @@ test "create builds a file of exactly one top-level symbol and one trailing newl
 test "create applies the same body rules as insert" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
-    try testing.expectError(error.NoTopLevelSymbol, createWith(runtime, "x", "foo();"));
-    try testing.expectError(error.MultipleTopLevelSymbols, createWith(runtime, "a", "function a() { return 1; }\nfunction b() { return 2; }"));
-    try testing.expectError(error.ExtraTopLevelCode, createWith(runtime, "f", "function f() { return 1; }\nfoo();"));
+    try testing.expectError(error.NoTopLevelSymbol, createWith(runtime, "x", "1 + 2;"));
+    try testing.expectError(error.SymbolExists, createWith(runtime, "a", "function a() { return 1; }\nfunction a() { return 2; }"));
+    try testing.expectError(error.ExtraTopLevelCode, createWith(runtime, "f", "function f() { return 1; }\n1 + 2;"));
     try testing.expectError(error.SymbolNameMismatch, createWith(runtime, "g", "function f() { return 1; }"));
     try testing.expectError(error.PlaceholderBody, createWith(runtime, "f", "function f() {\n  // TODO\n}"));
     try testing.expectError(error.MutationSyntaxInvalid, createWith(runtime, "f", "function f( { return 1; }"));
+}
+
+fn replaceIn(runtime: anytype, source: []const u8, ext: []const u8, ref_text: []const u8, body: []const u8) ![]u8 {
+    const base = try test_util.snapshotIn(runtime, source, ext);
+    defer base.destroy();
+    const applied = try mutate(base, ref_text, body, .current);
+    defer applied.snapshot.destroy();
+    try testing.expectEqual(try hashOfRef(applied.snapshot, ref_text), applied.hash);
+    return testing.allocator.dupe(u8, applied.snapshot.source);
+}
+
+fn expectReplaced(runtime: anytype, source: []const u8, ext: []const u8, ref_text: []const u8, body: []const u8, expected: []const u8) !void {
+    const got = try replaceIn(runtime, source, ext, ref_text, body);
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings(expected, got);
+}
+
+test "a whole top-level statement, binding, method or property is replaced by its ref without resending its neighbours" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const lib = "const { join } = require('path');\n\nclass Cart {\n  size() {\n    return 0;\n  }\n}\n\nmodule.exports = { Cart };\n";
+    try expectReplaced(runtime, lib, ".js", "module.exports", "module.exports = { Cart, join };", "const { join } = require('path');\n\nclass Cart {\n  size() {\n    return 0;\n  }\n}\n\nmodule.exports = { Cart, join };\n");
+    try expectReplaced(runtime, lib, ".js", "join", "const { join, resolve } = require('path');", "const { join, resolve } = require('path');\n\nclass Cart {\n  size() {\n    return 0;\n  }\n}\n\nmodule.exports = { Cart };\n");
+    try expectReplaced(runtime, lib, ".js", "Cart.size", "size() {\n  return 1;\n}", "const { join } = require('path');\n\nclass Cart {\n  size() {\n    return 1;\n  }\n}\n\nmodule.exports = { Cart };\n");
+    const rule = "module.exports = {\n  meta: {\n    type: 'problem',\n    schema: [],\n  },\n  create(context) {\n    return {};\n  },\n};\n";
+    try expectReplaced(runtime, rule, ".js", "module.exports.meta.schema", "schema: [{ type: 'object' }],", "module.exports = {\n  meta: {\n    type: 'problem',\n    schema: [{ type: 'object' }],\n  },\n  create(context) {\n    return {};\n  },\n};\n");
+    try expectReplaced(runtime, rule, ".js", "module.exports.create", "{\n    return { Program() {} };\n  }", "module.exports = {\n  meta: {\n    type: 'problem',\n    schema: [],\n  },\n  create(context) {\n    return { Program() {} };\n  },\n};\n");
+    try expectReplaced(runtime, "export function f(): number { return 1; }\n", ".ts", "f", "function f(): number { return 2; }", "export function f(): number { return 2; }\n");
+}
+
+test "a replaced item that grows into its neighbour or changes its name is refused" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotIn(runtime, "module.exports = { a: 1 };\nfoo();\n", ".js");
+    defer base.destroy();
+    try testing.expectError(error.BodyEscape, mutate(base, "module.exports", "module.exports = { a: 2 };\nbar();", .current));
+    try testing.expectError(error.BodyEscape, mutate(base, "module.exports", "exports.b = 1;", .current));
+    try testing.expectError(error.HashMismatch, mutate(base, "module.exports", "module.exports = { a: 2 };", .stale));
+}
+
+test "a member is inserted after the last member of its class and nested properties keep their blank lines" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "class Cart {\n  size() {\n    return 0;\n  }\n}\n";
+    const base = try test_util.snapshotIn(runtime, source, ".js");
+    defer base.destroy();
+    const ref = try symbol.Ref.parse(testing.allocator, "Cart.clear");
+    defer ref.deinit(testing.allocator);
+    const applied = try insert(base, .{ .ref = ref, .new_body = "clear() {\n  return 1;\n}" });
+    defer applied.snapshot.destroy();
+    try testing.expectEqualStrings("class Cart {\n  size() {\n    return 0;\n  }\n\n  clear() {\n    return 1;\n  }\n}\n", applied.snapshot.source);
+    try testing.expectEqual(try hashOfRef(applied.snapshot, "Cart.clear"), applied.hash);
+    const inline_base = try test_util.snapshotIn(runtime, "class C { m() { return 1; } }\n", ".js");
+    defer inline_base.destroy();
+    const member = try symbol.Ref.parse(testing.allocator, "C.n");
+    defer member.deinit(testing.allocator);
+    const placed = try insert(inline_base, .{ .ref = member, .new_body = "n() { return 2; }" });
+    defer placed.snapshot.destroy();
+    try testing.expectEqualStrings("class C { m() { return 1; } n() { return 2; } }\n", placed.snapshot.source);
+    const taken = try symbol.Ref.parse(testing.allocator, "Cart.size");
+    defer taken.deinit(testing.allocator);
+    try testing.expectError(error.SymbolExists, insert(base, .{ .ref = taken, .new_body = "size() { return 2; }" }));
 }

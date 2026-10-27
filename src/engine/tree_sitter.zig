@@ -120,6 +120,11 @@ pub const Node = struct {
         return wrap(c.ts_node_child_by_field_name(self.raw, field.ptr, len));
     }
 
+    pub fn fieldNameForChild(self: Node, index: u32) ?[]const u8 {
+        const name = c.ts_node_field_name_for_child(self.raw, index);
+        return if (name == null) null else std.mem.span(name);
+    }
+
     pub fn prevSibling(self: Node) ?Node {
         return wrap(c.ts_node_prev_sibling(self.raw));
     }

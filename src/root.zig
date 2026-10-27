@@ -19,6 +19,7 @@ pub const rename = @import("engine/rename.zig");
 pub const scope = @import("engine/scope.zig");
 pub const alpha = @import("engine/alpha.zig");
 pub const declarations = @import("engine/declarations.zig");
+pub const statements = @import("engine/statements.zig");
 pub const modules = @import("engine/modules.zig");
 pub const facts = @import("engine/facts.zig");
 pub const facts_extract = @import("engine/facts_extract.zig");
