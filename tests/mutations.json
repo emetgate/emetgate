@@ -15320,6 +15320,61 @@
       "kills": [
         "rename facts: every name of a Python from-import binds, not only the first"
       ]
+    },
+    {
+      "id": "L4R-package-inits-not-loaded",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try graph.addPackageInits(real.seam().fs, root);\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4S-package-init-gate-inverted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (modules.package_init.len == 0) return;",
+      "to": "        if (modules.package_init.len != 0) return;",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4T-namespace-package-no-submodule",
+      "file": "src/engine/facts_store.zig",
+      "from": "            .external => return self.submoduleOf(id, binding, .{ .unresolved = .external_module }, visit),",
+      "to": "            .external => return .{ .unresolved = .external_module },",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4U-missing-export-no-submodule",
+      "file": "src/engine/facts_store.zig",
+      "from": "        return self.submoduleOf(id, binding, found, visit);",
+      "to": "        return found;",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed"
+      ]
+    },
+    {
+      "id": "L4V-from-import-no-submodule-spec",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.m.submodule_imports) try self.addSubmodule(",
+      "to": "if (false) try self.addSubmodule(",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed",
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4W-import-bindings-not-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (self.m.exports_bindings) try self.exportBindings();",
+      "to": "",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed"
+      ]
     }
   ]
 }

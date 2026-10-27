@@ -131,6 +131,7 @@ pub const Binding = struct {
     local: []const u8,
     start: u32,
     type_only: bool,
+    submodule: u32 = none,
 };
 
 pub const ExportKind = enum(u8) { local, binding, star };

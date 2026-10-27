@@ -111,6 +111,24 @@ const Graph = struct {
         }
     }
 
+    fn addPackageInits(self: *Graph, fs: io_seam.Fs, root: []const u8) !void {
+        const modules = self.profile.modules orelse return;
+        if (modules.package_init.len == 0) return;
+        var i: usize = 0;
+        while (i < self.rels.items.len) : (i += 1) {
+            var dir = std.fs.path.dirnamePosix(self.rels.items[i]) orelse continue;
+            while (true) {
+                const init_rel = try std.fmt.allocPrint(self.gpa, "{s}/{s}", .{ dir, modules.package_init });
+                defer self.gpa.free(init_rel);
+                const abs = try std.fmt.allocPrint(self.gpa, "{s}\\{s}", .{ root, init_rel });
+                defer self.gpa.free(abs);
+                std.mem.replaceScalar(u8, abs[root.len..], '/', '\\');
+                if (fs.stat(abs, .follow)) |_| try self.addRel(init_rel) else |_| {}
+                dir = std.fs.path.dirnamePosix(dir) orelse break;
+            }
+        }
+    }
+
     fn absOf(self: *const Graph, gpa: Allocator, root: []const u8, file: u32) ![]u8 {
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, self.rels.items[file] });
         std.mem.replaceScalar(u8, abs[root.len..], '/', '\\');
@@ -456,6 +474,9 @@ pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, f
 
     var real = io_seam.Real.init(gpa, io);
     defer real.deinit();
+    const before_inits = graph.rels.items.len;
+    try graph.addPackageInits(real.seam().fs, root);
+    try graph.load(io, runtime, root, before_inits);
     var workspace = try fact_modules.Workspace.build(gpa, real.seam().fs, root, graph.rels.items);
     defer workspace.deinit();
     try graph.store.linkAll(workspace.resolver());

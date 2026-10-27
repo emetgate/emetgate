@@ -725,3 +725,41 @@ test "rename facts: a C# property reached bare, through var, target-typed new, a
         \\
     );
 }
+
+test "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "p/__init__.py", .text = "from .m import helper\n" },
+        .{ .rel = "p/m.py", .text = "def helper(v):\n    return v\n" },
+        .{ .rel = "n.py", .text = "from p import m\n\nprint(m.helper(1))\n" },
+        .{ .rel = "o.py", .text = "from p import helper\n\nprint(helper(2))\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("p/m.py", "helper", "double", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "p/__init__.py", "from .m import double\n");
+    try expectSource(planned, "n.py", "from p import m\n\nprint(m.double(1))\n");
+    try expectSource(planned, "o.py", "from p import double\n\nprint(double(2))\n");
+}
+
+test "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "q/m.py", .text = "def helper(v):\n    return v\n" },
+        .{ .rel = "n.py", .text = "from q import m\n\nprint(m.helper(1))\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("q/m.py", "helper", "double", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "n.py", "from q import m\n\nprint(m.double(1))\n");
+
+    var shadowed = try Case.init(&.{
+        .{ .rel = "p/__init__.py", .text = "m = None\n" },
+        .{ .rel = "p/m.py", .text = "def helper(v):\n    return v\n" },
+        .{ .rel = "n.py", .text = "from p import m\n\nprint(m.helper(1))\n" },
+    });
+    defer shadowed.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, shadowed.planWith("p/m.py", "helper", "double", true, &sites));
+    try testing.expectEqualStrings("n.py:3", sites.list());
+}

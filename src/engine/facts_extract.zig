@@ -259,6 +259,7 @@ const Extractor = struct {
                     if (entry.namespace) |name| _ = try self.addBinding(spec, facts.namespace_name, name, entry.namespace_start, entry.type_only);
                     for (entry.named) |named| {
                         const b = try self.addBinding(spec, named.name, named.local(), named.local_start, entry.type_only or named.type_only);
+                        if (self.m.submodule_imports) try self.addSubmodule(b, entry.spec, named.name, entry.statement.start);
                         try self.addImportRef(named.name, named.name_start, b);
                     }
                 },
@@ -284,6 +285,14 @@ const Extractor = struct {
         try self.bindings.append(self.arena, .{ .spec = spec, .imported = try self.keep(imported), .local = try self.keep(local), .start = start, .type_only = type_only });
         if (local.len != 0) try self.binding_at.put(self.arena, start, index);
         return index;
+    }
+
+    fn addSubmodule(self: *Extractor, binding: u32, package: []const u8, name: []const u8, start: u32) Error!void {
+        if (package.len == 0) return;
+        const separator: []const u8 = if (package[package.len - 1] == '.') "" else ".";
+        const joined = try std.mem.concat(self.arena, u8, &.{ package, separator, name });
+        self.bindings.items[binding].submodule = @intCast(self.specs.items.len);
+        try self.specs.append(self.arena, .{ .text = joined, .line = self.lineAt(start), .kind = .static });
     }
 
     fn addImportRef(self: *Extractor, name: []const u8, start: u32, binding: u32) Error!void {
@@ -542,6 +551,7 @@ const Extractor = struct {
                 def.exported = true;
                 try self.exports.append(self.arena, .{ .name = def.name, .kind = .local, .index = @intCast(d) });
             }
+            if (self.m.exports_bindings) try self.exportBindings();
             return;
         }
         const root = self.snapshot.tree.root();
@@ -575,6 +585,13 @@ const Extractor = struct {
                     try self.exportName(exported, name);
                 }
             }
+        }
+    }
+
+    fn exportBindings(self: *Extractor) Error!void {
+        for (self.bindings.items, 0..) |binding, b| {
+            if (binding.type_only) continue;
+            try self.exports.append(self.arena, .{ .name = binding.local, .kind = .binding, .index = @intCast(b) });
         }
     }
 

@@ -489,15 +489,31 @@ pub const Store = struct {
         const binding = state.facts.bindings[binding_index];
         const target = switch (state.spec_targets[binding.spec]) {
             .file => |f| f,
-            .external => return .{ .unresolved = .external_module },
-            .not_found => return .{ .unresolved = .module_not_found },
+            .external => return self.submoduleOf(id, binding, .{ .unresolved = .external_module }, visit),
+            .not_found => return self.submoduleOf(id, binding, .{ .unresolved = .module_not_found }, visit),
             .unindexed => return .{ .unresolved = .unindexed_module },
         };
         if (std.mem.eql(u8, binding.imported, facts.namespace_name)) {
             try visit.files.append(self.gpa, target);
             return .{ .namespace = target };
         }
-        return self.resolveExport(target, binding.imported, visit);
+        const found = try self.resolveExport(target, binding.imported, visit);
+        switch (found) {
+            .unresolved => |reason| if (reason != .export_not_found) return found,
+            else => return found,
+        }
+        return self.submoduleOf(id, binding, found, visit);
+    }
+
+    fn submoduleOf(self: *Store, id: FileId, binding: facts.Binding, otherwise: Resolved, visit: *Visit) LinkError!Resolved {
+        if (binding.submodule == facts.none) return otherwise;
+        return switch (self.files.items[id].spec_targets[binding.submodule]) {
+            .file => |f| blk: {
+                try visit.files.append(self.gpa, f);
+                break :blk .{ .namespace = f };
+            },
+            else => otherwise,
+        };
     }
 
     fn memberIndex(self: *Store, id: FileId) !*std.AutoHashMapUnmanaged(u64, u32) {
