@@ -39,6 +39,9 @@ test "test detection: each project marker names its test command" {
     try expectDetected("go test ./...", &.{.{ "go.mod", "" }});
     try expectDetected("python -m pytest", &.{.{ "pyproject.toml", "" }});
     try expectDetected("python -m pytest", &.{.{ "pytest.ini", "" }});
+    try expectDetected("python -m pytest", &.{.{ "tox.ini", "" }});
+    try expectDetected("python -m pytest", &.{.{ "setup.cfg", "" }});
+    try expectDetected("python -m pytest", &.{.{ "setup.py", "" }});
     try expectDetected("dotnet test", &.{.{ "app.csproj", "" }});
     try expectDetected("dotnet test", &.{.{ "App.SLN", "" }});
 }

@@ -47,6 +47,9 @@ const markers = [_]Marker{
     .{ .file = "go.mod", .command = "go test ./..." },
     .{ .file = "pyproject.toml", .command = "python -m pytest" },
     .{ .file = "pytest.ini", .command = "python -m pytest" },
+    .{ .file = "tox.ini", .command = "python -m pytest" },
+    .{ .file = "setup.cfg", .command = "python -m pytest" },
+    .{ .file = "setup.py", .command = "python -m pytest" },
 };
 
 pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {

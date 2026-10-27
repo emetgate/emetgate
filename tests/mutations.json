@@ -15375,6 +15375,33 @@
       "kills": [
         "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed"
       ]
+    },
+    {
+      "id": "L4X-tox-ini-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "    .{ .file = \"tox.ini\", .command = \"python -m pytest\" },\n",
+      "to": "",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L4Y-setup-cfg-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "    .{ .file = \"setup.cfg\", .command = \"python -m pytest\" },\n",
+      "to": "",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L4Z-setup-py-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "    .{ .file = \"setup.py\", .command = \"python -m pytest\" },\n",
+      "to": "",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
     }
   ]
 }
