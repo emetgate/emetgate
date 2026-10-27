@@ -6,6 +6,7 @@ const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
 const run_tool = @import("run_tool.zig");
+const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
@@ -203,6 +204,24 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_run",
         .description = run_tool.description,
         .props = &.{.{ .name = "command", .desc = "one allowlist entry, byte for byte; omit to list the allowlist", .optional = true }},
+    },
+    .{
+        .name = "emetgate_edit",
+        .description = edit_tool.edit_description,
+        .props = &.{
+            .{ .name = "file", .desc = "path inside the repo" },
+            .{ .name = "old_string", .desc = "exact text to replace" },
+            .{ .name = "new_string", .desc = "replacement text" },
+            .{ .name = "replace_all", .desc = "replace every match", .optional = true, .ty = "boolean" },
+        },
+    },
+    .{
+        .name = "emetgate_write",
+        .description = edit_tool.write_description,
+        .props = &.{
+            .{ .name = "file", .desc = "path inside the repo" },
+            .{ .name = "content", .desc = "the whole new file content" },
+        },
     },
     .{
         .name = "emetgate_write_doc",
@@ -447,7 +466,7 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
     try js.endObject();
 }
 
-pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc" };
+pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc", "emetgate_edit", "emetgate_write" };
 const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
 
 fn commits(tool: []const u8) bool {

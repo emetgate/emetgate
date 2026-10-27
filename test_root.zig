@@ -76,6 +76,7 @@ pub const tsserver = src.tsserver;
 pub const rename_batch = src.rename_batch;
 pub const move_batch = src.move_batch;
 pub const file_move = src.file_move;
+pub const file_edit = src.file_edit;
 pub const module_paths = src.module_paths;
 pub const search_index = src.search_index;
 pub const search_index_file = src.search_index_file;
@@ -240,6 +241,7 @@ test {
     _ = @import("tests/file_move_crash.zig");
     _ = @import("tests/dir_flush_crash.zig");
     _ = @import("tests/move_file_tool.zig");
+    _ = @import("tests/edit_tool.zig");
     _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/verify_receipts.zig");
     _ = @import("tests/verify_branch.zig");

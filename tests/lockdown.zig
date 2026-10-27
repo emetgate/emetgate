@@ -157,6 +157,8 @@ const gated_tools = [_][]const u8{
     "emetgate_try",
     "emetgate_try_batch",
     "emetgate_write_doc",
+    "emetgate_edit",
+    "emetgate_write",
     "emetgate_rename",
     "emetgate_move",
     "emetgate_move_file",
