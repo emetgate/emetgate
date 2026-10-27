@@ -4,6 +4,7 @@ const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
 const exe_path = @import("../platform/exe_path.zig");
 const git_symbols = @import("git_symbols.zig");
+const diff_digest = @import("diff_digest.zig");
 const read_budget = @import("read_budget.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -600,7 +601,7 @@ const Folded = struct {
 };
 
 fn isHunkBoundary(line: []const u8) bool {
-    return std.mem.startsWith(u8, line, "@@") or std.mem.startsWith(u8, line, "diff --git ");
+    return std.mem.startsWith(u8, line, "@");
 }
 
 fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
@@ -624,7 +625,7 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
 
     var hunks_elided: usize = 0;
     for (lines.items[keep..]) |l| {
-        if (std.mem.startsWith(u8, l, "@@")) hunks_elided += 1;
+        if (std.mem.startsWith(u8, l, "@")) hunks_elided += 1;
     }
     const remaining = total - keep;
 
@@ -650,7 +651,9 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
 
 fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path: ?[]const u8, stdout: []const u8, summary: ?*const git_symbols.Summary, opts: Options) !void {
     try writeBase(js, sub, path, opts);
-    if (summary) |s| try writeSymbolSummary(js, s.*);
+    if (opts.symbols_only or opts.detail == .full) {
+        if (summary) |s| try writeSymbolSummary(js, s.*);
+    }
 
     if (opts.symbols_only) {
         try js.objectField("symbols_only");
@@ -667,7 +670,9 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
         return;
     }
 
-    const folded = try foldDiff(gpa, stdout, opts.budget);
+    const condensed = try diff_digest.condense(gpa, stdout, summary);
+    defer gpa.free(condensed);
+    const folded = try foldDiff(gpa, condensed, opts.budget);
     defer folded.deinit(gpa);
     try js.objectField("output");
     try js.write(folded.text);
@@ -699,7 +704,7 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
     }
     try js.endArray();
     try js.objectField("note");
-    try js.write("compact: symbol_changes is the primary view; the raw diff is folded under the read budget — pass detail:\"full\" for every hunk, or symbols_only:true for zero raw bytes");
+    try js.write("compact diff folded under the read budget; pass detail:\"full\" for every hunk, or symbols_only:true for symbol_changes only");
     try js.endObject();
 }
 
