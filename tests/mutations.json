@@ -15573,6 +15573,24 @@
       "kills": [
         "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
       ]
+    },
+    {
+      "id": "L5T-fact-file-drops-submodule",
+      "file": "src/platform/fact_file.zig",
+      "from": "        b.submodule = if (submodule == 0) facts.none else submodule - 1;",
+      "to": "        b.submodule = if (submodule == 0) facts.none else facts.none;",
+      "kills": [
+        "fact store: a saved store keeps the submodule a Python from-import may name"
+      ]
+    },
+    {
+      "id": "L5U-fact-file-submodule-off-by-one",
+      "file": "src/platform/fact_file.zig",
+      "from": "        try e.varint(if (b.submodule == facts.none) 0 else b.submodule + 1);",
+      "to": "        try e.varint(if (b.submodule == facts.none) 0 else b.submodule);",
+      "kills": [
+        "fact store: a saved store keeps the submodule a Python from-import may name"
+      ]
     }
   ]
 }
