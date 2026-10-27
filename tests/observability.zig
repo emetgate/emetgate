@@ -483,8 +483,8 @@ test "a read tool logs the chars it can compute and leaves the rest null" {
     try writeCall(&line.writer, "emetgate_skeleton", fixture, null, null);
     const response = try call(runtime, line.written(), &observer, .{});
     defer testing.allocator.free(response);
-    try expectContains(response, "emetgate ✓ skeleton · read ");
-    try expectContains(response, " chars · session 0 edits");
+    try testing.expect(std.mem.indexOf(u8, response, "emetgate ✓ skeleton") == null);
+    try testing.expect(std.mem.indexOf(u8, response, "session 0 edits") == null);
 
     const ignore = try tmp.dir.readFileAlloc(testing.io, ".gitignore", testing.allocator, .unlimited);
     defer testing.allocator.free(ignore);
