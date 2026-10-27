@@ -12326,7 +12326,7 @@
       "id": "RD8-force-does-not-bypass-whole-read",
       "file": "src/protocol/read_cache.zig",
       "from": "    if (force or !m.enabled) return false;",
-      "to": "    if (!m.enabled) return false;",
+      "to": "    if ((force and false) or !m.enabled) return false;",
       "kills": [
         "a whole read covers later reads of the same file only while its hash holds"
       ]
@@ -12381,7 +12381,7 @@
       "id": "RD14-raw-code-ignored",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!policy.raw_code or result.is_error) return result;",
-      "to": "    if (true) return result;",
+      "to": "    if (policy.raw_code or !policy.raw_code or result.is_error) return result;",
       "kills": [
         "with raw code on, read replies put a one-line JSON header before the code as plain text"
       ]
@@ -12390,7 +12390,7 @@
       "id": "RD15-raw-code-always-on",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!policy.raw_code or result.is_error) return result;",
-      "to": "    if (result.is_error) return result;",
+      "to": "    if ((!policy.raw_code and false) or result.is_error) return result;",
       "kills": [
         "read_file returns the outline of a source file over the threshold, with line ranges and hashes, and text for a line range",
         "read_file at exactly the outline threshold still returns the text"
@@ -12437,7 +12437,7 @@
       "id": "RD20-doc-block-kept-whole",
       "file": "src/engine/skeleton.zig",
       "from": "    if (!std.mem.startsWith(u8, comment, \"/*\")) return .{ .text = std.mem.trimEnd(u8, comment[0..newline], \" \\t\\r\") };",
-      "to": "    if (true) return .{ .text = comment };",
+      "to": "    if (newline != std.math.maxInt(usize)) return .{ .text = comment };",
       "kills": [
         "a skeleton folds every doc block to its first line and keeps one-line comments"
       ]
@@ -12446,7 +12446,7 @@
       "id": "RD21-adjacent-comments-not-grouped",
       "file": "src/engine/skeleton.zig",
       "from": "        while (i < comments.items.len and isBlank(source[last.end..comments.items[i].start])) : (i += 1) last = comments.items[i];\n",
-      "to": "",
+      "to": "        while (false and i < comments.items.len and isBlank(source[last.end..comments.items[i].start])) : (i += 1) last = comments.items[i];\n",
       "kills": [
         "a skeleton keeps only the first of adjacent comments and drops a block with no text"
       ]
@@ -12464,7 +12464,7 @@
       "id": "RD23-raw-header-keeps-code",
       "file": "src/protocol/raw_reply.zig",
       "from": "        if (std.mem.eql(u8, field.key_ptr.*, skip)) continue;\n",
-      "to": "",
+      "to": "        if (skip.len == 0 and std.mem.eql(u8, field.key_ptr.*, skip)) continue;\n",
       "kills": [
         "a code field leaves the JSON header and follows it verbatim, with no escapes",
         "each symbol entry gets its own header line and raw code"
@@ -12474,7 +12474,7 @@
       "id": "RD24-raw-entries-not-split",
       "file": "src/protocol/raw_reply.zig",
       "from": "    } else if (entriesWithCode(object)) |entries| {",
-      "to": "    } else if (false) |entries| {",
+      "to": "    } else if (if (false) entriesWithCode(object) else null) |entries| {",
       "kills": [
         "each symbol entry gets its own header line and raw code"
       ]
@@ -12483,7 +12483,7 @@
       "id": "RD25-raw-accepts-non-string-code",
       "file": "src/protocol/raw_reply.zig",
       "from": "        if (value == .string) return name;",
-      "to": "        return name;",
+      "to": "        if (value == .string or value != .string) return name;",
       "kills": [
         "replies without code, and text that is not a JSON object, stay as they are"
       ]
