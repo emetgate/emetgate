@@ -96,7 +96,7 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_rename",
         .description = "Renames a symbol and every reference to it as one batch, and writes only if the configured typecheck and test commands pass. A rename that touches another file or an exported symbol needs interface_change:true. Refused when a reference cannot be resolved (RenameUnresolved) or the name is also used as a string, in eval or as a computed key (DynamicReference).",
         .props = &.{
-            .{ .name = "file", .desc = "path to the TypeScript or JavaScript file that declares the symbol" },
+            .{ .name = "file", .desc = "path to the TypeScript, JavaScript, Python or C# file that declares the symbol" },
             .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
             .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
             .{ .name = "new_name", .desc = "the new identifier" },

@@ -9,7 +9,6 @@ const binder_sites = [_]BinderSite{
     .{ .parent = "class_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "struct_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "record_declaration", .field = "name", .namespace = .both, .scope = .program },
-    .{ .parent = "record_struct_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "interface_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "enum_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "delegate_declaration", .field = "name", .namespace = .both, .scope = .program },
@@ -76,7 +75,6 @@ const type_declarations = [_]DeclarationShape{
     .{ .node = "class_declaration", .kind = .class, .name_field = "name" },
     .{ .node = "struct_declaration", .kind = .class, .name_field = "name" },
     .{ .node = "record_declaration", .kind = .class, .name_field = "name" },
-    .{ .node = "record_struct_declaration", .kind = .class, .name_field = "name" },
     .{ .node = "interface_declaration", .kind = .interface, .name_field = "name" },
     .{ .node = "enum_declaration", .kind = .enumeration, .name_field = "name" },
 };
@@ -88,7 +86,6 @@ const declaration_containers = [_][]const u8{
     "class_declaration",
     "struct_declaration",
     "record_declaration",
-    "record_struct_declaration",
     "interface_declaration",
 };
 
@@ -97,7 +94,8 @@ pub fn declarations() Declarations {
         .types = &type_declarations,
         .variable_statements = &.{},
         .value_field = "value",
-        .fields = &.{},
+        .fields = &.{.{ .node = "property_declaration", .kind = .field, .name_field = "name" }},
+        .field_statements = &.{ "field_declaration", "event_field_declaration" },
         .enum_body = "enum_member_declaration_list",
         .enum_members = &.{.{ .node = "enum_member_declaration", .kind = .enum_member, .name_field = "name" }},
         .enum_bare_member = null,

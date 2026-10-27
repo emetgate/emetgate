@@ -11,6 +11,7 @@ const batch_plan = @import("batch_plan.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const runner = @import("runner.zig");
+const rename_graph = @import("rename_graph.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -27,7 +28,7 @@ pub const Request = struct {
     interface_change: bool = false,
 };
 
-pub const Resolver = enum { language_service, text };
+pub const Resolver = enum { language_service, text, facts };
 
 pub const Options = struct {
     request: Request,
@@ -113,13 +114,22 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const old = ref.name;
     if (!rename.validName(request.new_name) or std.mem.eql(u8, old, request.new_name)) return error.InvalidName;
     const offset = target.offset;
-    const member = ref.container.len != 0;
+    var member = ref.container.len != 0;
 
     var locations: Locations = .{};
     defer locations.deinit(gpa);
     var resolver: Resolver = .text;
     var fallback: ?anyerror = error.NoLanguageService;
-    if (session) |s| {
+    var free_uses = false;
+    if (!base.profile.language_service and rename_graph.supports(base.profile)) {
+        const found = try rename_graph.locate(gpa, io, runtime, root, request.file_abs, offset, old);
+        defer found.deinit(gpa);
+        for (found.proven) |p| try locations.add(gpa, try gpa.dupe(u8, p.abs), p.span);
+        resolver = .facts;
+        fallback = null;
+        member = found.member;
+        free_uses = found.free_uses;
+    } else if (session) |s| {
         switch (try fromService(gpa, io, root, s, request.file_abs, offset, &locations)) {
             .ok => {
                 resolver = .language_service;
@@ -135,8 +145,8 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
 
     const own = locations.find(request.file_abs) orelse return error.IncompleteRename;
     if (!startsAt(own.spans.items, offset)) return error.IncompleteRename;
-    const top_name = if (member) ref.container[0] else old;
-    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name);
+    const top_name = if (ref.container.len != 0) ref.container[0] else old;
+    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name) or (resolver == .facts and visibleAt(base, offset, old));
     if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
     try refuseDynamic(gpa, io, runtime, root, &locations, old, member);
 
@@ -162,7 +172,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         const declaring = tsserver.sameFile(located.abs, request.file_abs);
         const file_base = try Snapshot.load(runtime, io, .cwd(), located.abs);
         errdefer file_base.destroy();
-        const renamed = try rename.apply(gpa, file_base, old, request.new_name, located.spans.items);
+        const renamed = try rename.applyWith(gpa, file_base, old, request.new_name, located.spans.items, .{ .free_uses = free_uses });
         defer gpa.free(renamed.spans);
         errdefer renamed.snapshot.destroy();
         const holes = try renamedHoles(gpa, located.spans.items, renamed.spans);
@@ -256,6 +266,12 @@ fn declarationOf(table: symbol.Table, ref: symbol.Ref, kind: symbol.DeclarationK
         if (declaration.kind == kind and declaration.ref.eql(ref)) return declaration;
     }
     return null;
+}
+
+fn visibleAt(base: *Snapshot, offset: u32, old: []const u8) bool {
+    const name = rename.leafAt(base.tree.root(), .{ .start = offset, .end = offset + @as(u32, @intCast(old.len)) }) orelse return true;
+    const holder = name.parent() orelse return true;
+    return base.profile.hasVisibilityKeyword(base.tree, holder);
 }
 
 fn startsAt(spans: []const Span, offset: u32) bool {

@@ -6,6 +6,8 @@ const csharp_facts = @import("facts.zig");
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
 const FunctionNode = profile_mod.FunctionNode;
+const FunctionName = profile_mod.FunctionName;
+const Accessor = @import("../../ref.zig").Accessor;
 const MemberTraits = profile_mod.MemberTraits;
 const Container = profile_mod.Container;
 const LiteralValues = profile_mod.LiteralValues;
@@ -20,6 +22,18 @@ const function_nodes = [_]FunctionNode{
     .{ .node = "method_declaration", .kind = .method },
     .{ .node = "constructor_declaration", .kind = .method },
     .{ .node = "local_function_statement", .kind = .declaration },
+    .{ .node = "accessor_declaration", .kind = .method },
+    .{ .node = "operator_declaration", .kind = .method },
+    .{ .node = "conversion_operator_declaration", .kind = .method },
+    .{ .node = "destructor_declaration", .kind = .method },
+    .{ .node = "lambda_expression", .kind = .arrow },
+};
+
+const function_names = [_]FunctionName{
+    .{ .node = "accessor_declaration", .owner_depth = 2, .field = "name" },
+    .{ .node = "operator_declaration", .field = null },
+    .{ .node = "conversion_operator_declaration", .field = null },
+    .{ .node = "destructor_declaration", .field = null },
 };
 
 const containers = [_]Container{
@@ -29,6 +43,7 @@ const containers = [_]Container{
     .{ .node = "enum_declaration", .name = .field },
     .{ .node = "record_declaration", .name = .field },
     .{ .node = "namespace_declaration", .name = .field },
+    .{ .node = "file_scoped_namespace_declaration", .name = .field },
 };
 
 const never_matching_literal_values: LiteralValues = .{
@@ -80,7 +95,10 @@ pub const profile: Profile = .{
     .directives = &.{},
     .literal_values = never_matching_literal_values,
     .memberTraits = memberTraits,
-    .visibility_keywords = &.{},
+    .visibility_keywords = &.{ "public", "protected", "internal" },
+    .modifier = "modifier",
+    .function_names = &function_names,
+    .file_scoped_containers = &.{"file_scoped_namespace_declaration"},
     .rename = &csharp_rename.grammar,
     .modules = &csharp_rename.modules,
     .declarations = csharp_rename.declarations(),
@@ -90,10 +108,21 @@ pub const profile: Profile = .{
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {
     _ = self;
     _ = kind;
+    if (isKind(node, "accessor_declaration")) {
+        const owner = (node.parent() orelse return .{}).parent() orelse return .{};
+        return .{ .accessor = accessorOf(node), .is_static = hasStaticModifier(tree, owner) };
+    }
     return .{
         .is_constructor = isKind(node, "constructor_declaration"),
         .is_static = hasStaticModifier(tree, node),
     };
+}
+
+fn accessorOf(node: ts.Node) Accessor {
+    const name = node.childByField("name") orelse return .none;
+    if (isKind(name, "get")) return .get;
+    if (isKind(name, "set") or isKind(name, "init")) return .set;
+    return .none;
 }
 
 fn isKind(node: ts.Node, name: []const u8) bool {
@@ -142,9 +171,6 @@ test "csharp profile maps its node kinds onto a real tree" {
     try testing.expect(!root.hasError());
     try testing.expectEqualStrings(profile.root, root.kind());
 
-    // Find the class, its method and the Console.WriteLine call by kind, then
-    // confirm the profile's container / function / call config resolves against
-    // the real tree (names come from the "name" field; calls from Call config).
     const class = find(root, "class_declaration").?;
     try testing.expect(profile.containerName(class.kind()) != null);
     try testing.expectEqualStrings("Greeter", tree.text(class.childByField("name").?));

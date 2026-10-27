@@ -89,18 +89,43 @@ const Collector = struct {
         });
     }
 
-    fn statement(self: *Collector, node: ts.Node) !void {
+    fn statement(self: *Collector, node: ts.Node, scope: []const []const u8) !void {
         const shapes = self.profile.declarations;
-        if (shapeOf(shapes.types, node.kind())) |shape| return self.typeDeclaration(node, shape);
+        if (shapeOf(shapes.types, node.kind())) |shape| return self.typeDeclaration(node, shape, scope);
         if (oneOf(node.kind(), shapes.variable_statements)) return self.variables(node);
     }
 
-    fn typeDeclaration(self: *Collector, node: ts.Node, shape: DeclarationShape) !void {
+    fn within(self: *Collector, node: ts.Node, scope: []const []const u8) ![]const []const u8 {
+        if (self.profile.containerName(node.kind()) != .field) return scope;
+        const name = node.childByField("name") orelse return scope;
+        var path: std.ArrayList([]const u8) = .empty;
+        try path.appendSlice(self.arena, scope);
+        if (!self.profile.isDottedName(name.kind())) {
+            try path.append(self.arena, self.text(name));
+            return path.items;
+        }
+        try self.segments(name, &path);
+        return path.items;
+    }
+
+    fn segments(self: *Collector, node: ts.Node, path: *std.ArrayList([]const u8)) !void {
+        if (node.childCount() == 0) {
+            if (oneOf(node.kind(), self.profile.name_segments)) try path.append(self.arena, self.text(node));
+            return;
+        }
+        var i: u32 = 0;
+        while (node.child(i)) |child| : (i += 1) try self.segments(child, path);
+    }
+
+    fn typeDeclaration(self: *Collector, node: ts.Node, shape: DeclarationShape, scope: []const []const u8) !void {
         const name = node.childByField(shape.name_field) orelse return;
         const outer = self.outerOf(node);
         const empty: Span = .{ .start = 0, .end = 0 };
-        try self.add(shape.kind, node, name, &.{}, false, empty, .{ .start = self.decoratedStart(outer), .end = outer.endByte() });
-        const container = try self.arena.dupe([]const u8, &.{self.text(name)});
+        try self.add(shape.kind, node, name, scope, false, empty, .{ .start = self.decoratedStart(outer), .end = outer.endByte() });
+        var path: std.ArrayList([]const u8) = .empty;
+        try path.appendSlice(self.arena, scope);
+        try path.append(self.arena, self.text(name));
+        const container = path.items;
         switch (shape.kind) {
             .class => try self.fields(node, container),
             .enumeration => try self.enumMembers(node, container),
@@ -120,8 +145,9 @@ const Collector = struct {
         const keyword = self.profile.declarations.static_keyword orelse return false;
         var i: u32 = 0;
         while (holder.child(i)) |child| : (i += 1) {
-            if (child.eql(name)) return false;
+            if (child.startByte() >= name.startByte()) return false;
             if (!child.isNamed() and std.mem.eql(u8, keyword, child.kind())) return true;
+            if (self.profile.isModifier(child.kind()) and std.mem.eql(u8, keyword, self.text(child))) return true;
         }
         return false;
     }
@@ -130,6 +156,10 @@ const Collector = struct {
         const body = class.childByField("body") orelse return;
         var i: u32 = 0;
         while (body.namedChild(i)) |member| : (i += 1) {
+            if (oneOf(member.kind(), self.profile.declarations.field_statements)) {
+                try self.fieldStatement(member, container);
+                continue;
+            }
             const shape = shapeOf(self.profile.declarations.fields, member.kind()) orelse continue;
             if (self.isFunctionValue(member)) continue;
             const name = member.childByField(shape.name_field) orelse continue;
@@ -137,6 +167,41 @@ const Collector = struct {
             const empty: Span = .{ .start = 0, .end = 0 };
             try self.add(.field, member, name, container, self.hasKeywordBefore(member, name), empty, .{ .start = self.decoratedStart(member), .end = member.endByte() });
         }
+    }
+
+    fn fieldStatement(self: *Collector, member: ts.Node, container: []const []const u8) !void {
+        var i: u32 = 0;
+        const holder = while (member.namedChild(i)) |child| : (i += 1) {
+            if (self.declaresVariables(child)) break child;
+        } else return;
+        var declarators: u32 = 0;
+        i = 0;
+        while (holder.namedChild(i)) |child| : (i += 1) {
+            if (std.mem.eql(u8, child.kind(), self.profile.declarator)) declarators += 1;
+        }
+        const is_static = self.hasKeywordBefore(member, holder);
+        i = 0;
+        var first_start: ?u32 = null;
+        while (holder.namedChild(i)) |child| : (i += 1) {
+            if (!std.mem.eql(u8, child.kind(), self.profile.declarator)) continue;
+            if (first_start == null) first_start = child.startByte();
+            const name = child.childByField("name") orelse continue;
+            if (!oneOf(name.kind(), self.profile.addressable_names)) continue;
+            if (declarators == 1) {
+                const empty: Span = .{ .start = 0, .end = 0 };
+                try self.add(.field, member, name, container, is_static, empty, .{ .start = self.decoratedStart(member), .end = member.endByte() });
+            } else {
+                try self.add(.field, child, name, container, is_static, .{ .start = member.startByte(), .end = first_start.? }, .{ .start = child.startByte(), .end = child.endByte() });
+            }
+        }
+    }
+
+    fn declaresVariables(self: *Collector, node: ts.Node) bool {
+        var i: u32 = 0;
+        while (node.namedChild(i)) |child| : (i += 1) {
+            if (std.mem.eql(u8, child.kind(), self.profile.declarator)) return true;
+        }
+        return false;
     }
 
     fn enumMembers(self: *Collector, enumeration: ts.Node, container: []const []const u8) !void {
@@ -184,22 +249,27 @@ const Collector = struct {
     }
 };
 
-fn descend(collector: *Collector, profile: *const Profile, node: ts.Node) Allocator.Error!void {
+fn descend(collector: *Collector, profile: *const Profile, node: ts.Node, scope: []const []const u8) Allocator.Error!void {
+    var current = scope;
     var i: u32 = 0;
     while (node.namedChild(i)) |child| : (i += 1) {
         if (oneOf(child.kind(), profile.export_wrappers)) {
             var j: u32 = 0;
-            while (child.namedChild(j)) |inner| : (j += 1) try collector.statement(inner);
+            while (child.namedChild(j)) |inner| : (j += 1) try collector.statement(inner, current);
             continue;
         }
-        try collector.statement(child);
-        if (oneOf(child.kind(), profile.declarations.containers)) try descend(collector, profile, child);
+        if (oneOf(child.kind(), profile.file_scoped_containers)) {
+            current = try collector.within(child, scope);
+            continue;
+        }
+        try collector.statement(child, current);
+        if (oneOf(child.kind(), profile.declarations.containers)) try descend(collector, profile, child, try collector.within(child, current));
     }
 }
 
 pub fn collect(arena: Allocator, profile: *const Profile, tree: ts.Tree) Allocator.Error![]Declaration {
     var collector: Collector = .{ .arena = arena, .profile = profile, .tree = tree };
-    try descend(&collector, profile, tree.root());
+    try descend(&collector, profile, tree.root(), &.{});
     markAmbiguous(collector.out.items);
     return collector.out.items;
 }

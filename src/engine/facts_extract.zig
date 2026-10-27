@@ -23,6 +23,11 @@ const none = facts.none;
 
 pub const Error = error{ UnsupportedLanguage, UseNotRevisited } || Allocator.Error;
 
+fn borrowsName(profile: *const Profile, node: ts.Node) bool {
+    const named = profile.functionName(node.kind()) orelse return false;
+    return named.owner_depth != 0;
+}
+
 fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
     for (kinds) |candidate| {
         if (std.mem.eql(u8, candidate, kind)) return true;
@@ -160,6 +165,7 @@ const Extractor = struct {
         for (table.symbols) |s| {
             const function = functions.classify(self.profile, s.node) orelse continue;
             const name = function.name orelse continue;
+            if (borrowsName(self.profile, s.node)) continue;
             try drafts.append(self.arena, .{ .node_start = s.node.startByte(), .def = .{
                 .kind = defKindOf(s.kind),
                 .name = try self.text(name),
@@ -300,7 +306,7 @@ const Extractor = struct {
     fn typeRefOfName(self: *Extractor, node: ts.Node) Error!?u32 {
         const kind = node.kind();
         if (std.mem.eql(u8, kind, self.profile.identifier) or oneOf(kind, self.g.type_kinds)) {
-            const binder = self.binderOfUse(node.startByte()) orelse return null;
+            const binder = self.binderOfUse(node.startByte()) orelse return self.globalType(node);
             const target = self.targetOfBinder(binder) orelse return null;
             return try self.addType(.{ .target = target });
         }
@@ -319,6 +325,13 @@ const Extractor = struct {
             return self.typeRefOfName(name);
         };
         return null;
+    }
+
+    fn globalType(self: *Extractor, node: ts.Node) Error!?u32 {
+        if (!self.f.global_types) return null;
+        if (!std.mem.eql(u8, node.kind(), self.profile.identifier)) return null;
+        if (!self.use_at.contains(node.startByte())) return null;
+        return try self.addType(.{ .target = .{ .unresolved = .global }, .member = try self.text(node) });
     }
 
     fn memberTypeRef(self: *Extractor, owner: ts.Node, member_name: []const u8) Error!?u32 {
@@ -554,7 +567,8 @@ const Extractor = struct {
                     .arrow => continue,
                     .method, .static_block => {
                         if (i < 3) return null;
-                        const def = self.classDef(self.path.items[i - 3].node) orelse return null;
+                        const holder = if (i >= 5 and oneOf(self.path.items[i - 3].node.kind(), self.f.class_fields)) i - 5 else i - 3;
+                        const def = self.classDef(self.path.items[holder].node) orelse return null;
                         const is_static = function_kind == .static_block or self.profile.memberTraits(self.profile, self.snapshot.tree, node, .method).is_static;
                         return .{ .def = def, .is_static = is_static };
                     },
@@ -603,7 +617,10 @@ const Extractor = struct {
         }
         if (std.mem.eql(u8, kind, self.profile.identifier)) {
             const at = self.use_at.get(object.startByte()) orelse return .{ .unresolved = .property_needs_type };
-            const binder_index = self.every.uses[at].binder orelse return .{ .unresolved = .global };
+            const binder_index = self.every.uses[at].binder orelse {
+                const global = (try self.globalType(object)) orelse return .{ .unresolved = .global };
+                return .{ .member_of_type = global };
+            };
             const binder = self.every.binders[binder_index].span.start;
             if (self.binding_at.get(binder)) |b| return .{ .member_of_binding = b };
             if (self.typed_at.get(binder)) |t| return .{ .member_of_type = t };
@@ -640,6 +657,7 @@ const Extractor = struct {
             if (self.enclosingClass()) |class| is_static = class.is_static;
         } else switch (target) {
             .member_of_def => |d| is_static = self.defs.items[d].kind == .class,
+            .member_of_type => is_static = std.mem.eql(u8, object_kind, self.profile.identifier) and self.binderOfUse(object.startByte()) == null,
             else => {},
         }
         switch (target) {

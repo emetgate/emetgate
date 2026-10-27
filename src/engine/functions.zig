@@ -30,6 +30,12 @@ pub fn classify(profile: *const Profile, node: ts.Node) ?Function {
 }
 
 fn resolveName(profile: *const Profile, node: ts.Node, kind: FunctionKind) ?ts.Node {
+    if (profile.functionName(node.kind())) |named| {
+        const field = named.field orelse return null;
+        var owner = node;
+        for (0..named.owner_depth) |_| owner = owner.parent() orelse return null;
+        return owner.childByField(field);
+    }
     const own = node.childByField("name");
     return switch (kind) {
         .declaration, .generator_declaration, .method => own,

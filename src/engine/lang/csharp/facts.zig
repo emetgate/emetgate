@@ -49,7 +49,7 @@ pub const csharp: Facts = .{
     .type_annotation = null,
     .this_keyword = "this",
     .super_keyword = "base",
-    .classes = &.{ "class_declaration", "struct_declaration", "record_declaration", "record_struct_declaration" },
+    .classes = &.{ "class_declaration", "struct_declaration", "record_declaration" },
     .class_fields = &.{"property_declaration"},
     .heritage = "base_list",
     .extends_clause = null,
@@ -62,4 +62,7 @@ pub const csharp: Facts = .{
     .error_node = "ERROR",
     .export_value_field = "value",
     .export_declaration_field = "declaration",
+    .global_types = true,
+    .namespaces = &.{"namespace_declaration"},
+    .using_directive = "using_directive",
 };
