@@ -17,6 +17,7 @@ const lockdown_slash = emetgate.lockdown_slash;
 const prompt_hook = emetgate.prompt_hook;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
+const rules_command = emetgate.rules_command;
 const receipts = emetgate.receipts;
 const facts_command = emetgate.facts_command;
 const map_command = emetgate.map_command;
@@ -38,6 +39,7 @@ const usage =
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++
+    \\       emetgate rules   (interactive checklist: pick the enforced rules with the keyboard)
     \\       emetgate hook prompt
     \\       emetgate recover [--shadow-root <dir>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
@@ -157,6 +159,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "rule")) {
         const request = rule_command.parse(args[2..]) orelse exitWithUsage();
         return ruleCmd(init, runtime, request, out);
+    }
+    if (std.mem.eql(u8, command, "rules")) {
+        if (args.len != 2) exitWithUsage();
+        return rulesCmd(init, runtime, out);
     }
     if (args.len == 1 + lockdown_slash.hook_args.len and std.mem.eql(u8, command, lockdown_slash.hook_args[0]) and std.mem.eql(u8, args[2], lockdown_slash.hook_args[1])) {
         return hookPromptCmd(init, runtime, out);
@@ -536,6 +542,17 @@ fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Requ
     var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
     defer stderr_writer.interface.flush() catch {};
     try rule_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
+    return 0;
+}
+
+fn rulesCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = try runner.repoRoot(gpa, init.io);
+    defer gpa.free(root);
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    defer stderr_writer.interface.flush() catch {};
+    try rules_command.run(gpa, init.io, root, out, &stderr_writer.interface);
     return 0;
 }
 
