@@ -12291,7 +12291,7 @@
       "id": "C21-kept-links-not-mirrored",
       "file": "src/platform/shadow.zig",
       "from": "        link_tree.mirror(io, try joinWindows(&link_buf, options.root_abs, link), dest, stats);",
-      "to": "",
+      "to": "        if (false) link_tree.mirror(io, try joinWindows(&link_buf, options.root_abs, link), dest, stats);",
       "kills": [
         "a node_modules that is a junction is a junction to the same target in the kept and the copied tree, and removal leaves the target",
         "a link inside a real node_modules is mirrored in the kept tree"
@@ -12391,7 +12391,7 @@
       "id": "TF-repeated-frames-kept",
       "file": "src/platform/test_outcome.zig",
       "from": "        if (frames != 0 and (try seen.getOrPut(arena, body)).found_existing) {",
-      "to": "        if (false) {",
+      "to": "        if (frames != 0 and (try seen.getOrPut(arena, body)).found_existing and false) {",
       "kills": [
         "test output keeps its failure lines, drops repeated stacks and frames past the third, and fits the budget"
       ]
