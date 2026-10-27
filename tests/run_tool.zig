@@ -50,6 +50,18 @@ test "run tool: a call without command lists the allowlist" {
     try testing.expectEqualStrings("npm run lint", commands[1].string);
 }
 
+test "run tool: a call without command runs the only allowlisted command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{.{ .name = "say.cmd", .body = "@echo off\r\necho only one\r\n" }});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{".\\say.cmd"}), .{});
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("ran", try reply.string("status"));
+    try testing.expectEqualStrings("only one\r\n", try reply.string("stdout"));
+}
+
 test "run tool: an allowlisted command runs in the shadow and reports its exit code and output" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try fixture.Repo.init(&.{.{ .name = "say.cmd", .body = "@echo off\r\necho hello from the shadow\r\nexit /b 3\r\n" }});

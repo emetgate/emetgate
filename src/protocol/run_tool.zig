@@ -21,7 +21,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Runs an allowlisted command in a sandbox copy, or a toolchain install/build/check in the repo: exit code, failure digest, full_log call; no command lists the allowlist.";
+pub const description = "Runs an allowlisted command in a sandbox copy, or a toolchain install/build/check in the repo: exit code, failure digest, full_log call; no command runs the only allowlisted one, or lists several.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,
@@ -76,7 +76,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
     defer allowlist.deinit(gpa);
     const allowed = allowlist.items.items;
 
-    const command = requested orelse {
+    const command = requested orelse if (allowed.len == 1) allowed[0] else {
         try writeAllowlist(w, allowed);
         return false;
     };
