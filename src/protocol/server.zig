@@ -189,16 +189,16 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_git",
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff unless symbols_only. log: a line per commit, receipt = note attached, unverified until emetgate verify <commit>; next_cursor pages. blame: per symbol, or per line with line_start/line_end.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff. log: a line per commit, receipt = note attached, unverified until emetgate verify <commit>; next_cursor pages. blame: per symbol or line range.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show or blame" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
             .{ .name = "detail", .desc = "", .optional = true },
             .{ .name = "symbols_only", .desc = "", .optional = true, .ty = "boolean" },
             .{ .name = "staged", .desc = "", .optional = true, .ty = "boolean" },
-            .{ .name = "n", .desc = "default 20", .optional = true, .ty = "integer" },
+            .{ .name = "n", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "cursor", .desc = "", .optional = true },
-            .{ .name = "commit", .desc = "e.g. HEAD~1", .optional = true },
+            .{ .name = "commit", .desc = "", .optional = true },
             .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
         },
@@ -545,7 +545,7 @@ fn writeCommitProp(js: *std.json.Stringify) !void {
     try js.endObject();
 }
 
-pub const batch_description = "Edits several files as one gated unit, one item per file: {file,symbol,hash,body}, {file,node,text} or {file,nodes}; op:\"delete\" with symbol+hash removes a symbol, with only hash:file_hash the file; hash \"absent\" creates; kind:\"doc\" takes {file,hash,content} plus pointer, heading or line_start+line_end.";
+pub const batch_description = "Edits several files as one gated unit: {file,symbol,hash,body}, {file,node,text} or {file,nodes}; op:\"delete\" with symbol+hash removes a symbol, with only hash:file_hash the file; hash \"absent\" creates; kind:\"doc\" takes {file,hash,content} plus pointer, heading or line_start+line_end.";
 
 fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();
