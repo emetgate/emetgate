@@ -63,7 +63,7 @@ const success = tool_result.success;
 const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
-pub const unverified_note = ",\"tests\":\"none: the project has no test command yet (package.json scripts.test, build.zig, Cargo.toml, go.mod, pyproject.toml, pytest.ini, a .sln or .csproj), so this write ran no test; once one exists every write must pass it\"";
+pub const unverified_note = "none: no test command yet, so this write ran no test; add one (package.json scripts.test, a .csproj/.sln/.slnx, Cargo.toml, go.mod, pyproject.toml, pytest.ini, build.zig) or pass --test; then every write must pass it";
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     wire.clearFix();
@@ -73,7 +73,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = test_command_mod.takeUnverified();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
-        if (try receipt_note.restated(gpa, result.text, test_command_mod.unverified_status, unverified_note)) |text| {
+        if (try receipt_note.unverified(gpa, result.text, test_command_mod.unverified_status, unverified_note)) |text| {
             gpa.free(result.text);
             result.text = text;
         }

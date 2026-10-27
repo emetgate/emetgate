@@ -15030,6 +15030,142 @@
       "kills": [
         "failure keys ignore numbers and summary lines, so the same failures in another run compare equal"
       ]
+    },
+    {
+      "id": "SBX1-daemon-name-needs-exact-path",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (std.ascii.eqlIgnoreCase(base, name)) return true;",
+      "to": "        if (std.mem.eql(u8, image_path, name)) return true;",
+      "kills": [
+        "toolchain build daemons left in the job are recognized by image name, whatever the path or case"
+      ]
+    },
+    {
+      "id": "SBX2-daemon-flags-dropped",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "        _ = flag;",
+      "kills": [
+        "every sandboxed command turns off build-server reuse but keeps a value the caller set"
+      ]
+    },
+    {
+      "id": "SBX3-daemon-flags-override-caller",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "        try vars.append(arena, flag);",
+      "kills": [
+        "every sandboxed command turns off build-server reuse but keeps a value the caller set"
+      ]
+    },
+    {
+      "id": "TC1-dotnet-info-probe-refused",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (std.ascii.eqlIgnoreCase(tool, \"dotnet\") and listed(&dotnet_info_args, arg)) return .dotnet;\n",
+      "to": "",
+      "kills": [
+        "project toolchain commands are classified into their family"
+      ]
+    },
+    {
+      "id": "TC2-npm-ls-refused",
+      "file": "src/platform/toolchain.zig",
+      "from": "    .{ .tools = &node_managers, .family = .node_tool, .subcommands = &.{ \"ls\", \"list\" } },\n",
+      "to": "",
+      "kills": [
+        "project toolchain commands are classified into their family"
+      ]
+    },
+    {
+      "id": "GC1-unborn-refused",
+      "file": "src/platform/git_commit.zig",
+      "from": "return unbornFacts(git);",
+      "to": "return error.NoCommitYet;",
+      "kills": [
+        "git commit: a repository with no commit yet gets a root commit with no parent"
+      ]
+    },
+    {
+      "id": "GC2-root-commit-given-zero-parent",
+      "file": "src/platform/git_commit.zig",
+      "from": "    const commit = try gpa.dupe(u8, if (isUnborn(head.oid))",
+      "to": "    const commit = try gpa.dupe(u8, if (head.oid.len == 0)",
+      "kills": [
+        "git commit: a repository with no commit yet gets a root commit with no parent"
+      ]
+    },
+    {
+      "id": "GC3-empty-id-counts-as-unborn",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (oid.len == 0) return false;\n    for (oid) |c| {",
+      "to": "    for (oid) |c| {",
+      "kills": [
+        "git commit: only an all-zero id stands for an unborn branch"
+      ]
+    },
+    {
+      "id": "GC4-unborn-listing-reads-zero-commit",
+      "file": "src/platform/git_commit.zig",
+      "from": "if (isUnborn(commit)) tree else commit",
+      "to": "commit",
+      "kills": [
+        "git commit: a repository with no commit yet gets a root commit with no parent"
+      ]
+    },
+    {
+      "id": "RN1-unverified-echoes-whole-receipt",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "    try js.objectField(\"tests\");\n    try js.write(hint);\n    try js.endObject();\n    try out.writer.writeByte('\\n');\n    return try out.toOwnedSlice();",
+      "to": "    try js.endObject();\n    return restated(gpa, text, to, hint);",
+      "kills": [
+        "receipt note: an unverified write is one short line that names the files and drops the symbol listing",
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "RN2-unverified-files-repeated",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "        if (std.mem.eql(u8, seen, file.string)) return;",
+      "to": "        _ = seen;",
+      "kills": [
+        "receipt note: an unverified write is one short line that names the files and drops the symbol listing"
+      ]
+    },
+    {
+      "id": "TD1-nested-test-project-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "    return nestedTestProject(io, dir);",
+      "to": "    return null;",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "TD2-slnx-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "\".sln\", \".slnx\", ",
+      "to": "\".sln\", ",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "TD3-bin-dir-searched",
+      "file": "src/platform/test_command.zig",
+      "from": "\"bin\", \"obj\", ",
+      "to": "\"obj\", ",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "TD4-one-of-many-test-projects-picked",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (found.count != 1) return null;",
+      "to": "    if (found.count == 0) return null;",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
     }
   ]
 }

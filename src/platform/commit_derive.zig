@@ -223,7 +223,7 @@ pub fn derive(gpa: Allocator, io: std.Io, root: []const u8, head: Head, gate_abs
     const index_abs = try std.fs.path.join(arena, &.{ work.dir, "index" });
     var private = try git.withIndex(index_abs);
     private.hex = head.oid.len;
-    _ = try private.need(&.{ "read-tree", head.oid });
+    _ = try private.need(&.{ "read-tree", head.tree });
     var gone: std.ArrayList(Entry) = .empty;
     for (targets) |target| {
         if (target.same_as != null) continue;
