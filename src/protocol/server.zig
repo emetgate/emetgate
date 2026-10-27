@@ -71,7 +71,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Reads symbol bodies with hashes by symbol, symbols, or line_start+line_end. Bodies over " ++ budget_text ++ " chars fold unless detail:\"full\". nodes:true prefixes node ids (id|code) for emetgate_try.",
+        .description = "Reads bodies with hashes by symbol, symbols or line_start+line_end. Bodies over " ++ budget_text ++ " chars fold unless detail:\"full\". nodes:true prefixes node ids (id|code) for emetgate_try.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "ref, e.g. Class.method or add", .optional = true },
@@ -131,7 +131,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_mutate",
-        .description = "Previews a symbol body replacement: new source and hash, no write.",
+        .description = "Previews a body edit: new source and hash, no write.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "" },
@@ -159,7 +159,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_search",
-        .description = "Finds a case-sensitive literal (or regex:true) in tracked text files under dir. Reply: path, then line:text per hit, * marks a definition, |N is a legend for repeated text. Ends \u{2713} when complete, else partial with next offset. detail:\"full\" allows 200 hits.",
+        .description = "Finds a case-sensitive literal (or regex:true) in tracked text files under dir. Reply: path, line:text per hit, * marks a definition, |N is a legend for repeated text. Ends \u{2713} when complete, else partial with next offset. detail:\"full\" allows 200 hits.",
         .props = &.{
             .{ .name = "pattern", .desc = "" },
             .{ .name = "dir", .desc = "", .optional = true },
@@ -189,7 +189,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_git",
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff. log: a line per commit, receipt = note attached, unverified until emetgate verify <commit>; next_cursor pages. blame: per symbol or line range.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff. log: a line per commit, receipt = note attached; next_cursor pages. blame: per symbol or line range.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show or blame" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
@@ -463,7 +463,7 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
     try js.endObject();
 }
 
-pub const instructions = "Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Edit code with emetgate_try, several files with emetgate_try_batch, and non-code files with emetgate_write_doc; each writes only if typecheck and tests pass, and takes the hash you last read. Every error reply has a fix field saying how to recover.";
+pub const instructions = "Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Edit code with emetgate_try, several files with emetgate_try_batch, and non-code files with emetgate_write_doc; each writes only if typecheck and tests pass, and takes the hash you last read. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
 
 fn writeEmptyResult(out: *Writer, id: Value) !void {
     var js: std.json.Stringify = .{ .writer = out };

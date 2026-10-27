@@ -515,3 +515,48 @@ test "map tools: evidence returns every definition of a name and names the symbo
     try expectHas(text, "export async function runHooks(signal: string) {");
     try expectHas(text, "No symbol named nothingLikeThis.");
 }
+
+test "map tools: explore names the callers, callees and impact of a named function with file and line" {
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const text = try f.session.answer(arena_state.allocator(), "what runs the module init hooks", &.{"callModuleInitHook"});
+
+    try expectHas(text, "Graph of callModuleInitHook packages/core/hooks/on-module-init.hook.ts:14\n");
+    try expectHas(text, "callers: packages/core/nest-application-context.ts:28 ");
+    try expectHas(text, "callInitHook;");
+    try expectHas(text, "callOperator packages/core/hooks/on-module-init.hook.ts:8;");
+    try expectHas(text, "files reach it within 3 calls: packages/core/nest-application-context.ts");
+    const graph_at = std.mem.indexOf(u8, text, "Graph of callModuleInitHook") orelse return error.TestExpectedEqual;
+    const code_at = std.mem.indexOf(u8, text, "14 export async function callModuleInitHook") orelse return error.TestExpectedEqual;
+    try testing.expect(graph_at < code_at);
+}
+
+test "map tools: a function nobody calls is graphed with no callers and no impact" {
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const text = try f.session.answer(arena_state.allocator(), "what admits", &.{"admitDevice"});
+
+    try expectHas(text, "Graph of admitDevice packages/core/limits/admission.ts:3\ncallers: none\n");
+    try expectHas(text, "impact: 0 functions in 0 files reach it within 3 calls\n");
+}
+
+test "map tools: only a question about calls or impact graphs the functions it names in its words" {
+    try testing.expect(map_tools.asksGraph("who calls callModuleInitHook?"));
+    try testing.expect(map_tools.asksGraph("what breaks if admitDevice changes"));
+    try testing.expect(map_tools.asksGraph("Impact of runHooks"));
+    try testing.expect(!map_tools.asksGraph("which hooks run"));
+    try testing.expect(!map_tools.asksGraph(""));
+
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const asked = try f.session.answer(arena_state.allocator(), "who calls callModuleInitHook", &.{});
+    try expectHas(asked, "Graph of callModuleInitHook ");
+    const plain_text = try f.session.answer(arena_state.allocator(), "show callModuleInitHook", &.{});
+    try expectLacks(plain_text, "Graph of ");
+}

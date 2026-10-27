@@ -14639,6 +14639,99 @@
       "kills": [
         "output cut by bytes never starts inside a multi-byte character"
       ]
+    },
+    {
+      "id": "EG1-explore-named-not-graphed",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                try graphed.append(arena, f);\n            }\n            if (!any)",
+      "to": "            }\n            if (!any)",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line",
+        "map tools: a function nobody calls is graphed with no callers and no impact"
+      ]
+    },
+    {
+      "id": "EG2-explore-graph-question-ignored",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            if (word.len >= g.len and std.ascii.eqlIgnoreCase(word[0..g.len], g)) return true;",
+      "to": "            if (word.len >= g.len and std.mem.eql(u8, word[0..g.len], g)) return true;",
+      "kills": [
+        "map tools: only a question about calls or impact graphs the functions it names in its words"
+      ]
+    },
+    {
+      "id": "EG3-explore-graph-asked-always",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        const graph_asked = asksGraph(question);",
+      "to": "        const graph_asked = true;",
+      "kills": [
+        "map tools: only a question about calls or impact graphs the functions it names in its words"
+      ]
+    },
+    {
+      "id": "EG4-explore-callees-from-callers",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        const callees = edgesOf(try repo.query(arena, .{ .relation = .callees,",
+      "to": "        const callees = edgesOf(try repo.query(arena, .{ .relation = .callers,",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line"
+      ]
+    },
+    {
+      "id": "EG5-explore-impact-files-lost",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            _ = try files.getOrPut(arena, site.path);",
+      "to": "            _ = try files.getOrPut(arena, \"\");",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line"
+      ]
+    },
+    {
+      "id": "EG6-explore-callers-none-not-said",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    if (listed == 0) try w.writeAll(\" none\");",
+      "to": "",
+      "kills": [
+        "map tools: a function nobody calls is graphed with no callers and no impact"
+      ]
+    },
+    {
+      "id": "EG7-explore-graph-dropped",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            try self.graph(arena, &out.writer, f);",
+      "to": "            try self.graph(arena, &notes.writer, f);",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line"
+      ]
+    },
+    {
+      "id": "AL1-own-config-not-always-load",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try js.objectField(always_load_field);\n    try js.write(true);\n",
+      "to": "",
+      "kills": [
+        "lockdown marks the emetgate server alwaysLoad so Claude Code does not defer its tools behind tool search"
+      ]
+    },
+    {
+      "id": "AL2-project-config-not-marked",
+      "file": "src/platform/lockdown.zig",
+      "from": "        try entry.value_ptr.object.put(parsed.arena.allocator(), always_load_field, .{ .bool = true });\n        changed = true;",
+      "to": "        changed = true;",
+      "kills": [
+        "lockdown marks the emetgate server alwaysLoad so Claude Code does not defer its tools behind tool search",
+        "without a .mcp.json lockdown serves the running emetgate from its own config"
+      ]
+    },
+    {
+      "id": "AL3-project-config-copied-when-already-loaded",
+      "file": "src/platform/lockdown.zig",
+      "from": "            if (present == .bool and present.bool) continue;",
+      "to": "            if (present == .bool and present.bool) {}",
+      "kills": [
+        "lockdown marks the emetgate server alwaysLoad so Claude Code does not defer its tools behind tool search",
+        "without a .mcp.json lockdown serves the running emetgate from its own config"
+      ]
     }
   ]
 }
