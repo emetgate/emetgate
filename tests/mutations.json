@@ -5099,7 +5099,7 @@
       "from": "if (kept.items.len < max_output_lines) try kept.append(gpa, line);",
       "to": "try kept.append(gpa, line);",
       "kills": [
-        "git diff caps output at a line count and marks it truncated"
+        "git diff full caps raw output at the line limit and marks it truncated"
       ]
     },
     {

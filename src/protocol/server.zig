@@ -185,13 +185,18 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_git",
-        .description = "Returns read-only git output: status, diff (staged:true for the staged diff), log, show or blame. The raw git output is capped. For diff and show the reply also carries symbol_changes: per file, which functions/types/methods were added, removed or changed (plus non_symbol_change for edits outside any symbol, and mapped:false when a side could not be parsed). For blame it carries symbol_blame: the commit that last changed each symbol. blame requires a single file path.",
+        .description = "Returns read-only git output, compact and symbol-anchored by default so the reply costs few tokens without losing recoverable detail. Every reply is assembled under the server read budget (" ++ std.fmt.comptimePrint("{d}", .{read_budget.default_budget}) ++ " characters); detail:\"full\" lifts the budget and returns the full raw git text (the legacy shape). sub is one of: status, diff, log, show, blame. diff/show: the primary view is symbol_changes (per file, which functions/types/methods were added/removed/changed, plus non_symbol_change for edits outside any symbol and mapped:false when a side did not parse); the raw diff follows as output, folded under the budget with the elided line range named in place — pass symbols_only:true for the symbol summary with zero raw bytes, or detail:\"full\" for every hunk. status: grouped compact counts (staged/unstaged/untracked) with entries capped (\"more\") and untracked directories collapsed to dir+count. log: one line per commit (commit/date/subject + verification mark); instead of a silent cap it returns next_cursor when more commits follow — pass it back as cursor to page on. blame: the primary view is symbol_blame (the commit that last changed each symbol); raw per-line blame is returned only under detail:\"full\" or when line_start/line_end request a window. blame requires a single file path.",
         .props = &.{
             .{ .name = "sub", .desc = "one of: status, diff, log, show, blame" },
             .{ .name = "path", .desc = "limit to this file or directory inside the repo (required for blame)", .optional = true },
+            .{ .name = "detail", .desc = "\"budgeted\" (default, compact) or \"full\" (lift the budget, full raw git text)", .optional = true },
+            .{ .name = "symbols_only", .desc = "diff/show only: return just the symbol_changes summary, no raw diff bytes", .optional = true, .ty = "boolean" },
             .{ .name = "staged", .desc = "diff only: true for the staged (--cached) diff instead of the working tree", .optional = true, .ty = "boolean" },
             .{ .name = "n", .desc = "log only: how many commits, newest first (default 20, at most 200)", .optional = true, .ty = "integer" },
+            .{ .name = "cursor", .desc = "log only: a commit id from a previous reply's next_cursor, to page to older commits", .optional = true },
             .{ .name = "commit", .desc = "show only: a commit hash (4 to 40 hex characters) or HEAD, optionally with ~N or ^N", .optional = true },
+            .{ .name = "line_start", .desc = "blame only: first line of a window; returns raw per-line blame for it", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "blame only: last line of the window (defaults to line_start)", .optional = true, .ty = "integer" },
         },
     },
     .{

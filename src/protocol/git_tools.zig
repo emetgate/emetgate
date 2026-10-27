@@ -4,6 +4,7 @@ const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
 const exe_path = @import("../platform/exe_path.zig");
 const git_symbols = @import("git_symbols.zig");
+const read_budget = @import("read_budget.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -20,7 +21,9 @@ const max_git_output_bytes = 256 * 1024;
 const max_output_lines = 800;
 const default_log_count = 20;
 const max_log_count = 200;
-const max_argv = 24;
+const max_argv = 28;
+const max_status_entries = 40;
+const ellipsis = "\u{2026}";
 
 pub const Error = error{
     UnknownGitSubcommand,
@@ -29,6 +32,7 @@ pub const Error = error{
     InvalidCommit,
     InvalidCount,
     GitCommandFailed,
+    UnknownDetail,
 };
 
 const safe_prefix = [_][]const u8{
@@ -86,20 +90,40 @@ fn getBool(args: ?Value, key: []const u8) bool {
     };
 }
 
-pub fn callGit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
+pub fn callGit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, budget: usize) !ToolResult {
     const sub = try requireString(args, "sub");
     event.label = "git";
     event.file = sub;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    render(gpa, io, runtime, root, sub, args, &buffer.writer) catch |err| {
+    render(gpa, io, runtime, root, sub, args, &buffer.writer, budget) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub: []const u8, args: ?Value, w: *Writer) !void {
+const Options = struct {
+    detail: read_budget.Detail,
+    symbols_only: bool,
+    budget: usize,
+    line_start: ?i64,
+    line_end: ?i64,
+    cursor: ?[]const u8,
+    clamped: usize = 0,
+};
+
+fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub: []const u8, args: ?Value, w: *Writer, budget: usize) !void {
+    const detail = try read_budget.parseDetail(if (args) |a| getString(a, "detail") else null);
+    var opts: Options = .{
+        .detail = detail,
+        .symbols_only = getBool(args, "symbols_only"),
+        .budget = budget,
+        .line_start = getInt(args, "line_start"),
+        .line_end = getInt(args, "line_end"),
+        .cursor = if (args) |a| getString(a, "cursor") else null,
+    };
+    if (opts.cursor) |c| if (!isValidCommit(c)) return error.InvalidCommit;
     const path = if (args) |a| getString(a, "path") else null;
     const place = try repo.jail(gpa, io, root, path orelse ".");
     defer place.deinit(gpa);
@@ -114,7 +138,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     }
     argv[0] = git;
 
-    var count_buf: [8]u8 = undefined;
+    var count_buf: [24]u8 = undefined;
     var show_commit: ?[]const u8 = null;
     if (std.mem.eql(u8, sub, "status")) {
         argv[n] = "status";
@@ -139,18 +163,23 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     } else if (std.mem.eql(u8, sub, "log")) {
         const requested = getInt(args, "n") orelse default_log_count;
         const clamped: usize = @intCast(std.math.clamp(requested, 1, max_log_count));
+        opts.clamped = clamped;
         argv[n] = "log";
         n += 1;
         argv[n] = "--no-color";
         n += 1;
         argv[n] = "-n";
         n += 1;
-        argv[n] = std.fmt.bufPrint(&count_buf, "{d}", .{clamped}) catch return error.InvalidCount;
+        argv[n] = std.fmt.bufPrint(&count_buf, "{d}", .{clamped + 1}) catch return error.InvalidCount;
         n += 1;
         argv[n] = "--date=iso-strict";
         n += 1;
         argv[n] = "--pretty=format:%H%x09%ad%x09%s";
         n += 1;
+        if (opts.cursor) |c| {
+            argv[n] = c;
+            n += 1;
+        }
     } else if (std.mem.eql(u8, sub, "show")) {
         const commit = (if (args) |a| getString(a, "commit") else null) orelse return error.MissingCommit;
         if (!isValidCommit(commit)) return error.InvalidCommit;
@@ -171,6 +200,13 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         if (path == null or place.rel.len == 0) return error.MissingPath;
         argv[n] = "blame";
         n += 1;
+        if (opts.line_start) |ls| {
+            const le = opts.line_end orelse ls;
+            argv[n] = "-L";
+            n += 1;
+            argv[n] = std.fmt.bufPrint(&count_buf, "{d},{d}", .{ ls, le }) catch return error.InvalidCount;
+            n += 1;
+        }
     } else {
         return error.UnknownGitSubcommand;
     }
@@ -237,7 +273,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
             blame = git_symbols.analyzeBlame(gpa, io, runtime, place.root, place.rel, text) catch null;
     }
 
-    try writeResult(gpa, w, sub, path, result.stdout, annotated, if (summary) |*s| s else null, if (blame) |*b| b else null);
+    try writeResult(gpa, w, sub, path, result.stdout, annotated, if (summary) |*s| s else null, if (blame) |*b| b else null, opts);
 }
 
 /// Second blame pass in machine-readable form, used only to map symbols to the
@@ -304,7 +340,23 @@ fn isAnnotated(annotated: []const []const u8, oid: []const u8) bool {
     return false;
 }
 
-fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8, summary: ?*const git_symbols.Summary, blame: ?*const git_symbols.BlameReport) !void {
+fn viewLabel(opts: Options) []const u8 {
+    return if (opts.detail == .full) "full" else "compact";
+}
+
+fn writeBase(js: *std.json.Stringify, sub: []const u8, path: ?[]const u8, opts: Options) !void {
+    try js.beginObject();
+    try js.objectField("sub");
+    try js.write(sub);
+    if (path) |p| {
+        try js.objectField("path");
+        try js.write(p);
+    }
+    try js.objectField("view");
+    try js.write(viewLabel(opts));
+}
+
+fn writeRaw(gpa: Allocator, js: *std.json.Stringify, stdout: []const u8) !void {
     var lines = std.mem.splitScalar(u8, stdout, '\n');
     var kept: std.ArrayList([]const u8) = .empty;
     defer kept.deinit(gpa);
@@ -314,15 +366,6 @@ fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, s
         if (kept.items.len < max_output_lines) try kept.append(gpa, line);
     }
     const truncated = total > kept.items.len;
-
-    var js: std.json.Stringify = .{ .writer = w };
-    try js.beginObject();
-    try js.objectField("sub");
-    try js.write(sub);
-    if (path) |p| {
-        try js.objectField("path");
-        try js.write(p);
-    }
     try js.objectField("output");
     var joined: std.Io.Writer.Allocating = .init(gpa);
     defer joined.deinit();
@@ -337,29 +380,335 @@ fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, s
     try js.write(total);
     try js.objectField("truncated");
     try js.write(truncated);
+}
+
+fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8, summary: ?*const git_symbols.Summary, blame: ?*const git_symbols.BlameReport, opts: Options) !void {
+    var js: std.json.Stringify = .{ .writer = w };
     if (std.mem.eql(u8, sub, "log")) {
-        try js.objectField("commits");
+        try writeLog(gpa, &js, path, stdout, annotated, opts);
+    } else if (std.mem.eql(u8, sub, "status")) {
+        try writeStatus(gpa, &js, path, stdout, opts);
+    } else if (std.mem.eql(u8, sub, "diff") or std.mem.eql(u8, sub, "show")) {
+        try writeDiffShow(gpa, &js, sub, path, stdout, summary, opts);
+    } else if (std.mem.eql(u8, sub, "blame")) {
+        try writeBlame(gpa, &js, path, stdout, blame, opts);
+    } else {
+        try writeBase(&js, sub, path, opts);
+        try writeRaw(gpa, &js, stdout);
+        try js.endObject();
+    }
+    try w.writeByte('\n');
+}
+
+
+fn oidOf(line: []const u8) []const u8 {
+    const tab = std.mem.indexOfScalar(u8, line, '\t') orelse line.len;
+    return line[0..tab];
+}
+
+fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8, opts: Options) !void {
+    var lines = std.mem.splitScalar(u8, stdout, '\n');
+    var rows: std.ArrayList([]const u8) = .empty;
+    defer rows.deinit(gpa);
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try rows.append(gpa, line);
+    }
+
+    try writeBase(js, "log", path, opts);
+    try js.objectField("commits");
+    try js.beginArray();
+    var shown: usize = 0;
+    var size: usize = 0;
+    var next_cursor: ?[]const u8 = null;
+    for (rows.items, 0..) |line, idx| {
+        if (opts.clamped != 0 and idx >= opts.clamped) {
+            next_cursor = oidOf(line);
+            break;
+        }
+        if (opts.detail != .full and shown > 0 and size > opts.budget) {
+            next_cursor = oidOf(line);
+            break;
+        }
+        const oid = oidOf(line);
+        var date: []const u8 = "";
+        var subject: []const u8 = "";
+        if (std.mem.indexOfScalar(u8, line, '\t')) |t1| {
+            const rest = line[t1 + 1 ..];
+            if (std.mem.indexOfScalar(u8, rest, '\t')) |t2| {
+                date = rest[0..t2];
+                subject = rest[t2 + 1 ..];
+            } else date = rest;
+        }
+        try js.beginObject();
+        try js.objectField("commit");
+        try js.write(oid);
+        try js.objectField("date");
+        try js.write(date);
+        try js.objectField("subject");
+        try js.write(subject);
+        try js.objectField("verification");
+        try js.write(if (isAnnotated(annotated, oid)) "verified" else "unverified");
+        try js.endObject();
+        shown += 1;
+        size += line.len + 48;
+    }
+    try js.endArray();
+    try js.objectField("commits_shown");
+    try js.write(shown);
+    if (next_cursor) |c| {
+        try js.objectField("next_cursor");
+        try js.write(c);
+        try js.objectField("note");
+        try js.write("more commits follow; pass cursor:<next_cursor> to page from there");
+    }
+    if (opts.detail == .full) try writeRaw(gpa, js, stdout);
+    try js.endObject();
+}
+
+
+const StatusEntry = struct { code: u8, path: []const u8 };
+
+fn statusPath(field: []const u8) []const u8 {
+    if (std.mem.indexOf(u8, field, " -> ")) |i| return field[i + 4 ..];
+    return field;
+}
+
+fn writeEntryGroup(js: *std.json.Stringify, name: []const u8, entries: []const StatusEntry) !void {
+    try js.objectField(name);
+    try js.beginObject();
+    try js.objectField("count");
+    try js.write(entries.len);
+    try js.objectField("files");
+    try js.beginArray();
+    const cap = @min(entries.len, max_status_entries);
+    for (entries[0..cap]) |e| {
+        try js.beginObject();
+        try js.objectField("code");
+        const code = [_]u8{e.code};
+        try js.write(&code);
+        try js.objectField("path");
+        try js.write(e.path);
+        try js.endObject();
+    }
+    try js.endArray();
+    if (entries.len > cap) {
+        try js.objectField("more");
+        try js.write(entries.len - cap);
+    }
+    try js.endObject();
+}
+
+fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, opts: Options) !void {
+    var staged: std.ArrayList(StatusEntry) = .empty;
+    defer staged.deinit(gpa);
+    var unstaged: std.ArrayList(StatusEntry) = .empty;
+    defer unstaged.deinit(gpa);
+    var untracked_files: std.ArrayList([]const u8) = .empty;
+    defer untracked_files.deinit(gpa);
+    var dir_names: std.ArrayList([]const u8) = .empty;
+    defer dir_names.deinit(gpa);
+    var dir_counts: std.ArrayList(usize) = .empty;
+    defer dir_counts.deinit(gpa);
+
+    var lines = std.mem.splitScalar(u8, stdout, '\n');
+    while (lines.next()) |line| {
+        if (line.len < 4) continue;
+        const x = line[0];
+        const y = line[1];
+        const p = statusPath(line[3..]);
+        if (x == '?' and y == '?') {
+            if (std.mem.indexOfScalar(u8, p, '/')) |slash| {
+                const dir = p[0..slash];
+                var found = false;
+                for (dir_names.items, 0..) |d, i| {
+                    if (std.mem.eql(u8, d, dir)) {
+                        dir_counts.items[i] += 1;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    try dir_names.append(gpa, dir);
+                    try dir_counts.append(gpa, 1);
+                }
+            } else {
+                try untracked_files.append(gpa, p);
+            }
+            continue;
+        }
+        if (x != ' ' and x != '?') try staged.append(gpa, .{ .code = x, .path = p });
+        if (y != ' ' and y != '?') try unstaged.append(gpa, .{ .code = y, .path = p });
+    }
+
+    const untracked_total = untracked_files.items.len + dir_counts.items.len;
+    const clean = staged.items.len == 0 and unstaged.items.len == 0 and untracked_total == 0;
+
+    try writeBase(js, "status", path, opts);
+    try js.objectField("clean");
+    try js.write(clean);
+    try writeEntryGroup(js, "staged", staged.items);
+    try writeEntryGroup(js, "unstaged", unstaged.items);
+
+    try js.objectField("untracked");
+    try js.beginObject();
+    try js.objectField("count");
+    try js.write(untracked_total);
+    try js.objectField("files");
+    try js.beginArray();
+    const fcap = @min(untracked_files.items.len, max_status_entries);
+    for (untracked_files.items[0..fcap]) |p| try js.write(p);
+    try js.endArray();
+    if (untracked_files.items.len > fcap) {
+        try js.objectField("files_more");
+        try js.write(untracked_files.items.len - fcap);
+    }
+    if (dir_names.items.len != 0) {
+        try js.objectField("dirs");
         try js.beginArray();
-        for (kept.items) |line| {
-            if (line.len == 0) continue;
-            const tab = std.mem.indexOfScalar(u8, line, '\t') orelse line.len;
-            const oid = line[0..tab];
+        for (dir_names.items, dir_counts.items) |d, c| {
             try js.beginObject();
-            try js.objectField("commit");
-            try js.write(oid);
-            try js.objectField("verification");
-            // v1 proof-mark: a receipt note is attached ("verified") or not
-            // ("unverified"). Replaying the receipt is the job of
-            // `emetgate verify` / `verify --branch`; here we only read the ref.
-            try js.write(if (isAnnotated(annotated, oid)) "verified" else "unverified");
+            try js.objectField("dir");
+            try js.write(d);
+            try js.objectField("count");
+            try js.write(c);
             try js.endObject();
         }
         try js.endArray();
     }
-    if (summary) |s| try writeSymbolSummary(&js, s.*);
-    if (blame) |b| try writeBlameSummary(&js, b.*);
     try js.endObject();
-    try w.writeByte('\n');
+
+    if (opts.detail == .full) try writeRaw(gpa, js, stdout);
+    try js.endObject();
+}
+
+
+const Folded = struct {
+    text: []u8,
+    elided: bool,
+    elided_start: u32,
+    elided_end: u32,
+    lines_shown: usize,
+    lines_total: usize,
+    hunks_elided: usize,
+
+    fn deinit(self: Folded, gpa: Allocator) void {
+        gpa.free(self.text);
+    }
+};
+
+fn isHunkBoundary(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "@@") or std.mem.startsWith(u8, line, "diff --git ");
+}
+
+fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
+    var lines: std.ArrayList([]const u8) = .empty;
+    defer lines.deinit(gpa);
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |l| try lines.append(gpa, l);
+    const total = lines.items.len;
+
+    var size: usize = 0;
+    var fit: usize = 0;
+    while (fit < total and size + lines.items[fit].len + 1 <= budget) : (fit += 1) {
+        size += lines.items[fit].len + 1;
+    }
+    if (fit >= total) {
+        return .{ .text = try gpa.dupe(u8, text), .elided = false, .elided_start = 0, .elided_end = 0, .lines_shown = total, .lines_total = total, .hunks_elided = 0 };
+    }
+    var keep = fit;
+    while (keep > 0 and !isHunkBoundary(lines.items[keep])) keep -= 1;
+    if (keep == 0) keep = fit;
+
+    var hunks_elided: usize = 0;
+    for (lines.items[keep..]) |l| {
+        if (std.mem.startsWith(u8, l, "@@")) hunks_elided += 1;
+    }
+    const remaining = total - keep;
+
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    for (lines.items[0..keep], 0..) |l, i| {
+        if (i != 0) try out.writer.writeByte('\n');
+        try out.writer.writeAll(l);
+    }
+    if (keep != 0) try out.writer.writeByte('\n');
+    try out.writer.print(ellipsis ++ " {d} lines in {d} hunks elided; pass detail:\"full\" for the full diff, or read a changed symbol with emetgate_read_symbol", .{ remaining, hunks_elided });
+
+    return .{
+        .text = try gpa.dupe(u8, out.written()),
+        .elided = true,
+        .elided_start = @intCast(keep + 1),
+        .elided_end = @intCast(total),
+        .lines_shown = keep,
+        .lines_total = total,
+        .hunks_elided = hunks_elided,
+    };
+}
+
+fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path: ?[]const u8, stdout: []const u8, summary: ?*const git_symbols.Summary, opts: Options) !void {
+    try writeBase(js, sub, path, opts);
+    if (summary) |s| try writeSymbolSummary(js, s.*);
+
+    if (opts.symbols_only) {
+        try js.objectField("symbols_only");
+        try js.write(true);
+        try js.objectField("note");
+        try js.write("symbol summary only; no raw diff bytes — pass detail:\"full\" or drop symbols_only for hunks");
+        try js.endObject();
+        return;
+    }
+
+    if (opts.detail == .full) {
+        try writeRaw(gpa, js, stdout);
+        try js.endObject();
+        return;
+    }
+
+    const folded = try foldDiff(gpa, stdout, opts.budget);
+    defer folded.deinit(gpa);
+    try js.objectField("output");
+    try js.write(folded.text);
+    try js.objectField("lines_shown");
+    try js.write(folded.lines_shown);
+    try js.objectField("lines_total");
+    try js.write(folded.lines_total);
+    try js.objectField("chars");
+    try js.write(stdout.len);
+    try js.objectField("budget");
+    try js.write(opts.budget);
+    try js.objectField("elided");
+    try js.beginArray();
+    if (folded.elided) {
+        try js.beginObject();
+        try js.objectField("line_start");
+        try js.write(folded.elided_start);
+        try js.objectField("line_end");
+        try js.write(folded.elided_end);
+        try js.objectField("lines");
+        try js.write(folded.elided_end - folded.elided_start + 1);
+        try js.objectField("hunks");
+        try js.write(folded.hunks_elided);
+        try js.endObject();
+    }
+    try js.endArray();
+    try js.objectField("note");
+    try js.write("compact: symbol_changes is the primary view; the raw diff is folded under the read budget — pass detail:\"full\" for every hunk, or symbols_only:true for zero raw bytes");
+    try js.endObject();
+}
+
+
+fn writeBlame(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, blame: ?*const git_symbols.BlameReport, opts: Options) !void {
+    try writeBase(js, "blame", path, opts);
+    if (blame) |b| try writeBlameSummary(js, b.*);
+    const want_raw = opts.detail == .full or opts.line_start != null;
+    if (want_raw) {
+        try writeRaw(gpa, js, stdout);
+    } else {
+        try js.objectField("note");
+        try js.write("compact: symbol_blame is the primary view; pass detail:\"full\" for raw per-line blame, or line_start/line_end for a window");
+    }
+    try js.endObject();
 }
 
 fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !void {
