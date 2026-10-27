@@ -59,7 +59,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_skeleton",
-        .description = "Returns the outline of a source file: every symbol's signature without its body, the file hash, and every adopted rule that covers the file. With --mirror an unchanged outline is returned as one line; force:true returns it in full.",
+        .description = "Returns the outline of a source file: every symbol's signature without its body, doc comments cut to one line, the file hash, and every adopted rule that covers the file. A file up to 8 KiB comes back whole. An unchanged outline is returned as one line; force:true returns it in full.",
         .props = &.{
             .{ .name = "file", .desc = "path to a source file in a registered language" },
             .{ .name = "force", .desc = "return the outline in full", .optional = true, .ty = "boolean" },
@@ -137,13 +137,13 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Returns a non-code file of the repository. A .json file returns its key tree with a hash per pointer, or with pointer one value. A .md file returns its heading tree, or with heading one section. Any other file returns at most 16 KiB, or with line_start and line_end a line range. A source file needs raw:true. With --mirror unchanged content is returned as one line; force:true returns it in full.",
+        .description = "Returns a non-code file of the repository. A .json file returns its key tree with a hash per pointer, or with pointer one value. A .md file returns its heading tree, or with heading one section. Any other file returns at most 16 KiB, or with line_start and line_end a line range. A source file over 8 KiB returns its symbol outline with line ranges. Code follows a one-line JSON header as raw text. Content unchanged since your last read is returned as one line; force:true returns it in full.",
         .props = &.{
             .{ .name = "file", .desc = "path inside the repo" },
             .{ .name = "raw", .desc = "true for the raw text of a source, .json or .md file", .optional = true, .ty = "boolean" },
             .{ .name = "pointer", .desc = "JSON pointer, e.g. /dependencies/express", .optional = true },
             .{ .name = "heading", .desc = "exact heading text", .optional = true },
-            .{ .name = "line_start", .desc = "1-based first line; a source, .json or .md file also needs raw:true", .optional = true, .ty = "integer" },
+            .{ .name = "line_start", .desc = "1-based first line; a .json or .md file also needs raw:true", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "1-based last line, inclusive", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "return the content in full", .optional = true, .ty = "boolean" },
         },

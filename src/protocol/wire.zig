@@ -37,8 +37,10 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
         try js.write(point.row + 1);
         try js.objectField("col");
         try js.write(point.column + 1);
-        try js.objectField("ambiguous");
-        try js.write(entry.ambiguous);
+        if (entry.ambiguous) {
+            try js.objectField("ambiguous");
+            try js.write(true);
+        }
         try js.endObject();
     }
     try js.endArray();
@@ -66,39 +68,44 @@ pub fn writeDeclarations(gpa: Allocator, js: *std.json.Stringify, table: symbol.
         try js.write(point.row + 1);
         try js.objectField("col");
         try js.write(point.column + 1);
-        try js.objectField("ambiguous");
-        try js.write(entry.ambiguous);
+        if (entry.ambiguous) {
+            try js.objectField("ambiguous");
+            try js.write(true);
+        }
         try js.endObject();
     }
     try js.endArray();
 }
 
-pub fn writeSkeleton(gpa: Allocator, writer: *Writer, file: []const u8, file_hash: symbol.Hash, skeleton_text: []const u8, table: ?*const symbol.Table, adopted: []const rules.Adopted) !void {
+pub const SkeletonKind = enum { skeleton, content };
+
+pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, kind: SkeletonKind, text: []const u8, adopted: []const rules.Adopted) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
     try writeFileHash(&js, file_hash);
-    try js.objectField("skeleton");
-    try js.write(skeleton_text);
-    if (table) |t| try writeDeclarations(gpa, &js, t.*);
-    try js.objectField("rules");
-    try js.beginArray();
-    for (adopted) |rule| {
-        try js.beginObject();
-        try js.objectField("id");
-        try js.write(rule.id);
-        try js.objectField("text");
-        try js.write(rule.text);
-        try js.objectField("mode");
-        try js.write(rule.mode);
-        try js.objectField("check");
-        try js.write(rule.check);
-        try js.objectField("where");
-        try js.write(rule.where);
-        try js.endObject();
+    if (adopted.len != 0) {
+        try js.objectField("rules");
+        try js.beginArray();
+        for (adopted) |rule| {
+            try js.beginObject();
+            try js.objectField("id");
+            try js.write(rule.id);
+            try js.objectField("text");
+            try js.write(rule.text);
+            try js.objectField("mode");
+            try js.write(rule.mode);
+            try js.objectField("check");
+            try js.write(rule.check);
+            try js.objectField("where");
+            try js.write(rule.where);
+            try js.endObject();
+        }
+        try js.endArray();
     }
-    try js.endArray();
+    try js.objectField(@tagName(kind));
+    try js.write(text);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -1209,13 +1216,13 @@ test "file paths with backslashes and quotes are JSON-escaped" {
 test "skeleton payload embeds the outline as one JSON line" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSkeleton(testing.allocator, &buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(a: number, b: number): number;\n", null, &.{});
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(a: number, b: number): number;\n", &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
     try testing.expect(std.mem.indexOf(u8, json, "\"file\":\"src/a.ts\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"skeleton\":\"export function add(a: number, b: number): number;\\n\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"rules\":[]") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"rules\"") == null);
 }
 
 test "the skeleton payload carries every adopted rule as data, with no way to change one" {
@@ -1225,7 +1232,7 @@ test "the skeleton payload carries every adopted rule as data, with no way to ch
         .{ .id = "m1", .text = "no console.log", .mode = "enforce", .check = "cmd:npx eslint", .where = "src/" },
         .{ .id = "m2", .text = "prefer Money", .mode = "advisory" },
     };
-    try writeSkeleton(testing.allocator, &buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(): void;\n", null, &adopted);
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(): void;\n", &adopted);
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));

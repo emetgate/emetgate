@@ -3377,8 +3377,8 @@
     {
       "id": "RO3-rules-dropped-from-the-skeleton",
       "file": "src/protocol/handlers.zig",
-      "from": "    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, adopted.items);",
-      "to": "    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, &.{});",
+      "from": "    try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, adopted.items);",
+      "to": "    try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, &.{});",
       "kills": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
       ]
@@ -5191,8 +5191,8 @@
     {
       "id": "FH3-skeleton-without-file-hash",
       "file": "src/protocol/wire.zig",
-      "from": "    try js.write(file);\n    try writeFileHash(&js, file_hash);\n    try js.objectField(\"skeleton\");",
-      "to": "    try js.write(file);\n    _ = file_hash;\n    try js.objectField(\"skeleton\");",
+      "from": "    try js.write(file);\n    try writeFileHash(&js, file_hash);\n    if (adopted.len != 0) {",
+      "to": "    try js.write(file);\n    _ = file_hash;\n    if (adopted.len != 0) {",
       "kills": [
         "redteam batch delete: an unreferenced file is deleted through the tool and reported as deleted"
       ]
@@ -12153,8 +12153,8 @@
     {
       "id": "TX8-served-face-takes-internals",
       "file": "src/protocol/policy.zig",
-      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false };",
-      "to": "    var policy: Policy = .{ .search_text = true };",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };",
+      "to": "    var policy: Policy = .{ .search_text = true, .mirror_enabled = true, .raw_code = true };",
       "kills": [
         "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
       ]
@@ -12257,6 +12257,235 @@
       "kills": [
         "an entry left out as too large is read again once the size limit admits it",
         "search text: a file an older index left out as too large is read again once the size limit admits it"
+      ]
+    },
+    {
+      "id": "RD1-outline-at-the-threshold",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (profile != null and bytes.len > outline.threshold) {",
+      "to": "    if (profile != null and bytes.len >= outline.threshold) {",
+      "kills": [
+        "read_file at exactly the outline threshold still returns the text"
+      ]
+    },
+    {
+      "id": "RD2-outline-never-served",
+      "file": "src/protocol/read_tools.zig",
+      "from": "            if (try renderOutline(gpa, io, s, place.abs, file, bytes, force, mirror, w, event)) return;",
+      "to": "            _ = s;",
+      "kills": [
+        "read_file returns the outline of a source file over the threshold, with line ranges and hashes, and text for a line range"
+      ]
+    },
+    {
+      "id": "RD3-truncated-read-covers-the-file",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (shown.len == bytes.len) try read_cache.recordWhole(gpa, mirror, file, symbol.fileHash(bytes));",
+      "to": "    try read_cache.recordWhole(gpa, mirror, file, symbol.fileHash(bytes));",
+      "kills": [
+        "a truncated read_file does not cover a later line range read"
+      ]
+    },
+    {
+      "id": "RD4-range-ignores-whole-read",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(bytes), force)) {",
+      "to": "    if (try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(bytes), true)) {",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD5-symbol-ignores-whole-read",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!nodes and try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force)) {",
+      "to": "    if (!nodes and try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), true)) {",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD6-symbols-ignore-whole-read",
+      "file": "src/protocol/handlers.zig",
+      "from": "        var unchanged = covered;",
+      "to": "        var unchanged = false;",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD7-symbol-range-ignores-whole-read",
+      "file": "src/protocol/handlers.zig",
+      "from": "        var unchanged = whole_read;",
+      "to": "        var unchanged = false;",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD8-force-does-not-bypass-whole-read",
+      "file": "src/protocol/read_cache.zig",
+      "from": "    if (force or !m.enabled) return false;",
+      "to": "    if (!m.enabled) return false;",
+      "kills": [
+        "a whole read covers later reads of the same file only while its hash holds"
+      ]
+    },
+    {
+      "id": "RD9-empty-symbol-range-is-an-error",
+      "file": "src/protocol/handlers.zig",
+      "from": "        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, w, event),",
+      "to": "        error.NoSymbolInRange => return error.NoSymbolInRange,",
+      "kills": [
+        "read_symbol over a line range that holds no symbol returns the raw lines instead of an error",
+        "emetgate_read_symbol with a line range hitting no symbol returns those lines"
+      ]
+    },
+    {
+      "id": "RD10-read-cache-off-by-default",
+      "file": "src/protocol/policy.zig",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };",
+      "to": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = false, .raw_code = true };",
+      "kills": [
+        "policy: the read cache is on by default, --no-mirror turns it off, and a mirror flag is given at most once"
+      ]
+    },
+    {
+      "id": "RD11-raw-code-off-by-default",
+      "file": "src/protocol/policy.zig",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };",
+      "to": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = false };",
+      "kills": [
+        "policy: the read cache is on by default, --no-mirror turns it off, and a mirror flag is given at most once"
+      ]
+    },
+    {
+      "id": "RD12-json-code-flag-repeatable",
+      "file": "src/protocol/policy.zig",
+      "from": "            if (json_code) return null;\n",
+      "to": "",
+      "kills": [
+        "policy: the read cache is on by default, --no-mirror turns it off, and a mirror flag is given at most once"
+      ]
+    },
+    {
+      "id": "RD13-ambiguous-always-written",
+      "file": "src/protocol/wire.zig",
+      "from": "        if (entry.ambiguous) {\n            try js.objectField(\"ambiguous\");\n            try js.write(true);\n        }\n        try js.endObject();\n    }\n    try js.endArray();\n    try writeDeclarations(",
+      "to": "        if (true) {\n            try js.objectField(\"ambiguous\");\n            try js.write(entry.ambiguous);\n        }\n        try js.endObject();\n    }\n    try js.endArray();\n    try writeDeclarations(",
+      "kills": [
+        "symbol listings name ambiguity only where it holds"
+      ]
+    },
+    {
+      "id": "RD14-raw-code-ignored",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!policy.raw_code or result.is_error) return result;",
+      "to": "    if (true) return result;",
+      "kills": [
+        "with raw code on, read replies put a one-line JSON header before the code as plain text"
+      ]
+    },
+    {
+      "id": "RD15-raw-code-always-on",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!policy.raw_code or result.is_error) return result;",
+      "to": "    if (result.is_error) return result;",
+      "kills": [
+        "read_file returns the outline of a source file over the threshold, with line ranges and hashes, and text for a line range",
+        "read_file at exactly the outline threshold still returns the text"
+      ]
+    },
+    {
+      "id": "RD16-skeleton-never-whole",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const whole = snapshot.source.len <= outline.threshold;",
+      "to": "    const whole = false;",
+      "kills": [
+        "emetgate_skeleton call returns a file under 8 KiB whole",
+        "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; a small file comes back whole and covers later reads"
+      ]
+    },
+    {
+      "id": "RD17-whole-skeleton-not-recorded",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);",
+      "to": "",
+      "kills": [
+        "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; a small file comes back whole and covers later reads"
+      ]
+    },
+    {
+      "id": "RD18-skeleton-not-folded",
+      "file": "src/protocol/handlers.zig",
+      "from": "else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);",
+      "to": "else try skeleton.skeletonize(gpa, runtime.parser, snapshot.profile, snapshot.tree);",
+      "kills": [
+        "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; a small file comes back whole and covers later reads"
+      ]
+    },
+    {
+      "id": "RD19-empty-rules-written",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (adopted.len != 0) {",
+      "to": "    if (true) {",
+      "kills": [
+        "skeleton payload embeds the outline as one JSON line"
+      ]
+    },
+    {
+      "id": "RD20-doc-block-kept-whole",
+      "file": "src/engine/skeleton.zig",
+      "from": "    if (!std.mem.startsWith(u8, comment, \"/*\")) return .{ .text = std.mem.trimEnd(u8, comment[0..newline], \" \\t\\r\") };",
+      "to": "    if (true) return .{ .text = comment };",
+      "kills": [
+        "a skeleton folds every doc block to its first line and keeps one-line comments"
+      ]
+    },
+    {
+      "id": "RD21-adjacent-comments-not-grouped",
+      "file": "src/engine/skeleton.zig",
+      "from": "        while (i < comments.items.len and isBlank(source[last.end..comments.items[i].start])) : (i += 1) last = comments.items[i];\n",
+      "to": "",
+      "kills": [
+        "a skeleton keeps only the first of adjacent comments and drops a block with no text"
+      ]
+    },
+    {
+      "id": "RD22-empty-block-kept",
+      "file": "src/engine/skeleton.zig",
+      "from": "        if (kept.text.len == 0) {",
+      "to": "        if (false) {",
+      "kills": [
+        "a skeleton keeps only the first of adjacent comments and drops a block with no text"
+      ]
+    },
+    {
+      "id": "RD23-raw-header-keeps-code",
+      "file": "src/protocol/raw_reply.zig",
+      "from": "        if (std.mem.eql(u8, field.key_ptr.*, skip)) continue;\n",
+      "to": "",
+      "kills": [
+        "a code field leaves the JSON header and follows it verbatim, with no escapes",
+        "each symbol entry gets its own header line and raw code"
+      ]
+    },
+    {
+      "id": "RD24-raw-entries-not-split",
+      "file": "src/protocol/raw_reply.zig",
+      "from": "    } else if (entriesWithCode(object)) |entries| {",
+      "to": "    } else if (false) |entries| {",
+      "kills": [
+        "each symbol entry gets its own header line and raw code"
+      ]
+    },
+    {
+      "id": "RD25-raw-accepts-non-string-code",
+      "file": "src/protocol/raw_reply.zig",
+      "from": "        if (value == .string) return name;",
+      "to": "        return name;",
+      "kills": [
+        "replies without code, and text that is not a JSON object, stay as they are"
       ]
     }
   ]
