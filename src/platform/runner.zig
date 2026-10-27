@@ -161,7 +161,23 @@ pub fn runCommandWith(gpa: Allocator, io: std.Io, cwd: []const u8, command: []co
     } else &.{};
     try shadow.freshTemp(io, temp);
     defer shadow.clearTemp(io, temp) catch {};
-    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env });
+    var attempt: usize = 1;
+    while (true) : (attempt += 1) {
+        const report = try sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env });
+        if (attempt == start_attempts or !neverStarted(report)) return report;
+        report.deinit(gpa);
+        try shadow.freshTemp(io, temp);
+    }
+}
+
+const start_attempts = 3;
+const status_dll_init_failed: u32 = 0xC0000142;
+
+fn neverStarted(report: sandbox.Report) bool {
+    return switch (report.outcome) {
+        .crashed => |code| code == status_dll_init_failed,
+        else => false,
+    };
 }
 
 const toolchain_env = [_]sandbox.EnvVar{.{ .name = "NoDefaultCurrentDirectoryInExePath", .value = "1" }};
