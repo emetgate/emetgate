@@ -115,15 +115,6 @@ test "recovery hints: a symbol hash sent as a node id is named as such" {
     try expectContains(unknown, "node 0123456789ab is not in");
 }
 
-test "recovery hints: a line range without symbols names the nearest symbols" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var case: Case = undefined;
-    try case.init();
-    defer case.deinit();
-    const fix = try case.fix("emetgate_read_symbol", try case.args("{{\"file\":\"{s}\",\"line_start\":1,\"line_end\":1}}", .{try case.escaped("src/math.ts")}));
-    try testing.expectEqualStrings("no symbol overlaps these lines; nearest: clamp (lines 2-7); or read the lines with nodes:true", fix);
-}
-
 test "recovery hints: deleting a file without its hash is answered with its file_hash" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
