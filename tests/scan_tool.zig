@@ -130,13 +130,13 @@ test "scan tool: a call without check or with a non-string where is a missing ar
     try skipOffWindows();
     var repo = try Repo.init(&.{.{ "src/a.ts", "networkidle;\n" }});
     defer repo.deinit();
-    inline for (.{ .{ .where = "src/a.ts" }, .{ .check = "forbid:networkidle", .where = 3 } }) |args| {
-        var reply = try call(&repo, args);
+    inline for (.{ .{ .{ .where = "src/a.ts" }, "check" }, .{ .{ .check = "forbid:networkidle", .where = 3 }, "where" } }) |case| {
+        var reply = try call(&repo, case[0]);
         defer reply.deinit();
         try testing.expect(reply.body == null);
         const err = reply.envelope.value.object.get("error").?.object;
         try testing.expectEqual(@as(i64, -32602), err.get("code").?.integer);
-        try testing.expectEqualStrings("Missing or invalid argument", err.get("message").?.string);
+        try testing.expectEqualStrings("Missing or invalid argument: " ++ case[1] ++ " (string)", err.get("message").?.string);
     }
 }
 

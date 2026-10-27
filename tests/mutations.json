@@ -2748,7 +2748,7 @@
     {
       "id": "ST4-scan-tool-non-string-where-ignored",
       "file": "src/protocol/handlers.zig",
-      "from": "        else => return error.MissingArgument,\n    } else null;",
+      "from": "        else => return tool_result.missing(\"where (string)\", .{}),\n    } else null;",
       "to": "        else => null,\n    } else null;",
       "kills": [
         "scan tool: a call without check or with a non-string where is a missing argument"
@@ -12162,8 +12162,8 @@
     {
       "id": "TX9-model-schema-offers-certificate",
       "file": "src/protocol/server.zig",
-      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },",
-      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
+      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" or \\\"compact\\\"\", .optional = true },",
+      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" or \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
       "kills": [
         "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
       ]
@@ -12180,7 +12180,7 @@
     {
       "id": "FT2-footer-switch-ignored",
       "file": "src/protocol/telemetry.zig",
-      "from": "    if (!event.footer) return null;",
+      "from": "    if (!(event.footer orelse event.mutating)) return null;",
       "to": "",
       "kills": [
         "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
@@ -13409,6 +13409,79 @@
       "to": "normalizeBody(insertion.new_body), null);",
       "kills": [
         "an inserted symbol follows a CRLF file's line ending inside its body too"
+      ]
+    },
+    {
+      "id": "RH1-stale-hash-equality-inverted",
+      "file": "src/protocol/recovery.zig",
+      "from": "    if (std.mem.eql(u8, &hex, given)) return false;",
+      "to": "    if (!std.mem.eql(u8, &hex, given)) return false;",
+      "kills": [
+        "recovery hints: a stale symbol hash is answered with the current hash"
+      ]
+    },
+    {
+      "id": "RH2-symbol-hash-as-node-not-named",
+      "file": "src/protocol/recovery.zig",
+      "from": "            if (pair.node.len < node_cas.min_address_len or !std.mem.startsWith(u8, &hex, pair.node)) continue;",
+      "to": "            if (pair.node.len < node_cas.min_address_len or std.mem.startsWith(u8, &hex, pair.node)) continue;",
+      "kills": [
+        "recovery hints: a symbol hash sent as a node id is named as such"
+      ]
+    },
+    {
+      "id": "RH3-unknown-node-check-inverted",
+      "file": "src/protocol/recovery.zig",
+      "from": "        if (std.mem.indexOf(u8, annotated, pair.node) != null) continue;",
+      "to": "        if (std.mem.indexOf(u8, annotated, pair.node) == null) continue;",
+      "kills": [
+        "recovery hints: a symbol hash sent as a node id is named as such"
+      ]
+    },
+    {
+      "id": "RH4-closing-brace-not-counted",
+      "file": "src/protocol/recovery.zig",
+      "from": "        '}' => balance -= 1,",
+      "to": "        '}' => {},",
+      "kills": [
+        "recovery hints: brace balance counts opening minus closing braces",
+        "recovery hints: a body that closes more braces than it opens is named with the surplus"
+      ]
+    },
+    {
+      "id": "RH5-empty-prop-description-written",
+      "file": "src/protocol/server.zig",
+      "from": "            if (prop.desc.len > 0) {",
+      "to": "            if (true) {",
+      "kills": [
+        "recovery hints: tools/list stays under 9000 characters and initialize says which tool reads, searches and edits"
+      ]
+    },
+    {
+      "id": "RH6-non-source-batch-item-hint-inverted",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (lang_registry.forPath(file) == null) return tool_result.missing(",
+      "to": "    if (lang_registry.forPath(file) != null) return tool_result.missing(",
+      "kills": [
+        "recovery hints: a missing argument names the field and its type"
+      ]
+    },
+    {
+      "id": "RH7-fix-not-cleared-per-call",
+      "file": "src/protocol/handlers.zig",
+      "from": "    wire.clearFix();",
+      "to": "",
+      "kills": [
+        "recovery hints: a hint left from an earlier call never reaches the next error"
+      ]
+    },
+    {
+      "id": "RH8-batch-item-label-dropped",
+      "file": "src/protocol/recovery.zig",
+      "from": "        const label = std.fmt.bufPrint(&label_buf, \"edits[{d}]: \", .{i}) catch \"\";",
+      "to": "        const label = std.fmt.bufPrint(&label_buf, \"item {d}: \", .{i}) catch \"\";",
+      "kills": [
+        "recovery hints: a stale hash inside a batch names the item and the current hash"
       ]
     }
   ]
