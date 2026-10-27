@@ -132,6 +132,7 @@ pub const where = src.where;
 pub const wire = src.wire;
 pub const scan_command = src.scan_command;
 pub const rule_command = src.rule_command;
+pub const rule_catalog = src.rule_catalog;
 pub const prompt_words = src.prompt_words;
 pub const prompt_hook = src.prompt_hook;
 pub const facts_command = src.facts_command;

@@ -371,7 +371,7 @@ test "prompt hook: a /rule the grammar does not define answers with the usage an
     var repo = try Repo.init();
     defer repo.deinit();
 
-    const usage = "/rule add <text> [--check <spec>] [--in <where>] [--enforce]\n/rule list [--all] [--json]\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\n/rule forget <id>";
+    const usage = "/rule add <text> [--check <spec>] [--in <where>] [--enforce]\n/rule list [--all] [--json]\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\n/rule forget <id>\n/rule pick [<numbers> [<path>]]   (pick rules from a catalog; /rule pick alone lists it)";
     const prompts = [_][]const u8{ "/rule", "/rule adopt x", "/rule add", "/rule add \"open", "/rule add t --check", "/rule forget a b", "/rule add no networkidle" };
     for (prompts) |prompt| {
         errdefer std.debug.print("prompt: {s}\n", .{prompt});
