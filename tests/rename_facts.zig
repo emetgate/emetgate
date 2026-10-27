@@ -763,3 +763,58 @@ test "rename facts: a Python submodule of a namespace package is reached, but a 
     try testing.expectError(error.RenameUnresolved, shadowed.planWith("p/m.py", "helper", "double", true, &sites));
     try testing.expectEqualStrings("n.py:3", sites.list());
 }
+
+test "rename facts: a Python import nested in if, try, def or a method is renamed with the function" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "a.py", .text = "import sys\nif sys.version_info >= (3, 8):\n    from m import helper\n\ndef use():\n    return helper()\n" },
+        .{ .rel = "b.py", .text = "try:\n    from m import helper\nexcept ImportError:\n    raise\n" },
+        .{ .rel = "c.py", .text = "def lazy():\n    from m import helper as h\n    return h()\n\nclass K:\n    def run(self):\n        import m\n        return m.helper()\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("m.py", "helper", "assist", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "a.py", "import sys\nif sys.version_info >= (3, 8):\n    from m import assist\n\ndef use():\n    return assist()\n");
+    try expectSource(planned, "b.py", "try:\n    from m import assist\nexcept ImportError:\n    raise\n");
+    try expectSource(planned, "c.py", "def lazy():\n    from m import assist as h\n    return h()\n\nclass K:\n    def run(self):\n        import m\n        return m.assist()\n");
+}
+
+test "rename facts: an import inside a Python function is not an attribute of its module" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "p/__init__.py", .text = "def f():\n    from m import helper\n    return helper()\n" },
+        .{ .rel = "u.py", .text = "from p import helper\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("m.py", "helper", "assist", true, &sites));
+    try testing.expectEqualStrings("u.py:1", sites.list());
+}
+
+test "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "p/__init__.py", .text = "" },
+        .{ .rel = "p/m.py", .text = "VALUE = 3\n" },
+        .{ .rel = "p/q.py", .text = "from m import helper\n\nhelper()\n" },
+        .{ .rel = "src/s.py", .text = "from m import helper\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("m.py", "helper", "assist", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "p/q.py", "from m import assist\n\nassist()\n");
+    try expectSource(planned, "src/s.py", "from m import assist\n");
+
+    var ambiguous = try Case.init(&.{
+        .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "tools/m.py", .text = "VALUE = 2\n" },
+        .{ .rel = "tools/run.py", .text = "from m import helper\n" },
+    });
+    defer ambiguous.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, ambiguous.planWith("m.py", "helper", "assist", true, &sites));
+    try testing.expectEqualStrings("tools/run.py:1", sites.list());
+}

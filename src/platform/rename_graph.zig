@@ -475,10 +475,18 @@ pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, f
     var real = io_seam.Real.init(gpa, io);
     defer real.deinit();
     const before_inits = graph.rels.items.len;
+    var module_files: []u8 = &.{};
+    defer gpa.free(module_files);
+    if (profile.modules) |m| if (m.package_init.len != 0) {
+        const pattern = try std.fmt.allocPrint(gpa, "*{s}", .{std.fs.path.extension(m.package_init)});
+        defer gpa.free(pattern);
+        module_files = try repo.trackedListing(gpa, io, root, pattern);
+    };
     try graph.addPackageInits(real.seam().fs, root);
     try graph.load(io, runtime, root, before_inits);
     var workspace = try fact_modules.Workspace.build(gpa, real.seam().fs, root, graph.rels.items);
     defer workspace.deinit();
+    try workspace.track(module_files);
     try graph.store.linkAll(workspace.resolver());
 
     var locator: Locator = .{ .gpa = gpa, .graph = &graph, .old = old, .target = target_place, .parent = parent, .sites = sites };

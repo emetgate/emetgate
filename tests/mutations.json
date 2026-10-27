@@ -15501,6 +15501,78 @@
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
+    },
+    {
+      "id": "L5L-nested-python-imports-skipped",
+      "file": "src/engine/modules.zig",
+      "from": "                try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });",
+      "to": "",
+      "kills": [
+        "rename facts: a Python import nested in if, try, def or a method is renamed with the function"
+      ]
+    },
+    {
+      "id": "L5M-function-import-is-module-scope",
+      "file": "src/engine/modules.zig",
+      "from": "            const scoped = next.scoped or opensScope(snapshot.profile, kind);",
+      "to": "            const scoped = next.scoped;",
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module"
+      ]
+    },
+    {
+      "id": "L5N-scoped-binding-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (binding.type_only or self.scoped_bindings.contains(@intCast(b))) continue;",
+      "to": "            if (binding.type_only) continue;",
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module"
+      ]
+    },
+    {
+      "id": "L5O-absolute-python-import-relative-to-file",
+      "file": "src/platform/fact_modules.zig",
+      "from": "        if (rest.len == 0 or rest[0] != '.') return self.resolvePythonAbsolute(store, base, spec);",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5P-python-roots-ambiguity-ignored",
+      "file": "src/platform/fact_modules.zig",
+      "from": "                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target)) return .unindexed;",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5Q-script-dir-not-a-root",
+      "file": "src/platform/fact_modules.zig",
+      "from": "        const roots = [_][]const u8{ self.scriptRoot(importer_dir), \"\", python_source_root };",
+      "to": "        const roots = [_][]const u8{ \"\", python_source_root };",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5R-package-dir-is-script-root",
+      "file": "src/platform/fact_modules.zig",
+      "from": "            if (!lookup.has(init)) return dir;",
+      "to": "            return dir;",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5S-unloaded-modules-untracked",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try workspace.track(module_files);",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
     }
   ]
 }

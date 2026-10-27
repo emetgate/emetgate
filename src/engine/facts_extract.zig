@@ -112,6 +112,7 @@ const Extractor = struct {
     binding_at: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     typed_at: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     skipped_uses: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    scoped_bindings: std.AutoHashMapUnmanaged(u32, void) = .empty,
     path: std.ArrayList(Step) = .empty,
     owners: std.ArrayList(u32) = .empty,
     next_owner: usize = 1,
@@ -256,9 +257,13 @@ const Extractor = struct {
                         const b = try self.addBinding(spec, self.m.default_keyword, name, entry.default_start, entry.type_only);
                         try self.addImportRef(self.m.default_keyword, entry.default_start, b);
                     }
-                    if (entry.namespace) |name| _ = try self.addBinding(spec, facts.namespace_name, name, entry.namespace_start, entry.type_only);
+                    if (entry.namespace) |name| {
+                        const b = try self.addBinding(spec, facts.namespace_name, name, entry.namespace_start, entry.type_only);
+                        if (entry.scoped) try self.scoped_bindings.put(self.arena, b, {});
+                    }
                     for (entry.named) |named| {
                         const b = try self.addBinding(spec, named.name, named.local(), named.local_start, entry.type_only or named.type_only);
+                        if (entry.scoped) try self.scoped_bindings.put(self.arena, b, {});
                         if (self.m.submodule_imports) try self.addSubmodule(b, entry.spec, named.name, entry.statement.start);
                         try self.addImportRef(named.name, named.name_start, b);
                     }
@@ -590,7 +595,7 @@ const Extractor = struct {
 
     fn exportBindings(self: *Extractor) Error!void {
         for (self.bindings.items, 0..) |binding, b| {
-            if (binding.type_only) continue;
+            if (binding.type_only or self.scoped_bindings.contains(@intCast(b))) continue;
             try self.exports.append(self.arena, .{ .name = binding.local, .kind = .binding, .index = @intCast(b) });
         }
     }
