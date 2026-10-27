@@ -189,7 +189,7 @@ test "test detection: a server with no test command and no detection refuses the
 
 test "test detection: a failing detected test still rejects the write" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try fixture.TsRepo.init(&.{.{ .rel = "pytest.ini", .text = "" }});
+    var repo = try fixture.TsRepo.init(&.{ .{ .rel = "pytest.ini", .text = "" }, .{ .rel = "test_fails.py", .text = "import os\n\ndef test_fails():\n    assert not os.path.exists(\"fresh.ts\")\n" } });
     defer repo.deinit();
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
