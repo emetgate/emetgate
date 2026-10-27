@@ -4876,7 +4876,7 @@
       "from": "if (overlaps(entry.declaration, range)) try out.append(gpa, entry);",
       "to": "if (overlaps(range, range)) try out.append(gpa, entry);",
       "kills": [
-        "emetgate_read_symbol with a line range hitting no symbol is a tool error"
+        "emetgate_read_symbol with a line range hitting no symbol returns those lines"
       ]
     },
     {
@@ -5018,8 +5018,8 @@
       "from": "                .directory => {",
       "to": "                .directory, .sym_link => {",
       "kills": [
-        "build hardlinks every file, recreates every directory and never follows a reparse point",
-        "redteam link tree: a junction inside a linked directory is not followed into the shadow"
+        "build hardlinks every file, recreates every directory and mirrors a reparse point as a junction to the same target",
+        "redteam link tree: a junction inside a linked directory is mirrored read-only, and writes through it never reach its target"
       ]
     },
     {
@@ -12538,7 +12538,7 @@
       "to": "            }\n        }\n    }\n};",
       "kills": [
         "rename facts: a C# member call on a receiver of unknown type refuses the rename",
-        "rename facts: a Python method called through self is refused"
+        "rename facts: a Python method called on a receiver of unknown type is refused"
       ]
     },
     {

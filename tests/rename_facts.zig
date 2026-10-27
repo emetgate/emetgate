@@ -506,9 +506,21 @@ test "rename facts: a Python function imported by another module is renamed wher
     try expectSource(planned, "b.py", "from a import plus\n\nhandlers = [plus]\n");
 }
 
-test "rename facts: a Python method called through self is refused" {
+test "rename facts: a Python method called through self is renamed at its call" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case = try Case.init(&.{.{ .rel = "svc.py", .text = "class Svc:\n    def run(self):\n        return 1\n\n    def go(self):\n        return self.run()\n" }});
+    defer case.deinit();
+    const planned = try case.plan("svc.py", "Svc.run", "start", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "svc.py", "class Svc:\n    def start(self):\n        return 1\n\n    def go(self):\n        return self.start()\n");
+}
+
+test "rename facts: a Python method called on a receiver of unknown type is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "svc.py", .text = "class Svc:\n    def run(self):\n        return 1\n" },
+        .{ .rel = "use.py", .text = "def go(x):\n    return x.run()\n" },
+    });
     defer case.deinit();
     try testing.expectError(error.RenameUnresolved, case.plan("svc.py", "Svc.run", "start", true));
 }

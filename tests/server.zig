@@ -68,7 +68,7 @@ test "tools/list offers the commit message on the tools that commit only when co
     defer testing.allocator.free(on);
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, on, .{});
     defer parsed.deinit();
-    const committing = [_][]const u8{ "emetgate_try", "emetgate_try_batch", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc" };
+    const committing = [_][]const u8{ "emetgate_try", "emetgate_try_batch", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc", "emetgate_edit", "emetgate_write" };
     var offered: usize = 0;
     for (parsed.value.object.get("result").?.object.get("tools").?.array.items) |tool| {
         const name = tool.object.get("name").?.string;
