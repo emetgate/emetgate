@@ -179,6 +179,30 @@ pub const Declarations = struct {
     containers: []const []const u8 = &.{},
     variable_declarator: []const u8 = "",
     variable_name_field: []const u8 = "name",
+    items: Items = .{},
+};
+
+pub const Items = struct {
+    assignment: ?[]const u8 = null,
+    assignment_left: []const u8 = "left",
+    assignment_right: []const u8 = "right",
+    member_chain: ?[]const u8 = null,
+    chain_object: []const u8 = "object",
+    chain_property: []const u8 = "property",
+    chain_root: []const u8 = "identifier",
+    chain_segment: []const u8 = "property_identifier",
+    imports: []const []const u8 = &.{},
+    import_source: []const u8 = "source",
+    alias_field: []const u8 = "alias",
+    pattern_names: []const []const u8 = &.{},
+    pattern_skip_fields: []const []const u8 = &.{},
+    object: ?[]const u8 = null,
+    pair: []const u8 = "pair",
+    pair_key: []const u8 = "key",
+    pair_value: []const u8 = "value",
+    property_keys: []const []const u8 = &.{},
+    require: ?[]const u8 = null,
+    member_separator: ?u8 = null,
 };
 
 pub const MemberTraits = struct {

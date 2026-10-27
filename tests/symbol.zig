@@ -300,6 +300,7 @@ test "containers: dotted namespaces, bound class expressions, nested objects and
         .{ .ref = "api.users.list", .kind = .method },
         .{ .ref = "outer", .kind = .function },
         .{ .ref = "outer.inner", .kind = .function },
+        .{ .ref = "exports.handler", .kind = .function_expression },
     });
 }
 

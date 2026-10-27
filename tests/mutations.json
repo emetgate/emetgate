@@ -1858,8 +1858,8 @@
     {
       "id": "NS6-insert-blank-line-always-added",
       "file": "src/engine/cas.zig",
-      "from": "const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) \"\" else eol;",
-      "to": "const separator: []const u8 = eol;",
+      "from": ".lead = if (grouped) \"\" else eol };",
+      "to": ".lead = eol };",
       "kills": [
         "insert appends after the last newline with exactly one blank line added only when none is there"
       ]
@@ -1867,8 +1867,8 @@
     {
       "id": "NS7-insert-blank-line-never-added",
       "file": "src/engine/cas.zig",
-      "from": "const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) \"\" else eol;",
-      "to": "const separator: []const u8 = \"\";",
+      "from": ".lead = if (grouped) \"\" else eol };",
+      "to": ".lead = \"\" };",
       "kills": [
         "insert appends after the last newline with exactly one blank line added only when none is there",
         "absent: a new top-level symbol is appended, committed, parses and joins the symbol table"
@@ -1886,8 +1886,8 @@
     {
       "id": "NS9-insert-extra-top-level-code-accepted",
       "file": "src/engine/cas.zig",
-      "from": "    if (statements != 1) return error.ExtraTopLevelCode;\n",
-      "to": "    if (statements != 1 and false) return error.ExtraTopLevelCode;\n",
+      "from": "    if (statements != holdersIn(profile, root, table, slot)) return error.ExtraTopLevelCode;\n",
+      "to": "    if (statements != holdersIn(profile, root, table, slot) and false) return error.ExtraTopLevelCode;\n",
       "kills": [
         "insert refuses top-level code beside the one symbol"
       ]
@@ -5660,8 +5660,8 @@
     {
       "id": "CR1-create-ignores-declarations",
       "file": "src/engine/cas.zig",
-      "from": "    for (table.declarations) |candidate| {\n        if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;\n        if (found != null) return error.MultipleTopLevelSymbols;\n        found = .{ .ref = candidate.ref, .hash = candidate.hash, .body = null };\n    }\n",
-      "to": "",
+      "from": "    inline for (.{ table.symbols, table.declarations, table.statements }) |list| {\n        for (list) |candidate| {\n            if (!within(candidate.declaration, slot)) continue;\n",
+      "to": "    inline for (.{ table.symbols, table.statements }) |list| {\n        for (list) |candidate| {\n            if (!within(candidate.declaration, slot)) continue;\n",
       "kills": [
         "insert and create accept a variable, class, interface, type alias or enum as the one new declaration",
         "create kinds: a batch adds an exported const and a new file with an interface, both classified as symmetry"
@@ -14275,6 +14275,87 @@
       "to": "",
       "kills": [
         "test detection: a server with no test command and no detection refuses the write with the fix for the user"
+      ]
+    },
+    {
+      "id": "JS1-item-span-escape-unchecked",
+      "file": "src/engine/cas.zig",
+      "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;",
+      "to": "    if (false) return error.BodyEscape;",
+      "kills": [
+        "a replaced item that grows into its neighbour or changes its name is refused"
+      ]
+    },
+    {
+      "id": "JS2-item-shape-unchecked",
+      "file": "src/engine/cas.zig",
+      "from": "    try expectSameShape(base.tree, next.tree, cut, slot);",
+      "to": "",
+      "kills": [
+        "a replaced item that grows into its neighbour or changes its name is refused"
+      ]
+    },
+    {
+      "id": "JS3-item-separator-doubled",
+      "file": "src/engine/cas.zig",
+      "from": "    if (text.len > 0 and (text[text.len - 1] == ',' or text[text.len - 1] == ';') and span.end < base.source.len",
+      "to": "    if (false and (text[text.len - 1] == ',' or text[text.len - 1] == ';') and span.end < base.source.len",
+      "kills": [
+        "a whole top-level statement, binding, method or property is replaced by its ref without resending its neighbours"
+      ]
+    },
+    {
+      "id": "JS4-node-separator-doubled",
+      "file": "src/engine/node_cas.zig",
+      "from": "    if ((last == ',' or last == ';') and source[end] == last) return text[0 .. text.len - 1];",
+      "to": "    if (false) return text[0 .. text.len - 1];",
+      "kills": [
+        "a separator the text repeats from right after its node is dropped instead of doubled"
+      ]
+    },
+    {
+      "id": "JS5-removal-blank-lines-all-eaten",
+      "file": "src/engine/removal.zig",
+      "from": "    if (bottom) |at| cut.end = at else cut.start = top.?;",
+      "to": "",
+      "kills": [
+        "removal: statements, members, bindings and properties leave exactly one blank line between neighbours"
+      ]
+    },
+    {
+      "id": "JS6-removal-shared-declaration-cut",
+      "file": "src/engine/removal.zig",
+      "from": "    if (whole and topLevelSymbolsIn(before.*, owned) > 1) return error.SharedStatement;",
+      "to": "",
+      "kills": [
+        "removal: a stale hash, a member and a shared declaration are refused"
+      ]
+    },
+    {
+      "id": "JS7-removal-shared-line-cut",
+      "file": "src/engine/removal.zig",
+      "from": "    const owned = lines orelse return error.SharedStatement;",
+      "to": "    const owned = lines orelse target.span;",
+      "kills": [
+        "removal: a stale hash, a member and a shared declaration are refused"
+      ]
+    },
+    {
+      "id": "JS8-require-delete-is-effect",
+      "file": "src/platform/batch_plan.zig",
+      "from": " and !requires(base, removed.span);",
+      "to": ";",
+      "kills": [
+        "deleting a require binding or a class member has no top-level effect, a bare statement skips the reference scan"
+      ]
+    },
+    {
+      "id": "JS9-member-insert-shape-start",
+      "file": "src/engine/cas.zig",
+      "from": "    try expectSameShape(base.tree, next.tree, end, region);",
+      "to": "",
+      "kills": [
+        "a member is inserted after the last member of its class and nested properties keep their blank lines"
       ]
     }
   ]

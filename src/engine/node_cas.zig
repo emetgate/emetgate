@@ -195,6 +195,13 @@ const Hole = struct {
     run: []const ts.Node = &.{},
 };
 
+fn dropEcho(source: []const u8, end: u32, text: []const u8) []const u8 {
+    if (text.len == 0 or end >= source.len) return text;
+    const last = text[text.len - 1];
+    if ((last == ',' or last == ';') and source[end] == last) return text[0 .. text.len - 1];
+    return text;
+}
+
 fn lessByStart(_: void, a: Hole, b: Hole) bool {
     return a.old.start < b.old.start;
 }
@@ -222,7 +229,7 @@ pub fn apply(base: *Snapshot, edits: []const Edit) Error!Applied {
         .index = i,
         .node = node.?,
         .old = .{ .start = node.?.startByte(), .end = node.?.endByte() },
-        .text = cas.normalizeBody(edit.text),
+        .text = dropEcho(base.source, node.?.endByte(), cas.normalizeBody(edit.text)),
     };
     std.mem.sort(Hole, holes, {}, lessByStart);
     for (holes[1..], holes[0 .. holes.len - 1]) |current, previous| {
@@ -501,6 +508,16 @@ test "a statement is replaced through its node hash and every byte outside it st
     try testing.expectEqual(@as(usize, 1), applied.units.len);
     try testing.expectEqualStrings("f", applied.units[0].ref);
     try testing.expect(applied.units[0].before != null and applied.units[0].after != null);
+}
+
+test "a separator the text repeats from right after its node is dropped instead of doubled" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotIn(runtime, "module.exports = {\n  meta: {\n    schema: [],\n  },\n};\n", ".js");
+    defer base.destroy();
+    const applied = try applyOne(base, "schema: []", "pair", "schema: [{ type: 'object' }],");
+    defer applied.deinit();
+    try testing.expectEqualStrings("module.exports = {\n  meta: {\n    schema: [{ type: 'object' }],\n  },\n};\n", applied.snapshot.source);
 }
 
 test "a node address stays valid after an edit elsewhere in the same body" {

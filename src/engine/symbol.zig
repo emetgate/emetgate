@@ -5,6 +5,7 @@ const functions_mod = @import("functions.zig");
 const ref_mod = @import("ref.zig");
 const profile_mod = @import("lang/profile.zig");
 const declarations_mod = @import("declarations.zig");
+const statements_mod = @import("statements.zig");
 
 const Allocator = std.mem.Allocator;
 const Profile = profile_mod.Profile;
@@ -95,11 +96,24 @@ pub const Symbol = struct {
 
 pub const Declaration = declarations_mod.Declaration;
 pub const DeclarationKind = profile_mod.DeclarationKind;
+pub const Statement = statements_mod.Statement;
+
+pub const Item = struct {
+    ref: Ref,
+    role: Role,
+    node: ts.Node,
+    span: Span,
+    hash: Hash,
+    body: ?ts.Node = null,
+
+    pub const Role = enum { symbol, declaration, statement, import, binding, property };
+};
 
 pub const Table = struct {
     arena: *std.heap.ArenaAllocator,
     symbols: []Symbol,
     declarations: []Declaration = &.{},
+    statements: []Statement = &.{},
 
     pub const BuildError = error{SourceHasErrors} || Allocator.Error;
     pub const ResolveError = error{ SymbolNotFound, AmbiguousSymbol };
@@ -125,7 +139,11 @@ pub const Table = struct {
         }
         markAmbiguous(symbols.items);
         const declarations = try declarations_mod.collect(arena.allocator(), profile, tree);
-        return .{ .arena = arena, .symbols = symbols.items, .declarations = declarations };
+        const taken = try arena.allocator().alloc(Ref, symbols.items.len + declarations.len);
+        for (symbols.items, 0..) |symbol, i| taken[i] = symbol.ref;
+        for (declarations, 0..) |declaration, i| taken[symbols.items.len + i] = declaration.ref;
+        const statements = try statements_mod.collect(arena.allocator(), profile, tree, taken);
+        return .{ .arena = arena, .symbols = symbols.items, .declarations = declarations, .statements = statements };
     }
 
     pub fn deinit(self: Table) void {
@@ -151,6 +169,33 @@ pub const Table = struct {
         return null;
     }
 
+    pub fn item(self: Table, ref: Ref) ResolveError!Item {
+        var found: ?Item = null;
+        for (self.symbols) |*symbol| {
+            if (!symbol.ref.eql(ref)) continue;
+            if (found) |_| return error.AmbiguousSymbol;
+            found = .{ .ref = symbol.ref, .role = .symbol, .node = symbol.node, .span = symbol.declaration, .hash = symbol.hash, .body = symbol.body };
+        }
+        if (found) |f| return f;
+        for (self.declarations) |*declaration| {
+            if (!declaration.ref.eql(ref)) continue;
+            if (found) |_| return error.AmbiguousSymbol;
+            found = .{ .ref = declaration.ref, .role = .declaration, .node = declaration.node, .span = declaration.declaration, .hash = declaration.hash };
+        }
+        if (found) |f| return f;
+        for (self.statements) |*statement| {
+            if (!statement.ref.eql(ref)) continue;
+            if (found != null or statement.ambiguous) return error.AmbiguousSymbol;
+            found = .{ .ref = statement.ref, .role = switch (statement.kind) {
+                .statement => .statement,
+                .import => .import,
+                .binding => .binding,
+                .property => .property,
+            }, .node = statement.node, .span = statement.declaration, .hash = statement.hash };
+        }
+        return found orelse error.SymbolNotFound;
+    }
+
     pub fn hasDeclaration(self: Table, ref: Ref) bool {
         for (self.declarations) |declaration| {
             if (declaration.ref.eql(ref)) return true;
@@ -173,13 +218,15 @@ fn describe(arena: Allocator, profile: *const Profile, tree: ts.Tree, function: 
     const traits = profile.memberTraits(profile, tree, function.node, function.kind);
     const kind = symbolKind(function.kind, traits) orelse return null;
     const name = function.name orelse return null;
-    if (!isOneOf(name.kind(), profile.addressable_names)) return null;
-    const container = try containerPath(arena, profile, tree, function.node) orelse return null;
+    const chain = try statements_mod.topLevelChain(arena, profile, tree, name);
+    if (chain == null and !isOneOf(name.kind(), profile.addressable_names)) return null;
+    const outer = try containerPath(arena, profile, tree, function.node) orelse return null;
+    const container = if (chain) |c| try std.mem.concat(arena, []const u8, &.{ outer, c[0 .. c.len - 1] }) else outer;
     const declaration = declarationOf(profile, function);
     return .{
         .ref = .{
             .container = container,
-            .name = tree.text(name),
+            .name = if (chain) |c| c[c.len - 1] else tree.text(name),
             .accessor = traits.accessor,
             .is_static = traits.is_static,
         },
@@ -232,9 +279,13 @@ fn containerPath(arena: Allocator, profile: *const Profile, tree: ts.Tree, node:
             .unnamed => return null,
             .named => |name| name,
         };
-        if (!isOneOf(name.kind(), profile.addressable_names) and !profile.isDottedName(name.kind())) return null;
         const first = reversed.items.len;
-        try appendNameSegments(arena, profile, tree, name, &reversed);
+        if (try statements_mod.topLevelChain(arena, profile, tree, name)) |chain| {
+            try reversed.appendSlice(arena, chain);
+        } else {
+            if (!isOneOf(name.kind(), profile.addressable_names) and !profile.isDottedName(name.kind())) return null;
+            try appendNameSegments(arena, profile, tree, name, &reversed);
+        }
         std.mem.reverse([]const u8, reversed.items[first..]);
     }
     if (fileScopedName(profile, node)) |name| {
