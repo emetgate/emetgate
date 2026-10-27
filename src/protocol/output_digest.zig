@@ -168,6 +168,9 @@ fn warningKey(text: []const u8) ?[]const u8 {
 }
 
 fn unrule(text: []const u8) []const u8 {
+    const rule_chars = "=-_*~";
+    const ends = std.mem.trimEnd(u8, text, " \r");
+    if (ends.len == 0 or std.mem.indexOfScalar(u8, rule_chars, ends[0]) == null or std.mem.indexOfScalar(u8, rule_chars, ends[ends.len - 1]) == null) return text;
     const inner = std.mem.trim(u8, text, "=-_*~ ");
     return if (inner.len != 0 and inner.len < text.len) inner else text;
 }
