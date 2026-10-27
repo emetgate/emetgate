@@ -72,7 +72,7 @@ const Victim = struct {
             "(echo BACKDOOR> \"{1s}\\planted.txt\") & " ++
             "(echo BACKDOOR> node_modules\\pkg\\index.js) & " ++
             "(echo BACKDOOR> node_modules\\pkg\\planted.js) & " ++
-            "exit {2d}", .{ self.root_abs, self.top_abs, exit_code });
+            "(findstr /r a.-.b src\\math.ts >nul && exit {2d} || exit 0)", .{ self.root_abs, self.top_abs, exit_code });
     }
 
     fn fingerprint(self: *Victim) ![]u8 {
@@ -191,6 +191,7 @@ test "redteam sandbox: a failing test command cannot leave writes behind outside
     defer gpa.free(run.before);
     defer run.result.deinit(gpa);
 
+    errdefer diagnostics.printResult(run.result);
     try testing.expect(run.result == .rejected);
     try testing.expectEqual(sandbox.Outcome{ .exited = 1 }, run.result.rejected.outcome);
     try expectOnlyTargetChanged(&run.victim, run.before, math_src);
@@ -277,7 +278,7 @@ test "redteam sandbox: the shadow lives under the operator's shadow root, outsid
             .ref_text = "add",
             .expected_hash = .{ .present = try hashOfAdd(runtime, file) },
             .new_body = "{\n  return a - b;\n}",
-            .test_command = "cd & exit 1",
+            .test_command = "cd & (findstr /r a.-.b src\\math.ts >nul && exit 1 || exit 0)",
             .shadow_root = base,
             .gate_tree = .{ .tree = tree },
             .trace = &trace,
@@ -299,6 +300,7 @@ test "redteam sandbox: the shadow lives under the operator's shadow root, outsid
             var it = workspace.iterate();
             var names: usize = 0;
             while (try it.next(testing.io)) |entry| {
+                if (std.mem.eql(u8, entry.name, "shadow-cache")) continue;
                 try testing.expect(std.mem.eql(u8, entry.name, shadow_root.marker_name) or std.mem.eql(u8, entry.name, "shadow"));
                 names += 1;
             }

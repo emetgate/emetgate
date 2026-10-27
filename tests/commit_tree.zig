@@ -32,8 +32,8 @@ const only_workspace: fixture.File = .{ .rel = ".gitignore", .text = ".emetgate/
 const files = [_]fixture.File{ util_file, flag_file, gone_file, text_file, only_workspace };
 
 const has_new = "findstr bbbb src\\flag.ts";
-const text_is_crlf = "for %I in (f.txt) do if not %~zI==6 exit 1";
-const text_is_lf = "for %I in (f.txt) do if not %~zI==4 exit 1";
+const text_is_crlf = "for %I in (f.txt) do @if not %~zI==6 exit 1";
+const text_is_lf = "for %I in (f.txt) do @if not %~zI==4 exit 1";
 const red = "cmd /c exit 1";
 
 fn skipOffWindows() !void {
@@ -285,7 +285,7 @@ test "commit tree: the test command cannot write a tracked file of the tree in p
     try case.init(&files);
     defer case.deinit();
     const env = &case.env;
-    const appends = "echo x>> src\\flag.ts";
+    const appends = "(echo x>> src\\flag.ts) 2>nul";
     const before = try env.head();
     try expectRefused(env, try swap(env, new_body, appends), before);
 
