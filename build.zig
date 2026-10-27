@@ -272,7 +272,7 @@ const cli_cases = [_]CliCase{
         .name = "mutate json on a stale hash is a typed error payload",
         .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", e2e_zero_hash, "--body", "{ return 0; }", "--json" },
         .exit_code = 6,
-        .stdout = "{\"status\":\"error\",\"error\":\"HashMismatch\",\"exit_code\":6}\n",
+        .stdout = "{\"status\":\"error\",\"error\":\"HashMismatch\",\"exit_code\":6,\"fix\":\"the hash is stale or of the wrong kind: symbol hashes come from emetgate_symbols, node ids from emetgate_read_symbol nodes:true, file and doc hashes from emetgate_read_file; read again and retry\"}\n",
     },
     .{
         .name = "output larger than the stdout buffer",
@@ -324,7 +324,7 @@ const cli_cases = [_]CliCase{
         .name = "mutate json with hash absent and a mismatched name",
         .args = &.{ "mutate", e2e_fixture, "--symbol", "extra", "--hash", "absent", "--body", "function other() { return 1; }", "--json" },
         .exit_code = 25,
-        .stdout = "{\"status\":\"error\",\"error\":\"SymbolNameMismatch\",\"exit_code\":25}\n",
+        .stdout = "{\"status\":\"error\",\"error\":\"SymbolNameMismatch\",\"exit_code\":25,\"fix\":\"the declared name must equal symbol\"}\n",
     },
     .{
         .name = "mutate with an inline body",
