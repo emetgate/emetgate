@@ -128,8 +128,8 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
                 if (killed_leftovers) continue;
                 if (drain_end) |end| {
                     if (std.Io.Clock.Timestamp.now(io, .awake).compare(.gte, end)) {
+                        if ((job.leftovers(consoleHost(child.id.?)) catch 1) != 0) killed_leftovers = true;
                         job.terminate();
-                        killed_leftovers = true;
                     }
                 } else if (hasExited(child.id.?)) {
                     drain_end = graceEnd(io, deadline);
@@ -197,6 +197,16 @@ fn consoleHost(process: std.os.windows.HANDLE) ?usize {
     if (win.NtQueryInformationProcess(process, win.process_console_host_process, &value, @sizeOf(usize), null) != .SUCCESS) return null;
     const pid = value & ~@as(usize, 3);
     return if (pid == 0) null else pid;
+}
+
+pub const toolchain_daemons = [_][]const u8{ "VBCSCompiler.exe", "MSBuild.exe", "dotnet.exe", "MSBuildTaskHost.exe" };
+
+pub fn isToolchainDaemon(image_path: []const u8) bool {
+    const base = std.fs.path.basename(image_path);
+    for (toolchain_daemons) |name| {
+        if (std.ascii.eqlIgnoreCase(base, name)) return true;
+    }
+    return false;
 }
 
 pub fn leftoverCount(pids: []const usize, console_host: ?usize) usize {
@@ -360,7 +370,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     const program = try resolveProgram(arena, command.cwd, command.argv[0]);
     const command_line = try commandLine(arena, command.argv);
     const cwd = try std.unicode.wtf8ToWtf16LeAllocZ(arena, command.cwd);
-    const environment: ?*anyopaque = if (command.temp != null or command.env.len != 0) @ptrCast((try commandEnvironment(arena, command)).ptr) else null;
+    const environment: ?*anyopaque = @ptrCast((try commandEnvironment(arena, command)).ptr);
 
     const nul = try openNul();
     defer std.os.windows.CloseHandle(nul);
@@ -535,13 +545,37 @@ pub fn environmentWithTemp(arena: Allocator, temp: []const u8) ![:0]u16 {
     return environmentWith(arena, &.{ .{ .name = "TEMP", .value = temp }, .{ .name = "TMP", .value = temp } });
 }
 
-fn commandEnvironment(arena: Allocator, command: Command) ![:0]u16 {
+pub const daemon_flags = [_]EnvVar{
+    .{ .name = "MSBUILDDISABLENODEREUSE", .value = "1" },
+    .{ .name = "DOTNET_CLI_USE_MSBUILD_SERVER", .value = "0" },
+    .{ .name = "UseSharedCompilation", .value = "false" },
+    .{ .name = "DOTNET_CLI_TELEMETRY_OPTOUT", .value = "1" },
+    .{ .name = "DOTNET_NOLOGO", .value = "1" },
+    .{ .name = "DOTNET_SKIP_FIRST_TIME_EXPERIENCE", .value = "1" },
+    .{ .name = "GRADLE_OPTS", .value = "-Dorg.gradle.daemon=false" },
+};
+
+fn namedIn(name: []const u8, vars: []const EnvVar) bool {
+    for (vars) |v| {
+        if (std.ascii.eqlIgnoreCase(v.name, name)) return true;
+    }
+    return false;
+}
+
+pub fn commandVars(arena: Allocator, command: Command) ![]EnvVar {
     var vars: std.ArrayList(EnvVar) = .empty;
     if (command.temp) |temp| {
         for (temp_names) |name| try vars.append(arena, .{ .name = name, .value = temp });
     }
     try vars.appendSlice(arena, command.env);
-    return environmentWith(arena, vars.items);
+    for (daemon_flags) |flag| {
+        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);
+    }
+    return vars.toOwnedSlice(arena);
+}
+
+fn commandEnvironment(arena: Allocator, command: Command) ![:0]u16 {
+    return environmentWith(arena, try commandVars(arena, command));
 }
 
 const CacheDir = struct { name: []const u8, sub: []const u8 };
@@ -827,6 +861,7 @@ const win = struct {
     extern "kernel32" fn GetExitCodeProcess(process: windows.HANDLE, code: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn OpenProcess(access: windows.DWORD, inherit: windows.BOOL, pid: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
     extern "kernel32" fn IsProcessInJob(process: windows.HANDLE, job: windows.HANDLE, result: *windows.BOOL) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn QueryFullProcessImageNameW(process: windows.HANDLE, flags: windows.DWORD, name: [*]u16, size: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetProcessId(process: windows.HANDLE) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn CreateIoCompletionPort(file: windows.HANDLE, existing: ?windows.HANDLE, key: usize, threads: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
     extern "kernel32" fn GetQueuedCompletionStatus(port: windows.HANDLE, bytes: *windows.DWORD, key: *usize, overlapped: *?*anyopaque, milliseconds: windows.DWORD) callconv(.winapi) windows.BOOL;
@@ -874,7 +909,25 @@ const Job = struct {
 
     fn leftovers(self: Job, console_host: ?usize) !usize {
         var list: PidList = .{};
-        return leftoverCount(try self.members(&list), console_host);
+        const pids = try self.members(&list);
+        var count: usize = 0;
+        for (pids) |pid| {
+            if (console_host != null and pid == console_host.?) continue;
+            if (daemonPid(pid)) continue;
+            count += 1;
+        }
+        return count;
+    }
+
+    fn daemonPid(pid: usize) bool {
+        const handle = win.OpenProcess(win.process_query_limited_information, .FALSE, @intCast(pid)) orelse return false;
+        defer std.os.windows.CloseHandle(handle);
+        var buf: [1024]u16 = undefined;
+        var size: std.os.windows.DWORD = buf.len;
+        if (win.QueryFullProcessImageNameW(handle, 0, &buf, &size) == .FALSE) return false;
+        var utf8: [3 * 1024]u8 = undefined;
+        const len = std.unicode.wtf16LeToWtf8(&utf8, buf[0..size]);
+        return isToolchainDaemon(utf8[0..len]);
     }
 
     fn outlasts(self: Job, console_host: ?usize, wait_ms: std.os.windows.DWORD) bool {
@@ -1402,4 +1455,30 @@ test "a spawn fault is decided before the process is created, so no child of the
     var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
     try testing.expectEqual(before + 1, try ownChildrenNamed(image));
     service.stop();
+}
+
+test "toolchain build daemons left in the job are recognized by image name, whatever the path or case" {
+    try testing.expect(isToolchainDaemon("C:\\Program Files\\dotnet\\sdk\\8.0.100\\Roslyn\\bincore\\VBCSCompiler.exe"));
+    try testing.expect(isToolchainDaemon("C:\\Program Files\\dotnet\\dotnet.exe"));
+    try testing.expect(isToolchainDaemon("msbuild.EXE"));
+    try testing.expect(!isToolchainDaemon("C:\\tools\\probe.exe"));
+    try testing.expect(!isToolchainDaemon("C:\\tools\\dotnet.exe.bak"));
+    try testing.expect(!isToolchainDaemon(""));
+}
+
+test "every sandboxed command turns off build-server reuse but keeps a value the caller set" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const vars = try commandVars(arena, .{ .argv = &.{"x"}, .cwd = ".", .env = &.{.{ .name = "gradle_opts", .value = "-Xmx1g" }} });
+    var reuse: ?[]const u8 = null;
+    var gradle: usize = 0;
+    for (vars) |v| {
+        if (std.mem.eql(u8, v.name, "MSBUILDDISABLENODEREUSE")) reuse = v.value;
+        if (std.ascii.eqlIgnoreCase(v.name, "GRADLE_OPTS")) gradle += 1;
+    }
+    try testing.expectEqualStrings("1", reuse.?);
+    try testing.expectEqual(@as(usize, 1), gradle);
+    try testing.expect(namedIn("UseSharedCompilation", vars));
+    try testing.expect(namedIn("DOTNET_CLI_USE_MSBUILD_SERVER", vars));
 }

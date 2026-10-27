@@ -16,7 +16,10 @@ const Value = std.json.Value;
 fn detectedWith(files: []const [2][]const u8) !?[]const u8 {
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
-    for (files) |file| try tmp.dir.writeFile(testing.io, .{ .sub_path = file[0], .data = file[1] });
+    for (files) |file| {
+        if (std.fs.path.dirnamePosix(file[0])) |parent| try tmp.dir.createDirPath(testing.io, parent);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = file[0], .data = file[1] });
+    }
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(root);
     return test_command.detectIn(gpa, testing.io, root);
@@ -47,6 +50,17 @@ test "test detection: an empty folder, npm's placeholder script and a package wi
     try expectDetected(null, &.{.{ "package.json", "{\"scripts\":{\"test\":\"\"}}" }});
     try expectDetected(null, &.{.{ "package.json", "not json" }});
     try expectDetected(null, &.{.{ "README.md", "" }});
+}
+
+test "test detection: a dotnet solution, or the one test project in a subfolder, names its test command" {
+    try expectDetected("dotnet test", &.{.{ "App.slnx", "" }});
+    try expectDetected("dotnet test", &.{.{ "App.fsproj", "" }});
+    try expectDetected("dotnet test \"App.Tests\\App.Tests.csproj\"", &.{ .{ "App/App.csproj", "" }, .{ "App.Tests/App.Tests.csproj", "" } });
+    try expectDetected("dotnet test \"tests\\Calc.Tests\\Calc.Tests.csproj\"",&.{ .{ "src/Calc/Calc.csproj", "" }, .{ "tests/Calc.Tests/Calc.Tests.csproj", "" } });
+    try expectDetected(null, &.{.{ "App/App.csproj", "" }});
+    try expectDetected(null, &.{ .{ "A.Tests/A.Tests.csproj", "" }, .{ "B.Tests/B.Tests.csproj", "" } });
+    try expectDetected(null, &.{.{ "App/bin/Debug/X.Tests.csproj", "" }});
+    try expectDetected(null, &.{.{ "a/b/c/Deep.Tests.csproj", "" }});
 }
 
 test "test detection: a package test script wins over the other markers" {
@@ -133,6 +147,10 @@ test "test detection: a write in a project with no test command lands as unverif
     try testing.expect(!reply.is_error);
     try testing.expectEqualStrings(test_command.unverified_status, reply.status());
     try testing.expect(std.mem.startsWith(u8, reply.value.object.get("tests").?.string, "none"));
+    try testing.expect(reply.text.len < 600);
+    try testing.expect(std.mem.indexOfScalar(u8, std.mem.trimEnd(u8, reply.text, "\n"), '\n') == null);
+    try testing.expect(reply.value.object.get("symbols") == null);
+    try testing.expect(reply.value.object.get("files").?.array.items.len == 1);
     const on_disk = try repo.read("fresh.ts");
     defer gpa.free(on_disk);
     try testing.expectEqualStrings(fresh_body, on_disk);

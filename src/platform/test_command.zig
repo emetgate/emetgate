@@ -59,9 +59,77 @@ pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
     var it = dir.iterate();
     while (it.next(io) catch null) |entry| {
         if (entry.kind != .file) continue;
-        if (std.ascii.endsWithIgnoreCase(entry.name, ".sln") or std.ascii.endsWithIgnoreCase(entry.name, ".csproj")) return "dotnet test";
+        if (isDotnetRoot(entry.name)) return "dotnet test";
     }
-    return null;
+    return nestedTestProject(io, dir);
+}
+
+const dotnet_roots = [_][]const u8{ ".sln", ".slnx", ".csproj", ".fsproj", ".vbproj" };
+const dotnet_projects = [_][]const u8{ ".csproj", ".fsproj", ".vbproj" };
+const skipped_dirs = [_][]const u8{ "bin", "obj", "node_modules", "packages", "target", "dist", "out" };
+const max_project_depth = 2;
+
+fn endsWithAny(name: []const u8, suffixes: []const []const u8) bool {
+    for (suffixes) |suffix| {
+        if (std.ascii.endsWithIgnoreCase(name, suffix)) return true;
+    }
+    return false;
+}
+
+fn isDotnetRoot(name: []const u8) bool {
+    return endsWithAny(name, &dotnet_roots);
+}
+
+pub fn isTestProject(name: []const u8) bool {
+    if (!endsWithAny(name, &dotnet_projects)) return false;
+    return std.ascii.indexOfIgnoreCase(name, "test") != null;
+}
+
+fn skippedDir(name: []const u8) bool {
+    if (name.len == 0 or name[0] == '.') return true;
+    for (skipped_dirs) |skipped| {
+        if (std.ascii.eqlIgnoreCase(name, skipped)) return true;
+    }
+    return false;
+}
+
+const Found = struct {
+    count: usize = 0,
+    path: [512]u8 = undefined,
+    len: usize = 0,
+};
+
+threadlocal var nested_command: [600]u8 = undefined;
+
+fn nestedTestProject(io: std.Io, dir: std.Io.Dir) ?[]const u8 {
+    var found: Found = .{};
+    var prefix: [512]u8 = undefined;
+    findTestProjects(io, dir, &prefix, 0, 1, &found);
+    if (found.count != 1) return null;
+    return std.fmt.bufPrint(&nested_command, "dotnet test \"{s}\"", .{found.path[0..found.len]}) catch null;
+}
+
+fn findTestProjects(io: std.Io, dir: std.Io.Dir, prefix: *[512]u8, prefix_len: usize, depth: usize, found: *Found) void {
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (entry.kind != .directory or skippedDir(entry.name)) continue;
+        const sub_len = prefix_len + entry.name.len + 1;
+        if (sub_len > prefix.len) continue;
+        @memcpy(prefix[prefix_len..][0..entry.name.len], entry.name);
+        prefix[prefix_len + entry.name.len] = '\\';
+        var sub = dir.openDir(io, entry.name, .{ .iterate = true }) catch continue;
+        defer sub.close(io);
+        var files = sub.iterate();
+        while (files.next(io) catch null) |file| {
+            if (file.kind != .file or !isTestProject(file.name)) continue;
+            found.count += 1;
+            if (sub_len + file.name.len > found.path.len) continue;
+            @memcpy(found.path[0..sub_len], prefix[0..sub_len]);
+            @memcpy(found.path[sub_len..][0..file.name.len], file.name);
+            found.len = sub_len + file.name.len;
+        }
+        if (depth < max_project_depth) findTestProjects(io, sub, prefix, sub_len, depth + 1, found);
+    }
 }
 
 fn packageTestScript(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {

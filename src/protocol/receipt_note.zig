@@ -51,6 +51,62 @@ pub fn restated(gpa: Allocator, text: []const u8, to: []const u8, extra: []const
     return try std.fmt.allocPrint(gpa, "{s}{s}\"{s}{s}", .{ open, to, extra, text[end + 1 ..] });
 }
 
+const max_unverified_files = 20;
+const kept_fields = [_][]const u8{ "commit", "commit_unfinished", "files_left_as_found", "left_as_found" };
+
+pub fn unverified(gpa: Allocator, text: []const u8, to: []const u8, hint: []const u8) !?[]u8 {
+    const open = "{\"status\":\"";
+    if (!std.mem.startsWith(u8, text, open)) return null;
+    const end = std.mem.indexOfScalarPos(u8, text, open.len, '"') orelse return null;
+    const status = text[open.len..end];
+    if (!std.mem.eql(u8, status, wire.written_status) and !std.mem.eql(u8, status, wire.committed_status)) return null;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const close = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, text[0..close], .{}) catch return null;
+    if (parsed != .object) return null;
+    var files: std.ArrayList([]const u8) = .empty;
+    try collectFile(arena, &files, parsed);
+    for ([_][]const u8{ "edits", "files" }) |name| {
+        const list = parsed.object.get(name) orelse continue;
+        if (list != .array) continue;
+        for (list.array.items) |item| try collectFile(arena, &files, item);
+    }
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write(to);
+    try js.objectField("files");
+    try js.write(files.items[0..@min(files.items.len, max_unverified_files)]);
+    if (files.items.len > max_unverified_files) {
+        try js.objectField("files_more");
+        try js.write(files.items.len - max_unverified_files);
+    }
+    for (kept_fields) |name| {
+        const value = parsed.object.get(name) orelse continue;
+        try js.objectField(name);
+        try js.write(value);
+    }
+    try js.objectField("tests");
+    try js.write(hint);
+    try js.endObject();
+    try out.writer.writeByte('\n');
+    return try out.toOwnedSlice();
+}
+
+fn collectFile(arena: Allocator, files: *std.ArrayList([]const u8), value: std.json.Value) !void {
+    if (value != .object) return;
+    const file = value.object.get("file") orelse return;
+    if (file != .string) return;
+    for (files.items) |seen| {
+        if (std.mem.eql(u8, seen, file.string)) return;
+    }
+    try files.append(arena, file.string);
+}
+
 fn promote(gpa: Allocator, w: *Writer) !void {
     const allocating: *std.Io.Writer.Allocating = @fieldParentPtr("writer", w);
     const text = (try restated(gpa, allocating.written(), wire.committed_status, "")) orelse return;
@@ -118,4 +174,13 @@ test "receipt note: the paths of a refusal are added as a list, with the count o
     const text = try withPaths(gpa, "{\"status\":\"error\",\"error\":\"GateTreeNotHead\"}", named);
     defer gpa.free(text);
     try std.testing.expectEqualStrings("{\"status\":\"error\",\"error\":\"GateTreeNotHead\",\"paths\":[\"src/a.ts\",\"src/A.ts\"],\"paths_more\":3}", text);
+}
+
+test "receipt note: an unverified write is one short line that names the files and drops the symbol listing" {
+    const gpa = std.testing.allocator;
+    const text = "{\"status\":\"written\",\"edits\":[{\"file\":\"src/A.cs\",\"symbols\":[{\"symbol\":\"A\",\"new_hash\":\"abc\"}]},{\"file\":\"src/A.cs\",\"symbols\":[]},{\"file\":\"src/B.cs\"}],\"commit\":\"c0ffee\"}\n";
+    const short = (try unverified(gpa, text, "unverified_no_tests", "none: add a test command")).?;
+    defer gpa.free(short);
+    try std.testing.expectEqualStrings("{\"status\":\"unverified_no_tests\",\"files\":[\"src/A.cs\",\"src/B.cs\"],\"commit\":\"c0ffee\",\"tests\":\"none: add a test command\"}\n", short);
+    try std.testing.expect((try unverified(gpa, "{\"status\":\"rejected\"}\n", "unverified_no_tests", "x")) == null);
 }

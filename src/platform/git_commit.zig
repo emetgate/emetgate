@@ -457,7 +457,7 @@ const Facts = struct {
 
 fn facts(git: Git) !Facts {
     const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "--git-path", "info/attributes", "HEAD^{commit}", "HEAD^{tree}", "--symbolic-full-name", "HEAD" })) orelse {
-        if (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" }) == null) return error.NoCommitYet;
+        if (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" }) == null) return unbornFacts(git);
         return error.GitFailed;
     };
     var lines = std.mem.tokenizeAny(u8, out, "\r\n");
@@ -468,6 +468,36 @@ fn facts(git: Git) !Facts {
     const tree = lines.next() orelse return error.GitFailed;
     const branch = lines.next() orelse return error.DetachedHead;
     if (!std.mem.startsWith(u8, branch, branch_prefix)) return error.DetachedHead;
+    return .{ .git_dir = git_dir, .index = try listedPath(git, listed), .attributes = try listedPath(git, attributes_listed), .oid = oid, .tree = tree, .branch = branch };
+}
+
+const empty_tree_sha1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const empty_tree_sha256 = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
+
+pub fn isUnborn(oid: []const u8) bool {
+    if (oid.len == 0) return false;
+    for (oid) |c| {
+        if (c != '0') return false;
+    }
+    return true;
+}
+
+pub fn emptyTreeFor(object_format: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, object_format, "sha1")) return empty_tree_sha1;
+    if (std.mem.eql(u8, object_format, "sha256")) return empty_tree_sha256;
+    return null;
+}
+
+fn unbornFacts(git: Git) !Facts {
+    const branch = try branchOf(git);
+    const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "--git-path", "info/attributes", "--show-object-format" })) orelse return error.GitFailed;
+    var lines = std.mem.tokenizeAny(u8, out, "\r\n");
+    const git_dir = lines.next() orelse return error.GitFailed;
+    const listed = lines.next() orelse return error.GitFailed;
+    const attributes_listed = lines.next() orelse return error.GitFailed;
+    const tree = emptyTreeFor(lines.next() orelse return error.GitFailed) orelse return error.NoCommitYet;
+    const oid = try git.arena.alloc(u8, tree.len);
+    @memset(oid, '0');
     return .{ .git_dir = git_dir, .index = try listedPath(git, listed), .attributes = try listedPath(git, attributes_listed), .oid = oid, .tree = tree, .branch = branch };
 }
 
@@ -638,7 +668,7 @@ pub var listings_read: usize = 0;
 
 fn treeListing(git: Git, commit: []const u8, tree: []const u8) ![]const u8 {
     if (try keptListing(git.arena, tree)) |kept| return kept;
-    const out = try git.needRaw(&.{ "ls-tree", "-r", "-z", commit });
+    const out = try git.needRaw(&.{ "ls-tree", "-r", "-z", if (isUnborn(commit)) tree else commit });
     if (builtin.is_test) listings_read += 1;
     keepListing(tree, out);
     return out;
@@ -763,7 +793,11 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, lines: 
         made += 1;
     }
 
-    const commit = try gpa.dupe(u8, try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p", head.oid, "-F", "-" }, try commit_message.stored(arena, message)));
+    const stored = try commit_message.stored(arena, message);
+    const commit = try gpa.dupe(u8, if (isUnborn(head.oid))
+        try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-F", "-" }, stored)
+    else
+        try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p", head.oid, "-F", "-" }, stored));
     keepListing(tree, lines);
     return .{ .commit = commit, .entries = entries };
 }
@@ -1030,10 +1064,10 @@ pub fn lineage(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8,
     const listed = (try git.run(&.{ "rev-list", "--parents", "-n", "1", commit })) orelse return null;
     var ids = std.mem.tokenizeAny(u8, listed, " \r\n");
     const self_id = ids.next() orelse return null;
-    const parent = ids.next() orelse return null;
+    const parent = ids.next() orelse if (isUnborn(base)) base else return null;
     if (ids.next() != null) return null;
     if (!std.mem.eql(u8, self_id, commit) or !std.mem.eql(u8, parent, base)) return null;
-    const before = try treeEntries(git, base, paths);
+    const before: []const TreeEntry = if (isUnborn(base)) &.{} else try treeEntries(git, base, paths);
     const after = try treeEntries(git, commit, paths);
     const base_oids = try gpa.alloc([]u8, paths.len);
     var made: usize = 0;
@@ -1163,7 +1197,7 @@ pub fn checkoutInto(gpa: Allocator, io: std.Io, root: []const u8, head: Head, pa
     defer work.done();
     const dir = work.dir;
     const private = try git.withIndex(try std.fs.path.join(arena, &.{ dir, "index" }));
-    _ = try private.need(&.{ "read-tree", head.oid });
+    _ = try private.need(&.{ "read-tree", head.tree });
     const prefix = try std.fmt.allocPrint(arena, "--prefix={s}/", .{try slashed(arena, target_abs)});
     var at: usize = 0;
     while (at < paths.len) {
