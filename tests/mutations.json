@@ -15166,6 +15166,24 @@
       "kills": [
         "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
       ]
+    },
+    {
+      "id": "BR1-output-limit-unchecked",
+      "file": "src/platform/bounded_run.zig",
+      "from": "        if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) return error.StreamTooLong;",
+      "to": "        _ = options.stdout_limit;",
+      "kills": [
+        "output over the limit stops the child instead of hanging"
+      ]
+    },
+    {
+      "id": "GT1-blame-porcelain-whole-file",
+      "file": "src/protocol/git_tools.zig",
+      "from": "        .argv = if (range != null) &windowed else &whole,",
+      "to": "        .argv = &whole,",
+      "kills": [
+        "symbol blame of a line window in a file whose whole blame is huge stays mapped and returns"
+      ]
     }
   ]
 }

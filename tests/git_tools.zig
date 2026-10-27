@@ -445,6 +445,35 @@ test "symbol blame maps a symbol to the commit that last changed it" {
     try testing.expect(full_body.value.object.get("output") != null);
 }
 
+test "symbol blame of a line window in a file whose whole blame is huge stays mapped and returns" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    for (0..1800) |_| {
+        try text.writer.writeAll("# ");
+        try text.writer.splatByteAll('x', 1200);
+        try text.writer.writeByte('\n');
+    }
+    try text.writer.writeAll("def tail():\n    return 1\n");
+    try repo.writeFile("big.py", text.written());
+    try repo.commitAll("add big");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file_abs = try std.fmt.allocPrint(gpa, "{s}/big.py", .{repo.root_abs});
+    defer gpa.free(file_abs);
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs, .line_start = 1801, .line_end = 1801 });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    const blame = body.value.object.get("symbol_blame") orelse return error.TestNoSymbolBlame;
+    try testing.expect(blame.object.get("mapped").?.bool);
+    try testing.expectEqualStrings("tail", blame.object.get("symbols").?.array.items[0].object.get("ref").?.string);
+}
+
 test "cross-language symbol_changes populate for python and c#" {
     var repo = try Repo.init();
     defer repo.deinit();

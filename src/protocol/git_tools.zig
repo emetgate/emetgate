@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("../platform/bounded_run.zig");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
@@ -140,6 +141,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
 
     var count_buf: [24]u8 = undefined;
     var show_commit: ?[]const u8 = null;
+    var blame_range: ?[]const u8 = null;
     if (std.mem.eql(u8, sub, "status")) {
         argv[n] = "status";
         n += 1;
@@ -205,6 +207,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
             argv[n] = "-L";
             n += 1;
             argv[n] = std.fmt.bufPrint(&count_buf, "{d},{d}", .{ ls, le }) catch return error.InvalidCount;
+            blame_range = argv[n];
             n += 1;
         }
     } else {
@@ -218,7 +221,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         n += 1;
     }
 
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = argv[0..n],
         .cwd = .{ .path = place.root },
         .stdout_limit = .limited(max_git_output_bytes),
@@ -268,7 +271,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     var porcelain: ?[]u8 = null;
     defer if (porcelain) |p| gpa.free(p);
     if (std.mem.eql(u8, sub, "blame")) {
-        porcelain = blamePorcelain(gpa, io, git, place.root, place.rel) catch null;
+        porcelain = blamePorcelain(gpa, io, git, place.root, place.rel, blame_range) catch null;
         if (porcelain) |text|
             blame = git_symbols.analyzeBlame(gpa, io, runtime, place.root, place.rel, text) catch null;
     }
@@ -279,10 +282,11 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
 /// Second blame pass in machine-readable form, used only to map symbols to the
 /// commit that last changed them. Best-effort: a failure returns null and the
 /// raw blame stays the whole answer.
-fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rel: []const u8) !?[]u8 {
-    const argv = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "--", rel };
-    const result = std.process.run(gpa, io, .{
-        .argv = &argv,
+fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rel: []const u8, range: ?[]const u8) !?[]u8 {
+    const whole = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "--", rel };
+    const windowed = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "-L", range orelse "", "--", rel };
+    const result = bounded_run.run(gpa, io, .{
+        .argv = if (range != null) &windowed else &whole,
         .cwd = .{ .path = root },
         .stdout_limit = .limited(max_git_output_bytes * 8),
         .stderr_limit = .limited(max_git_output_bytes),
@@ -306,7 +310,7 @@ fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8,
 fn annotatedCommits(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8) ![]const []const u8 {
     const argv = [_][]const u8{ git, "--no-pager", "notes", "--ref=emetgate", "list" };
     const limit: std.Io.Limit = .limited(max_git_output_bytes);
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = &argv,
         .cwd = .{ .path = root },
         .stdout_limit = limit,

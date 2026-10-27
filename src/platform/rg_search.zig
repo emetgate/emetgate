@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const exe_path = @import("exe_path.zig");
 
@@ -58,7 +59,7 @@ pub fn search(gpa: Allocator, io: std.Io, rg: []const u8, root: []const u8, patt
             units += files[at].len + 3;
             try argv.append(arena, files[at]);
         }
-        const result = std.process.run(arena, io, .{
+        const result = bounded_run.run(arena, io, .{
             .argv = argv.items,
             .cwd = .{ .path = root },
             .stdout_limit = .limited(max_output_bytes),

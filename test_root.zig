@@ -113,6 +113,7 @@ pub const toolchain = src.toolchain;
 pub const console_text = src.console_text;
 pub const commit_message = src.commit_message;
 pub const git_commit = src.git_commit;
+pub const bounded_run = src.bounded_run;
 pub const commit_store = src.commit_store;
 pub const commit_derive = src.commit_derive;
 pub const commit_names = src.commit_names;

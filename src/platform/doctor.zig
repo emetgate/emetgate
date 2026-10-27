@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const exe_path = @import("exe_path.zig");
 const repo = @import("repo.zig");
@@ -298,7 +299,7 @@ fn appContainerCheck() Check {
 
 fn capture(arena: Allocator, io: std.Io, argv: []const []const u8, cwd: []const u8) ?[]const u8 {
     const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = 20 * std.time.ns_per_s }, .clock = .awake } };
-    const result = std.process.run(arena, io, .{ .argv = argv, .cwd = .{ .path = cwd }, .stdout_limit = .limited(64 * 1024), .stderr_limit = .limited(64 * 1024), .timeout = timeout }) catch return null;
+    const result = bounded_run.run(arena, io, .{ .argv = argv, .cwd = .{ .path = cwd }, .stdout_limit = .limited(64 * 1024), .stderr_limit = .limited(64 * 1024), .timeout = timeout }) catch return null;
     return switch (result.term) {
         .exited => result.stdout,
         else => null,

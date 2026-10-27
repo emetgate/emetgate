@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const receipt = @import("../verify/receipt.zig");
 const checker = @import("../verify/checker.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -254,7 +255,7 @@ pub fn git(arena: Allocator, io: std.Io, root: []const u8, argv: []const []const
     var full: std.ArrayList([]const u8) = .empty;
     try full.appendSlice(arena, &.{ try exe_path.git(arena, root), "-c", "core.longpaths=true" });
     try full.appendSlice(arena, argv);
-    const result = std.process.run(arena, io, .{ .argv = full.items, .cwd = .{ .path = root }, .stdout_limit = .limited(max_git_output) }) catch return error.GitFailed;
+    const result = bounded_run.run(arena, io, .{ .argv = full.items, .cwd = .{ .path = root }, .stdout_limit = .limited(max_git_output) }) catch return error.GitFailed;
     return switch (result.term) {
         .exited => |code| if (code == 0) result.stdout else null,
         else => error.GitFailed,

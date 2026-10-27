@@ -108,6 +108,7 @@ pub const receipt = @import("verify/receipt.zig");
 pub const checker = @import("verify/checker.zig");
 pub const runner = @import("platform/runner.zig");
 pub const run_command = @import("platform/run_command.zig");
+pub const bounded_run = @import("platform/bounded_run.zig");
 pub const toolchain = @import("platform/toolchain.zig");
 pub const console_text = @import("platform/console_text.zig");
 pub const commit_message = @import("platform/commit_message.zig");
