@@ -17,9 +17,9 @@ const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 const ToolResult = tool_result.ToolResult;
 
-pub const edit_description = "Replaces old_string (exact, unique unless replace_all) with new_string in any file, gated.";
+pub const edit_description = "Replaces exact old_string (unique unless replace_all) with new_string in any file, gated.";
 
-pub const write_description = "Creates or overwrites a whole file of any type, parents included, gated.";
+pub const write_description = "Creates or overwrites a whole file, gated.";
 
 const Request = struct {
     file: []const u8,

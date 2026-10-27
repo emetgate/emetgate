@@ -63,10 +63,10 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_skeleton",
-        .description = "Outline of a source file: signatures, one-line docs, file_hash and the rules that cover it. A file up to 8 KiB comes back whole.",
+        .description = "Outline of a source file (whole if under 8 KiB): signatures, file_hash and covering rules.",
         .props = &.{
             .{ .name = "file", .desc = "" },
-            .{ .name = "force", .desc = "resend if unchanged", .optional = true, .ty = "boolean" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -78,14 +78,14 @@ pub const tool_defs = [_]Tool{
             .{ .name = "symbols", .desc = "", .optional = true, .ty = "array" },
             .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
-            .{ .name = "force", .desc = "resend if unchanged", .optional = true, .ty = "boolean" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
             .{ .name = "nodes", .desc = "", .optional = true, .ty = "boolean" },
             .{ .name = "detail", .desc = "\"full\" or \"budgeted\"", .optional = true },
         },
     },
     .{
         .name = "emetgate_try",
-        .description = "Edits code, written only if typecheck and tests pass. symbol+hash+body (body is the braced block; hash \"absent\" with a whole declaration adds one), or node+text or nodes:[{node,text}] with ids from emetgate_read_symbol nodes:true (empty text deletes).",
+        .description = "Edits code, gated. symbol+hash+body (body is the braced block; hash \"absent\" with a whole declaration adds one), or node+text or nodes:[{node,text}] with ids from emetgate_read_symbol nodes:true (empty text deletes).",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "", .optional = true },
@@ -141,7 +141,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Reads a file: .json key tree with hashes or one value by pointer; .md heading tree or one section by heading; others up to 16 KiB or line_start..line_end; a source over 8 KiB returns its outline with line ranges.",
+        .description = "Reads a file: .json key tree with hashes or a value by pointer; .md headings or a section by heading; else up to 16 KiB or line_start..line_end; source over 8 KiB as an outline.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "raw", .desc = "", .optional = true, .ty = "boolean" },
@@ -149,7 +149,7 @@ pub const tool_defs = [_]Tool{
             .{ .name = "heading", .desc = "", .optional = true },
             .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
-            .{ .name = "force", .desc = "resend if unchanged", .optional = true, .ty = "boolean" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -184,12 +184,12 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_commit",
-        .description = "Commits all pending gated changes as one commit with their receipts as its note; refused if a file changed outside the gate.",
+        .description = "Commits pending gated changes as one commit, receipts as its note; refused if a file changed outside the gate.",
         .props = &.{.{ .name = "message", .desc = "" }},
     },
     .{
         .name = "emetgate_git",
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff unless symbols_only. log: a line per commit marked receipt or no_receipt (a note is attached, not verified; only emetgate verify <commit> checks it), next_cursor goes back as cursor. blame: per symbol, or per line with line_start/line_end.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff unless symbols_only. log: a line per commit, receipt = note attached, unverified until emetgate verify <commit>; next_cursor pages. blame: per symbol, or per line with line_start/line_end.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show or blame" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
@@ -228,10 +228,10 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_write_doc",
-        .description = "Replaces one node of a non-code file (JSON value, Markdown section or line range) chosen by pointer, heading or line_start+line_end, gated.",
+        .description = "Replaces a JSON value, Markdown section or line range by pointer, heading or line_start+line_end, gated.",
         .props = &.{
             .{ .name = "file", .desc = "" },
-            .{ .name = "hash", .desc = "the node's hash from emetgate_read_file" },
+            .{ .name = "hash", .desc = "from emetgate_read_file" },
             .{ .name = "content", .desc = "" },
             .{ .name = "pointer", .desc = "", .optional = true },
             .{ .name = "heading", .desc = "", .optional = true },

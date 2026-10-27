@@ -47,7 +47,7 @@ pub const mention_chance = [_]f64{ 0.013, 0.029, 0.044 };
 pub const useful_ratio = [_]f64{ 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30 };
 pub const useful_chance = [_]f64{ 0.009, 0.012, 0.031, 0.045, 0.094, 0.110, 0.199, 0.482, 0.589 };
 
-pub const explore_description = "Answers a code question: definitions of the named symbols, then the best-matching functions and constants, line-numbered.";
+pub const explore_description = "Answers a code question: named symbols' definitions, then best-matching code, line-numbered.";
 pub const evidence_description = "Returns the full code of up to 6 functions by qualified name.";
 
 pub const Phase = enum(u8) { idle, building, ready, failed };
