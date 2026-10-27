@@ -23,6 +23,7 @@ pub const Policy = struct {
     shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
     mirror_enabled: bool = false,
+    raw_code: bool = false,
     read_budget: usize = read_budget_mod.default_budget,
     read_budget_set: bool = false,
     mirror: ?*mirror_mod.Mirror = null,
@@ -72,7 +73,9 @@ pub fn refusedRunEntry(args: anytype) ?RunRefusal {
 }
 
 pub fn parsePolicy(args: anytype) ?Policy {
-    var policy: Policy = .{ .search_text = true, .search_internals = false };
+    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };
+    var json_code = false;
+    var mirror_flag = false;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg: []const u8 = args[i];
@@ -103,9 +106,14 @@ pub fn parsePolicy(args: anytype) ?Policy {
         } else if (std.mem.eql(u8, arg, "--search-internals")) {
             if (policy.search_internals) return null;
             policy.search_internals = true;
-        } else if (std.mem.eql(u8, arg, "--mirror")) {
-            if (policy.mirror_enabled) return null;
-            policy.mirror_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--mirror") or std.mem.eql(u8, arg, "--no-mirror")) {
+            if (mirror_flag) return null;
+            mirror_flag = true;
+            policy.mirror_enabled = arg.len == "--mirror".len;
+        } else if (std.mem.eql(u8, arg, "--json-code")) {
+            if (json_code) return null;
+            json_code = true;
+            policy.raw_code = false;
         } else if (std.mem.eql(u8, arg, "--typecheck")) {
             if (policy.typecheck_command != null or i + 1 >= args.len) return null;
             i += 1;

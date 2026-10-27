@@ -13,6 +13,9 @@ const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const read_tools = @import("read_tools.zig");
 const read_budget = @import("read_budget.zig");
+const read_cache = @import("read_cache.zig");
+const raw_reply = @import("raw_reply.zig");
+const outline = @import("outline.zig");
 const search_v1 = @import("search_v1.zig");
 const find_tools = @import("find_tools.zig");
 const git_tools = @import("git_tools.zig");
@@ -75,8 +78,8 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
 
 fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
-    if (std.mem.eql(u8, name, "emetgate_skeleton")) return callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache);
-    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget);
+    if (std.mem.eql(u8, name, "emetgate_skeleton")) return rawCode(gpa, policy, try callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache));
+    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return rawCode(gpa, policy, try callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget));
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_commit")) return callCommit(gpa, io, runtime, args, event, policy);
@@ -85,7 +88,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arg
     if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move_file")) return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_read_file")) return read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror);
+    if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache }));
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearchAs(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session, .{ .format = if (policy.search_text) .text else .json, .internals = policy.search_internals });
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
@@ -98,6 +101,14 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arg
 pub const max_scan_violations = 100;
 
 pub const max_scan_operations: u64 = 100_000_000;
+
+fn rawCode(gpa: Allocator, policy: Policy, result: ToolResult) !ToolResult {
+    if (!policy.raw_code or result.is_error) return result;
+    errdefer gpa.free(result.text);
+    const raw = try raw_reply.convert(gpa, result.text) orelse return result;
+    gpa.free(result.text);
+    return .{ .text = raw, .is_error = false };
+}
 
 fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
     const check = try requireString(args, "check");
@@ -192,7 +203,14 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     defer loaded.deinit(gpa);
     const place = loaded.place;
     const snapshot = loaded.snapshot;
-    const text = try skeleton.skeletonize(gpa, runtime.parser, snapshot.profile, snapshot.tree);
+    const whole = snapshot.source.len <= outline.threshold;
+    const file_hash = symbol.fileHash(snapshot.source);
+    if (whole and try read_cache.coversWhole(gpa, mirror, file, file_hash, force)) {
+        event.chars_emetgate = 0;
+        event.chars_fullfile = snapshot.source.len;
+        return read_cache.writeCovered(w, file, null, file_hash);
+    }
+    const text = if (whole) try gpa.dupe(u8, snapshot.source) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
     defer gpa.free(text);
     const hash = symbol.hashOf(text);
     if (mirror) |m| {
@@ -201,18 +219,15 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
         if (try m.check(key, hash, force) == .unchanged) {
             event.chars_emetgate = 0;
             event.chars_fullfile = snapshot.source.len;
-            return wire.writeUnchanged(w, file, null, hash, symbol.fileHash(snapshot.source));
+            return wire.writeUnchanged(w, file, null, hash, file_hash);
         }
     }
     const adopted = try rules.adoptedFor(gpa, io, place.root, place.rel);
     defer adopted.deinit();
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
-    const table = snapshot.symbols() catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        error.SourceHasErrors => null,
-    };
-    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, adopted.items);
+    try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, adopted.items);
+    if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);
 }
 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize) !ToolResult {
@@ -288,6 +303,11 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     event.hash = found.hash;
     const body = snapshot.tree.text(found.body);
     const folds = !nodes and reading.folds(body.len);
+    if (!nodes and try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force)) {
+        event.chars_emetgate = 0;
+        event.chars_fullfile = snapshot.source.len;
+        return read_cache.writeCovered(w, file, sym, symbol.fileHash(snapshot.source));
+    }
     if (!nodes) if (mirror) |m| {
         const key = try mirrorKey(gpa, file, sym, folds);
         defer gpa.free(key);
@@ -331,6 +351,7 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     var lines: ?read_budget.Lines = null;
     defer if (lines) |l| l.deinit(gpa);
     var chars: usize = 0;
+    const covered = try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force);
     for (symbols, 0..) |item, i| {
         const sym = switch (item) {
             .string => |s| s,
@@ -348,12 +369,12 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         }
         const body = snapshot.tree.text(found.body);
         const folds = reading.folds(body.len);
-        var unchanged = false;
-        if (mirror) |m| {
+        var unchanged = covered;
+        if (!covered) if (mirror) |m| {
             const key = try mirrorKey(gpa, file, sym, folds);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
-        }
+        };
         entries[i] = .{ .ref = sym, .hash = found.hash, .body = if (unchanged) null else body };
         views = i + 1;
         if (unchanged) continue;
@@ -389,11 +410,12 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
     }
     const table = try snapshot.symbols();
     const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
-    const matched = line_range.symbolsOverlapping(gpa, table.*, requested) catch |err| {
-        if (err == error.NoSymbolInRange) recovery.nearestSymbols(snapshot.source, table.*, requested);
-        return err;
+    const matched = line_range.symbolsOverlapping(gpa, table.*, requested) catch |err| switch (err) {
+        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, w, event),
+        else => |e| return e,
     };
     defer gpa.free(matched);
+    const whole_read = try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force);
     const entries = try gpa.alloc(wire.RangeEntry, matched.len);
     defer gpa.free(entries);
     var views: usize = 0;
@@ -412,12 +434,12 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         named = i + 1;
         const text = snapshot.source[found.declaration.start..found.declaration.end];
         const folds = reading.folds(text.len);
-        var unchanged = false;
-        if (mirror) |m| {
+        var unchanged = whole_read;
+        if (!whole_read) if (mirror) |m| {
             const key = try mirrorKey(gpa, file, ref_text[i], folds);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
-        }
+        };
         const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
         const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
         entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line) };

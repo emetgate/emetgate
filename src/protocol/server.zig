@@ -62,7 +62,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_skeleton",
-        .description = "Outline of a source file: signatures, file_hash and the rules that cover it.",
+        .description = "Outline of a source file: signatures, one-line docs, file_hash and the rules that cover it. A file up to 8 KiB comes back whole.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "force", .desc = "resend if unchanged", .optional = true, .ty = "boolean" },
@@ -140,7 +140,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Reads a non-code file: .json key tree with hashes or one value by pointer; .md heading tree or one section by heading; others up to 16 KiB or line_start..line_end. Source files need raw:true.",
+        .description = "Reads a file: .json key tree with hashes or one value by pointer; .md heading tree or one section by heading; others up to 16 KiB or line_start..line_end; a source over 8 KiB returns its outline with line ranges.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "raw", .desc = "", .optional = true, .ty = "boolean" },

@@ -519,7 +519,8 @@ fn skeletonOf(repo: *Repo, rel: []const u8) !std.json.Parsed(std.json.Value) {
 }
 
 fn ruleRow(body: std.json.Value, id: []const u8) ?std.json.Value {
-    for (body.object.get("rules").?.array.items) |row| {
+    const listed = body.object.get("rules") orelse return null;
+    for (listed.array.items) |row| {
         if (std.mem.eql(u8, row.object.get("id").?.string, id)) return row;
     }
     return null;
@@ -546,7 +547,7 @@ test "rule: the skeleton the model reads carries every adopted rule that covers 
     var body = try skeletonOf(&repo, "src\\nav.ts");
     defer body.deinit();
 
-    try testing.expect(std.mem.indexOf(u8, body.value.object.get("skeleton").?.string, "export function open") != null);
+    try testing.expect(std.mem.indexOf(u8, body.value.object.get("content").?.string, "export function open") != null);
 
     const first = ruleRow(body.value, enforced).?;
     try testing.expectEqualStrings("no networkidle", first.object.get("text").?.string);
@@ -567,14 +568,14 @@ test "rule: the skeleton the model reads carries every adopted rule that covers 
     try testing.expectEqual(@as(usize, 3), body.value.object.get("rules").?.array.items.len);
 }
 
-test "rule: a file with no adopted rule still gets an explicit empty list" {
+test "rule: a file with no adopted rule gets no rules field" {
     try skipOffWindows();
     var repo = try Repo.init(&.{.{ .path = "src/nav.ts", .data = with_networkidle }});
     defer repo.deinit();
 
     var body = try skeletonOf(&repo, "src\\nav.ts");
     defer body.deinit();
-    try testing.expectEqual(@as(usize, 0), body.value.object.get("rules").?.array.items.len);
+    try testing.expect(body.value.object.get("rules") == null);
 }
 
 const typed_only = "q:(type_annotation) @violation";

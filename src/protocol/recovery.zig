@@ -170,35 +170,6 @@ pub fn afterBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     }
 }
 
-pub fn nearestSymbols(source: []const u8, table: symbol.Table, range: symbol.Span) void {
-    var before: ?*const symbol.Symbol = null;
-    var after: ?*const symbol.Symbol = null;
-    for (table.symbols) |*entry| {
-        if (entry.declaration.end <= range.start) {
-            if (before == null or entry.declaration.end > before.?.declaration.end) before = entry;
-        } else if (entry.declaration.start >= range.end) {
-            if (after == null or entry.declaration.start < after.?.declaration.start) after = entry;
-        }
-    }
-    var buf: [512]u8 = undefined;
-    var w: std.Io.Writer = .fixed(&buf);
-    w.writeAll("no symbol overlaps these lines; nearest: ") catch return;
-    var any = false;
-    for ([_]?*const symbol.Symbol{ before, after }) |slot| {
-        const entry = slot orelse continue;
-        if (any) w.writeAll(", ") catch return;
-        w.print("{f} (lines {d}-{d})", .{ entry.ref, lineOf(source, entry.declaration.start), lineOf(source, entry.declaration.end) }) catch return;
-        any = true;
-    }
-    if (!any) w.writeAll("none, the file has no symbols") catch return;
-    w.writeAll("; or read the lines with nodes:true") catch return;
-    wire.setFix("{s}", .{w.buffered()});
-}
-
-fn lineOf(source: []const u8, offset: u32) usize {
-    return std.mem.count(u8, source[0..@min(offset, source.len)], "\n") + 1;
-}
-
 pub fn afterWriteDoc(hash_hex: []const u8, err: anyerror) void {
     if (err != error.InvalidHash) return;
     if (!std.mem.eql(u8, hash_hex, symbol.absent_text)) return;
