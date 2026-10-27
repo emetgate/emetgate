@@ -106,7 +106,48 @@ test "git status lists an untracked file" {
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
-    try testing.expect(std.mem.indexOf(u8, body.value.object.get("output").?.string, "a.txt") != null);
+    try testing.expect(!body.value.object.get("clean").?.bool);
+    const untracked = body.value.object.get("untracked").?.object;
+    try testing.expectEqual(@as(i64, 1), untracked.get("count").?.integer);
+    try testing.expectEqualStrings("a.txt", untracked.get("files").?.array.items[0].string);
+
+    var full = try callTool(runtime, repo.root_abs, .{ .sub = "status", .path = repo.root_abs, .detail = "full" });
+    defer full.deinit();
+    var full_body = try full.payload();
+    defer full_body.deinit();
+    try testing.expect(std.mem.indexOf(u8, full_body.value.object.get("output").?.string, "a.txt") != null);
+}
+
+test "git status groups entries and collapses an untracked directory" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("tracked.txt", "one\n");
+    try repo.commitAll("seed");
+    try repo.writeFile("tracked.txt", "two\n");
+    try repo.git(&.{ "add", "tracked.txt" });
+    try repo.writeFile("tracked.txt", "three\n");
+    try repo.tmp.dir.createDirPath(testing.io, "repo/logs");
+    try repo.writeFile("logs/a.log", "x\n");
+    try repo.writeFile("logs/b.log", "y\n");
+    try repo.writeFile("root.tmp", "z\n");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "status", .path = repo.root_abs });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(body.value.object.get("staged").?.object.get("count").?.integer == 1);
+    try testing.expect(body.value.object.get("unstaged").?.object.get("count").?.integer == 1);
+    const untracked = body.value.object.get("untracked").?.object;
+    try testing.expectEqual(@as(i64, 2), untracked.get("count").?.integer);
+    try testing.expectEqual(@as(usize, 1), untracked.get("files").?.array.items.len);
+    const dirs = untracked.get("dirs").?.array;
+    try testing.expectEqual(@as(usize, 1), dirs.items.len);
+    try testing.expectEqualStrings("logs", dirs.items[0].object.get("dir").?.string);
+    try testing.expectEqual(@as(i64, 2), dirs.items[0].object.get("count").?.integer);
 }
 
 test "git log reports commits newest first and n clamps the count" {
@@ -125,10 +166,38 @@ test "git log reports commits newest first and n clamps the count" {
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
-    const output = body.value.object.get("output").?.string;
-    try testing.expect(std.mem.indexOf(u8, output, "second") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "first") == null);
-    try testing.expectEqual(@as(i64, 1), body.value.object.get("lines_shown").?.integer);
+    const commits = body.value.object.get("commits").?.array;
+    try testing.expectEqual(@as(usize, 1), commits.items.len);
+    try testing.expectEqualStrings("second", commits.items[0].object.get("subject").?.string);
+    try testing.expectEqual(@as(i64, 1), body.value.object.get("commits_shown").?.integer);
+    try testing.expect(body.value.object.get("next_cursor") != null);
+}
+
+test "git log pages from a cursor to older commits" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("a.txt", "one\n");
+    try repo.commitAll("first");
+    try repo.writeFile("a.txt", "two\n");
+    try repo.commitAll("second");
+    try repo.writeFile("a.txt", "three\n");
+    try repo.commitAll("third");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var page1 = try callTool(runtime, repo.root_abs, .{ .sub = "log", .n = 1, .path = repo.root_abs });
+    defer page1.deinit();
+    var b1 = try page1.payload();
+    defer b1.deinit();
+    try testing.expectEqualStrings("third", b1.value.object.get("commits").?.array.items[0].object.get("subject").?.string);
+    const cursor = b1.value.object.get("next_cursor").?.string;
+
+    var page2 = try callTool(runtime, repo.root_abs, .{ .sub = "log", .n = 1, .cursor = cursor, .path = repo.root_abs });
+    defer page2.deinit();
+    var b2 = try page2.payload();
+    defer b2.deinit();
+    try testing.expectEqualStrings("second", b2.value.object.get("commits").?.array.items[0].object.get("subject").?.string);
 }
 
 test "git diff shows a working tree change, cached shows a staged one" {
@@ -190,7 +259,7 @@ test "git refuses an unknown subcommand and a path outside the repo" {
     try expectError(runtime, repo.root_abs, .{ .sub = "log", .path = outside }, "FileOutsideRepo");
 }
 
-test "git diff caps output at a line count and marks it truncated" {
+test "git diff folds a big diff under the budget and names the elided span" {
     var repo = try Repo.init();
     defer repo.deinit();
     var big_before: std.Io.Writer.Allocating = .init(gpa);
@@ -212,8 +281,28 @@ test "git diff caps output at a line count and marks it truncated" {
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
-    try testing.expect(body.value.object.get("truncated").?.bool);
-    try testing.expect(body.value.object.get("lines_shown").?.integer < body.value.object.get("lines_total").?.integer);
+    try testing.expectEqualStrings("compact", body.value.object.get("view").?.string);
+    const shown = body.value.object.get("lines_shown").?.integer;
+    const totalc = body.value.object.get("lines_total").?.integer;
+    try testing.expect(shown < totalc);
+    const elided = body.value.object.get("elided").?.array;
+    try testing.expectEqual(@as(usize, 1), elided.items.len);
+    try testing.expect(std.mem.indexOf(u8, body.value.object.get("output").?.string, "elided") != null);
+    try testing.expect(body.value.object.get("output").?.string.len <= 8 * 1024 + 512);
+
+    var full = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .detail = "full" });
+    defer full.deinit();
+    var full_body = try full.payload();
+    defer full_body.deinit();
+    try testing.expectEqualStrings("full", full_body.value.object.get("view").?.string);
+    try testing.expect(full_body.value.object.get("output").?.string.len > body.value.object.get("output").?.string.len);
+
+    var so = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
+    defer so.deinit();
+    var so_body = try so.payload();
+    defer so_body.deinit();
+    try testing.expect(so_body.value.object.get("output") == null);
+    try testing.expect(so_body.value.object.get("symbol_changes") != null);
 }
 
 // --- symbol-level diff / show / blame --------------------------------------
@@ -310,6 +399,7 @@ test "symbol blame maps a symbol to the commit that last changed it" {
     defer body.deinit();
     const blame = body.value.object.get("symbol_blame").?;
     try testing.expect(blame.object.get("mapped").?.bool);
+    try testing.expect(body.value.object.get("output") == null);
     const syms = blame.object.get("symbols").?.array;
     var found = false;
     for (syms.items) |sym| {
@@ -319,6 +409,45 @@ test "symbol blame maps a symbol to the commit that last changed it" {
         }
     }
     try testing.expect(found);
+
+    var full = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs, .detail = "full" });
+    defer full.deinit();
+    var full_body = try full.payload();
+    defer full_body.deinit();
+    try testing.expect(full_body.value.object.get("output") != null);
+}
+
+test "cross-language symbol_changes populate for python and c#" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("m.py", "def foo():\n    return 1\n");
+    try repo.writeFile("P.cs", "class C {\n  int Foo() { return 1; }\n}\n");
+    try repo.commitAll("seed py and cs");
+    try repo.writeFile("m.py", "def foo():\n    return 2\n");
+    try repo.writeFile("P.cs", "class C {\n  int Foo() { return 2; }\n}\n");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(fileHasChangedSymbol(body.value, "m.py"));
+    try testing.expect(fileHasChangedSymbol(body.value, "P.cs"));
+}
+
+fn fileHasChangedSymbol(body: Value, path_suffix: []const u8) bool {
+    const files = body.object.get("symbol_changes") orelse return false;
+    for (files.array.items) |file| {
+        if (!std.mem.endsWith(u8, file.object.get("path").?.string, path_suffix)) continue;
+        const syms = file.object.get("symbols") orelse return false;
+        for (syms.array.items) |sym| {
+            if (std.mem.eql(u8, sym.object.get("change").?.string, "changed")) return true;
+        }
+    }
+    return false;
 }
 
 test "symbol diff tolerates a binary file change without crashing" {
