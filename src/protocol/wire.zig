@@ -12,6 +12,7 @@ const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
 const gate_tree = @import("../platform/gate_tree.zig");
 const read_budget = @import("read_budget.zig");
+const doc_fold = @import("../engine/doc_fold.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -133,7 +134,22 @@ pub fn writeDeclarations(gpa: Allocator, js: *std.json.Stringify, table: symbol.
 
 pub const SkeletonKind = enum { skeleton, content };
 
-pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, kind: SkeletonKind, text: []const u8, adopted: []const rules.Adopted) !void {
+pub const skeleton_docs_hint = "emetgate_read_file raw:true has them";
+pub const symbol_docs_hint = "detail:\"full\" has them";
+
+fn writeDocs(js: *std.json.Stringify, docs: []const doc_fold.LineSpan, hint: []const u8) !void {
+    if (docs.len == 0) return;
+    try js.objectField("docs");
+    try js.beginWriteRaw();
+    try js.writer.writeAll("\"folded lines ");
+    for (docs, 0..) |span, i| try js.writer.print("{s}{d}-{d}", .{ if (i == 0) "" else ",", span.first, span.last });
+    try js.writer.writeAll("; ");
+    try std.json.Stringify.encodeJsonStringChars(hint, .{}, js.writer);
+    try js.writer.writeByte('"');
+    js.endWriteRaw();
+}
+
+pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, kind: SkeletonKind, text: []const u8, adopted: []const rules.Adopted, docs: []const doc_fold.LineSpan) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
@@ -158,13 +174,14 @@ pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, 
         }
         try js.endArray();
     }
+    try writeDocs(&js, docs, skeleton_docs_hint);
     try js.objectField(@tagName(kind));
     try js.write(text);
     try js.endObject();
     try writer.writeByte('\n');
 }
 
-pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, body: []const u8) !void {
+pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, body: []const u8, docs: []const doc_fold.LineSpan) !void {
     const hex = symbol.formatHash(hash);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -174,6 +191,7 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try js.write(ref);
     try js.objectField("hash");
     try js.write(hex[0..]);
+    try writeDocs(&js, docs, symbol_docs_hint);
     try js.objectField("body");
     try js.write(body);
     try js.endObject();
@@ -321,6 +339,7 @@ pub const SymbolEntry = struct {
     body: ?[]const u8,
     nodes: bool = false,
     folded: ?Folded = null,
+    docs: []const doc_fold.LineSpan = &.{},
 };
 
 pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const SymbolEntry) !void {
@@ -344,6 +363,7 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
             try js.objectField("body");
             try js.write(folded.view.text);
         } else if (entry.body) |body| {
+            try writeDocs(&js, entry.docs, symbol_docs_hint);
             try js.objectField(if (entry.nodes) "nodes" else "body");
             try js.write(body);
         } else {
@@ -364,6 +384,7 @@ pub const RangeEntry = struct {
     start_line: u32,
     end_line: u32,
     folded: ?Folded = null,
+    docs: []const doc_fold.LineSpan = &.{},
 };
 
 pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32, requested_end: u32, entries: []const RangeEntry) !void {
@@ -395,6 +416,7 @@ pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32,
             try js.write(entry.start_line);
             try js.objectField("end_line");
             try js.write(entry.end_line);
+            try writeDocs(&js, entry.docs, symbol_docs_hint);
             try js.objectField("text");
             try js.write(text);
         } else {
@@ -1451,13 +1473,21 @@ test "file paths with backslashes and quotes are JSON-escaped" {
 test "skeleton payload embeds the outline as one JSON line" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(a: number, b: number): number;\n", &.{});
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(a: number, b: number): number;\n", &.{}, &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
     try testing.expect(std.mem.indexOf(u8, json, "\"file\":\"src/a.ts\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"skeleton\":\"export function add(a: number, b: number): number;\\n\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"rules\"") == null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"docs\"") == null);
+}
+
+test "a skeleton with folded docs names the original lines and how to get them" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .content, "/** Adds. */", &.{}, &.{ .{ .first = 2, .last = 5 }, .{ .first = 9, .last = 12 } });
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"docs\":\"folded lines 2-5,9-12; emetgate_read_file raw:true has them\"") != null);
 }
 
 test "the skeleton payload carries every adopted rule as data, with no way to change one" {

@@ -10,6 +10,7 @@ pub const doc_spans = @import("engine/doc_spans.zig");
 pub const line_range = @import("engine/line_range.zig");
 pub const docnode = @import("engine/docnode.zig");
 pub const skeleton = @import("engine/skeleton.zig");
+pub const doc_fold = @import("engine/doc_fold.zig");
 pub const cas = @import("engine/cas.zig");
 pub const node_cas = @import("engine/node_cas.zig");
 pub const boundedness = @import("engine/boundedness.zig");

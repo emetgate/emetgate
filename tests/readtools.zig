@@ -1104,3 +1104,53 @@ test "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; 
     defer after.deinit();
     try testing.expectEqualStrings("unchanged", try statusOf(&after));
 }
+
+test "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source = "/*\n * Copyright 2024 Acme\n * Licensed under MIT\n */\nexport class Box {\n  /**\n   * Opens the box. Carefully.\n   * @returns nothing\n   */\n  open(): void {\n    return;\n  }\n}\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "box.ts", .data = source });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "box.ts", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var skel = try callTool(runtime, "emetgate_skeleton", .{ .file = path });
+    defer skel.deinit();
+    var skel_body = try skel.payload();
+    defer skel_body.deinit();
+    try testing.expectEqualStrings("/* Copyright 2024 Acme */\nexport class Box {\n  /** Opens the box. */\n  open(): void {\n    return;\n  }\n}\n", skel_body.value.object.get("content").?.string);
+    try testing.expectEqualStrings("folded lines 1-4,6-9; emetgate_read_file raw:true has them", skel_body.value.object.get("docs").?.string);
+
+    var short = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "Box" });
+    defer short.deinit();
+    var short_body = try short.payload();
+    defer short_body.deinit();
+    try testing.expect(std.mem.indexOf(u8, short_body.value.object.get("body").?.string, "  /** Opens the box. */\n  open(): void {") != null);
+    try testing.expectEqualStrings("folded lines 6-9; detail:\"full\" has them", short_body.value.object.get("docs").?.string);
+
+    var full = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "Box", .detail = "full" });
+    defer full.deinit();
+    var full_body = try full.payload();
+    defer full_body.deinit();
+    try testing.expect(std.mem.indexOf(u8, full_body.value.object.get("body").?.string, "@returns nothing") != null);
+    try testing.expect(full_body.value.object.get("docs") == null);
+    try testing.expectEqualStrings(short_body.value.object.get("hash").?.string, full_body.value.object.get("hash").?.string);
+}
+
+test "read_symbol folds a python docstring to its first sentence" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const source = "def area(r):\n    \"\"\"Return the area. Uses pi.\n\n    Args:\n        r: radius\n    \"\"\"\n    return 3.14 * r * r\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "geo.py", .data = source });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "geo.py", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "area" });
+    defer reply.deinit();
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("\"\"\"Return the area.\"\"\"\n    return 3.14 * r * r", body.value.object.get("body").?.string);
+    try testing.expectEqualStrings("folded lines 2-6; detail:\"full\" has them", body.value.object.get("docs").?.string);
+}
