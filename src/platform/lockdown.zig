@@ -9,6 +9,8 @@ pub const claude_program = "claude";
 pub const allowed_builtin_tools = "";
 pub const mcp_config_name = ".mcp.json";
 pub const own_mcp_config_name = "mcp.json";
+pub const project_mcp_config_name = "project-mcp.json";
+pub const always_load_field = "alwaysLoad";
 pub const own_server_name = "emetgate";
 pub const own_server_args = [_][]const u8{"mcp"};
 pub const detect_flag = "--detect-test";
@@ -101,6 +103,29 @@ pub fn emetgateServer(gpa: Allocator, mcp_config: []const u8) ![]u8 {
     return toolNamePart(gpa, found orelse return error.NoEmetgateServer);
 }
 
+pub fn alwaysLoadConfig(gpa: Allocator, mcp_config: []const u8) !?[]u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, gpa, mcp_config, .{}) catch return error.McpConfigInvalid;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.McpConfigInvalid;
+    const servers = parsed.value.object.getPtr("mcpServers") orelse return error.NoEmetgateServer;
+    if (servers.* != .object) return error.McpConfigInvalid;
+    var changed = false;
+    var entries = servers.object.iterator();
+    while (entries.next()) |entry| {
+        if (!isEmetgateServer(entry.value_ptr.*)) continue;
+        if (entry.value_ptr.object.get(always_load_field)) |present| {
+            if (present == .bool and present.bool) continue;
+        }
+        try entry.value_ptr.object.put(parsed.arena.allocator(), always_load_field, .{ .bool = true });
+        changed = true;
+    }
+    if (!changed) return null;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try std.json.Stringify.value(parsed.value, .{}, &out.writer);
+    return try out.toOwnedSlice();
+}
+
 fn isEmetgateServer(server: std.json.Value) bool {
     if (server != .object) return false;
     const command = server.object.get("command") orelse return false;
@@ -184,6 +209,8 @@ pub fn ownMcpConfigJson(gpa: Allocator, exe_abs: []const u8, test_command: ?[]co
         try js.write(command);
     } else try js.write(detect_flag);
     try js.endArray();
+    try js.objectField(always_load_field);
+    try js.write(true);
     try js.endObject();
     try js.endObject();
     try js.endObject();
@@ -226,7 +253,16 @@ pub fn chooseMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir, state_dir: [
         gpa.free(found);
         return error.LockdownTestWithMcpConfig;
     }
-    return found;
+    defer gpa.free(found);
+    const config = try std.Io.Dir.cwd().readFileAlloc(io, found, gpa, .limited(max_mcp_config_bytes));
+    defer gpa.free(config);
+    const loaded = alwaysLoadConfig(gpa, config) catch return gpa.dupeZ(u8, found);
+    const json = loaded orelse return gpa.dupeZ(u8, found);
+    defer gpa.free(json);
+    const copy = try std.fs.path.joinZ(gpa, &.{ state_dir, project_mcp_config_name });
+    errdefer gpa.free(copy);
+    try lockdown_slash.place(gpa, io, copy, json);
+    return copy;
 }
 
 pub fn childEnviron(gpa: Allocator, parent: *const std.process.Environ.Map) !std.process.Environ.Map {
