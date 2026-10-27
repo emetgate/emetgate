@@ -12856,7 +12856,7 @@
       "id": "PY-FT4-test-prefix-ignored",
       "file": "src/engine/facts_tests.zig",
       "from": "        if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix)) return null;\n",
-      "to": "",
+      "to": "        if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix) and false) return null;\n",
       "kills": [
         "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
       ]
