@@ -96,6 +96,7 @@ pub const Loc = struct {
     nth: usize = 0,
     name: []const u8,
     prefix: bool = false,
+    suffix: bool = false,
     definition: bool = false,
 };
 
@@ -123,7 +124,7 @@ pub fn locationsJson(gpa: Allocator, repo: *TsRepo, field: []const u8, locs: []c
         const start = offsetOf(text, loc.needle, loc.nth, loc.name);
         const file = try repo.slashed(gpa, loc.rel);
         defer gpa.free(file);
-        try js.write(.{ .file = file, .start = start, .end = start + @as(u32, @intCast(loc.name.len)), .prefix = loc.prefix, .definition = loc.definition });
+        try js.write(.{ .file = file, .start = start, .end = start + @as(u32, @intCast(loc.name.len)), .prefix = loc.prefix, .suffix = loc.suffix, .definition = loc.definition });
     }
     try js.endArray();
     try js.endObject();

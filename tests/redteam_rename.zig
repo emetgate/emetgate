@@ -160,3 +160,31 @@ test "red team rename: a shorthand property location and a refused rename info a
     try testing.expectError(error.RenameRefused, case.rename("src/a.ts", "add", "sum", true, null));
     try case.expectOld();
 }
+
+test "red team rename: a shorthand the service marks with a kept key is written as key and new name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    const source = "function add(a: number): number {\n  return a + 1;\n}\nexport const api = { add };\n";
+    try case.init(&.{.{ .rel = "src/a.ts", .text = source }}, true);
+    defer case.deinit();
+    try case.plan(&.{ .{ .rel = "src/a.ts", .needle = "function add", .name = "add" }, .{ .rel = "src/a.ts", .needle = "{ add }", .name = "add", .prefix = true } });
+    const outcome = try case.rename("src/a.ts", "add", "sum", false, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/a.ts", "function sum(a: number): number {\n  return a + 1;\n}\nexport const api = { add: sum };\n");
+}
+
+test "red team rename: a shorthand the service leaves bare collapses only with interface approval" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    const source = "function add(a: number): number {\n  return a + 1;\n}\nexport const api = { add };\n";
+    try case.init(&.{.{ .rel = "src/a.ts", .text = source }}, true);
+    defer case.deinit();
+    try case.plan(&.{ .{ .rel = "src/a.ts", .needle = "function add", .name = "add" }, .{ .rel = "src/a.ts", .needle = "{ add }", .name = "add" }, .{ .rel = "src/a.ts", .needle = "{ add }", .name = "add" } });
+    try testing.expectError(error.InterfaceChangeNeedsApproval, case.rename("src/a.ts", "add", "sum", false, null));
+    try case.expectFile("src/a.ts", source);
+    const outcome = try case.rename("src/a.ts", "add", "sum", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/a.ts", "function sum(a: number): number {\n  return a + 1;\n}\nexport const api = { sum };\n");
+}

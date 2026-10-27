@@ -1,6 +1,71 @@
 {
   "mutations": [
     {
+      "id": "SH1-kept-key-on-plain-name-accepted",
+      "file": "src/engine/rename.zig",
+      "from": "        if (!leaf.shorthand) return error.ShorthandReference;\n",
+      "to": "",
+      "kills": [
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a kept key on a plain name are refused",
+        "red team rename: a shorthand property location and a refused rename info are both refused"
+      ]
+    },
+    {
+      "id": "SH2-kept-key-dropped",
+      "file": "src/engine/rename.zig",
+      "from": "        if (keep == .key) try text.print(gpa, \"{s}: \", .{old});",
+      "to": "",
+      "kills": [
+        "rename: a shorthand property keeps its key when only the binding is renamed",
+        "red team rename: a shorthand the service marks with a kept key is written as key and new name"
+      ]
+    },
+    {
+      "id": "SH3-kept-value-dropped",
+      "file": "src/engine/rename.zig",
+      "from": "        if (keep == .value) try text.print(gpa, \": {s}\", .{old});",
+      "to": "",
+      "kills": [
+        "rename: a destructured shorthand collapses with its uses or keeps its local name when only the key is renamed"
+      ]
+    },
+    {
+      "id": "SH4-checks-run-on-unexpanded-base",
+      "file": "src/engine/rename.zig",
+      "from": "    const resolved = try crossCheck(gpa, checked, old, expanded.targets, options.free_uses);",
+      "to": "    const resolved = try crossCheck(gpa, base, old, spans, options.free_uses);",
+      "kills": [
+        "rename: a destructured shorthand collapses with its uses or keeps its local name when only the key is renamed"
+      ]
+    },
+    {
+      "id": "SH5-service-keep-ignored",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (location.prefix.len != 0) return .key;",
+      "to": "    if (false) return .key;",
+      "kills": [
+        "red team rename: a shorthand the service marks with a kept key is written as key and new name"
+      ]
+    },
+    {
+      "id": "SH6-collapsed-shorthand-not-an-interface-change",
+      "file": "src/platform/rename_batch.zig",
+      "from": " or try collapsesShorthand(gpa, io, runtime, &locations, old);",
+      "to": ";",
+      "kills": [
+        "red team rename: a shorthand the service leaves bare collapses only with interface approval"
+      ]
+    },
+    {
+      "id": "SH7-duplicate-service-span-kept",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (containsSpan(self.spans.items, span)) return;\n",
+      "to": "",
+      "kills": [
+        "red team rename: a shorthand the service leaves bare collapses only with interface approval"
+      ]
+    },
+    {
       "id": "RF1-read-file-raw-range-ignored",
       "file": "src/protocol/read_tools.zig",
       "from": "    if (line_start != null or line_end != null) {\n        return renderRange(",
@@ -5272,11 +5337,11 @@
     {
       "id": "RN7-location-not-an-identifier-skipped",
       "file": "src/engine/rename.zig",
-      "from": "        const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;\n        if (leaf.shorthand) return error.ShorthandReference;",
-      "to": "        const leaf = findLeaf(leaves, span) orelse continue;\n        if (leaf.shorthand) return error.ShorthandReference;",
+      "from": "        const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;\n        keep.* = options.keepOf(span);",
+      "to": "        const leaf = findLeaf(leaves, span) orelse continue;\n        keep.* = options.keepOf(span);",
       "kills": [
         "red team rename: a location inside a comment or a string is refused and both stay unchanged",
-        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a kept key on a plain name are refused"
       ]
     },
     {
@@ -5321,7 +5386,7 @@
       "to": "",
       "kills": [
         "red team rename: a new name that another touched file already uses is refused",
-        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a kept key on a plain name are refused"
       ]
     },
     {
@@ -12282,8 +12347,8 @@
     {
       "id": "CSR3-free-uses-not-passed",
       "file": "src/platform/rename_batch.zig",
-      "from": ".{ .free_uses = free_uses }",
-      "to": ".{}",
+      "from": ".{ .free_uses = free_uses, .kept_keys",
+      "to": ".{ .free_uses = false, .kept_keys",
       "kills": [
         "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
       ]

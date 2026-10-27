@@ -237,9 +237,54 @@ fn containsSpan(spans: []const Span, wanted: Span) bool {
     return false;
 }
 
+pub const Keep = enum { none, key, value };
+
 pub const Options = struct {
     free_uses: bool = false,
+    kept_keys: []const Span = &.{},
+    kept_values: []const Span = &.{},
+
+    fn keepOf(self: Options, span: Span) Keep {
+        if (containsSpan(self.kept_keys, span)) return .key;
+        if (containsSpan(self.kept_values, span)) return .value;
+        return .none;
+    }
 };
+
+const Rewritten = struct {
+    text: []u8,
+    targets: []Span,
+    wholes: []Span,
+
+    fn deinit(self: Rewritten, gpa: Allocator) void {
+        gpa.free(self.text);
+        gpa.free(self.targets);
+        gpa.free(self.wholes);
+    }
+};
+
+fn rewrite(gpa: Allocator, source: []const u8, spans: []const Span, keeps: []const Keep, old: []const u8, name: []const u8) Allocator.Error!Rewritten {
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    const targets = try gpa.alloc(Span, spans.len);
+    errdefer gpa.free(targets);
+    const wholes = try gpa.alloc(Span, spans.len);
+    errdefer gpa.free(wholes);
+    var cursor: usize = 0;
+    for (spans, keeps, targets, wholes) |span, keep, *target, *whole| {
+        try text.appendSlice(gpa, source[cursor..span.start]);
+        const start: u32 = @intCast(text.items.len);
+        if (keep == .key) try text.print(gpa, "{s}: ", .{old});
+        const at: u32 = @intCast(text.items.len);
+        try text.appendSlice(gpa, name);
+        target.* = .{ .start = at, .end = at + @as(u32, @intCast(name.len)) };
+        if (keep == .value) try text.print(gpa, ": {s}", .{old});
+        whole.* = .{ .start = start, .end = @intCast(text.items.len) };
+        cursor = span.end;
+    }
+    try text.appendSlice(gpa, source[cursor..]);
+    return .{ .text = try text.toOwnedSlice(gpa), .targets = targets, .wholes = wholes };
+}
 
 pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, proposed: []const Span) Error!Renamed {
     return applyWith(gpa, base, old, new, proposed, .{});
@@ -258,39 +303,39 @@ pub fn applyWith(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const 
 
     const leaves = try leavesNamed(gpa, base, old);
     defer gpa.free(leaves);
-    for (spans) |span| {
+    const keeps = try gpa.alloc(Keep, spans.len);
+    defer gpa.free(keeps);
+    var expanding = false;
+    for (spans, keeps) |span, *keep| {
         const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;
-        if (leaf.shorthand) return error.ShorthandReference;
+        keep.* = options.keepOf(span);
+        if (keep.* == .none) continue;
+        if (!leaf.shorthand) return error.ShorthandReference;
+        expanding = true;
     }
     const taken = try leavesNamed(gpa, base, new);
     defer gpa.free(taken);
     if (taken.len != 0) return error.NameTaken;
-    const resolved = try crossCheck(gpa, base, old, spans, options.free_uses);
 
-    var text: std.ArrayList(u8) = .empty;
-    defer text.deinit(gpa);
-    const moved = try gpa.alloc(Span, spans.len);
-    defer gpa.free(moved);
-    var cursor: usize = 0;
-    for (spans, moved) |span, *slot| {
-        try text.appendSlice(gpa, base.source[cursor..span.start]);
-        const start: u32 = @intCast(text.items.len);
-        try text.appendSlice(gpa, new);
-        slot.* = .{ .start = start, .end = start + @as(u32, @intCast(new.len)) };
-        cursor = span.end;
-    }
-    try text.appendSlice(gpa, base.source[cursor..]);
+    const expanded = try rewrite(gpa, base.source, spans, keeps, old, old);
+    defer expanded.deinit(gpa);
+    const checked = if (expanding) try Snapshot.fromSource(base.runtime, base.profile, try base.runtime.gpa.dupe(u8, expanded.text)) else base;
+    defer if (expanding) checked.destroy();
+    if (checked.tree.root().hasError()) return error.MutationSyntaxInvalid;
+    const resolved = try crossCheck(gpa, checked, old, expanded.targets, options.free_uses);
 
-    const source = try base.runtime.gpa.dupe(u8, text.items);
+    const renamed = try rewrite(gpa, base.source, spans, keeps, old, new);
+    defer renamed.deinit(gpa);
+    const source = try base.runtime.gpa.dupe(u8, renamed.text);
     const next = try Snapshot.fromSource(base.runtime, base.profile, source);
     errdefer next.destroy();
     if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;
 
-    const regions = try compareRegions(gpa, base, next, spans);
+    const regions = try compareRegions(gpa, checked, next, expanded.targets);
     try checkSurvivors(gpa, next, old);
-    const symbols_checked = try compareSymbols(gpa, base, next, old, new, spans);
+    const symbols_checked = try compareSymbols(gpa, checked, next, old, new, expanded.targets);
 
-    return .{ .snapshot = next, .spans = try gpa.dupe(Span, moved), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
+    return .{ .snapshot = next, .spans = try gpa.dupe(Span, renamed.wholes), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
 }
 
 fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const Span, free_uses: bool) Error!usize {
@@ -634,11 +679,53 @@ test "rename: a span that is not an occurrence, a taken name, a bad name, a dupl
     try testing.expectError(error.InvalidName, apply(testing.allocator, base, "add", "not-a-name", spans));
     try testing.expectError(error.DuplicateLocation, apply(testing.allocator, base, "add", "sum", &.{ spans[0], spans[0] }));
 
-    const shorthand = try test_util.snapshotOf(runtime, "function add(): number { return 1; }\nconst api = { add };\n");
+    try testing.expectError(error.ShorthandReference, applyWith(testing.allocator, base, "add", "sum", spans, .{ .kept_keys = spans[0..1] }));
+}
+
+test "rename: a shorthand property collapses to the new name when the key is renamed with the binding" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const shorthand = try test_util.snapshotOf(runtime, "function add() { return 1; }\nmodule.exports = { add };\n");
     defer shorthand.destroy();
-    const short_spans = try spansOf(testing.allocator, shorthand, "add");
-    defer testing.allocator.free(short_spans);
-    try testing.expectError(error.ShorthandReference, apply(testing.allocator, shorthand, "add", "sum", short_spans));
+    const spans = try spansOf(testing.allocator, shorthand, "add");
+    defer testing.allocator.free(spans);
+    const renamed = try apply(testing.allocator, shorthand, "add", "sum", spans);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("function sum() { return 1; }\nmodule.exports = { sum };\n", renamed.snapshot.source);
+}
+
+test "rename: a shorthand property keeps its key when only the binding is renamed" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "function add() { return 1; }\nmodule.exports = { add };\n";
+    const shorthand = try test_util.snapshotOf(runtime, source);
+    defer shorthand.destroy();
+    const spans = try spansOf(testing.allocator, shorthand, "add");
+    defer testing.allocator.free(spans);
+    const kept = [_]Span{spanOf(source, "{ add }", 0, "add")};
+    const renamed = try applyWith(testing.allocator, shorthand, "add", "sum", spans, .{ .kept_keys = &kept });
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("function sum() { return 1; }\nmodule.exports = { add: sum };\n", renamed.snapshot.source);
+    const whole = renamed.spans[1];
+    try testing.expectEqualStrings("add: sum", renamed.snapshot.source[whole.start..whole.end]);
+}
+
+test "rename: a destructured shorthand collapses with its uses or keeps its local name when only the key is renamed" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "const { add } = require(\"./math\");\nconst total = add(1);\n";
+    const pattern = try test_util.snapshotOf(runtime, source);
+    defer pattern.destroy();
+    const spans = try spansOf(testing.allocator, pattern, "add");
+    defer testing.allocator.free(spans);
+    const collapsed = try apply(testing.allocator, pattern, "add", "sum", spans);
+    defer collapsed.deinit(testing.allocator);
+    try testing.expectEqualStrings("const { sum } = require(\"./math\");\nconst total = sum(1);\n", collapsed.snapshot.source);
+    const key = [_]Span{spanOf(source, "{ add }", 0, "add")};
+    const keyed = try applyWith(testing.allocator, pattern, "add", "sum", &key, .{ .kept_values = &key });
+    defer keyed.deinit(testing.allocator);
+    try testing.expectEqualStrings("const { sum: add } = require(\"./math\");\nconst total = add(1);\n", keyed.snapshot.source);
+    try testing.expectError(error.IncompleteRename, apply(testing.allocator, pattern, "add", "sum", &key));
 }
 
 test "rename: a string that is exactly the name, eval, computed requires and constructed keys are dynamic access" {

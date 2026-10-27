@@ -28,6 +28,7 @@ function location(entry) {
     textSpan: { start: entry.start, length: entry.end - entry.start },
     isDefinition: Boolean(entry.definition),
     prefixText: entry.prefix ? 'name: ' : undefined,
+    suffixText: entry.suffix ? ': name' : undefined,
   };
 }
 

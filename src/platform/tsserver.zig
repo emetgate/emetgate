@@ -26,7 +26,8 @@ pub const Location = struct {
     file: []const u8,
     start: u32,
     end: u32,
-    prefix: bool = false,
+    prefix: []const u8 = "",
+    suffix: []const u8 = "",
     definition: bool = false,
 };
 
@@ -123,8 +124,8 @@ pub const Client = struct {
         try self.start();
     }
 
-    pub fn rename(self: *Client, file: []const u8, offset: u32) !Parsed {
-        return self.ask("rename", file, offset);
+    pub fn rename(self: *Client, file: []const u8, offset: u32, keep_keys: bool) !Parsed {
+        return self.askKeeping("rename", file, offset, keep_keys);
     }
 
     pub fn references(self: *Client, file: []const u8, offset: u32) !Parsed {
@@ -151,6 +152,10 @@ pub const Client = struct {
     }
 
     fn ask(self: *Client, op: []const u8, file: []const u8, offset: u32) !Parsed {
+        return self.askKeeping(op, file, offset, true);
+    }
+
+    fn askKeeping(self: *Client, op: []const u8, file: []const u8, offset: u32, keep_keys: bool) !Parsed {
         try self.ensure();
         const files = try programFiles(self.gpa, self.io, self.root);
         defer freeFiles(self.gpa, files);
@@ -164,6 +169,8 @@ pub const Client = struct {
         try js.write(file);
         try js.objectField("offset");
         try js.write(offset);
+        try js.objectField("keep_keys");
+        try js.write(keep_keys);
         try js.objectField("files");
         try js.write(files);
         return self.exchange(head.written(), "}");

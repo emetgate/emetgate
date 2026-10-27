@@ -16,7 +16,7 @@ fn askRename(repo: *TsRepo, s: *tsserver.Session, rel: []const u8, offset: u32) 
     const client = try s.get();
     const file = try repo.slashed(testing.allocator, rel);
     defer testing.allocator.free(file);
-    return client.rename(file, offset);
+    return client.rename(file, offset, true);
 }
 
 fn reportProgress(s: *tsserver.Session) void {

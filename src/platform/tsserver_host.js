@@ -97,8 +97,8 @@ function handle(request) {
   if (request.op === 'rename') {
     const info = service.getRenameInfo(request.file, position, { allowRenameOfImportPath: false });
     if (!info.canRename) return { can_rename: false, reason: String(info.localizedErrorMessage || '') };
-    const found = service.findRenameLocations(request.file, position, false, false, { providePrefixAndSuffixTextForRename: true }) || [];
-    const locations = found.map((l) => Object.assign(span(l.fileName, l.textSpan), { prefix: Boolean(l.prefixText || l.suffixText) }));
+    const found = service.findRenameLocations(request.file, position, false, false, { providePrefixAndSuffixTextForRename: request.keep_keys !== false }) || [];
+    const locations = found.map((l) => Object.assign(span(l.fileName, l.textSpan), { prefix: String(l.prefixText || ''), suffix: String(l.suffixText || '') }));
     return { can_rename: true, locations: locations };
   }
   if (request.op === 'references') {
