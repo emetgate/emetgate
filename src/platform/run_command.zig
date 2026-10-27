@@ -5,6 +5,7 @@ const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const test_command = @import("test_command.zig");
+const toolchain = @import("toolchain.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -171,6 +172,20 @@ pub fn runInShadow(gpa: Allocator, io: std.Io, options: Options) !sandbox.Report
     };
 }
 
+pub const toolchain_limits: sandbox.Limits = .{ .timeout_ms = 600_000, .max_output_bytes = 4 * 1024 * 1024 };
+
+pub fn isToolchain(command: []const u8) bool {
+    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;
+    return toolchain.classify(command) != null;
+}
+
+pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
+    if (!isToolchain(command)) return error.RunCommandRefused;
+    const lock = try shadow.Lock.acquire(io, root_abs);
+    defer lock.release();
+    return runner.runToolchain(gpa, io, root_abs, command, limits);
+}
+
 pub const Tail = struct {
     text: []const u8,
     omitted_lines: usize,
@@ -181,6 +196,7 @@ pub fn tail(bytes: []const u8, max_lines: usize, max_bytes: usize) Tail {
     if (start > 0 and bytes[start - 1] != '\n') {
         if (std.mem.indexOfScalarPos(u8, bytes, start, '\n')) |nl| start = nl + 1;
     }
+    while (start < bytes.len and bytes[start] & 0xC0 == 0x80) start += 1;
     const body_end = if (bytes.len > 0 and bytes[bytes.len - 1] == '\n') bytes.len - 1 else bytes.len;
     var lines: usize = 0;
     var i: usize = body_end;
@@ -254,4 +270,21 @@ test "output is cut to its last lines with a count of the lines left out" {
     const no_newline = tail("x\ny", 1, 1024);
     try testing.expectEqualStrings("y", no_newline.text);
     try testing.expectEqual(@as(usize, 1), no_newline.omitted_lines);
+}
+
+test "output cut by bytes never starts inside a multi-byte character" {
+    const cut = tail("\u{e7}\u{e7}\u{e7}", 100, 3);
+    try testing.expectEqualStrings("\u{e7}", cut.text);
+    try testing.expect(std.unicode.utf8ValidateSlice(cut.text));
+}
+
+test "toolchain commands are accepted for the repo run while shells, git and metacharacters are not" {
+    for ([_][]const u8{ "npm install", "npx tsc --noEmit", "dotnet restore", "python -m pip install -r requirements.txt", "pytest -q" }) |command| {
+        errdefer std.debug.print("refused: {s}\n", .{command});
+        try testing.expect(isToolchain(command));
+    }
+    for ([_][]const u8{ "npm install & del x", "npm install | more", "git push", "cmd /c npm install", "npx tsc %x%", "a" ** (max_entry_bytes + 1) }) |command| {
+        errdefer std.debug.print("accepted: {s}\n", .{command});
+        try testing.expect(!isToolchain(command));
+    }
 }

@@ -7,7 +7,9 @@ const policy_mod = @import("policy.zig");
 const repo = @import("../platform/repo.zig");
 const run_command = @import("../platform/run_command.zig");
 const test_command = @import("../platform/test_command.zig");
+const test_outcome = @import("../platform/test_outcome.zig");
 const sandbox = @import("../platform/sandbox.zig");
+const toolchain = @import("../platform/toolchain.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -18,7 +20,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Runs one allowlisted command (the test command included) in a sandbox copy: exit code and last 200 lines per stream; no command lists the allowlist.";
+pub const description = "Runs an allowlisted command (test command included) in a sandbox copy, or a toolchain install/build/check in the repo: exit code, last 200 lines per stream; no command lists the allowlist.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,
@@ -79,6 +81,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
     };
     const entry = switch (run_command.check(allowed, command)) {
         .refused => |why| {
+            if (why == .not_allowed and run_command.isToolchain(command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);
             event.fail("RunRefused");
             try writeRefused(w, command, @tagName(why), allowed);
             return true;
@@ -102,9 +105,25 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         else => |e| return e,
     };
     defer report.deinit(gpa);
-    try writeRan(w, entry, report, used);
+    try writeRan(w, entry, report, used, "shadow");
     return false;
 }
+
+fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, allowed: []const []const u8, w: *Writer, event: *telemetry.Event) !bool {
+    const report = run_command.runInRepo(gpa, io, root_abs, command, run_command.toolchain_limits) catch |err| switch (err) {
+        error.SandboxUnavailable => {
+            event.fail("SandboxUnavailable");
+            try writeRefused(w, command, "sandbox_unavailable", allowed);
+            return true;
+        },
+        else => |e| return e,
+    };
+    defer report.deinit(gpa);
+    try writeRan(w, command, report, null, "repo");
+    return false;
+}
+
+pub const toolchain_fix = "run an allowlisted command, or a toolchain command: " ++ toolchain.families_hint;
 
 fn writeAllowlist(w: *Writer, allowed: []const []const u8) !void {
     var js: std.json.Stringify = .{ .writer = w };
@@ -128,17 +147,23 @@ fn writeRefused(w: *Writer, command: []const u8, reason: []const u8, allowed: []
     try js.write(command);
     try js.objectField("allowed");
     try js.write(allowed);
+    if (std.mem.eql(u8, reason, "not_allowed")) {
+        try js.objectField("fix");
+        try js.write(toolchain_fix);
+    }
     try js.endObject();
     try w.writeByte('\n');
 }
 
-fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report, used: shadow.TreeUse) !void {
+fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report, used: ?shadow.TreeUse, ran_in: []const u8) !void {
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
     try js.write("ran");
     try js.objectField("command");
     try js.write(command);
+    try js.objectField("ran_in");
+    try js.write(ran_in);
     try js.objectField("outcome");
     switch (report.outcome) {
         .exited => |code| {
@@ -154,6 +179,10 @@ fn writeRan(w: *Writer, command: []const u8, report: sandbox.Report, used: shado
         },
         .timed_out => try js.write("timed_out"),
         .output_limit => try js.write("output_limit"),
+    }
+    if (report.no_tests) {
+        try js.objectField("note");
+        try js.write(test_outcome.no_tests_note);
     }
     try js.objectField("killed_leftovers");
     try js.write(report.killed_leftovers);

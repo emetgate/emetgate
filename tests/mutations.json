@@ -14211,6 +14211,173 @@
       "kills": [
         "test detection: a server with no test command and no detection refuses the write with the fix for the user"
       ]
+    },
+    {
+      "id": "TC1-toolchain-path-tool-accepted",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (std.mem.indexOfAny(u8, first, \"\\\\/:\") != null) return null;\n",
+      "to": "",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands"
+      ]
+    },
+    {
+      "id": "TC2-toolchain-write-flags-accepted",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (hasArg(command, &forbidden_args)) return null;\n",
+      "to": "",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands",
+        "run tool: toolchain commands that write files or open a shell stay refused"
+      ]
+    },
+    {
+      "id": "TC3-toolchain-runner-shell-accepted",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (listed(&node_runners, tool) and hasArg(command, &runner_shell_args)) return null;\n",
+      "to": "",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands",
+        "run tool: toolchain commands that write files or open a shell stay refused"
+      ]
+    },
+    {
+      "id": "TC4-toolchain-metachar-accepted",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n",
+      "to": "",
+      "kills": [
+        "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
+      ]
+    },
+    {
+      "id": "TC5-toolchain-not-routed",
+      "file": "src/protocol/run_tool.zig",
+      "from": "            if (why == .not_allowed and run_command.isToolchain(command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);\n",
+      "to": "",
+      "kills": [
+        "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name"
+      ]
+    },
+    {
+      "id": "TC6-toolchain-searches-current-dir",
+      "file": "src/platform/runner.zig",
+      "from": "const toolchain_env = [_]sandbox.EnvVar{.{ .name = \"NoDefaultCurrentDirectoryInExePath\", .value = \"1\" }};",
+      "to": "const toolchain_env = [_]sandbox.EnvVar{};",
+      "kills": [
+        "a toolchain command writes into its real directory and never runs a same-named script from it",
+        "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name"
+      ]
+    },
+    {
+      "id": "TC7-low-integrity-check-skipped",
+      "file": "src/platform/sandbox.zig",
+      "from": "    if (command.backend != .user) try requireLowIntegrity(child.id.?);\n",
+      "to": "    if (false) try requireLowIntegrity(child.id.?);\n",
+      "kills": [
+        "the user backend runs without the low-integrity check while a sandboxed run still fails closed"
+      ]
+    },
+    {
+      "id": "TC8-refusal-without-toolchain-fix",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    if (std.mem.eql(u8, reason, \"not_allowed\")) {",
+      "to": "    if (false) {",
+      "kills": [
+        "run tool: a refusal names the toolchain families the model can run instead"
+      ]
+    },
+    {
+      "id": "CACHE1-gate-run-without-cache-env",
+      "file": "src/platform/runner.zig",
+      "from": "        break :blk try sandbox.cacheEnvironment(arena_state.allocator(), dir);",
+      "to": "        break :blk &.{};",
+      "kills": [
+        "a gated command gets writable package caches next to its directory that survive the run"
+      ]
+    },
+    {
+      "id": "CACHE2-cache-not-low-writable",
+      "file": "src/platform/shadow.zig",
+      "from": "            try grantLowIntegrityWrite(cache_abs);\n",
+      "to": "",
+      "kills": [
+        "a gated command gets writable package caches next to its directory that survive the run"
+      ]
+    },
+    {
+      "id": "CACHE3-inherited-env-not-overridden",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (isOverridden(entry, vars)) continue;\n",
+      "to": "",
+      "kills": [
+        "the cache environment points every package cache under the given directory and overrides inherited values",
+        "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest"
+      ]
+    },
+    {
+      "id": "NT1-no-tests-fails-the-gate",
+      "file": "src/platform/sandbox.zig",
+      "from": "            .exited => |code| (code == 0 or self.no_tests) and !self.killed_leftovers,",
+      "to": "            .exited => |code| code == 0 and !self.killed_leftovers,",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not",
+        "a gated test run that collected no tests passes with a note instead of failing the write"
+      ]
+    },
+    {
+      "id": "NT2-failure-beside-no-tests-ignored",
+      "file": "src/platform/test_outcome.zig",
+      "from": "    if (containsAny(report, &failure_signs)) return false;\n",
+      "to": "",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not"
+      ]
+    },
+    {
+      "id": "NT3-any-exit-5-is-no-tests",
+      "file": "src/platform/test_outcome.zig",
+      "from": "    if (code == pytest_no_tests and containsAny(report, &pytest_no_tests_signs)) return true;",
+      "to": "    if (code == pytest_no_tests) return true;",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not"
+      ]
+    },
+    {
+      "id": "NT4-no-tests-not-recorded-by-gate",
+      "file": "src/platform/runner.zig",
+      "from": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = test_outcome.noTests(report);\n",
+      "to": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = false;\n",
+      "kills": [
+        "a gated test run that collected no tests passes with a note instead of failing the write"
+      ]
+    },
+    {
+      "id": "UTF1-code-page-output-not-decoded",
+      "file": "src/platform/console_text.zig",
+      "from": "    if (bytes.len - valid >= max_sequence) {",
+      "to": "    if (false) {",
+      "kills": [
+        "console code page output is decoded to UTF-8 text"
+      ]
+    },
+    {
+      "id": "UTF2-sandbox-returns-raw-bytes",
+      "file": "src/platform/sandbox.zig",
+      "from": "    const stdout = try console_text.toText(gpa, try takeStream(gpa, &reader, 0, limit, &truncated), code_page);",
+      "to": "    const stdout = try takeStream(gpa, &reader, 0, limit, &truncated);",
+      "kills": [
+        "a command's console output reaches the caller as UTF-8 text"
+      ]
+    },
+    {
+      "id": "UTF3-tail-starts-mid-character",
+      "file": "src/platform/run_command.zig",
+      "from": "    while (start < bytes.len and bytes[start] & 0xC0 == 0x80) start += 1;\n",
+      "to": "",
+      "kills": [
+        "output cut by bytes never starts inside a multi-byte character"
+      ]
     }
   ]
 }
