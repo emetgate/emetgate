@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const exe_path = @import("exe_path.zig");
 const shadow = @import("shadow.zig");
@@ -144,7 +145,7 @@ pub const Git = struct {
         var full: std.ArrayList([]const u8) = .empty;
         try full.appendSlice(self.arena, &.{ self.exe, "-c", "core.longpaths=true", "-c", "core.fsmonitor=false" });
         try full.appendSlice(self.arena, argv);
-        const result = std.process.run(self.arena, self.io, .{
+        const result = bounded_run.run(self.arena, self.io, .{
             .argv = full.items,
             .cwd = .{ .path = self.root },
             .environ_map = self.env,

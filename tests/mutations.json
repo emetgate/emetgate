@@ -15259,6 +15259,116 @@
       "kills": [
         "an error line repeated under hundreds of failing test titles is shown even when the titles alone fill the cap"
       ]
+    },
+    {
+      "id": "GW1-hard-reset-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "x(\"--hard\")",
+      "to": ".{ .name = \"--hard\" }",
+      "kills": [
+        "git write accepts the local workflow and marks only work-losing forms",
+        "git write refuses a hard reset that would lose work until force is true"
+      ]
+    },
+    {
+      "id": "GW2-restore-worktree-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.eql(u8, spec.sub, \"restore\") and !(staged and !worktree)) lossy = true;",
+      "to": "    if (std.mem.eql(u8, spec.sub, \"restore\") and false and !(staged and !worktree)) lossy = true;",
+      "kills": [
+        "git write accepts the local workflow and marks only work-losing forms"
+      ]
+    },
+    {
+      "id": "GW3-push-plus-refspec-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (spec.network and (arg[0] == '+' or arg[0] == ':')) lossy = true;",
+      "to": "        {}",
+      "kills": [
+        "git write accepts the local workflow and marks only work-losing forms"
+      ]
+    },
+    {
+      "id": "GW4-checkout-path-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.eql(u8, ok.spec.sub, \"checkout\") and !lossy) lossy =",
+      "to": "    if (std.mem.eql(u8, ok.spec.sub, \"checkout\") and false) lossy =",
+      "kills": [
+        "git write treats checkout of a branch as a switch and checkout of a path as work-losing"
+      ]
+    },
+    {
+      "id": "GW5-unknown-flag-passed-to-git",
+      "file": "src/protocol/git_write.zig",
+      "from": "        const found = findFlag(spec, arg) orelse return .{ .refused = .{ .reason = \"unsupported_flag\", .arg = arg } };",
+      "to": "        const found = findFlag(spec, arg) orelse continue;",
+      "kills": [
+        "git write refuses execution and config flags and unknown subcommands",
+        "git write refuses a flag that runs a program and a subcommand outside the list"
+      ]
+    },
+    {
+      "id": "BR1-output-limit-unchecked",
+      "file": "src/platform/bounded_run.zig",
+      "from": "        if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) return error.StreamTooLong;",
+      "to": "        _ = options.stdout_limit;",
+      "kills": [
+        "output over the limit stops the child instead of hanging"
+      ]
+    },
+    {
+      "id": "GT1-blame-porcelain-whole-file",
+      "file": "src/protocol/git_tools.zig",
+      "from": "        .argv = if (range != null) &windowed else &whole,",
+      "to": "        .argv = &whole,",
+      "kills": [
+        "symbol blame of a line window in a file whose whole blame is huge stays mapped and returns"
+      ]
+    },
+    {
+      "id": "CG1-restored-file-counts-as-drift",
+      "file": "src/platform/commit_group.zig",
+      "from": "        if (try equalsHead(arena, io, root, item.rel, bytes)) continue;",
+      "to": "        _ = &equalsHead;",
+      "kills": [
+        "emetgate_commit: a gated file that git put back to HEAD is skipped, not refused as drift"
+      ]
+    },
+    {
+      "id": "LD1-lockdown-keeps-server-without-test",
+      "file": "src/platform/lockdown.zig",
+      "from": "        if (!namesTest(args.items)) {",
+      "to": "        if (false) {",
+      "kills": [
+        "lockdown gives a project emetgate server without a test flag --detect-test so writes and emetgate_run work"
+      ]
+    },
+    {
+      "id": "RT1-git-refusal-gets-toolchain-fix",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        try js.write(if (isGit(command)) git_fix else toolchain_fix);",
+      "to": "        try js.write(toolchain_fix);",
+      "kills": [
+        "run tool: a refused git command points at the git tools"
+      ]
+    },
+    {
+      "id": "RT2-empty-allowlist-no-hint",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        try js.write(empty_allowlist_fix);",
+      "to": "        try js.write(toolchain_fix);",
+      "kills": [
+        "run tool: an empty allowlist says how to get a test command and that toolchain commands still run"
+      ]
+    },
+    {
+      "id": "HS1-commit-shortstat-dropped",
+      "file": "src/protocol/handlers.zig",
+      "from": "            if (try commitShortstat(gpa, io, root, c.base, c.oid)) |stat| {",
+      "to": "            if (@as(?[]u8, null)) |stat| {",
+      "kills": [
+        "emetgate_commit: the MCP tool commits the pending gated writes"
+      ]
     }
   ]
 }

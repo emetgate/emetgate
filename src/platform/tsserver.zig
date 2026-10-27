@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const sandbox = @import("sandbox.zig");
 const exe_path = @import("exe_path.zig");
 const registry = @import("../engine/lang/registry.zig");
@@ -221,7 +222,7 @@ pub const Client = struct {
 pub fn programFiles(gpa: Allocator, io: std.Io, root: []const u8) ![][]u8 {
     const git = try exe_path.git(gpa, root);
     defer gpa.free(git);
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = &.{ git, "ls-files", "-z" },
         .cwd = .{ .path = root },
         .stdout_limit = .limited(max_listing_bytes),

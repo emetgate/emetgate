@@ -7,6 +7,7 @@ const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
 const wire = @import("wire.zig");
 const run_tool = @import("run_tool.zig");
+const git_write = @import("git_write.zig");
 const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
@@ -202,6 +203,14 @@ pub const tool_defs = [_]Tool{
             .{ .name = "commit", .desc = "", .optional = true },
             .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
+        },
+    },
+    .{
+        .name = "emetgate_git_write",
+        .description = git_write.description,
+        .props = &.{
+            .{ .name = "args", .desc = "", .ty = "array" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{

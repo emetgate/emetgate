@@ -20,6 +20,7 @@ const outline = @import("outline.zig");
 const search_v1 = @import("search_v1.zig");
 const find_tools = @import("find_tools.zig");
 const git_tools = @import("git_tools.zig");
+const git_write = @import("git_write.zig");
 const rename_tool = @import("rename_tool.zig");
 const move_tool = @import("move_tool.zig");
 const node_tool = @import("node_tool.zig");
@@ -117,6 +118,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
     if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, runtime, args, event, policy.root, policy.read_budget);
+    if (std.mem.eql(u8, name, "emetgate_git_write")) return git_write.callGitWrite(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_run")) return run_tool.callRun(gpa, io, args, event, policy);
     return error.UnknownTool;
 }
@@ -720,6 +722,11 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
             try js.write(c.files);
             try js.objectField("receipts");
             try js.write(c.receipts);
+            if (try commitShortstat(gpa, io, root, c.base, c.oid)) |stat| {
+                defer gpa.free(stat);
+                try js.objectField("shortstat");
+                try js.write(stat);
+            }
             try js.endObject();
             return false;
         },
@@ -760,6 +767,15 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
             return true;
         },
     }
+}
+
+fn commitShortstat(gpa: Allocator, io: std.Io, root: []const u8, base: []const u8, oid: []const u8) !?[]u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const out = receipts.git(arena_state.allocator(), io, root, &.{ "diff", "--shortstat", base, oid }) catch return null;
+    const text = std.mem.trim(u8, out orelse return null, " \r\n");
+    if (text.len == 0) return null;
+    return try gpa.dupe(u8, text);
 }
 
 const doc_writer = @import("../platform/doc_writer.zig");

@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const exe_path = @import("exe_path.zig");
 const lockdown_marks = @import("lockdown_marks.zig");
 const lockdown_slash = @import("lockdown_slash.zig");
@@ -113,6 +114,11 @@ pub fn alwaysLoadConfig(gpa: Allocator, mcp_config: []const u8) !?[]u8 {
     var entries = servers.object.iterator();
     while (entries.next()) |entry| {
         if (!isEmetgateServer(entry.value_ptr.*)) continue;
+        const args = &entry.value_ptr.object.getPtr("args").?.array;
+        if (!namesTest(args.items)) {
+            try args.append(.{ .string = detect_flag });
+            changed = true;
+        }
         if (entry.value_ptr.object.get(always_load_field)) |present| {
             if (present == .bool and present.bool) continue;
         }
@@ -124,6 +130,15 @@ pub fn alwaysLoadConfig(gpa: Allocator, mcp_config: []const u8) !?[]u8 {
     defer out.deinit();
     try std.json.Stringify.value(parsed.value, .{}, &out.writer);
     return try out.toOwnedSlice();
+}
+
+fn namesTest(args: []const std.json.Value) bool {
+    for (args) |arg| {
+        if (arg != .string) continue;
+        if (std.mem.eql(u8, arg.string, test_flag) or std.mem.eql(u8, arg.string, detect_flag)) return true;
+        if (std.mem.startsWith(u8, arg.string, test_flag ++ "=")) return true;
+    }
+    return false;
 }
 
 fn isEmetgateServer(server: std.json.Value) bool {
@@ -285,7 +300,7 @@ fn gitSucceeds(gpa: Allocator, io: std.Io, git: []const u8, dir_abs: []const u8,
     var argv: [4][]const u8 = undefined;
     argv[0] = git;
     @memcpy(argv[1..][0..args.len], args);
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = argv[0 .. args.len + 1],
         .cwd = .{ .path = dir_abs },
         .environ_map = env,
