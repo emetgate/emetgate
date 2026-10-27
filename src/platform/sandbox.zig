@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const appcontainer = @import("appcontainer.zig");
+const console_text = @import("console_text.zig");
 
 const Allocator = std.mem.Allocator;
 const MultiReader = std.Io.File.MultiReader;
@@ -27,10 +28,11 @@ pub const Report = struct {
     stderr: []u8,
     truncated: bool,
     killed_leftovers: bool,
+    no_tests: bool = false,
 
     pub fn passed(self: Report) bool {
         return switch (self.outcome) {
-            .exited => |code| code == 0 and !self.killed_leftovers,
+            .exited => |code| (code == 0 or self.no_tests) and !self.killed_leftovers,
             .crashed, .timed_out, .output_limit => false,
         };
     }
@@ -44,7 +46,10 @@ pub const Report = struct {
 pub const Backend = union(enum) {
     low_integrity,
     app_container: *const appcontainer.Profile,
+    user,
 };
+
+pub const EnvVar = struct { name: []const u8, value: []const u8 };
 
 pub const Command = struct {
     argv: []const []const u8,
@@ -52,6 +57,7 @@ pub const Command = struct {
     limits: Limits = .{},
     backend: Backend = .low_integrity,
     temp: ?[]const u8 = null,
+    env: []const EnvVar = &.{},
 };
 
 const ntstatus_error_floor: u32 = 0xC0000000;
@@ -76,18 +82,19 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
 
     const token: ?LowToken = switch (command.backend) {
         .low_integrity => try LowToken.create(),
-        .app_container => null,
+        .app_container, .user => null,
     };
     defer if (token) |t| t.close();
     const spawn_backend: SpawnBackend = switch (command.backend) {
         .low_integrity => .{ .low = token.? },
         .app_container => |profile| .{ .app = profile },
+        .user => .user,
     };
 
     const started = std.Io.Timestamp.now(io, .awake);
     var child = try spawnRestricted(gpa, spawn_backend, command, .command);
     defer child.kill(io);
-    try requireLowIntegrity(child.id.?);
+    if (command.backend != .user) try requireLowIntegrity(child.id.?);
     try job.assign(child.id.?);
     try resumeMainThread(child.thread_handle);
 
@@ -155,9 +162,10 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
     const duration_ns: u64 = @intCast(started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds);
 
     var truncated = false;
-    const stdout = try takeStream(gpa, &reader, 0, limit, &truncated);
+    const code_page = console_text.oemCodePage();
+    const stdout = try console_text.toText(gpa, try takeStream(gpa, &reader, 0, limit, &truncated), code_page);
     errdefer gpa.free(stdout);
-    const stderr = try takeStream(gpa, &reader, 1, limit, &truncated);
+    const stderr = try console_text.toText(gpa, try takeStream(gpa, &reader, 1, limit, &truncated), code_page);
 
     return .{
         .outcome = stopped orelse exitOutcome(exit_code),
@@ -333,10 +341,11 @@ const Stdio = enum { command, service };
 const SpawnBackend = union(enum) {
     low: LowToken,
     app: *const appcontainer.Profile,
+    user,
 
     fn attributeCount(self: SpawnBackend) std.os.windows.DWORD {
         return switch (self) {
-            .low => 1,
+            .low, .user => 1,
             .app => |profile| if (profile.lpac) 3 else 2,
         };
     }
@@ -351,7 +360,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     const program = try resolveProgram(arena, command.cwd, command.argv[0]);
     const command_line = try commandLine(arena, command.argv);
     const cwd = try std.unicode.wtf8ToWtf16LeAllocZ(arena, command.cwd);
-    const environment: ?*anyopaque = if (command.temp) |temp| @ptrCast((try environmentWithTemp(arena, temp)).ptr) else null;
+    const environment: ?*anyopaque = if (command.temp != null or command.env.len != 0) @ptrCast((try commandEnvironment(arena, command)).ptr) else null;
 
     const nul = try openNul();
     defer std.os.windows.CloseHandle(nul);
@@ -379,7 +388,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     var capabilities: appcontainer.SecurityCapabilities = undefined;
     var lpac_policy: u32 = appcontainer.all_application_packages_opt_out;
     switch (backend) {
-        .low => {},
+        .low, .user => {},
         .app => |profile| {
             capabilities = profile.securityCapabilities();
             if (win.UpdateProcThreadAttribute(list.ptr, 0, appcontainer.proc_thread_attribute_security_capabilities, &capabilities, @sizeOf(appcontainer.SecurityCapabilities), null, null) == .FALSE) return error.SandboxUnavailable;
@@ -402,7 +411,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     const flags = win.create_suspended | win.create_unicode_environment | win.create_no_window | win.extended_startupinfo_present;
     const spawned: std.os.windows.BOOL = switch (backend) {
         .low => |token| win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, environment, cwd, &startup, &info),
-        .app => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, environment, cwd, &startup, &info),
+        .app, .user => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, environment, cwd, &startup, &info),
     };
     if (spawned == .FALSE) return switch (win.GetLastError()) {
         win.error_file_not_found, win.error_path_not_found, win.error_directory => error.FileNotFound,
@@ -476,19 +485,29 @@ pub fn environmentValue(arena: Allocator, name: [:0]const u16) !?[]u8 {
 
 const temp_names = [_][]const u8{ "TEMP", "TMP" };
 
+fn isNamedEntry(entry: []const u16, name: []const u8) bool {
+    if (entry.len <= name.len or entry[name.len] != '=') return false;
+    for (name, entry[0..name.len]) |want, got| {
+        if (got > 0x7f or std.ascii.toUpper(@intCast(got)) != std.ascii.toUpper(want)) return false;
+    }
+    return true;
+}
+
 fn isTempEntry(entry: []const u16) bool {
     for (temp_names) |name| {
-        if (entry.len <= name.len or entry[name.len] != '=') continue;
-        var same = true;
-        for (name, entry[0..name.len]) |want, got| {
-            if (got > 0x7f or std.ascii.toUpper(@intCast(got)) != want) same = false;
-        }
-        if (same) return true;
+        if (isNamedEntry(entry, name)) return true;
     }
     return false;
 }
 
-pub fn environmentWithTemp(arena: Allocator, temp: []const u8) ![:0]u16 {
+fn isOverridden(entry: []const u16, vars: []const EnvVar) bool {
+    for (vars) |v| {
+        if (isNamedEntry(entry, v.name)) return true;
+    }
+    return false;
+}
+
+pub fn environmentWith(arena: Allocator, vars: []const EnvVar) ![:0]u16 {
     const block = win.GetEnvironmentStringsW() orelse return error.SandboxUnavailable;
     defer _ = win.FreeEnvironmentStringsW(block);
     var out: std.ArrayList(u16) = .empty;
@@ -498,18 +517,77 @@ pub fn environmentWithTemp(arena: Allocator, temp: []const u8) ![:0]u16 {
         while (block[index] != 0) index += 1;
         const entry = block[start..index];
         index += 1;
-        if (isTempEntry(entry)) continue;
+        if (isOverridden(entry, vars)) continue;
         try out.appendSlice(arena, entry);
         try out.append(arena, 0);
     }
-    const temp_w = try std.unicode.wtf8ToWtf16LeAlloc(arena, temp);
-    for (temp_names) |name| {
-        for (name) |c| try out.append(arena, c);
+    for (vars) |v| {
+        const value_w = try std.unicode.wtf8ToWtf16LeAlloc(arena, v.value);
+        for (v.name) |c| try out.append(arena, c);
         try out.append(arena, '=');
-        try out.appendSlice(arena, temp_w);
+        try out.appendSlice(arena, value_w);
         try out.append(arena, 0);
     }
     return out.toOwnedSliceSentinel(arena, 0);
+}
+
+pub fn environmentWithTemp(arena: Allocator, temp: []const u8) ![:0]u16 {
+    return environmentWith(arena, &.{ .{ .name = "TEMP", .value = temp }, .{ .name = "TMP", .value = temp } });
+}
+
+fn commandEnvironment(arena: Allocator, command: Command) ![:0]u16 {
+    var vars: std.ArrayList(EnvVar) = .empty;
+    if (command.temp) |temp| {
+        for (temp_names) |name| try vars.append(arena, .{ .name = name, .value = temp });
+    }
+    try vars.appendSlice(arena, command.env);
+    return environmentWith(arena, vars.items);
+}
+
+const CacheDir = struct { name: []const u8, sub: []const u8 };
+
+pub const cache_dirs = [_]CacheDir{
+    .{ .name = "NUGET_PACKAGES", .sub = "nuget\\packages" },
+    .{ .name = "NUGET_HTTP_CACHE_PATH", .sub = "nuget\\http" },
+    .{ .name = "NUGET_PLUGINS_CACHE_PATH", .sub = "nuget\\plugins" },
+    .{ .name = "DOTNET_CLI_HOME", .sub = "dotnet" },
+    .{ .name = "npm_config_cache", .sub = "npm" },
+    .{ .name = "npm_config_store_dir", .sub = "pnpm" },
+    .{ .name = "YARN_CACHE_FOLDER", .sub = "yarn" },
+    .{ .name = "PIP_CACHE_DIR", .sub = "pip" },
+    .{ .name = "UV_CACHE_DIR", .sub = "uv" },
+    .{ .name = "GOCACHE", .sub = "go-build" },
+    .{ .name = "GOMODCACHE", .sub = "go-mod" },
+    .{ .name = "CARGO_HOME", .sub = "cargo" },
+};
+
+const cache_flags = [_]EnvVar{
+    .{ .name = "DOTNET_SKIP_FIRST_TIME_EXPERIENCE", .value = "1" },
+    .{ .name = "DOTNET_NOLOGO", .value = "1" },
+    .{ .name = "DOTNET_CLI_TELEMETRY_OPTOUT", .value = "1" },
+    .{ .name = "DOTNET_GENERATE_ASPNET_CERTIFICATE", .value = "false" },
+};
+
+pub fn cacheEnvironment(arena: Allocator, cache: []const u8) ![]EnvVar {
+    var vars: std.ArrayList(EnvVar) = .empty;
+    for (cache_dirs) |dir| {
+        try vars.append(arena, .{ .name = dir.name, .value = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ cache, dir.sub }) });
+    }
+    try vars.appendSlice(arena, &cache_flags);
+    if (try userNugetPackages(arena)) |packages| try vars.append(arena, .{ .name = "NUGET_FALLBACK_PACKAGES", .value = packages });
+    return vars.toOwnedSlice(arena);
+}
+
+fn userNugetPackages(arena: Allocator) !?[]u8 {
+    const configured = try environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("NUGET_PACKAGES"));
+    const packages = configured orelse blk: {
+        const profile = (try environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("USERPROFILE"))) orelse return null;
+        break :blk try std.fmt.allocPrint(arena, "{s}\\.nuget\\packages", .{profile});
+    };
+    const wide = std.unicode.wtf8ToWtf16LeAllocZ(arena, packages) catch return null;
+    const attributes = win.GetFileAttributesW(wide);
+    if (attributes == win.invalid_file_attributes or attributes & win.file_attribute_directory == 0) return null;
+    return packages;
 }
 
 fn resolveProgram(arena: Allocator, cwd: []const u8, name: []const u8) ![:0]u16 {
@@ -914,6 +992,57 @@ test "the temp environment replaces every TEMP and TMP entry, whatever its case,
     try testing.expect(isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("tmp=x")));
     try testing.expect(!isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("TEMPLATE=x")));
     try testing.expect(!isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("TMP")));
+}
+
+test "the cache environment points every package cache under the given directory and overrides inherited values" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const vars = try cacheEnvironment(arena, "D:\\gate\\shadow-cache");
+    var nuget_seen = false;
+    for (cache_dirs) |dir| {
+        var found = false;
+        for (vars) |v| {
+            if (!std.mem.eql(u8, v.name, dir.name)) continue;
+            try testing.expect(std.mem.startsWith(u8, v.value, "D:\\gate\\shadow-cache\\"));
+            found = true;
+        }
+        try testing.expect(found);
+    }
+    for (vars) |v| {
+        if (std.mem.eql(u8, v.name, "NUGET_PACKAGES")) {
+            try testing.expectEqualStrings("D:\\gate\\shadow-cache\\nuget\\packages", v.value);
+            nuget_seen = true;
+        }
+    }
+    try testing.expect(nuget_seen);
+    const block = try environmentWith(arena, vars);
+    var nuget_entries: usize = 0;
+    var entries = std.mem.splitScalar(u16, block, 0);
+    while (entries.next()) |entry_w| {
+        if (entry_w.len == 0) continue;
+        const entry = try std.unicode.wtf16LeToWtf8Alloc(arena, entry_w);
+        if (std.ascii.startsWithIgnoreCase(entry, "NUGET_PACKAGES=")) {
+            try testing.expectEqualStrings("NUGET_PACKAGES=D:\\gate\\shadow-cache\\nuget\\packages", entry);
+            nuget_entries += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), nuget_entries);
+    try testing.expect(isNamedEntry(std.unicode.utf8ToUtf16LeStringLiteral("NPM_CONFIG_CACHE=x"), "npm_config_cache"));
+    try testing.expect(!isNamedEntry(std.unicode.utf8ToUtf16LeStringLiteral("npm_config_cache_x=x"), "npm_config_cache"));
+}
+
+test "the user backend runs without the low-integrity check while a sandboxed run still fails closed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    defer injected_fault = null;
+    injected_fault = .verify;
+    const argv = [_][]const u8{ build_options.probe_path, "both" };
+    try testing.expectError(error.SandboxUnavailable, run(testing.allocator, testing.io, .{ .argv = &argv, .cwd = ".", .limits = .{ .timeout_ms = 10_000 } }));
+    const report = try run(testing.allocator, testing.io, .{ .argv = &argv, .cwd = ".", .limits = .{ .timeout_ms = 10_000 }, .backend = .user });
+    defer report.deinit(testing.allocator);
+    try testing.expect(report.passed());
+    try testing.expectEqualStrings("to stdout\n", report.stdout);
 }
 
 test "the job actually carries every limit we claim to set" {

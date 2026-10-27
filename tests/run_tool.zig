@@ -97,3 +97,44 @@ test "run tool: the repository's run list counts only with --allow-repo-config" 
     try testing.expect(!trusted.is_error);
     try testing.expectEqual(@as(i64, 0), (try trusted.field("exit_code")).?.integer);
 }
+
+test "run tool: a refusal names the toolchain families the model can run instead" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{ .command = "node build.js" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("not_allowed", try reply.string("reason"));
+    const fix = try reply.string("fix");
+    for ([_][]const u8{ "npm|pnpm|yarn|bun install", "npx", "pip install", "dotnet restore", "cargo", "go build" }) |family| {
+        errdefer std.debug.print("fix lacks {s}: {s}\n", .{ family, fix });
+        try testing.expect(std.mem.indexOf(u8, fix, family) != null);
+    }
+}
+
+test "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{.{ .name = "pytest.cmd", .body = "@echo off\r\necho planted> planted.txt\r\n" }});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{ .command = "pytest -q" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("ran", try reply.string("status"));
+    try testing.expectEqualStrings("repo", try reply.string("ran_in"));
+    try testing.expect(!repo.exists("repo\\planted.txt"));
+}
+
+test "run tool: toolchain commands that write files or open a shell stay refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    for ([_][]const u8{ "npx eslint --fix src", "npx -c whoami", "git commit -m x", "cmd /c dir", "dotnet run" }) |command| {
+        errdefer std.debug.print("accepted: {s}\n", .{command});
+        var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{ .command = command });
+        defer reply.deinit();
+        try testing.expect(reply.is_error);
+        try testing.expectEqualStrings("refused", try reply.string("status"));
+    }
+}

@@ -473,6 +473,18 @@ pub fn freshTemp(io: std.Io, temp_abs: []const u8) !void {
     try grantLowIntegrityWrite(temp_abs);
 }
 
+pub fn ensureCache(io: std.Io, cache_abs: []const u8) !void {
+    if (builtin.os.tag != .windows) return;
+    if (try isReparsePoint(cache_abs)) try clearTemp(io, cache_abs);
+    Dir.cwd().access(io, cache_abs, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            try Dir.cwd().createDirPath(io, cache_abs);
+            try grantLowIntegrityWrite(cache_abs);
+        },
+        else => |e| return e,
+    };
+}
+
 pub fn clearTemp(io: std.Io, temp_abs: []const u8) !void {
     if (builtin.os.tag != .windows) return;
     if (!try isReparsePoint(temp_abs)) {

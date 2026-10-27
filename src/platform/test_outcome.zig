@@ -80,6 +80,7 @@ fn clean(line: []const u8) []const u8 {
 
 pub fn summarize(report: sandbox.Report) Summary {
     var summary: Summary = .{};
+    if (report.no_tests) summary.add(no_tests_note);
     var picked: [max_summary_lines][]const u8 = undefined;
     var count: usize = 0;
     for ([_][]const u8{ report.stdout, report.stderr }) |stream| {
@@ -104,6 +105,41 @@ pub fn summarize(report: sandbox.Report) Summary {
         summary.add(picked[index]);
     }
     return summary;
+}
+
+pub const no_tests_note = "no tests collected; treated as passing";
+
+const pytest_no_tests: u32 = 5;
+
+const no_tests_signs = [_][]const u8{
+    "No tests found",
+    "No test files found",
+    "No test is available",
+    "no test files",
+};
+
+const pytest_no_tests_signs = [_][]const u8{ "no tests ran", "collected 0 items" };
+
+const failure_signs = [_][]const u8{ "failing", "FAILED", "Failed!", " failed", "error CS", "Build FAILED", "Traceback", "SyntaxError" };
+
+fn containsAny(report: sandbox.Report, signs: []const []const u8) bool {
+    for ([_][]const u8{ report.stdout, report.stderr }) |stream| {
+        for (signs) |sign| {
+            if (std.mem.indexOf(u8, stream, sign) != null) return true;
+        }
+    }
+    return false;
+}
+
+pub fn noTests(report: sandbox.Report) bool {
+    const code = switch (report.outcome) {
+        .exited => |code| code,
+        else => return false,
+    };
+    if (code == 0 or report.killed_leftovers) return false;
+    if (containsAny(report, &failure_signs)) return false;
+    if (code == pytest_no_tests and containsAny(report, &pytest_no_tests_signs)) return true;
+    return containsAny(report, &no_tests_signs);
 }
 
 const env_signs = [_][]const u8{
@@ -328,4 +364,39 @@ test "a missing command or module is an environment error, a failing test or a r
     try testing.expect(envError(reportOf(1, "", "Error: Cannot find module './helpers'\n")) == null);
     try testing.expect(envError(reportOf(0, "", "Error: Cannot find module 'x'\n")) == null);
     try testing.expect(envError(.{ .outcome = .timed_out, .duration_ns = 0, .stdout = @constCast(""), .stderr = @constCast("Cannot find module 'x'"), .truncated = false, .killed_leftovers = false }) == null);
+}
+
+test "a run that collected no tests counts as passing with a note, a failing or crashing run does not" {
+    for ([_]sandbox.Report{
+        reportOf(5, "============ test session starts ============\ncollected 0 items\n\n=========== no tests ran in 0.01s ===========\n", ""),
+        reportOf(1, "", "No tests found, exiting with code 1\nRun with `--passWithNoTests` to exit with code 0\n"),
+        reportOf(1, "", "No test files found, exiting with code 1\n"),
+        reportOf(1, "No test is available in C:/w/bin/Debug/net8.0/App.dll.\n", ""),
+        reportOf(1, "", "Error: No test files found: \"test\"\n"),
+    }) |report| {
+        errdefer std.debug.print("not treated as empty: {s}{s}\n", .{ report.stdout, report.stderr });
+        try std.testing.expect(noTests(report));
+        var empty = report;
+        empty.no_tests = true;
+        try std.testing.expect(empty.passed());
+        const summary = summarize(empty);
+        try std.testing.expect(std.mem.startsWith(u8, summary.text(), no_tests_note));
+    }
+    for ([_]sandbox.Report{
+        reportOf(5, "something else entirely\n", ""),
+        reportOf(1, "  1 failing\n", "No tests found\n"),
+        reportOf(1, "FAILED tests/test_a.py::test_x\n", ""),
+        reportOf(2, "collected 0 items / 1 error\nTraceback (most recent call last):\n", ""),
+        reportOf(1, "", "Cannot find module 'jest'\n"),
+        reportOf(0, "no tests ran\n", ""),
+    }) |report| {
+        errdefer std.debug.print("treated as empty: {s}{s}\n", .{ report.stdout, report.stderr });
+        try std.testing.expect(!noTests(report));
+    }
+    var crashed = reportOf(5, "no tests ran\n", "");
+    crashed.outcome = .{ .crashed = 0xC0000005 };
+    try std.testing.expect(!noTests(crashed));
+    var leftovers = reportOf(5, "no tests ran\n", "");
+    leftovers.killed_leftovers = true;
+    try std.testing.expect(!noTests(leftovers));
 }
