@@ -182,6 +182,19 @@ test "lockdown marks the emetgate server alwaysLoad so Claude Code does not defe
     try testing.expectError(error.McpConfigInvalid, lockdown.alwaysLoadConfig(gpa, "not json"));
 }
 
+test "lockdown gives a project emetgate server without a test flag --detect-test so writes and emetgate_run work" {
+    const gpa = testing.allocator;
+    const bare =
+        \\{"mcpServers":{"emetgate":{"command":"C:/tools/emetgate.exe","args":["mcp"],"alwaysLoad":true}}}
+    ;
+    const marked = (try lockdown.alwaysLoadConfig(gpa, bare)).?;
+    defer gpa.free(marked);
+    try testing.expect(std.mem.indexOf(u8, marked, "[\"mcp\",\"--detect-test\"]") != null);
+    const tested = (try lockdown.alwaysLoadConfig(gpa, emetgate_config)).?;
+    defer gpa.free(tested);
+    try testing.expect(std.mem.indexOf(u8, tested, "--detect-test") == null);
+}
+
 test "ordinary claude args pass through the lock" {
     try lockdown.refuseReserved(&.{ "-p", "hi", "--output-format", "stream-json", "--verbose", "--max-turns", "1", "--toolsy" });
 }
@@ -231,7 +244,7 @@ test "every emetgate tool is either pre-allowed by lockdown or left to the permi
 }
 
 const loaded_config =
-    \\{"mcpServers":{"gate":{"command":"C:/tools/emetgate.exe","args":["mcp"],"alwaysLoad":true}}}
+    \\{"mcpServers":{"gate":{"command":"C:/tools/emetgate.exe","args":["mcp","--test","npm test"],"alwaysLoad":true}}}
 ;
 
 const emetgate_config =

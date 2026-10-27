@@ -15184,6 +15184,15 @@
       "kills": [
         "symbol blame of a line window in a file whose whole blame is huge stays mapped and returns"
       ]
+    },
+    {
+      "id": "LD1-lockdown-keeps-server-without-test",
+      "file": "src/platform/lockdown.zig",
+      "from": "        if (!namesTest(args.items)) {",
+      "to": "        if (false) {",
+      "kills": [
+        "lockdown gives a project emetgate server without a test flag --detect-test so writes and emetgate_run work"
+      ]
     }
   ]
 }
