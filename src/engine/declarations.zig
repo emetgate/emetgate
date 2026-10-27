@@ -159,27 +159,38 @@ const Collector = struct {
         }
     }
 
+    fn declarator(self: *Collector) []const u8 {
+        const own = self.profile.declarations.variable_declarator;
+        return if (own.len != 0) own else self.profile.declarator;
+    }
+
     fn variables(self: *Collector, statement_node: ts.Node) !void {
         const outer = self.outerOf(statement_node);
+        const declarator_kind = self.declarator();
+        if (std.mem.eql(u8, statement_node.kind(), declarator_kind)) return self.declareVariable(statement_node, outer, 1, statement_node.startByte());
         var declarators: u32 = 0;
         var i: u32 = 0;
         while (statement_node.namedChild(i)) |child| : (i += 1) {
-            if (std.mem.eql(u8, child.kind(), self.profile.declarator)) declarators += 1;
+            if (std.mem.eql(u8, child.kind(), declarator_kind)) declarators += 1;
         }
         i = 0;
         var first_start: ?u32 = null;
         while (statement_node.namedChild(i)) |child| : (i += 1) {
-            if (!std.mem.eql(u8, child.kind(), self.profile.declarator)) continue;
+            if (!std.mem.eql(u8, child.kind(), declarator_kind)) continue;
             if (first_start == null) first_start = child.startByte();
-            const name = child.childByField("name") orelse continue;
-            if (oneOf(name.kind(), self.profile.declarations.destructuring)) continue;
-            if (self.isFunctionValue(child)) continue;
-            if (declarators == 1) {
-                const empty: Span = .{ .start = 0, .end = 0 };
-                try self.add(.variable, child, name, &.{}, false, empty, .{ .start = self.decoratedStart(outer), .end = outer.endByte() });
-            } else {
-                try self.add(.variable, child, name, &.{}, false, .{ .start = outer.startByte(), .end = first_start.? }, .{ .start = child.startByte(), .end = child.endByte() });
-            }
+            try self.declareVariable(child, outer, declarators, first_start.?);
+        }
+    }
+
+    fn declareVariable(self: *Collector, child: ts.Node, outer: ts.Node, declarators: u32, first_start: u32) !void {
+        const name = child.childByField(self.profile.declarations.variable_name_field) orelse return;
+        if (oneOf(name.kind(), self.profile.declarations.destructuring)) return;
+        if (self.isFunctionValue(child)) return;
+        if (declarators == 1) {
+            const empty: Span = .{ .start = 0, .end = 0 };
+            try self.add(.variable, child, name, &.{}, false, empty, .{ .start = self.decoratedStart(outer), .end = outer.endByte() });
+        } else {
+            try self.add(.variable, child, name, &.{}, false, .{ .start = outer.startByte(), .end = first_start }, .{ .start = child.startByte(), .end = child.endByte() });
         }
     }
 };

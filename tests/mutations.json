@@ -2557,8 +2557,8 @@
     {
       "id": "NL4-literal-pair-outside-span-reported",
       "file": "src/engine/checks.zig",
-      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        if (!isKind(node, shape.pair))",
-      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        if (!isKind(node, shape.pair))",
+      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        const fields = literalFields(shape, node)",
+      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        const fields = literalFields(shape, node)",
       "kills": [
         "no_literal reports only pairs inside the span",
         "scope: a no_literal rule scoped to one symbol reports only its literal options"
@@ -2699,8 +2699,8 @@
     {
       "id": "NL14-literal-pair-kind-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (!isKind(node, shape.pair)) continue;",
-      "to": "if (!isKind(node, shape.pair) and false) continue;",
+      "from": "if (isKind(node, shape.pair)) return .{ .key",
+      "to": "if (true) return .{ .key",
       "filter": [
         "no_literal"
       ],
@@ -5506,8 +5506,8 @@
     {
       "id": "KD6-function-values-listed-twice",
       "file": "src/engine/declarations.zig",
-      "from": "            if (self.isFunctionValue(child)) continue;\n            if (declarators == 1) {",
-      "to": "            if (declarators == 1) {",
+      "from": "        if (self.isFunctionValue(child)) return;\n        if (declarators == 1) {",
+      "to": "        if (declarators == 1) {",
       "kills": [
         "declarations: a merged interface and class share a ref and are marked ambiguous, a destructuring and a function value are not declarations"
       ]
@@ -12257,6 +12257,659 @@
       "kills": [
         "an entry left out as too large is read again once the size limit admits it",
         "search text: a file an older index left out as too large is read again once the size limit admits it"
+      ]
+    },
+    {
+      "id": "PY-NL1-unmeasured-literal-shape-reported-clean",
+      "file": "src/engine/checks.zig",
+      "from": "    if (shape.pair.len == 0) return error.QueryNotForLanguage;\n",
+      "to": "",
+      "kills": [
+        "no_literal refuses a language with no literal option shape instead of reporting it clean"
+      ]
+    },
+    {
+      "id": "PY-NL2-keyword-argument-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "    if (shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
+      "to": "    if (false and shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
+      "kills": [
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
+      ]
+    },
+    {
+      "id": "PY-NL3-bare-dict-key-taken-as-option-name",
+      "file": "src/engine/checks.zig",
+      "from": "        if (!fields.bare_key and !isKind(key, shape.quoted_key)) continue;\n",
+      "to": "",
+      "kills": [
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
+      ]
+    },
+    {
+      "id": "PY-NL4-interpolated-key-read-as-plain",
+      "file": "src/engine/checks.zig",
+      "from": "        if (isKind(part, shape.substitution)) return \"\";\n",
+      "to": "",
+      "kills": [
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
+      ]
+    },
+    {
+      "id": "PY-NL5-quoted-key-content-dropped",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .quoted_key_content = \"string_content\",\n",
+      "to": "",
+      "kills": [
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
+      ]
+    },
+    {
+      "id": "PY-NL6-python-bare-pair-key-allowed",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .bare_pair_key = false,\n",
+      "to": "",
+      "kills": [
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
+      ]
+    },
+    {
+      "id": "PY-CAT11-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(print_statement) @violation ((call function: (identifier) @violation) (#eq? @violation \\\"print\\\"))\"",
+      "to": ".check = \"forbid:print\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT12-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(exec_statement) @violation ((call function: (identifier) @violation) (#eq? @violation \\\"exec\\\"))\"",
+      "to": ".check = \"forbid:exec\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT13-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(assert_statement) @violation\"",
+      "to": ".check = \"forbid:assert\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT14-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(except_clause !value) @violation\"",
+      "to": ".check = \"forbid:except:\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT15-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"forbid_import:pickle\"",
+      "to": ".check = \"forbid:pickle\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT16-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \\\"Console\\\") (#eq? @violation \\\"WriteLine\\\"))\"",
+      "to": ".check = \"forbid:Console.WriteLine\"",
+      "kills": [
+        "c# presets flag the named member call and not another type or member of the same name"
+      ]
+    },
+    {
+      "id": "PY-CAT17-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \\\"Debug\\\") (#eq? @violation \\\"WriteLine\\\"))\"",
+      "to": ".check = \"forbid:Debug.WriteLine\"",
+      "kills": [
+        "c# presets flag the named member call and not another type or member of the same name"
+      ]
+    },
+    {
+      "id": "PY-CAT18-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \\\"Thread\\\") (#eq? @violation \\\"Sleep\\\"))\"",
+      "to": ".check = \"forbid:Thread.Sleep\"",
+      "kills": [
+        "c# presets flag the named member call and not another type or member of the same name"
+      ]
+    },
+    {
+      "id": "PY-FI1-python-import-shape-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "        if (m.from_statement) |from_statement| {\n",
+      "to": "        if (@as(?[]const u8, null)) |from_statement| {\n",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-FI2-module-prefix-taken-as-module",
+      "file": "src/engine/checks.zig",
+      "from": "    return dotted.len == module.len or dotted[module.len] == '.';",
+      "to": "    return true;",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-FI3-aliased-import-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "const name = if (isKind(child, m.aliased_import)) child.childByField(m.name_field) orelse continue else child;",
+      "to": "const name = child;",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-FI4-from-import-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "        return importsModule(tree.text(source), module);\n",
+      "to": "        return importsModule(tree.text(source), module) and false;\n",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-SC1-first-position-matches-any",
+      "file": "src/engine/scope.zig",
+      "from": "        .first => if (parent.namedChild(0)) |first| first.eql(node) else false,\n",
+      "to": "        .first => true,\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC2-rest-position-matches-any",
+      "file": "src/engine/scope.zig",
+      "from": "        .rest => if (parent.namedChild(0)) |first| !first.eql(node) else false,\n",
+      "to": "        .rest => true,\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC3-sole-position-matches-any",
+      "file": "src/engine/scope.zig",
+      "from": "        .sole => parent.namedChildCount() == 1,\n",
+      "to": "        .sole => true,\n",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-SC4-site-position-ignored",
+      "file": "src/engine/scope.zig",
+      "from": "        if (!atPosition(parent, node, site.position)) continue;\n",
+      "to": "",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC5-inert-site-taken-as-use",
+      "file": "src/engine/scope.zig",
+      "from": "    if (matchingSite(g.inert_sites, up, node) != null) return true;\n",
+      "to": "",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC6-import-flag-without-import-statement",
+      "file": "src/engine/scope.zig",
+      "from": "        if (oneOf(ancestor.kind(), g.import_statements)) return true;\n",
+      "to": "        return true;\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC7-class-scope-visible-in-methods",
+      "file": "src/engine/scope.zig",
+      "from": "        if (!class_scope or !crossed) {\n",
+      "to": "        {\n",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-SC8-function-scope-never-crossed",
+      "file": "src/engine/scope.zig",
+      "from": "        if (!class_scope and oneOf(ancestor.kind(), g.block_scopes)) crossed = true;\n",
+      "to": "",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-SC9-default-read-inside-function",
+      "file": "src/engine/scope.zig",
+      "from": "        if (!inScopeBody(g, ancestor, from)) continue;\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function",
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-SC10-rebound-name-binds-locally",
+      "file": "src/engine/scope.zig",
+      "from": "            if (!isRebound(rebound, scope_node, name)) {\n                try binders",
+      "to": "            if (true) {\n                try binders",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name"
+      ]
+    },
+    {
+      "id": "PY-SC11-rebound-name-binds-locally-in-pass",
+      "file": "src/engine/scope.zig",
+      "from": "                if (!isRebound(rebound, scope_node, name)) {\n                    const binder",
+      "to": "                if (true) {\n                    const binder",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name",
+        "python rename: a module name is renamed through a global statement"
+      ]
+    },
+    {
+      "id": "PY-RN1-no-rebinding-statements",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .rebinding_statements = &.{ \"global_statement\", \"nonlocal_statement\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name",
+        "python rename: a module name is renamed through a global statement"
+      ]
+    },
+    {
+      "id": "PY-RN2-nonlocal-not-rebinding",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "&.{ \"global_statement\", \"nonlocal_statement\" }",
+      "to": "&.{\"global_statement\"}",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name"
+      ]
+    },
+    {
+      "id": "PY-RN3-function-body-not-scope-body",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"function_definition\", .field = \"body\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN4-lambda-body-not-scope-body",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"lambda\", .field = \"body\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN5-class-body-not-scope-body",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"class_definition\", .field = \"body\" },\n};",
+      "to": "};",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-RN6-lambda-and-comprehensions-not-scopes",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ", \"lambda\", \"list_comprehension\", \"set_comprehension\", \"dictionary_comprehension\", \"generator_expression\" }",
+      "to": " }",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN7-generator-not-scope",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ", \"dictionary_comprehension\", \"generator_expression\" }",
+      "to": ", \"dictionary_comprehension\" }",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN8-no-class-scopes",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .class_scopes = &.{\"class_definition\"},\n",
+      "to": "",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-RN9-walrus-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"named_expression\", .field = \"name\", .scope = .function },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN10-walrus-binds-in-comprehension",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ".{ .parent = \"named_expression\", .field = \"name\", .scope = .function }",
+      "to": ".{ .parent = \"named_expression\", .field = \"name\" }",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN11-as-pattern-target-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"as_pattern_target\", .field = null },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN12-match-capture-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"dotted_name\", .field = null, .grandparent = \"case_pattern\", .position = .sole },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN13-mapping-splat-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"splat_pattern\", .field = null },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN14-unpacking-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"pattern_list\", .field = null, .scope = .pattern },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN15-starred-unpacking-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"list_splat_pattern\", .field = null, .grandparent = \"pattern_list\", .scope = .pattern },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN16-comprehension-target-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"for_in_clause\", .field = \"left\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN17-keyword-pattern-name-read",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"keyword_pattern\", .field = null, .position = .first },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN18-relative-import-module-read",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"dotted_name\", .field = null, .grandparent = \"relative_import\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-RN19-import-binds-module-scope",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"aliased_import\", .field = \"alias\", .namespace = .both },\n",
+      "to": "    .{ .parent = \"aliased_import\", .field = \"alias\", .namespace = .both, .scope = .program },\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-RN20-dotted-import-binds-every-part",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ".grandparent = \"import_statement\", .namespace = .both, .position = .first },",
+      "to": ".grandparent = \"import_statement\", .namespace = .both },",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-DC1-assignment-not-a-variable",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .variable_statements = &.{\"assignment\"},\n",
+      "to": "",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC2-class-assignment-not-a-field",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .fields = &field_declarations,\n",
+      "to": "",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC3-attribute-target-declared",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "\"list_splat_pattern\", \"attribute\", \"subscript\" }",
+      "to": "\"list_splat_pattern\", \"subscript\" }",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC4-unpacking-target-declared",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ".destructuring = &.{ \"pattern_list\", \"tuple_pattern\",",
+      "to": ".destructuring = &.{ \"tuple_pattern\",",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC5-self-declarator-statement-skipped",
+      "file": "src/engine/declarations.zig",
+      "from": "        if (std.mem.eql(u8, statement_node.kind(), declarator_kind)) return self.declareVariable(statement_node, outer, 1, statement_node.startByte());\n",
+      "to": "",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-PF1-lambda-not-a-function",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .{ .node = \"lambda\", .kind = .arrow },\n",
+      "to": "",
+      "kills": [
+        "python profile treats a lambda as a function named by the assignment that holds it"
+      ]
+    },
+    {
+      "id": "PY-PF2-assignment-not-a-binding",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .bindings = &bindings,\n",
+      "to": "    .bindings = &.{},\n",
+      "kills": [
+        "python profile treats a lambda as a function named by the assignment that holds it"
+      ]
+    },
+    {
+      "id": "PY-PF3-decorator-outside-class-read",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    if (!std.mem.eql(u8, owner.kind(), \"block\") or !std.mem.eql(u8, class.kind(), \"class_definition\")) return .{};\n",
+      "to": "",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-PF4-staticmethod-keeps-receiver",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "                traits.receiver = false;\n",
+      "to": "",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only",
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-PF5-classmethod-not-static",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "            .classmethod => traits.is_static = true,\n",
+      "to": "            .classmethod => {},\n",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only",
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-PF6-property-not-getter",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "            .property => traits.accessor = .get,\n",
+      "to": "            .property => {},\n",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-PF7-setter-not-setter",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "            .setter => traits.accessor = .set,\n",
+      "to": "            .setter => {},\n",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-PF8-staticmethod-name-ignored",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "        if (std.mem.eql(u8, name, \"staticmethod\")) return .staticmethod;\n",
+      "to": "",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-FT1-no-test-definitions",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .test_definitions = &test_definitions,\n",
+      "to": "",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT2-conftest-not-a-test-file",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .test_files = &.{\"conftest.py\"},\n",
+      "to": "",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT3-test-file-name-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "    if (oneOf(name, table.test_files)) return true;\n",
+      "to": "",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT4-test-prefix-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "        if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix)) return null;\n",
+      "to": "",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-RC1-no-receiver-parameter",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .receiver_parameter = \"parameters\",\n",
+      "to": "",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-RC2-decorated-method-not-a-member",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .member_wrappers = &.{\"decorated_definition\"},\n",
+      "to": "",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-RC3-staticmethod-parameter-taken-as-receiver",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (!traits.receiver) return null;\n",
+      "to": "",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-RC4-any-parameter-taken-as-receiver",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (first.startByte() != binder) continue;\n",
+      "to": "",
+      "kills": [
+        "python facts: a receiver is only the first parameter of a method directly in the class body"
+      ]
+    },
+    {
+      "id": "PY-RC5-function-anywhere-in-class-is-member",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        return if (body.eql(holder)) class else null;\n",
+      "to": "        return class;\n",
+      "kills": [
+        "python facts: a receiver is only the first parameter of a method directly in the class body"
+      ]
+    },
+    {
+      "id": "PY-RC6-receiver-static-flag-dropped",
+      "file": "src/engine/facts_extract.zig",
+      "from": "\n            is_static = class.is_static;\n",
+      "to": "\n            is_static = false;\n",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
       ]
     }
   ]

@@ -38,6 +38,7 @@ pub fn mentionsCall(source: []const u8, names: []const []const u8) bool {
 
 pub fn isTestPath(table: *const Facts, path: []const u8) bool {
     const name = std.fs.path.basenamePosix(path);
+    if (oneOf(name, table.test_files)) return true;
     for (table.test_file_infixes) |infix| {
         if (std.mem.indexOf(u8, name, infix) != null) return true;
     }
@@ -92,7 +93,8 @@ fn titleOf(arena: Allocator, profile: *const Profile, source: []const u8, node: 
 
 pub fn collect(arena: Allocator, profile: *const Profile, tree: ts.Tree, lines: facts_spine.Lines) ![]const TestBlock {
     const table = profile.facts orelse return &.{};
-    if (table.test_calls.len == 0 or !mentionsCall(lines.bytes, table.test_calls)) return &.{};
+    const calls = table.test_calls.len != 0 and mentionsCall(lines.bytes, table.test_calls);
+    if (!calls and table.test_definitions.len == 0) return &.{};
     var out: std.ArrayList(TestBlock) = .empty;
     var open: std.ArrayList(u32) = .empty;
     var kinds: std.ArrayList([]const u8) = .empty;
@@ -108,7 +110,11 @@ pub fn collect(arena: Allocator, profile: *const Profile, tree: ts.Tree, lines: 
             walker.skipChildren();
             continue;
         }
-        if (!std.mem.eql(u8, kind, profile.call.node)) continue;
+        if (testDefinitionName(table, node, lines.bytes)) |name| {
+            try push(arena, &out, &open, .{ .title = try titleOf(arena, profile, lines.bytes, name), .start = node.startByte(), .end = node.endByte(), .line = lines.lineAt(node.startByte()), .parent = none });
+            continue;
+        }
+        if (!calls or !std.mem.eql(u8, kind, profile.call.node)) continue;
         if (depth != 0 and std.mem.eql(u8, kinds.items[depth - 1], profile.call.node)) {
             if (entry.field) |field| if (std.mem.eql(u8, field, profile.call.function_field)) continue;
         }
@@ -118,14 +124,27 @@ pub fn collect(arena: Allocator, profile: *const Profile, tree: ts.Tree, lines: 
         const arguments = node.childByField(profile.call.arguments_field) orelse continue;
         const first = arguments.namedChild(0) orelse continue;
         const start = node.startByte();
-        const end = node.endByte();
-        while (open.items.len != 0 and out.items[open.items[open.items.len - 1]].end <= start) _ = open.pop();
-        const parent = if (open.items.len == 0) none else open.items[open.items.len - 1];
-        const index: u32 = @intCast(out.items.len);
-        try out.append(arena, .{ .title = try titleOf(arena, profile, lines.bytes, first), .start = start, .end = end, .line = lines.lineAt(start), .parent = parent });
-        try open.append(arena, index);
+        try push(arena, &out, &open, .{ .title = try titleOf(arena, profile, lines.bytes, first), .start = start, .end = node.endByte(), .line = lines.lineAt(start), .parent = none });
     }
     return out.items;
+}
+
+fn push(arena: Allocator, out: *std.ArrayList(TestBlock), open: *std.ArrayList(u32), block: TestBlock) !void {
+    while (open.items.len != 0 and out.items[open.items[open.items.len - 1]].end <= block.start) _ = open.pop();
+    var placed = block;
+    placed.parent = if (open.items.len == 0) none else open.items[open.items.len - 1];
+    try open.append(arena, @intCast(out.items.len));
+    try out.append(arena, placed);
+}
+
+fn testDefinitionName(table: *const Facts, node: ts.Node, source: []const u8) ?ts.Node {
+    for (table.test_definitions) |definition| {
+        if (!std.mem.eql(u8, node.kind(), definition.node)) continue;
+        const name = node.childByField(definition.name_field) orelse return null;
+        if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix)) return null;
+        return name;
+    }
+    return null;
 }
 
 pub fn innermost(blocks: []const TestBlock, offset: u32) ?u32 {

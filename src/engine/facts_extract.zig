@@ -586,6 +586,38 @@ const Extractor = struct {
         return current;
     }
 
+    fn receiverOf(self: *const Extractor, object: ts.Node) ?Enclosing {
+        const at = self.use_at.get(object.startByte()) orelse return null;
+        const binder_index = self.every.uses[at].binder orelse return null;
+        return self.receiverAt(self.every.binders[binder_index].span.start);
+    }
+
+    fn receiverAt(self: *const Extractor, binder: u32) ?Enclosing {
+        const field = self.f.receiver_parameter orelse return null;
+        var i = self.path.items.len;
+        while (i > 0) : (i -= 1) {
+            const node = self.path.items[i - 1].node;
+            const function_kind = self.profile.functionKind(node.kind()) orelse continue;
+            const parameters = node.childByField(field) orelse continue;
+            const first = parameters.namedChild(0) orelse continue;
+            if (first.startByte() != binder) continue;
+            const class = self.classOfMember(node) orelse return null;
+            const def = self.classDef(class) orelse return null;
+            const traits = self.profile.memberTraits(self.profile, self.snapshot.tree, node, function_kind);
+            if (!traits.receiver) return null;
+            return .{ .def = def, .is_static = traits.is_static };
+        }
+        return null;
+    }
+
+    fn classOfMember(self: *const Extractor, function: ts.Node) ?ts.Node {
+        var holder = function.parent() orelse return null;
+        if (oneOf(holder.kind(), self.f.member_wrappers)) holder = holder.parent() orelse return null;
+        const class = holder.parent() orelse return null;
+        const body = class.childByField(self.f.class_body_field) orelse return null;
+        return if (body.eql(holder)) class else null;
+    }
+
     fn memberTarget(self: *Extractor, object: ts.Node) Error!facts.Target {
         const kind = object.kind();
         if (std.mem.eql(u8, kind, self.g.new_expression)) {
@@ -605,6 +637,7 @@ const Extractor = struct {
             const at = self.use_at.get(object.startByte()) orelse return .{ .unresolved = .property_needs_type };
             const binder_index = self.every.uses[at].binder orelse return .{ .unresolved = .global };
             const binder = self.every.binders[binder_index].span.start;
+            if (self.receiverAt(binder)) |class| return .{ .member_of_def = class.def };
             if (self.binding_at.get(binder)) |b| return .{ .member_of_binding = b };
             if (self.typed_at.get(binder)) |t| return .{ .member_of_type = t };
             if (self.def_at_name.get(binder)) |d| return .{ .member_of_def = d };
@@ -638,6 +671,8 @@ const Extractor = struct {
         const object_kind = object.kind();
         if (std.mem.eql(u8, object_kind, self.f.this_keyword) or std.mem.eql(u8, object_kind, self.f.super_keyword)) {
             if (self.enclosingClass()) |class| is_static = class.is_static;
+        } else if (self.receiverOf(object)) |class| {
+            is_static = class.is_static;
         } else switch (target) {
             .member_of_def => |d| is_static = self.defs.items[d].kind == .class,
             else => {},
