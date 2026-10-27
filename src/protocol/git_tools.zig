@@ -448,7 +448,7 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
         try js.objectField("subject");
         try js.write(subject);
         try js.objectField("verification");
-        try js.write(if (isAnnotated(annotated, oid)) "verified" else "unverified");
+        try js.write(if (isAnnotated(annotated, oid)) "receipt" else "no_receipt");
         try js.endObject();
         shown += 1;
         size += line.len + 48;
@@ -456,6 +456,8 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
     try js.endArray();
     try js.objectField("commits_shown");
     try js.write(shown);
+    try js.objectField("verification_note");
+    try js.write("receipt means a receipt note is attached, not that it holds; emetgate verify <commit> checks it");
     if (next_cursor) |c| {
         try js.objectField("next_cursor");
         try js.write(c);

@@ -185,7 +185,7 @@ test "verify --branch: an empty base walks the whole history" {
     try testing.expect(result.links[result.links.len - 1].has_receipt);
 }
 
-test "git log: proof-marks each commit as verified when a receipt note is attached" {
+test "git log: a commit with a receipt note is marked receipt, never verified, even when the note is forged" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
     try case.init();
@@ -194,6 +194,12 @@ test "git log: proof-marks each commit as verified when a receipt note is attach
     const gated_oid = try case.arena().dupe(u8, try case.head());
     try case.handCommit("export function add(a: number, b: number): number {\n  return a - b;\n}\n", "by hand");
     const hand_oid = try case.arena().dupe(u8, try case.head());
+
+    const original = try case.note(gated_oid);
+    const at = std.mem.indexOf(u8, original, "\"after\":\"").? + "\"after\":\"".len;
+    const forged = try case.arena().dupe(u8, original);
+    forged[at] = if (forged[at] == '0') '1' else '0';
+    try case.replaceNote(gated_oid, forged);
 
     var args: std.json.ObjectMap = .empty;
     try args.put(case.arena(), "sub", .{ .string = "log" });
@@ -214,13 +220,15 @@ test "git log: proof-marks each commit as verified when a receipt note is attach
         const mark = c.object.get("verification").?.string;
         if (std.mem.eql(u8, oid, gated_oid)) {
             saw_gated = true;
-            try testing.expectEqualStrings("verified", mark);
+            try testing.expectEqualStrings("receipt", mark);
         } else if (std.mem.eql(u8, oid, hand_oid)) {
             saw_hand = true;
-            try testing.expectEqualStrings("unverified", mark);
+            try testing.expectEqualStrings("no_receipt", mark);
         }
+        try testing.expect(!std.mem.eql(u8, mark, "verified"));
     }
     try testing.expect(saw_gated and saw_hand);
+    try testing.expect(parsed.value.object.get("verification_note") != null);
 }
 
 test "verify --branch: range parsing splits base..head" {

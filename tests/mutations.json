@@ -12267,6 +12267,15 @@
       "kills": [
         "verify --branch: an empty range is not green"
       ]
+    },
+    {
+      "id": "GV2-git-log-calls-a-receipt-note-verified",
+      "file": "src/protocol/git_tools.zig",
+      "from": "(isAnnotated(annotated, oid)) \"receipt\" else",
+      "to": "(isAnnotated(annotated, oid)) \"verified\" else",
+      "kills": [
+        "git log: a commit with a receipt note is marked receipt, never verified, even when the note is forged"
+      ]
     }
   ]
 }
