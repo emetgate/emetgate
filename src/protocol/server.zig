@@ -105,6 +105,7 @@ pub const tool_defs = [_]Tool{
             .{ .name = "hash", .desc = "" },
             .{ .name = "new_name", .desc = "" },
             .{ .name = "interface_change", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "allow_dynamic", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
@@ -545,7 +546,7 @@ fn writeCommitProp(js: *std.json.Stringify) !void {
     try js.endObject();
 }
 
-pub const batch_description = "Gated edits across files: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string} or {file,hash,content} (whole file; hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" removes a symbol, or a file given its file_hash.";
+pub const batch_description = "Gated edits across files: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string,replace_all?} or {file,hash,content} (whole file; hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" removes a symbol, or a file given its file_hash. A file may repeat for old_string and line-range items; they apply in order.";
 
 fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();

@@ -21,6 +21,7 @@ const commit_plan = @import("commit_plan.zig");
 const git_commit = @import("git_commit.zig");
 const commit_store = @import("commit_store.zig");
 const commit_refusal = @import("commit_refusal.zig");
+const baseline = @import("baseline.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -80,6 +81,7 @@ pub const Trace = struct {
     test_ms: ?u64 = null,
     tests: test_outcome.Summary = .{},
     blocked: gate_tree.Report = .{},
+    baseline: baseline.Note = .{},
 };
 
 pub fn noteSummary(trace: ?*Trace, report: sandbox.Report) void {
@@ -317,7 +319,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     try deriveGate(gpa, io, root, location, session, &.{.{ .rel = rel, .content = patched }});
 
     if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
-    return runStages(gpa, io, gate_abs, options.typecheck_command, command, options.limits);
+    return baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = patched }}, .{ .root = root, .gate_dir = gate_abs, .typecheck_command = options.typecheck_command, .test_command = command, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null });
 }
 
 fn linkedPath(path: []const u8, linked: []const []const u8) bool {

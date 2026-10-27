@@ -218,7 +218,7 @@ pub fn textAfter(gpa: Allocator, base: ?[]const u8, expected: symbol.Expected, t
     }
 }
 
-fn regionUnderFileHash(gpa: Allocator, parser: ts.Parser, source: []const u8, selector: docnode.Selector, new_text: []const u8) ![]u8 {
+pub fn regionUnderFileHash(gpa: Allocator, parser: ts.Parser, source: []const u8, selector: docnode.Selector, new_text: []const u8) ![]u8 {
     const range = switch (selector) {
         .line_range => |r| r,
         else => return error.HashMismatch,

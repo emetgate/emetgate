@@ -8,6 +8,7 @@ const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
+const baseline = @import("baseline.zig");
 const rules = @import("rules.zig");
 const commit_plan = @import("commit_plan.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -121,7 +122,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
         };
     }
 
-    const staged = try runner.runStages(gpa, io, runner.gateDir(location, &session), options.typecheck_command, options.test_command, options.limits);
+    const staged = try baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = applied.source }}, .{ .root = root, .gate_dir = runner.gateDir(location, &session), .typecheck_command = options.typecheck_command, .test_command = options.test_command, .limits = options.limits, .note = if (trace) |t| &t.gate.baseline else null });
     switch (staged) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation, .rule_check_failed => unreachable,

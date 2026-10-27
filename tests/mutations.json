@@ -5418,8 +5418,8 @@
     {
       "id": "RN11-dynamic-access-ignored",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (rename.dynamicAccess(snapshot, old, member) != null) return error.DynamicReference;\n",
-      "to": "    _ = member;\n",
+      "from": "    if (sites.count != 0 and !sites.allow) return error.DynamicReference;\n",
+      "to": "\n",
       "kills": [
         "red team rename: a string key, eval or a computed require in a touched file is unresolved dynamic access"
       ]
@@ -14957,6 +14957,78 @@
       "to": "@as(u64, 0)",
       "kills": [
         "without a .mcp.json lockdown serves the running emetgate from its own config"
+      ]
+    },
+    {
+      "id": "BMG1-same-file-items-not-chained",
+      "file": "src/protocol/batch_merge.zig",
+      "from": "        gpa.free(current);\n        current = next;\n    }\n    return .{",
+      "to": "        gpa.free(next);\n    }\n    return .{",
+      "kills": [
+        "two old_string items for one file apply in order against the result of the first"
+      ]
+    },
+    {
+      "id": "BMG2-whole-file-conflict-ignored",
+      "file": "src/protocol/batch_merge.zig",
+      "from": "        return error.ConflictingBatchEdits;\n",
+      "to": "        continue;\n",
+      "kills": [
+        "a whole-file item next to another item for the same file is refused with a fix"
+      ]
+    },
+    {
+      "id": "BMG3-overlapping-ranges-accepted",
+      "file": "src/protocol/batch_merge.zig",
+      "from": "        return error.OverlappingLineRanges;\n",
+      "to": "        continue;\n",
+      "kills": [
+        "overlapping line ranges for one file are refused with both indexes"
+      ]
+    },
+    {
+      "id": "BSL1-new-failure-accepted",
+      "file": "src/platform/baseline.zig",
+      "from": "        if (i == before.keys.len or before.keys[i] != key) return false;\n",
+      "to": "\n",
+      "kills": [
+        "an edit is accepted only when its failures were already failing before it, in the same stage"
+      ]
+    },
+    {
+      "id": "BSL2-other-stage-accepted",
+      "file": "src/platform/baseline.zig",
+      "from": "    if (after.stage == null or after.stage.? != stage) return false;\n",
+      "to": "    _ = stage;\n",
+      "kills": [
+        "an edit is accepted only when its failures were already failing before it, in the same stage"
+      ]
+    },
+    {
+      "id": "BSL3-unrecognized-failure-accepted",
+      "file": "src/platform/baseline.zig",
+      "from": "    if (after.keys.len == 0 or before.keys.len == 0) return false;\n",
+      "to": "\n",
+      "kills": [
+        "an edit is accepted only when its failures were already failing before it, in the same stage"
+      ]
+    },
+    {
+      "id": "BSL4-code-file-skips-gate",
+      "file": "src/platform/baseline.zig",
+      "from": "    for (changes) |change| if (!inert(change.rel)) return false;\n",
+      "to": "\n",
+      "kills": [
+        "non-code files are never test-gated"
+      ]
+    },
+    {
+      "id": "BSL5-failure-key-keeps-digits",
+      "file": "src/protocol/output_digest.zig",
+      "from": "            if (!digits) hasher.update(\"#\");\n            digits = true;\n            continue;\n",
+      "to": "            digits = true;\n",
+      "kills": [
+        "failure keys ignore numbers and summary lines, so the same failures in another run compare equal"
       ]
     }
   ]

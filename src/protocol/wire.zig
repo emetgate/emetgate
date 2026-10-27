@@ -9,6 +9,7 @@ const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
 const runner = @import("../platform/runner.zig");
+const baseline = @import("../platform/baseline.zig");
 const shadow = @import("../platform/shadow.zig");
 const gate_tree = @import("../platform/gate_tree.zig");
 const read_budget = @import("read_budget.zig");
@@ -443,6 +444,7 @@ pub const ShadowNote = struct {
     tree: ?shadow.TreeUse = null,
     tree_only: bool = false,
     tests: test_outcome.Summary = .{},
+    baseline: baseline.Note = .{},
 };
 
 pub fn treeNote(trace: runner.Trace) ?ShadowNote {
@@ -486,6 +488,17 @@ fn writeNote(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void {
 }
 
 fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
+    if (n.baseline.skipped) {
+        try js.objectField("tests");
+        try js.write("not run: only non-code files changed");
+        return;
+    }
+    if (n.baseline.failing) {
+        try js.objectField("baseline_failing");
+        try js.write(true);
+        try js.objectField("baseline");
+        try js.write(n.baseline.text());
+    }
     if (n.tests.len == 0) return;
     try js.objectField("tests");
     try js.write(n.tests.text());
@@ -502,6 +515,7 @@ pub fn shadowNote(root: []const u8, trace: runner.Trace) ShadowNote {
         .skipped_links = trace.skipped_links,
         .tree = trace.tree,
         .tests = trace.tests,
+        .baseline = trace.baseline,
     };
 }
 
@@ -660,6 +674,7 @@ pub const RenameSummary = struct {
     regions_checked: usize,
     symbols_checked: usize,
     files: []const RenamedFile,
+    dynamic_sites: []const u8 = "",
 };
 
 pub fn writeRenameCommitted(writer: *Writer, summary: RenameSummary, note: ?ShadowNote) !void {
@@ -692,6 +707,12 @@ pub fn writeRenameCommitted(writer: *Writer, summary: RenameSummary, note: ?Shad
     try js.objectField("alpha_symbols");
     try js.write(summary.symbols_checked);
     try js.endObject();
+    if (summary.dynamic_sites.len != 0) {
+        try js.objectField("dynamic_sites");
+        try js.write(summary.dynamic_sites);
+        try js.objectField("review");
+        try js.write("these dynamic references were not renamed; update them by hand if they name the symbol");
+    }
     try js.objectField("files");
     try js.beginArray();
     for (summary.files) |file| {
@@ -1168,6 +1189,54 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "WorkspaceBusy", "another gated write is running; retry" },
     .{ "NotAnIdentifier", "new_name must be a plain identifier" },
     .{ "NoClobber", "the target path exists; choose a new path" },
+    .{ "DuplicateBatchFile", "one file is in two items that cannot be combined (a symbol, node, delete or doc item next to another item for it); several old_string/new_string and line-range items for one file are fine, otherwise send one item per file" },
+    .{ "ConflictingBatchEdits", "a whole-file item and another item name the same file; send that file once with its final content" },
+    .{ "OverlappingLineRanges", "two line-range items for one file overlap; merge them into one item" },
+    .{ "OldStringNotFound", "old_string matches 0 times; copy it exactly from emetgate_read_file raw:true" },
+    .{ "OldStringNotUnique", "old_string matches several places; add surrounding lines so it matches once, or pass replace_all:true" },
+    .{ "NoChange", "old_string equals new_string; nothing to change" },
+    .{ "EmptyOldString", "old_string is empty; give the exact text to replace" },
+    .{ "DynamicReference", "the name is also reached dynamically (string key, eval, computed member or computed require); pass allow_dynamic:true to rename the static references and get the dynamic sites back to review" },
+    .{ "RenameUnresolved", "the references could not be resolved with certainty; rename by hand with emetgate_try_batch old_string/new_string items, one per file, with replace_all:true" },
+    .{ "IncompleteRename", "a file outside the rename still uses the old name; rename by hand with emetgate_try_batch old_string/new_string items with replace_all:true, all files in one batch" },
+    .{ "ShorthandReference", "the name is used in an object shorthand; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "DuplicateLocation", "the language service reported one reference twice; retry, or rename by hand with emetgate_try_batch" },
+    .{ "AlphaMismatch", "the rename would change more than the name; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "ResolutionMismatch", "the parser and the language service disagree on the references; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "MergedDeclaration", "the name has merged declarations; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "NameTaken", "new_name is already declared in scope; choose another name" },
+    .{ "InvalidName", "new_name must be a plain identifier different from the old one" },
+    .{ "RenameRefused", "the language service refuses to rename this symbol; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "RenameOutsideRepo", "a reference lives outside the repository; rename by hand inside it with emetgate_try_batch" },
+    .{ "SourceHasErrors", "the file does not parse now; fix it first with emetgate_try_batch old_string/new_string or a whole-file item" },
+    .{ "SkeletonInvalid", "the file does not parse; read it with emetgate_read_file raw:true" },
+    .{ "PlaceholderBody", "body is a placeholder such as ...; send the real code" },
+    .{ "MissingTrailingNewline", "end the content with a newline" },
+    .{ "NotUtf8", "the file is not UTF-8 text; it cannot be edited with these tools" },
+    .{ "BinaryFile", "binary files cannot be read or edited with these tools" },
+    .{ "DocTooLarge", "the file is over the size limit; edit it with old_string/new_string items" },
+    .{ "EmptyPattern", "pass a non-empty pattern" },
+    .{ "IgnoredPath", "the path is git-ignored; write tracked files only" },
+    .{ "InvalidPath", "pass a path relative to the repository root" },
+    .{ "NoNodeEdits", "nodes is empty; send at least one {node, text}" },
+    .{ "TooManyNodeEdits", "too many node edits in one call; split them" },
+    .{ "Conflict", "the file changed on disk during the write; read it again and retry" },
+    .{ "WrittenButUnverified", "the write landed but could not be verified; read the file again before the next edit" },
+    .{ "WorkspaceLockFailed", "another gated write holds the workspace; retry" },
+    .{ "ModelSuppliedTestPolicy", "omit test and typecheck commands; only the user sets them" },
+    .{ "InvalidConfig", ".emetgaterc.json is invalid; the user must fix it" },
+    .{ "UntrustedRepoMemory", "repository rules are used only when the user starts the server with --allow-repo-memory" },
+    .{ "GitCommandFailed", "the git command failed; check the arguments with emetgate_git sub status" },
+    .{ "InvalidCommit", "commit is a ref such as HEAD, HEAD~1 or a hash" },
+    .{ "InvalidCount", "count is a positive integer" },
+    .{ "SameFile", "the target is the source file; pick another target file" },
+    .{ "NotTopLevel", "only top-level declarations can be moved" },
+    .{ "ExportDefault", "a default export cannot be moved; move it by hand with emetgate_try_batch" },
+    .{ "SharedStatement", "the declaration shares a statement with others; split it first, then move" },
+    .{ "MoveNeedsExport", "the moved symbol is used by its old file; export it there or move by hand" },
+    .{ "ImportCycle", "the move would create an import cycle; pick another target file" },
+    .{ "CaseOnlyRename", "a case-only rename is not supported; move to a temporary name first" },
+    .{ "DynamicPathUse", "the file path is built at runtime somewhere; move it by hand and update those sites" },
     .{ "CommitNotEnabled", "omit message: commits are off on this server" },
     .{ "MissingCommitMessage", "pass message" },
 });
@@ -1190,6 +1259,12 @@ pub fn clearFix() void {
 
 pub fn hasFix() bool {
     return fix_len > 0;
+}
+
+pub fn takeFixForTest() []const u8 {
+    const given = fix_buffer[0..fix_len];
+    fix_len = 0;
+    return given;
 }
 
 fn takeFix(name: []const u8) ?[]const u8 {

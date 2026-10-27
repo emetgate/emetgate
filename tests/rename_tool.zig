@@ -37,6 +37,7 @@ pub const Case = struct {
     repo: TsRepo,
     runtime: *Runtime,
     session: tsserver.Session,
+    dynamic: ?*rename_batch.DynamicSites = null,
 
     pub fn init(self: *Case, files: []const fixture.File, stub: bool) !void {
         self.repo = try TsRepo.init(files);
@@ -71,7 +72,7 @@ pub const Case = struct {
         defer testing.allocator.free(file);
         const hash = try support.hashOfRef(testing.allocator, testing.io, self.runtime, file, ref_text);
         return rename_batch.tryRename(testing.allocator, testing.io, self.runtime, .{
-            .request = .{ .file_abs = file, .ref_text = ref_text, .expected_hash = hash, .new_name = new_name, .interface_change = interface_change },
+            .request = .{ .file_abs = file, .ref_text = ref_text, .expected_hash = hash, .new_name = new_name, .interface_change = interface_change, .dynamic = self.dynamic },
             .test_command = test_command,
             .commit_step = step,
             .language_service = &self.session,

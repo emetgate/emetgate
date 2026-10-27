@@ -155,7 +155,15 @@ fn literalArgument(snapshot: *const Snapshot, g: *const Rename, call: ts.Node) b
     return std.mem.eql(u8, first.kind(), g.literal_argument);
 }
 
+pub const Hit = struct { kind: Dynamic, start: u32 };
+
 pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) ?Dynamic {
+    var one: [1]Hit = undefined;
+    return if (dynamicHits(snapshot, name, member, &one) != 0) one[0].kind else null;
+}
+
+pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, out: []Hit) usize {
+    var found: usize = 0;
     const g = grammarOf(snapshot);
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
@@ -169,27 +177,36 @@ pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) 
         }
         if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, g.template_fragment)) {
             walker.skipChildren();
-            if (std.mem.eql(u8, std.mem.trim(u8, text, g.quotes), name)) return .string_key;
+            if (std.mem.eql(u8, std.mem.trim(u8, text, g.quotes), name) and record(out, &found, .string_key, node)) return found;
             continue;
         }
         if (std.mem.eql(u8, kind, snapshot.profile.call.node)) {
             const callee = calleeName(snapshot, node) orelse continue;
-            if (oneOf(callee, g.eval_callees)) return .eval;
-            if (oneOf(callee, g.module_callees) and !literalArgument(snapshot, g, node)) return .computed_module;
+            if (oneOf(callee, g.eval_callees)) {
+                if (record(out, &found, .eval, node)) return found;
+            } else if (oneOf(callee, g.module_callees) and !literalArgument(snapshot, g, node)) {
+                if (record(out, &found, .computed_module, node)) return found;
+            }
             continue;
         }
         if (std.mem.eql(u8, kind, g.new_expression)) {
             const constructor = node.childByField(g.new_constructor_field) orelse continue;
-            if (oneOf(snapshot.source[constructor.startByte()..constructor.endByte()], g.constructor_callees)) return .eval;
+            if (oneOf(snapshot.source[constructor.startByte()..constructor.endByte()], g.constructor_callees) and record(out, &found, .eval, node)) return found;
             continue;
         }
         if (std.mem.eql(u8, kind, g.subscript)) {
             const index = node.childByField(g.subscript_index_field) orelse continue;
             if (oneOf(index.kind(), g.literal_index_kinds)) continue;
-            if (member or oneOf(index.kind(), g.constructed_index_kinds)) return .computed_member;
+            if ((member or oneOf(index.kind(), g.constructed_index_kinds)) and record(out, &found, .computed_member, node)) return found;
         }
     }
-    return null;
+    return found;
+}
+
+fn record(out: []Hit, found: *usize, kind: Dynamic, node: ts.Node) bool {
+    out[found.*] = .{ .kind = kind, .start = node.startByte() };
+    found.* += 1;
+    return found.* == out.len;
 }
 
 fn lessThan(_: void, a: Span, b: Span) bool {
