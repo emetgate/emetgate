@@ -126,6 +126,7 @@ pub const stdio = src.stdio;
 pub const lockdown = src.lockdown;
 pub const lockdown_marks = src.lockdown_marks;
 pub const lockdown_slash = src.lockdown_slash;
+pub const doctor = src.doctor;
 pub const memory = src.memory;
 pub const journal = src.journal;
 pub const where = src.where;
@@ -259,6 +260,7 @@ test {
     _ = @import("tests/lockdown.zig");
     _ = @import("tests/lockdown_marks.zig");
     _ = @import("tests/lockdown_slash.zig");
+    _ = @import("tests/doctor.zig");
     _ = @import("tests/prompt_hook.zig");
     _ = @import("tests/launch_path.zig");
     _ = @import("tests/symbol.zig");

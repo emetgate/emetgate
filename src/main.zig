@@ -14,6 +14,7 @@ const shadow = emetgate.shadow;
 const shadow_root = emetgate.shadow_root;
 const lockdown = emetgate.lockdown;
 const lockdown_slash = emetgate.lockdown_slash;
+const doctor = emetgate.doctor;
 const prompt_hook = emetgate.prompt_hook;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
@@ -47,6 +48,8 @@ const usage =
     \\       emetgate receipts attach [<commit>]
     \\       emetgate commit -m <message> [--shadow-root <dir>]
     \\       emetgate lockdown [--no-marks] [<claude args>...]
+    \\       emetgate doctor   (first run: checks claude, git, the test command and the sandbox; exit 1 if lockdown would not work)
+    \\       emetgate --version | help
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
     \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
     \\       emetgate facts defined_at <name> [--file <path>] [--budget <chars>] [--json]
@@ -196,6 +199,15 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         const options = find_command.parse(args[2..]) orelse exitWithUsage();
         return find_command.run(runtime.gpa, init.io, options, out);
     }
+    if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
+        try out.print("emetgate {s}\n", .{server.server_version});
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
+        try out.writeAll(usage);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "doctor") and args.len == 2) return doctorCmd(init, runtime, out);
     if (std.mem.eql(u8, command, "lockdown")) {
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
         for (args[2..], 0..) |arg, i| passthrough[i] = arg;
@@ -235,8 +247,21 @@ fn extractFlags(init: std.process.Init, args: []const [:0]const u8) Extracted {
     return .{ .json = json, .allow_repo_config = allow_repo_config, .allow_repo_memory = allow_repo_memory, .rest = rest };
 }
 
+fn doctorCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 {
+    const arena = init.arena.allocator();
+    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(init.io, ".", arena);
+    const self_exe = try std.process.executablePathAlloc(init.io, arena);
+    return doctor.run(runtime.gpa, init.io, .{
+        .cwd = cwd,
+        .self_exe = self_exe,
+        .local_app_data = init.environ_map.get(lockdown_slash.local_app_data_variable),
+        .version = server.server_version,
+        .code_page = doctor.consoleCodePage(),
+    }, out);
+}
+
 fn fail(err: anyerror) u8 {
-    std.debug.print("error: {t}\n", .{err});
+    doctor.printError(err);
     return exitCodeFor(err);
 }
 
