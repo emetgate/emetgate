@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const Family = enum { node_install, node_tool, python_install, python_tool, dotnet, cargo, go };
 
-pub const families_hint = "npm|pnpm|yarn|bun install|i|ci|add; npx|pnpx|bunx <tool>; tsc; eslint; pip install; python -m pip|pytest|mypy|ruff|venv|unittest; uv pip|sync|add|venv|lock; pytest; mypy; ruff check; dotnet restore|build|test|new|add|sln|list; cargo build|check|test|fetch|add|clippy|tree|metadata|generate-lockfile; go build|vet|test|mod|get|list";
+pub const families_hint = "npm|pnpm|yarn|bun install|i|ci|add; npx|pnpx|bunx <tool>; tsc; eslint; pip install; python -m pip|pytest|mypy|ruff|venv|unittest; uv pip|sync|add|venv|lock; pytest; mypy; ruff check; dotnet restore|build|test|new|add|sln|list; cargo build|check|test|fetch|add|clippy|tree|metadata|generate-lockfile; go build|vet|test|mod|get|list; any of these --version";
 
 const Rule = struct {
     tools: []const []const u8,
@@ -79,6 +79,7 @@ pub fn classify(command: []const u8) ?Family {
     const first = tokens.next() orelse return null;
     if (std.mem.indexOfAny(u8, first, "\\/:") != null) return null;
     const tool = toolName(first);
+    if (versionProbe(tool, tokens)) |family| return family;
     if (listed(&pythons, tool)) return pythonModule(&tokens);
     if (listed(&node_runners, tool) and hasArg(command, &runner_shell_args)) return null;
     for (rules) |rule| {
@@ -94,6 +95,21 @@ pub fn classify(command: []const u8) ?Family {
         };
         if (listed(subcommands, sub)) return rule.family;
     }
+    return null;
+}
+
+const version_args = [_][]const u8{ "--version", "-v", "-V", "version" };
+
+fn versionProbe(tool: []const u8, after: std.mem.TokenIterator(u8, .any)) ?Family {
+    var rest = after;
+    const arg = rest.next() orelse return null;
+    if (rest.next() != null or !listed(&version_args, arg)) return null;
+    if (listed(&node_managers, tool) or listed(&node_runners, tool) or listed(&node_checkers, tool) or std.ascii.eqlIgnoreCase(tool, "node")) return .node_tool;
+    if (listed(&pythons, tool) and std.mem.eql(u8, arg, "-v")) return null;
+    if (listed(&pythons, tool) or listed(&.{ "pip", "pip3", "uv", "pytest", "mypy", "ruff" }, tool)) return .python_tool;
+    if (std.ascii.eqlIgnoreCase(tool, "dotnet")) return .dotnet;
+    if (std.ascii.eqlIgnoreCase(tool, "cargo")) return .cargo;
+    if (std.ascii.eqlIgnoreCase(tool, "go")) return .go;
     return null;
 }
 
@@ -146,6 +162,10 @@ test "project toolchain commands are classified into their family" {
         .{ "go test ./...", .go },
         .{ "go mod tidy", .go },
         .{ "npm.cmd install", .node_install },
+        .{ "npm --version", .node_tool },
+        .{ "node -v", .node_tool },
+        .{ "python --version", .python_tool },
+        .{ "go version", .go },
     };
     for (cases) |case| {
         errdefer std.debug.print("command: {s}\n", .{case[0]});
@@ -185,6 +205,9 @@ test "git, shells, arbitrary runners, explicit paths and file-rewriting flags ar
         "C:\\tools\\npm.cmd install",
         ".\\npm install",
         "bin/pytest",
+        "git --version",
+        "python -v",
+        "node --version x",
         "",
     }) |command| {
         errdefer std.debug.print("accepted: {s}\n", .{command});
