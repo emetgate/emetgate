@@ -670,8 +670,17 @@ pub fn asksGraph(question: []const u8) bool {
     var words = std.mem.tokenizeAny(u8, question, " \t\r\n,.?!:;()'\"");
     while (words.next()) |word| {
         for (graph_words) |g| {
-            if (word.len >= g.len and std.ascii.eqlIgnoreCase(word[0..g.len], g)) return true;
+            if (word.len >= g.len and std.ascii.eqlIgnoreCase(word[0..g.len], g) and isGraphSuffix(word[g.len..])) return true;
         }
+    }
+    return false;
+}
+
+const graph_suffixes = [_][]const u8{ "", "s", "es", "ed", "ing", "er", "ers", "ee", "ees", "ent", "ents", "ency", "encies", "ence", "ences" };
+
+fn isGraphSuffix(rest: []const u8) bool {
+    for (graph_suffixes) |suffix| {
+        if (std.ascii.eqlIgnoreCase(rest, suffix)) return true;
     }
     return false;
 }
