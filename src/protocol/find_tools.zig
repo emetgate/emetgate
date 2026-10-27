@@ -13,7 +13,7 @@ const ToolResult = tool_result.ToolResult;
 const Index = emet_file.Index;
 const Set = std.StringArrayHashMapUnmanaged(void);
 
-pub const description = "Finds a case-folded literal in all project files: hit and file counts, top 20 files, first 40 hits.";
+pub const description = "Finds a case-folded literal in all project files: counts, top 20 files, first 40 hits.";
 
 pub const waited_note = "waited for the find index build";
 pub const index_suffix = ".emet";

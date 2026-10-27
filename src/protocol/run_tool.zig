@@ -20,7 +20,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Runs an allowlisted command (test command included) in a sandbox copy, or a toolchain install/build/check in the repo: exit code, last 200 lines per stream; no command lists the allowlist.";
+pub const description = "Runs an allowlisted command in a sandbox copy, or a toolchain install/build/check in the repo; no command lists the allowlist.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,

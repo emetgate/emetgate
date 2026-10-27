@@ -63,7 +63,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_skeleton",
-        .description = "Outline of a source file (whole if under 8 KiB): signatures, file_hash and covering rules.",
+        .description = "Outline of a source file (whole if under 8 KiB) with file_hash and covering rules.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
@@ -71,7 +71,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Reads symbol bodies with hashes by symbol, symbols, or line_start+line_end. Bodies over " ++ budget_text ++ " chars fold unless detail:\"full\". nodes:true prefixes node ids (id|code) for emetgate_try.",
+        .description = "Reads symbol bodies with hashes by symbol, symbols or line_start+line_end; over " ++ budget_text ++ " chars folds unless detail:\"full\". nodes:true adds node ids for emetgate_try.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "ref, e.g. Class.method or add", .optional = true },
@@ -85,7 +85,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_try",
-        .description = "Edits code, gated. symbol+hash+body (body is the braced block; hash \"absent\" with a whole declaration adds one), or node+text or nodes:[{node,text}] with ids from emetgate_read_symbol nodes:true (empty text deletes).",
+        .description = "Edits code, gated: symbol+hash+body (the braced block; hash \"absent\" + whole declaration adds one), or node+text / nodes:[{node,text}] (ids from emetgate_read_symbol nodes:true).",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "", .optional = true },
@@ -98,7 +98,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_rename",
-        .description = "Renames a symbol and its references, gated. Another file or an export needs interface_change:true.",
+        .description = "Renames a symbol and its references, gated; other files or exports need interface_change:true.",
         .props = &.{
             .{ .name = "file", .desc = "TS, JS, Python or C# file declaring it" },
             .{ .name = "symbol", .desc = "" },
@@ -109,7 +109,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_move",
-        .description = "Moves a top-level declaration to target_file and rewrites imports, gated. An export needs interface_change:true; module side effects order_change:true.",
+        .description = "Moves a top-level declaration to target_file, rewriting imports, gated. Exports need interface_change:true, side effects order_change:true.",
         .props = &.{
             .{ .name = "file", .desc = "TS or JS file declaring it" },
             .{ .name = "symbol", .desc = "" },
@@ -121,7 +121,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_move_file",
-        .description = "Moves a TS or JS file and rewrites relative imports, gated. A file named in package.json or tsconfig paths needs interface_change:true.",
+        .description = "Moves a TS/JS file, rewriting relative imports, gated; one named in package.json or tsconfig paths needs interface_change:true.",
         .props = &.{
             .{ .name = "from", .desc = "" },
             .{ .name = "to", .desc = "must not exist" },
@@ -131,7 +131,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_mutate",
-        .description = "Previews a symbol body replacement: new source and hash, no write.",
+        .description = "Previews a symbol body replacement without writing.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "" },
@@ -141,7 +141,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Reads a file: .json key tree with hashes or a value by pointer; .md headings or a section by heading; else up to 16 KiB or line_start..line_end; source over 8 KiB as an outline.",
+        .description = "Reads a file: .json key tree or value by pointer; .md headings or section by heading; else up to 16 KiB or line_start..line_end.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "raw", .desc = "", .optional = true, .ty = "boolean" },
@@ -154,12 +154,12 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_list",
-        .description = "Lists tracked files under dir (default root), at most 2000.",
+        .description = "Lists up to 2000 tracked files under dir.",
         .props = &.{.{ .name = "dir", .desc = "", .optional = true }},
     },
     .{
         .name = "emetgate_search",
-        .description = "Finds a case-sensitive literal (or regex:true) in tracked text files under dir. Reply: path, then line:text per hit, * marks a definition, |N is a legend for repeated text. Ends \u{2713} when complete, else partial with next offset. detail:\"full\" allows 200 hits.",
+        .description = "Finds a case-sensitive literal (or regex:true) in tracked text under dir: path, then line:text per hit (* definition, |N legend). Ends \u{2713} if complete, else next offset; detail:\"full\" allows 200.",
         .props = &.{
             .{ .name = "pattern", .desc = "" },
             .{ .name = "dir", .desc = "", .optional = true },
@@ -176,7 +176,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_scan",
-        .description = "Lists violations of one check expression in tracked files, at most 100.",
+        .description = "Lists up to 100 violations of one check in tracked files.",
         .props = &.{
             .{ .name = "check", .desc = "e.g. forbid:networkidle" },
             .{ .name = "where", .desc = "file, dir/ or file#symbol", .optional = true },
@@ -184,12 +184,12 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_commit",
-        .description = "Commits pending gated changes as one commit, receipts as its note; refused if a file changed outside the gate.",
+        .description = "Commits pending gated changes; refused if a file changed outside the gate.",
         .props = &.{.{ .name = "message", .desc = "" }},
     },
     .{
         .name = "emetgate_git",
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff. log: a line per commit, receipt = note attached, unverified until emetgate verify <commit>; next_cursor pages. blame: per symbol or line range.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes a symbol or line range.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show or blame" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
@@ -228,7 +228,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_write_doc",
-        .description = "Replaces a JSON value, Markdown section or line range by pointer, heading or line_start+line_end, gated.",
+        .description = "Replaces a JSON value, Markdown section or line range, gated.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "hash", .desc = "from emetgate_read_file" },
@@ -545,7 +545,7 @@ fn writeCommitProp(js: *std.json.Stringify) !void {
     try js.endObject();
 }
 
-pub const batch_description = "One gated unit over several files: {file,symbol,hash,body}, {file,node,text} or {file,nodes}; {file,hash:\"absent\",content} creates a file; op:\"delete\" with symbol+hash removes a symbol, with only hash:file_hash the file; kind:\"doc\" takes {file,hash,content} plus pointer, heading or line_start+line_end.";
+pub const batch_description = "Gated edits across files: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string} or {file,hash,content} (whole file; hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" removes a symbol, or a file given its file_hash.";
 
 fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();
