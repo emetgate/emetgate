@@ -9,7 +9,7 @@ const allowed = "mcp__emetgate__emetgate_search mcp__emetgate__emetgate_read_fil
 test "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args" {
     const argv = try lockdown.buildArgv(testing.allocator, "C:\\repo\\.mcp.json", allowed, &.{ "-p", "fix the bug" });
     defer testing.allocator.free(argv);
-    const expected = [_][]const u8{ "claude", "--tools", "", "--allowedTools", allowed, "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "-p", "fix the bug" };
+    const expected = [_][]const u8{ "claude", "--setting-sources", "project", "--tools", "", "--allowedTools", allowed, "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "-p", "fix the bug" };
     try testing.expectEqual(expected.len, argv.len);
     for (expected, argv) |want, got| try testing.expectEqualStrings(want, got);
 }
@@ -29,6 +29,7 @@ test "a passthrough arg that would override the lock is refused in both spelling
         "--mcp-config",
         "--strict-mcp-config",
         "--settings",
+        "--setting-sources",
         "--plugin-dir",
         "--agents",
         "--dangerously-skip-permissions",
@@ -66,6 +67,8 @@ fn parseLikeClaude(argv: []const []const u8) !Parsed {
         const list: ?*std.ArrayList([]const u8) = if (std.mem.eql(u8, arg, "--tools")) &parsed.tools else if (std.mem.eql(u8, arg, "--allowedTools")) &parsed.allowed else if (std.mem.eql(u8, arg, "--mcp-config")) &parsed.configs else null;
         if (list) |values| {
             while (i + 1 < argv.len and !std.mem.startsWith(u8, argv[i + 1], "-")) : (i += 1) try values.append(testing.allocator, argv[i + 1]);
+        } else if (std.mem.eql(u8, arg, lockdown.setting_sources_flag)) {
+            i += 1;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             try parsed.positional.append(testing.allocator, arg);
         }
@@ -131,7 +134,7 @@ test "without a .mcp.json lockdown serves the running emetgate from its own conf
     defer gpa.free(state);
     const exe = "C:\\tools\\emetgate.exe";
 
-    const own = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe);
+    const own = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe, null);
     defer gpa.free(own);
     try testing.expect(std.mem.startsWith(u8, own, state));
     const config = try std.Io.Dir.cwd().readFileAlloc(testing.io, own, gpa, .limited(lockdown.max_mcp_config_bytes));
@@ -143,7 +146,7 @@ test "without a .mcp.json lockdown serves the running emetgate from its own conf
     try testing.expectError(error.McpConfigMissing, lockdown.resolveMcpConfig(gpa, testing.io, project));
 
     try project.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = emetgate_config });
-    const found = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe);
+    const found = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, exe, null);
     defer gpa.free(found);
     try testing.expect(std.mem.endsWith(u8, found, ".mcp.json"));
     try testing.expect(!std.mem.startsWith(u8, found, state));
@@ -301,4 +304,68 @@ test "the bypassPermissions refusal does not depend on letter case" {
         defer testing.allocator.free(joined);
         try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{joined}));
     }
+}
+
+test "lockdown --test takes the next argument or the joined value and leaves the rest to claude" {
+    const split = try lockdown.chooseTest(&.{ "--test", "npm test", "-p", "hi" });
+    try testing.expectEqualStrings("npm test", split.command.?);
+    try testing.expectEqual(@as(usize, 2), split.rest.len);
+    try testing.expectEqualStrings("-p", split.rest[0]);
+    const joined = try lockdown.chooseTest(&.{ "--test=cargo test", "hi" });
+    try testing.expectEqualStrings("cargo test", joined.command.?);
+    try testing.expectEqual(@as(usize, 1), joined.rest.len);
+    const none = try lockdown.chooseTest(&.{ "-p", "--test" });
+    try testing.expect(none.command == null);
+    try testing.expectEqual(@as(usize, 2), none.rest.len);
+    try testing.expectError(error.LockdownTestCommandMissing, lockdown.chooseTest(&.{"--test"}));
+    try testing.expectError(error.LockdownTestCommandMissing, lockdown.chooseTest(&.{ "--test", " " }));
+    try testing.expectError(error.LockdownTestCommandMissing, lockdown.chooseTest(&.{"--test="}));
+}
+
+test "lockdown's own config hands the server --test with a given command and --detect-test without one" {
+    const gpa = testing.allocator;
+    const given = try lockdown.ownMcpConfigJson(gpa, "C:\\e.exe", "npm test");
+    defer gpa.free(given);
+    try testing.expect(std.mem.indexOf(u8, given, "\"args\":[\"mcp\",\"--test\",\"npm test\"]") != null);
+    const detect = try lockdown.ownMcpConfigJson(gpa, "C:\\e.exe", null);
+    defer gpa.free(detect);
+    try testing.expect(std.mem.indexOf(u8, detect, "\"args\":[\"mcp\",\"--detect-test\"]") != null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{lockdown.detect_flag}).?.detect_test);
+}
+
+test "lockdown --test with the project's own .mcp.json is refused, since that config sets the server's arguments" {
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "project");
+    try tmp.dir.createDirPath(testing.io, "state");
+    var project = try tmp.dir.openDir(testing.io, "project", .{});
+    defer project.close(testing.io);
+    const state = try tmp.dir.realPathFileAlloc(testing.io, "state", gpa);
+    defer gpa.free(state);
+    const own = try lockdown.chooseMcpConfig(gpa, testing.io, project, state, "C:\\e.exe", "npm test");
+    defer gpa.free(own);
+    const config = try std.Io.Dir.cwd().readFileAlloc(testing.io, own, gpa, .limited(lockdown.max_mcp_config_bytes));
+    defer gpa.free(config);
+    try testing.expect(std.mem.indexOf(u8, config, "\"--test\",\"npm test\"") != null);
+    try project.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = emetgate_config });
+    try testing.expectError(error.LockdownTestWithMcpConfig, lockdown.chooseMcpConfig(gpa, testing.io, project, state, "C:\\e.exe", "npm test"));
+}
+
+test "lockdown makes a folder outside any repository a git repository once, and leaves a repository alone" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "empty");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(top);
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, "empty", gpa);
+    defer gpa.free(dir);
+    var env = try testing.environ.createMap(gpa);
+    defer env.deinit();
+    try env.put("GIT_CEILING_DIRECTORIES", top);
+    try testing.expect(try lockdown.ensureRepo(gpa, testing.io, dir, &env));
+    try tmp.dir.access(testing.io, "empty/.git/HEAD", .{});
+    try testing.expect(!try lockdown.ensureRepo(gpa, testing.io, dir, &env));
 }

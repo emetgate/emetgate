@@ -14,6 +14,9 @@ const read_budget = @import("read_budget.zig");
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
 
+pub const written_status = "written";
+pub const committed_status = "committed";
+
 pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: symbol.Table) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -441,7 +444,7 @@ pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expecte
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("symbol");
     try js.write(sym);
     if (full) {
@@ -498,7 +501,7 @@ pub fn writeNodesCommitted(writer: *Writer, file: []const u8, applied: node_cas.
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("file");
     try js.write(file);
     try writeNodeFields(&js, applied);
@@ -511,7 +514,7 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("edits");
     try js.beginArray();
     for (edits) |edit| {
@@ -573,7 +576,7 @@ pub fn writeRenameCommitted(writer: *Writer, summary: RenameSummary, note: ?Shad
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("class");
     try js.write("symmetry");
     try js.objectField("symbol");
@@ -654,7 +657,7 @@ pub fn writeFileMoveCommitted(writer: *Writer, summary: FileMoveSummary, note: ?
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("class");
     try js.write("symmetry");
     try js.objectField("from");
@@ -699,7 +702,7 @@ pub fn writeMoveCommitted(writer: *Writer, summary: MoveSummary, note: ?ShadowNo
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("class");
     try js.write(summary.class);
     try js.objectField("symbol");
@@ -1158,8 +1161,21 @@ pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
     try js.write(name);
     try js.objectField("exit_code");
     try js.write(exit_code);
+    if (setupFix(name)) |fix| {
+        try js.objectField("fix");
+        try js.write(fix);
+    }
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+pub const no_test_command_fix = "the server has no test command: the user restarts it with emetgate mcp --test \"<command>\" or --detect-test, or emetgate lockdown --test \"<command>\"; emetgate lockdown without --test detects one per write";
+pub const not_in_repo_fix = "the file is not inside a git repository: the user runs git init in the project folder (emetgate lockdown does this itself) and the call is retried";
+
+pub fn setupFix(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "NoTestCommand")) return no_test_command_fix;
+    if (std.mem.eql(u8, name, "NotInRepo")) return not_in_repo_fix;
+    return null;
 }
 
 const testing = std.testing;
@@ -1250,7 +1266,7 @@ test "committed payload names the symbol and both hashes" {
     try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), null, true);
 
     try testing.expectEqualStrings(
-        "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
+        "{\"status\":\"written\",\"symbol\":\"validateOrder\"," ++
             "\"old_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("a")) ++ "\"," ++
             "\"new_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("b")) ++ "\"}\n",
         buffer.written(),
@@ -1264,7 +1280,7 @@ test "compact committed payload drops the old hash and the shadow note" {
     try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), note, false);
 
     try testing.expectEqualStrings(
-        "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
+        "{\"status\":\"written\",\"symbol\":\"validateOrder\"," ++
             "\"new_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("b")) ++ "\"}\n",
         buffer.written(),
     );

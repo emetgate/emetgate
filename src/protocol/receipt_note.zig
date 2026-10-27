@@ -2,6 +2,7 @@ const std = @import("std");
 const receipts = @import("../platform/receipts.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const commit_refusal = @import("../platform/commit_refusal.zig");
+const wire = @import("wire.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -41,6 +42,23 @@ pub fn insert(gpa: Allocator, w: *Writer, field: []const u8) !void {
     try allocating.writer.writeAll(tail);
 }
 
+pub fn restated(gpa: Allocator, text: []const u8, to: []const u8, extra: []const u8) !?[]u8 {
+    const open = "{\"status\":\"";
+    if (!std.mem.startsWith(u8, text, open)) return null;
+    const end = std.mem.indexOfScalarPos(u8, text, open.len, '"') orelse return null;
+    const status = text[open.len..end];
+    if (!std.mem.eql(u8, status, wire.written_status) and !std.mem.eql(u8, status, wire.committed_status)) return null;
+    return try std.fmt.allocPrint(gpa, "{s}{s}\"{s}{s}", .{ open, to, extra, text[end + 1 ..] });
+}
+
+fn promote(gpa: Allocator, w: *Writer) !void {
+    const allocating: *std.Io.Writer.Allocating = @fieldParentPtr("writer", w);
+    const text = (try restated(gpa, allocating.written(), wire.committed_status, "")) orelse return;
+    defer gpa.free(text);
+    allocating.shrinkRetainingCapacity(0);
+    try allocating.writer.writeAll(text);
+}
+
 pub fn withRecovered(gpa: Allocator, text: []const u8, found: commit_plan.Found) ![]u8 {
     var field: std.Io.Writer.Allocating = .init(gpa);
     defer field.deinit();
@@ -75,6 +93,7 @@ pub fn withPaths(gpa: Allocator, text: []const u8, named: commit_refusal.Named) 
 pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, request: ?commit_plan.Request, w: *Writer) !void {
     const made = request orelse return;
     const oid = made.oid orelse return;
+    try promote(gpa, w);
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     try buffer.writer.print(",\"commit\":\"{s}\"", .{oid});

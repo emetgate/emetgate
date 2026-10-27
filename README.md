@@ -139,11 +139,31 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 ## Install
 
+New here? Follow [docs/QUICKSTART.md](docs/QUICKSTART.md): install, run `emetgate doctor`, then `emetgate lockdown`.
+
+Download the Windows binary from the [latest release](https://github.com/emetgate/emetgate/releases/latest) and put its folder on your `PATH` (PowerShell; open a new terminal afterwards):
+
 ```
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` starts the agent with only the emetgate tools, fail-closed.
+Then, in the project folder:
+
+```
+emetgate lockdown --test "npm test"
+```
+
+Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` starts the agent with only the emetgate tools, fail-closed. Leave `--test` out and the test command is detected on every write (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, a `.sln` or `.csproj`). In an empty folder lockdown runs `git init`, and writes land as `unverified_no_tests` until the project has a test command.
+
+Lockdown reads only the project's own `.mcp.json`, never a server registered at user scope. To use emetgate as a server next to the other tools, or to give lockdown your own server arguments, register it for the project:
+
+```
+claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+```
+
+With that `.mcp.json` in place, lockdown takes the test command from it, and `emetgate lockdown --test` is refused.
 
 ## Dig deeper
 

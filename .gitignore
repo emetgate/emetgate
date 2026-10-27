@@ -1,7 +1,8 @@
 .zig-cache/
 zig-out/
 .emetgate/
-docs/
+docs/*
+!docs/QUICKSTART.md
 .mcp.json
 tests/bench/master/node_modules/
 tests/bench/work/

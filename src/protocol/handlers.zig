@@ -29,6 +29,7 @@ const disk = @import("../platform/disk.zig");
 const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
+const test_command_mod = @import("../platform/test_command.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const repo = @import("../platform/repo.zig");
 const rules = @import("../platform/rules.zig");
@@ -51,10 +52,19 @@ const success = tool_result.success;
 const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
+pub const unverified_note = ",\"tests\":\"none: the project has no test command yet (package.json scripts.test, build.zig, Cargo.toml, go.mod, pyproject.toml, pytest.ini, a .sln or .csproj), so this write ran no test; once one exists every write must pass it\"";
+
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     _ = commit_plan.takeFound();
     _ = commit_refusal.take();
+    _ = test_command_mod.takeUnverified();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
+    if (test_command_mod.takeUnverified()) {
+        if (try receipt_note.restated(gpa, result.text, test_command_mod.unverified_status, unverified_note)) |text| {
+            gpa.free(result.text);
+            result.text = text;
+        }
+    }
     if (commit_refusal.take()) |named| {
         errdefer gpa.free(result.text);
         const text = try receipt_note.withPaths(gpa, result.text, named);

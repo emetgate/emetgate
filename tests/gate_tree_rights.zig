@@ -215,11 +215,11 @@ test "gate tree rights: a doc write and a batch are committed in a repository th
     policy.test_command = "cmd /c exit 0";
     const doc = try writeDoc(policy, repo.root_abs);
     defer gpa.free(doc);
-    try expectHas(doc, "\"status\":\"committed\"");
+    try expectHas(doc, "\"status\":\"written\"");
     try expectFile(&repo, "repo/notes.txt", "line one\nline 2\n");
     const batch = try tryBatch(policy, repo.root_abs);
     defer gpa.free(batch);
-    try expectHas(batch, "\"status\":\"committed\"");
+    try expectHas(batch, "\"status\":\"written\"");
     try expectFile(&repo, "repo/calc.ts", "export function two(): number {\n  return 1 + 1;\n}\n");
     const last = try run(policy);
     defer gpa.free(last);

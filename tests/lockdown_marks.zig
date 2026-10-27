@@ -131,7 +131,7 @@ test "lockdown marks: the plugin flag comes after the lock and the user's argume
     defer testing.allocator.free(locked);
     const argv = try lockdown_marks.extend(testing.allocator, locked, 2, "C:\\state\\k\\marks");
     defer testing.allocator.free(argv);
-    const expected = [_][]const u8{ "claude", "--tools", "", "--allowedTools", "mcp__emetgate__emetgate_search", "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "--plugin-dir", "C:\\state\\k\\marks", "-p", "hello" };
+    const expected = [_][]const u8{ "claude", "--setting-sources", "project", "--tools", "", "--allowedTools", "mcp__emetgate__emetgate_search", "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "--plugin-dir", "C:\\state\\k\\marks", "-p", "hello" };
     try testing.expectEqual(expected.len, argv.len);
     for (expected, argv) |want, got| try testing.expectEqualStrings(want, got);
 }

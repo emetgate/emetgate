@@ -284,7 +284,7 @@ test "redteam batch delete: an unreferenced file is deleted through the tool and
     const response = try call(&repo, &.{.{ .file = file, .hash = &current }});
     defer testing.allocator.free(response);
     errdefer std.debug.print("response: {s}\n", .{response});
-    try testing.expect(std.mem.indexOf(u8, response, "committed") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "written") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"deleted\\\":true") != null);
     try testing.expect(!repo.exists("repo/src/spare.ts"));
 }

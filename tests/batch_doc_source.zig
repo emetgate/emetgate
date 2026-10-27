@@ -41,7 +41,7 @@ const Reply = struct {
     fn expectCommitted(self: *Reply) !void {
         errdefer std.debug.print("reply: {s}\n", .{self.text});
         try testing.expect(!self.is_error);
-        try testing.expect(std.mem.indexOf(u8, self.text, "\"status\":\"committed\"") != null);
+        try testing.expect(std.mem.indexOf(u8, self.text, "\"status\":\"written\"") != null);
     }
 };
 

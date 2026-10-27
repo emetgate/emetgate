@@ -208,7 +208,7 @@ test "redteam batch create: a new file in a batch is committed with a symmetry c
     const response = try call(&repo, &.{.{ .file = file }});
     defer testing.allocator.free(response);
     errdefer std.debug.print("response: {s}\n", .{response});
-    try testing.expect(std.mem.indexOf(u8, response, "committed") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "written") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"class\\\":\\\"symmetry\\\"") != null);
     try testing.expect(repo.exists("repo/src/fresh.ts"));
 }

@@ -892,7 +892,7 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
     const committed = try respondWith(runtime, line, .{ .allow_repo_config = true, .root = repo.root_abs });
     defer testing.allocator.free(committed);
     errdefer std.debug.print("response={s}\n", .{committed});
-    try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"committed\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"written\\\"") != null);
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);
     try testing.expectEqualStrings(edited_source, on_disk);
@@ -1023,7 +1023,7 @@ test "purple: hash absent on a missing file creates it through emetgate_try, and
     const created = try respondWith(runtime, try_line, policy);
     defer testing.allocator.free(created);
     errdefer std.debug.print("try: {s}\n", .{created});
-    try testing.expect(std.mem.indexOf(u8, created, "\\\"status\\\":\\\"committed\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, created, "\\\"status\\\":\\\"written\\\"") != null);
     const on_disk = try repo.tmp.dir.readFileAlloc(testing.io, "repo/src/mul.ts", testing.allocator, .unlimited);
     defer testing.allocator.free(on_disk);
     try testing.expectEqualStrings("export function mul(a: number, b: number): number { return a * b; }\n", on_disk);

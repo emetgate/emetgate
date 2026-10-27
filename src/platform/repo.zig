@@ -410,6 +410,21 @@ pub fn relativeUnder(gpa: Allocator, root: []const u8, file_abs: []const u8) ![]
     return gpa.dupe(u8, normalized[root.len + 1 ..]);
 }
 
+pub fn existingAncestor(io: std.Io, path_abs: []const u8) ?[]const u8 {
+    var dir: []const u8 = std.fs.path.dirname(path_abs) orelse return null;
+    while (true) {
+        std.Io.Dir.cwd().access(io, dir, .{}) catch {
+            dir = std.fs.path.dirname(dir) orelse return null;
+            continue;
+        };
+        return dir;
+    }
+}
+
+pub fn toplevelOf(gpa: Allocator, io: std.Io, file_abs: []const u8) ![]u8 {
+    return gitToplevel(gpa, io, existingAncestor(io, file_abs) orelse return error.InvalidPath);
+}
+
 pub fn gitToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8) ![]u8 {
     const git = try exe_path.git(gpa, dir_abs);
     defer gpa.free(git);
