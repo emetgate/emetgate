@@ -76,6 +76,8 @@ pub const BinderSite = struct {
     unless: ?[]const u8 = null,
     namespace: Namespace = .value,
     scope: ScopeRule = .block,
+    parent_field: ?[]const u8 = null,
+    grandparent: ?[]const u8 = null,
 };
 
 pub const ExternalSite = struct {
@@ -111,6 +113,7 @@ pub const Rename = struct {
     literal_argument: []const u8,
     template_fragment: []const u8,
     quotes: []const u8,
+    property_sites: []const FieldSite = &.{},
 };
 
 pub const Modules = struct {
@@ -129,6 +132,11 @@ pub const Modules = struct {
     type_keywords: []const []const u8,
     default_keyword: []const u8,
     star_token: []const u8,
+    from_statement: ?[]const u8 = null,
+    module_name_field: []const u8 = "",
+    aliased_import: []const u8 = "",
+    wildcard_import: []const u8 = "",
+    dotted_name: []const u8 = "",
 };
 
 pub const DeclarationKind = enum { class, variable, interface, type_alias, enumeration, field, enum_member };

@@ -1,5 +1,7 @@
 const ts = @import("../../tree_sitter.zig");
 const profile_mod = @import("../profile.zig");
+const python_rename = @import("rename.zig");
+const python_facts = @import("facts.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -73,6 +75,10 @@ pub const profile: Profile = .{
     .literal_values = never_matching_literal_values,
     .memberTraits = memberTraits,
     .visibility_keywords = &.{},
+    .rename = &python_rename.grammar,
+    .modules = &python_rename.modules,
+    .declarations = python_rename.declarations,
+    .facts = &python_facts.python,
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {

@@ -1,0 +1,93 @@
+const profile_mod = @import("../profile.zig");
+
+const Rename = profile_mod.Rename;
+const Modules = profile_mod.Modules;
+const BinderSite = profile_mod.BinderSite;
+const FieldSite = profile_mod.FieldSite;
+const Declarations = profile_mod.Declarations;
+const DeclarationShape = profile_mod.DeclarationShape;
+
+const binder_sites = [_]BinderSite{
+    .{ .parent = "function_definition", .field = "name" },
+    .{ .parent = "class_definition", .field = "name", .namespace = .both },
+    .{ .parent = "parameters", .field = null, .scope = .function },
+    .{ .parent = "lambda_parameters", .field = null, .scope = .function },
+    .{ .parent = "default_parameter", .field = "name", .scope = .function },
+    .{ .parent = "typed_parameter", .field = null, .scope = .function },
+    .{ .parent = "typed_default_parameter", .field = "name", .scope = .function },
+    .{ .parent = "list_splat_pattern", .field = null, .scope = .function },
+    .{ .parent = "dictionary_splat_pattern", .field = null, .scope = .function },
+    .{ .parent = "assignment", .field = "left" },
+    .{ .parent = "for_statement", .field = "left" },
+    .{ .parent = "aliased_import", .field = "alias", .namespace = .both, .scope = .program },
+    .{ .parent = "dotted_name", .field = null, .parent_field = "name", .grandparent = "import_from_statement", .namespace = .both, .scope = .program },
+    .{ .parent = "dotted_name", .field = null, .parent_field = "name", .grandparent = "import_statement", .namespace = .both, .scope = .program },
+};
+
+const property_sites = [_]FieldSite{
+    .{ .parent = "attribute", .field = "attribute" },
+    .{ .parent = "keyword_argument", .field = "name" },
+};
+
+pub const modules: Modules = .{
+    .import_statement = "import_statement",
+    .export_statement = "",
+    .source_field = "",
+    .declaration_field = "",
+    .import_clause = "",
+    .named_imports = "",
+    .import_specifier = "",
+    .namespace_import = "",
+    .export_clause = "",
+    .export_specifier = "",
+    .name_field = "name",
+    .alias_field = "alias",
+    .type_keywords = &.{},
+    .default_keyword = "default",
+    .star_token = "*",
+    .from_statement = "import_from_statement",
+    .module_name_field = "module_name",
+    .aliased_import = "aliased_import",
+    .wildcard_import = "wildcard_import",
+    .dotted_name = "dotted_name",
+};
+
+pub const grammar: Rename = .{
+    .external_sites = &.{},
+    .name_kinds = &.{"identifier"},
+    .free_kinds = &.{"identifier"},
+    .type_kinds = &.{},
+    .property_kinds = &.{},
+    .shorthand_kinds = &.{},
+    .export_specifiers = &.{},
+    .import_statements = &.{ "import_statement", "import_from_statement" },
+    .import_binders = &.{ "aliased_import", "dotted_name" },
+    .export_scope_stops = &.{},
+    .binder_sites = &binder_sites,
+    .block_scopes = &.{ "module", "function_definition", "class_definition" },
+    .function_scoped_statements = &.{},
+    .subscript = "subscript",
+    .subscript_index_field = "subscript",
+    .literal_index_kinds = &.{ "string", "integer", "float" },
+    .constructed_index_kinds = &.{ "binary_operator", "call", "parenthesized_expression", "conditional_expression" },
+    .eval_callees = &.{ "eval", "exec" },
+    .module_callees = &.{"__import__"},
+    .new_expression = "",
+    .new_constructor_field = "",
+    .constructor_callees = &.{},
+    .literal_argument = "string",
+    .template_fragment = "",
+    .quotes = "\"'",
+    .property_sites = &property_sites,
+};
+
+const type_declarations = [_]DeclarationShape{
+    .{ .node = "class_definition", .kind = .class, .name_field = "name" },
+};
+
+pub const declarations: Declarations = .{
+    .types = &type_declarations,
+    .variable_statements = &.{},
+    .value_field = "right",
+    .fields = &.{},
+};

@@ -82,6 +82,30 @@ pub fn resolveJoined(gpa: Allocator, lookup: anytype, joined: []const u8, separa
     return null;
 }
 
+pub const python_extensions = [_][]const u8{ ".py", ".pyi" };
+
+pub fn isPythonPath(path: []const u8) bool {
+    for (python_extensions) |ext| {
+        if (std.ascii.endsWithIgnoreCase(path, ext)) return true;
+    }
+    return false;
+}
+
+pub fn resolveJoinedPython(gpa: Allocator, lookup: anytype, joined: []const u8, separator: u8) !?[]u8 {
+    if (lookup.has(joined)) return try gpa.dupe(u8, joined);
+    for (python_extensions) |ext| {
+        const candidate = try std.fmt.allocPrint(gpa, "{s}{s}", .{ joined, ext });
+        if (lookup.has(candidate)) return candidate;
+        gpa.free(candidate);
+    }
+    for (python_extensions) |ext| {
+        const candidate = try std.fmt.allocPrint(gpa, "{s}{c}__init__{s}", .{ joined, separator, ext });
+        if (lookup.has(candidate)) return candidate;
+        gpa.free(candidate);
+    }
+    return null;
+}
+
 pub fn relativeSpec(gpa: Allocator, from_abs: []const u8, to_abs: []const u8, extension: ?[]const u8) ![]u8 {
     const from_dir = std.fs.path.dirname(from_abs) orelse return error.InvalidPath;
     const rel = try std.fs.path.relative(gpa, from_dir, null, from_dir, to_abs);

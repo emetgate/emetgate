@@ -79,11 +79,12 @@ pub fn leavesNamed(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
         const span: Span = .{ .start = node.startByte(), .end = node.endByte() };
         if (!std.mem.eql(u8, snapshot.source[span.start..span.end], name)) continue;
         const site = scope.siteOf(g, node);
+        const property = scope.isProperty(g, node);
         try out.append(gpa, .{
             .span = span,
             .shorthand = oneOf(kind, g.shorthand_kinds),
             .binder = site != null,
-            .free = oneOf(kind, g.free_kinds),
+            .free = oneOf(kind, g.free_kinds) and !property,
             .namespace = if (site) |s| s.namespace else scope.useNamespace(g, kind),
         });
     }
