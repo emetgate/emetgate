@@ -165,6 +165,10 @@ pub const markdown_heading = src.markdown_heading;
 pub const rules_tui = src.rules_tui;
 pub const rules_command = src.rules_command;
 pub const console_raw = src.console_raw;
+pub const doc_fold = src.doc_fold;
+pub const output_digest = src.output_digest;
+pub const baseline = src.baseline;
+pub const batch_merge = src.batch_merge;
 
 comptime {
     for (@typeInfo(src).@"struct".decls) |decl| {

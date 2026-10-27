@@ -1572,7 +1572,7 @@ test "the skeleton payload carries every adopted rule as data, with no way to ch
         .{ .id = "m1", .text = "no console.log", .mode = "enforce", .check = "cmd:npx eslint", .where = "src/" },
         .{ .id = "m2", .text = "prefer Money", .mode = "advisory" },
     };
-    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(): void;\n", &adopted);
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(): void;\n", &adopted, &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
@@ -1583,7 +1583,7 @@ test "the skeleton payload carries every adopted rule as data, with no way to ch
 test "symbol body payload carries ref, hash and the escaped body" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSymbolBody(&buffer.writer, "src/a.ts", "add", symbol.hashOf("x"), "{\n  return a + b;\n}");
+    try writeSymbolBody(&buffer.writer, "src/a.ts", "add", symbol.hashOf("x"), "{\n  return a + b;\n}", &.{});
 
     const json = buffer.written();
     try testing.expect(std.mem.indexOf(u8, json, "\"symbol\":\"add\"") != null);
