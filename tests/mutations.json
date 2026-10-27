@@ -3,8 +3,8 @@
     {
       "id": "WC1-batch-whole-create-not-recognised",
       "file": "src/protocol/handlers.zig",
-      "from": "    return std.mem.eql(u8, hash, \"absent\") and wholeText(item) != null;",
-      "to": "    return false;",
+      "from": "    if (!symbol_named and (getString(item, \"body\") != null or getString(item, \"content\") != null)) return .text;",
+      "to": "    if (false) return .text;",
       "kills": [
         "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory"
       ]
@@ -12,8 +12,8 @@
     {
       "id": "WC2-batch-whole-create-overwrites-existing",
       "file": "src/platform/batch_plan.zig",
-      "from": "    return error.FileExists;\n}\n\nfn planFileDeletion(",
-      "to": "    return file_edit.prepare(gpa, runtime, edit.file_abs, rel, null, edit.new_body);\n}\n\nfn planFileDeletion(",
+      "from": "            if (expected == .absent and base != null) return error.FileExists;\n",
+      "to": "",
       "kills": [
         "try_batch whole-file create refuses a file that already exists and leaves it untouched"
       ]
@@ -21,8 +21,8 @@
     {
       "id": "WC3-batch-whole-create-new-dirs-dropped",
       "file": "src/protocol/handlers.zig",
-      "from": "        if (!seen) try dirs.append(gpa, try gpa.dupe(u8, dir));",
-      "to": "        _ = seen;",
+      "from": "            if (!known) try dirs.append(gpa, try gpa.dupe(u8, dir));",
+      "to": "            _ = known;",
       "kills": [
         "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory"
       ]
@@ -51,7 +51,7 @@
       "from": "        if (!leaf.shorthand) return error.ShorthandReference;\n",
       "to": "",
       "kills": [
-        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a kept key on a plain name are refused",
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused",
         "red team rename: a shorthand property location and a refused rename info are both refused"
       ]
     },
@@ -1743,8 +1743,8 @@
     {
       "id": "SB3-sandbox-child-integrity-check-removed",
       "file": "src/platform/sandbox.zig",
-      "from": "    try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
-      "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
+      "from": "    if (command.backend != .user) try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n",
+      "to": "    try job.assign(child.id.?);\n",
       "kills": [
         "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all",
         "redteam sandbox: an unavailable sandbox rejects the proposal and leaves the repository untouched"
@@ -2023,7 +2023,7 @@
       "to": "        error.FileNotFound => return error.FileNotFound,\n",
       "kills": [
         "new file: a missing directory is refused and nothing is created",
-        "purple: hash absent in a directory that does not exist is refused by name through MCP"
+        "purple: hash absent in a directory that does not exist is refused by name through emetgate_mutate"
       ]
     },
     {
@@ -3449,8 +3449,8 @@
     {
       "id": "CMD7-spawned-integrity-not-verified",
       "file": "src/platform/sandbox.zig",
-      "from": "    try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
-      "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
+      "from": "    if (command.backend != .user) try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n",
+      "to": "    try job.assign(child.id.?);\n",
       "kills": [
         "cmd rule: a sandbox that cannot be built refuses the command instead of running it unrestricted",
         "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all"
@@ -3487,8 +3487,8 @@
     {
       "id": "RO3-rules-dropped-from-the-skeleton",
       "file": "src/protocol/handlers.zig",
-      "from": "    try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, adopted.items);",
-      "to": "    try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, &.{});",
+      "from": ", text, adopted.items, if (docs)",
+      "to": ", text, &.{}, if (docs)",
       "kills": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
       ]
@@ -4038,8 +4038,8 @@
     {
       "id": "LW3-console-host-counted",
       "file": "src/platform/sandbox.zig",
-      "from": "        if (console_host != null and pid == console_host.?) continue;\n",
-      "to": "        if (console_host == null and pid == 0) continue;\n",
+      "from": "        if (console_host != null and pid == console_host.?) continue;\n        count += 1;\n",
+      "to": "        if (console_host == null and pid == 0) continue;\n        count += 1;\n",
       "kills": [
         "the exited command's own console host is not a leftover, any other process in the job is"
       ]
@@ -5014,7 +5014,7 @@
     {
       "id": "R13-cache-not-invalidated-after-try-batch",
       "file": "src/protocol/handlers.zig",
-      "from": "if (policy.tree_cache) |cache| for (edits) |edit| cache.invalidate(edit.file_abs);",
+      "from": "if (policy.tree_cache) |cache| for (edits[0..code_used]) |edit| cache.invalidate(edit.file_abs);",
       "to": "",
       "expect_status": "survived",
       "note": "defense-in-depth: same as R12, the content hash on the next load catches the batch edit even without invalidation",
@@ -5386,7 +5386,7 @@
       "to": "        const leaf = findLeaf(leaves, span) orelse continue;\n        keep.* = options.keepOf(span);",
       "kills": [
         "red team rename: a location inside a comment or a string is refused and both stay unchanged",
-        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a kept key on a plain name are refused"
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
       ]
     },
     {
@@ -5431,7 +5431,7 @@
       "to": "",
       "kills": [
         "red team rename: a new name that another touched file already uses is refused",
-        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a kept key on a plain name are refused"
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
       ]
     },
     {
@@ -5854,11 +5854,11 @@
     },
     {
       "id": "RUN4-output-cap-removed",
-      "file": "src/protocol/run_tool.zig",
-      "from": "    const cut = run_command.tail(bytes, max_output_lines, max_output_bytes);\n",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    const cut = run_command.tail(bytes, max_log_lines, max_log_bytes);\n",
       "to": "    const cut = run_command.tail(bytes, std.math.maxInt(usize), std.math.maxInt(usize));\n",
       "kills": [
-        "redteam run: a flood of output comes back cut to the last lines with a count of the rest"
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
       ]
     },
     {
@@ -6196,8 +6196,8 @@
     {
       "id": "DW9-try-batch-drops-doc-edits",
       "file": "src/protocol/handlers.zig",
-      "from": ".{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved,",
-      "to": ".{ .edits = edits, .test_command = resolved,",
+      "from": ".doc_edits = doc_edits, .test_command = resolved,",
+      "to": ".test_command = resolved,",
       "kills": [
         "emetgate_try_batch commits a code edit and a doc edit together"
       ]
@@ -9493,16 +9493,6 @@
       "note": "a commit would move a detached HEAD and belong to no branch"
     },
     {
-      "id": "GC2-unborn-branch-accepted",
-      "file": "src/platform/git_commit.zig",
-      "from": "        if (try git.run(&.{ \"rev-parse\", \"--verify\", \"-q\", \"HEAD^{commit}\" }) == null) return error.NoCommitYet;\n",
-      "to": "",
-      "kills": [
-        "git commit: a repository with no commit yet is refused"
-      ],
-      "note": "a first commit has no parent to compare with and no tree to start from"
-    },
-    {
       "id": "GC3-operation-in-progress-accepted",
       "file": "src/platform/git_commit.zig",
       "from": "        if (try exists(io, path)) return error.OperationInProgress;\n",
@@ -9782,8 +9772,8 @@
     {
       "id": "BC4-moved-source-stays-in-the-commit",
       "file": "src/platform/batch.zig",
-      "from": "        if (p.source_rel) |from| try changes.append(gpa, .{ .rel = from, .content = null });\n",
-      "to": "",
+      "from": "        if (p.source_rel) |from| try changes.append(gpa, .{ .rel = from, .content = null });\n        try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source(), .mode_from",
+      "to": "        try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source(), .mode_from",
       "kills": [
         "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
       ],
@@ -9792,8 +9782,8 @@
     {
       "id": "BC5-deleted-file-committed-as-empty",
       "file": "src/platform/batch.zig",
-      "from": "if (p.action == .delete_file) null else p.source()",
-      "to": "if (false and p.action == .delete_file) null else p.source()",
+      "from": "if (p.action == .delete_file) null else p.source(), .mode_from",
+      "to": "if (false and p.action == .delete_file) null else p.source(), .mode_from",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
@@ -9802,8 +9792,8 @@
     {
       "id": "BC6-doc-edit-left-out-of-the-commit",
       "file": "src/platform/batch.zig",
-      "from": "    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
-      "to": "    for (doc_prepared) |p| if (false) try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
+      "from": "    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n    return changes.toOwnedSlice(gpa);",
+      "to": "    for (doc_prepared) |p| if (false) try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n    return changes.toOwnedSlice(gpa);",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
@@ -9853,8 +9843,8 @@
     {
       "id": "BC11-try-batch-handler-drops-the-commit-request",
       "file": "src/protocol/handlers.zig",
-      "from": ".language_service = policy.language_service, .commit = if (commit) |*request| request else null };",
-      "to": ".language_service = policy.language_service, .commit = if (commit) |*request| (if (false) request else null) else null };",
+      "from": ".language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs",
+      "to": ".language_service = policy.language_service, .commit = if (commit) |*request| (if (false) request else null) else null, .created_dirs",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
@@ -10045,8 +10035,8 @@
     {
       "id": "PV7-commit-encoding-taken-from-config",
       "file": "src/platform/git_commit.zig",
-      "from": "\"-c\", \"i18n.commitEncoding=UTF-8\", ",
-      "to": "",
+      "from": "\"-c\", \"i18n.commitEncoding=UTF-8\", \"commit-tree\", tree, \"-p\"",
+      "to": "\"commit-tree\", tree, \"-p\"",
       "kills": [
         "redteam commit: a commit encoding setting does not mislabel the UTF-8 message"
       ],
@@ -10252,8 +10242,8 @@
     {
       "id": "PV29-recover-deletes-a-file-the-replaced-commit-does-not-hold",
       "file": "src/platform/git_commit.zig",
-      "from": "    const parent = ids.next() orelse return null;\n    if (ids.next() != null) return null;\n",
-      "to": "    const parent = ids.next() orelse base;\n    if (ids.next() != null) return null;\n",
+      "from": "    const parent = ids.next() orelse if (isUnborn(base)) base else return null;\n",
+      "to": "    const parent = ids.next() orelse base;\n",
       "kills": [
         "commit protocol: a record that did not come from a commit cannot delete a file the replaced commit does not hold"
       ],
@@ -10973,11 +10963,6 @@
       "from": "    if (registry.forPath(path) != null) return error.UseSymbolToolsForSource;\n",
       "to": "    if (false and registry.forPath(path) != null) return error.UseSymbolToolsForSource;\n",
       "kills": [
-        "batch doc on source: a line range that adds comments under an enforced no_comment rule is refused, nothing is written and the call is logged",
-        "batch doc on source: the same edit is refused under an enforced forbid rule and under an advisory rule",
-        "write_doc on source: a line range of a source file is refused like the batch, and nothing is written",
-        "mixed batch: a symbol edit of one file and a doc edit of another source file are refused together",
-        "mixed batch: a symbol edit and a doc edit of the same source file are refused as a source doc edit",
         "planDoc refuses a file of a registered language before it reads it"
       ]
     },
@@ -10987,7 +10972,7 @@
       "from": "    try docnode.refuseSource(options.file_abs);\n",
       "to": "",
       "kills": [
-        "write_doc on source: a line range of a source file is refused like the batch, and nothing is written"
+        "the doc writer refuses a source file before it looks for the repository"
       ]
     },
     {
@@ -10996,7 +10981,7 @@
       "from": "    for (options.doc_edits) |edit| try docnode.refuseSource(edit.file_abs);\n",
       "to": "",
       "kills": [
-        "mixed batch: a symbol edit and a doc edit of the same source file are refused as a source doc edit"
+        "the batch engine refuses a doc edit of a source file before it looks for the repository"
       ]
     },
     {
@@ -13882,8 +13867,8 @@
     {
       "id": "B19-temp-env-dropped",
       "file": "src/platform/runner.zig",
-      "from": "    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp });",
-      "to": "    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits });",
+      "from": ".limits = limits, .temp = temp, .env = env });",
+      "to": ".limits = limits, .env = env });",
       "kills": [
         "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run"
       ]
@@ -13891,8 +13876,8 @@
     {
       "id": "B19-temp-entry-prefix-match",
       "file": "src/platform/sandbox.zig",
-      "from": "        if (entry.len <= name.len or entry[name.len] != '=') continue;",
-      "to": "        if (entry.len <= name.len) continue;",
+      "from": "    if (entry.len <= name.len or entry[name.len] != '=') return false;",
+      "to": "    if (entry.len <= name.len) return false;",
       "kills": [
         "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest"
       ]
@@ -14653,8 +14638,8 @@
     {
       "id": "EG2-explore-graph-question-ignored",
       "file": "src/protocol/map_tools.zig",
-      "from": "            if (word.len >= g.len and std.ascii.eqlIgnoreCase(word[0..g.len], g)) return true;",
-      "to": "            if (word.len >= g.len and std.mem.eql(u8, word[0..g.len], g)) return true;",
+      "from": "std.ascii.eqlIgnoreCase(word[0..g.len], g) and isGraphSuffix(word[g.len..])) return true;",
+      "to": "std.mem.eql(u8, word[0..g.len], g) and isGraphSuffix(word[g.len..])) return true;",
       "kills": [
         "map tools: only a question about calls or impact graphs the functions it names in its words"
       ]
