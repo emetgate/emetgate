@@ -6,6 +6,8 @@ const telemetry = @import("emetgate").telemetry;
 const memory = @import("emetgate").memory;
 const symbol = @import("emetgate").symbol;
 const batch_plan = @import("emetgate").batch_plan;
+const runner = @import("emetgate").runner;
+const doc_writer = @import("emetgate").doc_writer;
 const Runtime = @import("emetgate").runtime.Runtime;
 const Snapshot = @import("emetgate").loader.Snapshot;
 
@@ -330,6 +332,33 @@ test "planDoc refuses a file of a registered language before it reads it" {
     try testing.expectError(error.UseSymbolToolsForSource, batch_plan.planDoc(gpa, testing.io, edit, rel));
 }
 
+fn sourceDocEdit() batch_plan.DocEdit {
+    return .{
+        .file_abs = "C:\\no-such-directory\\src\\cart.TS",
+        .selector = .{ .line_range = .{ .start = 1, .end = 1 } },
+        .expected_hash = symbol.hashOf("x\n"),
+        .new_text = "y\n",
+    };
+}
+
+test "the batch engine refuses a doc edit of a source file before it looks for the repository" {
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const edits = [_]batch_plan.DocEdit{sourceDocEdit()};
+    try testing.expectError(error.UseSymbolToolsForSource, runner.tryMutateBatch(gpa, testing.io, runtime, .{ .doc_edits = &edits, .test_command = "exit 0" }));
+}
+
+test "the doc writer refuses a source file before it looks for the repository" {
+    const edit = sourceDocEdit();
+    try testing.expectError(error.UseSymbolToolsForSource, doc_writer.tryWriteDoc(gpa, testing.io, .{
+        .file_abs = edit.file_abs,
+        .selector = edit.selector,
+        .expected_hash = edit.expected_hash,
+        .new_text = edit.new_text,
+        .test_command = "exit 0",
+    }, null));
+}
+
 test "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory" {
     var repo = try Repo.init();
     defer repo.deinit();
@@ -350,8 +379,10 @@ test "try_batch creates whole files from content with hash absent and no symbol,
 test "try_batch whole-file create refuses a file that already exists and leaves it untouched" {
     var repo = try Repo.init();
     defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
     var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
-        .{ .file = "src/math.ts", .hash = "absent", .content = cart_ts },
+        .{ .file = math, .hash = "absent", .content = cart_ts },
     } });
     defer reply.deinit();
     try reply.expectError("FileExists");
