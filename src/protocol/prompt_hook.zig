@@ -1,5 +1,6 @@
 const std = @import("std");
 const rule_command = @import("rule_command.zig");
+const rule_catalog = @import("rule_catalog.zig");
 const prompt_words = @import("prompt_words.zig");
 const lockdown_slash = @import("../platform/lockdown_slash.zig");
 
@@ -66,6 +67,9 @@ fn answer(gpa: Allocator, io: std.Io, root: anyerror![]const u8, text: []const u
         error.OutOfMemory => return err,
         error.UnterminatedQuote => return reason.writeAll(usage),
     };
+    if (words.len >= 1 and std.mem.eql(u8, words[0], "pick")) {
+        return rule_catalog.pick(gpa, io, try root, words[1..], reason, reason);
+    }
     const request = rule_command.parse(words) orelse return reason.writeAll(usage);
     try rule_command.runAs(.spoken, gpa, io, try root, request, reason, reason);
 }

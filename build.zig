@@ -447,7 +447,7 @@ const hook_cases = [_]HookCase{
         .name = "hook prompt stops a /rule prompt with the usage as the reason",
         .stdin = "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"/rule add \\\"\u{e7}ift t\u{131}rnak kapanmad\u{131}\"}",
         .exit_code = 0,
-        .stdout = "{\"decision\":\"block\",\"reason\":\"/rule add <text> [--check <spec>] [--in <where>] [--enforce]\\n/rule list [--all] [--json]\\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\\n/rule forget <id>\"}\n",
+        .stdout = "{\"decision\":\"block\",\"reason\":\"/rule add <text> [--check <spec>] [--in <where>] [--enforce]\\n/rule list [--all] [--json]\\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\\n/rule forget <id>\\n/rule pick [<numbers> [<path>]]   (pick rules from a catalog; /rule pick alone lists it)\"}\n",
     },
     .{
         .name = "hook prompt stops every prompt with exit code 2 when its input is not the hook JSON",
