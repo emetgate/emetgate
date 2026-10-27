@@ -14211,6 +14211,76 @@
       "kills": [
         "test detection: a server with no test command and no detection refuses the write with the fix for the user"
       ]
+    },
+    {
+      "id": "FE1-whole-file-ignores-stale-hash",
+      "file": "src/platform/batch_plan.zig",
+      "from": "                if (!std.mem.eql(u8, &expected.present, &symbol.fileHash(current))) return error.HashMismatch;\n",
+      "to": "                _ = current;\n",
+      "kills": [
+        "forgiving edits: a whole-file write under a stale hash is refused and nothing is written",
+        "textAfter keeps a whole-file write to its hash and reads a line range under the file hash"
+      ]
+    },
+    {
+      "id": "FE2-line-range-under-file-hash-refused",
+      "file": "src/platform/batch_plan.zig",
+      "from": "error.HashMismatch => if (std.mem.eql(u8, &wanted, &symbol.fileHash(current)))",
+      "to": "error.HashMismatch => if (false)",
+      "kills": [
+        "forgiving edits: a line range is accepted under the whole file's hash too",
+        "textAfter keeps a whole-file write to its hash and reads a line range under the file hash"
+      ]
+    },
+    {
+      "id": "FE3-batch-new-directory-refused",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (err != error.ParentDirectoryMissing or !may_create) return err;",
+      "to": "        if (true) return err;",
+      "kills": [
+        "forgiving edits: try_batch with hash absent and content but no symbol creates the whole file in a new directory",
+        "purple: hash absent in a directory that does not exist creates the directory and the file through emetgate_try"
+      ]
+    },
+    {
+      "id": "FE4-source-line-range-refused",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (lang_registry.forPath(file) != null or absentHash(item) or !hasRegion(item)) return .text;",
+      "to": "        if (absentHash(item) or !hasRegion(item)) return .text;",
+      "kills": [
+        "forgiving edits: a kind doc line range on a JavaScript file goes through the gate and is written",
+        "commit tree: a doc edit of a source file inside a committing batch goes through the gate and commits"
+      ]
+    },
+    {
+      "id": "FE5-no-symbol-content-needs-symbol",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!symbol_named and (getString(item, \"body\") != null or getString(item, \"content\") != null)) return .text;",
+      "to": "",
+      "kills": [
+        "forgiving edits: try with path and body but no symbol creates a source file whole",
+        "forgiving edits: try_batch with hash absent and content but no symbol creates the whole file in a new directory"
+      ]
+    },
+    {
+      "id": "FE6-aliases-ignored",
+      "file": "src/protocol/forgive.zig",
+      "from": "            try map.put(arena, alias[0], value);\n            break;",
+      "to": "            if (false) try map.put(arena, alias[0], value);\n            break;",
+      "kills": [
+        "normalizeItem maps path and content aliases and reads an empty hash as absent",
+        "forgiving edits: emetgate_write takes body as content"
+      ]
+    },
+    {
+      "id": "FE7-write-doc-not-rerouted",
+      "file": "src/protocol/forgive.zig",
+      "from": "        if (!needsBatch(item)) return .{ .name = name, .args = item };",
+      "to": "        if (true) return .{ .name = name, .args = item };",
+      "kills": [
+        "normalize sends write_doc through try_batch as a doc item and keeps the top-level fields",
+        "forgiving edits: write_doc with hash absent and no selector creates a document"
+      ]
     }
   ]
 }

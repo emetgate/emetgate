@@ -493,12 +493,11 @@ fn callJson(env: *Env, tool: []const u8, args: anytype) !Reply {
     return .{ .text = try env.arena().dupe(u8, result.text), .is_error = result.is_error };
 }
 
-fn expectSourceRefused(env: *Env, reply: Reply, before: []const u8) !void {
+fn expectSourceLanded(env: *Env, reply: Reply, before: []const u8) !void {
     errdefer std.debug.print("{s}\n", .{reply.text});
-    try testing.expect(reply.is_error);
-    try testing.expect(contains(reply.text, "UseSymbolToolsForSource"));
-    try testing.expectEqualStrings(before, try env.head());
-    try testing.expectEqualStrings(util_src, try env.read("src/util.ts"));
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings(before, try env.git(&.{ "rev-parse", "HEAD^" }));
+    try testing.expectEqualStrings("export function add(a: number, b: number): number {\n" ++ slipped ++ "}\n", try env.read("src/util.ts"));
     try testing.expectEqualStrings("", try env.git(&.{ "status", "--porcelain" }));
 }
 
@@ -506,7 +505,7 @@ fn lineHash(env: *Env) ![]const u8 {
     return env.arena().dupe(u8, &emetgate.symbol.formatHash(emetgate.symbol.hashOf("  return a + b;\n")));
 }
 
-test "commit tree: a doc edit of a source file inside a committing batch is refused, writes nothing and commits nothing" {
+test "commit tree: a doc edit of a source file inside a committing batch goes through the gate and commits" {
     try skipOffWindows();
     var case: Plain = undefined;
     try case.init(&files);
@@ -518,10 +517,10 @@ test "commit tree: a doc edit of a source file inside a committing batch is refu
         .edits = [_]Doc{.{ .kind = "doc", .file = try env.abs("src/util.ts"), .hash = try lineHash(env), .content = slipped, .line_start = 2, .line_end = 2 }},
         .message = message,
     });
-    try expectSourceRefused(env, reply, before);
+    try expectSourceLanded(env, reply, before);
 }
 
-test "commit tree: a committing write_doc on a source file is refused, writes nothing and commits nothing" {
+test "commit tree: a committing write_doc on a source file goes through the gate and commits" {
     try skipOffWindows();
     var case: Plain = undefined;
     try case.init(&files);
@@ -529,5 +528,5 @@ test "commit tree: a committing write_doc on a source file is refused, writes no
     const env = &case.env;
     const before = try env.head();
     const reply = try callJson(env, "emetgate_write_doc", .{ .file = try env.abs("src/util.ts"), .hash = try lineHash(env), .content = slipped, .line_start = @as(i64, 2), .line_end = @as(i64, 2), .message = message });
-    try expectSourceRefused(env, reply, before);
+    try expectSourceLanded(env, reply, before);
 }
