@@ -415,8 +415,8 @@ test "new file: an extension with no language profile is refused" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    try testing.expectError(error.UnsupportedLanguage, tryNewFile(&repo, runtime, "src/mul.py", "mul", mul_body, "exit 0"));
-    try expectNoNewFile(&repo, "src/mul.py");
+    try testing.expectError(error.UnsupportedLanguage, tryNewFile(&repo, runtime, "src/mul.rb", "mul", mul_body, "exit 0"));
+    try expectNoNewFile(&repo, "src/mul.rb");
 }
 
 test "new file: a creation whose tests fail leaves no file on disk and nothing in the index" {

@@ -264,6 +264,42 @@ test "CRLF line endings and a UTF-8 BOM are preserved around the cuts" {
     );
 }
 
+test "python defs and classes are collected and their bodies stubbed with ellipsis" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const python = &@import("lang/python/profile.zig").profile;
+    const parser = try ts.Parser.init(python.grammar());
+    defer parser.deinit();
+
+    const source =
+        "import os\n\n\ndef greet(name):\n    # say hi\n    print(name)\n\n\nclass Greeter:\n    def run(self):\n        return 1\n";
+    const tree = try parser.parse(source);
+    defer tree.deinit();
+    try testing.expect(!tree.root().hasError());
+
+    const functions = try symbol.collectFunctions(testing.allocator, python, tree);
+    defer testing.allocator.free(functions);
+    try testing.expectEqual(@as(usize, 2), functions.len);
+    try testing.expectEqualStrings("greet", tree.text(functions[0].name.?));
+    try testing.expectEqualStrings("run", tree.text(functions[1].name.?));
+
+    const skeleton = try skeletonize(testing.allocator, parser, python, tree);
+    defer testing.allocator.free(skeleton);
+
+    const reparsed = try parser.parse(skeleton);
+    defer reparsed.deinit();
+    try testing.expect(!reparsed.root().hasError());
+    try testing.expect(std.mem.indexOf(u8, skeleton, "...") != null);
+    try testing.expect(std.mem.indexOf(u8, skeleton, "print(name)") == null);
+    try testing.expect(std.mem.indexOf(u8, skeleton, "return 1") == null);
+    try testing.expect(skeleton.len < source.len);
+
+    const again = try skeletonize(testing.allocator, parser, python, reparsed);
+    defer testing.allocator.free(again);
+    try testing.expectEqualStrings(skeleton, again);
+}
+
 test "a source without functions is returned unchanged" {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();

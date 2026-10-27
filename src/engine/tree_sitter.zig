@@ -207,3 +207,14 @@ test "every vendored grammar parses through its external scanner table" {
         try testing.expect(!tree.root().hasError());
     }
 }
+
+test "the python grammar parses an indented block through its external scanner" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+
+    const parser = try Parser.init(@import("lang/python/profile.zig").profile.grammar());
+    defer parser.deinit();
+    const tree = try parser.parse("def f(a):\n    return a\n");
+    defer tree.deinit();
+    try testing.expect(!tree.root().hasError());
+}

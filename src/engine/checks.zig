@@ -956,3 +956,48 @@ test "forbid_import ignores a different module and a bare matching string" {
     defer testing.allocator.free(v);
     try testing.expectEqual(@as(usize, 0), v.len);
 }
+
+fn runPython(source: []const u8, specs: []const []const u8) ![]Violation {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const profile = &@import("lang/python/profile.zig").profile;
+    const parser = try ts.Parser.init(profile.grammar());
+    defer parser.deinit();
+    const tree = try parser.parse(source);
+    defer tree.deinit();
+    return run(testing.allocator, profile, tree, .{ .start = 0, .end = @intCast(source.len) }, specs);
+}
+
+test "python: no_comment flags a # comment, forbid flags a print call, require_comment and max_function_lines apply to defs" {
+    const documented = "# a greeter\ndef greet(name):\n    print(name)\n";
+    const nc = try runPython(documented, &.{"no_comment"});
+    defer testing.allocator.free(nc);
+    try testing.expectEqual(@as(usize, 1), nc.len);
+    try testing.expectEqualStrings("no_comment", nc[0].check);
+    try testing.expectEqualStrings("# a greeter", documented[nc[0].span.start..nc[0].span.end]);
+
+    const fb = try runPython(documented, &.{"forbid:print"});
+    defer testing.allocator.free(fb);
+    try testing.expectEqual(@as(usize, 1), fb.len);
+    try testing.expectEqualStrings("print", documented[fb[0].span.start..fb[0].span.end]);
+
+    const rc_ok = try runPython(documented, &.{"require_comment"});
+    defer testing.allocator.free(rc_ok);
+    try testing.expectEqual(@as(usize, 0), rc_ok.len);
+
+    const bare = "def greet(name):\n    print(name)\n";
+    const rc_bad = try runPython(bare, &.{"require_comment"});
+    defer testing.allocator.free(rc_bad);
+    try testing.expectEqual(@as(usize, 1), rc_bad.len);
+    try testing.expectEqualStrings("require_comment", rc_bad[0].check);
+
+    const long = "def f():\n    a = 1\n    b = 2\n    c = 3\n    return a\n";
+    const mfl = try runPython(long, &.{"max_function_lines:2"});
+    defer testing.allocator.free(mfl);
+    try testing.expectEqual(@as(usize, 1), mfl.len);
+    try testing.expectEqualStrings("max_function_lines", mfl[0].check);
+
+    const mfl_ok = try runPython(long, &.{"max_function_lines:10"});
+    defer testing.allocator.free(mfl_ok);
+    try testing.expectEqual(@as(usize, 0), mfl_ok.len);
+}

@@ -13,7 +13,7 @@ const cases_mod = @import("cases.zig");
 const Cases = cases_mod.Cases;
 const testing = std.testing;
 
-const object_style_contract_exempt = [_][]const u8{"zig"};
+const object_style_contract_exempt = [_][]const u8{ "zig", "python" };
 
 fn isExemptFromObjectStyleContract(name: []const u8) bool {
     for (object_style_contract_exempt) |exempt| {
