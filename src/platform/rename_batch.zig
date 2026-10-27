@@ -12,6 +12,7 @@ const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const runner = @import("runner.zig");
 const rename_graph = @import("rename_graph.zig");
+const rename_require = @import("rename_require.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -184,6 +185,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             },
         }
     }
+    if (resolver == .language_service and request.interface_change) try addModuleMembers(gpa, io, runtime, root, base, request.file_abs, old, &locations);
     if (resolver == .text) try fromText(gpa, io, root, base, request.file_abs, old, member, &locations);
 
     const own = locations.find(request.file_abs) orelse return error.IncompleteRename;
@@ -420,6 +422,29 @@ fn fromText(gpa: Allocator, io: std.Io, root: []const u8, base: *Snapshot, file_
         if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnresolved;
     }
     for (leaves) |leaf| try locations.add(gpa, try gpa.dupe(u8, file_abs), leaf.span);
+}
+
+fn addModuleMembers(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, base: *Snapshot, declaring_abs: []const u8, old: []const u8, locations: *Locations) !void {
+    const own = locations.find(declaring_abs) orelse return;
+    if (!try rename_require.exportsAsProperty(gpa, base, old, own.spans.items)) return;
+    const listing = try repo.filesMentioning(gpa, io, root, old);
+    defer gpa.free(listing);
+    var sites: std.ArrayList(rename_require.Site) = .empty;
+    defer sites.deinit(gpa);
+    var files = std.mem.tokenizeScalar(u8, listing, 0);
+    while (files.next()) |rel| {
+        const profile = registry.forPath(rel) orelse continue;
+        if (!profile.language_service or !rename.supports(profile)) continue;
+        const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, rel });
+        defer gpa.free(abs);
+        if (tsserver.sameFile(abs, declaring_abs)) continue;
+        const snapshot = try Snapshot.load(runtime, io, .cwd(), abs);
+        defer snapshot.destroy();
+        if (snapshot.tree.root().hasError()) continue;
+        sites.clearRetainingCapacity();
+        try rename_require.sitesIn(gpa, snapshot, std.fs.path.dirname(abs) orelse root, declaring_abs, old, &sites);
+        for (sites.items) |site| try locations.addKept(gpa, try gpa.dupe(u8, abs), site.span, site.keep);
+    }
 }
 
 fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, locations: *const Locations, old: []const u8, member: bool, given: ?*DynamicSites) !void {

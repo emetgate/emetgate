@@ -280,6 +280,47 @@ fn failureKey(text: []const u8) u64 {
     return hasher.final();
 }
 
+const error_marks = [_][]const u8{ "Error:", "error:", "Error [", "Exception", "panicked" };
+
+fn isErrorEntry(entry: Entry) bool {
+    return warningKey(entry.text) == null and containsAny(entry.text, &error_marks);
+}
+
+const Choice = struct { picked: []bool, errors_first: bool };
+
+fn choose(arena: Allocator, entries: []const Entry, budget: usize) !Choice {
+    const picked = try arena.alloc(bool, entries.len);
+    @memset(picked, true);
+    var total: usize = 0;
+    for (entries) |entry| total += entry.text.len + 8;
+    if (total <= budget) return .{ .picked = picked, .errors_first = false };
+    @memset(picked, false);
+    var used: usize = 0;
+    for (entries, picked) |entry, *pick| {
+        const need = entry.text.len + 8;
+        if (!isErrorEntry(entry) or used + need > budget / 2) continue;
+        pick.* = true;
+        used += need;
+    }
+    const errors_first = used != 0;
+    const limit = if (errors_first) used + budget / 2 else budget;
+    for (entries, picked) |entry, *pick| {
+        if (pick.*) continue;
+        const need = entry.text.len + 8;
+        if (used + need > limit) break;
+        pick.* = true;
+        used += need;
+    }
+    return .{ .picked = picked, .errors_first = errors_first };
+}
+
+fn writeEntry(gpa: Allocator, out: *std.ArrayList(u8), entry: Entry) !void {
+    if (out.items.len != 0) try out.append(gpa, '\n');
+    if (!entry.head) try out.appendSlice(gpa, "  ");
+    try out.appendSlice(gpa, entry.text);
+    if (entry.count > 1) try out.print(gpa, " \u{00d7}{d}", .{entry.count});
+}
+
 pub fn digest(gpa: Allocator, stdout: []const u8, stderr: []const u8) !Digest {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -287,20 +328,20 @@ pub fn digest(gpa: Allocator, stdout: []const u8, stderr: []const u8) !Digest {
     const c = try collect(arena, &.{ stdout, stderr });
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
-    var shown: usize = 0;
     var dropped = c.dropped;
-    for (c.entries.items) |entry| {
-        const need = entry.text.len + 8;
-        if (out.items.len + need > cap - footer_reserve) break;
-        if (out.items.len != 0) try out.append(gpa, '\n');
-        if (!entry.head) try out.appendSlice(gpa, "  ");
-        try out.appendSlice(gpa, entry.text);
-        if (entry.count > 1) try out.print(gpa, " \u{00d7}{d}", .{entry.count});
-        shown += 1;
+    const chosen = try choose(arena, c.entries.items, cap - footer_reserve);
+    if (chosen.errors_first) {
+        for (c.entries.items, chosen.picked) |entry, picked| {
+            if (picked and isErrorEntry(entry)) try writeEntry(gpa, &out, entry);
+        }
+    }
+    for (c.entries.items, chosen.picked) |entry, picked| {
+        if (picked and !(chosen.errors_first and isErrorEntry(entry))) try writeEntry(gpa, &out, entry);
     }
     var more: usize = 0;
     var rest: usize = 0;
-    for (c.entries.items[shown..]) |entry| {
+    for (c.entries.items, chosen.picked) |entry, picked| {
+        if (picked) continue;
         rest += entry.count;
         if (entry.head) more += 1;
     }
@@ -560,6 +601,20 @@ test "a flood of distinct failures stays under the cap and counts the failures i
     try testing.expect(d.more_failures > 200);
     var buf: [64]u8 = undefined;
     try testing.expect(std.mem.indexOf(u8, d.text, try std.fmt.bufPrint(&buf, "+{d} more failures", .{d.more_failures})) != null);
+}
+
+test "an error line repeated under hundreds of failing test titles is shown even when the titles alone fill the cap" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(testing.allocator);
+    for (0..300) |i| try out.print(testing.allocator, "  {d}) consistent-return valid case number {d} with a long title\n", .{ i + 1, i });
+    try out.appendSlice(testing.allocator, "\n  300 failing\n\n");
+    for (0..300) |i| try out.print(testing.allocator, "  {d}) consistent-return valid case number {d} with a long title:\n     TypeError: astUtils.isOld is not a function\n", .{ i + 1, i });
+    const d = try digest(testing.allocator, out.items, "");
+    defer testing.allocator.free(d.text);
+    errdefer std.debug.print("{s}\n", .{d.text});
+    try testing.expect(d.text.len <= cap);
+    try testing.expect(std.mem.indexOf(u8, d.text, "TypeError: astUtils.isOld is not a function") != null);
+    try testing.expect(std.mem.indexOf(u8, d.text, "TypeError").? < std.mem.indexOf(u8, d.text, "1) consistent-return valid case number 0").?);
 }
 
 test "a passing run with a count line is one line with its duration, a run without one is not" {

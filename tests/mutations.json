@@ -14758,7 +14758,7 @@
     {
       "id": "DG5-no-cap",
       "file": "src/protocol/output_digest.zig",
-      "from": "        if (out.items.len + need > cap - footer_reserve) break;\n",
+      "from": "        if (used + need > limit) break;\n",
       "to": "",
       "kills": [
         "a flood of distinct failures stays under the cap and counts the failures it left out",
@@ -15150,6 +15150,114 @@
       "to": "    if (found.count == 0) return null;",
       "kills": [
         "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "DG1-digest-errors-not-first",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (!isErrorEntry(entry) or used + need > budget / 2) continue;",
+      "to": "        if (isErrorEntry(entry) or used + need > budget / 2) continue;",
+      "kills": [
+        "an error line repeated under hundreds of failing test titles is shown even when the titles alone fill the cap"
+      ]
+    },
+    {
+      "id": "TO1-count-lines-not-scanned",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (countLines(report.stdout, &summary)) return summary;\n",
+      "to": "",
+      "kills": [
+        "a failing run whose count lines sit above a long failure list is summed up by them, not by a stack frame"
+      ]
+    },
+    {
+      "id": "DD1-punctuation-substituted",
+      "file": "src/protocol/diff_digest.zig",
+      "from": "        if (!isWord(a[0]) or !isWord(b[0])) return null;\n",
+      "to": "",
+      "kills": [
+        "a word for word substitution is one pair, anything else is not"
+      ]
+    },
+    {
+      "id": "DD2-single-substitution-collapsed",
+      "file": "src/protocol/diff_digest.zig",
+      "from": ".? < 2) break false;",
+      "to": ".? < 1) break false;",
+      "kills": [
+        "consecutive collapsed lines print as a range and a single substitution is shown raw"
+      ]
+    },
+    {
+      "id": "RD1-numeric-index-flagged",
+      "file": "src/engine/rename.zig",
+      "from": "{ \"-\", \"/\", \"//\", ",
+      "to": "{ \"/\", \"//\", ",
+      "kills": [
+        "rename: a string that is exactly the name, eval, computed requires and constructed keys are dynamic access"
+      ]
+    },
+    {
+      "id": "RD2-template-prefix-ignored",
+      "file": "src/engine/rename.zig",
+      "from": "    return !std.mem.startsWith(u8, name, prefix) or !std.mem.endsWith(u8, name, suffix);",
+      "to": "    return prefix.len > name.len or !std.mem.endsWith(u8, name, suffix);",
+      "kills": [
+        "rename: a string that is exactly the name, eval, computed requires and constructed keys are dynamic access"
+      ]
+    },
+    {
+      "id": "RR1-module-member-not-renamed",
+      "file": "src/platform/rename_require.zig",
+      "from": "            try out.append(gpa, .{ .span = spanOf(property), .keep = .none });\n",
+      "to": "",
+      "kills": [
+        "a member read through a required or imported module binding is a rename site, other objects and modules are not"
+      ]
+    },
+    {
+      "id": "RR2-rebound-module-name-renamed",
+      "file": "src/platform/rename_require.zig",
+      "from": "        if (try oneBinder(gpa, snapshot, binder)) try binders.append(gpa, binder);",
+      "to": "        if (try oneBinder(gpa, snapshot, binder) or true) try binders.append(gpa, binder);",
+      "kills": [
+        "a local rebinding of the module name stops member sites from being renamed"
+      ]
+    },
+    {
+      "id": "RR3-uncovered-export-accepted",
+      "file": "src/platform/rename_require.zig",
+      "from": "        if (!covered(renamed, leaf.span)) return false;\n",
+      "to": "",
+      "kills": [
+        "a declaring file exports the name as a property only when every occurrence is renamed and one is a key"
+      ]
+    },
+    {
+      "id": "RR4-destructured-local-renamed",
+      "file": "src/platform/rename_require.zig",
+      "from": ".span = spanOf(child), .keep = .value",
+      "to": ".span = spanOf(child), .keep = .none",
+      "kills": [
+        "a member read through a required or imported module binding is a rename site, other objects and modules are not"
+      ]
+    },
+    {
+      "id": "RN1-sole-command-not-run",
+      "file": "src/protocol/run_tool.zig",
+      "from": "orelse if (allowed.len == 1) allowed[0] else {",
+      "to": "orelse if (allowed.len == 0) allowed[0] else {",
+      "kills": [
+        "run tool: a call without command runs the only allowlisted command"
+      ]
+    },
+    {
+      "id": "DG2-errors-in-original-order",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (chosen.errors_first) {\n",
+      "to": "    if (false) {\n",
+      "kills": [
+        "an error line repeated under hundreds of failing test titles is shown even when the titles alone fill the cap"
       ]
     }
   ]

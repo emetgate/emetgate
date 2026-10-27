@@ -95,6 +95,7 @@ pub fn summarize(report: sandbox.Report) Summary {
         if (count != 0) break;
     }
     if (count == 0) {
+        if (countLines(report.stdout, &summary)) return summary;
         const lines = Lines.fromTail(if (std.mem.trim(u8, report.stdout, " \t\r\n").len != 0) report.stdout else report.stderr);
         if (lines.count != 0) summary.add(lines.items[0]);
         return summary;
@@ -105,6 +106,29 @@ pub fn summarize(report: sandbox.Report) Summary {
         summary.add(picked[index]);
     }
     return summary;
+}
+
+fn isCountLine(line: []const u8) bool {
+    var digits: usize = 0;
+    while (digits < line.len and std.ascii.isDigit(line[digits])) digits += 1;
+    if (digits == 0 or digits >= line.len or line[digits] != ' ') return false;
+    const rest = line[digits + 1 ..];
+    for ([_][]const u8{ "passing", "failing", "pending" }) |word| {
+        if (std.mem.startsWith(u8, rest, word)) return true;
+    }
+    return false;
+}
+
+fn countLines(stream: []const u8, summary: *Summary) bool {
+    var found = false;
+    var lines = std.mem.splitScalar(u8, stream, '\n');
+    while (lines.next()) |raw| {
+        const line = clean(raw);
+        if (!isCountLine(line)) continue;
+        summary.add(line);
+        found = true;
+    }
+    return found;
 }
 
 pub const no_tests_note = "no tests collected; treated as passing";
@@ -353,6 +377,12 @@ test "a passing run is summed up by its count lines, oldest first and under the 
 
     summary = summarize(reportOf(0, "", ""));
     try testing.expectEqualStrings("", summary.text());
+}
+
+test "a failing run whose count lines sit above a long failure list is summed up by them, not by a stack frame" {
+    const failing = reportOf(1, "  1) rule\n       valid\n         a:\n\n  3 passing (1s)\n  516 failing\n\n  1) rule\n     TypeError: x is not a function\n" ++ "      at f (lib/a.js:1:1)\n" ** 20, "");
+    const summary = summarize(failing);
+    try testing.expectEqualStrings("3 passing (1s) | 516 failing", summary.text());
 }
 
 test "a missing command or module is an environment error, a failing test or a relative import is not" {

@@ -270,7 +270,7 @@ test "git diff folds a big diff under the budget and names the elided span" {
 
     var big_after: std.Io.Writer.Allocating = .init(gpa);
     defer big_after.deinit();
-    for (0..1500) |i| try big_after.writer.print("changed {d}\n", .{i});
+    for (0..1500) |i| try big_after.writer.print("changed {d} again\n", .{i});
     try repo.writeFile("big.txt", big_after.written());
 
     const runtime = try Runtime.create(gpa);
@@ -357,7 +357,7 @@ test "symbol diff reports a changed function body at the symbol level" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -375,7 +375,7 @@ test "symbol diff reports an added function and an added type" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -396,7 +396,7 @@ test "symbol diff flags a comment-only change as a non-symbol change" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -457,7 +457,7 @@ test "cross-language symbol_changes populate for python and c#" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -491,7 +491,7 @@ test "symbol diff tolerates a binary file change without crashing" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
