@@ -14639,6 +14639,72 @@
       "kills": [
         "output cut by bytes never starts inside a multi-byte character"
       ]
+    },
+    {
+      "id": "DOCF1-jsdoc-never-folded",
+      "file": "src/engine/doc_fold.zig",
+      "from": "    if (std.mem.startsWith(u8, comment, \"/**/\")) return null;\n",
+      "to": "    return null;\n",
+      "kills": [
+        "a multi-line JSDoc folds to its first sentence and reports the original lines",
+        "a fold limited to a byte range returns only that range"
+      ]
+    },
+    {
+      "id": "DOCF2-plain-comments-folded",
+      "file": "src/engine/doc_fold.zig",
+      "from": "    const prefix = docPrefix(comment) orelse return null;\n",
+      "to": "    const prefix = docPrefix(comment) orelse \"/*\";\n",
+      "kills": [
+        "plain comments and one-line docs stay byte for byte"
+      ]
+    },
+    {
+      "id": "DOCF3-license-not-collapsed",
+      "file": "src/engine/doc_fold.zig",
+      "from": "            if (mentionsLicense(source[first.start..top.end])) {\n",
+      "to": "            if (false) {\n",
+      "kills": [
+        "a license header at the top of the file collapses to its first line"
+      ]
+    },
+    {
+      "id": "DOCF4-docstring-not-recognised",
+      "file": "src/engine/doc_fold.zig",
+      "from": "    if (!wrapped and !isString(profile, node.kind())) return false;\n",
+      "to": "    return false;\n",
+      "kills": [
+        "a python docstring folds to a one-line docstring with the same quotes",
+        "read_symbol folds a python docstring to its first sentence"
+      ]
+    },
+    {
+      "id": "DOCF5-detail-full-still-folds",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (self.detail == .full) return null;\n",
+      "to": "",
+      "kills": [
+        "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
+      ]
+    },
+    {
+      "id": "DOCF6-docs-field-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (docs.len == 0) return;\n",
+      "to": "    return;\n",
+      "kills": [
+        "a skeleton with folded docs names the original lines and how to get them",
+        "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
+      ]
+    },
+    {
+      "id": "DOCF7-skeleton-whole-unfolded",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const text = if (docs) |d| try gpa.dupe(u8, d.text) else",
+      "to": "    const text = if (docs) |_| try gpa.dupe(u8, snapshot.source) else",
+      "kills": [
+        "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
+      ]
     }
   ]
 }

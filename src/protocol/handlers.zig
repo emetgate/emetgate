@@ -5,6 +5,7 @@ const commit_refusal = @import("../platform/commit_refusal.zig");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const skeleton = @import("../engine/skeleton.zig");
+const doc_fold = @import("../engine/doc_fold.zig");
 const line_range = @import("../engine/line_range.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
@@ -232,7 +233,9 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
         event.chars_fullfile = snapshot.source.len;
         return read_cache.writeCovered(w, file, null, file_hash);
     }
-    const text = if (whole) try gpa.dupe(u8, snapshot.source) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
+    const docs: ?doc_fold.Folded = if (whole) try doc_fold.fold(gpa, snapshot.profile, snapshot.tree, 0, @intCast(snapshot.source.len)) else null;
+    defer if (docs) |d| d.deinit(gpa);
+    const text = if (docs) |d| try gpa.dupe(u8, d.text) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
     defer gpa.free(text);
     const hash = symbol.hashOf(text);
     if (mirror) |m| {
@@ -248,7 +251,7 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     defer adopted.deinit();
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, adopted.items);
+    try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, adopted.items, if (docs) |d| d.spans else &.{});
     if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);
 }
 
@@ -296,6 +299,14 @@ const Reading = struct {
     fn folds(self: Reading, chars: usize) bool {
         return self.detail == .budgeted and chars > self.budget;
     }
+
+    fn foldDocs(self: Reading, gpa: Allocator, snapshot: *const Snapshot, start: u32, end: u32) !?doc_fold.Folded {
+        if (self.detail == .full) return null;
+        const docs = try doc_fold.fold(gpa, snapshot.profile, snapshot.tree, start, end);
+        if (docs.spans.len != 0) return docs;
+        docs.deinit(gpa);
+        return null;
+    }
 };
 
 fn mirrorKey(gpa: Allocator, file: []const u8, sym: []const u8, folded: bool) ![]u8 {
@@ -323,7 +334,9 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     defer ref.deinit(gpa);
     const found = try table.resolve(ref);
     event.hash = found.hash;
-    const body = snapshot.tree.text(found.body);
+    const docs = if (nodes) null else try reading.foldDocs(gpa, snapshot, found.body.startByte(), found.body.endByte());
+    defer if (docs) |d| d.deinit(gpa);
+    const body = if (docs) |d| d.text else snapshot.tree.text(found.body);
     const folds = !nodes and reading.folds(body.len);
     if (!nodes and try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force)) {
         event.chars_emetgate = 0;
@@ -331,7 +344,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
         return read_cache.writeCovered(w, file, sym, symbol.fileHash(snapshot.source));
     }
     if (!nodes) if (mirror) |m| {
-        const key = try mirrorKey(gpa, file, sym, folds);
+        const key = try mirrorKey(gpa, file, sym, folds or docs != null);
         defer gpa.free(key);
         if (try m.check(key, found.hash, force) == .unchanged) {
             event.chars_emetgate = 0;
@@ -355,7 +368,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
         return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
     }
     event.chars_emetgate = body.len;
-    try wire.writeSymbolBody(w, file, sym, found.hash, body);
+    try wire.writeSymbolBody(w, file, sym, found.hash, body, if (docs) |d| d.spans else &.{});
 }
 
 fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
@@ -372,6 +385,11 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     defer for (entries[0..views]) |entry| if (entry.folded) |folded| folded.view.deinit(gpa);
     var lines: ?read_budget.Lines = null;
     defer if (lines) |l| l.deinit(gpa);
+    var folded_docs: std.ArrayList(doc_fold.Folded) = .empty;
+    defer {
+        for (folded_docs.items) |d| d.deinit(gpa);
+        folded_docs.deinit(gpa);
+    }
     var chars: usize = 0;
     const covered = try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force);
     for (symbols, 0..) |item, i| {
@@ -389,15 +407,18 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
             chars += text.len;
             continue;
         }
-        const body = snapshot.tree.text(found.body);
+        try folded_docs.ensureUnusedCapacity(gpa, 1);
+        const docs = try reading.foldDocs(gpa, snapshot, found.body.startByte(), found.body.endByte());
+        if (docs) |d| folded_docs.appendAssumeCapacity(d);
+        const body = if (docs) |d| d.text else snapshot.tree.text(found.body);
         const folds = reading.folds(body.len);
         var unchanged = covered;
         if (!covered) if (mirror) |m| {
-            const key = try mirrorKey(gpa, file, sym, folds);
+            const key = try mirrorKey(gpa, file, sym, folds or docs != null);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
         };
-        entries[i] = .{ .ref = sym, .hash = found.hash, .body = if (unchanged) null else body };
+        entries[i] = .{ .ref = sym, .hash = found.hash, .body = if (unchanged) null else body, .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
         if (unchanged) continue;
         if (folds) {
@@ -450,27 +471,35 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
     }
     var lines: ?read_budget.Lines = null;
     defer if (lines) |l| l.deinit(gpa);
+    var folded_docs: std.ArrayList(doc_fold.Folded) = .empty;
+    defer {
+        for (folded_docs.items) |d| d.deinit(gpa);
+        folded_docs.deinit(gpa);
+    }
     var chars: usize = 0;
     for (matched, 0..) |found, i| {
         ref_text[i] = try std.fmt.allocPrint(gpa, "{f}", .{found.ref});
         named = i + 1;
-        const text = snapshot.source[found.declaration.start..found.declaration.end];
+        try folded_docs.ensureUnusedCapacity(gpa, 1);
+        const docs = try reading.foldDocs(gpa, snapshot, found.declaration.start, found.declaration.end);
+        if (docs) |d| folded_docs.appendAssumeCapacity(d);
+        const text = if (docs) |d| d.text else snapshot.source[found.declaration.start..found.declaration.end];
         const folds = reading.folds(text.len);
         var unchanged = whole_read;
         if (!whole_read) if (mirror) |m| {
-            const key = try mirrorKey(gpa, file, ref_text[i], folds);
+            const key = try mirrorKey(gpa, file, ref_text[i], folds or docs != null);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
         };
         const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
         const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
-        entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line) };
+        entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line), .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
         if (unchanged) continue;
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
             const view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));
-            entries[i].folded = .{ .view = view, .signature = firstLineOf(text), .budget = reading.budget };
+            entries[i].folded = .{ .view = view, .signature = firstLineOf(snapshot.source[found.declaration.start..found.declaration.end]), .budget = reading.budget };
             chars += view.text.len;
             continue;
         }

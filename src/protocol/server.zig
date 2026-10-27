@@ -71,7 +71,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Reads symbol bodies with hashes by symbol, symbols, or line_start+line_end. Bodies over " ++ budget_text ++ " chars fold unless detail:\"full\". nodes:true prefixes node ids (id|code) for emetgate_try.",
+        .description = "Reads bodies+hashes by symbol, symbols or line_start+line_end. Docs and bodies over " ++ budget_text ++ " chars fold unless detail:\"full\". nodes:true prefixes node ids (id|code) for emetgate_try.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "ref, e.g. Class.method or add", .optional = true },
