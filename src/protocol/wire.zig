@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const symmetry = @import("../engine/symmetry.zig");
 const node_cas = @import("../engine/node_cas.zig");
 const sandbox = @import("../platform/sandbox.zig");
+const test_outcome = @import("../platform/test_outcome.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
@@ -366,6 +367,7 @@ pub const ShadowNote = struct {
     skipped_links: usize,
     tree: ?shadow.TreeUse = null,
     tree_only: bool = false,
+    tests: test_outcome.Summary = .{},
 };
 
 pub fn treeNote(trace: runner.Trace) ?ShadowNote {
@@ -403,8 +405,15 @@ pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
 fn writeNote(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void {
     if (full) return writeShadowNote(js, note);
     const n = note orelse return;
+    try writeTests(js, &n);
     const tree = n.tree orelse return;
     if (tree.left_behind != null) try writeGateTree(js, tree);
+}
+
+fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
+    if (n.tests.len == 0) return;
+    try js.objectField("tests");
+    try js.write(n.tests.text());
 }
 
 pub const shadow_path_warning = "the shadow root has a path segment starting with a dot; tools that refuse dot directories (the send package behind express res.sendFile is one) fail there; start emetgate with --shadow-root <dir> on a path without one";
@@ -417,12 +426,14 @@ pub fn shadowNote(root: []const u8, trace: runner.Trace) ShadowNote {
         .copied_files = trace.copied_files,
         .skipped_links = trace.skipped_links,
         .tree = trace.tree,
+        .tests = trace.tests,
     };
 }
 
 fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
     const n = note orelse return;
     if (n.tree_only) return writeGateTree(js, n.tree);
+    try writeTests(js, &n);
     try js.objectField("shadow");
     try js.beginObject();
     try js.objectField("root");
@@ -1090,6 +1101,19 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
     try js.write(command);
     try js.objectField("outcome");
     try js.write(outcomeTag(report.outcome));
+    if (std.mem.eql(u8, reason, "tests_failed")) {
+        const tests = test_outcome.summarize(report);
+        if (tests.len != 0) {
+            try js.objectField("tests");
+            try js.write(tests.text());
+        }
+    }
+    if (std.mem.eql(u8, reason, "test_env_error")) {
+        try js.objectField("env_error");
+        try js.write(test_outcome.envError(report).?);
+        try js.objectField("hint");
+        try js.write(env_error_hint);
+    }
     switch (report.outcome) {
         .crashed => |code| {
             var code_buf: [10]u8 = undefined;
@@ -1100,13 +1124,30 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
     }
     try js.objectField("diagnostics");
     try js.beginArray();
-    for (from_out) |d| try writeDiagnostic(&js, d);
-    for (from_err) |d| try writeDiagnostic(&js, d);
+    var shown: usize = 0;
+    for ([_][]const diagnostics.Diagnostic{ from_out, from_err }) |found| for (found) |d| {
+        if (shown == max_rejected_diagnostics) break;
+        try writeDiagnostic(&js, d);
+        shown += 1;
+    };
     try js.endArray();
+    if (from_out.len + from_err.len > shown) {
+        try js.objectField("diagnostics_dropped");
+        try js.write(from_out.len + from_err.len - shown);
+    }
+    const err_budget: usize = if (report.stdout.len == 0) test_outcome.output_budget else test_outcome.output_budget / 3;
+    const err_text = try test_outcome.condense(gpa, report.stderr, err_budget);
+    defer gpa.free(err_text.text);
+    const out_text = try test_outcome.condense(gpa, report.stdout, test_outcome.output_budget - @min(err_text.text.len, err_budget));
+    defer gpa.free(out_text.text);
     try js.objectField("stdout");
-    try js.write(report.stdout);
+    try js.write(out_text.text);
     try js.objectField("stderr");
-    try js.write(report.stderr);
+    try js.write(err_text.text);
+    if (out_text.dropped_lines + err_text.dropped_lines != 0) {
+        try js.objectField("output_dropped_lines");
+        try js.write(out_text.dropped_lines + err_text.dropped_lines);
+    }
     try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
@@ -1125,9 +1166,13 @@ fn writeDiagnostic(js: *std.json.Stringify, d: diagnostics.Diagnostic) !void {
     try js.endObject();
 }
 
+const max_rejected_diagnostics = 20;
+
+pub const env_error_hint = "the test command could not start (a missing program or module), so no test judged the edit; the edit is not the cause; fix the test setup or pass a different --test command";
+
 pub fn rejectionReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
-        .exited => |code| if (code != 0) "tests_failed" else "leftover_processes",
+        .exited => |code| if (code == 0) "leftover_processes" else if (test_outcome.envError(report) != null) "test_env_error" else "tests_failed",
         .crashed => "test_crashed",
         .timed_out => "timed_out",
         .output_limit => "output_limit",
@@ -1401,6 +1446,83 @@ test "rejected reason reflects the real outcome, not always tests_failed" {
         var tag_buf: [64]u8 = undefined;
         try testing.expect(std.mem.indexOf(u8, json, try std.fmt.bufPrint(&tag_buf, "\"outcome\":\"{s}\"", .{case.tag})) != null);
         try testing.expect(std.mem.indexOf(u8, json, "\"test_cmd\":\"npm test\"") != null);
+    }
+}
+
+test "a test command that could not start is a test_env_error with its first useful line, never tests_failed" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 1 },
+        .duration_ns = 0,
+        .stdout = @constCast(""),
+        .stderr = @constCast("node:internal/modules/cjs/loader:1228\n  throw err;\n\nError: Cannot find module 'mocha'\n"),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    try testing.expectEqualStrings("test_env_error", rejectionReason(report));
+    try writeRejected(testing.allocator, &buffer.writer, "npm test", report, null);
+    const json = buffer.written();
+    errdefer std.debug.print("{s}\n", .{json});
+    try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"test_env_error\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"env_error\":\"Error: Cannot find module 'mocha'\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"hint\":\"") != null);
+
+    var failed: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer failed.deinit();
+    var plain = report;
+    plain.stderr = @constCast("  41 passing\n  1 failing\n");
+    try writeRejected(testing.allocator, &failed.writer, "npm test", plain, null);
+    try testing.expect(std.mem.indexOf(u8, failed.written(), "\"reason\":\"tests_failed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, failed.written(), "\"tests\":\"41 passing") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"tests\"") == null);
+    try testing.expect(std.mem.indexOf(u8, failed.written(), "env_error") == null);
+}
+
+test "a rejected reply caps its test output and diagnostics and says how much it dropped" {
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(testing.allocator);
+    for (0..11) |index| try output.print(testing.allocator, "  {d}) suite case {d}\n  Error: same failure\n    at a (x.js:1:1)\n    at b (x.js:2:2)\n    at c (x.js:3:3)\n    at d (x.js:4:4)\n", .{ index + 1, index });
+    for (0..30) |index| try output.print(testing.allocator, "src/x.ts({d},1): error TS2322: bad type\n", .{index + 1});
+    for (0..100) |index| try output.print(testing.allocator, "noise line {d} that takes up room in the reply\n", .{index});
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 1 },
+        .duration_ns = 0,
+        .stdout = output.items,
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeRejected(testing.allocator, &buffer.writer, "npm test", report, null);
+    const json = buffer.written();
+    errdefer std.debug.print("{s}\n", .{json});
+    try testing.expect(json.len < 5000);
+    try testing.expectEqual(@as(usize, max_rejected_diagnostics), std.mem.count(u8, json, "\"file\":"));
+    try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics_dropped\":10") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"output_dropped_lines\":") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "1) suite case 0") != null);
+}
+
+test "a committed reply carries the test summary, compact or full" {
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 0 },
+        .duration_ns = 0,
+        .stdout = @constCast("  ok\n\n  12 passing (40ms)\n"),
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    var trace: runner.Trace = .{};
+    runner.noteSummary(&trace, report);
+    const note = shadowNote("D:\\shadows", trace);
+    for ([_]bool{ false, true }) |full| {
+        var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buffer.deinit();
+        try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), note, full);
+        errdefer std.debug.print("{s}\n", .{buffer.written()});
+        try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"tests\":\"12 passing (40ms)\"") != null);
     }
 }
 

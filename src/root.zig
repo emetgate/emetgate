@@ -69,6 +69,7 @@ pub const dir_scan = @import("platform/dir_scan.zig");
 pub const gate_tree = @import("platform/gate_tree.zig");
 pub const shadow_root = @import("platform/shadow_root.zig");
 pub const sandbox = @import("platform/sandbox.zig");
+pub const test_outcome = @import("platform/test_outcome.zig");
 pub const appcontainer = @import("platform/appcontainer.zig");
 pub const tsserver = @import("platform/tsserver.zig");
 pub const rename_batch = @import("platform/rename_batch.zig");

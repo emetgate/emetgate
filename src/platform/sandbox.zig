@@ -51,6 +51,7 @@ pub const Command = struct {
     cwd: []const u8,
     limits: Limits = .{},
     backend: Backend = .low_integrity,
+    temp: ?[]const u8 = null,
 };
 
 const ntstatus_error_floor: u32 = 0xC0000000;
@@ -350,6 +351,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     const program = try resolveProgram(arena, command.cwd, command.argv[0]);
     const command_line = try commandLine(arena, command.argv);
     const cwd = try std.unicode.wtf8ToWtf16LeAllocZ(arena, command.cwd);
+    const environment: ?*anyopaque = if (command.temp) |temp| @ptrCast((try environmentWithTemp(arena, temp)).ptr) else null;
 
     const nul = try openNul();
     defer std.os.windows.CloseHandle(nul);
@@ -399,8 +401,8 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     var info: std.os.windows.PROCESS.INFORMATION = undefined;
     const flags = win.create_suspended | win.create_unicode_environment | win.create_no_window | win.extended_startupinfo_present;
     const spawned: std.os.windows.BOOL = switch (backend) {
-        .low => |token| win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
-        .app => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
+        .low => |token| win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, environment, cwd, &startup, &info),
+        .app => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, environment, cwd, &startup, &info),
     };
     if (spawned == .FALSE) return switch (win.GetLastError()) {
         win.error_file_not_found, win.error_path_not_found, win.error_directory => error.FileNotFound,
@@ -470,6 +472,44 @@ pub fn environmentValue(arena: Allocator, name: [:0]const u16) !?[]u8 {
     const written = win.GetEnvironmentVariableW(name.ptr, value_w.ptr, needed);
     if (written == 0 or written >= needed) return null;
     return try std.unicode.wtf16LeToWtf8Alloc(arena, value_w[0..written]);
+}
+
+const temp_names = [_][]const u8{ "TEMP", "TMP" };
+
+fn isTempEntry(entry: []const u16) bool {
+    for (temp_names) |name| {
+        if (entry.len <= name.len or entry[name.len] != '=') continue;
+        var same = true;
+        for (name, entry[0..name.len]) |want, got| {
+            if (got > 0x7f or std.ascii.toUpper(@intCast(got)) != want) same = false;
+        }
+        if (same) return true;
+    }
+    return false;
+}
+
+pub fn environmentWithTemp(arena: Allocator, temp: []const u8) ![:0]u16 {
+    const block = win.GetEnvironmentStringsW() orelse return error.SandboxUnavailable;
+    defer _ = win.FreeEnvironmentStringsW(block);
+    var out: std.ArrayList(u16) = .empty;
+    var index: usize = 0;
+    while (block[index] != 0) {
+        const start = index;
+        while (block[index] != 0) index += 1;
+        const entry = block[start..index];
+        index += 1;
+        if (isTempEntry(entry)) continue;
+        try out.appendSlice(arena, entry);
+        try out.append(arena, 0);
+    }
+    const temp_w = try std.unicode.wtf8ToWtf16LeAlloc(arena, temp);
+    for (temp_names) |name| {
+        for (name) |c| try out.append(arena, c);
+        try out.append(arena, '=');
+        try out.appendSlice(arena, temp_w);
+        try out.append(arena, 0);
+    }
+    return out.toOwnedSliceSentinel(arena, 0);
 }
 
 fn resolveProgram(arena: Allocator, cwd: []const u8, name: []const u8) ![:0]u16 {
@@ -625,6 +665,8 @@ const win = struct {
     extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetEnvironmentStringsW() callconv(.winapi) ?[*]u16;
+    extern "kernel32" fn FreeEnvironmentStringsW(block: [*]u16) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buffer: ?[*]u16, size: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn CreateNamedPipeW(name: [*:0]const u16, open_mode: windows.DWORD, pipe_mode: windows.DWORD, max_instances: windows.DWORD, out_size: windows.DWORD, in_size: windows.DWORD, timeout: windows.DWORD, security: ?*SecurityAttributes) callconv(.winapi) windows.HANDLE;
     extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: windows.DWORD, share: windows.DWORD, security: ?*SecurityAttributes, disposition: windows.DWORD, flags: windows.DWORD, template: ?windows.HANDLE) callconv(.winapi) windows.HANDLE;
@@ -840,6 +882,38 @@ fn processIsGone(pid: u32) bool {
     const handle = win.OpenProcess(win.synchronize, .FALSE, pid) orelse return true;
     defer std.os.windows.CloseHandle(handle);
     return win.WaitForSingleObject(handle, 5000) == win.wait_object_0;
+}
+
+test "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const block = try environmentWithTemp(arena, "D:\\gate\\shadow-tmp");
+    var temps: usize = 0;
+    var tmps: usize = 0;
+    var path_seen = false;
+    var entries = std.mem.splitScalar(u16, block, 0);
+    while (entries.next()) |entry_w| {
+        if (entry_w.len == 0) continue;
+        const entry = try std.unicode.wtf16LeToWtf8Alloc(arena, entry_w);
+        if (std.ascii.startsWithIgnoreCase(entry, "TEMP=")) {
+            try testing.expectEqualStrings("TEMP=D:\\gate\\shadow-tmp", entry);
+            temps += 1;
+        }
+        if (std.ascii.startsWithIgnoreCase(entry, "TMP=")) {
+            try testing.expectEqualStrings("TMP=D:\\gate\\shadow-tmp", entry);
+            tmps += 1;
+        }
+        if (std.ascii.startsWithIgnoreCase(entry, "PATH=")) path_seen = true;
+    }
+    try testing.expectEqual(@as(usize, 1), temps);
+    try testing.expectEqual(@as(usize, 1), tmps);
+    try testing.expect(path_seen);
+    try testing.expectEqual(@as(u16, 0), block[block.len - 1]);
+    try testing.expect(isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("tmp=x")));
+    try testing.expect(!isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("TEMPLATE=x")));
+    try testing.expect(!isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("TMP")));
 }
 
 test "the job actually carries every limit we claim to set" {

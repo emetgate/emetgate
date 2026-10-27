@@ -71,6 +71,7 @@ pub const dir_scan = src.dir_scan;
 pub const gate_tree = src.gate_tree;
 pub const shadow_root = src.shadow_root;
 pub const sandbox = src.sandbox;
+pub const test_outcome = src.test_outcome;
 pub const appcontainer = src.appcontainer;
 pub const tsserver = src.tsserver;
 pub const rename_batch = src.rename_batch;

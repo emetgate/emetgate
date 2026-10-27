@@ -262,7 +262,8 @@ pub const Shadow = struct {
             try wants.append(arena, .{ .rel = file, .source = file, .how = if (isUnderAny(file, options.private)) .copy else .link });
         }
         const tracked = wants.items.len;
-        var found: gate_tree.Found = .{ .report = options.blocked };
+        var links: std.ArrayList([]const u8) = .empty;
+        var found: gate_tree.Found = .{ .report = options.blocked, .links = &links };
         for (options.linked) |link| try gate_tree.discover(arena, &pool, root, 0, link, &wants, &found);
         const roots: []const std.os.windows.HANDLE = if (store) |handle| &.{ root, handle } else &.{root};
         const outcomes = try arena.alloc(gate_tree.Outcome, wants.items.len);
@@ -274,7 +275,8 @@ pub const Shadow = struct {
             else => |e| return e,
         };
 
-        var stats: link_tree.Stats = .{ .dirs = found.dirs, .skipped_links = found.skipped_links };
+        var stats: link_tree.Stats = .{ .dirs = found.dirs };
+        try mirrorLinks(io, options, links.items, &stats);
         var use: TreeUse = .{ .mode = .kept, .source = if (store != null) .head else .working };
         for (outcomes, 0..) |outcome, index| {
             if (index < tracked) {
@@ -320,6 +322,7 @@ pub const Shadow = struct {
             count += 1;
             if (isUnderAny(entry.path, options.linked) != under_links) continue;
             if (std.fs.path.dirname(entry.path)) |parent| try dir.createDirPath(io, parent);
+            if (under_links) try ensureNoLinks(options.shadow_abs, try std.fs.path.join(arena, &.{ options.shadow_abs, entry.path }));
             if (under_links) dir.deleteFile(io, entry.path) catch |err| switch (err) {
                 error.FileNotFound => {},
                 else => |e| return e,
@@ -426,6 +429,19 @@ pub const Shadow = struct {
     }
 };
 
+fn mirrorLinks(io: std.Io, options: Shadow.Options, links: []const []const u8, stats: *link_tree.Stats) !void {
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
+    for (links) |link| {
+        const dest = try joinWindows(&dest_buf, options.shadow_abs, link);
+        if (std.fs.path.dirname(dest)) |parent| {
+            try Dir.cwd().createDirPath(io, parent);
+            try ensureNoLinks(options.shadow_abs, parent);
+        }
+        link_tree.mirror(io, try joinWindows(&link_buf, options.root_abs, link), dest, stats);
+    }
+}
+
 fn removeAfterCall(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     if (builtin.is_test) {
         if (injected_probe.removal) |forced| return forced;
@@ -449,6 +465,25 @@ fn unlinkAll(base_abs: []const u8, shadow_abs: []const u8) !void {
     const tree = (try dir_scan.openRoot(shadow_abs)) orelse return;
     defer dir_scan.close(tree);
     _ = try gate_tree.removeAll(tree);
+}
+
+pub fn freshTemp(io: std.Io, temp_abs: []const u8) !void {
+    try clearTemp(io, temp_abs);
+    try Dir.cwd().createDirPath(io, temp_abs);
+    try grantLowIntegrityWrite(temp_abs);
+}
+
+pub fn clearTemp(io: std.Io, temp_abs: []const u8) !void {
+    if (builtin.os.tag != .windows) return;
+    if (!try isReparsePoint(temp_abs)) {
+        const tree = (try dir_scan.openRoot(temp_abs)) orelse return;
+        defer dir_scan.close(tree);
+        _ = try gate_tree.removeAll(tree);
+    }
+    Dir.cwd().deleteDir(io, temp_abs) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| return e,
+    };
 }
 
 pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
@@ -1009,6 +1044,84 @@ test "removing the shadow deletes the hardlink tree, never the files it shares" 
     defer testing.allocator.free(survivor);
     try testing.expectEqualStrings("module.exports = 42;\n", survivor);
     try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
+}
+
+fn linkNodeModules(project: *Project, target_buf: []u8) ![]const u8 {
+    try project.tmp.dir.deleteTree(testing.io, "project/node_modules");
+    try project.tmp.dir.createDirPath(testing.io, "outside_modules/pkg");
+    try project.tmp.dir.writeFile(testing.io, .{ .sub_path = "outside_modules/pkg/index.js", .data = "module.exports = 7;\n" });
+    const top_abs = try project.tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top_abs);
+    const target = try std.fmt.bufPrint(target_buf, "{s}\\outside_modules", .{top_abs});
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try createJunction(testing.io, try std.fmt.bufPrint(&link_buf, "{s}\\node_modules", .{project.root_abs}), target);
+    return target;
+}
+
+test "a node_modules that is a junction is a junction to the same target in the kept and the copied tree, and removal leaves the target" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    for ([_]TreeMode{ .kept, .full_copy }) |mode| {
+        var project = try Project.init();
+        defer project.deinit();
+        var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+        _ = try linkNodeModules(&project, &target_buf);
+        var options = try project.options();
+        options.files = &.{ "a.ts", "src/b.ts" };
+        options.tree = mode;
+
+        for (0..2) |_| {
+            var shadow = try Shadow.prepare(testing.io, options);
+            defer shadow.finish();
+            try expectFileContent(shadow.dir, "node_modules/pkg/index.js", "module.exports = 7;\n");
+            try testing.expectEqual(@as(usize, 1), shadow.link_stats.mirrored);
+            try testing.expectEqual(@as(usize, 0), shadow.link_stats.skipped_links);
+            var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+            try testing.expect(try isReparsePoint(try std.fmt.bufPrint(&link_buf, "{s}\\node_modules", .{options.shadow_abs})));
+            try testing.expectError(error.UnsafePath, shadow.writeFile("node_modules/pkg/index.js", "changed\n"));
+        }
+        try remove(testing.io, options.base_abs, options.shadow_abs);
+        try expectFileContent(project.tmp.dir, "outside_modules/pkg/index.js", "module.exports = 7;\n");
+    }
+}
+
+test "a link inside a real node_modules is mirrored in the kept tree" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    try project.tmp.dir.createDirPath(testing.io, "outside_modules/dep");
+    try project.tmp.dir.writeFile(testing.io, .{ .sub_path = "outside_modules/dep/index.js", .data = "module.exports = 8;\n" });
+    const top_abs = try project.tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top_abs);
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try createJunction(testing.io, try std.fmt.bufPrint(&link_buf, "{s}\\node_modules\\dep", .{project.root_abs}), try std.fmt.bufPrint(&target_buf, "{s}\\outside_modules\\dep", .{top_abs}));
+    var options = try project.options();
+    options.tree = .kept;
+
+    var shadow = try Shadow.prepare(testing.io, options);
+    defer shadow.finish();
+    try expectFileContent(shadow.dir, "node_modules/pkg/index.js", "module.exports = 42;\n");
+    try expectFileContent(shadow.dir, "node_modules/dep/index.js", "module.exports = 8;\n");
+    try testing.expectEqual(link_tree.Stats{ .dirs = 2, .linked = 1, .mirrored = 1 }, shadow.link_stats);
+}
+
+test "a committed file is never copied through a mirrored node_modules junction" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    _ = try linkNodeModules(&project, &target_buf);
+    try project.tmp.dir.createDirPath(testing.io, "store/tree/node_modules/pkg");
+    try project.tmp.dir.writeFile(testing.io, .{ .sub_path = "store/tree/node_modules/pkg/index.js", .data = "planted\n" });
+    const store = try project.tmp.dir.realPathFileAlloc(testing.io, "store", testing.allocator);
+    defer testing.allocator.free(store);
+    var options = try project.options();
+    options.tree = .full_copy;
+    options.files = &.{};
+    options.committed = .{ .dir = store, .count = 1 };
+
+    try testing.expectError(error.WorkspaceIsLink, Shadow.prepare(testing.io, options));
+    try expectFileContent(project.tmp.dir, "outside_modules/pkg/index.js", "module.exports = 7;\n");
 }
 
 test "re-preparing replaces a stale shadow completely" {

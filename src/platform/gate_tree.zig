@@ -26,6 +26,7 @@ pub const Found = struct {
     dirs: usize = 0,
     skipped_links: usize = 0,
     report: ?*Report = null,
+    links: ?*std.ArrayList([]const u8) = null,
 };
 
 pub const Stats = struct {
@@ -887,12 +888,20 @@ const Discovery = struct {
         self.found.skipped_links += 1;
     }
 
+    fn noteLink(self: *Discovery, rel: []const u8, name: []const u16) Allocator.Error!void {
+        const links = self.found.links orelse return;
+        self.lock.acquire();
+        defer self.lock.release();
+        try links.append(self.arena, try self.pathOf(rel, name));
+    }
+
     fn body(raw: *anyopaque, item: u32, scratch: *align(8) dir_scan.Buffer, key: []u8) Error!void {
         _ = key;
         const self: *Discovery = @ptrCast(@alignCast(raw));
         const at = self.current[item];
         var reader = dir_scan.Reader.init(at.handle, scratch);
         while (try reader.next()) |entry| {
+            if (entry.kind == .link_file or entry.kind == .link_directory) try self.noteLink(at.rel, entry.name);
             switch (entry.kind) {
                 .link_file, .link_directory => self.skip(),
                 .file => try self.file(at.rel, entry),
@@ -900,6 +909,7 @@ const Discovery = struct {
                     const child = (dir_scan.openChild(at.handle, entry.name) catch |err| switch (err) {
                         error.ScanIsLink => {
                             self.skip();
+                            try self.noteLink(at.rel, entry.name);
                             continue;
                         },
                         else => |e| return self.refused(e, at.rel, entry.name),
@@ -921,6 +931,7 @@ pub fn discover(arena: Allocator, pool: ?*worker_pool.Pool, root: Handle, root_i
     const top = (descendExisting(root, dir_rel) catch |err| switch (err) {
         error.ScanIsLink => {
             found.skipped_links += 1;
+            if (found.links) |links| try links.append(arena, dir_rel);
             return;
         },
         else => |e| {
