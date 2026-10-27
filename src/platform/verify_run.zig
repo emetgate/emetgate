@@ -56,8 +56,14 @@ const Context = struct {
         return self.blob(self.commit, path);
     }
 
+    fn converted(self: *Context, rev: []const u8, path: []const u8) !?[]u8 {
+        if (try receipts.filtered(self.arena, self.io, self.root, rev, path)) return null;
+        return receipts.checkedOut(self.arena, self.io, self.root, rev, path);
+    }
+
     fn text(self: *Context, rev: ?[]const u8, path: []const u8) !checker.Text {
         const r = rev orelse return .stored;
+        if (try self.converted(r, path)) |bytes| return .{ .converted = bytes };
         if (!try receipts.filtered(self.arena, self.io, self.root, r, path)) return .stored;
         const bytes = (try receipts.checkedOut(self.arena, self.io, self.root, r, path)) orelse return .unavailable;
         return .{ .driver = bytes };

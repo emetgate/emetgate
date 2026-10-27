@@ -50,8 +50,30 @@ pub fn normalizeBody(body: []const u8) []const u8 {
     return std.mem.trim(u8, without_bom, " \t\r\n");
 }
 
+fn crlfOf(source: []const u8) ?[]const u8 {
+    const at = std.mem.indexOfScalar(u8, source, '\n') orelse return null;
+    return if (at > 0 and source[at - 1] == '\r') "\r\n" else null;
+}
+
+fn followLineEnding(gpa: Allocator, body: []const u8, eol: ?[]const u8) Allocator.Error![]u8 {
+    const ending = eol orelse return gpa.dupe(u8, body);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var i: usize = 0;
+    while (i < body.len) : (i += 1) {
+        if (body[i] == '\r' and i + 1 < body.len and body[i + 1] == '\n') {
+            try out.appendSlice(gpa, ending);
+            i += 1;
+        } else if (body[i] == '\n') {
+            try out.appendSlice(gpa, ending);
+        } else try out.append(gpa, body[i]);
+    }
+    return out.toOwnedSlice(gpa);
+}
+
 pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
-    const new_body = normalizeBody(mutation.new_body);
+    const new_body = try followLineEnding(base.runtime.gpa, normalizeBody(mutation.new_body), crlfOf(base.source));
+    defer base.runtime.gpa.free(new_body);
     const before = try base.symbols();
     const target = try before.resolve(mutation.ref);
     if (!std.mem.eql(u8, &target.hash, &mutation.expected_hash)) return error.HashMismatch;
@@ -84,7 +106,6 @@ pub fn propose(base: *Snapshot, ref: symbol.Ref, expected: symbol.Expected, new_
 }
 
 pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
-    const new_body = normalizeBody(insertion.new_body);
     const before = try base.symbols();
     if (before.resolve(insertion.ref)) |_| {
         return error.SymbolExists;
@@ -95,6 +116,8 @@ pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
     if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;
 
     const eol = try lineEnding(base.source);
+    const new_body = try followLineEnding(base.runtime.gpa, normalizeBody(insertion.new_body), crlfOf(eol));
+    defer base.runtime.gpa.free(new_body);
     const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) "" else eol;
     const start: u32 = @intCast(base.source.len + separator.len);
     const source = try std.mem.concat(base.runtime.gpa, u8, &.{ base.source, separator, new_body, eol });
@@ -525,6 +548,33 @@ test "replacement bodies are normalised: a BOM and surrounding whitespace are ig
         try testing.expectEqualStrings("function f() { return 2; }\n", patched.snapshot.source);
     }
     try testing.expectError(error.BodyEscape, mutate(base, "f", " \r\n\t", .current));
+}
+
+test "a replacement body spliced into a CRLF file takes CRLF line endings, an LF file keeps the body as sent" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const crlf = try test_util.snapshotOf(runtime, "function f() {\r\n  return 1;\r\n}\r\n");
+    defer crlf.destroy();
+    const into_crlf = try mutate(crlf, "f", "{\n  return 2;\r\n}", .current);
+    defer into_crlf.snapshot.destroy();
+    try testing.expectEqualStrings("function f() {\r\n  return 2;\r\n}\r\n", into_crlf.snapshot.source);
+    try testing.expectEqual(@as(u32, "{\r\n  return 2;\r\n}".len), into_crlf.body.end - into_crlf.body.start);
+
+    const lf = try test_util.snapshotOf(runtime, "function f() {\n  return 1;\n}\n");
+    defer lf.destroy();
+    const into_lf = try mutate(lf, "f", "{\r\n  return 2;\n}", .current);
+    defer into_lf.snapshot.destroy();
+    try testing.expectEqualStrings("function f() {\r\n  return 2;\n}\n", into_lf.snapshot.source);
+}
+
+test "an inserted symbol follows a CRLF file's line ending inside its body too" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const applied = try insertInto(runtime, "function add() {\r\n  return 1;\r\n}\r\n", "f", "function f() {\n  return 1;\n}");
+    defer applied.snapshot.destroy();
+    try testing.expectEqualStrings("function add() {\r\n  return 1;\r\n}\r\n\r\nfunction f() {\r\n  return 1;\r\n}\r\n", applied.snapshot.source);
+    try testing.expectEqualStrings("function f() {\r\n  return 1;\r\n}", applied.snapshot.source[applied.body.start..applied.body.end]);
+    try testing.expectEqual(try hashOfRef(applied.snapshot, "f"), applied.hash);
 }
 
 test "mutating one declarator leaves a sibling declarator's hash intact" {

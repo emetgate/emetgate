@@ -12276,6 +12276,61 @@
       "kills": [
         "git log: a commit with a receipt note is marked receipt, never verified, even when the note is forged"
       ]
+    },
+    {
+      "id": "GV3-verify-reads-the-blob-not-the-eol-converted-checkout",
+      "file": "src/platform/verify_run.zig",
+      "from": "        if (try self.converted(r, path)) |bytes| return .{ .converted = bytes };\n",
+      "to": "",
+      "kills": [
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV4-checked-out-receipt-over-an-unconverted-working-file-rejected",
+      "file": "src/verify/checker.zig",
+      "from": "    if (eqlOptional(digestOf(blob), digest)) return .{ .bytes = blob };",
+      "to": "    if (false and eqlOptional(digestOf(blob), digest)) return .{ .bytes = blob };",
+      "kills": [
+        "verify: under core.autocrlf a receipt over an LF working file still verifies against the blob"
+      ]
+    },
+    {
+      "id": "GV5-python-before-ignores-the-eol-converted-checkout",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "[blob_digest(data)] + ([blob_digest(alt)] if alt is not None else [])",
+      "to": "[blob_digest(data)]",
+      "kills": [
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV6-python-after-ignores-the-eol-converted-checkout",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "                    data = alt\n",
+      "to": "                    pass\n",
+      "kills": [
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV7-try-splices-an-lf-body-into-a-crlf-file",
+      "file": "src/engine/cas.zig",
+      "from": "normalizeBody(mutation.new_body), crlfOf(base.source));",
+      "to": "normalizeBody(mutation.new_body), null);",
+      "kills": [
+        "a replacement body spliced into a CRLF file takes CRLF line endings, an LF file keeps the body as sent",
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV8-insert-keeps-an-lf-body-in-a-crlf-file",
+      "file": "src/engine/cas.zig",
+      "from": "normalizeBody(insertion.new_body), crlfOf(eol));",
+      "to": "normalizeBody(insertion.new_body), null);",
+      "kills": [
+        "an inserted symbol follows a CRLF file's line ending inside its body too"
+      ]
     }
   ]
 }

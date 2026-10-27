@@ -134,6 +134,50 @@ test "verify: a file edited by hand after the gate is unverified, the gated one 
     try testing.expect(result.report.verdict != .verified);
 }
 
+test "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try support.Repo.git(case.repo.root_abs, &.{ "config", "core.autocrlf", "true" });
+    try case.repo.write("src/math.ts", "export function add(a: number, b: number): number {\r\n  return a + b;\r\n}\r\n");
+    _ = try case.tryBody("{\n  return b + a;\n}", green);
+    const written = try case.repo.read("src/math.ts");
+    defer testing.allocator.free(written);
+    try testing.expectEqualStrings("export function add(a: number, b: number): number {\r\n  return b + a;\r\n}\r\n", written);
+    try case.commit("gated under autocrlf");
+    try testing.expectEqual(@as(usize, 1), try case.attach());
+    const blob = try receipts.git(case.arena(), testing.io, case.repo.root_abs, &.{ "cat-file", "blob", "HEAD:src/math.ts" });
+    try testing.expect(std.mem.indexOfScalar(u8, blob.?, '\r') == null);
+
+    const result = try case.verify(.{ .commit = "HEAD", .test_command = green });
+    try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
+    try testing.expectEqual(@as(?checker.Verdict, .verified), fileVerdict(result, "src/math.ts"));
+
+    const original = try case.note();
+    const at = std.mem.indexOf(u8, original, "\"before\":\"").? + "\"before\":\"".len;
+    const forged = try case.arena().dupe(u8, original);
+    forged[at] = if (forged[at] == '0') '1' else '0';
+    try case.replaceNote(forged);
+    try testing.expectEqual(checker.Verdict.mismatch, (try case.verify(.{ .commit = "HEAD", .test_command = green })).report.verdict);
+}
+
+test "verify: under core.autocrlf a receipt over an LF working file still verifies against the blob" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try support.Repo.git(case.repo.root_abs, &.{ "config", "core.autocrlf", "true" });
+    _ = try case.tryBody("{\n  return b + a;\n}", green);
+    const written = try case.repo.read("src/math.ts");
+    defer testing.allocator.free(written);
+    try testing.expect(std.mem.indexOfScalar(u8, written, '\r') == null);
+    try case.commit("gated over an LF file under autocrlf");
+    try testing.expectEqual(@as(usize, 1), try case.attach());
+    const result = try case.verify(.{ .commit = "HEAD", .test_command = green });
+    try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
+}
+
 test "verify: a forged digest, a non-canonical note, an added and a removed receipt are caught" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

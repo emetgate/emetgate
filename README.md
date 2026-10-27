@@ -121,7 +121,7 @@ branch broken: 1 commit(s)
 | fuzz & red-team | random mutation plus attack corpora | no crash or escape on unexpected or hostile input |
 | ripgrep parity gate | compares the hit-set against rg on every run | search cannot be "fast but wrong"; checked line for line |
 
-For the engine: <!-- generated:engine-mutant-summary -->61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
+For the engine: <!-- generated:engine-mutant-summary -->63 mutants today: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
 
 ## Measured
 
