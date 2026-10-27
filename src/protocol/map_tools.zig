@@ -8,6 +8,7 @@ const registry = @import("../engine/lang/registry.zig");
 const rank = @import("../engine/map_region_rank.zig");
 const term_index = @import("../engine/term_index.zig");
 const evidence = @import("../engine/evidence.zig");
+const facts_query = @import("../engine/facts_query.zig");
 const tool_result = @import("tool_result.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -27,6 +28,11 @@ pub const max_symbol_rank: usize = 64;
 pub const extra_part_penalty: f64 = 0.25;
 pub const max_evidence_names: usize = 6;
 pub const max_closest: usize = 3;
+pub const max_graph_subjects: usize = 3;
+pub const max_graph_items: usize = 8;
+pub const max_impact_files: usize = 6;
+pub const impact_depth: u32 = 3;
+pub const graph_words = [_][]const u8{ "call", "caller", "callee", "impact", "break", "blast", "depend", "affect", "uses", "used" };
 pub const call_output_tokens: f64 = 501;
 pub const call_written_tokens: f64 = 1_008;
 pub const call_read_tokens: f64 = 15_000;
@@ -47,7 +53,7 @@ pub const mention_chance = [_]f64{ 0.013, 0.029, 0.044 };
 pub const useful_ratio = [_]f64{ 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30 };
 pub const useful_chance = [_]f64{ 0.009, 0.012, 0.031, 0.045, 0.094, 0.110, 0.199, 0.482, 0.589 };
 
-pub const explore_description = "Answers a code question with named definitions and best-matching code.";
+pub const explore_description = "Answers a code question: named symbols' definitions, callers, callees and impact, then best-matching code.";
 pub const evidence_description = "Full code of up to 6 functions by qualified name.";
 
 pub const Phase = enum(u8) { idle, building, ready, failed };
@@ -344,6 +350,7 @@ pub const Session = struct {
         var containers: Writer.Allocating = .init(arena);
         var picks: std.ArrayList(Picked) = .empty;
         var at: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        var graphed: std.ArrayList(Fn) = .empty;
         for (names) |n| {
             var any = false;
             for (try self.named(arena, n)) |f| {
@@ -354,13 +361,16 @@ pub const Session = struct {
                     continue;
                 }
                 try addPicked(arena, &picks, &at, f, 1, true);
+                try graphed.append(arena, f);
             }
             if (!any) try self.unknown(arena, &notes.writer, n);
         }
+        const graph_asked = asksGraph(question);
         for (try questionIdentifiers(arena, question)) |ident| {
             for (try self.named(arena, ident)) |f| {
                 if (isTest(f.path) or self.container(f)) continue;
                 try addPicked(arena, &picks, &at, f, 1, true);
+                if (graph_asked) try graphed.append(arena, f);
             }
         }
         try self.freshTerms();
@@ -375,6 +385,13 @@ pub const Session = struct {
 
         var out: Writer.Allocating = .init(arena);
         try out.writer.writeAll(notes.written());
+        var drawn: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        for (graphed.items) |f| {
+            if (drawn.count() >= max_graph_subjects) break;
+            const entry = try drawn.getOrPut(arena, keyOf(f));
+            if (entry.found_existing) continue;
+            try self.graph(arena, &out.writer, f);
+        }
         if (containers.written().len != 0) {
             try out.writer.writeAll("Named classes, shown through their matching members:\n");
             try out.writer.writeAll(containers.written());
@@ -469,6 +486,60 @@ pub const Session = struct {
             try out.writer.writeAll(pointers.written());
         }
         return out.written();
+    }
+
+    pub fn graph(self: *Session, arena: Allocator, w: *Writer, f: Fn) !void {
+        const repo = self.repo.?;
+        try w.print("Graph of {s} {s}:{d}\n", .{ f.qname, f.path, self.defLine(f) });
+        const callers = edgesOf(try repo.query(arena, .{ .relation = .callers, .subject = f.qname, .path = f.path }));
+        const callees = edgesOf(try repo.query(arena, .{ .relation = .callees, .subject = f.qname, .path = f.path }));
+        const impact = edgesOf(try repo.query(arena, .{ .relation = .callers, .subject = f.qname, .path = f.path, .depth = impact_depth }));
+
+        var seen: std.StringHashMapUnmanaged(void) = .empty;
+        var listed: usize = 0;
+        var more: usize = 0;
+        try w.writeAll("callers:");
+        if (callers) |e| for (e.sites) |site| {
+            const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ site.path, site.owner.qname });
+            if ((try seen.getOrPut(arena, key)).found_existing) continue;
+            if (listed == max_graph_items) {
+                more += 1;
+                continue;
+            }
+            try w.print(" {s}:{d} {s};", .{ site.path, site.line, site.owner.qname });
+            listed += 1;
+        };
+        try endList(w, listed, more);
+
+        seen.clearRetainingCapacity();
+        listed = 0;
+        more = 0;
+        try w.writeAll("callees:");
+        if (callees) |e| for (e.sites) |site| {
+            const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ site.target.path, site.target.qname });
+            if ((try seen.getOrPut(arena, key)).found_existing) continue;
+            if (listed == max_graph_items) {
+                more += 1;
+                continue;
+            }
+            try w.print(" {s} {s}:{d};", .{ site.target.qname, site.target.path, site.target.line });
+            listed += 1;
+        };
+        try endList(w, listed, more);
+
+        seen.clearRetainingCapacity();
+        var files: std.StringArrayHashMapUnmanaged(void) = .empty;
+        if (impact) |e| for (e.sites) |site| {
+            const key = try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ site.path, site.owner.qname });
+            _ = try seen.getOrPut(arena, key);
+            _ = try files.getOrPut(arena, site.path);
+        };
+        try w.print("impact: {d} functions in {d} files reach it within {d} calls", .{ seen.count(), files.count(), impact_depth });
+        for (files.keys()[0..@min(files.count(), max_impact_files)], 0..) |path, i| try w.print("{s}{s}", .{ if (i == 0) ": " else ", ", path });
+        if (files.count() > max_impact_files) try w.print(" (+{d} more)", .{files.count() - max_impact_files});
+        try w.writeByte('\n');
+        const unbound = if (callers) |e| e.unknown.len else 0;
+        if (unbound != 0) try w.print("unresolved: {d} call sites of the same name could not be bound\n", .{unbound});
     }
 
     fn container(self: *Session, f: Fn) bool {
@@ -580,6 +651,30 @@ const Shown = struct {
     first: u32,
     last: u32,
 };
+
+fn edgesOf(result: facts_query.FactsAnswer) ?facts_query.Edges {
+    return switch (result) {
+        .complete => |c| c.value,
+        .partial => |p| p.value,
+        .refused => null,
+    };
+}
+
+fn endList(w: *Writer, listed: usize, more: usize) !void {
+    if (listed == 0) try w.writeAll(" none");
+    if (more != 0) try w.print(" (+{d} more)", .{more});
+    try w.writeByte('\n');
+}
+
+pub fn asksGraph(question: []const u8) bool {
+    var words = std.mem.tokenizeAny(u8, question, " \t\r\n,.?!:;()'\"");
+    while (words.next()) |word| {
+        for (graph_words) |g| {
+            if (word.len >= g.len and std.ascii.eqlIgnoreCase(word[0..g.len], g)) return true;
+        }
+    }
+    return false;
+}
 
 fn inside(shown: []const Shown, file: u32, first: u32, last: u32) bool {
     for (shown) |s| {
