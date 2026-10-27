@@ -1,6 +1,51 @@
 {
   "mutations": [
     {
+      "id": "WC1-batch-whole-create-not-recognised",
+      "file": "src/protocol/handlers.zig",
+      "from": "    return std.mem.eql(u8, hash, \"absent\") and wholeText(item) != null;",
+      "to": "    return false;",
+      "kills": [
+        "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory"
+      ]
+    },
+    {
+      "id": "WC2-batch-whole-create-overwrites-existing",
+      "file": "src/platform/batch_plan.zig",
+      "from": "    return error.FileExists;\n}\n\nfn planFileDeletion(",
+      "to": "    return file_edit.prepare(gpa, runtime, edit.file_abs, rel, null, edit.new_body);\n}\n\nfn planFileDeletion(",
+      "kills": [
+        "try_batch whole-file create refuses a file that already exists and leaves it untouched"
+      ]
+    },
+    {
+      "id": "WC3-batch-whole-create-new-dirs-dropped",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (!seen) try dirs.append(gpa, try gpa.dupe(u8, dir));",
+      "to": "        _ = seen;",
+      "kills": [
+        "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory"
+      ]
+    },
+    {
+      "id": "SC1-symbols-never-compact",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table.*);",
+      "to": "",
+      "kills": [
+        "symbol listings of a large file are compact lines without hashes unless detail full"
+      ]
+    },
+    {
+      "id": "SC2-symbols-compact-ignores-detail-full",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!full and table.symbols.len",
+      "to": "    if (table.symbols.len",
+      "kills": [
+        "symbol listings of a large file are compact lines without hashes unless detail full"
+      ]
+    },
+    {
       "id": "RF1-read-file-raw-range-ignored",
       "file": "src/protocol/read_tools.zig",
       "from": "    if (line_start != null or line_end != null) {\n        return renderRange(",

@@ -128,10 +128,12 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     try js.objectField("file");
     try js.write(file);
     try wire.writeFileHash(&js, symbol.fileHash(bytes));
-    try js.objectField("bytes");
-    try js.write(bytes.len);
-    try js.objectField("truncated");
-    try js.write(shown.len < bytes.len);
+    if (shown.len < bytes.len) {
+        try js.objectField("bytes");
+        try js.write(bytes.len);
+        try js.objectField("truncated");
+        try js.write(true);
+    }
     try js.objectField("content");
     try js.write(shown);
     try js.endObject();
@@ -403,8 +405,10 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w:
         count += 1;
     }
     try js.endArray();
-    try js.objectField("truncated");
-    try js.write(truncated);
+    if (truncated) {
+        try js.objectField("truncated");
+        try js.write(true);
+    }
     try js.endObject();
     try w.writeByte('\n');
 }
