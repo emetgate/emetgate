@@ -2748,7 +2748,7 @@
     {
       "id": "ST4-scan-tool-non-string-where-ignored",
       "file": "src/protocol/handlers.zig",
-      "from": "        else => return error.MissingArgument,\n    } else null;",
+      "from": "        else => return tool_result.missing(\"where (string)\", .{}),\n    } else null;",
       "to": "        else => null,\n    } else null;",
       "kills": [
         "scan tool: a call without check or with a non-string where is a missing argument"
@@ -12162,8 +12162,8 @@
     {
       "id": "TX9-model-schema-offers-certificate",
       "file": "src/protocol/server.zig",
-      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },",
-      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
+      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" or \\\"compact\\\"\", .optional = true },",
+      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" or \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
       "kills": [
         "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
       ]
@@ -12180,7 +12180,7 @@
     {
       "id": "FT2-footer-switch-ignored",
       "file": "src/protocol/telemetry.zig",
-      "from": "    if (!event.footer) return null;",
+      "from": "    if (!(event.footer orelse event.mutating)) return null;",
       "to": "",
       "kills": [
         "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
@@ -12327,7 +12327,7 @@
       "id": "RH8-batch-item-label-dropped",
       "file": "src/protocol/recovery.zig",
       "from": "        const label = std.fmt.bufPrint(&label_buf, \"edits[{d}]: \", .{i}) catch \"\";",
-      "to": "        const label = \"\";",
+      "to": "        const label = std.fmt.bufPrint(&label_buf, \"item {d}: \", .{i}) catch \"\";",
       "kills": [
         "recovery hints: a stale hash inside a batch names the item and the current hash"
       ]
