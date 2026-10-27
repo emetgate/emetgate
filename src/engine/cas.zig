@@ -6,6 +6,7 @@ const Profile = @import("lang/profile.zig").Profile;
 const Runtime = @import("runtime.zig").Runtime;
 const test_util = @import("test_util.zig");
 const traversal = @import("traversal.zig");
+const doc_fold = @import("doc_fold.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
@@ -84,8 +85,14 @@ pub fn apply(base: *Snapshot, mutation: Mutation) Error!Applied {
     };
 }
 
+fn unfoldDocs(base: *Snapshot, cut: Span, body: []const u8) Allocator.Error!?[]u8 {
+    return doc_fold.restore(base.runtime.gpa, base.profile, base.tree, cut.start, cut.end, body);
+}
+
 fn applyBody(base: *Snapshot, mutation: Mutation, target: *const symbol.Symbol) Error!Applied {
-    const new_body = try followLineEnding(base.runtime.gpa, normalizeBody(mutation.new_body), crlfOf(base.source));
+    const unfolded = try unfoldDocs(base, .{ .start = target.body.startByte(), .end = target.body.endByte() }, normalizeBody(mutation.new_body));
+    defer if (unfolded) |text| base.runtime.gpa.free(text);
+    const new_body = try followLineEnding(base.runtime.gpa, unfolded orelse normalizeBody(mutation.new_body), crlfOf(base.source));
     defer base.runtime.gpa.free(new_body);
     const before = try base.symbols();
     if (!std.mem.eql(u8, &target.hash, &mutation.expected_hash)) return error.HashMismatch;
@@ -116,7 +123,9 @@ fn replaceItem(base: *Snapshot, mutation: Mutation) Error!Applied {
     if (!std.mem.eql(u8, &mutation.expected_hash, &target.hash)) return error.HashMismatch;
     const gpa = base.runtime.gpa;
     const crlf = crlfOf(base.source);
-    const body = try followLineEnding(gpa, normalizeBody(mutation.new_body), crlf);
+    const unfolded = try unfoldDocs(base, target.span, normalizeBody(mutation.new_body));
+    defer if (unfolded) |text| gpa.free(text);
+    const body = try followLineEnding(gpa, unfolded orelse normalizeBody(mutation.new_body), crlf);
     defer gpa.free(body);
     const text = try shapeText(gpa, base, target.span, body);
     defer gpa.free(text);
@@ -1244,4 +1253,19 @@ test "a member is inserted after the last member of its class and nested propert
     const taken = try symbol.Ref.parse(testing.allocator, "Cart.size");
     defer taken.deinit(testing.allocator);
     try testing.expectError(error.SymbolExists, insert(base, .{ .ref = taken, .new_body = "size() { return 2; }" }));
+}
+
+test "a body sent back with its docs folded as read keeps the full docs, a dropped doc stays dropped" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const doc_text = "/**\n   * Inner helper. Returns one.\n   * @returns one\n   */";
+    const source = "function outer() {\n  " ++ doc_text ++ "\n  function inner() { return 1; }\n  return inner();\n}\n";
+    const doc = try test_util.snapshotOf(runtime, source);
+    defer doc.destroy();
+    const patched = try mutate(doc, "outer", "{\n  /** Inner helper. */\n  function inner() { return 1; }\n  return inner() + 1;\n}", .current);
+    defer patched.snapshot.destroy();
+    try testing.expectEqualStrings("function outer() {\n  " ++ doc_text ++ "\n  function inner() { return 1; }\n  return inner() + 1;\n}\n", patched.snapshot.source);
+    const dropped = try mutate(doc, "outer", "{\n  function inner() { return 1; }\n  return inner();\n}", .current);
+    defer dropped.snapshot.destroy();
+    try testing.expect(std.mem.indexOf(u8, dropped.snapshot.source, "Inner helper") == null);
 }

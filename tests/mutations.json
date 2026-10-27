@@ -14940,6 +14940,15 @@
       "kills": [
         "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
       ]
+    },
+    {
+      "id": "DOCR1-folded-doc-not-restored",
+      "file": "src/engine/doc_fold.zig",
+      "from": "        restored = true;\n",
+      "to": "",
+      "kills": [
+        "a body sent back with its docs folded as read keeps the full docs, a dropped doc stays dropped"
+      ]
     }
   ]
 }

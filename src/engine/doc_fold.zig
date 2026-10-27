@@ -22,29 +22,81 @@ const Kind = enum { comment, docstring };
 
 const Piece = struct { start: u32, end: u32, kind: Kind };
 
-pub fn fold(gpa: Allocator, profile: *const Profile, tree: ts.Tree, start: u32, end: u32) Allocator.Error!Folded {
-    const source = tree.source;
-    var pieces: std.ArrayList(Piece) = .empty;
-    defer pieces.deinit(gpa);
-    var walker = traversal.Walker.init(tree.root());
-    defer walker.deinit();
-    while (walker.next()) |entry| {
-        const node = entry.node;
-        if (node.endByte() <= start or node.startByte() >= end) {
-            walker.skipChildren();
-            continue;
+const Group = struct { start: u32, end: u32, short: []const u8 };
+
+const Groups = struct {
+    source: []const u8,
+    pieces: std.ArrayList(Piece) = .empty,
+    i: usize = 0,
+    buf: [512]u8 = undefined,
+
+    fn init(gpa: Allocator, profile: *const Profile, tree: ts.Tree, start: u32, end: u32) Allocator.Error!Groups {
+        var groups: Groups = .{ .source = tree.source };
+        errdefer groups.pieces.deinit(gpa);
+        var walker = traversal.Walker.init(tree.root());
+        defer walker.deinit();
+        while (walker.next()) |entry| {
+            const node = entry.node;
+            if (node.endByte() <= start or node.startByte() >= end) {
+                walker.skipChildren();
+                continue;
+            }
+            if (profile.isComment(node.kind())) {
+                walker.skipChildren();
+                if (node.startByte() >= start and node.endByte() <= end) try groups.pieces.append(gpa, .{ .start = node.startByte(), .end = node.endByte(), .kind = .comment });
+                continue;
+            }
+            if (isDocstring(profile, tree.source, node)) {
+                walker.skipChildren();
+                if (node.startByte() >= start and node.endByte() <= end) try groups.pieces.append(gpa, .{ .start = node.startByte(), .end = node.endByte(), .kind = .docstring });
+            }
         }
-        if (profile.isComment(node.kind())) {
-            walker.skipChildren();
-            if (node.startByte() >= start and node.endByte() <= end) try pieces.append(gpa, .{ .start = node.startByte(), .end = node.endByte(), .kind = .comment });
-            continue;
-        }
-        if (isDocstring(profile, source, node)) {
-            walker.skipChildren();
-            if (node.startByte() >= start and node.endByte() <= end) try pieces.append(gpa, .{ .start = node.startByte(), .end = node.endByte(), .kind = .docstring });
-        }
+        return groups;
     }
 
+    fn deinit(self: *Groups, gpa: Allocator) void {
+        self.pieces.deinit(gpa);
+    }
+
+    fn next(self: *Groups) ?Group {
+        const source = self.source;
+        const pieces = self.pieces.items;
+        while (self.i < pieces.len) {
+            const first = pieces[self.i];
+            var last = first;
+            self.i += 1;
+            var license = false;
+            if (first.kind == .comment and isBlank(source[0..first.start])) {
+                var j = self.i;
+                var top = first;
+                while (j < pieces.len and pieces[j].kind == .comment and isBlank(source[top.end..pieces[j].start])) : (j += 1) top = pieces[j];
+                if (mentionsLicense(source[first.start..top.end])) {
+                    license = true;
+                    last = top;
+                    self.i = j;
+                }
+            }
+            if (first.kind == .comment and !license) {
+                while (self.i < pieces.len and pieces[self.i].kind == .comment and isBlank(source[last.end..pieces[self.i].start]) and sameDocStyle(source[first.start..first.end], source[pieces[self.i].start..pieces[self.i].end])) : (self.i += 1) last = pieces[self.i];
+            }
+            const whole = source[first.start..last.end];
+            if (std.mem.indexOfScalar(u8, whole, '\n') == null) continue;
+            const short = (if (first.kind == .docstring)
+                docstringLine(&self.buf, whole)
+            else if (license)
+                licenseLine(&self.buf, source[first.start..first.end])
+            else
+                docCommentLine(&self.buf, source[first.start..first.end])) orelse continue;
+            return .{ .start = first.start, .end = last.end, .short = short };
+        }
+        return null;
+    }
+};
+
+pub fn fold(gpa: Allocator, profile: *const Profile, tree: ts.Tree, start: u32, end: u32) Allocator.Error!Folded {
+    const source = tree.source;
+    var groups = try Groups.init(gpa, profile, tree, start, end);
+    defer groups.deinit(gpa);
     var out: std.ArrayList(u8) = try .initCapacity(gpa, end - start);
     errdefer out.deinit(gpa);
     var spans: std.ArrayList(LineSpan) = .empty;
@@ -52,46 +104,44 @@ pub fn fold(gpa: Allocator, profile: *const Profile, tree: ts.Tree, start: u32, 
     var copied: u32 = start;
     var line: u32 = 1 + @as(u32, @intCast(std.mem.count(u8, source[0..start], "\n")));
     var line_at: u32 = start;
-    var i: usize = 0;
-    while (i < pieces.items.len) {
-        const first = pieces.items[i];
-        var last = first;
-        i += 1;
-        var license = false;
-        if (first.kind == .comment and isBlank(source[0..first.start])) {
-            var j = i;
-            var top = first;
-            while (j < pieces.items.len and pieces.items[j].kind == .comment and isBlank(source[top.end..pieces.items[j].start])) : (j += 1) top = pieces.items[j];
-            if (mentionsLicense(source[first.start..top.end])) {
-                license = true;
-                last = top;
-                i = j;
-            }
-        }
-        if (first.kind == .comment and !license) {
-            while (i < pieces.items.len and pieces.items[i].kind == .comment and isBlank(source[last.end..pieces.items[i].start]) and sameDocStyle(source[first.start..first.end], source[pieces.items[i].start..pieces.items[i].end])) : (i += 1) last = pieces.items[i];
-        }
-        const whole = source[first.start..last.end];
-        if (std.mem.indexOfScalar(u8, whole, '\n') == null) continue;
-        var buf: [512]u8 = undefined;
-        const short = (if (first.kind == .docstring)
-            docstringLine(&buf, whole)
-        else if (license)
-            licenseLine(&buf, source[first.start..first.end])
-        else
-            docCommentLine(&buf, source[first.start..first.end])) orelse continue;
-        try out.appendSlice(gpa, source[copied..first.start]);
-        try out.appendSlice(gpa, short);
-        copied = last.end;
-        line += @intCast(std.mem.count(u8, source[line_at..first.start], "\n"));
-        line_at = first.start;
-        const span_last = line + @as(u32, @intCast(std.mem.count(u8, whole, "\n")));
+    while (groups.next()) |group| {
+        try out.appendSlice(gpa, source[copied..group.start]);
+        try out.appendSlice(gpa, group.short);
+        copied = group.end;
+        line += @intCast(std.mem.count(u8, source[line_at..group.start], "\n"));
+        line_at = group.start;
+        const span_last = line + @as(u32, @intCast(std.mem.count(u8, source[group.start..group.end], "\n")));
         try spans.append(gpa, .{ .first = line, .last = span_last });
     }
     try out.appendSlice(gpa, source[copied..end]);
     const text = try out.toOwnedSlice(gpa);
     errdefer gpa.free(text);
     return .{ .text = text, .spans = try spans.toOwnedSlice(gpa) };
+}
+
+pub fn restore(gpa: Allocator, profile: *const Profile, tree: ts.Tree, start: u32, end: u32, submitted: []const u8) Allocator.Error!?[]u8 {
+    const source = tree.source;
+    var groups = try Groups.init(gpa, profile, tree, start, end);
+    defer groups.deinit(gpa);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    var copied: usize = 0;
+    var restored = false;
+    while (groups.next()) |group| {
+        const full = source[group.start..group.end];
+        if (std.mem.indexOf(u8, submitted[copied..], full) != null) continue;
+        const at = copied + (std.mem.indexOf(u8, submitted[copied..], group.short) orelse continue);
+        try out.appendSlice(gpa, submitted[copied..at]);
+        try out.appendSlice(gpa, full);
+        copied = at + group.short.len;
+        restored = true;
+    }
+    if (!restored) {
+        out.deinit(gpa);
+        return null;
+    }
+    try out.appendSlice(gpa, submitted[copied..]);
+    return try out.toOwnedSlice(gpa);
 }
 
 fn isDocstring(profile: *const Profile, source: []const u8, node: ts.Node) bool {
