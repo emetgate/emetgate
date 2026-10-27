@@ -237,7 +237,15 @@ fn containsSpan(spans: []const Span, wanted: Span) bool {
     return false;
 }
 
+pub const Options = struct {
+    free_uses: bool = false,
+};
+
 pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, proposed: []const Span) Error!Renamed {
+    return applyWith(gpa, base, old, new, proposed, .{});
+}
+
+pub fn applyWith(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, proposed: []const Span, options: Options) Error!Renamed {
     if (!supports(base.profile)) return error.UnsupportedLanguage;
     if (!validName(old) or !validName(new) or std.mem.eql(u8, old, new)) return error.InvalidName;
     if (base.tree.root().hasError()) return error.SourceHasErrors;
@@ -257,7 +265,7 @@ pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, 
     const taken = try leavesNamed(gpa, base, new);
     defer gpa.free(taken);
     if (taken.len != 0) return error.NameTaken;
-    const resolved = try crossCheck(gpa, base, old, spans);
+    const resolved = try crossCheck(gpa, base, old, spans, options.free_uses);
 
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(gpa);
@@ -285,7 +293,7 @@ pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, 
     return .{ .snapshot = next, .spans = try gpa.dupe(Span, moved), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
 }
 
-fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const Span) Error!usize {
+fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const Span, free_uses: bool) Error!usize {
     const resolution = scope.resolveName(gpa, base, old) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedLanguage => return error.UnsupportedLanguage,
@@ -307,7 +315,10 @@ fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const S
     var checked: usize = 0;
     for (spans) |span| {
         const use = resolution.useAt(span) orelse continue;
-        const index = use.binder orelse return error.ResolutionMismatch;
+        const index = use.binder orelse {
+            if (free_uses) continue;
+            return error.ResolutionMismatch;
+        };
         if (!renamed[index]) return error.ResolutionMismatch;
         checked += 1;
     }
@@ -367,20 +378,37 @@ const Mapping = struct {
     new: []const u8,
     spans: []const Span,
     containers: bool,
+    owners: []const []const []const u8 = &.{},
 
     fn name(self: Mapping, part: []const u8, renamed: bool) []const u8 {
         return if (renamed and std.mem.eql(u8, part, self.old)) self.new else part;
     }
 
+    fn owned(self: Mapping, path: []const []const u8, at: usize) bool {
+        for (self.owners) |owner| {
+            if (owner.len != at) continue;
+            if (eqlPath(owner, path[0..at])) return true;
+        }
+        return false;
+    }
+
     fn same(self: Mapping, before: symbol.Ref, after: symbol.Ref, renamed: bool) bool {
         if (!std.mem.eql(u8, self.name(before.name, renamed), after.name)) return false;
         if (before.container.len != after.container.len) return false;
-        for (before.container, after.container) |a, b| {
-            if (!std.mem.eql(u8, self.name(a, self.containers), b)) return false;
+        for (before.container, after.container, 0..) |a, b, i| {
+            if (!std.mem.eql(u8, self.name(a, self.containers or self.owned(before.container, i)), b)) return false;
         }
         return before.accessor == after.accessor and before.is_static == after.is_static;
     }
 };
+
+fn eqlPath(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!std.mem.eql(u8, x, y)) return false;
+    }
+    return true;
+}
 
 fn startsWithin(spans: []const Span, start: u32) bool {
     for (spans) |span| {
@@ -404,10 +432,14 @@ fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const
         error.SourceHasErrors => return error.MutationSyntaxInvalid,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    var owners: std.ArrayList([]const []const u8) = .empty;
+    defer owners.deinit(gpa);
     var mapping: Mapping = .{ .old = old, .new = new, .spans = spans, .containers = false };
     for (before.declarations) |d| {
-        if (d.ref.container.len == 0 and startsWithin(spans, d.name.startByte())) mapping.containers = true;
+        if (!startsWithin(spans, d.name.startByte())) continue;
+        if (d.ref.container.len == 0) mapping.containers = true else try owners.append(gpa, d.ref.container);
     }
+    mapping.owners = owners.items;
     for (before.symbols) |f| {
         if (f.ref.container.len == 0 and try functionNameRenamed(gpa, base, f, spans)) mapping.containers = true;
     }

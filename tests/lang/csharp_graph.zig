@@ -166,3 +166,98 @@ test "csharp rename: a method and its unqualified sibling call rename together" 
     ;
     try testing.expectEqualStrings(expected, renamed.snapshot.source);
 }
+
+fn expectRefs(runtime: *Runtime, source: []const u8, expected: []const []const u8) !void {
+    const snapshot = try snapshotOf(runtime, source);
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
+    var got: std.ArrayList(u8) = .empty;
+    defer got.deinit(testing.allocator);
+    for (table.symbols) |s| try got.print(testing.allocator, "{f} {t}{s}\n", .{ s.ref, s.kind, if (s.ambiguous) " ambiguous" else "" });
+    for (table.declarations) |d| try got.print(testing.allocator, "{f} {t}{s}\n", .{ d.ref, d.kind, if (d.ambiguous) " ambiguous" else "" });
+    var want: std.ArrayList(u8) = .empty;
+    defer want.deinit(testing.allocator);
+    for (expected) |line| try want.print(testing.allocator, "{s}\n", .{line});
+    try testing.expectEqualStrings(want.items, got.items);
+}
+
+test "csharp symbols: types, members, accessors, fields and properties share one namespace-qualified container" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectRefs(runtime,
+        \\namespace Demo.Sub
+        \\{
+        \\    public class Calc
+        \\    {
+        \\        public static int Count { get; private set; }
+        \\        public static int Total { get => 1; init { } }
+        \\        private int a, b;
+        \\        static readonly int seed = 1;
+        \\        public event System.Action Changed;
+        \\        public int Add(int x) { return x; }
+        \\        public static Calc operator +(Calc l, Calc r) => l;
+        \\        public static implicit operator int(Calc c) => 0;
+        \\        ~Calc() { }
+        \\        public int this[int i] { get { return i; } }
+        \\        class Inner { void Deep() { System.Func<int, int> f = y => y; } }
+        \\    }
+        \\    enum Color { Red, Green }
+        \\}
+        \\
+    , &.{
+        "Demo.Sub.Calc.Total@static@get getter",
+        "Demo.Sub.Calc.Total@static@set setter",
+        "Demo.Sub.Calc.Add method",
+        "Demo.Sub.Calc.Inner.Deep method",
+        "Demo.Sub.Calc class",
+        "Demo.Sub.Calc.Count@static field",
+        "Demo.Sub.Calc.Total@static field",
+        "Demo.Sub.Calc.a field",
+        "Demo.Sub.Calc.b field",
+        "Demo.Sub.Calc.seed@static field",
+        "Demo.Sub.Calc.Changed field",
+        "Demo.Sub.Calc.Inner class",
+        "Demo.Sub.Color enumeration",
+        "Demo.Sub.Color.Red enum_member",
+        "Demo.Sub.Color.Green enum_member",
+    });
+}
+
+test "csharp symbols: a file-scoped namespace qualifies the types and members declared after it" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try expectRefs(runtime,
+        \\namespace Demo;
+        \\
+        \\public class Calc
+        \\{
+        \\    public int Add(int a, int b) { return a + b; }
+        \\}
+        \\
+    , &.{
+        "Demo.Calc.Add method",
+        "Demo.Calc class",
+    });
+}
+
+test "csharp symbols: public, protected and internal members are visible, private and default members are not" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const snapshot = try snapshotOf(runtime,
+        \\class C
+        \\{
+        \\    public void A() { }
+        \\    protected void B() { }
+        \\    internal void D() { }
+        \\    private void E() { }
+        \\    void F() { }
+        \\}
+        \\
+    );
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
+    const profile = csharp();
+    const visible = [_]bool{ true, true, true, false, false };
+    try testing.expectEqual(visible.len, table.symbols.len);
+    for (table.symbols, visible) |s, want| try testing.expectEqual(want, profile.hasVisibilityKeyword(snapshot.tree, s.node));
+}

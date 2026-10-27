@@ -237,8 +237,28 @@ fn containerPath(arena: Allocator, profile: *const Profile, tree: ts.Tree, node:
         try appendNameSegments(arena, profile, tree, name, &reversed);
         std.mem.reverse([]const u8, reversed.items[first..]);
     }
+    if (fileScopedName(profile, node)) |name| {
+        if (!isOneOf(name.kind(), profile.addressable_names) and !profile.isDottedName(name.kind())) return null;
+        const first = reversed.items.len;
+        try appendNameSegments(arena, profile, tree, name, &reversed);
+        std.mem.reverse([]const u8, reversed.items[first..]);
+    }
     std.mem.reverse([]const u8, reversed.items);
     return reversed.items;
+}
+
+pub fn fileScopedName(profile: *const Profile, node: ts.Node) ?ts.Node {
+    if (profile.file_scoped_containers.len == 0) return null;
+    var top = node;
+    while (top.parent()) |parent| {
+        if (parent.parent() == null) break;
+        top = parent;
+    }
+    var prev = top.prevNamedSibling();
+    while (prev) |sibling| : (prev = sibling.prevNamedSibling()) {
+        if (isOneOf(sibling.kind(), profile.file_scoped_containers)) return sibling.childByField("name");
+    }
+    return null;
 }
 
 const Extent = struct {

@@ -25,6 +25,12 @@ pub const Binding = struct {
 
 pub const NameSource = enum { field, field_or_binding, binding };
 
+pub const FunctionName = struct {
+    node: []const u8,
+    owner_depth: u8 = 0,
+    field: ?[]const u8,
+};
+
 pub const Container = struct {
     node: []const u8,
     name: NameSource,
@@ -152,6 +158,7 @@ pub const Declarations = struct {
     variable_statements: []const []const u8 = &.{},
     value_field: []const u8 = "value",
     fields: []const DeclarationShape = &.{},
+    field_statements: []const []const u8 = &.{},
     enum_body: ?[]const u8 = null,
     enum_members: []const DeclarationShape = &.{},
     enum_bare_member: ?[]const u8 = null,
@@ -207,6 +214,9 @@ pub const Facts = struct {
     test_file_infixes: []const []const u8 = &.{},
     test_dirs: []const []const u8 = &.{},
     doc_directives: []const []const u8 = &.{},
+    global_types: bool = false,
+    namespaces: []const []const u8 = &.{},
+    using_directive: ?[]const u8 = null,
 };
 
 pub const MapEntryKind = enum { route, command, event, api };
@@ -276,22 +286,38 @@ pub const Profile = struct {
     literal_values: LiteralValues,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
     visibility_keywords: []const []const u8 = &.{},
+    modifier: ?[]const u8 = null,
+    function_names: []const FunctionName = &.{},
+    file_scoped_containers: []const []const u8 = &.{},
+    language_service: bool = false,
     rename: ?*const Rename = null,
     modules: ?*const Modules = null,
     declarations: Declarations = .{},
     facts: ?*const Facts = null,
     map: ?*const MapTable = null,
 
-    pub fn hasVisibilityKeyword(self: *const Profile, node: ts.Node) bool {
+    pub fn hasVisibilityKeyword(self: *const Profile, tree: ts.Tree, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;
         var i: u32 = 0;
         while (node.child(i)) |child| : (i += 1) {
-            if (child.isNamed()) continue;
+            const word = if (!child.isNamed()) child.kind() else if (self.isModifier(child.kind())) tree.text(child) else continue;
             for (self.visibility_keywords) |keyword| {
-                if (std.mem.eql(u8, keyword, child.kind())) return true;
+                if (std.mem.eql(u8, keyword, word)) return true;
             }
         }
         return false;
+    }
+
+    pub fn isModifier(self: *const Profile, node_kind: []const u8) bool {
+        const modifier = self.modifier orelse return false;
+        return std.mem.eql(u8, modifier, node_kind);
+    }
+
+    pub fn functionName(self: *const Profile, node_kind: []const u8) ?FunctionName {
+        for (self.function_names) |entry| {
+            if (std.mem.eql(u8, entry.node, node_kind)) return entry;
+        }
+        return null;
     }
 
     pub fn handles(self: *const Profile, path: []const u8) bool {
