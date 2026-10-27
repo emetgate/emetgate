@@ -76,6 +76,7 @@ pub const test_outcome = src.test_outcome;
 pub const appcontainer = src.appcontainer;
 pub const tsserver = src.tsserver;
 pub const rename_batch = src.rename_batch;
+pub const rename_require = src.rename_require;
 pub const move_batch = src.move_batch;
 pub const file_move = src.file_move;
 pub const file_edit = src.file_edit;
@@ -167,6 +168,7 @@ pub const rules_command = src.rules_command;
 pub const console_raw = src.console_raw;
 pub const doc_fold = src.doc_fold;
 pub const output_digest = src.output_digest;
+pub const diff_digest = src.diff_digest;
 pub const baseline = src.baseline;
 pub const batch_merge = src.batch_merge;
 

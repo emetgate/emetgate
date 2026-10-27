@@ -196,11 +196,27 @@ pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, ou
         }
         if (std.mem.eql(u8, kind, g.subscript)) {
             const index = node.childByField(g.subscript_index_field) orelse continue;
-            if (oneOf(index.kind(), g.literal_index_kinds)) continue;
+            if (oneOf(index.kind(), g.literal_index_kinds) or cannotSpell(snapshot.source, g.constructed_index_kinds, index, name)) continue;
             if ((member or oneOf(index.kind(), g.constructed_index_kinds)) and record(out, &found, .computed_member, node)) return found;
         }
     }
     return found;
+}
+
+const numeric_operators = [_][]const u8{ "-", "/", "//", "<<", ">>", ">>>", "&", "|", "^", "**", "==", "!=", "===", "!==", "<", ">", "<=", ">=", "instanceof", "in" };
+
+fn cannotSpell(source: []const u8, constructed: []const []const u8, index: ts.Node, name: []const u8) bool {
+    if (std.mem.eql(u8, index.kind(), "binary_expression") and oneOf(index.kind(), constructed)) {
+        const op = index.childByField("operator") orelse return false;
+        return oneOf(source[op.startByte()..op.endByte()], &numeric_operators);
+    }
+    const text = source[index.startByte()..index.endByte()];
+    if (text.len < 2 or text[0] != '`' or text[text.len - 1] != '`') return false;
+    const open = std.mem.indexOf(u8, text, "${") orelse return false;
+    const close = std.mem.lastIndexOfScalar(u8, text, '}') orelse return false;
+    const prefix = text[1..open];
+    const suffix = if (close + 1 < text.len - 1) text[close + 1 .. text.len - 1] else "";
+    return !std.mem.startsWith(u8, name, prefix) or !std.mem.endsWith(u8, name, suffix);
 }
 
 fn record(out: []Hit, found: *usize, kind: Dynamic, node: ts.Node) bool {
@@ -757,6 +773,9 @@ test "rename: a string that is exactly the name, eval, computed requires and con
         .{ .source = "function add() { return 1; }\nconst m = require(\"./\" + \"x\");\n", .member = false, .expected = .computed_module },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst v = o[\"a\" + \"dd\"];\n", .member = false, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k];\n", .member = true, .expected = .computed_member },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = 1;\nconst v = o[k - 1] + o[k >> 1] + o[`es${k}`] + o[`${k}_x`];\n", .member = true, .expected = null },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"d\";\nconst v = o[`a${k}d`];\n", .member = false, .expected = .computed_member },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"d\";\nconst v = o[k + \"d\"];\n", .member = true, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k] + o[0];\nconst m = require(\"./m\");\n// add in a comment\nconst t = `${add()} and add`;\nconst e = \"add failed\";\n", .member = false, .expected = null },
     };
     for (cases) |case| {
