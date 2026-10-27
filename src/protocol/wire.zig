@@ -978,8 +978,93 @@ pub fn writeErrorMessage(writer: *Writer, name: []const u8, exit_code: u8, messa
     try js.write(exit_code);
     try js.objectField("message");
     try js.write(message);
+    try writeFix(&js, name);
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+const fixes = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "HashMismatch", "the hash is stale or of the wrong kind: symbol hashes come from emetgate_symbols, node ids from emetgate_read_symbol nodes:true, file and doc hashes from emetgate_read_file; read again and retry" },
+    .{ "InvalidHash", "hash is 32 hex characters from emetgate_symbols or emetgate_read_file, or \"absent\" to create with emetgate_try or emetgate_try_batch" },
+    .{ "MissingHash", "deleting a symbol needs hash: its current hash from emetgate_symbols" },
+    .{ "MissingFileHash", "deleting a file needs hash: its file_hash from emetgate_read_file or emetgate_skeleton" },
+    .{ "SymbolNotFound", "call emetgate_symbols with this file for the exact symbol refs" },
+    .{ "AmbiguousSymbol", "qualify the ref, e.g. Class.method; emetgate_symbols lists them" },
+    .{ "InvalidRef", "symbol is a ref like add or Class.method, as emetgate_symbols lists it" },
+    .{ "NoSymbolInRange", "no symbol overlaps these lines; read them with emetgate_read_symbol nodes:true or emetgate_read_file raw:true and the same line_start, line_end" },
+    .{ "InvalidLineRange", "line_start and line_end are 1-based and line_start <= line_end" },
+    .{ "LineOutOfRange", "line_start is past the end of the file" },
+    .{ "FileOutsideRepo", "the path resolves outside the repository (for example a linked node_modules); only files inside it are readable; take a dependency's version from package.json or the lockfile" },
+    .{ "NotInRepo", "the server is not inside a git repository; the user must run git init there" },
+    .{ "InternalPath", ".git and .emetgate are internal; the test command is the server's --test option, which only the user sets" },
+    .{ "FileNotFound", "no such file; emetgate_list or emetgate_search shows the tracked paths" },
+    .{ "UseSymbolToolsForSource", "a source file is read with emetgate_skeleton, emetgate_read_symbol or emetgate_read_file raw:true, and edited with emetgate_try" },
+    .{ "UnsupportedLanguage", "not a registered source language: read it with emetgate_read_file, edit it with emetgate_write_doc" },
+    .{ "NoTestCommand", "no test command is configured; the user must start the server with --test \"<command>\"" },
+    .{ "UntrustedRepoConfig", "the repository's .emetgaterc.json is used only when the user starts the server with --allow-repo-config" },
+    .{ "ParentDirectoryMissing", "the target's directory does not exist; emetgate_move_file creates missing directories of its target" },
+    .{ "MutationSyntaxInvalid", "body does not parse: for an existing symbol it is the block with its braces only; with hash \"absent\" it is the whole declaration" },
+    .{ "BodyEscape", "the new text reaches outside the replaced span; replace one whole node (ids from emetgate_read_symbol nodes:true) or the whole symbol" },
+    .{ "AmbiguousNode", "the node id prefix matches several nodes; use the full id from emetgate_read_symbol nodes:true" },
+    .{ "MixedEditForms", "use one form: symbol+hash+body, node+text, or nodes" },
+    .{ "OverlappingNodes", "two node edits overlap; edit the outer node only" },
+    .{ "SymbolExists", "the symbol exists; pass its hash from emetgate_symbols instead of \"absent\"" },
+    .{ "FileExists", "the file exists; edit its symbols with their hashes from emetgate_symbols" },
+    .{ "NoTopLevelSymbol", "with hash \"absent\" body is one complete top-level declaration" },
+    .{ "MultipleTopLevelSymbols", "with hash \"absent\" body holds one declaration; add the others as separate edits" },
+    .{ "ExtraTopLevelCode", "with hash \"absent\" body holds one declaration and nothing else" },
+    .{ "SymbolNameMismatch", "the declared name must equal symbol" },
+    .{ "InterfaceChangeNeedsApproval", "pass interface_change:true" },
+    .{ "ModuleSideEffect", "pass order_change:true" },
+    .{ "DeclaredSideEffect", "pass order_change:true" },
+    .{ "InvalidOp", "op is \"write\" or \"delete\"; kind is \"code\" or \"doc\"" },
+    .{ "UnknownDetail", "detail is \"full\" or \"budgeted\"" },
+    .{ "PointerNotFound", "emetgate_read_file on the file lists its pointers" },
+    .{ "HeadingNotFound", "emetgate_read_file on the file lists its headings" },
+    .{ "InvalidJson", "content must be valid JSON" },
+    .{ "DocSyntaxInvalid", "a Markdown section starts with its heading line" },
+    .{ "UnknownGitSubcommand", "sub is status, diff, log, show or blame" },
+    .{ "MissingCommit", "sub show needs commit, e.g. HEAD" },
+    .{ "WorkspaceBusy", "another gated write is running; retry" },
+    .{ "NotAnIdentifier", "new_name must be a plain identifier" },
+    .{ "NoClobber", "the target path exists; choose a new path" },
+    .{ "CommitNotEnabled", "omit message: commits are off on this server" },
+    .{ "MissingCommitMessage", "pass message" },
+});
+
+pub fn fixFor(name: []const u8) ?[]const u8 {
+    return fixes.get(name);
+}
+
+threadlocal var fix_buffer: [768]u8 = undefined;
+threadlocal var fix_len: usize = 0;
+
+pub fn setFix(comptime fmt: []const u8, args: anytype) void {
+    const written = std.fmt.bufPrint(&fix_buffer, fmt, args) catch fix_buffer[0..];
+    fix_len = written.len;
+}
+
+pub fn clearFix() void {
+    fix_len = 0;
+}
+
+pub fn hasFix() bool {
+    return fix_len > 0;
+}
+
+fn takeFix(name: []const u8) ?[]const u8 {
+    if (fix_len > 0) {
+        const given = fix_buffer[0..fix_len];
+        fix_len = 0;
+        return given;
+    }
+    return fixFor(name);
+}
+
+fn writeFix(js: *std.json.Stringify, name: []const u8) !void {
+    const fix = takeFix(name) orelse return;
+    try js.objectField("fix");
+    try js.write(fix);
 }
 
 fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, command_field: []const u8, command: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {
@@ -1158,6 +1243,7 @@ pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
     try js.write(name);
     try js.objectField("exit_code");
     try js.write(exit_code);
+    try writeFix(&js, name);
     try js.endObject();
     try writer.writeByte('\n');
 }

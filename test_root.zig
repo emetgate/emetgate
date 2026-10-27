@@ -144,6 +144,7 @@ pub const diagnostics = src.diagnostics;
 pub const server = src.server;
 pub const telemetry = src.telemetry;
 pub const handlers = src.handlers;
+pub const recovery = src.recovery;
 pub const run_tool = src.run_tool;
 pub const read_tools = src.read_tools;
 pub const read_budget = src.read_budget;
@@ -250,6 +251,7 @@ test {
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
     _ = @import("tests/observability.zig");
+    _ = @import("tests/recovery_hints.zig");
     _ = @import("tests/readtools.zig");
     _ = @import("tests/short_path_jail.zig");
     _ = @import("tests/read_budget.zig");

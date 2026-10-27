@@ -28,10 +28,12 @@ const receipts = @import("../platform/receipts.zig");
 const disk = @import("../platform/disk.zig");
 const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
+const recovery = @import("recovery.zig");
 const runner = @import("../platform/runner.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const repo = @import("../platform/repo.zig");
 const rules = @import("../platform/rules.zig");
+const lang_registry = @import("../engine/lang/registry.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -52,6 +54,8 @@ const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    wire.clearFix();
+    tool_result.clearMissing();
     _ = commit_plan.takeFound();
     _ = commit_refusal.take();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
@@ -99,7 +103,7 @@ fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: 
     const check = try requireString(args, "check");
     const where: ?[]const u8 = if (getField(args.?, "where")) |field| switch (field) {
         .string => |text| text,
-        else => return error.MissingArgument,
+        else => return tool_result.missing("where (string)", .{}),
     } else null;
     event.label = "scan";
     event.file = where;
@@ -313,7 +317,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
 }
 
 fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
-    if (symbols.len == 0) return error.MissingArgument;
+    if (symbols.len == 0) return tool_result.missing("symbols (non-empty array of symbol refs)", .{});
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
     const snapshot = loaded.snapshot;
@@ -330,7 +334,7 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     for (symbols, 0..) |item, i| {
         const sym = switch (item) {
             .string => |s| s,
-            else => return error.MissingArgument,
+            else => return tool_result.missing("symbols[{d}] (string)", .{i}),
         };
         const ref = try symbol.Ref.parse(gpa, sym);
         defer ref.deinit(gpa);
@@ -368,8 +372,8 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
 }
 
 fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
-    const start = line_start orelse return error.MissingArgument;
-    const end = line_end orelse return error.MissingArgument;
+    const start = line_start orelse return tool_result.missing("line_start (integer, with line_end)", .{});
+    const end = line_end orelse return tool_result.missing("line_end (integer, with line_start)", .{});
     if (start < 1 or end < 1) return error.InvalidLineRange;
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
@@ -385,7 +389,10 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
     }
     const table = try snapshot.symbols();
     const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
-    const matched = try line_range.symbolsOverlapping(gpa, table.*, requested);
+    const matched = line_range.symbolsOverlapping(gpa, table.*, requested) catch |err| {
+        if (err == error.NoSymbolInRange) recovery.nearestSymbols(snapshot.source, table.*, requested);
+        return err;
+    };
     defer gpa.free(matched);
     const entries = try gpa.alloc(wire.RangeEntry, matched.len);
     defer gpa.free(entries);
@@ -492,6 +499,7 @@ fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *
     const is_error = tryInto(gpa, io, runtime, file, sym, hash_hex, body, args, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
+        recovery.afterSymbolEdit(gpa, io, runtime, policy.root, file, sym, hash_hex, body, err);
         buffer.clearRetainingCapacity();
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, file);
@@ -677,8 +685,8 @@ const doc_writer = @import("../platform/doc_writer.zig");
 fn docSelector(args: Value) !struct { selector: doc_writer.Selector, label: []const u8 } {
     if (getString(args, "pointer")) |pointer| return .{ .selector = .{ .pointer = pointer }, .label = pointer };
     if (getString(args, "heading")) |heading| return .{ .selector = .{ .heading = heading }, .label = heading };
-    const start = getInt(args, "line_start") orelse return error.MissingArgument;
-    const end = getInt(args, "line_end") orelse return error.MissingArgument;
+    const start = getInt(args, "line_start") orelse return tool_result.missing(selector_missing, .{});
+    const end = getInt(args, "line_end") orelse return tool_result.missing(selector_missing, .{});
     if (start < 1 or end < 1) return error.InvalidLineRange;
     return .{ .selector = .{ .line_range = .{ .start = @intCast(start), .end = @intCast(end) } }, .label = "range" };
 }
@@ -695,6 +703,7 @@ fn callWriteDoc(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
     const is_error = writeDocInto(gpa, io, file, hash_hex, new_text, args, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
+        recovery.afterWriteDoc(hash_hex, err);
         buffer.clearRetainingCapacity();
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, file);
@@ -783,23 +792,24 @@ fn itemKind(item: Value) !ItemKind {
 }
 
 fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
-    const arguments = args orelse return error.MissingArgument;
-    const edits_val = getField(arguments, "edits") orelse return error.MissingArgument;
-    if (edits_val != .array or edits_val.array.items.len == 0) return error.MissingArgument;
-    for (edits_val.array.items) |item| {
-        _ = getString(item, "file") orelse return error.MissingArgument;
+    const arguments = args orelse return tool_result.missing(edits_missing, .{});
+    const edits_val = getField(arguments, "edits") orelse return tool_result.missing(edits_missing, .{});
+    if (edits_val != .array or edits_val.array.items.len == 0) return tool_result.missing(edits_missing, .{});
+    for (edits_val.array.items, 0..) |item, i| {
+        const file = getString(item, "file") orelse return tool_result.missing("edits[{d}].file (string)", .{i});
         switch (try itemKind(item)) {
             .doc => {
-                _ = getString(item, "hash") orelse return error.MissingArgument;
-                _ = getString(item, "content") orelse return error.MissingArgument;
-                _ = try docSelector(item);
+                inline for (.{ "hash", "content" }) |field| {
+                    if (getString(item, field) == null) return tool_result.missing("edits[{d}]." ++ field ++ " (string)", .{i});
+                }
+                _ = docSelector(item) catch |err| return if (err == error.MissingArgument) tool_result.missing("edits[{d}]: " ++ selector_missing, .{i}) else err;
             },
             .code => {
                 if (node_tool.isNodeForm(item)) continue;
                 if (try itemOp(item) == .delete) continue;
-                _ = getString(item, "symbol") orelse return error.MissingArgument;
-                _ = getString(item, "hash") orelse return error.MissingArgument;
-                _ = getString(item, "body") orelse return error.MissingArgument;
+                inline for (.{ "symbol", "hash", "body" }) |field| {
+                    if (getString(item, field) == null) return missingCodeField(i, field, file);
+                }
             },
         }
     }
@@ -810,6 +820,7 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
     const is_error = batchInto(gpa, io, runtime, edits_val.array.items, arguments, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
+        recovery.afterBatch(gpa, io, runtime, policy.root, edits_val.array.items, err);
         buffer.clearRetainingCapacity();
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, firstAbsentFile(edits_val.array.items));
@@ -819,6 +830,14 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
         break :blk true;
     };
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+const edits_missing = "edits (non-empty array of objects, one per file)";
+const selector_missing = "pointer, heading, or line_start and line_end (integers)";
+
+fn missingCodeField(index: usize, comptime field: []const u8, file: []const u8) error{MissingArgument} {
+    if (lang_registry.forPath(file) == null) return tool_result.missing("edits[{d}]." ++ field ++ " (string); {s} is not source code, so it needs kind:\"doc\" with hash, content and " ++ selector_missing, .{ index, file });
+    return tool_result.missing("edits[{d}]." ++ field ++ " (string)", .{index});
 }
 
 fn itemOp(item: Value) !runner.EditOp {

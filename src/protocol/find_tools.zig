@@ -13,7 +13,7 @@ const ToolResult = tool_result.ToolResult;
 const Index = emet_file.Index;
 const Set = std.StringArrayHashMapUnmanaged(void);
 
-pub const description = "Returns every place a literal text occurs in the files of the project, in under a millisecond: any bytes, any language, any encoding, case folded by Unicode. Gives the hit and file counts, the 20 files with the most hits and the first 40 hits with their lines. The index is built once in the background; a changed file is indexed again on its own within milliseconds, and the whole index is built again only after many files have changed.";
+pub const description = "Finds a case-folded literal in all project files: hit and file counts, top 20 files, first 40 hits.";
 
 pub const waited_note = "waited for the find index build";
 pub const index_suffix = ".emet";

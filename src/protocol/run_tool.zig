@@ -17,7 +17,7 @@ const Policy = policy_mod.Policy;
 pub const max_output_lines = 200;
 pub const max_output_bytes = 16 * 1024;
 
-pub const description = "Runs one command of the allowlist set when the server started, in a sandboxed shadow copy, and returns its exit code and the last 200 lines (16 KiB) of each output stream; the working tree is not changed. Without command, returns the allowlist.";
+pub const description = "Runs one allowlisted command in a sandbox copy: exit code and the last 200 lines of each stream. No command lists the allowlist.";
 
 const Allowlist = struct {
     items: std.ArrayList([]const u8) = .empty,
@@ -49,7 +49,7 @@ pub fn callRun(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event
     const requested: ?[]const u8 = if (args) |a| switch (tool_result.getField(a, "command") orelse Value{ .null = {} }) {
         .null => null,
         .string => |text| text,
-        else => return error.MissingArgument,
+        else => return tool_result.missing("command (string)", .{}),
     } else null;
     const is_error = render(gpa, io, requested, args, &policy, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;

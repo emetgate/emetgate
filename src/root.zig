@@ -145,6 +145,7 @@ pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
 pub const telemetry = @import("protocol/telemetry.zig");
 pub const handlers = @import("protocol/handlers.zig");
+pub const recovery = @import("protocol/recovery.zig");
 pub const run_tool = @import("protocol/run_tool.zig");
 pub const read_tools = @import("protocol/read_tools.zig");
 pub const read_budget = @import("protocol/read_budget.zig");

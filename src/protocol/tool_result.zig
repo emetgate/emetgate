@@ -24,8 +24,26 @@ pub fn dupTrim(gpa: Allocator, bytes: []const u8) ![]u8 {
 }
 
 pub fn requireString(args: ?Value, key: []const u8) error{MissingArgument}![]const u8 {
-    const object = args orelse return error.MissingArgument;
-    return getString(object, key) orelse error.MissingArgument;
+    const object = args orelse return missing("{s} (string)", .{key});
+    return getString(object, key) orelse missing("{s} (string)", .{key});
+}
+
+threadlocal var missing_buffer: [384]u8 = undefined;
+threadlocal var missing_len: usize = 0;
+
+pub fn missing(comptime fmt: []const u8, args: anytype) error{MissingArgument} {
+    const written = std.fmt.bufPrint(&missing_buffer, fmt, args) catch missing_buffer[0..];
+    missing_len = written.len;
+    return error.MissingArgument;
+}
+
+pub fn clearMissing() void {
+    missing_len = 0;
+}
+
+pub fn missingField() ?[]const u8 {
+    if (missing_len == 0) return null;
+    return missing_buffer[0..missing_len];
 }
 
 pub fn getField(value: Value, key: []const u8) ?Value {
