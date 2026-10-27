@@ -73,7 +73,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = test_command_mod.takeUnverified();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
-        if (try receipt_note.unverified(gpa, result.text, test_command_mod.unverified_status, unverified_note)) |text| {
+        if (try receipt_note.unverified(gpa, result.text, test_command_mod.unverified_status, unverified_note, args)) |text| {
             gpa.free(result.text);
             result.text = text;
         }

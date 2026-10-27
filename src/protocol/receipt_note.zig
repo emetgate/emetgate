@@ -54,7 +54,7 @@ pub fn restated(gpa: Allocator, text: []const u8, to: []const u8, extra: []const
 const max_unverified_files = 20;
 const kept_fields = [_][]const u8{ "commit", "commit_unfinished", "files_left_as_found", "left_as_found" };
 
-pub fn unverified(gpa: Allocator, text: []const u8, to: []const u8, hint: []const u8) !?[]u8 {
+pub fn unverified(gpa: Allocator, text: []const u8, to: []const u8, hint: []const u8, args: ?std.json.Value) !?[]u8 {
     const open = "{\"status\":\"";
     if (!std.mem.startsWith(u8, text, open)) return null;
     const end = std.mem.indexOfScalarPos(u8, text, open.len, '"') orelse return null;
@@ -67,12 +67,8 @@ pub fn unverified(gpa: Allocator, text: []const u8, to: []const u8, hint: []cons
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, text[0..close], .{}) catch return null;
     if (parsed != .object) return null;
     var files: std.ArrayList([]const u8) = .empty;
-    try collectFile(arena, &files, parsed);
-    for ([_][]const u8{ "edits", "files" }) |name| {
-        const list = parsed.object.get(name) orelse continue;
-        if (list != .array) continue;
-        for (list.array.items) |item| try collectFile(arena, &files, item);
-    }
+    try collectFiles(arena, &files, parsed);
+    if (files.items.len == 0) if (args) |given| try collectFiles(arena, &files, given);
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     var js: std.json.Stringify = .{ .writer = &out.writer };
@@ -95,6 +91,16 @@ pub fn unverified(gpa: Allocator, text: []const u8, to: []const u8, hint: []cons
     try js.endObject();
     try out.writer.writeByte('\n');
     return try out.toOwnedSlice();
+}
+
+fn collectFiles(arena: Allocator, files: *std.ArrayList([]const u8), value: std.json.Value) !void {
+    if (value != .object) return;
+    try collectFile(arena, files, value);
+    for ([_][]const u8{ "edits", "files" }) |name| {
+        const list = value.object.get(name) orelse continue;
+        if (list != .array) continue;
+        for (list.array.items) |item| try collectFile(arena, files, item);
+    }
 }
 
 fn collectFile(arena: Allocator, files: *std.ArrayList([]const u8), value: std.json.Value) !void {
@@ -179,8 +185,8 @@ test "receipt note: the paths of a refusal are added as a list, with the count o
 test "receipt note: an unverified write is one short line that names the files and drops the symbol listing" {
     const gpa = std.testing.allocator;
     const text = "{\"status\":\"written\",\"edits\":[{\"file\":\"src/A.cs\",\"symbols\":[{\"symbol\":\"A\",\"new_hash\":\"abc\"}]},{\"file\":\"src/A.cs\",\"symbols\":[]},{\"file\":\"src/B.cs\"}],\"commit\":\"c0ffee\"}\n";
-    const short = (try unverified(gpa, text, "unverified_no_tests", "none: add a test command")).?;
+    const short = (try unverified(gpa, text, "unverified_no_tests", "none: add a test command", null)).?;
     defer gpa.free(short);
     try std.testing.expectEqualStrings("{\"status\":\"unverified_no_tests\",\"files\":[\"src/A.cs\",\"src/B.cs\"],\"commit\":\"c0ffee\",\"tests\":\"none: add a test command\"}\n", short);
-    try std.testing.expect((try unverified(gpa, "{\"status\":\"rejected\"}\n", "unverified_no_tests", "x")) == null);
+    try std.testing.expect((try unverified(gpa, "{\"status\":\"rejected\"}\n", "unverified_no_tests", "x", null)) == null);
 }
