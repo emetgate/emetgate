@@ -189,7 +189,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_git",
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff unless symbols_only. log: a line per commit, next_cursor goes back as cursor. blame: per symbol, or per line with line_start/line_end.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars (detail:\"full\" is raw). diff/show: changed symbols, then the folded diff unless symbols_only. log: a line per commit marked receipt or no_receipt (a note is attached, not verified; only emetgate verify <commit> checks it), next_cursor goes back as cursor. blame: per symbol, or per line with line_start/line_end.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show or blame" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
