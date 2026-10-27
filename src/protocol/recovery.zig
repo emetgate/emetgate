@@ -143,6 +143,7 @@ fn nodeHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, la
 
 pub fn afterBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, items: []const Value, err: anyerror) void {
     if (err == error.FileExists or err == error.HashMismatch) if (wholeFileHint(gpa, io, root, items)) return;
+    if (err == error.FileExists) if (absentSectionHint(items)) return;
     if (err != error.HashMismatch and err != error.MissingFileHash and err != error.BodyEscape and err != error.MutationSyntaxInvalid) return;
     for (items, 0..) |item, i| {
         var label_buf: [24]u8 = undefined;
@@ -188,8 +189,21 @@ fn wholeFileHint(gpa: Allocator, io: std.Io, root: ?[]const u8, items: []const V
     return false;
 }
 
+const write_doc_absent_fix = "write_doc only edits an existing file with the hash read by emetgate_read_file; create a new file with emetgate_write";
+
+fn absentSectionHint(items: []const Value) bool {
+    for (items, 0..) |item, i| {
+        const given = tool_result.getString(item, "hash") orelse continue;
+        if (!std.mem.eql(u8, given, symbol.absent_text)) continue;
+        if (tool_result.getField(item, "line_start") == null and tool_result.getField(item, "pointer") == null and tool_result.getField(item, "heading") == null) continue;
+        wire.setFix("edits[{d}]: " ++ write_doc_absent_fix, .{i});
+        return true;
+    }
+    return false;
+}
+
 pub fn afterWriteDoc(hash_hex: []const u8, err: anyerror) void {
     if (err != error.InvalidHash) return;
     if (!std.mem.eql(u8, hash_hex, symbol.absent_text)) return;
-    wire.setFix("write_doc only edits an existing file with the hash read by emetgate_read_file; create a new file with emetgate_write", .{});
+    wire.setFix(write_doc_absent_fix, .{});
 }
