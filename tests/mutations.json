@@ -12258,6 +12258,15 @@
         "an entry left out as too large is read again once the size limit admits it",
         "search text: a file an older index left out as too large is read again once the size limit admits it"
       ]
+    },
+    {
+      "id": "GV1-empty-branch-range-green",
+      "file": "src/platform/verify_branch.zig",
+      "from": "    if (links.items.len == 0) branch = .empty;",
+      "to": "",
+      "kills": [
+        "verify --branch: an empty range is not green"
+      ]
     }
   ]
 }

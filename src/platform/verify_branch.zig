@@ -38,6 +38,7 @@ pub const BranchVerdict = enum {
     verified, // every commit carried a receipt and verified
     partial, // at least one commit has no receipt or is only unverified
     broken, // at least one commit's receipt actively mismatched
+    empty,
 
     pub fn worse(self: BranchVerdict, other: BranchVerdict) BranchVerdict {
         return if (@intFromEnum(other) > @intFromEnum(self)) other else self;
@@ -136,13 +137,14 @@ pub fn run(gpa: Allocator, arena: Allocator, io: std.Io, runtime: *Runtime, root
             .report = result,
         });
     }
+    if (links.items.len == 0) branch = .empty;
     return .{ .links = links.items, .verdict = branch, .tip = prev, .count = links.items.len };
 }
 
 pub fn exitCode(verdict: BranchVerdict) u8 {
     return switch (verdict) {
         .verified => 0,
-        .partial => 53,
+        .partial, .empty => 53,
         .broken => 54,
     };
 }
@@ -159,6 +161,7 @@ fn reasonFor(link: Link) []const u8 {
 
 pub fn writeText(w: *std.Io.Writer, result: Result) !void {
     try w.print("branch {t}: {d} commit(s)\n", .{ result.verdict, result.count });
+    if (result.verdict == .empty) try w.writeAll("  the range holds no commit, so nothing was verified\n");
     for (result.links) |link| {
         const mark: []const u8 = switch (link.verdict) {
             .verified => "verified",

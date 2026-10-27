@@ -153,6 +153,38 @@ test "verify --branch: a forged receipt note makes the branch broken and shifts 
     try testing.expectEqual(@as(u8, 54), verify_branch.exitCode(tampered.verdict));
 }
 
+test "verify --branch: an empty range is not green" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.gatedCommit("{\n  return b + a;\n}", "c1");
+
+    const result = try case.verify("HEAD");
+    try testing.expectEqual(verify_branch.BranchVerdict.empty, result.verdict);
+    try testing.expectEqual(@as(usize, 0), result.count);
+    try testing.expectEqual(@as(u8, 53), verify_branch.exitCode(result.verdict));
+
+    var buffer: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    try verify_branch.writeText(&w, result);
+    try testing.expect(std.mem.startsWith(u8, w.buffered(), "branch empty: 0 commit(s)\n"));
+    try testing.expect(std.mem.indexOf(u8, w.buffered(), "nothing was verified") != null);
+}
+
+test "verify --branch: an empty base walks the whole history" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.gatedCommit("{\n  return b + a;\n}", "c1");
+
+    const result = try case.verify("");
+    try testing.expect(result.count >= 2);
+    try testing.expect(result.verdict != .empty);
+    try testing.expect(result.links[result.links.len - 1].has_receipt);
+}
+
 test "git log: proof-marks each commit as verified when a receipt note is attached" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
