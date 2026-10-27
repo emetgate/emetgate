@@ -1,5 +1,7 @@
 const ts = @import("../../tree_sitter.zig");
 const profile_mod = @import("../profile.zig");
+const csharp_rename = @import("rename.zig");
+const csharp_facts = @import("facts.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -55,7 +57,7 @@ pub const profile: Profile = .{
     .name_segments = &.{"identifier"},
     .containers = &containers,
     .declaration_statements = &.{},
-    .declarator = "",
+    .declarator = "variable_declarator",
     .export_wrappers = &.{},
     .decorator = "attribute_list",
     .comments = &.{"comment"},
@@ -79,17 +81,32 @@ pub const profile: Profile = .{
     .literal_values = never_matching_literal_values,
     .memberTraits = memberTraits,
     .visibility_keywords = &.{},
+    .rename = &csharp_rename.grammar,
+    .modules = &csharp_rename.modules,
+    .declarations = csharp_rename.declarations(),
+    .facts = &csharp_facts.csharp,
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {
     _ = self;
-    _ = tree;
     _ = kind;
-    return .{ .is_constructor = isKind(node, "constructor_declaration") };
+    return .{
+        .is_constructor = isKind(node, "constructor_declaration"),
+        .is_static = hasStaticModifier(tree, node),
+    };
 }
 
 fn isKind(node: ts.Node, name: []const u8) bool {
     return std.mem.eql(u8, node.kind(), name);
+}
+
+fn hasStaticModifier(tree: ts.Tree, node: ts.Node) bool {
+    var i: u32 = 0;
+    while (node.child(i)) |child| : (i += 1) {
+        if (!std.mem.eql(u8, child.kind(), "modifier")) continue;
+        if (std.mem.eql(u8, tree.text(child), "static")) return true;
+    }
+    return false;
 }
 
 const std = @import("std");

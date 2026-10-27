@@ -157,6 +157,7 @@ pub const Declarations = struct {
     enum_bare_member: ?[]const u8 = null,
     destructuring: []const []const u8 = &.{},
     static_keyword: ?[]const u8 = null,
+    containers: []const []const u8 = &.{},
 };
 
 pub const MemberTraits = struct {

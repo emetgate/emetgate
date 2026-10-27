@@ -333,10 +333,11 @@ const Extractor = struct {
     }
 
     fn annotatedType(self: *Extractor, holder: ts.Node, type_field: []const u8) Error!?u32 {
-        const annotation_kind = self.f.type_annotation orelse return null;
         const annotation = holder.childByField(type_field) orelse return null;
-        if (!std.mem.eql(u8, annotation.kind(), annotation_kind)) return null;
-        const inner = annotation.namedChild(0) orelse return null;
+        const inner = if (self.f.type_annotation) |annotation_kind| blk: {
+            if (!std.mem.eql(u8, annotation.kind(), annotation_kind)) return null;
+            break :blk annotation.namedChild(0) orelse return null;
+        } else annotation;
         return self.typeRefOfName(inner);
     }
 
