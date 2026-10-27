@@ -364,10 +364,16 @@ test "try_batch creates whole files from content with hash absent and no symbol,
     defer repo.deinit();
     const created_ts = "export function twice(n: number): number {\n  return n * 2;\n}\n";
     const created_json = "{\n  \"compilerOptions\": {}\n}\n";
+    const twice = try repo.path("lib\\deep\\twice.ts");
+    defer gpa.free(twice);
+    const tsconfig = try repo.path("tsconfig.json");
+    defer gpa.free(tsconfig);
+    const other = try repo.path("lib\\deep\\other.ts");
+    defer gpa.free(other);
     var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
-        .{ .file = "lib/deep/twice.ts", .hash = "absent", .content = created_ts },
-        .{ .kind = "doc", .file = "tsconfig.json", .hash = "absent", .content = created_json },
-        .{ .file = "lib/deep/other.ts", .hash = "absent", .body = math_ts },
+        .{ .file = twice, .hash = "absent", .content = created_ts },
+        .{ .kind = "doc", .file = tsconfig, .hash = "absent", .content = created_json },
+        .{ .file = other, .hash = "absent", .body = math_ts },
     } });
     defer reply.deinit();
     try reply.expectCommitted();
@@ -392,8 +398,10 @@ test "try_batch whole-file create refuses a file that already exists and leaves 
 test "try_batch whole-file create with a syntax error creates no file and no directory" {
     var repo = try Repo.init();
     defer repo.deinit();
+    const fresh = try repo.path("fresh\\new.ts");
+    defer gpa.free(fresh);
     var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
-        .{ .file = "fresh/new.ts", .hash = "absent", .content = "export function broken( {\n" },
+        .{ .file = fresh, .hash = "absent", .content = "export function broken( {\n" },
     } });
     defer reply.deinit();
     try reply.expectError("MutationSyntaxInvalid");
