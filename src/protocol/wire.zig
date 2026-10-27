@@ -1156,12 +1156,10 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "InvalidLineRange", "line_start and line_end are 1-based and line_start <= line_end" },
     .{ "LineOutOfRange", "line_start is past the end of the file" },
     .{ "FileOutsideRepo", "the path resolves outside the repository (for example a linked node_modules); only files inside it are readable; take a dependency's version from package.json or the lockfile" },
-    .{ "NotInRepo", "the server is not inside a git repository; the user must run git init there" },
     .{ "InternalPath", ".git and .emetgate are internal; the test command is the server's --test option, which only the user sets" },
     .{ "FileNotFound", "no such file; emetgate_list or emetgate_search shows the tracked paths" },
     .{ "UseSymbolToolsForSource", "a source file is read with emetgate_skeleton, emetgate_read_symbol or emetgate_read_file raw:true, and edited with emetgate_try" },
     .{ "UnsupportedLanguage", "not a registered source language: read it with emetgate_read_file, edit it with emetgate_write_doc" },
-    .{ "NoTestCommand", "no test command is configured; the user must start the server with --test \"<command>\"" },
     .{ "UntrustedRepoConfig", "the repository's .emetgaterc.json is used only when the user starts the server with --allow-repo-config" },
     .{ "ParentDirectoryMissing", "the target's directory does not exist; emetgate_move_file creates missing directories of its target" },
     .{ "MutationSyntaxInvalid", "body does not parse: for an existing symbol it is the block with its braces only; with hash \"absent\" it is the whole declaration" },
@@ -1242,7 +1240,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
 });
 
 pub fn fixFor(name: []const u8) ?[]const u8 {
-    return fixes.get(name);
+    return setupFix(name) orelse fixes.get(name);
 }
 
 threadlocal var fix_buffer: [768]u8 = undefined;
@@ -1277,7 +1275,7 @@ fn takeFix(name: []const u8) ?[]const u8 {
 }
 
 fn writeFix(js: *std.json.Stringify, name: []const u8) !void {
-    const fix = takeFix(name) orelse setupFix(name) orelse return;
+    const fix = takeFix(name) orelse return;
     try js.objectField("fix");
     try js.write(fix);
 }
@@ -1530,7 +1528,7 @@ test "symbols render as one NDJSON line with typed fields" {
     try testing.expect(std.mem.indexOf(u8, json, "\"ref\":\"add\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"function\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"line\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"ambiguous\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"ambiguous\"") == null);
 }
 
 test "file paths with backslashes and quotes are JSON-escaped" {
@@ -1831,7 +1829,7 @@ test "error payload carries the name and exit code on one line" {
     try writeError(&buffer.writer, "PlaceholderBody", 13);
 
     try testing.expectEqualStrings(
-        "{\"status\":\"error\",\"error\":\"PlaceholderBody\",\"exit_code\":13}\n",
+        "{\"status\":\"error\",\"error\":\"PlaceholderBody\",\"exit_code\":13,\"fix\":\"body is a placeholder such as ...; send the real code\"}\n",
         buffer.written(),
     );
 }
