@@ -89,6 +89,7 @@ fn namedList(arena: Allocator, snapshot: *const Snapshot, m: *const Modules, lis
 
 pub fn imports(arena: Allocator, snapshot: *const Snapshot) ![]Import {
     const m = snapshot.profile.modules orelse return error.UnsupportedLanguage;
+    if (m.from_statement != null) return pythonImports(arena, snapshot, m);
     var out: std.ArrayList(Import) = .empty;
     const root = snapshot.tree.root();
     var i: u32 = 0;
@@ -132,6 +133,60 @@ pub fn imports(arena: Allocator, snapshot: *const Snapshot) ![]Import {
                 entry.named = try namedList(arena, snapshot, m, clause, m.export_specifier);
             }
             try out.append(arena, entry);
+        }
+    }
+    return out.items;
+}
+
+fn firstSegment(node: ts.Node) ts.Node {
+    return node.namedChild(0) orelse node;
+}
+
+fn pythonImports(arena: Allocator, snapshot: *const Snapshot, m: *const Modules) ![]Import {
+    var out: std.ArrayList(Import) = .empty;
+    const root = snapshot.tree.root();
+    var i: u32 = 0;
+    while (root.namedChild(i)) |statement| : (i += 1) {
+        const kind = statement.kind();
+        if (std.mem.eql(u8, kind, m.import_statement)) {
+            var j: u32 = 0;
+            while (statement.namedChild(j)) |name_node| : (j += 1) {
+                const nk = name_node.kind();
+                if (std.mem.eql(u8, nk, m.aliased_import)) {
+                    const path = name_node.childByField(m.name_field) orelse continue;
+                    const alias = name_node.childByField(m.alias_field) orelse continue;
+                    try out.append(arena, .{ .statement = span(statement), .spec = snapshot.tree.text(path), .form = .import, .type_only = false, .namespace = snapshot.tree.text(alias), .namespace_start = alias.startByte() });
+                } else if (std.mem.eql(u8, nk, m.dotted_name)) {
+                    const seg = firstSegment(name_node);
+                    try out.append(arena, .{ .statement = span(statement), .spec = snapshot.tree.text(name_node), .form = .import, .type_only = false, .namespace = snapshot.tree.text(seg), .namespace_start = seg.startByte() });
+                }
+            }
+        } else if (std.mem.eql(u8, kind, m.from_statement.?)) {
+            const source = statement.childByField(m.module_name_field);
+            const spec = if (source) |s| snapshot.tree.text(s) else "";
+            var wildcard = false;
+            var named: std.ArrayList(Named) = .empty;
+            var j: u32 = 0;
+            while (statement.namedChild(j)) |child| : (j += 1) {
+                const ck = child.kind();
+                if (std.mem.eql(u8, ck, m.wildcard_import)) {
+                    wildcard = true;
+                } else if (std.mem.eql(u8, ck, m.aliased_import)) {
+                    const path = child.childByField(m.name_field) orelse continue;
+                    const alias = child.childByField(m.alias_field) orelse continue;
+                    const remote = firstSegment(path);
+                    try named.append(arena, .{ .name = snapshot.tree.text(path), .alias = snapshot.tree.text(alias), .span = span(child), .type_only = false, .name_start = remote.startByte(), .local_start = alias.startByte() });
+                } else if (std.mem.eql(u8, ck, m.dotted_name)) {
+                    if (source != null and child.eql(source.?)) continue;
+                    const seg = firstSegment(child);
+                    try named.append(arena, .{ .name = snapshot.tree.text(child), .alias = null, .span = span(child), .type_only = false, .name_start = seg.startByte(), .local_start = seg.startByte() });
+                }
+            }
+            if (wildcard) {
+                try out.append(arena, .{ .statement = span(statement), .spec = spec, .form = .bare, .type_only = false });
+            } else {
+                try out.append(arena, .{ .statement = span(statement), .spec = spec, .form = .import, .type_only = false, .named = named.items });
+            }
         }
     }
     return out.items;
@@ -194,7 +249,7 @@ pub fn freeNames(arena: Allocator, snapshot: *const Snapshot, region: Span) ![]F
         if (node.endByte() <= region.start or node.startByte() >= region.end) continue;
         if (snapshot.profile.isComment(node.kind()) or oneOf(node.kind(), snapshot.profile.strings)) continue;
         if (node.childCount() == 0) {
-            if (oneOf(node.kind(), g.free_kinds) and scope.siteOf(g, node) == null) try names.put(arena, snapshot.tree.text(node), {});
+            if (oneOf(node.kind(), g.free_kinds) and scope.siteOf(g, node) == null and !scope.isProperty(g, node)) try names.put(arena, snapshot.tree.text(node), {});
             continue;
         }
         var i: u32 = 0;

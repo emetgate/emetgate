@@ -106,12 +106,37 @@ pub fn siteIn(g: *const Rename, up: anytype, node: ts.Node) ?BinderSite {
     const kind = parent.kind();
     for (g.binder_sites) |site| {
         if (!std.mem.eql(u8, site.parent, kind)) continue;
+        if (site.parent_field) |pf| {
+            const grand = up.parent(parent) orelse continue;
+            if (site.grandparent) |gk| if (!std.mem.eql(u8, grand.kind(), gk)) continue;
+            const held = grand.childByField(pf) orelse continue;
+            if (!held.eql(parent)) continue;
+        } else if (site.grandparent) |gk| {
+            const grand = up.parent(parent) orelse continue;
+            if (!std.mem.eql(u8, grand.kind(), gk)) continue;
+        }
         const field = site.field orelse return site;
         if (site.unless) |unless| if (parent.childByField(unless) != null) continue;
         const held = parent.childByField(field) orelse continue;
         if (held.eql(node)) return site;
     }
     return null;
+}
+
+pub fn isProperty(g: *const Rename, node: ts.Node) bool {
+    return isPropertyIn(g, TreeUp{}, node);
+}
+
+pub fn isPropertyIn(g: *const Rename, up: anytype, node: ts.Node) bool {
+    if (g.property_sites.len == 0) return false;
+    const parent = up.parent(node) orelse return false;
+    const kind = parent.kind();
+    for (g.property_sites) |site| {
+        if (!std.mem.eql(u8, site.parent, kind)) continue;
+        const held = parent.childByField(site.field) orelse continue;
+        if (held.eql(node)) return true;
+    }
+    return false;
 }
 
 pub fn isExternal(g: *const Rename, node: ts.Node) bool {
@@ -233,6 +258,7 @@ pub fn resolveName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
             try binders.append(gpa, .{ .span = span, .namespace = site.namespace, .scope = .of(scopeFor(snapshot.profile, g, up, node, site)), .import = isImport(g, up, node) });
             continue;
         }
+        if (isPropertyIn(g, up, node)) continue;
         if (oneOf(kind, g.free_kinds)) try pending.append(gpa, node);
     }
     for (pending.items) |node| {
@@ -350,6 +376,7 @@ pub fn resolveAll(gpa: Allocator, snapshot: *const Snapshot) !Every {
                 try pending.append(gpa, .{ .name = name, .binder = binder, .order = @intCast(pending.items.len) });
                 continue;
             }
+            if (isPropertyIn(g, up, node)) continue;
             if (!oneOf(node.kind(), g.free_kinds)) continue;
             try uses.append(gpa, .{ .span = span, .namespace = useNamespace(g, node.kind()), .binder = null });
             try use_names.append(gpa, name);

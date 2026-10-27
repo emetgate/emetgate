@@ -301,9 +301,39 @@ pub const Workspace = struct {
         };
     }
 
+    fn foundPython(self: *Workspace, store: *const Store, joined: []const u8) Allocator.Error!?SpecTarget {
+        const scratch = self.resolve_scratch.allocator();
+        const lookup: Tracked = .{ .map = &self.tracked };
+        const hit = (try module_paths.resolveJoinedPython(scratch, lookup, joined, '/')) orelse return null;
+        const original = self.tracked.getKey(hit) orelse return null;
+        const id = store.fileId(original) orelse return .unindexed;
+        return switch (store.file(id).status) {
+            .indexed => .{ .file = id },
+            else => .unindexed,
+        };
+    }
+
+    fn resolvePython(self: *Workspace, store: *const Store, importer: []const u8, spec: []const u8) Allocator.Error!?SpecTarget {
+        const scratch = self.resolve_scratch.allocator();
+        var base: []const u8 = std.fs.path.dirnamePosix(importer) orelse "";
+        var rest = spec;
+        if (rest.len > 0 and rest[0] == '.') {
+            var dots: usize = 0;
+            while (dots < rest.len and rest[dots] == '.') dots += 1;
+            var up: usize = 1;
+            while (up < dots) : (up += 1) base = std.fs.path.dirnamePosix(base) orelse "";
+            rest = rest[dots..];
+        }
+        const path = try scratch.dupe(u8, rest);
+        std.mem.replaceScalar(u8, path, '.', '/');
+        const joined = if (path.len == 0) base else (try join(scratch, base, path)) orelse return null;
+        return self.foundPython(store, joined);
+    }
+
     pub fn resolve(self: *Workspace, store: *const Store, importer: []const u8, spec: []const u8) Allocator.Error!SpecTarget {
         defer _ = self.resolve_scratch.reset(.retain_capacity);
         const scratch = self.resolve_scratch.allocator();
+        if (module_paths.isPythonPath(importer)) return (try self.resolvePython(store, importer, spec)) orelse .external;
         if (module_paths.isRelative(spec)) {
             const dir = std.fs.path.dirnamePosix(importer) orelse "";
             const joined = (try join(scratch, dir, spec)) orelse return .external;

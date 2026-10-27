@@ -448,6 +448,14 @@ const Extractor = struct {
     }
 
     fn collectExports(self: *Extractor) Error!void {
+        if (self.m.export_statement.len == 0) {
+            for (self.defs.items, 0..) |*def, d| {
+                if (d == 0 or def.parent != 0) continue;
+                def.exported = true;
+                try self.exports.append(self.arena, .{ .name = def.name, .kind = .local, .index = @intCast(d) });
+            }
+            return;
+        }
         const root = self.snapshot.tree.root();
         var i: u32 = 0;
         while (root.namedChild(i)) |statement| : (i += 1) {
