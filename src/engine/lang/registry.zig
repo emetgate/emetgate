@@ -6,6 +6,7 @@ pub const profiles = [_]*const Profile{
     &@import("tsx/profile.zig").profile,
     &@import("javascript/profile.zig").profile,
     &@import("zig/profile.zig").profile,
+    &@import("python/profile.zig").profile,
 };
 
 pub fn forPath(path: []const u8) ?*const Profile {
