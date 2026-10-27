@@ -24,6 +24,24 @@ pub const Proven = struct {
     span: Span,
 };
 
+pub const Sites = struct {
+    count: usize = 0,
+    buf: [480]u8 = undefined,
+    len: usize = 0,
+
+    pub fn list(self: *const Sites) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    pub fn add(self: *Sites, rel: []const u8, source: []const u8, offset: u32) void {
+        self.count += 1;
+        const line = std.mem.count(u8, source[0..@min(offset, source.len)], "\n") + 1;
+        const sep: []const u8 = if (self.len == 0) "" else ", ";
+        const written = std.fmt.bufPrint(self.buf[self.len..], "{s}{s}:{d}", .{ sep, rel, line }) catch return;
+        self.len += written.len;
+    }
+};
+
 pub const Found = struct {
     proven: []Proven,
     member: bool,
@@ -156,6 +174,7 @@ const Locator = struct {
     old: []const u8,
     target: Place,
     parent: ?Place,
+    sites: ?*Sites = null,
     proven: std.ArrayList(Place) = .empty,
 
     fn prove(self: *Locator, file: u32, start: u32) !void {
@@ -357,9 +376,11 @@ const Locator = struct {
                 if (resolution.useAt(leaf.span)) |use| {
                     if (use.binder) |b| if (!resolution.binders[b].import and !self.isProven(file, resolution.binders[b].span.start)) continue;
                 }
-                return error.RenameUnresolved;
+                const sites = self.sites orelse return error.RenameUnresolved;
+                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);
             }
         }
+        if (self.sites) |sites| if (sites.count != 0) return error.RenameUnresolved;
     }
 };
 
@@ -397,7 +418,7 @@ pub fn supports(profile: *const Profile) bool {
     return facts_extract.supports(profile);
 }
 
-pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, offset: u32, old: []const u8) !Found {
+pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, offset: u32, old: []const u8, sites: ?*Sites) !Found {
     const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;
     if (!supports(profile)) return error.UnsupportedLanguage;
     var graph = Graph.init(gpa, profile);
@@ -439,7 +460,7 @@ pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, f
     defer workspace.deinit();
     try graph.store.linkAll(workspace.resolver());
 
-    var locator: Locator = .{ .gpa = gpa, .graph = &graph, .old = old, .target = target_place, .parent = parent };
+    var locator: Locator = .{ .gpa = gpa, .graph = &graph, .old = old, .target = target_place, .parent = parent, .sites = sites };
     defer locator.proven.deinit(gpa);
     try locator.refuseLookalikes();
     try locator.proveLinked();

@@ -71,7 +71,7 @@ pub fn leavesNamed(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     while (walker.next()) |entry| {
         const node = entry.node;
         const kind = node.kind();
-        if (snapshot.profile.isComment(kind) or oneOf(kind, snapshot.profile.strings)) {
+        if (snapshot.profile.opaqueText(node)) {
             walker.skipChildren();
             continue;
         }
@@ -175,9 +175,9 @@ pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, ou
             walker.skipChildren();
             continue;
         }
-        if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, g.template_fragment)) {
+        if ((oneOf(kind, snapshot.profile.strings) and snapshot.profile.opaqueText(node)) or std.mem.eql(u8, kind, g.template_fragment)) {
             walker.skipChildren();
-            if (std.mem.eql(u8, std.mem.trim(u8, text, g.quotes), name) and record(out, &found, .string_key, node)) return found;
+            if ((std.mem.eql(u8, std.mem.trim(u8, text, g.quotes), name) or typeStringNames(g, node, text, name)) and record(out, &found, .string_key, node)) return found;
             continue;
         }
         if (std.mem.eql(u8, kind, snapshot.profile.call.node)) {
@@ -201,6 +201,23 @@ pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, ou
         }
     }
     return found;
+}
+
+fn typeStringNames(g: *const Rename, node: ts.Node, text: []const u8, name: []const u8) bool {
+    const parent = node.parent() orelse return false;
+    if (!oneOf(parent.kind(), g.type_string_parents)) return false;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, text, at, name)) |start| : (at = start + 1) {
+        const end = start + name.len;
+        const before_ok = start == 0 or !isWordByte(text[start - 1]);
+        const after_ok = end == text.len or !isWordByte(text[end]);
+        if (before_ok and after_ok) return true;
+    }
+    return false;
+}
+
+fn isWordByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
 
 fn record(out: []Hit, found: *usize, kind: Dynamic, node: ts.Node) bool {

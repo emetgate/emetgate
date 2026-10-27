@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const emetgate = @import("emetgate");
 const rename_batch = emetgate.rename_batch;
+const rename_graph = emetgate.rename_graph;
 const symbol = emetgate.symbol;
 const Runtime = emetgate.runtime.Runtime;
 const Snapshot = emetgate.loader.Snapshot;
@@ -38,6 +39,10 @@ const Case = struct {
     }
 
     fn plan(self: *Case, rel: []const u8, ref_text: []const u8, new_name: []const u8, interface_change: bool) !rename_batch.Plan {
+        return self.planWith(rel, ref_text, new_name, interface_change, null);
+    }
+
+    fn planWith(self: *Case, rel: []const u8, ref_text: []const u8, new_name: []const u8, interface_change: bool, unresolved: ?*rename_graph.Sites) !rename_batch.Plan {
         const file = try self.repo.abs(testing.allocator, rel);
         defer testing.allocator.free(file);
         const hash = try self.hashOf(file, ref_text);
@@ -47,6 +52,7 @@ const Case = struct {
             .expected_hash = hash,
             .new_name = new_name,
             .interface_change = interface_change,
+            .unresolved = unresolved,
         }, null);
     }
 };
@@ -579,4 +585,66 @@ test "rename facts: a C# member call on a receiver of unknown type refuses the r
     var case = try Case.init(&.{ .{ .rel = "src/Box.cs", .text = box_cs }, .{ .rel = "src/Caller.cs", .text = caller } });
     defer case.deinit();
     try testing.expectError(error.RenameUnresolved, case.plan("src/Box.cs", "Demo.Box.Size", "Width", true));
+}
+
+test "rename facts: a Python function called inside an f-string interpolation is renamed there too" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "def helper(v):\n    return v\n\n\ndef show(x):\n    return f\"value={helper(x)!r:>4} {{helper}}\"\n" }});
+    defer case.deinit();
+    const planned = try case.plan("m.py", "helper", "double", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "m.py", "def double(v):\n    return v\n\n\ndef show(x):\n    return f\"value={double(x)!r:>4} {{helper}}\"\n");
+}
+
+test "rename facts: a C# method called inside an interpolated string is renamed there too" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const util =
+        \\namespace Demo
+        \\{
+        \\    public static class Util
+        \\    {
+        \\        public static int Helper(int v) => v;
+        \\        public static string Show(int x) => $"v={Helper(x),4:D} Helper";
+        \\    }
+        \\}
+        \\
+    ;
+    var case = try Case.init(&.{.{ .rel = "src/Util.cs", .text = util }});
+    defer case.deinit();
+    const planned = try case.plan("src/Util.cs", "Demo.Util.Helper@static", "Twice", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "src/Util.cs",
+        \\namespace Demo
+        \\{
+        \\    public static class Util
+        \\    {
+        \\        public static int Twice(int v) => v;
+        \\        public static string Show(int x) => $"v={Twice(x),4:D} Helper";
+        \\    }
+        \\}
+        \\
+    );
+}
+
+test "rename facts: a Python class named inside a string annotation is a dynamic reference" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "m.py", .text = "class Box:\n    pass\n" },
+        .{ .rel = "n.py", .text = "from m import Box\n\n\ndef f(xs: \"list[Box]\") -> Box:\n    return Box()\n" },
+    });
+    defer case.deinit();
+    try testing.expectError(error.DynamicReference, case.plan("m.py", "Box", "Crate", true));
+}
+
+test "rename facts: an unproven reference refuses the rename and names every site it could not prove" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "svc.py", .text = "class Svc:\n    def run(self):\n        return 1\n" },
+        .{ .rel = "use.py", .text = "def go(x):\n    return x.run()\n\n\ndef again(y):\n    return y.run()\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("svc.py", "Svc.run", "start", true, &sites));
+    try testing.expectEqual(@as(usize, 2), sites.count);
+    try testing.expectEqualStrings("use.py:2, use.py:6", sites.list());
 }

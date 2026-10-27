@@ -132,6 +132,7 @@ pub const Rename = struct {
     class_scopes: []const []const u8 = &.{},
     scope_bodies: []const FieldSite = &.{},
     rebinding_statements: []const []const u8 = &.{},
+    type_string_parents: []const []const u8 = &.{},
 };
 
 pub const Modules = struct {
@@ -327,6 +328,7 @@ pub const Profile = struct {
     dynamic_callees: []const []const u8,
     dynamic_constructors: []const DynamicConstructor,
     strings: []const []const u8,
+    string_holes: []const []const u8 = &.{},
     class_body: []const u8,
     bodyless_terminator: ?[]const u8,
     empty_body: []const u8,
@@ -387,6 +389,20 @@ pub const Profile = struct {
     pub fn isDottedName(self: *const Profile, node_kind: []const u8) bool {
         const dotted = self.dotted_name orelse return false;
         return std.mem.eql(u8, dotted, node_kind);
+    }
+
+    pub fn opaqueText(self: *const Profile, node: ts.Node) bool {
+        const node_kind = node.kind();
+        if (self.isComment(node_kind)) return true;
+        for (self.strings) |kind| {
+            if (!std.mem.eql(u8, kind, node_kind)) continue;
+            var i: u32 = 0;
+            while (node.child(i)) |child| : (i += 1) {
+                for (self.string_holes) |hole| if (std.mem.eql(u8, hole, child.kind())) return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     pub fn isComment(self: *const Profile, node_kind: []const u8) bool {

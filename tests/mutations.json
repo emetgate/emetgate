@@ -15166,6 +15166,61 @@
       "kills": [
         "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
       ]
+    },
+    {
+      "id": "L4A-string-holes-ignored",
+      "file": "src/engine/lang/profile.zig",
+      "from": "                for (self.string_holes) |hole| if (std.mem.eql(u8, hole, child.kind())) return false;",
+      "to": "                _ = child;",
+      "kills": [
+        "rename facts: a Python function called inside an f-string interpolation is renamed there too",
+        "rename facts: a C# method called inside an interpolated string is renamed there too"
+      ]
+    },
+    {
+      "id": "L4B-python-interpolation-not-a-hole",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .string_holes = &.{\"interpolation\"},",
+      "to": "",
+      "kills": [
+        "rename facts: a Python function called inside an f-string interpolation is renamed there too"
+      ]
+    },
+    {
+      "id": "L4C-csharp-interpolation-not-a-hole",
+      "file": "src/engine/lang/csharp/profile.zig",
+      "from": "    .string_holes = &.{\"interpolation\"},",
+      "to": "",
+      "kills": [
+        "rename facts: a C# method called inside an interpolated string is renamed there too"
+      ]
+    },
+    {
+      "id": "L4D-type-string-names-unchecked",
+      "file": "src/engine/rename.zig",
+      "from": " or typeStringNames(g, node, text, name)) and record(",
+      "to": ") and record(",
+      "kills": [
+        "rename facts: a Python class named inside a string annotation is a dynamic reference"
+      ]
+    },
+    {
+      "id": "L4E-unresolved-stops-at-first-site",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);",
+      "to": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n                return error.RenameUnresolved;",
+      "kills": [
+        "rename facts: an unproven reference refuses the rename and names every site it could not prove"
+      ]
+    },
+    {
+      "id": "L4F-unresolved-sites-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (self.sites) |sites| if (sites.count != 0) return error.RenameUnresolved;",
+      "to": "",
+      "kills": [
+        "rename facts: an unproven reference refuses the rename and names every site it could not prove"
+      ]
     }
   ]
 }

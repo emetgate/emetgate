@@ -75,6 +75,7 @@ pub const test_outcome = @import("platform/test_outcome.zig");
 pub const appcontainer = @import("platform/appcontainer.zig");
 pub const tsserver = @import("platform/tsserver.zig");
 pub const rename_batch = @import("platform/rename_batch.zig");
+pub const rename_graph = @import("platform/rename_graph.zig");
 pub const move_batch = @import("platform/move_batch.zig");
 pub const file_move = @import("platform/file_move.zig");
 pub const file_edit = @import("platform/file_edit.zig");

@@ -108,6 +108,7 @@ pub const grammar: Rename = .{
     .literal_argument = "string",
     .template_fragment = "",
     .quotes = "\"'",
+    .type_string_parents = &.{"type"},
     .property_sites = &property_sites,
     .inert_sites = &inert_sites,
     .class_scopes = &.{"class_definition"},

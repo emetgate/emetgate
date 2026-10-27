@@ -27,6 +27,7 @@ pub const Request = struct {
     new_name: []const u8,
     interface_change: bool = false,
     dynamic: ?*DynamicSites = null,
+    unresolved: ?*rename_graph.Sites = null,
 };
 
 pub const DynamicSites = struct {
@@ -165,7 +166,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     var fallback: ?anyerror = error.NoLanguageService;
     var free_uses = false;
     if (!base.profile.language_service and rename_graph.supports(base.profile)) {
-        const found = try rename_graph.locate(gpa, io, runtime, root, request.file_abs, offset, old);
+        const found = try rename_graph.locate(gpa, io, runtime, root, request.file_abs, offset, old, request.unresolved);
         defer found.deinit(gpa);
         for (found.proven) |p| try locations.add(gpa, try gpa.dupe(u8, p.abs), p.span);
         resolver = .facts;

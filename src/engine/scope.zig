@@ -265,7 +265,7 @@ pub fn resolveName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     while (walker.next()) |entry| {
         const node = entry.node;
         const kind = node.kind();
-        if (snapshot.profile.isComment(kind) or oneOf(kind, snapshot.profile.strings)) {
+        if (snapshot.profile.opaqueText(node)) {
             walker.skipChildren();
             continue;
         }
@@ -393,7 +393,7 @@ const Pass = struct {
             self.path.shrinkRetainingCapacity(entry.depth);
             const node = entry.node;
             const kind = node.kind();
-            if (snapshot.profile.isComment(kind) or oneOf(kind, snapshot.profile.strings)) {
+            if (snapshot.profile.opaqueText(node)) {
                 self.walker.skipChildren();
                 continue;
             }

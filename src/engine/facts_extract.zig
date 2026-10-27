@@ -368,7 +368,7 @@ const Extractor = struct {
         while (walker.next()) |entry| {
             const node = entry.node;
             const kind = node.kind();
-            if (self.profile.isComment(kind) or oneOf(kind, self.profile.strings)) {
+            if (self.profile.opaqueText(node)) {
                 walker.skipChildren();
                 continue;
             }
@@ -790,7 +790,7 @@ const Extractor = struct {
             self.path.shrinkRetainingCapacity(depth);
             const node = entry.node;
             const kind = node.kind();
-            if (self.profile.isComment(kind) or oneOf(kind, self.profile.strings)) {
+            if (self.profile.opaqueText(node)) {
                 walker.skipChildren();
                 continue;
             }

@@ -9,6 +9,7 @@ const runner = @import("../platform/runner.zig");
 const repo = @import("../platform/repo.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const rename_batch = @import("../platform/rename_batch.zig");
+const rename_graph = @import("../platform/rename_graph.zig");
 const receipts = @import("../platform/receipts.zig");
 const receipt_note = @import("receipt_note.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -26,17 +27,19 @@ pub fn callRename(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     const new_name = try tool_result.requireString(args, "new_name");
     const interface_change = tool_result.getBool(args.?, "interface_change") orelse false;
     var dynamic: rename_batch.DynamicSites = .{ .allow = tool_result.getBool(args.?, "allow_dynamic") orelse false };
+    var unresolved: rename_graph.Sites = .{};
     event.label = "rename";
     event.file = file;
     event.symbol = sym;
     event.mutating = true;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = renameInto(gpa, io, runtime, file, sym, hash_hex, new_name, interface_change, &dynamic, args, policy, &buffer.writer, event) catch |err| blk: {
+    const is_error = renameInto(gpa, io, runtime, file, sym, hash_hex, new_name, interface_change, &dynamic, &unresolved, args, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
         if (err == error.DynamicReference and dynamic.count != 0) wire.setFix("{s} is also reached dynamically at {s}{s}; pass allow_dynamic:true to rename the static references and get these sites back to review by hand", .{ sym, dynamic.list(), if (dynamic.count > 8) " and more" else "" });
+        if (err == error.RenameUnresolved and unresolved.count != 0) wire.setFix("{s} has references that could not be proven at {s}{s}; nothing was written; rename these sites by hand with emetgate_try_batch", .{ sym, unresolved.list(), if (unresolved.count > 8) " and more" else "" });
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, file);
         } else {
@@ -67,7 +70,7 @@ fn recordRename(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8, s
     }, w, true, request);
 }
 
-fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, new_name: []const u8, interface_change: bool, dynamic: *rename_batch.DynamicSites, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym: []const u8, hash_hex: []const u8, new_name: []const u8, interface_change: bool, dynamic: *rename_batch.DynamicSites, unresolved: *rename_graph.Sites, args: ?Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try policy_mod.trustedTestCommand(args, policy);
     var commit = try policy_mod.commitRequest(args, policy, runtime);
     defer if (commit) |request| request.deinit(gpa);
@@ -79,7 +82,7 @@ fn renameInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, s
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, place.abs, policy_mod.trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
     const outcome = try rename_batch.tryRename(gpa, io, runtime, .{
-        .request = .{ .file_abs = place.abs, .ref_text = sym, .expected_hash = hash, .new_name = new_name, .interface_change = interface_change, .dynamic = dynamic },
+        .request = .{ .file_abs = place.abs, .ref_text = sym, .expected_hash = hash, .new_name = new_name, .interface_change = interface_change, .dynamic = dynamic, .unresolved = unresolved },
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
