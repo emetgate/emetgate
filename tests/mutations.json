@@ -13943,6 +13943,111 @@
         "replaceUnique matches a LF old string against a CRLF file and keeps CRLF",
         "emetgate_edit matches a LF old_string in a CRLF file"
       ]
+    },
+    {
+      "id": "DR1-doctor-warning-blocks",
+      "file": "src/platform/doctor.zig",
+      "from": "    for (checks) |check| if (check.status == .fail) return 1;",
+      "to": "    for (checks) |check| if (check.status != .ok) return 1;",
+      "kills": [
+        "doctor: exit is non-zero only when a check fails, a warning alone does not block"
+      ]
+    },
+    {
+      "id": "DR2-doctor-failure-exits-zero",
+      "file": "src/platform/doctor.zig",
+      "from": "    for (checks) |check| if (check.status == .fail) return 1;",
+      "to": "    for (checks) |check| if (check.status == .fail) return 0;",
+      "kills": [
+        "doctor: exit is non-zero only when a check fails, a warning alone does not block",
+        "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix",
+        "doctor: in a repository with a Unicode, spaced path the repo, tests, write, state and sandbox checks pass",
+        "doctor: a repository with no test command fails the tests check before lockdown starts",
+        "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up"
+      ]
+    },
+    {
+      "id": "DR3-doctor-signed-out-passes",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (signed_in) return .{ .name = \"login\", .status = .ok, .detail = \"signed in\" };",
+      "to": "    if (signed_in or true) return .{ .name = \"login\", .status = .ok, .detail = \"signed in\" };",
+      "kills": [
+        "doctor: a signed-out claude blocks lockdown with claude auth login, an unreadable status only warns"
+      ]
+    },
+    {
+      "id": "DR4-doctor-repo-config-flag-ignored",
+      "file": "src/platform/doctor.zig",
+      "from": "            if (std.mem.eql(u8, arg.string, \"--allow-repo-config\")) found.allow_repo_config = true;\n",
+      "to": "",
+      "kills": [
+        "doctor: the test command lockdown will use comes from the emetgate server's --test in .mcp.json"
+      ]
+    },
+    {
+      "id": "DR5-doctor-no-test-command-only-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "        error.NoTestCommand => .{ .name = \"tests\", .status = .fail,",
+      "to": "        error.NoTestCommand => .{ .name = \"tests\", .status = .warn,",
+      "kills": [
+        "doctor: no test command blocks lockdown, and the fix names --test",
+        "doctor: a repository with no test command fails the tests check before lockdown starts"
+      ]
+    },
+    {
+      "id": "DR6-doctor-code-page-never-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (code_page == 0 or code_page == utf8_code_page) return",
+      "to": "    if (code_page == 0 or true) return",
+      "kills": [
+        "doctor: a non-UTF-8 console code page is a warning with chcp 65001"
+      ]
+    },
+    {
+      "id": "DR7-doctor-claude-not-found-no-hint",
+      "file": "src/platform/doctor.zig",
+      "from": "        error.ClaudeNotFound => \"claude (Claude Code) is not on PATH; install it with: \" ++ claude_install ++ \"  then open a new terminal\",\n",
+      "to": "",
+      "kills": [
+        "doctor: a startup error names what is wrong and the exact fix command on one line"
+      ]
+    },
+    {
+      "id": "DR8-doctor-tests-looked-up-outside-repo",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (root == null) return .{ .name = \"tests\", .status = .fail, .detail = \"skipped: needs a git repository\" };\n",
+      "to": "",
+      "kills": [
+        "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix"
+      ]
+    },
+    {
+      "id": "DR9-doctor-not-in-repo-only-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "        try checks.append(arena, .{ .name = \"repo\", .status = .fail,",
+      "to": "        try checks.append(arena, .{ .name = \"repo\", .status = .warn,",
+      "kills": [
+        "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix"
+      ]
+    },
+    {
+      "id": "DR10-doctor-quoted-program-split",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (trimmed.len != 0 and trimmed[0] == '\"') {",
+      "to": "    if (false) {",
+      "kills": [
+        "doctor: the program of a test command is its first word, quoted or not"
+      ]
+    },
+    {
+      "id": "DR11-doctor-bad-mcp-config-only-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "    return .{ .name = \".mcp.json\", .status = .fail,",
+      "to": "    return .{ .name = \".mcp.json\", .status = .warn,",
+      "kills": [
+        "doctor: no test command blocks lockdown, and the fix names --test",
+        "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up"
+      ]
     }
   ]
 }
