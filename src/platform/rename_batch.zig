@@ -26,7 +26,30 @@ pub const Request = struct {
     expected_hash: symbol.Hash,
     new_name: []const u8,
     interface_change: bool = false,
+    dynamic: ?*DynamicSites = null,
 };
+
+pub const DynamicSites = struct {
+    allow: bool = false,
+    count: usize = 0,
+    buf: [480]u8 = undefined,
+    len: usize = 0,
+
+    pub fn list(self: *const DynamicSites) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    fn add(self: *DynamicSites, rel: []const u8, line: usize, kind: rename.Dynamic) void {
+        self.count += 1;
+        const sep: []const u8 = if (self.len == 0) "" else ", ";
+        const written = std.fmt.bufPrint(self.buf[self.len..], "{s}{s}:{d} ({s})", .{ sep, rel, line, @tagName(kind) }) catch return;
+        self.len += written.len;
+    }
+};
+
+fn lineAt(source: []const u8, offset: u32) usize {
+    return std.mem.count(u8, source[0..@min(offset, source.len)], "\n") + 1;
+}
 
 pub const Resolver = enum { language_service, text, facts };
 
@@ -168,7 +191,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const top_name = if (ref.container.len != 0) ref.container[0] else old;
     const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name) or (resolver == .facts and visibleAt(base, offset, old)) or try collapsesShorthand(gpa, io, runtime, &locations, old);
     if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
-    try refuseDynamic(gpa, io, runtime, root, &locations, old, member);
+    try refuseDynamic(gpa, io, runtime, root, &locations, old, member, request.dynamic);
 
     var new_ref = ref;
     new_ref.name = request.new_name;
@@ -399,8 +422,10 @@ fn fromText(gpa: Allocator, io: std.Io, root: []const u8, base: *Snapshot, file_
     for (leaves) |leaf| try locations.add(gpa, try gpa.dupe(u8, file_abs), leaf.span);
 }
 
-fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, locations: *const Locations, old: []const u8, member: bool) !void {
-    for (locations.files.items) |located| try refuseDynamicIn(gpa, runtime, io, located.abs, old, member, false);
+fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, locations: *const Locations, old: []const u8, member: bool, given: ?*DynamicSites) !void {
+    var local: DynamicSites = .{};
+    const sites = given orelse &local;
+    for (locations.files.items) |located| try refuseDynamicIn(gpa, runtime, io, root, located.abs, old, member, false, sites);
     const listing = try repo.filesMentioning(gpa, io, root, old);
     defer gpa.free(listing);
     var files = std.mem.tokenizeScalar(u8, listing, 0);
@@ -410,15 +435,20 @@ fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, rel });
         defer gpa.free(abs);
         if (locations.find(abs) != null) continue;
-        try refuseDynamicIn(gpa, runtime, io, abs, old, member, true);
+        try refuseDynamicIn(gpa, runtime, io, root, abs, old, member, true, sites);
     }
+    if (sites.count != 0 and !sites.allow) return error.DynamicReference;
 }
 
-fn refuseDynamicIn(gpa: Allocator, runtime: *Runtime, io: std.Io, abs: []const u8, old: []const u8, member: bool, untouched: bool) !void {
+fn refuseDynamicIn(gpa: Allocator, runtime: *Runtime, io: std.Io, root: []const u8, abs: []const u8, old: []const u8, member: bool, untouched: bool, sites: *DynamicSites) !void {
     const snapshot = try Snapshot.load(runtime, io, .cwd(), abs);
     defer snapshot.destroy();
     if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
-    if (rename.dynamicAccess(snapshot, old, member) != null) return error.DynamicReference;
+    var hits: [8]rename.Hit = undefined;
+    const found = rename.dynamicHits(snapshot, old, member, &hits);
+    const rel = if (abs.len > root.len + 1 and std.ascii.startsWithIgnoreCase(abs, root)) abs[root.len + 1 ..] else abs;
+    for (hits[0..found]) |hit| sites.add(rel, lineAt(snapshot.source, hit.start), hit.kind);
+    if (found != 0 and !sites.allow) return;
     if (untouched and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;
 }
 

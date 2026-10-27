@@ -43,6 +43,7 @@ const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
 const forgive = @import("forgive.zig");
 const batch_plan = @import("../platform/batch_plan.zig");
+const batch_merge = @import("batch_merge.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -990,6 +991,31 @@ fn itemOp(item: Value) !runner.EditOp {
     return std.meta.stringToEnum(runner.EditOp, text) orelse error.InvalidOp;
 }
 
+fn earlierText(items: []const Value, places: []const repo.Jailed, abs: []const u8) ?usize {
+    for (items, places, 0..) |item, place, j| {
+        if ((itemKind(item) catch continue) != .text) continue;
+        if (std.ascii.eqlIgnoreCase(place.abs, abs)) return j;
+    }
+    return null;
+}
+
+fn mergeSameFile(arena: Allocator, io: std.Io, items: []const Value, places: []const repo.Jailed, order: []const usize, edits: []runner.Edit) !void {
+    for (edits, 0..) |*edit, slot| {
+        if (edit.text == null) continue;
+        var parts: std.ArrayList(batch_merge.Part) = .empty;
+        for (items, 0..) |item, i| {
+            if ((try itemKind(item)) != .text or order[i] != slot) continue;
+            try parts.append(arena, .{ .index = i, .expected = try itemExpected(item), .text = try itemText(item, i) });
+        }
+        if (parts.items.len < 2) continue;
+        const first = parts.items[0].index;
+        const base = try file_edit.readBase(arena, io, places[first].abs, lang_registry.forPath(edit.file_abs) != null);
+        const merged = try batch_merge.merge(arena, base, getString(items[first], "file").?, parts.items);
+        edit.text = .{ .whole = merged.content };
+        edit.expected_hash = merged.expected;
+    }
+}
+
 fn firstAbsentFile(items: []const Value) []const u8 {
     for (items) |item| {
         if (node_tool.isNodeForm(item)) continue;
@@ -1111,6 +1137,10 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 const text = try itemText(item, i);
                 places[i] = try jailItem(gpa, io, policy.root, file, text == .whole, &new_dirs);
                 built = i + 1;
+                if (earlierText(items[0..i], places[0..i], places[i].abs)) |first| {
+                    order[i] = order[first];
+                    continue;
+                }
                 edits[ci] = .{
                     .file_abs = places[i].abs,
                     .ref_text = "",
@@ -1140,6 +1170,14 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         }
     }
 
+    const code_used = ci;
+    for (items, 0..) |item, i| {
+        if (try itemKind(item) == .doc) order[i] = code_used + (order[i] - code_count);
+    }
+    var merge_arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer merge_arena_state.deinit();
+    try mergeSameFile(merge_arena_state.allocator(), io, items, places, order, edits[0..code_used]);
+
     const anchor = file_edit.existingAncestor(io, places[0].abs) orelse return error.InvalidPath;
     const in_place = std.mem.eql(u8, anchor, std.fs.path.dirname(places[0].abs) orelse anchor);
     const probe = if (in_place) try gpa.dupe(u8, places[0].abs) else try std.fmt.allocPrint(gpa, "{s}\\_", .{anchor});
@@ -1148,13 +1186,13 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer gpa.free(resolved);
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, probe, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
-    const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
+    const before_hashes = try gpa.alloc(?symbol.Hash, code_used);
     defer gpa.free(before_hashes);
-    for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs = @ptrCast(new_dirs.items) };
+    for (edits[0..code_used], before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
+    const options: batch_mod.BatchOptions = .{ .edits = edits[0..code_used], .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs = @ptrCast(new_dirs.items) };
     var planned = try batch_mod.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
-    const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits, options);
+    const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits[0..code_used], options);
     defer result.deinit(gpa);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
     defer gpa.free(note_root);
@@ -1174,7 +1212,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         .committed => |committed| {
             event.outcome = .committed;
             event.edits = items.len;
-            if (policy.tree_cache) |cache| for (edits) |edit| cache.invalidate(edit.file_abs);
+            if (policy.tree_cache) |cache| for (edits[0..code_used]) |edit| cache.invalidate(edit.file_abs);
             const views = try gpa.alloc(wire.BatchEdit, items.len);
             defer gpa.free(views);
             for (items, 0..) |item, i| {
@@ -1200,7 +1238,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                     .doc => .{
                         .file = getString(item, "file").?,
                         .symbol = (docSelector(item) catch unreachable).label,
-                        .old_hash = .{ .present = doc_expected[slot - code_count] },
+                        .old_hash = .{ .present = doc_expected[slot - code_used] },
                         .new_hash = committed[slot].hash,
                         .evidence = null,
                         .deleted = false,
@@ -1208,16 +1246,16 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 };
             }
             try wire.writeBatchCommitted(w, views, note, full);
-            const code_places = try gpa.alloc(repo.Jailed, edits.len);
+            const code_places = try gpa.alloc(repo.Jailed, code_used);
             defer gpa.free(code_places);
-            const code_committed = try gpa.alloc(@import("../platform/batch.zig").Committed, edits.len);
+            const code_committed = try gpa.alloc(@import("../platform/batch.zig").Committed, code_used);
             defer gpa.free(code_committed);
             for (items, 0..) |item, i| {
                 if (itemKind(item) catch unreachable == .doc) continue;
                 code_places[order[i]] = places[i];
                 code_committed[order[i]] = committed[order[i]];
             }
-            try recordBatch(gpa, io, places[0].root, code_places, edits, planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full, if (commit) |*made| made else null);
+            try recordBatch(gpa, io, places[0].root, code_places, edits[0..code_used], planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full, if (commit) |*made| made else null);
             try receipt_note.commit(gpa, io, places[0].root, commit, w);
             return false;
         },

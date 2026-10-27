@@ -368,3 +368,70 @@ test "try_batch whole-file create with a syntax error creates no file and no dir
     try reply.expectError("MutationSyntaxInvalid");
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/fresh", .{}));
 }
+
+test "same-file batch: two old_string items for one file apply in order and commit as one write" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .old_string = "return a + b;", .new_string = "return a + b + 0;" },
+        .{ .file = math, .old_string = "b + 0;", .new_string = "b + 1;" },
+    } });
+    defer reply.deinit();
+    try reply.expectCommitted();
+    try repo.expectFile("src/math.ts", "export function add(a: number, b: number): number {\n  return a + b + 1;\n}\n");
+}
+
+test "same-file batch: a whole-file item and an old_string item for one file are refused naming both indexes" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    const file_hash = symbol.formatHash(symbol.fileHash(math_ts));
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .hash = file_hash[0..], .content = "export const x = 1;\n" },
+        .{ .file = math, .old_string = "a + b", .new_string = "b + a" },
+    } });
+    defer reply.deinit();
+    try reply.expectError("ConflictingBatchEdits");
+    try testing.expect(std.mem.indexOf(u8, reply.text, "edits[0]") != null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "edits[1]") != null);
+    try repo.expectFile("src/math.ts", math_ts);
+}
+
+test "same-file batch: a missing old_string in the second item names that item and writes nothing" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .old_string = "a + b", .new_string = "b + a" },
+        .{ .file = math, .old_string = "a + b", .new_string = "a - b" },
+    } });
+    defer reply.deinit();
+    try reply.expectError("OldStringNotFound");
+    try testing.expect(std.mem.indexOf(u8, reply.text, "edits[1].old_string") != null);
+    try repo.expectFile("src/math.ts", math_ts);
+}
+
+test "multi-file batch: replace_all items across two files commit together" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    const notes = try repo.path("notes.md");
+    defer gpa.free(notes);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .old_string = "number", .new_string = "bigint", .replace_all = true },
+        .{ .file = notes, .old_string = "old", .new_string = "new", .replace_all = true },
+    } });
+    defer reply.deinit();
+    try reply.expectCommitted();
+    try repo.expectFile("src/math.ts", "export function add(a: bigint, b: bigint): bigint {\n  return a + b;\n}\n");
+    try repo.expectFile("notes.md", "# Notes\n\n## Setup\n\nnew\n");
+}

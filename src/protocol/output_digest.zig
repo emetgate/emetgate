@@ -248,6 +248,35 @@ fn collect(arena: Allocator, streams: []const []const u8) !Collected {
     return c;
 }
 
+pub fn failureKeys(gpa: Allocator, stdout: []const u8, stderr: []const u8) ![]u64 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const c = try collect(arena_state.allocator(), &.{ stdout, stderr });
+    var keys: std.ArrayList(u64) = .empty;
+    errdefer keys.deinit(gpa);
+    for (c.entries.items) |entry| {
+        if (warningKey(entry.text) != null or test_outcome.isSummaryLine(entry.text)) continue;
+        try keys.append(gpa, failureKey(entry.text));
+    }
+    std.mem.sort(u64, keys.items, {}, std.sort.asc(u64));
+    return keys.toOwnedSlice(gpa);
+}
+
+fn failureKey(text: []const u8) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    var digits = false;
+    for (text) |byte| {
+        if (std.ascii.isDigit(byte)) {
+            if (!digits) hasher.update("#");
+            digits = true;
+            continue;
+        }
+        digits = false;
+        hasher.update(&.{byte});
+    }
+    return hasher.final();
+}
+
 pub fn digest(gpa: Allocator, stdout: []const u8, stderr: []const u8) !Digest {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -603,4 +632,13 @@ test "a log request names eight hex digits after log and nothing else" {
     const a = logId("x", "y");
     const b = logId("xy", "");
     try testing.expect(!std.mem.eql(u8, &a, &b));
+}
+
+test "failure keys ignore numbers and summary lines, so the same failures in another run compare equal" {
+    const before = try failureKeys(std.testing.allocator, "FAIL src/a.test.ts > adds (12 ms)\nTests: 1 failed, 4 passed\n", "");
+    defer std.testing.allocator.free(before);
+    const after = try failureKeys(std.testing.allocator, "FAIL src/a.test.ts > adds (31 ms)\nTests: 1 failed, 5 passed\n", "");
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualSlices(u64, before, after);
+    try std.testing.expect(after.len != 0);
 }
