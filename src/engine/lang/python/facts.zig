@@ -2,6 +2,7 @@ const profile_mod = @import("../profile.zig");
 
 const Facts = profile_mod.Facts;
 const FieldSite = profile_mod.FieldSite;
+const TestDefinition = profile_mod.TestDefinition;
 
 const writes = [_]FieldSite{
     .{ .parent = "assignment", .field = "left" },
@@ -16,14 +17,18 @@ const branch_statements = [_][]const u8{
     "conditional_expression", "assert_statement",
 };
 
-const test_calls = [_][]const u8{};
+const test_definitions = [_]TestDefinition{
+    .{ .node = "class_definition", .prefix = "Test" },
+    .{ .node = "function_definition", .prefix = "test" },
+};
 const test_file_infixes = [_][]const u8{ "test_", "_test" };
 const test_dirs = [_][]const u8{ "tests", "test" };
 const doc_directives = [_][]const u8{ "type:", "noqa", "pragma:", "pylint:", "mypy:", "pyright:", "fmt:" };
 
 pub const python: Facts = .{
     .branch_statements = &branch_statements,
-    .test_calls = &test_calls,
+    .test_definitions = &test_definitions,
+    .test_files = &.{"conftest.py"},
     .test_file_infixes = &test_file_infixes,
     .test_dirs = &test_dirs,
     .doc_directives = &doc_directives,
@@ -51,4 +56,6 @@ pub const python: Facts = .{
     .error_node = "ERROR",
     .export_value_field = "",
     .export_declaration_field = "",
+    .receiver_parameter = "parameters",
+    .member_wrappers = &.{"decorated_definition"},
 };

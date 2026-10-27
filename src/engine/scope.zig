@@ -102,9 +102,22 @@ pub fn siteOf(g: *const Rename, node: ts.Node) ?BinderSite {
 }
 
 pub fn siteIn(g: *const Rename, up: anytype, node: ts.Node) ?BinderSite {
+    return matchingSite(g.binder_sites, up, node);
+}
+
+fn atPosition(parent: ts.Node, node: ts.Node, position: profile_mod.Position) bool {
+    return switch (position) {
+        .any => true,
+        .first => if (parent.namedChild(0)) |first| first.eql(node) else false,
+        .rest => if (parent.namedChild(0)) |first| !first.eql(node) else false,
+        .sole => parent.namedChildCount() == 1,
+    };
+}
+
+fn matchingSite(sites: []const BinderSite, up: anytype, node: ts.Node) ?BinderSite {
     const parent = up.parent(node) orelse return null;
     const kind = parent.kind();
-    for (g.binder_sites) |site| {
+    for (sites) |site| {
         if (!std.mem.eql(u8, site.parent, kind)) continue;
         if (site.parent_field) |pf| {
             const grand = up.parent(parent) orelse continue;
@@ -115,6 +128,7 @@ pub fn siteIn(g: *const Rename, up: anytype, node: ts.Node) ?BinderSite {
             const grand = up.parent(parent) orelse continue;
             if (!std.mem.eql(u8, grand.kind(), gk)) continue;
         }
+        if (!atPosition(parent, node, site.position)) continue;
         const field = site.field orelse return site;
         if (site.unless) |unless| if (parent.childByField(unless) != null) continue;
         const held = parent.childByField(field) orelse continue;
@@ -128,6 +142,7 @@ pub fn isProperty(g: *const Rename, node: ts.Node) bool {
 }
 
 pub fn isPropertyIn(g: *const Rename, up: anytype, node: ts.Node) bool {
+    if (matchingSite(g.inert_sites, up, node) != null) return true;
     if (g.property_sites.len == 0) return false;
     const parent = up.parent(node) orelse return false;
     const kind = parent.kind();
@@ -223,7 +238,12 @@ fn scopeFor(profile: *const Profile, g: *const Rename, up: anytype, node: ts.Nod
 
 fn isImport(g: *const Rename, up: anytype, node: ts.Node) bool {
     const parent = up.parent(node) orelse return false;
-    return oneOf(parent.kind(), g.import_binders);
+    if (!oneOf(parent.kind(), g.import_binders)) return false;
+    var current = up.parent(parent);
+    while (current) |ancestor| : (current = up.parent(ancestor)) {
+        if (oneOf(ancestor.kind(), g.import_statements)) return true;
+    }
+    return false;
 }
 
 pub fn resolveName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) !Resolution {
@@ -237,6 +257,8 @@ pub fn resolveName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     defer pending.deinit(gpa);
     var externals: std.ArrayList(Span) = .empty;
     errdefer externals.deinit(gpa);
+    const rebound = try collectRebound(gpa, snapshot, g);
+    defer gpa.free(rebound);
 
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
@@ -255,15 +277,17 @@ pub fn resolveName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
             continue;
         }
         if (siteIn(g, up, node)) |site| {
-            try binders.append(gpa, .{ .span = span, .namespace = site.namespace, .scope = .of(scopeFor(snapshot.profile, g, up, node, site)), .import = isImport(g, up, node) });
-            continue;
-        }
-        if (isPropertyIn(g, up, node)) continue;
+            const scope_node = scopeFor(snapshot.profile, g, up, node, site);
+            if (!isRebound(rebound, scope_node, name)) {
+                try binders.append(gpa, .{ .span = span, .namespace = site.namespace, .scope = .of(scope_node), .import = isImport(g, up, node) });
+                continue;
+            }
+        } else if (isPropertyIn(g, up, node)) continue;
         if (oneOf(kind, g.free_kinds)) try pending.append(gpa, node);
     }
     for (pending.items) |node| {
         const namespace = useNamespace(g, node.kind());
-        try uses.append(gpa, .{ .span = .{ .start = node.startByte(), .end = node.endByte() }, .namespace = namespace, .binder = lookup(binders.items, up, node, namespace) });
+        try uses.append(gpa, .{ .span = .{ .start = node.startByte(), .end = node.endByte() }, .namespace = namespace, .binder = lookup(g, binders.items, up, node, namespace) });
     }
     const owned_binders = try binders.toOwnedSlice(gpa);
     errdefer gpa.free(owned_binders);
@@ -272,14 +296,60 @@ pub fn resolveName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     return .{ .binders = owned_binders, .uses = owned_uses, .externals = try externals.toOwnedSlice(gpa) };
 }
 
-fn lookup(binders: []const Binder, up: anytype, node: ts.Node, namespace: Namespace) ?usize {
+fn lookup(g: *const Rename, binders: []const Binder, up: anytype, node: ts.Node, namespace: Namespace) ?usize {
+    var from = node;
+    var crossed = false;
     var current = up.parent(node);
-    while (current) |ancestor| : (current = up.parent(ancestor)) {
-        for (binders, 0..) |b, i| {
-            if (b.scope.eql(ancestor) and b.namespace.overlaps(namespace)) return i;
+    while (current) |ancestor| : ({
+        from = ancestor;
+        current = up.parent(ancestor);
+    }) {
+        if (!inScopeBody(g, ancestor, from)) continue;
+        const class_scope = oneOf(ancestor.kind(), g.class_scopes);
+        if (!class_scope or !crossed) {
+            for (binders, 0..) |b, i| {
+                if (b.scope.eql(ancestor) and b.namespace.overlaps(namespace)) return i;
+            }
         }
+        if (!class_scope and oneOf(ancestor.kind(), g.block_scopes)) crossed = true;
     }
     return null;
+}
+
+fn inScopeBody(g: *const Rename, scope_node: ts.Node, from: ts.Node) bool {
+    for (g.scope_bodies) |site| {
+        if (!std.mem.eql(u8, site.parent, scope_node.kind())) continue;
+        const body = scope_node.childByField(site.field) orelse return false;
+        return body.eql(from);
+    }
+    return true;
+}
+
+const Rebound = struct { scope: Region, name: []const u8 };
+
+fn collectRebound(gpa: Allocator, snapshot: *const Snapshot, g: *const Rename) ![]Rebound {
+    if (g.rebinding_statements.len == 0) return &.{};
+    var out: std.ArrayList(Rebound) = .empty;
+    errdefer out.deinit(gpa);
+    var walker = traversal.Walker.init(snapshot.tree.root());
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        if (!oneOf(node.kind(), g.rebinding_statements)) continue;
+        const scope_node = blockAbove(g, TreeUp{}, node);
+        var i: u32 = 0;
+        while (node.namedChild(i)) |child| : (i += 1) {
+            try out.append(gpa, .{ .scope = .of(scope_node), .name = snapshot.source[child.startByte()..child.endByte()] });
+        }
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+fn isRebound(rebound: []const Rebound, scope_node: ts.Node, name: []const u8) bool {
+    for (rebound) |r| {
+        if (r.scope.eql(scope_node) and std.mem.eql(u8, r.name, name)) return true;
+    }
+    return false;
 }
 
 pub const NamedSpan = struct {
@@ -359,6 +429,8 @@ pub fn resolveAll(gpa: Allocator, snapshot: *const Snapshot) !Every {
     defer use_names.deinit(gpa);
     var externals: std.ArrayList(NamedSpan) = .empty;
     defer externals.deinit(gpa);
+    const rebound = try collectRebound(gpa, snapshot, g);
+    defer gpa.free(rebound);
 
     {
         var pass: Pass = .init(snapshot.tree.root());
@@ -372,11 +444,13 @@ pub fn resolveAll(gpa: Allocator, snapshot: *const Snapshot) !Every {
                 continue;
             }
             if (siteIn(g, up, node)) |site| {
-                const binder: Binder = .{ .span = span, .namespace = site.namespace, .scope = .of(scopeFor(snapshot.profile, g, up, node, site)), .import = isImport(g, up, node) };
-                try pending.append(gpa, .{ .name = name, .binder = binder, .order = @intCast(pending.items.len) });
-                continue;
-            }
-            if (isPropertyIn(g, up, node)) continue;
+                const scope_node = scopeFor(snapshot.profile, g, up, node, site);
+                if (!isRebound(rebound, scope_node, name)) {
+                    const binder: Binder = .{ .span = span, .namespace = site.namespace, .scope = .of(scope_node), .import = isImport(g, up, node) };
+                    try pending.append(gpa, .{ .name = name, .binder = binder, .order = @intCast(pending.items.len) });
+                    continue;
+                }
+            } else if (isPropertyIn(g, up, node)) continue;
             if (!oneOf(node.kind(), g.free_kinds)) continue;
             try uses.append(gpa, .{ .span = span, .namespace = useNamespace(g, node.kind()), .binder = null });
             try use_names.append(gpa, name);
@@ -410,7 +484,7 @@ pub fn resolveAll(gpa: Allocator, snapshot: *const Snapshot) !Every {
             next += 1;
             const group = groups.get(name) orelse continue;
             const slice = binders[group.start .. group.start + group.len];
-            if (lookup(slice, pass.up(node), node, use.namespace)) |at| use.binder = group.start + at;
+            if (lookup(g, slice, pass.up(node), node, use.namespace)) |at| use.binder = group.start + at;
         }
     }
 

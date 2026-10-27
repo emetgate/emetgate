@@ -62,6 +62,11 @@ pub const LiteralValues = struct {
     negatable: []const []const u8,
     template: []const u8,
     substitution: []const u8,
+    quoted_key_content: []const u8 = "",
+    bare_pair_key: bool = true,
+    named_argument: []const u8 = "",
+    named_argument_name_field: []const u8 = "",
+    named_argument_value_field: []const u8 = "",
 };
 
 pub const Namespace = enum {
@@ -76,6 +81,8 @@ pub const Namespace = enum {
 
 pub const ScopeRule = enum { block, function, own, owner, pattern, declarator, program };
 
+pub const Position = enum { any, first, rest, sole };
+
 pub const BinderSite = struct {
     parent: []const u8,
     field: ?[]const u8,
@@ -84,6 +91,7 @@ pub const BinderSite = struct {
     scope: ScopeRule = .block,
     parent_field: ?[]const u8 = null,
     grandparent: ?[]const u8 = null,
+    position: Position = .any,
 };
 
 pub const ExternalSite = struct {
@@ -120,6 +128,10 @@ pub const Rename = struct {
     template_fragment: []const u8,
     quotes: []const u8,
     property_sites: []const FieldSite = &.{},
+    inert_sites: []const BinderSite = &.{},
+    class_scopes: []const []const u8 = &.{},
+    scope_bodies: []const FieldSite = &.{},
+    rebinding_statements: []const []const u8 = &.{},
 };
 
 pub const Modules = struct {
@@ -165,12 +177,15 @@ pub const Declarations = struct {
     destructuring: []const []const u8 = &.{},
     static_keyword: ?[]const u8 = null,
     containers: []const []const u8 = &.{},
+    variable_declarator: []const u8 = "",
+    variable_name_field: []const u8 = "name",
 };
 
 pub const MemberTraits = struct {
     accessor: Accessor = .none,
     is_static: bool = false,
     is_constructor: bool = false,
+    receiver: bool = true,
 };
 
 pub const FieldSite = struct {
@@ -217,6 +232,17 @@ pub const Facts = struct {
     global_types: bool = false,
     namespaces: []const []const u8 = &.{},
     using_directive: ?[]const u8 = null,
+    receiver_parameter: ?[]const u8 = null,
+    member_wrappers: []const []const u8 = &.{},
+    class_body_field: []const u8 = "body",
+    test_files: []const []const u8 = &.{},
+    test_definitions: []const TestDefinition = &.{},
+};
+
+pub const TestDefinition = struct {
+    node: []const u8,
+    name_field: []const u8 = "name",
+    prefix: []const u8,
 };
 
 pub const MapEntryKind = enum { route, command, event, api };
