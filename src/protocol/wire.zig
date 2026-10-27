@@ -53,6 +53,35 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
     try writer.writeByte('\n');
 }
 
+pub const compact_symbols_over = 40;
+
+pub fn writeSymbolsCompact(gpa: Allocator, writer: *Writer, file: []const u8, table: symbol.Table) !void {
+    var lines: std.Io.Writer.Allocating = .init(gpa);
+    defer lines.deinit();
+    for (table.symbols) |entry| {
+        try lines.writer.print("{d} {s} {f}{s}\n", .{ entry.node.startPoint().row + 1, @tagName(entry.kind), entry.ref, if (entry.ambiguous) " ambiguous" else "" });
+    }
+    var declared: std.Io.Writer.Allocating = .init(gpa);
+    defer declared.deinit();
+    for (table.declarations) |entry| {
+        try declared.writer.print("{d} {s} {f}{s}\n", .{ entry.name.startPoint().row + 1, @tagName(entry.kind), entry.ref, if (entry.ambiguous) " ambiguous" else "" });
+    }
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("hashes");
+    try js.write("emetgate_read_symbol returns the hash, or pass detail:\"full\"");
+    try js.objectField("symbols");
+    try js.write(lines.written());
+    if (table.declarations.len != 0) {
+        try js.objectField("declarations");
+        try js.write(declared.written());
+    }
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
 pub fn writeDeclarations(gpa: Allocator, js: *std.json.Stringify, table: symbol.Table) !void {
     try js.objectField("declarations");
     try js.beginArray();

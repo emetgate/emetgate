@@ -74,8 +74,8 @@ test "read_file returns a small repo file whole" {
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
-    try testing.expect(!body.value.object.get("truncated").?.bool);
-    try testing.expectEqual(@as(i64, @intCast(expected.len)), body.value.object.get("bytes").?.integer);
+    try testing.expect(body.value.object.get("truncated") == null);
+    try testing.expect(body.value.object.get("bytes") == null);
     try testing.expectEqualStrings(expected, body.value.object.get("content").?.string);
 }
 
@@ -712,7 +712,7 @@ test "list returns only tracked files under the requested directory" {
     const files = fileNames(body.value);
     try testing.expect(containsString(files, "tests/fixtures/functions.ts"));
     for (files) |item| try testing.expect(std.mem.startsWith(u8, item.string, "tests/fixtures/"));
-    try testing.expect(!body.value.object.get("truncated").?.bool);
+    try testing.expect(body.value.object.get("truncated") == null);
 }
 
 test "search finds a literal in tracked files under a directory and refuses an empty pattern" {
@@ -1001,6 +1001,36 @@ test "symbol listings name ambiguity only where it holds" {
     try testing.expect(symbols[0].object.get("ambiguous").?.bool);
     try testing.expect(symbols[1].object.get("ambiguous").?.bool);
     try testing.expect(symbols[2].object.get("ambiguous") == null);
+}
+
+test "symbol listings of a large file are compact lines without hashes unless detail full" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var source: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer source.deinit();
+    for (0..50) |i| try source.writer.print("function f{d}() {{\n  return {d};\n}}\n", .{ i, i });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "big.js", .data = source.written() });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "big.js", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, "emetgate_symbols", .{ .file = path });
+    defer reply.deinit();
+    var body = try reply.payload();
+    defer body.deinit();
+    const lines = body.value.object.get("symbols").?.string;
+    try testing.expectEqual(@as(usize, 50), std.mem.count(u8, lines, "\n"));
+    try testing.expect(std.mem.startsWith(u8, lines, "1 function f0\n4 function f1\n"));
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"hash\"") == null);
+
+    var full = try callTool(runtime, "emetgate_symbols", .{ .file = path, .detail = "full" });
+    defer full.deinit();
+    var full_body = try full.payload();
+    defer full_body.deinit();
+    const symbols = full_body.value.object.get("symbols").?.array.items;
+    try testing.expectEqual(@as(usize, 50), symbols.len);
+    try testing.expect(symbols[0].object.get("hash") != null);
 }
 
 test "with raw code on, read replies put a one-line JSON header before the code as plain text" {

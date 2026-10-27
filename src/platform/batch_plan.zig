@@ -8,6 +8,7 @@ const docnode = @import("../engine/docnode.zig");
 const ts = @import("../engine/tree_sitter.zig");
 const repo = @import("repo.zig");
 const create = @import("create.zig");
+const file_edit = @import("file_edit.zig");
 const tsserver = @import("tsserver.zig");
 const rename = @import("../engine/rename.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -154,6 +155,7 @@ fn planNodes(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u
 
 fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     if (edit.nodes.len != 0) return planNodes(gpa, io, runtime, edit, rel);
+    if (edit.ref_text.len == 0 and edit.expected_hash == .absent) return planWholeCreate(gpa, io, runtime, edit, rel);
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     switch (edit.expected_hash) {
@@ -174,6 +176,15 @@ fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, ed
             return .{ .rel = rel, .action = if (p.base_hash == null) .create else .insert, .base_hash = p.base_hash, .hash = p.applied.hash, .snapshot = p.applied.snapshot, .body = p.applied.body, .base = p.base, .holes = holes };
         },
     }
+}
+
+fn planWholeCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u8) !Prepared {
+    try repo.refuseInternal(rel);
+    std.Io.Dir.cwd().access(io, edit.file_abs, .{}) catch |err| switch (err) {
+        error.FileNotFound => return file_edit.prepare(gpa, runtime, edit.file_abs, rel, null, edit.new_body),
+        else => |e| return e,
+    };
+    return error.FileExists;
 }
 
 fn planFileDeletion(gpa: Allocator, io: std.Io, edit: Edit, rel: []u8) !Prepared {

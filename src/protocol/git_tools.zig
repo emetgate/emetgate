@@ -671,6 +671,10 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
     defer folded.deinit(gpa);
     try js.objectField("output");
     try js.write(folded.text);
+    if (!folded.elided) {
+        try js.endObject();
+        return;
+    }
     try js.objectField("lines_shown");
     try js.write(folded.lines_shown);
     try js.objectField("lines_total");
@@ -722,16 +726,20 @@ fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !vo
         try js.write(file.path);
         try js.objectField("status");
         try js.write(file.status);
-        try js.objectField("mapped");
-        try js.write(file.mapped);
-        try js.objectField("non_symbol_change");
-        try js.write(file.non_symbol_change);
+        if (!file.mapped) {
+            try js.objectField("mapped");
+            try js.write(false);
+        }
+        if (file.non_symbol_change) {
+            try js.objectField("non_symbol_change");
+            try js.write(true);
+        }
         if (file.note) |note| {
             try js.objectField("note");
             try js.write(note);
         }
-        try js.objectField("symbols");
-        try js.beginArray();
+        if (file.symbols.len != 0) try js.objectField("symbols");
+        if (file.symbols.len != 0) try js.beginArray();
         for (file.symbols) |sym| {
             try js.beginObject();
             try js.objectField("ref");
@@ -742,12 +750,14 @@ fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !vo
             try js.write(@tagName(sym.change));
             try js.endObject();
         }
-        try js.endArray();
+        if (file.symbols.len != 0) try js.endArray();
         try js.endObject();
     }
     try js.endArray();
-    try js.objectField("symbol_changes_truncated");
-    try js.write(summary.truncated);
+    if (summary.truncated) {
+        try js.objectField("symbol_changes_truncated");
+        try js.write(true);
+    }
 }
 
 fn writeBlameSummary(js: *std.json.Stringify, blame: git_symbols.BlameReport) !void {

@@ -405,7 +405,8 @@ test "symbol diff flags a comment-only change as a non-symbol change" {
     const files = body.value.object.get("symbol_changes").?.array;
     try testing.expect(files.items.len == 1);
     try testing.expect(files.items[0].object.get("non_symbol_change").?.bool);
-    try testing.expect(files.items[0].object.get("mapped").?.bool);
+    try testing.expect(files.items[0].object.get("mapped") == null);
+    try testing.expect(files.items[0].object.get("symbol_changes_truncated") == null);
 }
 
 test "symbol blame maps a symbol to the commit that last changed it" {
@@ -499,9 +500,9 @@ test "symbol diff tolerates a binary file change without crashing" {
     const files = body.value.object.get("symbol_changes").?.array;
     try testing.expect(files.items.len == 1);
     const f = files.items[0];
-    try testing.expect(f.object.get("mapped").?.bool);
+    try testing.expect(f.object.get("mapped") == null);
     try testing.expect(f.object.get("note") != null);
-    try testing.expect(f.object.get("symbols").?.array.items.len == 0);
+    try testing.expect(f.object.get("symbols") == null);
 }
 
 test "symbol blame requires a file path" {

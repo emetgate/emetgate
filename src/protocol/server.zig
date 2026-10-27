@@ -58,7 +58,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_symbols",
-        .description = "Lists the symbols of a source file with their hashes.",
+        .description = "Lists a source file's symbols.",
         .props = &.{.{ .name = "file", .desc = "" }},
     },
     .{
@@ -545,7 +545,7 @@ fn writeCommitProp(js: *std.json.Stringify) !void {
     try js.endObject();
 }
 
-pub const batch_description = "Edits several files as one gated unit: {file,symbol,hash,body}, {file,node,text} or {file,nodes}; op:\"delete\" with symbol+hash removes a symbol, with only hash:file_hash the file; hash \"absent\" creates; kind:\"doc\" takes {file,hash,content} plus pointer, heading or line_start+line_end.";
+pub const batch_description = "One gated unit over several files: {file,symbol,hash,body}, {file,node,text} or {file,nodes}; {file,hash:\"absent\",content} creates a file; op:\"delete\" with symbol+hash removes a symbol, with only hash:file_hash the file; kind:\"doc\" takes {file,hash,content} plus pointer, heading or line_start+line_end.";
 
 fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();

@@ -321,3 +321,42 @@ test "planDoc refuses a file of a registered language before it reads it" {
     defer gpa.free(rel);
     try testing.expectError(error.UseSymbolToolsForSource, batch_plan.planDoc(gpa, testing.io, edit, rel));
 }
+
+test "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const created_ts = "export function twice(n: number): number {\n  return n * 2;\n}\n";
+    const created_json = "{\n  \"compilerOptions\": {}\n}\n";
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = "lib/deep/twice.ts", .hash = "absent", .content = created_ts },
+        .{ .kind = "doc", .file = "tsconfig.json", .hash = "absent", .content = created_json },
+        .{ .file = "lib/deep/other.ts", .hash = "absent", .body = math_ts },
+    } });
+    defer reply.deinit();
+    try reply.expectCommitted();
+    try repo.expectFile("lib/deep/twice.ts", created_ts);
+    try repo.expectFile("tsconfig.json", created_json);
+    try repo.expectFile("lib/deep/other.ts", math_ts);
+}
+
+test "try_batch whole-file create refuses a file that already exists and leaves it untouched" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = "src/math.ts", .hash = "absent", .content = cart_ts },
+    } });
+    defer reply.deinit();
+    try reply.expectError("FileExists");
+    try repo.expectFile("src/math.ts", math_ts);
+}
+
+test "try_batch whole-file create with a syntax error creates no file and no directory" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = "fresh/new.ts", .hash = "absent", .content = "export function broken( {\n" },
+    } });
+    defer reply.deinit();
+    try reply.expectError("MutationSyntaxInvalid");
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/fresh", .{}));
+}

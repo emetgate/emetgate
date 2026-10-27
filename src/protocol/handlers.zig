@@ -37,6 +37,7 @@ const runner = @import("../platform/runner.zig");
 const test_command_mod = @import("../platform/test_command.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const repo = @import("../platform/repo.zig");
+const file_edit = @import("../platform/file_edit.zig");
 const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -165,7 +166,7 @@ fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSymbols(gpa, io, runtime, root, file, tree_cache, &buffer.writer) catch |err| {
+    renderSymbols(gpa, io, runtime, root, file, tree_cache, tool_result.wantsFull(args), &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -190,10 +191,11 @@ fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
     return .{ .place = place, .snapshot = try Snapshot.load(runtime, io, .cwd(), place.abs), .owned = true };
 }
 
-fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer) !void {
+fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, full: bool, w: *Writer) !void {
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
     const table = try loaded.snapshot.symbols();
+    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table.*);
     try wire.writeSymbols(gpa, w, file, table.*);
 }
 
@@ -820,6 +822,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
 const ItemKind = enum { code, doc };
 
 fn itemKind(item: Value) !ItemKind {
+    if (isWholeCreate(item)) return .code;
     const text = getString(item, "kind") orelse return .code;
     if (std.mem.eql(u8, text, "code")) return .code;
     if (std.mem.eql(u8, text, "doc")) return .doc;
@@ -840,7 +843,7 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
                 _ = docSelector(item) catch |err| return if (err == error.MissingArgument) tool_result.missing("edits[{d}]: " ++ selector_missing, .{i}) else err;
             },
             .code => {
-                if (node_tool.isNodeForm(item)) continue;
+                if (node_tool.isNodeForm(item) or isWholeCreate(item)) continue;
                 if (try itemOp(item) == .delete) continue;
                 inline for (.{ "symbol", "hash", "body" }) |field| {
                     if (getString(item, field) == null) return missingCodeField(i, field, file);
@@ -873,6 +876,36 @@ const selector_missing = "pointer, heading, or line_start and line_end (integers
 fn missingCodeField(index: usize, comptime field: []const u8, file: []const u8) error{MissingArgument} {
     if (lang_registry.forPath(file) == null) return tool_result.missing("edits[{d}]." ++ field ++ " (string); {s} is not source code, so it needs kind:\"doc\" with hash, content and " ++ selector_missing, .{ index, file });
     return tool_result.missing("edits[{d}]." ++ field ++ " (string)", .{index});
+}
+
+fn wholeText(item: Value) ?[]const u8 {
+    return getString(item, "content") orelse getString(item, "body");
+}
+
+fn isWholeCreate(item: Value) bool {
+    if (node_tool.isNodeForm(item) or getString(item, "symbol") != null) return false;
+    inline for (.{ "pointer", "heading", "line_start", "line_end", "op" }) |field| {
+        if (getField(item, field) != null) return false;
+    }
+    const hash = getString(item, "hash") orelse return false;
+    return std.mem.eql(u8, hash, "absent") and wholeText(item) != null;
+}
+
+fn jailWhole(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, dirs: *std.ArrayList([]u8)) !repo.Jailed {
+    const target = try file_edit.jailWrite(gpa, io, root, file, true);
+    defer target.deinit(gpa);
+    for (target.created_dirs) |dir| {
+        const seen = for (dirs.items) |known| {
+            if (std.ascii.eqlIgnoreCase(known, dir)) break true;
+        } else false;
+        if (!seen) try dirs.append(gpa, try gpa.dupe(u8, dir));
+    }
+    const served = try repo.servedRoot(gpa, io, root);
+    errdefer gpa.free(served);
+    const abs = try gpa.dupeZ(u8, target.abs);
+    errdefer gpa.free(abs);
+    const rel = try repo.relativeTo(gpa, served, abs);
+    return .{ .root = served, .abs = abs, .rel = rel, .creates = true };
 }
 
 fn itemOp(item: Value) !runner.EditOp {
@@ -911,7 +944,7 @@ fn recordBatch(gpa: Allocator, io: std.Io, root: []const u8, places: []const rep
             continue;
         }
         const created = edit.expected_hash == .absent;
-        try symbols.append(arena, .{ .path = place.rel, .ref = edit.ref_text, .before = if (created) null else edit.expected_hash.present, .after = c.hash });
+        if (edit.ref_text.len != 0) try symbols.append(arena, .{ .path = place.rel, .ref = edit.ref_text, .before = if (created) null else edit.expected_hash.present, .after = c.hash });
         const evidence = c.evidence orelse {
             symmetric = false;
             continue;
@@ -959,6 +992,11 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer gpa.free(node_lists);
     var parsed: usize = 0;
     defer for (node_lists[0..parsed]) |list| gpa.free(list);
+    var new_dirs: std.ArrayList([]u8) = .empty;
+    defer {
+        for (new_dirs.items) |dir| gpa.free(dir);
+        new_dirs.deinit(gpa);
+    }
 
     var ci: usize = 0;
     var di: usize = 0;
@@ -971,13 +1009,14 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 parsed = i + 1;
                 const op = try itemOp(item);
                 const expected: symbol.Expected = if (getString(item, "hash")) |hash| try symbol.parseExpected(hash) else .absent;
-                places[i] = try repo.jailTarget(gpa, io, policy.root, file, !node_form and op == .write and expected == .absent);
+                const whole = isWholeCreate(item);
+                places[i] = if (whole) try jailWhole(gpa, io, policy.root, file, &new_dirs) else try repo.jailTarget(gpa, io, policy.root, file, !node_form and op == .write and expected == .absent);
                 built = i + 1;
                 if (op == .delete) try repo.refuseLinkAsWritten(gpa, io, file);
                 edits[ci] = .{
                     .file_abs = places[i].abs,
                     .ref_text = getString(item, "symbol") orelse "",
-                    .new_body = getString(item, "body") orelse "",
+                    .new_body = (if (whole) wholeText(item) else getString(item, "body")) orelse "",
                     .expected_hash = expected,
                     .op = op,
                     .nodes = node_lists[i],
@@ -1005,14 +1044,16 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
         }
     }
 
-    const resolved = try runner.resolveTestCommand(gpa, io, places[0].abs, given, policy.allow_repo_config);
+    const probe = try std.fmt.allocPrint(gpa, "{s}\\_", .{file_edit.existingAncestor(io, places[0].abs) orelse places[0].root});
+    defer gpa.free(probe);
+    const resolved = try runner.resolveTestCommand(gpa, io, probe, given, policy.allow_repo_config);
     defer gpa.free(resolved);
-    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, places[0].abs, trustedTypecheckCommand(policy), policy.allow_repo_config);
+    const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, probe, trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
     const before_hashes = try gpa.alloc(?symbol.Hash, edits.len);
     defer gpa.free(before_hashes);
     for (edits, before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null };
+    const options: batch_mod.BatchOptions = .{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .created_dirs = @ptrCast(new_dirs.items), .commit = if (commit) |*request| request else null };
     var planned = try batch_mod.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
     const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits, options);
