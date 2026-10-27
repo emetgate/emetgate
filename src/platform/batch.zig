@@ -83,7 +83,7 @@ pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOp
     for (options.doc_edits) |edit| try docnode.refuseSource(edit.file_abs);
 
     const first_file = if (options.edits.len != 0) options.edits[0].file_abs else options.doc_edits[0].file_abs;
-    const dir0 = std.fs.path.dirname(first_file) orelse return error.InvalidPath;
+    const dir0 = @import("file_edit.zig").existingAncestor(io, first_file) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir0);
     errdefer gpa.free(root);
     const lock = try shadow.Lock.acquire(io, root);
