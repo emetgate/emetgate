@@ -5,6 +5,7 @@ const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
 const exe_path = @import("../platform/exe_path.zig");
 const git_symbols = @import("git_symbols.zig");
+const git_write = @import("git_write.zig");
 const diff_digest = @import("diff_digest.zig");
 const read_budget = @import("read_budget.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -96,6 +97,7 @@ pub fn callGit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
     const sub = try requireString(args, "sub");
     event.label = "git";
     event.file = sub;
+    if (git_write.wantsRead(sub, args) and git_write.isReadSub(sub)) return git_write.callRead(gpa, io, sub, args, event, root, budget);
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     render(gpa, io, runtime, root, sub, args, &buffer.writer, budget) catch |err| {
@@ -405,7 +407,6 @@ fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, s
     try w.writeByte('\n');
 }
 
-
 fn oidOf(line: []const u8) []const u8 {
     const tab = std.mem.indexOfScalar(u8, line, '\t') orelse line.len;
     return line[0..tab];
@@ -473,7 +474,6 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
     try js.endObject();
 }
 
-
 const StatusEntry = struct { code: u8, path: []const u8 };
 
 fn statusPath(field: []const u8) []const u8 {
@@ -513,6 +513,8 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     defer unstaged.deinit(gpa);
     var untracked_files: std.ArrayList([]const u8) = .empty;
     defer untracked_files.deinit(gpa);
+    var conflicted: std.ArrayList([]const u8) = .empty;
+    defer conflicted.deinit(gpa);
     var dir_names: std.ArrayList([]const u8) = .empty;
     defer dir_names.deinit(gpa);
     var dir_counts: std.ArrayList(usize) = .empty;
@@ -544,16 +546,26 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
             }
             continue;
         }
+        if (x == 'U' or y == 'U' or (x == y and (x == 'A' or x == 'D'))) {
+            try conflicted.append(gpa, p);
+            continue;
+        }
         if (x != ' ' and x != '?') try staged.append(gpa, .{ .code = x, .path = p });
         if (y != ' ' and y != '?') try unstaged.append(gpa, .{ .code = y, .path = p });
     }
 
     const untracked_total = untracked_files.items.len + dir_counts.items.len;
-    const clean = staged.items.len == 0 and unstaged.items.len == 0 and untracked_total == 0;
+    const clean = staged.items.len == 0 and unstaged.items.len == 0 and untracked_total == 0 and conflicted.items.len == 0;
 
     try writeBase(js, "status", path, opts);
     try js.objectField("clean");
     try js.write(clean);
+    if (conflicted.items.len != 0) {
+        try js.objectField("conflicted");
+        try js.beginArray();
+        for (conflicted.items[0..@min(conflicted.items.len, max_status_entries)]) |p| try js.write(p);
+        try js.endArray();
+    }
     try writeEntryGroup(js, "staged", staged.items);
     try writeEntryGroup(js, "unstaged", unstaged.items);
 
@@ -588,7 +600,6 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     if (opts.detail == .full) try writeRaw(gpa, js, stdout);
     try js.endObject();
 }
-
 
 const Folded = struct {
     text: []u8,
@@ -711,7 +722,6 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
     try js.write("compact diff folded under the read budget; pass detail:\"full\" for every hunk, or symbols_only:true for symbol_changes only");
     try js.endObject();
 }
-
 
 fn writeBlame(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, blame: ?*const git_symbols.BlameReport, opts: Options) !void {
     try writeBase(js, "blame", path, opts);
