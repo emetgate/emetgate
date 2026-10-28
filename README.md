@@ -125,7 +125,7 @@ For the engine: <!-- generated:engine-mutant-summary -->68 mutants today: 59 kil
 
 | surface | measure | result |
 | --- | --- | --- |
-| full test suite | pass / fail / leaked | 1908 / 0 / 0 |
+| full test suite | pass / fail / leaked | 2386 / 0 / 0 |
 | search parity | rg lines = emetgate | 1617=1617 · 6=6 · 2=2 |
 | search warm | median | 1.5–3.5 ms |
 | find warm | median | 0.7–1.0 ms |

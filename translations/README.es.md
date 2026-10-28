@@ -127,7 +127,7 @@ Para el motor: 68 mutantes hoy: 59 eliminados, 6 demostrados equivalentes, 2 gua
 
 | superficie | medida | resultado |
 | --- | --- | --- |
-| suite de pruebas completa | pasa / falla / fugas | 1908 / 0 / 0 |
+| suite de pruebas completa | pasa / falla / fugas | 2386 / 0 / 0 |
 | paridad de búsqueda | líneas rg = emetgate | 1617=1617 · 6=6 · 2=2 |
 | búsqueda en caliente | mediana | 1.5–3.5 ms |
 | find en caliente | mediana | 0.7–1.0 ms |

@@ -127,7 +127,7 @@ Motor için: bugün 68 mutant: 59 öldürüldü, 6'sının eşdeğer olduğu kan
 
 | yüzey | ölçü | sonuç |
 | --- | --- | --- |
-| tam test paketi | geçti / kaldı / sızdırdı | 1908 / 0 / 0 |
+| tam test paketi | geçti / kaldı / sızdırdı | 2386 / 0 / 0 |
 | arama eşitliği | rg satırları = emetgate | 1617=1617 · 6=6 · 2=2 |
 | arama sıcak | medyan | 1.5–3.5 ms |
 | find sıcak | medyan | 0.7–1.0 ms |
