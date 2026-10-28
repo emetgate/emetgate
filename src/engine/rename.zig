@@ -420,9 +420,9 @@ pub fn applyWith(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const 
     errdefer next.destroy();
     if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;
 
-    const regions = try compareRegions(gpa, checked, next, expanded.targets, renamed.wholes);
+    const regions = try compareRegions(gpa, checked, next, expanded.targets, renamed.targets);
     try checkSurvivors(gpa, next, old);
-    const symbols_checked = try compareSymbols(gpa, checked, next, old, new, expanded.targets, renamed.wholes);
+    const symbols_checked = try compareSymbols(gpa, checked, next, old, new, expanded.targets, renamed.targets);
 
     return .{ .snapshot = next, .spans = try gpa.dupe(Span, renamed.wholes), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
 }
