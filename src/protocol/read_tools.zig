@@ -383,7 +383,7 @@ pub fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
 fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w: *Writer) !void {
     const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
-    const files = try shadow.trackedFiles(gpa, io, place.root);
+    const files = try shadow.workingFiles(gpa, io, place.root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
