@@ -1,4 +1,5 @@
 const std = @import("std");
+const cache_lease = @import("cache_lease.zig");
 const ts = @import("../engine/tree_sitter.zig");
 const symbol = @import("../engine/symbol.zig");
 const facts = @import("../engine/facts.zig");
@@ -88,11 +89,9 @@ fn canceled(flag: ?*const std.atomic.Value(bool)) bool {
 }
 
 pub fn defaultStorePath(gpa: Allocator, root_abs: []const u8) ![]u8 {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
-    const key = shadow_root.repoKey(root_abs);
-    return std.fmt.allocPrint(gpa, "{s}\\emetgate\\facts\\{s}\\facts.v{d}", .{ local, &key, fact_file.version });
+    const dir = try cache_lease.entryDir(gpa, root_abs, "facts");
+    defer gpa.free(dir);
+    return std.fmt.allocPrint(gpa, "{s}\\facts.v{d}", .{ dir, fact_file.version });
 }
 
 fn hasUnindexedExtension(path: []const u8) bool {

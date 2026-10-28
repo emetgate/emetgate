@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
+const cache_lease = @import("cache_lease.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -34,6 +35,7 @@ pub const Location = struct {
 pub fn locate(gpa: Allocator, root_abs: []const u8, override: ?[]const u8) !Location {
     const base = if (override) |dir| try validBase(gpa, dir) else try defaultBase(gpa);
     errdefer gpa.free(base);
+    if (override == null) if (std.fs.path.dirname(base)) |data| try cache_lease.holdForProcess(data, root_abs);
     const key = repoKey(root_abs);
     const workspace = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ base, &key });
     errdefer gpa.free(workspace);
@@ -50,10 +52,9 @@ pub fn displayRoot(gpa: Allocator, override: ?[]const u8) ![]u8 {
 }
 
 pub fn defaultBase(gpa: Allocator) ![]u8 {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.ShadowRootUnavailable;
-    const joined = try std.fmt.allocPrint(gpa, "{s}\\emetgate\\shadow", .{local});
+    const data = try cache_lease.defaultDataDir(gpa);
+    defer gpa.free(data);
+    const joined = try std.fmt.allocPrint(gpa, "{s}\\shadow", .{data});
     errdefer gpa.free(joined);
     const checked = try validBase(gpa, joined);
     gpa.free(joined);
@@ -115,6 +116,12 @@ pub const Swept = struct {
 };
 
 pub fn sweep(gpa: Allocator, io: std.Io, base_abs: []const u8, keep_abs: []const u8) !Swept {
+    const data_abs = try cache_lease.dataDirOfBase(gpa, base_abs);
+    defer if (data_abs) |data| gpa.free(data);
+    return sweepLeased(gpa, io, base_abs, keep_abs, data_abs);
+}
+
+pub fn sweepLeased(gpa: Allocator, io: std.Io, base_abs: []const u8, keep_abs: []const u8, data_abs: ?[]const u8) !Swept {
     var swept: Swept = .{};
     var base = Dir.openDirAbsolute(io, base_abs, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return swept,
@@ -147,13 +154,21 @@ pub fn sweep(gpa: Allocator, io: std.Io, base_abs: []const u8, keep_abs: []const
             continue;
         };
         if (!stale) continue;
-        shadow.removeWorkspace(io, base_abs, workspace) catch |err| {
-            swept.fail(err);
-            continue;
-        };
-        swept.removed += 1;
+        removeUnclaimed(io, data_abs, base_abs, workspace, name, &swept);
     }
     return swept;
+}
+
+fn removeUnclaimed(io: std.Io, data_abs: ?[]const u8, base_abs: []const u8, workspace: []const u8, name: []const u8, swept: *Swept) void {
+    const held: ?cache_lease.Claim = if (data_abs) |data| cache_lease.claim(data, name) catch |err| switch (err) {
+        error.Busy => return,
+        else => |e| return swept.fail(e),
+    } else null;
+    var removed = false;
+    defer if (held) |h| h.release(removed);
+    shadow.removeWorkspace(io, base_abs, workspace) catch |err| return swept.fail(err);
+    removed = true;
+    swept.removed += 1;
 }
 
 fn isStale(gpa: Allocator, io: std.Io, workspace: []const u8, name: []const u8) !bool {
@@ -162,10 +177,16 @@ fn isStale(gpa: Allocator, io: std.Io, workspace: []const u8, name: []const u8) 
     defer dir.close(io);
     const recorded = dir.readFileAlloc(io, marker_name, gpa, .limited(max_marker_bytes)) catch return false;
     defer gpa.free(recorded);
-    if (!std.fs.path.isAbsolute(recorded)) return false;
-    if (!std.mem.eql(u8, &repoKey(recorded), name)) return false;
-    Dir.accessAbsolute(io, recorded, .{}) catch |err| return err == error.FileNotFound;
-    return false;
+    return verdict(io, recorded, name) == .gone;
+}
+
+pub const Verdict = enum { none, gone, refused };
+
+pub fn verdict(io: std.Io, recorded: []const u8, key: []const u8) Verdict {
+    if (!std.fs.path.isAbsolute(recorded)) return .refused;
+    if (!std.mem.eql(u8, &repoKey(recorded), key)) return .refused;
+    Dir.accessAbsolute(io, recorded, .{}) catch |err| return if (err == error.FileNotFound) .gone else .none;
+    return .none;
 }
 
 const testing = std.testing;
@@ -311,6 +332,27 @@ test "sweep reports a stale workspace it could not remove, and keeps its marker 
     try testing.expectEqual(Swept{ .removed = 1 }, try sweep(testing.allocator, testing.io, stale.base, ""));
     var workspace_buf: [std.fs.max_path_bytes]u8 = undefined;
     try testing.expectError(error.FileNotFound, stale.tmp.dir.access(testing.io, try std.fmt.bufPrint(&workspace_buf, "base/{s}", .{&key}), .{}));
+}
+
+test "sweep leaves a stale workspace whose lease a live process holds, and removes it with the lease once let go" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var stale = try Stale.init();
+    defer stale.deinit();
+    const gone = try std.fmt.allocPrint(testing.allocator, "{s}\\gone", .{stale.top});
+    defer testing.allocator.free(gone);
+    const data = try std.fmt.allocPrint(testing.allocator, "{s}\\data", .{stale.top});
+    defer testing.allocator.free(data);
+    const key = repoKey(gone);
+    try stale.workspace(&key, gone);
+    const lease = try cache_lease.acquire(data, gone, 0);
+
+    const held = sweepLeased(testing.allocator, testing.io, stale.base, "", data);
+    lease.release();
+    try testing.expectEqual(Swept{}, try held);
+    try stale.expectPresent(&key, "shadow/src/a.ts");
+    try testing.expectEqual(Swept{ .removed = 1 }, try sweepLeased(testing.allocator, testing.io, stale.base, "", data));
+    var lease_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try testing.expectError(error.FileNotFound, Dir.accessAbsolute(testing.io, try cache_lease.leasePath(&lease_buf, data, &key), .{}));
 }
 
 test "only one process sweeps a shadow root at a time, and a second one leaves the stale shadows to it" {

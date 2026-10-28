@@ -5262,8 +5262,8 @@
     {
       "id": "SR5-sweep-removes-a-live-shadow",
       "file": "src/platform/shadow_root.zig",
-      "from": "catch |err| return err == error.FileNotFound;\n    return false;",
-      "to": "catch |err| return err == error.FileNotFound;\n    return true;",
+      "from": "catch |err| return if (err == error.FileNotFound) .gone else .none;\n    return .none;",
+      "to": "catch |err| return if (err == error.FileNotFound) .gone else .none;\n    return .gone;",
       "kills": [
         "sweep removes only stale shadows whose repository is gone, and never follows a junction"
       ]
@@ -16731,8 +16731,8 @@
     {
       "id": "SL6-sweep-swallows-removal-failure",
       "file": "src/platform/shadow_root.zig",
-      "from": "        shadow.removeWorkspace(io, base_abs, workspace) catch |err| {\n            swept.fail(err);",
-      "to": "        shadow.removeWorkspace(io, base_abs, workspace) catch |err| {\n            _ = err;",
+      "from": "    shadow.removeWorkspace(io, base_abs, workspace) catch |err| return swept.fail(err);\n",
+      "to": "    shadow.removeWorkspace(io, base_abs, workspace) catch return;\n",
       "kills": [
         "sweep reports a stale workspace it could not remove, and keeps its marker so the next sweep finds it again"
       ]
@@ -16740,10 +16740,11 @@
     {
       "id": "SL7-sweep-trusts-marker-without-key",
       "file": "src/platform/shadow_root.zig",
-      "from": "    if (!std.mem.eql(u8, &repoKey(recorded), name)) return false;\n",
-      "to": "",
+      "from": "    if (!std.mem.eql(u8, &repoKey(recorded), key)) return .refused;\n",
+      "to": "    _ = key;\n",
       "kills": [
-        "sweep leaves a workspace whose marker names a gone repository that does not own that key"
+        "sweep leaves a workspace whose marker names a gone repository that does not own that key",
+        "a marker that names a repository owning another key is refused and the young entry stays"
       ]
     },
     {
@@ -16834,6 +16835,150 @@
       "to": "",
       "kills": [
         "prompt hook: empty input is refused as empty, so the hook still blocks and says why"
+      ]
+    },
+    {
+      "id": "GC1-gone-root-not-removed",
+      "file": "src/platform/cache_gc.zig",
+      "from": "if (verdict != .gone and !aged and !over)",
+      "to": "if (!aged and !over)",
+      "kills": [
+        "a cache whose recorded repository is gone is removed from every family, whether the shadow marker or the lease records the root"
+      ]
+    },
+    {
+      "id": "GC3-age-ignored",
+      "file": "src/platform/cache_gc.zig",
+      "from": "const aged = now - last_used > policy.maxAgeNs();",
+      "to": "const aged = now - last_used > policy.maxAgeNs() * 1000;",
+      "kills": [
+        "an entry unused for longer than the age limit is removed, and the limit can be raised"
+      ]
+    },
+    {
+      "id": "GC4-lru-newest-first",
+      "file": "src/platform/cache_gc.zig",
+      "from": "if (a.last_used != b.last_used) return a.last_used < b.last_used;",
+      "to": "if (a.last_used != b.last_used) return a.last_used > b.last_used;",
+      "kills": [
+        "over the size cap the least recently used entries go first, until the total fits"
+      ]
+    },
+    {
+      "id": "GC5-cap-never-satisfied",
+      "file": "src/platform/cache_gc.zig",
+      "from": "                total -|= entry.bytes;\n",
+      "to": "",
+      "kills": [
+        "over the size cap the least recently used entries go first, until the total fits"
+      ]
+    },
+    {
+      "id": "GC6-claim-ignores-holders",
+      "file": "src/platform/cache_lease.zig",
+      "from": "win.generic_read | win.delete, 0, null",
+      "to": "0, 7, null",
+      "kills": [
+        "an entry whose lease a live process holds is never removed"
+      ]
+    },
+    {
+      "id": "GC7-concurrent-sweepers",
+      "file": "src/platform/cache_gc.zig",
+      "from": "error.Busy => return .{ .busy = true },",
+      "to": "error.Busy => null,",
+      "kills": [
+        "only one process sweeps the caches at a time, and a second one leaves them alone"
+      ]
+    },
+    {
+      "id": "GC8-stamp-ignored",
+      "file": "src/platform/cache_gc.zig",
+      "from": "return age >= 0 and age < interval_ns;",
+      "to": "return age >= 0 and age < 0;",
+      "kills": [
+        "the daily sweep runs at most once a day per data directory"
+      ]
+    },
+    {
+      "id": "GC9-failure-not-counted",
+      "file": "src/platform/cache_gc.zig",
+      "from": "        self.failed += 1;\n",
+      "to": "",
+      "kills": [
+        "an entry the sweep could not remove is reported, not swallowed, and a link target outside the data directory survives"
+      ]
+    },
+    {
+      "id": "GC10-link-entry-followed",
+      "file": "src/platform/cache_gc.zig",
+      "from": "if (try shadow.isReparsePoint(entry_abs)) return error.CacheEntryIsLink;",
+      "to": "",
+      "kills": [
+        "an entry the sweep could not remove is reported, not swallowed, and a link target outside the data directory survives"
+      ]
+    },
+    {
+      "id": "GC11-lease-marker-kept",
+      "file": "src/platform/cache_lease.zig",
+      "from": "if (drop_marker or self.created) {",
+      "to": "if (drop_marker and self.created) {",
+      "kills": [
+        "a cache whose recorded repository is gone is removed from every family, whether the shadow marker or the lease records the root"
+      ]
+    },
+    {
+      "id": "GC12-background-failure-dropped",
+      "file": "src/platform/cache_gc.zig",
+      "from": "    noted.store(@intFromError(err), .release);\n",
+      "to": "    noted.store(@intFromError(err) & 0, .release);\n",
+      "kills": [
+        "an entry the sweep could not remove is reported, not swallowed, and a link target outside the data directory survives"
+      ]
+    },
+    {
+      "id": "GC13-zero-cap-accepted",
+      "file": "src/platform/cache_gc.zig",
+      "from": "        if (value == 0) return null;\n",
+      "to": "",
+      "kills": [
+        "cache flags parse once each and refuse zero, junk and repeats"
+      ]
+    },
+    {
+      "id": "GC14-test-build-uses-real-data-dir",
+      "file": "src/platform/cache_lease.zig",
+      "from": "    if (builtin.is_test) return testDataDir(gpa);\n",
+      "to": "",
+      "kills": [
+        "a test build resolves every cache path to a per-run temp dir outside the real data dir"
+      ]
+    },
+    {
+      "id": "GC15-in-use-entry-deleted-in-place",
+      "file": "src/platform/cache_gc.zig",
+      "from": "    cache_lease.moveAside(entry_abs, try std.fmt.bufPrint(&inner_buf, \"{s}\\\\{s}\", .{ tomb_abs, key })) catch |err| {",
+      "to": "    _ = &inner_buf;\n    _ = key;\n    shadow.clearTemp(io, entry_abs) catch |err| {",
+      "kills": [
+        "an entry with a file held open and no lease survives the age rule and the size cap, and leftover tombstones are cleared"
+      ]
+    },
+    {
+      "id": "GC16-tombstones-left-behind",
+      "file": "src/platform/cache_gc.zig",
+      "from": "        for (names.items) |name| settleTombstone(io, family, family_abs, name) catch |err| report.fail(err);\n",
+      "to": "        _ = report;\n",
+      "kills": [
+        "an entry with a file held open and no lease survives the age rule and the size cap, and leftover tombstones are cleared"
+      ]
+    },
+    {
+      "id": "SL10-sweep-ignores-lease",
+      "file": "src/platform/shadow_root.zig",
+      "from": "        error.Busy => return,\n",
+      "to": "        error.Busy => return shadow.removeWorkspace(io, base_abs, workspace) catch {},\n",
+      "kills": [
+        "sweep leaves a stale workspace whose lease a live process holds, and removes it with the lease once let go"
       ]
     }
   ]
