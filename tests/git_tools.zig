@@ -545,3 +545,78 @@ test "symbol blame requires a file path" {
 
     try expectError(runtime, repo.root_abs, .{ .sub = "blame", .path = repo.root_abs }, "MissingPath");
 }
+
+fn manyFunctions(text: *std.Io.Writer.Allocating, head: []const u8, ret: []const u8) !void {
+    try text.writer.writeAll(head);
+    for (0..300) |i| {
+        try text.writer.print("def f{d}():\n", .{i});
+        for (0..8) |_| {
+            try text.writer.writeAll("    x = '");
+            try text.writer.splatByteAll('a', 90);
+            try text.writer.writeAll("'\n");
+        }
+        try text.writer.print("    return {s}\n", .{ret});
+    }
+}
+
+fn symbolNamed(body: Value, ref: []const u8) ?Value {
+    const syms = body.object.get("symbol_blame").?.object.get("symbols").?.array;
+    for (syms.items) |sym| if (std.mem.eql(u8, sym.object.get("ref").?.string, ref)) return sym;
+    return null;
+}
+
+test "whole-file blame over the raw output cap answers in ranges under the budget and honors commit" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var v1: std.Io.Writer.Allocating = .init(gpa);
+    defer v1.deinit();
+    try repo.tmp.dir.createDirPath(testing.io, "repo/pkg");
+    try manyFunctions(&v1, "", "x");
+    try repo.writeFile("pkg/big.py", v1.written());
+    try repo.commitAll("add many");
+    var v2: std.Io.Writer.Allocating = .init(gpa);
+    defer v2.deinit();
+    try manyFunctions(&v2, "def early():\n    return 0\n\n", "x + ''");
+    try repo.writeFile("pkg/big.py", v2.written());
+    try repo.commitAll("touch");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file_abs = try std.fmt.allocPrint(gpa, "{s}/pkg/big.py", .{repo.root_abs});
+    defer gpa.free(file_abs);
+
+    var whole = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs });
+    defer whole.deinit();
+    errdefer std.debug.print("{s}\n", .{whole.text});
+    try testing.expect(!whole.is_error);
+    try testing.expect(whole.text.len < 12 * 1024);
+    var body = try whole.payload();
+    defer body.deinit();
+    const ranges = body.value.object.get("ranges").?.array;
+    try testing.expect(ranges.items.len > 1);
+    try testing.expect(std.mem.startsWith(u8, ranges.items[0].string, "1-"));
+    try testing.expect(body.value.object.get("ranges_left") != null);
+    try testing.expect(body.value.object.get("next_line").?.integer > 1);
+    try testing.expect(body.value.object.get("commits").?.object.count() >= 1);
+    try testing.expect(body.value.object.get("symbol_blame").?.object.get("symbols_left") != null);
+
+    var past = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs, .commit = "HEAD^", .symbols_only = true });
+    defer past.deinit();
+    errdefer std.debug.print("{s}\n", .{past.text});
+    try testing.expect(!past.is_error);
+    var past_body = try past.payload();
+    defer past_body.deinit();
+    try testing.expect(past_body.value.object.get("ranges") == null);
+    try testing.expect(symbolNamed(past_body.value, "early") == null);
+    const f1 = symbolNamed(past_body.value, "f1") orelse return error.TestNoSymbol;
+    try testing.expectEqual(@as(i64, 11), f1.object.get("line_start").?.integer);
+    try testing.expectEqualStrings("add many", f1.object.get("summary").?.string);
+
+    var missing = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs, .commit = "deadbeef" });
+    defer missing.deinit();
+    try testing.expect(missing.is_error);
+    var missing_body = try missing.payload();
+    defer missing_body.deinit();
+    try testing.expectEqualStrings("GitCommandFailed", missing_body.value.object.get("error").?.string);
+    try testing.expect(missing_body.value.object.get("message").?.string.len != 0);
+}
