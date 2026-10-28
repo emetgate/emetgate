@@ -251,6 +251,37 @@ test "rename: the tool answers with the class, the resolver, the evidence and ev
     try case.expectNew();
 }
 
+test "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.initThree();
+    defer case.deinit();
+    try case.repo.setPlan("{\"exit\":true}");
+    const file = try case.repo.abs(testing.allocator, "src/a.ts");
+    defer testing.allocator.free(file);
+    const hash = symbol.formatHash(try support.hashOfRef(testing.allocator, testing.io, case.runtime, file, "add"));
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var args: std.json.ObjectMap = .empty;
+    try args.put(arena, "file", .{ .string = file });
+    try args.put(arena, "symbol", .{ .string = "add" });
+    try args.put(arena, "hash", .{ .string = &hash });
+    try args.put(arena, "new_name", .{ .string = "sum" });
+    try args.put(arena, "interface_change", .{ .bool = true });
+    var event: telemetry.Event = .{ .tool = "emetgate_rename" };
+    const result = try handlers.callTool(testing.allocator, testing.io, case.runtime, "emetgate_rename", .{ .object = args }, &event, .{ .root = case.repo.root_abs, .test_command = "cmd /c exit 0", .language_service = &case.session });
+    defer testing.allocator.free(result.text);
+    errdefer std.debug.print("{s}\n", .{result.text});
+    try testing.expect(result.is_error);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, result.text, .{});
+    defer parsed.deinit();
+    const body = parsed.value.object;
+    try testing.expectEqualStrings("RenameUnresolved", body.get("error").?.string);
+    try testing.expect(std.mem.indexOf(u8, body.get("fix").?.string, "the language service failed with LanguageServiceExited") != null);
+    try case.expectOld();
+}
+
 test "rename: with a tree cache, read_symbol after a committed emetgate_rename sees the new name" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

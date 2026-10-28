@@ -16234,6 +16234,42 @@
       "kills": [
         "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
       ]
+    },
+    {
+      "id": "GB1-bisect-first-bad-without-convergence",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (!std.mem.eql(u8, left, bad)) return null;",
+      "to": "",
+      "kills": [
+        "git parity: bisect walks to the first bad commit and resets"
+      ]
+    },
+    {
+      "id": "GB2-bisect-first-bad-without-good",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (goods.len == 0) return null;",
+      "to": "",
+      "kills": [
+        "git parity: a bad root commit with no good commit marked is not reported as the first bad commit"
+      ]
+    },
+    {
+      "id": "RS1-rename-service-failure-not-named",
+      "file": "src/protocol/rename_tool.zig",
+      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with emetgate_try_batch old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym });",
+      "to": "",
+      "kills": [
+        "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
+      ]
+    },
+    {
+      "id": "RS2-rename-service-failure-not-recorded",
+      "file": "src/platform/rename_batch.zig",
+      "from": "                if (request.service_failure) |slot| slot.* = err;",
+      "to": "",
+      "kills": [
+        "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
+      ]
     }
   ]
 }
