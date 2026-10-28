@@ -77,7 +77,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
     const allowed = allowlist.items.items;
 
     const command = requested orelse if (allowed.len == 1) allowed[0] else {
-        try writeAllowlist(w, allowed);
+        try writeAllowlist(w, allowed, if (policy.detect_test) undetected_fix else empty_allowlist_fix);
         return false;
     };
     if (output_digest.logRequest(command)) |id| return output_digest.writeLog(gpa, io, root_abs, id, w);
@@ -127,6 +127,8 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
 
 pub const empty_allowlist_fix = "no test command is configured (emetgate mcp --test or --detect-test adds one); toolchain commands run without an entry: " ++ toolchain.families_hint;
 
+pub const undetected_fix = "no test command yet: once a project file exists (" ++ test_command.markers_hint ++ "), every write runs the test it names, until then writes run none; toolchain commands run without an entry: " ++ toolchain.families_hint;
+
 pub const git_fix = "git runs through emetgate_git (status, diff, log, show, blame) and emetgate_git_write (args as for git)";
 
 fn isGit(command: []const u8) bool {
@@ -138,7 +140,7 @@ fn isGit(command: []const u8) bool {
 
 pub const toolchain_fix = "run an allowlisted command, or a toolchain command: " ++ toolchain.families_hint;
 
-fn writeAllowlist(w: *Writer, allowed: []const []const u8) !void {
+fn writeAllowlist(w: *Writer, allowed: []const []const u8, empty_fix: []const u8) !void {
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
@@ -147,7 +149,7 @@ fn writeAllowlist(w: *Writer, allowed: []const []const u8) !void {
     try js.write(allowed);
     if (allowed.len == 0) {
         try js.objectField("fix");
-        try js.write(empty_allowlist_fix);
+        try js.write(empty_fix);
     }
     try js.endObject();
     try w.writeByte('\n');

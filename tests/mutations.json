@@ -1,6 +1,97 @@
 {
   "mutations": [
     {
+      "id": "SO1-symbols-over-budget-not-outlined",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (lines.written().len + declared.written().len > budget) return writeSymbolsOutline(gpa, writer, file, table, prefix, budget);",
+      "to": "",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "SO2-outline-ignores-budget",
+      "file": "src/protocol/wire.zig",
+      "from": "        if (shown != 0 and text.written().len + line.written().len > budget) break;",
+      "to": "",
+      "kills": [
+        "symbol listings whose outline still exceeds the read budget say how many names were left out and from which line"
+      ]
+    },
+    {
+      "id": "SO3-outline-elided-note-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (shown < groups.count()) {",
+      "to": "    if (false) {",
+      "kills": [
+        "symbol listings whose outline still exceeds the read budget say how many names were left out and from which line"
+      ]
+    },
+    {
+      "id": "SO4-outline-member-count-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "            if (group.rows > 1) try line.writer.print(\" +{d}\", .{group.rows - 1});",
+      "to": "",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "SO5-within-not-filtered",
+      "file": "src/protocol/wire.zig",
+      "from": "    for (table.symbols) |entry| if (refUnder(entry.ref, prefix)) try symbols.append(arena, entry);",
+      "to": "    for (table.symbols) |entry| try symbols.append(arena, entry);",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "SO6-within-miss-not-refused",
+      "file": "src/protocol/handlers.zig",
+      "from": "return error.NoSymbolsWithin;",
+      "to": "{}",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "WT1-gate-shadow-tracked-only",
+      "file": "src/platform/runner.zig",
+      "from": "        const files = try shadow.workingFiles(gpa, io, root);",
+      "to": "        const files = try shadow.trackedFiles(gpa, io, root);",
+      "kills": [
+        "batch create through the tool: the gate test sees an untracked project file of the working tree"
+      ]
+    },
+    {
+      "id": "WT2-working-listing-without-untracked",
+      "file": "src/platform/shadow.zig",
+      "from": "\"--others\",",
+      "to": "\"--cached\",",
+      "kills": [
+        "batch create through the tool: the gate test sees an untracked project file of the working tree",
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
+    },
+    {
+      "id": "WT3-working-listing-keeps-build-output",
+      "file": "src/platform/shadow.zig",
+      "from": "\"--exclude=bin/\",",
+      "to": "\"--exclude=target/\",",
+      "kills": [
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
+    },
+    {
+      "id": "WT4-working-listing-keeps-ignored",
+      "file": "src/platform/shadow.zig",
+      "from": "\"--exclude-standard\",",
+      "to": "\"--exclude=target/\",",
+      "kills": [
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
+    },
+    {
       "id": "WC1-batch-whole-create-not-recognised",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!symbol_named and (getString(item, \"body\") != null or getString(item, \"content\") != null)) return .text;",
@@ -30,7 +121,7 @@
     {
       "id": "SC1-symbols-never-compact",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table.*);",
+      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);",
       "to": "",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
@@ -5198,8 +5289,8 @@
     {
       "id": "GT4-output-byte-limit-removed",
       "file": "src/protocol/git_tools.zig",
-      "from": ".stdout_limit = .limited(max_git_output_bytes),",
-      "to": ".stdout_limit = .unlimited,",
+      "from": "        .stdout_limit = .limited(if (is_blame) max_blame_bytes else max_git_output_bytes),",
+      "to": "        .stdout_limit = .unlimited,",
       "expect_status": "survived",
       "note": "open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git stdout) exists in this suite yet, so this mutant is not caught; the line limit (GT5) is covered by a cheaper test"
     },
@@ -7702,8 +7793,8 @@
     {
       "id": "EP1-tracked-files-run-bare-git",
       "file": "src/platform/shadow.zig",
-      "from": "        .argv = &.{ git, \"ls-files\", \"-z\" },",
-      "to": "        .argv = &.{ \"git\", \"ls-files\", \"-z\" },",
+      "from": "    try argv.append(gpa, git);",
+      "to": "    try argv.append(gpa, \"git\");",
       "kills": [
         "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
       ]
@@ -15263,8 +15354,8 @@
     {
       "id": "GW1-hard-reset-not-lossy",
       "file": "src/protocol/git_write.zig",
-      "from": "x(\"--hard\")",
-      "to": ".{ .name = \"--hard\" }",
+      "from": "fl(\"--soft --mixed -N --keep --merge --hard!\")",
+      "to": "fl(\"--soft --mixed -N --keep --merge --hard\")",
       "kills": [
         "git write accepts the local workflow and marks only work-losing forms",
         "git write refuses a hard reset that would lose work until force is true"
@@ -15273,8 +15364,8 @@
     {
       "id": "GW2-restore-worktree-not-lossy",
       "file": "src/protocol/git_write.zig",
-      "from": "    if (std.mem.eql(u8, spec.sub, \"restore\") and !(staged and !worktree)) lossy = true;",
-      "to": "    if (std.mem.eql(u8, spec.sub, \"restore\") and false and !(staged and !worktree)) lossy = true;",
+      "from": "    if (std.mem.eql(u8, spec.sub, \"restore\") and !(walk.staged and !walk.worktree)) walk.ok.lossy = true;",
+      "to": "    if (std.mem.eql(u8, spec.sub, \"restore\") and false and !(walk.staged and !walk.worktree)) walk.ok.lossy = true;",
       "kills": [
         "git write accepts the local workflow and marks only work-losing forms"
       ]
@@ -15282,8 +15373,8 @@
     {
       "id": "GW3-push-plus-refspec-not-lossy",
       "file": "src/protocol/git_write.zig",
-      "from": "        if (spec.network and (arg[0] == '+' or arg[0] == ':')) lossy = true;",
-      "to": "        {}",
+      "from": "        if (before and spec.network and (arg[0] == '+' or arg[0] == ':')) walk.ok.lossy = true;",
+      "to": "        if (before and spec.network and false and (arg[0] == '+' or arg[0] == ':')) walk.ok.lossy = true;",
       "kills": [
         "git write accepts the local workflow and marks only work-losing forms"
       ]
@@ -15300,8 +15391,8 @@
     {
       "id": "GW5-unknown-flag-passed-to-git",
       "file": "src/protocol/git_write.zig",
-      "from": "        const found = findFlag(spec, arg) orelse return .{ .refused = .{ .reason = \"unsupported_flag\", .arg = arg } };",
-      "to": "        const found = findFlag(spec, arg) orelse continue;",
+      "from": "            return refuse(\"unsupported_flag\", arg);",
+      "to": "            continue;",
       "kills": [
         "git write refuses execution and config flags and unknown subcommands",
         "git write refuses a flag that runs a program and a subcommand outside the list"
@@ -15317,12 +15408,12 @@
       ]
     },
     {
-      "id": "GT1-blame-porcelain-whole-file",
+      "id": "GB1-blame-capped-at-the-raw-output-limit",
       "file": "src/protocol/git_tools.zig",
-      "from": "        .argv = if (range != null) &windowed else &whole,",
-      "to": "        .argv = &whole,",
+      "from": "        .stdout_limit = .limited(if (is_blame) max_blame_bytes else max_git_output_bytes),",
+      "to": "        .stdout_limit = .limited(max_git_output_bytes),",
       "kills": [
-        "symbol blame of a line window in a file whose whole blame is huge stays mapped and returns"
+        "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
       ]
     },
     {
@@ -15355,10 +15446,19 @@
     {
       "id": "RT2-empty-allowlist-no-hint",
       "file": "src/protocol/run_tool.zig",
-      "from": "        try js.write(empty_allowlist_fix);",
+      "from": "        try js.write(empty_fix);",
       "to": "        try js.write(toolchain_fix);",
       "kills": [
         "run tool: an empty allowlist says how to get a test command and that toolchain commands still run"
+      ]
+    },
+    {
+      "id": "RT3-empty-allowlist-ignores-detection",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        try writeAllowlist(w, allowed, if (policy.detect_test) undetected_fix else empty_allowlist_fix);",
+      "to": "        try writeAllowlist(w, allowed, empty_allowlist_fix);",
+      "kills": [
+        "run tool: with test detection on and no project file yet, an empty call says a project file names the test"
       ]
     },
     {
@@ -15977,6 +16077,198 @@
       "to": "        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at * 0 ..];",
       "kills": [
         "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "GB2-blame-commit-dropped",
+      "file": "src/protocol/git_tools.zig",
+      "from": "            argv[n] = rev;",
+      "to": "            argv[n] = \"HEAD\";",
+      "kills": [
+        "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
+      ]
+    },
+    {
+      "id": "GB3-blame-symbols-from-working-tree",
+      "file": "src/protocol/git_symbols.zig",
+      "from": "    const read = if (rev) |r| readRev(gpa, io, git, root, r, rel) else readWorking(gpa, io, root, rel);",
+      "to": "    const read = if (rev) |_| readWorking(gpa, io, root, rel) else readWorking(gpa, io, root, rel);",
+      "kills": [
+        "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
+      ]
+    },
+    {
+      "id": "GB4-blame-ranges-unbounded",
+      "file": "src/protocol/git_tools.zig",
+      "from": "        const fits = used + cost <= budget;",
+      "to": "        const fits = used + cost <= budget or true;",
+      "kills": [
+        "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
+      ]
+    },
+    {
+      "id": "GB5-blame-symbols-unbounded",
+      "file": "src/protocol/git_tools.zig",
+      "from": "        if (used + cost > budget) {",
+      "to": "        if (used + cost > budget and false) {",
+      "kills": [
+        "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
+      ]
+    },
+    {
+      "id": "GB6-blame-rev-path-keeps-backslashes",
+      "file": "src/protocol/git_symbols.zig",
+      "from": "    std.mem.replaceScalar(u8, spec[rev.len + 1 ..], '\\\\', '/');",
+      "to": "",
+      "kills": [
+        "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
+      ]
+    },
+    {
+      "id": "GB7-git-reason-dropped",
+      "file": "src/protocol/git_tools.zig",
+      "from": "    noteReason(result.stderr);",
+      "to": "",
+      "kills": [
+        "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
+      ]
+    },
+    {
+      "id": "GW6-dry-run-guard-ignored",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (!walk.safe) walk.ok.lossy = true;",
+      "to": "    if (false) walk.ok.lossy = true;",
+      "kills": [
+        "git write reads short flag clusters, attached values and counts flag by flag",
+        "git parity: clean previews freely and deletes only with force"
+      ]
+    },
+    {
+      "id": "GW7-ext-url-accepted",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.indexOf(u8, text, \"::\") != null) return .{ .reason = \"unsupported_url\", .arg = text };",
+      "to": "    if (false) return .{ .reason = \"unsupported_url\", .arg = text };",
+      "kills": [
+        "git write keeps paths, clone targets, local remotes and config keys inside the root"
+      ]
+    },
+    {
+      "id": "GW8-config-key-unchecked",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (!configKeyAllowed(name)) return .{ .reason = \"unsupported_config_key\", .arg = name };",
+      "to": "    if (false) return .{ .reason = \"unsupported_config_key\", .arg = name };",
+      "kills": [
+        "git write keeps paths, clone targets, local remotes and config keys inside the root",
+        "git parity: config writes only listed keys and reads any key"
+      ]
+    },
+    {
+      "id": "GW9-clean-removes-workspace",
+      "file": "src/protocol/git_write.zig",
+      "from": "        try full.append(arena, workspace_exclude);",
+      "to": "        _ = workspace_exclude;",
+      "kills": [
+        "git parity: clean previews freely and deletes only with force",
+        "git parity: add, commit -a and stash never pick up or remove .emetgate"
+      ]
+    },
+    {
+      "id": "GW10-read-tool-runs-changing-form",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (ok.lossy) {",
+      "to": "    if (false) {",
+      "kills": [
+        "git parity: emetgate_git runs read-only subcommands from args and refuses changing forms"
+      ]
+    },
+    {
+      "id": "GW11-merge-strategy-unchecked",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (flag.strategy and !listed(strategies, value)) return refuse(\"unsupported_value\", value);",
+      "to": "        if (false and flag.strategy and !listed(strategies, value)) return refuse(\"unsupported_value\", value);",
+      "kills": [
+        "git write marks the new destructive forms as work-losing"
+      ]
+    },
+    {
+      "id": "GW12-local-remote-outside-root",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (try insideRoot(arena, root_abs, localPath(text))) return null;",
+      "to": "    if (true or try insideRoot(arena, root_abs, localPath(text))) return null;",
+      "kills": [
+        "git write keeps paths, clone targets, local remotes and config keys inside the root"
+      ]
+    },
+    {
+      "id": "GW13-add-all-picks-workspace",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (listed(keep.whole_tree, arg)) return 0;",
+      "to": "        if (listed(keep.whole_tree, arg)) return null;",
+      "kills": [
+        "git parity: add, commit -a and stash never pick up or remove .emetgate"
+      ]
+    },
+    {
+      "id": "GW14-stash-all-removes-workspace",
+      "file": "src/protocol/git_write.zig",
+      "from": ".lossy_actions = words(\"drop clear\"), .keep_workspace = .{ .scope = \":/\", .action = \"push\" } },",
+      "to": ".lossy_actions = words(\"drop clear\") },",
+      "kills": [
+        "git parity: add, commit -a and stash never pick up or remove .emetgate"
+      ]
+    },
+    {
+      "id": "SH1-working-listing-keeps-nested-repository",
+      "file": "src/platform/shadow.zig",
+      "from": "        if (name[name.len - 1] == '/') continue;",
+      "to": "        if (name.len == 0) continue;",
+      "kills": [
+        "a repository reached through its 8.3 short path is read, listed and gated like the same repository by its long path"
+      ]
+    },
+    {
+      "id": "SH2-working-listing-keeps-workspace",
+      "file": "src/platform/shadow.zig",
+      "from": "\":(exclude,icase)\" ++ workspace_dir,",
+      "to": "\":(exclude,icase)\" ++ workspace_dir ++ \"-x\",",
+      "kills": [
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
+    },
+    {
+      "id": "GB1-bisect-first-bad-without-convergence",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (!std.mem.eql(u8, left, bad)) return null;",
+      "to": "",
+      "kills": [
+        "git parity: bisect walks to the first bad commit and resets"
+      ]
+    },
+    {
+      "id": "GB2-bisect-first-bad-without-good",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (goods.len == 0) return null;",
+      "to": "",
+      "kills": [
+        "git parity: a bad root commit with no good commit marked is not reported as the first bad commit"
+      ]
+    },
+    {
+      "id": "RS1-rename-service-failure-not-named",
+      "file": "src/protocol/rename_tool.zig",
+      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with emetgate_try_batch old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym });",
+      "to": "",
+      "kills": [
+        "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
+      ]
+    },
+    {
+      "id": "RS2-rename-service-failure-not-recorded",
+      "file": "src/platform/rename_batch.zig",
+      "from": "                if (request.service_failure) |slot| slot.* = err;",
+      "to": "",
+      "kills": [
+        "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
       ]
     }
   ]

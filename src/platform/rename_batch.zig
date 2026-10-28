@@ -29,6 +29,7 @@ pub const Request = struct {
     interface_change: bool = false,
     dynamic: ?*DynamicSites = null,
     unresolved: ?*rename_graph.Sites = null,
+    service_failure: ?*?anyerror = null,
 };
 
 pub const DynamicSites = struct {
@@ -183,6 +184,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             .unavailable => |err| {
                 s.last_error = err;
                 fallback = err;
+                if (request.service_failure) |slot| slot.* = err;
             },
         }
     }

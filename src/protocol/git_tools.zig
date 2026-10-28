@@ -5,8 +5,10 @@ const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
 const exe_path = @import("../platform/exe_path.zig");
 const git_symbols = @import("git_symbols.zig");
+const git_write = @import("git_write.zig");
 const diff_digest = @import("diff_digest.zig");
 const read_budget = @import("read_budget.zig");
+const wire = @import("wire.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -21,6 +23,10 @@ const failure = tool_result.failure;
 
 const max_git_output_bytes = 256 * 1024;
 const max_output_lines = 800;
+const max_blame_bytes = 32 * 1024 * 1024;
+
+threadlocal var git_reason_buf: [320]u8 = undefined;
+threadlocal var git_reason_len: usize = 0;
 const default_log_count = 20;
 const max_log_count = 200;
 const max_argv = 28;
@@ -34,6 +40,7 @@ pub const Error = error{
     InvalidCommit,
     InvalidCount,
     GitCommandFailed,
+    GitOutputTooLarge,
     UnknownDetail,
 };
 
@@ -61,16 +68,14 @@ fn isHexDigit(c: u8) bool {
 }
 
 fn isValidCommit(text: []const u8) bool {
-    if (text.len == 0 or text.len > 64) return false;
-    if (std.mem.eql(u8, text, "HEAD")) return true;
-    if (std.mem.startsWith(u8, text, "HEAD~") or std.mem.startsWith(u8, text, "HEAD^")) {
-        const rest = text[5..];
-        if (rest.len == 0) return true;
-        for (rest) |c| if (!std.ascii.isDigit(c)) return false;
-        return true;
+    if (text.len == 0 or text.len > 80) return false;
+    const base = std.mem.indexOfAny(u8, text, "^~") orelse text.len;
+    const head = text[0..base];
+    if (!std.mem.eql(u8, head, "HEAD")) {
+        if (head.len < 4 or head.len > 64) return false;
+        for (head) |c| if (!isHexDigit(c)) return false;
     }
-    if (text.len < 4) return false;
-    for (text) |c| if (!isHexDigit(c)) return false;
+    for (text[base..]) |c| if (c != '^' and c != '~' and !std.ascii.isDigit(c)) return false;
     return true;
 }
 
@@ -96,11 +101,17 @@ pub fn callGit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
     const sub = try requireString(args, "sub");
     event.label = "git";
     event.file = sub;
+    if (git_write.wantsRead(sub, args) and git_write.isReadSub(sub)) return git_write.callRead(gpa, io, sub, args, event, root, budget);
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
+    git_reason_len = 0;
     render(gpa, io, runtime, root, sub, args, &buffer.writer, budget) catch |err| {
         if (err == error.OutOfMemory) return err;
-        return failure(gpa, &buffer, err, event);
+        if (err != error.GitCommandFailed or git_reason_len == 0) return failure(gpa, &buffer, err, event);
+        event.fail(@errorName(err));
+        buffer.clearRetainingCapacity();
+        try wire.writeErrorMessage(&buffer.writer, @errorName(err), wire.exitCode(err), git_reason_buf[0..git_reason_len]);
+        return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = true };
     };
     return success(gpa, &buffer);
 }
@@ -113,6 +124,7 @@ const Options = struct {
     line_end: ?i64,
     cursor: ?[]const u8,
     clamped: usize = 0,
+    rev: ?[]const u8 = null,
 };
 
 fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub: []const u8, args: ?Value, w: *Writer, budget: usize) !void {
@@ -142,7 +154,6 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
 
     var count_buf: [24]u8 = undefined;
     var show_commit: ?[]const u8 = null;
-    var blame_range: ?[]const u8 = null;
     if (std.mem.eql(u8, sub, "status")) {
         argv[n] = "status";
         n += 1;
@@ -203,14 +214,21 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         if (path == null or place.rel.len == 0) return error.MissingPath;
         argv[n] = "blame";
         n += 1;
+        argv[n] = "--porcelain";
+        n += 1;
         if (opts.line_start) |ls| {
             const le = opts.line_end orelse ls;
             argv[n] = "-L";
             n += 1;
             argv[n] = std.fmt.bufPrint(&count_buf, "{d},{d}", .{ ls, le }) catch return error.InvalidCount;
-            blame_range = argv[n];
             n += 1;
         }
+        if (args) |a| if (getString(a, "commit")) |rev| {
+            if (!isValidCommit(rev)) return error.InvalidCommit;
+            opts.rev = rev;
+            argv[n] = rev;
+            n += 1;
+        };
     } else {
         return error.UnknownGitSubcommand;
     }
@@ -222,12 +240,13 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         n += 1;
     }
 
+    const is_blame = std.mem.eql(u8, sub, "blame");
     const result = bounded_run.run(gpa, io, .{
         .argv = argv[0..n],
         .cwd = .{ .path = place.root },
-        .stdout_limit = .limited(max_git_output_bytes),
+        .stdout_limit = .limited(if (is_blame) max_blame_bytes else max_git_output_bytes),
         .stderr_limit = .limited(max_git_output_bytes),
-    }) catch return error.GitCommandFailed;
+    }) catch |err| return if (err == error.StreamTooLong) error.GitOutputTooLarge else error.GitCommandFailed;
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -235,7 +254,10 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         .exited => |code| code == 0,
         else => false,
     };
-    if (!ok) return error.GitCommandFailed;
+    if (!ok) {
+        noteReason(result.stderr);
+        return error.GitCommandFailed;
+    }
 
     const annotated: []const []const u8 = if (std.mem.eql(u8, sub, "log"))
         annotatedCommits(gpa, io, git, place.root) catch &.{}
@@ -269,39 +291,18 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         summary = git_symbols.analyzeDiff(gpa, io, runtime, git, place.root, sides, result.stdout) catch null;
     }
 
-    var porcelain: ?[]u8 = null;
-    defer if (porcelain) |p| gpa.free(p);
-    if (std.mem.eql(u8, sub, "blame")) {
-        porcelain = blamePorcelain(gpa, io, git, place.root, place.rel, blame_range) catch null;
-        if (porcelain) |text|
-            blame = git_symbols.analyzeBlame(gpa, io, runtime, place.root, place.rel, text) catch null;
-    }
+    if (is_blame) blame = git_symbols.analyzeBlame(gpa, io, runtime, git, place.root, place.rel, opts.rev, result.stdout) catch null;
 
     try writeResult(gpa, w, sub, path, result.stdout, annotated, if (summary) |*s| s else null, if (blame) |*b| b else null, opts);
 }
 
-/// Second blame pass in machine-readable form, used only to map symbols to the
-/// commit that last changed them. Best-effort: a failure returns null and the
-/// raw blame stays the whole answer.
-fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rel: []const u8, range: ?[]const u8) !?[]u8 {
-    const whole = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "--", rel };
-    const windowed = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "-L", range orelse "", "--", rel };
-    const result = bounded_run.run(gpa, io, .{
-        .argv = if (range != null) &windowed else &whole,
-        .cwd = .{ .path = root },
-        .stdout_limit = .limited(max_git_output_bytes * 8),
-        .stderr_limit = .limited(max_git_output_bytes),
-    }) catch return null;
-    defer gpa.free(result.stderr);
-    const ok = switch (result.term) {
-        .exited => |code| code == 0,
-        else => false,
-    };
-    if (!ok) {
-        gpa.free(result.stdout);
-        return null;
-    }
-    return result.stdout;
+fn noteReason(stderr: []const u8) void {
+    const trimmed = std.mem.trim(u8, stderr, " \r\n\t");
+    const first = trimmed[0 .. std.mem.indexOfScalar(u8, trimmed, '\n') orelse trimmed.len];
+    const line = std.mem.trimEnd(u8, first, "\r");
+    const kept = line[0..@min(line.len, git_reason_buf.len)];
+    @memcpy(git_reason_buf[0..kept.len], kept);
+    git_reason_len = kept.len;
 }
 
 /// Column ② — proof-aware reading: the full object ids of every commit that
@@ -405,7 +406,6 @@ fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, s
     try w.writeByte('\n');
 }
 
-
 fn oidOf(line: []const u8) []const u8 {
     const tab = std.mem.indexOfScalar(u8, line, '\t') orelse line.len;
     return line[0..tab];
@@ -473,7 +473,6 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
     try js.endObject();
 }
 
-
 const StatusEntry = struct { code: u8, path: []const u8 };
 
 fn statusPath(field: []const u8) []const u8 {
@@ -513,6 +512,8 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     defer unstaged.deinit(gpa);
     var untracked_files: std.ArrayList([]const u8) = .empty;
     defer untracked_files.deinit(gpa);
+    var conflicted: std.ArrayList([]const u8) = .empty;
+    defer conflicted.deinit(gpa);
     var dir_names: std.ArrayList([]const u8) = .empty;
     defer dir_names.deinit(gpa);
     var dir_counts: std.ArrayList(usize) = .empty;
@@ -544,16 +545,26 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
             }
             continue;
         }
+        if (x == 'U' or y == 'U' or (x == y and (x == 'A' or x == 'D'))) {
+            try conflicted.append(gpa, p);
+            continue;
+        }
         if (x != ' ' and x != '?') try staged.append(gpa, .{ .code = x, .path = p });
         if (y != ' ' and y != '?') try unstaged.append(gpa, .{ .code = y, .path = p });
     }
 
     const untracked_total = untracked_files.items.len + dir_counts.items.len;
-    const clean = staged.items.len == 0 and unstaged.items.len == 0 and untracked_total == 0;
+    const clean = staged.items.len == 0 and unstaged.items.len == 0 and untracked_total == 0 and conflicted.items.len == 0;
 
     try writeBase(js, "status", path, opts);
     try js.objectField("clean");
     try js.write(clean);
+    if (conflicted.items.len != 0) {
+        try js.objectField("conflicted");
+        try js.beginArray();
+        for (conflicted.items[0..@min(conflicted.items.len, max_status_entries)]) |p| try js.write(p);
+        try js.endArray();
+    }
     try writeEntryGroup(js, "staged", staged.items);
     try writeEntryGroup(js, "unstaged", unstaged.items);
 
@@ -588,7 +599,6 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     if (opts.detail == .full) try writeRaw(gpa, js, stdout);
     try js.endObject();
 }
-
 
 const Folded = struct {
     text: []u8,
@@ -712,18 +722,135 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
     try js.endObject();
 }
 
-
-fn writeBlame(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, blame: ?*const git_symbols.BlameReport, opts: Options) !void {
+fn writeBlame(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, porcelain: []const u8, blame: ?*const git_symbols.BlameReport, opts: Options) !void {
     try writeBase(js, "blame", path, opts);
-    if (blame) |b| try writeBlameSummary(js, b.*);
-    const want_raw = opts.detail == .full or opts.line_start != null;
-    if (want_raw) {
-        try writeRaw(gpa, js, stdout);
+    if (opts.rev) |rev| {
+        try js.objectField("commit");
+        try js.write(rev);
+    }
+    const report = blame orelse {
+        try writeBlameLines(gpa, js, porcelain, opts.budget);
+        try js.endObject();
+        return;
+    };
+    const per_line = opts.detail == .full or opts.line_start != null;
+    const symbol_share = if (opts.symbols_only) opts.budget else opts.budget / 2;
+    const symbols_left = try writeBlameSummary(js, report.*, symbol_share);
+    var ranges_left: usize = 0;
+    if (opts.symbols_only) {} else if (per_line) {
+        try writeBlameLines(gpa, js, porcelain, if (opts.detail == .full) std.math.maxInt(usize) else opts.budget - symbol_share);
     } else {
-        try js.objectField("note");
-        try js.write("compact: symbol_blame is the primary view; pass detail:\"full\" for raw per-line blame, or line_start/line_end for a window");
+        ranges_left = try writeBlameRanges(gpa, js, report.lines, opts.budget - symbol_share);
+    }
+    try js.objectField("note");
+    if (symbols_left != 0 or ranges_left != 0)
+        try js.write("cut at the read budget; pass line_start/line_end for the rest, or symbols_only:true")
+    else if (per_line)
+        try js.write("output lines are: line commit text")
+    else
+        try js.write("ranges are first-last lines and a commit from commits; pass line_start/line_end for the text");
+    try js.endObject();
+}
+
+fn shortSha(sha: []const u8) []const u8 {
+    return sha[0..@min(sha.len, 8)];
+}
+
+fn writeBlameRanges(gpa: Allocator, js: *std.json.Stringify, lines: []const ?git_symbols.LineInfo, budget: usize) !usize {
+    var cited: std.StringArrayHashMapUnmanaged(git_symbols.LineInfo) = .empty;
+    defer cited.deinit(gpa);
+    var line_buf: [64]u8 = undefined;
+    var used: usize = 0;
+    var left: usize = 0;
+    var next_line: usize = 0;
+    try js.objectField("ranges");
+    try js.beginArray();
+    var first: usize = 0;
+    while (first < lines.len) {
+        const info = lines[first] orelse {
+            first += 1;
+            continue;
+        };
+        var last = first;
+        while (last + 1 < lines.len) : (last += 1) {
+            const next = lines[last + 1] orelse break;
+            if (!std.mem.eql(u8, next.sha, info.sha)) break;
+        }
+        const sha = shortSha(info.sha);
+        const range = std.fmt.bufPrint(&line_buf, "{d}-{d} {s}", .{ first + 1, last + 1, sha }) catch unreachable;
+        const cost = range.len + 3 + if (cited.contains(sha)) 0 else sha.len + info.author.len + info.summary.len + 20;
+        const fits = used + cost <= budget;
+        if (!fits) {
+            if (left == 0) next_line = first + 1;
+            left += 1;
+        } else {
+            used += cost;
+            try js.write(range);
+            try cited.put(gpa, sha, info);
+        }
+        first = last + 1;
+    }
+    try js.endArray();
+    try js.objectField("commits");
+    try js.beginObject();
+    var date_buf: [16]u8 = undefined;
+    var text_buf: std.Io.Writer.Allocating = .init(gpa);
+    defer text_buf.deinit();
+    var it = cited.iterator();
+    while (it.next()) |entry| {
+        text_buf.clearRetainingCapacity();
+        try text_buf.writer.print("{s} {s} {s}", .{ entry.value_ptr.author, isoDate(&date_buf, entry.value_ptr.time), entry.value_ptr.summary });
+        try js.objectField(entry.key_ptr.*);
+        try js.write(text_buf.written());
     }
     try js.endObject();
+    if (left != 0) {
+        try js.objectField("ranges_left");
+        try js.write(left);
+        try js.objectField("next_line");
+        try js.write(next_line);
+    }
+    return left;
+}
+
+fn isoDate(buf: *[16]u8, time: i64) []const u8 {
+    const secs: std.time.epoch.EpochSeconds = .{ .secs = @intCast(@max(time, 0)) };
+    const year_day = secs.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ year_day.year, month_day.month.numeric(), @as(u32, month_day.day_index) + 1 }) catch "";
+}
+
+fn writeBlameLines(gpa: Allocator, js: *std.json.Stringify, porcelain: []const u8, budget: usize) !void {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var sha: []const u8 = "";
+    var final_line: u32 = 0;
+    var shown: usize = 0;
+    var total: usize = 0;
+    var lines = std.mem.splitScalar(u8, porcelain, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (line.len != 0 and line[0] == '\t') {
+            total += 1;
+            const cost = line.len + 16;
+            if (shown < max_output_lines and out.written().len + cost <= budget) {
+                if (shown != 0) try out.writer.writeByte('\n');
+                try out.writer.print("{d} {s} {s}", .{ final_line, shortSha(sha), line[1..] });
+                shown += 1;
+            }
+        } else if (git_symbols.headerStart(line)) |h| {
+            sha = h.sha;
+            final_line = h.final_line;
+        }
+    }
+    try js.objectField("output");
+    try js.write(out.written());
+    try js.objectField("lines_shown");
+    try js.write(shown);
+    try js.objectField("lines_total");
+    try js.write(total);
+    try js.objectField("truncated");
+    try js.write(shown < total);
 }
 
 fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !void {
@@ -769,7 +896,7 @@ fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !vo
     }
 }
 
-fn writeBlameSummary(js: *std.json.Stringify, blame: git_symbols.BlameReport) !void {
+fn writeBlameSummary(js: *std.json.Stringify, blame: git_symbols.BlameReport, budget: usize) !usize {
     try js.objectField("symbol_blame");
     try js.beginObject();
     try js.objectField("file");
@@ -782,7 +909,15 @@ fn writeBlameSummary(js: *std.json.Stringify, blame: git_symbols.BlameReport) !v
     }
     try js.objectField("symbols");
     try js.beginArray();
+    var used: usize = 0;
+    var left: usize = 0;
     for (blame.symbols) |sym| {
+        const cost = sym.ref.len + sym.kind.len + sym.commit.len + sym.summary.len + sym.author.len + 110;
+        if (used + cost > budget) {
+            left += 1;
+            continue;
+        }
+        used += cost;
         try js.beginObject();
         try js.objectField("ref");
         try js.write(sym.ref);
@@ -801,5 +936,10 @@ fn writeBlameSummary(js: *std.json.Stringify, blame: git_symbols.BlameReport) !v
         try js.endObject();
     }
     try js.endArray();
+    if (left != 0) {
+        try js.objectField("symbols_left");
+        try js.write(left);
+    }
     try js.endObject();
+    return left;
 }

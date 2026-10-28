@@ -260,13 +260,14 @@ pub const BlameReport = struct {
     symbols: []const BlameSymbol,
     mapped: bool,
     note: ?[]const u8 = null,
+    lines: []const ?LineInfo = &.{},
 
     pub fn deinit(self: *BlameReport) void {
         self.arena.deinit();
     }
 };
 
-const LineInfo = struct {
+pub const LineInfo = struct {
     sha: []const u8,
     time: i64,
     summary: []const u8,
@@ -276,24 +277,24 @@ const LineInfo = struct {
 /// Report which commit last changed each symbol in `rel`, by reading the
 /// `git blame --line-porcelain` output over the working-tree source. The raw
 /// per-line blame stays available to the caller. Caller owns the report.
-pub fn analyzeBlame(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, rel: []const u8, porcelain: []const u8) !BlameReport {
+pub fn analyzeBlame(gpa: Allocator, io: std.Io, runtime: *Runtime, git: []const u8, root: []const u8, rel: []const u8, rev: ?[]const u8, porcelain: []const u8) !BlameReport {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     errdefer arena_state.deinit();
     const arena = arena_state.allocator();
+    const lines = try parsePorcelain(arena, porcelain);
 
     const profile = registry.forPath(rel) orelse
-        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "no symbols: unsupported language" };
+        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "no symbols: unsupported language", .lines = lines };
 
-    const bytes = (try readWorking(gpa, io, root, rel)) orelse
-        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "could not read the working-tree file" };
+    const read = if (rev) |r| readRev(gpa, io, git, root, r, rel) else readWorking(gpa, io, root, rel);
+    const bytes = (try read) orelse
+        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "could not read the file", .lines = lines };
 
     const snapshot = Snapshot.fromSource(runtime, profile, bytes) catch
-        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "could not map to symbols: the source did not parse cleanly" };
+        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "could not map to symbols: the source did not parse cleanly", .lines = lines };
     defer snapshot.destroy();
     const table = snapshot.symbols() catch
-        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "could not map to symbols: the source did not parse cleanly" };
-
-    const lines = try parsePorcelain(arena, porcelain);
+        return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "could not map to symbols: the source did not parse cleanly", .lines = lines };
     const newlines = try newlineOffsets(arena, snapshot.source);
 
     var out: std.ArrayList(BlameSymbol) = .empty;
@@ -308,6 +309,7 @@ pub fn analyzeBlame(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const
         .symbols = try out.toOwnedSlice(arena),
         .mapped = true,
         .note = if (truncated) "symbol list truncated" else null,
+        .lines = lines,
     };
 }
 
@@ -356,6 +358,7 @@ fn parsePorcelain(arena: Allocator, text: []const u8) ![]const ?LineInfo {
     var time: i64 = 0;
     var summary: []const u8 = "";
     var author: []const u8 = "";
+    var known: std.StringHashMapUnmanaged(LineInfo) = .empty;
 
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw| {
@@ -365,7 +368,15 @@ fn parsePorcelain(arena: Allocator, text: []const u8) ![]const ?LineInfo {
             // Content line: this header block describes `final_line`.
             if (final_line > 0) {
                 while (map.items.len < final_line) try map.append(arena, null);
-                map.items[final_line - 1] = .{ .sha = try arena.dupe(u8, sha), .time = time, .summary = summary, .author = author };
+                const entry = try known.getOrPut(arena, sha);
+                if (!entry.found_existing) {
+                    const owned = try arena.dupe(u8, sha);
+                    entry.key_ptr.* = owned;
+                    entry.value_ptr.* = .{ .sha = owned, .time = time, .summary = summary, .author = author };
+                } else if (summary.len != 0) {
+                    entry.value_ptr.* = .{ .sha = entry.value_ptr.sha, .time = time, .summary = summary, .author = author };
+                }
+                map.items[final_line - 1] = entry.value_ptr.*;
             }
             summary = "";
             author = "";
@@ -387,7 +398,7 @@ fn parsePorcelain(arena: Allocator, text: []const u8) ![]const ?LineInfo {
 
 const PorcelainHeader = struct { sha: []const u8, final_line: u32 };
 
-fn headerStart(line: []const u8) ?PorcelainHeader {
+pub fn headerStart(line: []const u8) ?PorcelainHeader {
     // "<40-hex> <orig> <final>[ <group-size>]"
     if (line.len < 42) return null;
     for (line[0..40]) |c| {
@@ -409,6 +420,7 @@ fn headerStart(line: []const u8) ?PorcelainHeader {
 fn readRev(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rev: []const u8, rel: []const u8) !?[]u8 {
     const spec = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ rev, rel });
     defer gpa.free(spec);
+    std.mem.replaceScalar(u8, spec[rev.len + 1 ..], '\\', '/');
     const argv = [_][]const u8{ git, "--no-pager", "show", spec };
     const result = bounded_run.run(gpa, io, .{
         .argv = &argv,

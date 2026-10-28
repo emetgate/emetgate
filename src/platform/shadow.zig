@@ -18,10 +18,29 @@ pub const dependency_dirs = [_][]const u8{ "node_modules", ".venv", "venv" };
 const max_git_listing = 64 * 1024 * 1024;
 
 pub fn trackedFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
+    return listFiles(gpa, io, root_abs, &.{ "ls-files", "-z" });
+}
+
+pub const working_listing = [_][]const u8{
+    "ls-files",              "-z",                     "--cached",                 "--others",                "--exclude-standard",
+    "--exclude=bin/",        "--exclude=obj/",         "--exclude=target/",        "--exclude=node_modules/", "--exclude=.venv/",
+    "--exclude=venv/",       "--exclude=__pycache__/", "--exclude=.pytest_cache/", "--exclude=.mypy_cache/",  "--exclude=.ruff_cache/",
+    "--exclude=.zig-cache/", "--exclude=zig-out/",     "--",                       ".",                       ":(exclude,icase)" ++ workspace_dir,
+};
+
+pub fn workingFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
+    return listFiles(gpa, io, root_abs, &working_listing);
+}
+
+fn listFiles(gpa: Allocator, io: std.Io, root_abs: []const u8, listing: []const []const u8) ![][]u8 {
     const git = try exe_path.git(gpa, root_abs);
     defer gpa.free(git);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, git);
+    try argv.appendSlice(gpa, listing);
     const result = try bounded_run.run(gpa, io, .{
-        .argv = &.{ git, "ls-files", "-z" },
+        .argv = argv.items,
         .cwd = .{ .path = root_abs },
         .stdout_limit = .limited(max_git_listing),
     });
@@ -37,6 +56,7 @@ pub fn trackedFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
     errdefer files.deinit(gpa);
     var names = std.mem.tokenizeScalar(u8, result.stdout, 0);
     while (names.next()) |name| {
+        if (name[name.len - 1] == '/') continue;
         const copy = try gpa.dupe(u8, name);
         errdefer gpa.free(copy);
         try files.append(gpa, copy);

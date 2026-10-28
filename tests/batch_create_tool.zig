@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const diagnostics = @import("diagnostics.zig");
 const runner = @import("emetgate").runner;
+const shadow = @import("emetgate").shadow;
 const disk = @import("emetgate").disk;
 const Runtime = @import("emetgate").runtime.Runtime;
 
@@ -163,6 +164,55 @@ test "batch create through the tool: a failing test rejects the batch and create
     defer result.deinit(testing.allocator);
     try testing.expect(result == .rejected);
     try f.expectOld();
+}
+
+test "batch create through the tool: the gate test sees an untracked project file of the working tree" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var f: Fixture = .{ .repo = undefined, .runtime = undefined };
+    try f.init();
+    defer f.deinit();
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/Untracked.sln", .data = "solution\n" });
+
+    const edits = [_]runner.Edit{
+        .{ .file_abs = f.file_c, .ref_text = "helper", .expected_hash = .absent, .new_body = helper_body },
+    };
+    const result = try runner.tryMutateBatch(testing.allocator, testing.io, f.runtime, .{ .edits = &edits, .test_command = "cmd /c type Untracked.sln" });
+    defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
+    try testing.expect(result == .committed);
+}
+
+test "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var f: Fixture = .{ .repo = undefined, .runtime = undefined };
+    try f.init();
+    defer f.deinit();
+    try f.repo.tmp.dir.createDirPath(testing.io, "repo/bin");
+    try f.repo.tmp.dir.createDirPath(testing.io, "repo/obj");
+    try f.repo.tmp.dir.createDirPath(testing.io, "repo/.emetgate");
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.gitignore", .data = "*.log\n" });
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/Untracked.sln", .data = "solution\n" });
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/run.log", .data = "log\n" });
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/bin/app.dll", .data = "dll\n" });
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/obj/app.json", .data = "{}\n" });
+    try f.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.emetgate/state", .data = "s\n" });
+
+    const files = try shadow.workingFiles(testing.allocator, testing.io, f.repo.root_abs);
+    defer {
+        shadow.freeFileList(testing.allocator, files);
+        testing.allocator.free(files);
+    }
+    var seen_sln = false;
+    var seen_a = false;
+    for (files) |file| {
+        if (std.mem.eql(u8, file, "Untracked.sln")) seen_sln = true;
+        if (std.mem.eql(u8, file, "src/a.ts")) seen_a = true;
+        if (std.mem.eql(u8, file, "run.log")) return error.IgnoredFileListed;
+        if (std.mem.startsWith(u8, file, "bin/") or std.mem.startsWith(u8, file, "obj/")) return error.BuildOutputListed;
+        if (std.mem.startsWith(u8, file, ".emetgate/")) return error.WorkspaceListed;
+    }
+    try testing.expect(seen_sln);
+    try testing.expect(seen_a);
 }
 
 const ExternalSave = struct {

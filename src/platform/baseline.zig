@@ -116,7 +116,7 @@ pub fn treeKey(gpa: Allocator, io: std.Io, root: []const u8, typecheck_command: 
     hasher.update(typecheck_command orelse "");
     hasher.update(&.{0});
     hasher.update(test_command);
-    const files = try shadow.trackedFiles(gpa, io, root);
+    const files = try shadow.workingFiles(gpa, io, root);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
     for (files) |rel| {

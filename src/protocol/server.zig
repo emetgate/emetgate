@@ -191,9 +191,10 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_git",
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes a symbol or line range.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes commit and a line range.",
         .props = &.{
-            .{ .name = "sub", .desc = "status, diff, log, show or blame" },
+            .{ .name = "sub", .desc = "status, diff, log, show, blame, or with args any read-only git e.g. grep" },
+            .{ .name = "args", .desc = "", .optional = true, .ty = "array" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
             .{ .name = "detail", .desc = "", .optional = true },
             .{ .name = "symbols_only", .desc = "", .optional = true, .ty = "boolean" },

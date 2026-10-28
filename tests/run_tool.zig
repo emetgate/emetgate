@@ -126,6 +126,22 @@ test "run tool: an empty allowlist says how to get a test command and that toolc
     try testing.expect((try listed.field("fix")) == null);
 }
 
+test "run tool: with test detection on and no project file yet, an empty call says a project file names the test" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var policy = fixture.policyWith(repo.root_abs, &.{});
+    policy.detect_test = true;
+    var reply = try fixture.call(policy, .{});
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings("allowlist", try reply.string("status"));
+    const fix = try reply.string("fix");
+    try testing.expect(std.mem.indexOf(u8, fix, ".csproj/.sln") != null);
+    try testing.expect(std.mem.indexOf(u8, fix, "--detect-test") == null);
+    try testing.expect(std.mem.indexOf(u8, fix, "dotnet restore") != null);
+}
+
 test "run tool: a refused git command points at the git tools" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try fixture.Repo.init(&.{});

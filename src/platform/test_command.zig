@@ -7,6 +7,7 @@ pub const config_file = ".emetgaterc.json";
 pub const detect = "\x00detect";
 pub const unverified_command = "exit 0";
 pub const unverified_status = "unverified_no_tests";
+pub const markers_hint = "package.json scripts.test, a .csproj/.sln/.slnx, Cargo.toml, go.mod, pyproject.toml, pytest.ini, build.zig";
 const max_manifest_bytes = 1024 * 1024;
 const npm_placeholder = "no test specified";
 
