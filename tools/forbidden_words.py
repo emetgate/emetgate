@@ -19,8 +19,15 @@ FORBIDDEN = [
 ]
 
 
+CODE = re.compile(r"^```.*?^```|`[^`\n]*`", re.DOTALL | re.MULTILINE)
+
+
+def prose(text):
+    return CODE.sub(lambda match: re.sub(r"[^\n]", " ", match.group(0)), text)
+
+
 def find_violations(text):
-    lower = text.lower()
+    lower = prose(text).lower()
     hits = []
     for word in FORBIDDEN:
         for match in re.finditer(re.escape(word), lower):

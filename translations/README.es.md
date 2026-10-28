@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20python%20%7C%20c%23%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Python, C#, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
   <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
@@ -18,7 +18,7 @@ Los LLM son rápidos y capaces: horas de trabajo en minutos. Pero si siguen tus 
 
 La respuesta habitual es un mejor prompt, un `AGENTS.md` más largo: reglas que al modelo se le *pide* obedecer. Emetgate toma el otro camino: una capa entre el modelo y tu árbol de fuentes. No una instrucción que pueda saltarse, sino una puerta que tiene que pasar. El modelo propone un cambio; el núcleo lo verifica; nada llega al disco salvo que pase.
 
-Funciona como servidor MCP, en Windows, para TypeScript, JavaScript y Zig. Abajo, cada capacidad se descompone en sus partes: qué es cada parte y qué hace aquí. Ninguna afirmación sin el código y la salida real debajo.
+Funciona como servidor MCP, en Windows, para TypeScript, JavaScript, Python, C# y Zig. Abajo, cada capacidad se descompone en sus partes: qué es cada parte y qué hace aquí. Ninguna afirmación sin el código y la salida real debajo.
 
 ## La puerta
 
@@ -121,13 +121,13 @@ branch broken: 1 commit(s)
 | fuzz y red-team | mutación aleatoria más corpus de ataque | sin caída ni escape ante entrada inesperada u hostil |
 | puerta de paridad con ripgrep | compara el conjunto de aciertos contra rg en cada ejecución | la búsqueda no puede ser "rápida pero errónea"; se verifica línea por línea |
 
-Para el motor: 63 mutants today: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open. La lista está en [VERIFICATION.md](../VERIFICATION.md).
+Para el motor: 68 mutantes hoy: 59 eliminados, 6 demostrados equivalentes, 2 guardas redundantes conservadas como defensa en profundidad, 1 abierto. La lista está en [VERIFICATION.md](../VERIFICATION.md).
 
 ## Medido
 
 | superficie | medida | resultado |
 | --- | --- | --- |
-| suite de pruebas completa | pasa / falla / fugas | 1908 / 0 / 0 |
+| suite de pruebas completa | pasa / falla / fugas | 2386 / 0 / 0 |
 | paridad de búsqueda | líneas rg = emetgate | 1617=1617 · 6=6 · 2=2 |
 | búsqueda en caliente | mediana | 1.5–3.5 ms |
 | find en caliente | mediana | 0.7–1.0 ms |
@@ -139,11 +139,31 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 ## Instalación
 
+¿Primera vez? Sigue [docs/QUICKSTART.md](../docs/QUICKSTART.md): instala, ejecuta `emetgate doctor` y después `emetgate lockdown`.
+
+Descarga el binario de Windows de la [última versión](https://github.com/emetgate/emetgate/releases/latest) y añade su carpeta al `PATH` (PowerShell; abre una terminal nueva después):
+
 ```
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` arranca el agente solo con las herramientas de emetgate, en fallo-cerrado.
+Después, en la carpeta del proyecto:
+
+```
+emetgate lockdown --test "npm test"
+```
+
+Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown` arranca el agente solo con las herramientas de emetgate, en fallo-cerrado. Si omites `--test`, el comando de pruebas se detecta en cada escritura (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, un `.sln` o un `.csproj`). En una carpeta vacía lockdown ejecuta `git init`, y las escrituras quedan como `unverified_no_tests` hasta que el proyecto tenga un comando de pruebas.
+
+Lockdown lee solo el `.mcp.json` del propio proyecto, nunca un servidor registrado a nivel de usuario. Para usar emetgate como servidor junto a las demás herramientas, o para dar a lockdown tus propios argumentos de servidor, regístralo para el proyecto:
+
+```
+claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+```
+
+Con ese `.mcp.json` en su sitio, lockdown toma de él el comando de pruebas, y `emetgate lockdown --test` se rechaza.
 
 ## Profundiza
 
@@ -154,7 +174,7 @@ Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` arranca el agente 
 
 ## Límites
 
-Solo Windows; TypeScript, JavaScript y Zig. El sandbox bloquea las escrituras, no las lecturas ni la red. Pasar la puerta prueba que un cambio se analiza y pasa *tus* pruebas: es solo tan fuerte como esas pruebas. Los benchmarks son nuestros, de una sola máquina, y reproducibles.
+Solo Windows; TypeScript, JavaScript, Python, C# y Zig. El sandbox bloquea las escrituras, no las lecturas ni la red. Pasar la puerta prueba que un cambio se analiza y pasa *tus* pruebas: es solo tan fuerte como esas pruebas. Los benchmarks son nuestros, de una sola máquina, y reproducibles.
 
 ## De dónde viene el nombre
 

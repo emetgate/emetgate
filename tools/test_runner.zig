@@ -8,6 +8,7 @@ pub const panic = std.debug.FullPanic(onPanic);
 
 pub var emetgate_mutant: u32 = 0;
 pub var emetgate_slow: bool = false;
+pub var emetgate_release_leases: ?*const fn () void = null;
 
 var log_err_count: usize = 0;
 var current_test: ?[]const u8 = null;
@@ -385,7 +386,16 @@ pub fn main(init: std.process.Init.Minimal) void {
     const own = redirectAppData(&own_buf);
     const code = run(gpa, init, options);
     if (own) |dir| Io.Dir.cwd().deleteTree(rio, dir) catch {};
+    removeTestDataDir();
     std.process.exit(code);
+}
+
+fn removeTestDataDir() void {
+    if (builtin.os.tag != .windows) return;
+    if (emetgate_release_leases) |release| release();
+    var buf: [64]u8 = undefined;
+    const dir = std.fmt.bufPrint(&buf, "zig-out\\test-appdata\\emetgate-test-p{d}", .{app_data_win.GetCurrentProcessId()}) catch return;
+    Io.Dir.cwd().deleteTree(rio, dir) catch {};
 }
 
 fn redirectAppData(own_buf: *[64]u8) ?[]const u8 {

@@ -408,16 +408,22 @@ test "a search scoped to a subdirectory does not return hits from outside it" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "scopedneedle", .dir = inside_abs }, .{ .root = root });
-    defer reply.deinit();
-    try testing.expect(!reply.is_error);
-    var body = try reply.payload();
-    defer body.deinit();
+    for (0..2) |round| {
+        if (round == 1) {
+            try tmp.dir.writeFile(testing.io, .{ .sub_path = "outside.txt", .data = "scopedneedle edited\n" });
+            try tmp.dir.writeFile(testing.io, .{ .sub_path = "inside/a.txt", .data = "scopedneedle edited\n" });
+        }
+        var reply = try callToolServedPolicy(runtime, "emetgate_search", .{ .pattern = "scopedneedle", .dir = inside_abs }, .{ .root = root });
+        defer reply.deinit();
+        try testing.expect(!reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
 
-    for (groupsOf(body.value)) |g| {
-        try testing.expect(!std.mem.eql(u8, g.object.get("file").?.string, "outside.txt"));
+        for (groupsOf(body.value)) |g| {
+            try testing.expect(!std.mem.eql(u8, g.object.get("file").?.string, "outside.txt"));
+        }
+        try testing.expect(groupsOf(body.value).len >= 1);
     }
-    try testing.expect(groupsOf(body.value).len >= 1);
 }
 
 const win = std.os.windows;

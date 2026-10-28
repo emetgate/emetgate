@@ -50,7 +50,7 @@ emetgate doctor
 One line per check, each `ok`, `warn` or `FAIL`, and every `FAIL` ends with the command that fixes it:
 
 ```
-ok    emetgate  0.6.1 at C:\Users\you\emetgate\emetgate.exe
+ok    emetgate  0.8.0 at C:\Users\you\emetgate\emetgate.exe
 ok    claude    2.1.311 (Claude Code) at C:\Users\you\AppData\Roaming\npm\claude.cmd
 ok    login     signed in
 ok    git       C:\Program Files\Git\cmd\git.exe

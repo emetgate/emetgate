@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20python%20%7C%20c%23%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Python, C#, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
   <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
@@ -18,7 +18,7 @@ LLM'ler hızlı ve yeteneklidir — saatlerce sürecek iş dakikalar içinde. Am
 
 Alışılmış cevap daha iyi bir istem, daha uzun bir `AGENTS.md`'dir — modelden uymasının *istendiği* kurallar. Emetgate başka bir yol tutar: model ile kaynak ağacınız arasında bir katman. Atlayabileceği bir yönerge değil — geçmek zorunda olduğu bir kapı. Model bir değişiklik önerir; çekirdek onu doğrular; geçmediği sürece hiçbir şey diske ulaşmaz.
 
-Bir MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript, JavaScript ve Zig için. Aşağıda her yetenek parçalarına ayrılıyor — her parçanın ne olduğu ve burada ne yaptığı. Altında kodu ve gerçek çıktısı olmayan hiçbir iddia yok.
+Bir MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript, JavaScript, Python, C# ve Zig için. Aşağıda her yetenek parçalarına ayrılıyor — her parçanın ne olduğu ve burada ne yaptığı. Altında kodu ve gerçek çıktısı olmayan hiçbir iddia yok.
 
 ## Kapı
 
@@ -121,13 +121,13 @@ branch broken: 1 commit(s)
 | fuzz & kırmızı takım | rastgele mutasyon artı saldırı derlemleri | beklenmedik veya düşmanca girdide çökme ya da kaçış yok |
 | ripgrep eşitlik kapısı | her koşuda isabet kümesini rg ile karşılaştırır | arama "hızlı ama yanlış" olamaz; satır satır denetlenir |
 
-Motor için: 63 mutant bugün: 56 öldürüldü, 4'ünün eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan koruma, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
+Motor için: bugün 68 mutant: 59 öldürüldü, 6'sının eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan koruma, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
 
 ## Ölçülen
 
 | yüzey | ölçü | sonuç |
 | --- | --- | --- |
-| tam test paketi | geçti / kaldı / sızdırdı | 1908 / 0 / 0 |
+| tam test paketi | geçti / kaldı / sızdırdı | 2386 / 0 / 0 |
 | arama eşitliği | rg satırları = emetgate | 1617=1617 · 6=6 · 2=2 |
 | arama sıcak | medyan | 1.5–3.5 ms |
 | find sıcak | medyan | 0.7–1.0 ms |
@@ -139,11 +139,31 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 ## Kurulum
 
+Yeni misiniz? [docs/QUICKSTART.md](../docs/QUICKSTART.md) adımlarını izleyin: kurun, `emetgate doctor` çalıştırın, sonra `emetgate lockdown`.
+
+Windows ikilisini [son sürümden](https://github.com/emetgate/emetgate/releases/latest) indirin ve klasörünü `PATH`'e ekleyin (PowerShell; ardından yeni bir terminal açın):
+
 ```
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`, ajanı yalnızca emetgate araçlarıyla, kapalı-güvenli olarak başlatır.
+Sonra proje klasöründe:
+
+```
+emetgate lockdown --test "npm test"
+```
+
+Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown`, ajanı yalnızca emetgate araçlarıyla, kapalı-güvenli olarak başlatır. `--test` verilmezse test komutu her yazmada bulunur (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, bir `.sln` ya da `.csproj`). Boş bir klasörde lockdown `git init` çalıştırır ve projenin bir test komutu olana dek yazmalar `unverified_no_tests` olarak kaydedilir.
+
+Lockdown yalnızca projenin kendi `.mcp.json` dosyasını okur, kullanıcı kapsamında kayıtlı bir sunucuyu asla okumaz. emetgate'i diğer araçların yanında bir sunucu olarak kullanmak ya da lockdown'a kendi sunucu argümanlarınızı vermek için onu proje için kaydedin:
+
+```
+claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+```
+
+Bu `.mcp.json` yerindeyken lockdown test komutunu oradan alır ve `emetgate lockdown --test` reddedilir.
 
 ## Daha derine
 
@@ -154,7 +174,7 @@ Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`, ajanı yalnızca 
 
 ## Sınırlar
 
-Yalnızca Windows; TypeScript, JavaScript ve Zig. Korumalı alan yazmaları engeller, okumaları ya da ağı değil. Kapıdan geçmek, bir değişikliğin ayrıştığını ve *sizin* testlerinizi geçtiğini kanıtlar — yalnızca o testler kadar güçlüdür. Kıyaslamalar bizim kendi kıyaslamalarımız, tek bir makineden ve yeniden üretilebilir.
+Yalnızca Windows; TypeScript, JavaScript, Python, C# ve Zig. Korumalı alan yazmaları engeller, okumaları ya da ağı değil. Kapıdan geçmek, bir değişikliğin ayrıştığını ve *sizin* testlerinizi geçtiğini kanıtlar — yalnızca o testler kadar güçlüdür. Kıyaslamalar bizim kendi kıyaslamalarımız, tek bir makineden ve yeniden üretilebilir.
 
 ## İsim nereden geliyor
 

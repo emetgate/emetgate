@@ -284,13 +284,6 @@ pub fn propose(base: *Snapshot, ref: symbol.Ref, expected: symbol.Expected, new_
 
 pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
     const before = try base.symbols();
-    if (before.resolve(insertion.ref)) |_| {
-        return error.SymbolExists;
-    } else |err| switch (err) {
-        error.AmbiguousSymbol => return error.SymbolExists,
-        error.SymbolNotFound => {},
-    }
-    if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;
     if (before.item(insertion.ref)) |_| return error.SymbolExists else |err| if (err == error.AmbiguousSymbol) return error.SymbolExists;
 
     const eol = try lineEnding(base.source);
@@ -1130,6 +1123,8 @@ test "insert refuses a symbol that already exists, even as a duplicate" {
     defer test_util.closeRuntime(runtime);
     try testing.expectError(error.SymbolExists, insertInto(runtime, "function add() { return 1; }\n", "add", "function add() { return 2; }"));
     try testing.expectError(error.SymbolExists, insertInto(runtime, "function d() {}\nfunction d() {}\n", "d", "function d() { return 3; }"));
+    try testing.expectError(error.SymbolExists, insertInto(runtime, "const v = 1;\n", "v", "function v() { return 2; }"));
+    try testing.expectError(error.SymbolExists, insertInto(runtime, "let w = 1;\nlet w = 2;\n", "w", "function w() { return 3; }"));
 }
 
 test "insert refuses a file without a trailing newline and a body that does not parse" {

@@ -176,10 +176,14 @@ test "batch create through the tool: the gate test sees an untracked project fil
     const edits = [_]runner.Edit{
         .{ .file_abs = f.file_c, .ref_text = "helper", .expected_hash = .absent, .new_body = helper_body },
     };
-    const result = try runner.tryMutateBatch(testing.allocator, testing.io, f.runtime, .{ .edits = &edits, .test_command = "cmd /c type Untracked.sln" });
+    var trace: runner.Trace = .{};
+    const result = try runner.tryMutateBatch(testing.allocator, testing.io, f.runtime, .{ .edits = &edits, .test_command = "cmd /c type Untracked.sln", .trace = &trace });
     defer result.deinit(testing.allocator);
     errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
+    try testing.expect(!trace.baseline.skipped);
+    try testing.expect(!trace.baseline.failing);
+    try testing.expect(!trace.baseline.unverified);
 }
 
 test "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files" {

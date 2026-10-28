@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20python%20%7C%20c%23%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Python, C#, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
   <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
@@ -18,7 +18,7 @@
 
 惯常的答案是更好的提示词、更长的 `AGENTS.md` —— 这些规则只是*请求*模型去遵守。Emetgate 走的是另一条路：在模型与你的源码树之间加一层。不是一条它可以跳过的指令 —— 而是一道它必须通过的闸门。模型提出一次修改；内核对其进行验证；除非通过，否则任何内容都不会落盘。
 
-它作为 MCP 服务器运行，在 Windows 上，面向 TypeScript、JavaScript 和 Zig。下面把每项能力拆成各个部分 —— 每个部分是什么，以及它在这里做什么。没有代码和其下的真实输出，就没有任何主张。
+它作为 MCP 服务器运行，在 Windows 上，面向 TypeScript、JavaScript、Python、C# 和 Zig。下面把每项能力拆成各个部分 —— 每个部分是什么，以及它在这里做什么。没有代码和其下的真实输出，就没有任何主张。
 
 ## 闸门
 
@@ -121,13 +121,13 @@ branch broken: 1 commit(s)
 | 模糊测试与红队 | 随机变异加攻击语料 | 对意外或敌意输入不崩溃、不逃逸 |
 | ripgrep 一致性闸门 | 每次运行都把命中集与 rg 比对 | 搜索不能“快却是错的”；逐行核对 |
 
-就引擎而言：63 mutants today: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open。列表在 [VERIFICATION.md](../VERIFICATION.md) 中。
+就引擎而言：目前 68 个变异体：59 个被杀死，6 个被证明等价，2 个作为纵深防御保留的冗余守卫，1 个未解决。列表在 [VERIFICATION.md](../VERIFICATION.md) 中。
 
 ## 已测量
 
 | 面 | 度量 | 结果 |
 | --- | --- | --- |
-| 完整测试套件 | 通过 / 失败 / 泄漏 | 1908 / 0 / 0 |
+| 完整测试套件 | 通过 / 失败 / 泄漏 | 2386 / 0 / 0 |
 | 搜索一致性 | rg 行数 = emetgate | 1617=1617 · 6=6 · 2=2 |
 | 搜索热态 | 中位数 | 1.5–3.5 ms |
 | find 热态 | 中位数 | 0.7–1.0 ms |
@@ -139,11 +139,31 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 ## 安装
 
+第一次使用？按 [docs/QUICKSTART.md](../docs/QUICKSTART.md) 操作：安装，运行 `emetgate doctor`，然后运行 `emetgate lockdown`。
+
+从[最新发布](https://github.com/emetgate/emetgate/releases/latest)下载 Windows 二进制文件，并把它所在的文件夹加入 `PATH`（PowerShell；之后打开一个新终端）：
+
 ```
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Windows · TypeScript / JavaScript / Zig。`emetgate lockdown` 让智能体仅带 emetgate 工具启动，失败即关闭。
+然后，在项目文件夹中：
+
+```
+emetgate lockdown --test "npm test"
+```
+
+Windows · TypeScript / JavaScript / Python / C# / Zig。`emetgate lockdown` 让智能体仅带 emetgate 工具启动，失败即关闭。省略 `--test` 时，每次写入都会检测测试命令（`package.json` `scripts.test`、`build.zig`、`Cargo.toml`、`go.mod`、`pyproject.toml`、`.sln` 或 `.csproj`）。在空文件夹中 lockdown 会运行 `git init`，在项目有测试命令之前，写入记为 `unverified_no_tests`。
+
+Lockdown 只读取项目自己的 `.mcp.json`，从不读取在用户范围注册的服务器。若要把 emetgate 作为服务器与其他工具并用，或给 lockdown 传入你自己的服务器参数，请为项目注册它：
+
+```
+claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+```
+
+有了这个 `.mcp.json`，lockdown 会从中读取测试命令，而 `emetgate lockdown --test` 会被拒绝。
 
 ## 深入了解
 
@@ -154,7 +174,7 @@ Windows · TypeScript / JavaScript / Zig。`emetgate lockdown` 让智能体仅�
 
 ## 局限
 
-仅 Windows；TypeScript、JavaScript 和 Zig。沙箱阻挡写入，而非读取或网络。通过闸门，证明的是一次修改能解析并通过*你的*测试 —— 它只和那些测试一样强。基准测试是我们自己的，出自一台机器，且可复现。
+仅 Windows；TypeScript、JavaScript、Python、C# 和 Zig。沙箱阻挡写入，而非读取或网络。通过闸门，证明的是一次修改能解析并通过*你的*测试 —— 它只和那些测试一样强。基准测试是我们自己的，出自一台机器，且可复现。
 
 ## 名字的由来
 

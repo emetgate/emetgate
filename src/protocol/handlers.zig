@@ -73,6 +73,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = commit_plan.takeFound();
     _ = commit_refusal.take();
     _ = test_command_mod.takeUnverified();
+    _ = test_command_mod.takeLate();
     defer if (!readOnly(name)) policy.invalidate();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
@@ -1275,6 +1276,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     defer planned.deinit(gpa);
     const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits[0..code_used], options);
     defer result.deinit(gpa);
+    const gated = test_command_mod.takeLate() orelse resolved;
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
     defer gpa.free(note_root);
     const note = wire.shadowNote(note_root, event.trace);
@@ -1337,14 +1339,14 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
                 code_places[order[i]] = places[i];
                 code_committed[order[i]] = committed[order[i]];
             }
-            try recordBatch(gpa, io, places[0].root, code_places, edits[0..code_used], planned.prepared.items, before_hashes, code_committed, resolved, typecheck_command, event.trace.test_ms, w, full, if (commit) |*made| made else null);
+            try recordBatch(gpa, io, places[0].root, code_places, edits[0..code_used], planned.prepared.items, before_hashes, code_committed, gated, typecheck_command, event.trace.test_ms, w, full, if (commit) |*made| made else null);
             try receipt_note.commit(gpa, io, places[0].root, commit, w);
             return false;
         },
         .rejected => |report| {
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
-            try wire.writeRejected(gpa, w, resolved, report, note);
+            try wire.writeRejected(gpa, w, gated, report, note);
             return true;
         },
         .typecheck_failed => |report| {

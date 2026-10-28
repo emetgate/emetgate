@@ -255,6 +255,7 @@ test "a word for word substitution is one pair, anything else is not" {
     try testing.expectEqualStrings("isOld", pair.from);
     try testing.expectEqualStrings("isNew", pair.to);
     try testing.expect(substitution("a + isOld(x)", "a - isNew(x)") == null);
+    try testing.expect(substitution("a + b", "a - b") == null);
     try testing.expect(substitution("isOld(x, y)", "isNew(y, x)") == null);
     try testing.expect(substitution("f(a, b)", "f(c, d)") == null);
     try testing.expect(substitution("same", "same") == null);

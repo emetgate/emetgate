@@ -66,6 +66,7 @@ test "test detection: a dotnet solution, or the one test project in a subfolder,
     try expectDetected(null, &.{.{ "App/App.csproj", "" }});
     try expectDetected(null, &.{ .{ "A.Tests/A.Tests.csproj", "" }, .{ "B.Tests/B.Tests.csproj", "" } });
     try expectDetected(null, &.{.{ "App/bin/Debug/X.Tests.csproj", "" }});
+    try expectDetected(null, &.{.{ "bin/X.Tests.csproj", "" }});
     try expectDetected(null, &.{.{ "a/b/c/Deep.Tests.csproj", "" }});
 }
 
@@ -356,4 +357,59 @@ test "test detection: a test command that cannot start is reported unverified, n
     const reason = reply.value.object.get("unverified").?.string;
     try testing.expect(std.mem.indexOf(u8, reason, "No module named 'emetgate_absent'") != null);
     try testing.expect(std.mem.startsWith(u8, reason, "the test command could not run"));
+}
+
+fn createBatch(repo: *fixture.TsRepo, runtime: *Runtime, files: []const [2][]const u8) !Call {
+    var call: Call = .{ .arena_state = std.heap.ArenaAllocator.init(gpa) };
+    errdefer call.deinit();
+    const arena = call.arena_state.allocator();
+    var edits = std.json.Array.init(arena);
+    for (files) |file| {
+        var item: std.json.ObjectMap = .empty;
+        try item.put(arena, "file", .{ .string = try repo.abs(arena, file[0]) });
+        try item.put(arena, "hash", .{ .string = "absent" });
+        try item.put(arena, "content", .{ .string = file[1] });
+        try edits.append(.{ .object = item });
+    }
+    var map: std.json.ObjectMap = .empty;
+    try map.put(arena, "edits", .{ .array = edits });
+    var event: telemetry.Event = .{ .tool = "emetgate_try_batch" };
+    const policy: Policy = .{ .detect_test = true, .root = repo.root_abs };
+    const result = try handlers.callTool(gpa, testing.io, runtime, "emetgate_try_batch", .{ .object = map }, &event, policy);
+    defer gpa.free(result.text);
+    call.text = try arena.dupe(u8, result.text);
+    call.is_error = result.is_error;
+    call.value = try std.json.parseFromSliceLeaky(Value, arena, call.text, .{});
+    return call;
+}
+
+test "test detection: a batch that creates the project file runs the test command it names" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.TsRepo.init(&.{.{ .rel = "a.txt", .text = "x\n" }});
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try createBatch(&repo, runtime, &.{ .{ "pytest.ini", "" }, .{ "test_ok.py", "def test_ok():\n    assert True\n" } });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("written", reply.status());
+    try testing.expect(std.mem.indexOf(u8, reply.text, "passed") != null);
+    try testing.expect(!test_command.takeUnverified());
+}
+
+test "test detection: a batch that creates the project file with a failing test is rejected and writes nothing" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.TsRepo.init(&.{.{ .rel = "a.txt", .text = "x\n" }});
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try createBatch(&repo, runtime, &.{ .{ "pytest.ini", "" }, .{ "test_bad.py", "def test_bad():\n    assert False\n" } });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("python -m pytest", reply.value.object.get("test_cmd").?.string);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, try repo.abs(reply.arena_state.allocator(), "test_bad.py"), .{}));
 }

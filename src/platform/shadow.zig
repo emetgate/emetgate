@@ -244,8 +244,8 @@ pub const Shadow = struct {
     fn prepareKept(io: std.Io, options: Options) !Kept {
         if (builtin.os.tag != .windows) return .{ .unavailable = .no_hard_links };
         try ensureInsideWorkspace(options.base_abs, options.shadow_abs);
-        try Dir.cwd().createDirPath(io, options.shadow_abs);
         try ensureNoLinks(options.base_abs, options.shadow_abs);
+        try Dir.cwd().createDirPath(io, options.shadow_abs);
         const held = try labelOrReplace(own_dir.Held, KeptShadow{ .io = io, .options = options });
         errdefer held.close();
 
@@ -478,8 +478,8 @@ const KeptShadow = struct {
 
     fn replace(self: KeptShadow) !void {
         try remove(self.io, self.options.base_abs, self.options.shadow_abs);
-        try Dir.cwd().createDirPath(self.io, self.options.shadow_abs);
         try ensureNoLinks(self.options.base_abs, self.options.shadow_abs);
+        try Dir.cwd().createDirPath(self.io, self.options.shadow_abs);
     }
 };
 
@@ -572,7 +572,6 @@ fn clearUnderHold(io: std.Io, base_abs: []const u8, shadow_abs: []const u8, work
     const held = try holdWorkspace(io, shadow_abs);
     defer if (held) |h| h.close();
     try unlinkAll(base_abs, shadow_abs);
-    try ensureNoLinks(base_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
     var sibling_buf: [std.fs.max_path_bytes]u8 = undefined;
     for (shadow_siblings) |suffix| try clearTemp(io, try std.fmt.bufPrint(&sibling_buf, "{s}{s}", .{ shadow_abs, suffix }));
@@ -1071,30 +1070,35 @@ fn expectFileContent(dir: Dir, sub_path: []const u8, expected: []const u8) !void
 
 test "prepare copies tracked files, rebuilds heavy directories as hardlink trees and skips missing links" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var project = try Project.init();
-    defer project.deinit();
+    for ([_]TreeMode{ .kept, .full_copy }) |mode| {
+        var project = try Project.init();
+        defer project.deinit();
 
-    var shadow = try Shadow.prepare(testing.io, try project.options());
-    defer shadow.close();
+        var options = try project.options();
+        options.tree = mode;
+        var shadow = try Shadow.prepare(testing.io, options);
+        defer shadow.finish();
+        try testing.expectEqual(mode, shadow.use.mode);
 
-    try expectFileContent(shadow.dir, "a.ts", "export const a = 1;\n");
-    try expectFileContent(shadow.dir, "src/b.ts", "export function b() { return 2; }\n");
-    try expectFileContent(shadow.dir, "node_modules/pkg/index.js", "module.exports = 42;\n");
-    try testing.expectError(error.FileNotFound, shadow.dir.access(testing.io, "untracked.log", .{}));
-    try testing.expectError(error.FileNotFound, shadow.dir.access(testing.io, "vendor_missing", .{}));
+        try expectFileContent(shadow.dir, "a.ts", "export const a = 1;\n");
+        try expectFileContent(shadow.dir, "src/b.ts", "export function b() { return 2; }\n");
+        try expectFileContent(shadow.dir, "node_modules/pkg/index.js", "module.exports = 42;\n");
+        try testing.expectError(error.FileNotFound, shadow.dir.access(testing.io, "untracked.log", .{}));
+        try testing.expectError(error.FileNotFound, shadow.dir.access(testing.io, "vendor_missing", .{}));
 
-    var listing = try shadow.dir.openDir(testing.io, ".", .{ .iterate = true });
-    defer listing.close(testing.io);
-    var iterator = listing.iterate();
-    var saw_tree = false;
-    while (try iterator.next(testing.io)) |entry| {
-        if (std.mem.eql(u8, entry.name, "node_modules")) {
-            try testing.expectEqual(std.Io.File.Kind.directory, entry.kind);
-            saw_tree = true;
+        var listing = try shadow.dir.openDir(testing.io, ".", .{ .iterate = true });
+        defer listing.close(testing.io);
+        var iterator = listing.iterate();
+        var saw_tree = false;
+        while (try iterator.next(testing.io)) |entry| {
+            if (std.mem.eql(u8, entry.name, "node_modules")) {
+                try testing.expectEqual(std.Io.File.Kind.directory, entry.kind);
+                saw_tree = true;
+            }
         }
+        try testing.expect(saw_tree);
+        try testing.expectEqual(link_tree.Stats{ .dirs = 2, .linked = 1 }, shadow.link_stats);
     }
-    try testing.expect(saw_tree);
-    try testing.expectEqual(link_tree.Stats{ .dirs = 2, .linked = 1 }, shadow.link_stats);
 }
 
 test "a tracked file that is missing from the working tree is absent from the shadow, kept or copied" {
@@ -1443,26 +1447,29 @@ test "re-preparing replaces a stale shadow completely" {
 
 test "prepare fails instead of carrying on when a stale shadow cannot be removed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var project = try Project.init();
-    defer project.deinit();
+    for ([_]TreeMode{ .kept, .full_copy }) |tree| {
+        var project = try Project.init();
+        defer project.deinit();
 
-    const options = try project.options();
-    var first = try Shadow.prepare(testing.io, options);
-    try first.writeFile("held.ts", "held open\n");
-    first.close();
-    var held_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const held = try FileLock.acquire(try std.fmt.bufPrint(&held_buf, "{s}\\held.ts", .{options.shadow_abs}));
+        var options = try project.options();
+        options.tree = tree;
+        var first = try Shadow.prepare(testing.io, options);
+        try first.writeFile("held.ts", "held open\n");
+        first.close();
+        var held_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const held = try FileLock.acquire(try std.fmt.bufPrint(&held_buf, "{s}\\held.ts", .{options.shadow_abs}));
 
-    const direct = remove(testing.io, options.base_abs, options.shadow_abs);
-    const second = Shadow.prepare(testing.io, options);
-    held.release();
-    if (second) |prepared| {
-        var leaked = prepared;
-        leaked.close();
-        return error.TestUnexpectedResult;
-    } else |err| {
-        const expected = if (direct) |_| return error.TestUnexpectedResult else |e| e;
-        try testing.expectEqual(expected, err);
+        const direct = remove(testing.io, options.base_abs, options.shadow_abs);
+        const second = Shadow.prepare(testing.io, options);
+        held.release();
+        if (second) |prepared| {
+            var leaked = prepared;
+            leaked.close();
+            return error.TestUnexpectedResult;
+        } else |err| {
+            const expected = if (direct) |_| return error.TestUnexpectedResult else |e| e;
+            try testing.expectEqual(expected, err);
+        }
     }
 }
 
@@ -1661,17 +1668,21 @@ test "shadow paths outside <shadow root>\\<repo key>\\ are refused before anythi
 
 test "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    for ([_]bool{ true, false }) |whole_root| {
+    for ([_]enum { root, workspace, shadow }{ .root, .workspace, .shadow }) |level| {
         var project = try Project.init();
         defer project.deinit();
 
         try project.tmp.dir.createDirPath(testing.io, "victim/shadow");
         try project.tmp.dir.writeFile(testing.io, .{ .sub_path = "victim/shadow/precious.txt", .data = "keep me\n" });
-        const victim_abs = try project.tmp.dir.realPathFileAlloc(testing.io, "victim", testing.allocator);
+        const victim_abs = try project.tmp.dir.realPathFileAlloc(testing.io, if (level == .shadow) "victim/shadow" else "victim", testing.allocator);
         defer testing.allocator.free(victim_abs);
         const shadow_abs = try project.shadowPath();
-        const link = if (whole_root) project.base_abs else std.fs.path.dirname(shadow_abs).?;
-        if (!whole_root) try Dir.cwd().createDirPath(testing.io, project.base_abs);
+        const link = switch (level) {
+            .root => project.base_abs,
+            .workspace => std.fs.path.dirname(shadow_abs).?,
+            .shadow => shadow_abs,
+        };
+        if (level != .root) try Dir.cwd().createDirPath(testing.io, std.fs.path.dirname(link).?);
         try createJunction(testing.io, link, victim_abs);
 
         try testing.expectError(error.WorkspaceIsLink, Shadow.prepare(testing.io, try project.options()));

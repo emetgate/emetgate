@@ -76,6 +76,7 @@ jobs:
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
+        shell: bash
         run: |
           python tools/verification_page.py --check
           python tools/readme_facts.py --check
@@ -95,18 +96,18 @@ jobs:
   nightly-stress:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
-    name: nightly-stress (${{ matrix.shard }}/4)
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    name: nightly-stress (${{ matrix.shard }}/10)
     env:
-      RUNS: 5
+      RUNS: 2
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - name: Every test 5 times under load, 20 times across the four shards
+      - name: Every test twice under load, 20 times across the ten shards
         shell: pwsh
         run: |
           zig build test-bin
@@ -119,9 +120,9 @@ jobs:
           }
           try {
             for ($i = 1; $i -le [int]$env:RUNS; $i++) {
-              Write-Output "run $i of $env:RUNS on shard ${{ matrix.shard }}/4"
+              Write-Output "run $i of $env:RUNS on shard ${{ matrix.shard }}/10"
               & $exe --jobs 8 --slow
-              if ($LASTEXITCODE -ne 0) { Write-Output "::error::run $i of $env:RUNS on shard ${{ matrix.shard }}/4 failed"; exit 1 }
+              if ($LASTEXITCODE -ne 0) { Write-Output "::error::run $i of $env:RUNS on shard ${{ matrix.shard }}/10 failed"; exit 1 }
             }
           } finally {
             Stop-Job $load
@@ -135,8 +136,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        slice: [1, 2, 3, 4]
-    name: nightly-mutate (${{ matrix.slice }}/4)
+        slice: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    name: nightly-mutate (${{ matrix.slice }}/12)
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -150,22 +151,22 @@ jobs:
             exit 1
           }
       - run: zig build mutate-tool
-      - name: A quarter of the mutation corpus from the schema binary, the four slices cover all of it
+      - name: A twelfth of the mutation corpus from the schema binary, the twelve slices cover all of it
         shell: pwsh
-        run: ./zig-out/bin/emetgate-mutate.exe --jobs=4 "--slice=${{ matrix.slice }}/4"
+        run: ./zig-out/bin/emetgate-mutate.exe --jobs=4 "--slice=${{ matrix.slice }}/12"
       - name: Summarize unexpected outcomes
         if: always()
         shell: pwsh
         run: |
           $path = ".zig-cache/mutate/report.json"
           if (-not (Test-Path $path)) {
-            "No report was written for slice ${{ matrix.slice }}/4; see the harness log above." >> $env:GITHUB_STEP_SUMMARY
+            "No report was written for slice ${{ matrix.slice }}/12; see the harness log above." >> $env:GITHUB_STEP_SUMMARY
             exit 0
           }
           $outcomes = Get-Content $path -Raw | ConvertFrom-Json
           $bad = @($outcomes | Where-Object { -not $_.ok })
           $schema = @($outcomes | Where-Object { $_.origin -eq 'schema' }).Count
-          "## Mutation corpus, slice ${{ matrix.slice }}/4" >> $env:GITHUB_STEP_SUMMARY
+          "## Mutation corpus, slice ${{ matrix.slice }}/12" >> $env:GITHUB_STEP_SUMMARY
           "$($outcomes.Count) run ($schema from the schema binary), $($outcomes.Count - $bad.Count) as expected, $($bad.Count) not as expected" >> $env:GITHUB_STEP_SUMMARY
           if ($bad.Count -gt 0) {
             "" >> $env:GITHUB_STEP_SUMMARY
@@ -188,9 +189,15 @@ jobs:
   nightly-mutate-compare:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4, 5, 6, 7, 8]
+    name: nightly-mutate-compare (${{ matrix.part }}/8)
     env:
       SLICE: ${{ github.run_number }}
+      PART: ${{ matrix.part }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -204,11 +211,11 @@ jobs:
             exit 1
           }
       - run: zig build mutate-tool
-      - name: A rotating tenth of the corpus, schema binary against one build per mutant
+      - name: A rotating tenth of the corpus in eight parts, schema binary against one build per mutant
         shell: pwsh
         run: |
-          $slice = ([int]$env:SLICE % 10) + 1
-          ./zig-out/bin/emetgate-mutate.exe --jobs=4 --skip-survivors --compare "--slice=$slice/10"
+          $slice = ([int]$env:SLICE % 10) * 8 + [int]$env:PART
+          ./zig-out/bin/emetgate-mutate.exe --jobs=4 --skip-survivors --compare "--slice=$slice/80"
 
   nightly-fuzz:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

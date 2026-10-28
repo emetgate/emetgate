@@ -5,6 +5,7 @@ const boundedness = @import("../engine/boundedness.zig");
 const shadow = @import("shadow.zig");
 const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
+const cache_gc = @import("cache_gc.zig");
 const sandbox = @import("sandbox.zig");
 const test_outcome = @import("test_outcome.zig");
 const disk = @import("disk.zig");
@@ -421,7 +422,8 @@ pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow
 }
 
 pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, tree_abs: []const u8, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace, committed: ?shadow.Committed) !shadow.Shadow {
-    const stale_left = staleLeft(shadow_root.sweep(gpa, io, location.base, location.workspace));
+    var stale_left = staleLeft(shadow_root.sweep(gpa, io, location.base, location.workspace));
+    if (stale_left == null) stale_left = cache_gc.takeFailure();
     var workspace = try shadow.Shadow.prepare(io, .{
         .root_abs = root,
         .base_abs = location.base,

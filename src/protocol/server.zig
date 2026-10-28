@@ -13,6 +13,8 @@ const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
+const cache_gc = @import("../platform/cache_gc.zig");
+const cache_lease = @import("../platform/cache_lease.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
@@ -278,6 +280,7 @@ pub const Served = struct {
     find_session: ?*find_tools.Session,
     batch_stage: batch_stage_mod.Store,
     policy: Policy,
+    cache_sweep: cache_gc.Background,
 
     pub const Options = struct {
         root: ?[]const u8 = null,
@@ -302,6 +305,7 @@ pub const Served = struct {
             .find_session = if (root) |r| find_tools.Session.create(gpa, io, r) catch null else null,
             .batch_stage = .init(gpa),
             .policy = policy,
+            .cache_sweep = .{},
         };
         self.policy.root = root;
         self.policy.mirror = &self.mirror;
@@ -317,9 +321,20 @@ pub const Served = struct {
             ms.start();
         }
         if (self.find_session) |fs| fs.start();
+        if (root) |r| self.startCacheSweep(r);
+    }
+
+    fn startCacheSweep(self: *Served, root: []const u8) void {
+        cache_lease.holdDefault(self.gpa, root) catch |err| {
+            cache_gc.note(err);
+            std.debug.print("emetgate: could not lease the caches of {s}, skipping the cache sweep: {t}\n", .{ root, err });
+            return;
+        };
+        self.cache_sweep.start(self.gpa, self.io, self.policy.cache.policy);
     }
 
     pub fn close(self: *Served) void {
+        self.cache_sweep.stop();
         if (self.find_session) |fs| fs.destroy();
         if (self.map_session) |ms| ms.destroy();
         self.batch_stage.deinit();

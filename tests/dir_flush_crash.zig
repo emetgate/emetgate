@@ -123,8 +123,8 @@ const Setup = struct {
     }
 };
 
-fn isBackupCreation(op: durability_log.Op) bool {
-    return op.kind == .created and op.endsWith(".bak");
+fn isBackupRename(op: durability_log.Op) bool {
+    return op.kind == .renamed and op.endsWith(".bak");
 }
 
 fn isJournalRemoval(op: durability_log.Op) bool {
@@ -148,7 +148,7 @@ test "dir flush bak: a backup whose directory entry was lost with the swapped ta
     disk.crash_after_rename = 1;
     defer disk.crash_after_rename = null;
     try testing.expectError(error.Crashed, setup.run(null));
-    setup.log.powerLoss(isBackupCreation);
+    setup.log.powerLoss(isBackupRename);
     try setup.recover();
     try testing.expectEqual(.old, try setup.state());
     try setup.noDebris();

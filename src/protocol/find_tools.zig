@@ -1,4 +1,5 @@
 const std = @import("std");
+const cache_lease = @import("../platform/cache_lease.zig");
 const emet_file = @import("../platform/emet_file.zig");
 const change_watch = @import("../platform/change_watch.zig");
 const sandbox = @import("../platform/sandbox.zig");
@@ -26,11 +27,7 @@ const patch_wait_ms = 250;
 const fence_timeout_ms = 1000;
 
 pub fn indexDir(gpa: Allocator, root_abs: []const u8) ![]u8 {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
-    const key = shadow_root.repoKey(root_abs);
-    return std.fmt.allocPrint(gpa, "{s}\\emetgate\\find\\{s}", .{ local, &key });
+    return cache_lease.entryDir(gpa, root_abs, "find");
 }
 
 fn putOwned(gpa: Allocator, set: *Set, p: []const u8) !void {
