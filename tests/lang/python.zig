@@ -92,10 +92,12 @@ test "python facts: an imported name is a binding and a call to it targets that 
     defer arena.deinit();
     const x: Extracted = .{ .arena = arena, .snapshot = snapshot, .facts = try facts_extract.extract(arena.allocator(), snapshot) };
 
-    try testing.expectEqual(@as(usize, 1), x.facts.specs.len);
+    try testing.expectEqual(@as(usize, 2), x.facts.specs.len);
     try testing.expectEqualStrings("mod", x.facts.specs[0].text);
+    try testing.expectEqualStrings("mod.helper", x.facts.specs[1].text);
     try testing.expectEqual(@as(usize, 1), x.facts.bindings.len);
     try testing.expectEqualStrings("helper", x.facts.bindings[0].imported);
+    try testing.expectEqual(@as(u32, 1), x.facts.bindings[0].submodule);
     const r = try x.ref(.call, "helper", 0);
     try testing.expectEqual(facts.Target{ .binding = 0 }, r.target);
 }
