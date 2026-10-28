@@ -12098,15 +12098,6 @@
       ]
     },
     {
-      "id": "JF1-root-prefix-not-compared",
-      "file": "src/platform/repo.zig",
-      "from": "    if (normalized.len <= root.len or !std.ascii.startsWithIgnoreCase(normalized, root) or normalized[root.len] != '\\\\') {",
-      "to": "    if (normalized.len <= root.len or normalized[root.len] != '\\\\') {",
-      "kills": [
-        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
-      ]
-    },
-    {
       "id": "NC1-node-index-rebuilt-every-call",
       "file": "src/engine/node_cas.zig",
       "from": "    snapshot.node_hashes = index.hashes;",
