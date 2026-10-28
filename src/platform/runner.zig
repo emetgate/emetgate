@@ -163,13 +163,24 @@ pub fn runCommandWith(gpa: Allocator, io: std.Io, cwd: []const u8, command: []co
     }
     if (try test_command_mod.pythonPath(arena, io, cwd)) |path| try env.append(arena, path);
     try shadow.freshTemp(io, temp);
-    defer shadow.clearTemp(io, temp) catch {};
+    const report = startCommand(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env.items }) catch |err| {
+        shadow.clearTemp(io, temp) catch {};
+        return err;
+    };
+    shadow.clearTemp(io, temp) catch |err| {
+        report.deinit(gpa);
+        return err;
+    };
+    return report;
+}
+
+fn startCommand(gpa: Allocator, io: std.Io, command: sandbox.Command) !sandbox.Report {
     var attempt: usize = 1;
     while (true) : (attempt += 1) {
-        const report = try sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env.items });
+        const report = try sandbox.run(gpa, io, command);
         if (attempt == start_attempts or !neverStarted(report)) return report;
         report.deinit(gpa);
-        try shadow.freshTemp(io, temp);
+        try shadow.freshTemp(io, command.temp.?);
     }
 }
 
@@ -410,7 +421,7 @@ pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow
 }
 
 pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, tree_abs: []const u8, files: []const []const u8, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace, committed: ?shadow.Committed) !shadow.Shadow {
-    _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
+    const stale_left = staleLeft(shadow_root.sweep(gpa, io, location.base, location.workspace));
     var workspace = try shadow.Shadow.prepare(io, .{
         .root_abs = root,
         .base_abs = location.base,
@@ -425,12 +436,18 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
     if (trace) |t| {
         t.tree = workspace.use;
         workspace.reportTo(&t.tree.?);
+        t.tree.?.stale_left = stale_left;
         t.shadow_dotted = location.dotted();
         t.linked_files = workspace.link_stats.linked;
         t.copied_files = workspace.link_stats.copied;
         t.skipped_links = workspace.link_stats.skipped_links;
     }
     return workspace;
+}
+
+fn staleLeft(swept: anyerror!shadow_root.Swept) ?anyerror {
+    const done = swept catch |err| return err;
+    return done.first_failure;
 }
 
 const testing = std.testing;
@@ -579,4 +596,33 @@ test "a command's console output reaches the caller as UTF-8 text" {
     errdefer std.debug.print("stdout: {any}\n", .{report.stdout});
     try testing.expect(std.unicode.utf8ValidateSlice(report.stdout));
     try testing.expectEqualStrings("\u{e7}\u{e7}\u{e7}\u{e7}\r\n", report.stdout);
+}
+
+test "a stale shadow that the sweep could not remove is named in the trace of the next gate" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/a.ts", .data = "export const a = 1;\n" });
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const root = try std.fmt.allocPrint(testing.allocator, "{s}\\repo", .{top});
+    defer testing.allocator.free(root);
+    const gone = try std.fmt.allocPrint(testing.allocator, "{s}\\gone", .{top});
+    defer testing.allocator.free(gone);
+    const base = try std.fmt.allocPrint(testing.allocator, "{s}\\base", .{top});
+    defer testing.allocator.free(base);
+    const gone_key = shadow_root.repoKey(gone);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    try tmp.dir.createDirPath(testing.io, try std.fmt.bufPrint(&buf, "base/{s}/shadow", .{&gone_key}));
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&buf, "base/{s}/{s}", .{ &gone_key, shadow_root.marker_name }), .data = gone });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&buf, "base/{s}/unknown.txt", .{&gone_key}), .data = "not ours\n" });
+
+    const location = try shadow_root.locate(testing.allocator, root, base);
+    defer location.deinit(testing.allocator);
+    var trace: Trace = .{};
+    var workspace = try prepareShadow(testing.allocator, testing.io, root, location, location.shadow, &.{"a.ts"}, &.{}, .{ .tree = .full_copy }, &trace, null);
+    workspace.finish();
+    try testing.expectEqual(@as(?anyerror, error.WorkspaceNotEmpty), trace.tree.?.stale_left);
+    try testing.expectEqual(@as(?anyerror, null), trace.tree.?.left_behind);
 }

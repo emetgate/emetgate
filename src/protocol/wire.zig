@@ -594,6 +594,10 @@ pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
         try js.objectField("left_behind");
         try js.write(@errorName(err));
     }
+    if (tree.stale_left) |err| {
+        try js.objectField("stale_left");
+        try js.write(@errorName(err));
+    }
     try js.endObject();
 }
 
@@ -607,7 +611,7 @@ fn writeNoteFields(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void
     const n = note orelse return;
     try writeTests(js, &n);
     const tree = n.tree orelse return;
-    if (tree.left_behind != null) try writeGateTree(js, tree);
+    if (tree.left_behind != null or tree.stale_left != null) try writeGateTree(js, tree);
 }
 
 pub const verified_text = "tests ran on a mirror of this exact tree; no need to rerun them";
@@ -1382,6 +1386,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "DynamicPathUse", "the file path is built at runtime somewhere; move it by hand and update those sites" },
     .{ "CommitNotEnabled", "omit message: commits are off on this server" },
     .{ "MissingCommitMessage", "pass message" },
+    .{ "LabelDenied", "the sandbox folder is owned by another account and this account may not relabel it; delete it from the account that created it, or pass --shadow-root <a folder you own>" },
 });
 
 pub fn fixFor(name: []const u8) ?[]const u8 {
@@ -1415,6 +1420,9 @@ fn takeFix(name: []const u8) ?[]const u8 {
         const given = fix_buffer[0..fix_len];
         fix_len = 0;
         return given;
+    }
+    if (std.mem.eql(u8, name, "LabelDenied")) {
+        if (shadow.takeLabelDeniedFix(&fix_buffer)) |text| return text;
     }
     return fixFor(name);
 }
@@ -2014,6 +2022,17 @@ test "a result says which tree the gate used: kept with its private copies, or a
         var expected_buf: [96]u8 = undefined;
         const expected = try std.fmt.bufPrint(&expected_buf, "\"gate_tree\":{{\"kind\":\"full_copy\",\"reason\":\"{t}\"}}", .{reason});
         try testing.expect(std.mem.indexOf(u8, buffer.written(), expected) != null);
+    }
+}
+
+test "a result names a stale shadow the sweep could not remove, in a compact reply too" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const note: ShadowNote = .{ .root = "D:\\shadows", .dotted = false, .linked_files = 0, .copied_files = 0, .skipped_links = 0, .tree = .{ .mode = .kept, .stale_left = error.WorkspaceNotEmpty } };
+    for ([_]bool{ true, false }) |full| {
+        buffer.clearRetainingCapacity();
+        try writeCommitted(&buffer.writer, "f", .absent, symbol.hashOf("b"), note, full);
+        try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"gate_tree\":{\"kind\":\"kept\",\"private_copies\":0,\"stale_left\":\"WorkspaceNotEmpty\"}") != null);
     }
 }
 

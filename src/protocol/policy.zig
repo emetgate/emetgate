@@ -45,6 +45,10 @@ pub const Policy = struct {
     shadow_private: [max_private][]const u8 = undefined,
     shadow_private_len: usize = 0,
 
+    pub fn invalidate(self: *const Policy) void {
+        if (self.find_session) |session| session.invalidate();
+    }
+
     pub fn treeChoice(self: *const Policy) shadow.Choice {
         return .{ .tree = self.shadow_tree orelse shadow.default_tree, .private = self.shadow_private[0..self.shadow_private_len] };
     }

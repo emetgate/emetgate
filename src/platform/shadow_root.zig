@@ -8,6 +8,7 @@ const Dir = std.Io.Dir;
 
 pub const key_len = 32;
 pub const marker_name = "root.txt";
+pub const sweep_lock_name = "sweep.lock";
 const max_marker_bytes = 64 * 1024;
 
 pub const Location = struct {
@@ -102,13 +103,31 @@ pub fn writeMarker(io: std.Io, location: Location, root_abs: []const u8) !void {
     try dir.writeFile(io, .{ .sub_path = marker_name, .data = root_abs });
 }
 
-pub fn sweep(gpa: Allocator, io: std.Io, base_abs: []const u8, keep_abs: []const u8) !usize {
+pub const Swept = struct {
+    removed: usize = 0,
+    failed: usize = 0,
+    first_failure: ?anyerror = null,
+
+    fn fail(self: *Swept, err: anyerror) void {
+        self.failed += 1;
+        if (self.first_failure == null) self.first_failure = err;
+    }
+};
+
+pub fn sweep(gpa: Allocator, io: std.Io, base_abs: []const u8, keep_abs: []const u8) !Swept {
+    var swept: Swept = .{};
     var base = Dir.openDirAbsolute(io, base_abs, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return 0,
+        error.FileNotFound => return swept,
         else => |e| return e,
     };
     defer base.close(io);
-    var removed: usize = 0;
+    var lock_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const lock: ?shadow.FileLock = shadow.FileLock.acquire(try std.fmt.bufPrint(&lock_buf, "{s}\\{s}", .{ base_abs, sweep_lock_name })) catch |err| switch (err) {
+        error.Busy => return swept,
+        error.Unsupported => null,
+        else => |e| return e,
+    };
+    defer if (lock) |held| held.release();
     var it = base.iterate();
     var names: std.ArrayList([]u8) = .empty;
     defer {
@@ -123,20 +142,28 @@ pub fn sweep(gpa: Allocator, io: std.Io, base_abs: []const u8, keep_abs: []const
         const workspace = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ base_abs, name });
         defer gpa.free(workspace);
         if (std.ascii.eqlIgnoreCase(workspace, keep_abs)) continue;
-        if (!try isStale(gpa, io, workspace)) continue;
-        shadow.removeWorkspace(io, base_abs, workspace) catch continue;
-        removed += 1;
+        const stale = isStale(gpa, io, workspace, name) catch |err| {
+            swept.fail(err);
+            continue;
+        };
+        if (!stale) continue;
+        shadow.removeWorkspace(io, base_abs, workspace) catch |err| {
+            swept.fail(err);
+            continue;
+        };
+        swept.removed += 1;
     }
-    return removed;
+    return swept;
 }
 
-fn isStale(gpa: Allocator, io: std.Io, workspace: []const u8) !bool {
+fn isStale(gpa: Allocator, io: std.Io, workspace: []const u8, name: []const u8) !bool {
     if (try shadow.isReparsePoint(workspace)) return false;
     var dir = Dir.openDirAbsolute(io, workspace, .{}) catch return false;
     defer dir.close(io);
     const recorded = dir.readFileAlloc(io, marker_name, gpa, .limited(max_marker_bytes)) catch return false;
     defer gpa.free(recorded);
     if (!std.fs.path.isAbsolute(recorded)) return false;
+    if (!std.mem.eql(u8, &repoKey(recorded), name)) return false;
     Dir.accessAbsolute(io, recorded, .{}) catch |err| return err == error.FileNotFound;
     return false;
 }
@@ -202,7 +229,7 @@ test "sweep removes only stale shadows whose repository is gone, and never follo
     var target_buf: [std.fs.max_path_bytes]u8 = undefined;
     try shadow.createJunction(testing.io, try std.fmt.bufPrint(&link_buf, "{s}\\{s}", .{ base, &trap_key }), try std.fmt.bufPrint(&target_buf, "{s}\\victim", .{top}));
 
-    try testing.expectEqual(@as(usize, 1), try sweep(testing.allocator, testing.io, base, ""));
+    try testing.expectEqual(Swept{ .removed = 1 }, try sweep(testing.allocator, testing.io, base, ""));
     const gone_key = repoKey(gone);
     const live_key = repoKey(live);
     const gone_rel = try std.fmt.allocPrint(testing.allocator, "base/{s}", .{&gone_key});
@@ -213,4 +240,93 @@ test "sweep removes only stale shadows whose repository is gone, and never follo
     try tmp.dir.access(testing.io, live_rel, .{});
     try tmp.dir.access(testing.io, "base/notakey/shadow", .{});
     try tmp.dir.access(testing.io, "victim/keep.txt", .{});
+}
+
+const Stale = struct {
+    tmp: testing.TmpDir,
+    top: [:0]u8,
+    base: []u8,
+
+    fn init() !Stale {
+        var tmp = testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+        errdefer testing.allocator.free(top);
+        const base = try std.fmt.allocPrint(testing.allocator, "{s}\\base", .{top});
+        return .{ .tmp = tmp, .top = top, .base = base };
+    }
+
+    fn deinit(self: *Stale) void {
+        testing.allocator.free(self.base);
+        testing.allocator.free(self.top);
+        self.tmp.cleanup();
+    }
+
+    fn workspace(self: *Stale, key: []const u8, recorded: []const u8) !void {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        try self.tmp.dir.createDirPath(testing.io, try std.fmt.bufPrint(&buf, "base/{s}/shadow/src", .{key}));
+        try self.tmp.dir.writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&buf, "base/{s}/shadow/src/a.ts", .{key}), .data = "a\n" });
+        try self.tmp.dir.writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&buf, "base/{s}/{s}", .{ key, marker_name }), .data = recorded });
+    }
+
+    fn expectPresent(self: *Stale, key: []const u8, name: []const u8) !void {
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        try self.tmp.dir.access(testing.io, try std.fmt.bufPrint(&buf, "base/{s}/{s}", .{ key, name }), .{});
+    }
+};
+
+test "sweep leaves a workspace whose marker names a gone repository that does not own that key" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var stale = try Stale.init();
+    defer stale.deinit();
+    const gone = try std.fmt.allocPrint(testing.allocator, "{s}\\gone", .{stale.top});
+    defer testing.allocator.free(gone);
+    const other_key = repoKey("C:\\some\\other\\repository");
+    try stale.workspace(&other_key, gone);
+
+    try testing.expectEqual(Swept{}, try sweep(testing.allocator, testing.io, stale.base, ""));
+    try stale.expectPresent(&other_key, "shadow/src/a.ts");
+    try stale.expectPresent(&other_key, marker_name);
+}
+
+test "sweep reports a stale workspace it could not remove, and keeps its marker so the next sweep finds it again" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var stale = try Stale.init();
+    defer stale.deinit();
+    const gone = try std.fmt.allocPrint(testing.allocator, "{s}\\gone", .{stale.top});
+    defer testing.allocator.free(gone);
+    const key = repoKey(gone);
+    try stale.workspace(&key, gone);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const unknown = try std.fmt.bufPrint(&buf, "base/{s}/unknown.txt", .{&key});
+    try stale.tmp.dir.writeFile(testing.io, .{ .sub_path = unknown, .data = "not ours\n" });
+
+    try testing.expectEqual(Swept{ .failed = 1, .first_failure = error.WorkspaceNotEmpty }, try sweep(testing.allocator, testing.io, stale.base, ""));
+    try stale.expectPresent(&key, marker_name);
+    try stale.expectPresent(&key, "unknown.txt");
+    var shadow_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try testing.expectError(error.FileNotFound, stale.tmp.dir.access(testing.io, try std.fmt.bufPrint(&shadow_buf, "base/{s}/shadow", .{&key}), .{}));
+
+    try stale.tmp.dir.deleteFile(testing.io, unknown);
+    try testing.expectEqual(Swept{ .removed = 1 }, try sweep(testing.allocator, testing.io, stale.base, ""));
+    var workspace_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try testing.expectError(error.FileNotFound, stale.tmp.dir.access(testing.io, try std.fmt.bufPrint(&workspace_buf, "base/{s}", .{&key}), .{}));
+}
+
+test "only one process sweeps a shadow root at a time, and a second one leaves the stale shadows to it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var stale = try Stale.init();
+    defer stale.deinit();
+    const gone = try std.fmt.allocPrint(testing.allocator, "{s}\\gone", .{stale.top});
+    defer testing.allocator.free(gone);
+    const key = repoKey(gone);
+    try stale.workspace(&key, gone);
+    var lock_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const held = try shadow.FileLock.acquire(try std.fmt.bufPrint(&lock_buf, "{s}\\{s}", .{ stale.base, sweep_lock_name }));
+
+    const busy = sweep(testing.allocator, testing.io, stale.base, "");
+    held.release();
+    try testing.expectEqual(Swept{}, try busy);
+    try stale.expectPresent(&key, "shadow/src/a.ts");
+    try testing.expectEqual(Swept{ .removed = 1 }, try sweep(testing.allocator, testing.io, stale.base, ""));
 }

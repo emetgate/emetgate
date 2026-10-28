@@ -18,8 +18,53 @@ env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
+  authors:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Commit authors, committers and messages
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = pull_request ]; then
+            range=("$BASE..$HEAD")
+          elif [ -z "${BEFORE//0/}" ]; then
+            range=(-1 "$AFTER")
+          else
+            range=("$BEFORE..$AFTER")
+          fi
+          allowed='^(infougurcalskan@gmail\.com|166253481\+ugurcl@users\.noreply\.github\.com|noreply@github\.com)$'
+          bad=0
+          count=0
+          for c in $(git rev-list "${range[@]}"); do
+            count=$((count + 1))
+            for e in $(git log -1 --format='%ae %ce' "$c"); do
+              if ! grep -Eq "$allowed" <<< "$e"; then
+                echo "::error::$c uses the email $e, which is not allowed"
+                bad=1
+              fi
+            done
+            if git log -1 --format=%B "$c" | grep -Eiq '^[[:space:]]*(co-authored-by|signed-off-by)[[:space:]]*:|claude|anthropic'; then
+              echo "::error::$c has a Co-authored-by or Signed-off-by trailer, or a disallowed word, in its message"
+              bad=1
+            fi
+          done
+          echo "checked $count commit(s) in ${range[*]}"
+          exit $bad
+
   test:
     runs-on: windows-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -27,38 +72,7 @@ jobs:
     name: test (${{ matrix.optimize }})
     steps:
       - uses: actions/checkout@v4
-      - name: Install Zig
-        shell: pwsh
-        run: |
-          $zip = "zig-x86_64-windows-$env:ZIG_VERSION.zip"
-          $url = "https://ziglang.org/download/$env:ZIG_VERSION/$zip"
-          Invoke-WebRequest $url -OutFile $zip
-          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
-          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
-      - run: zig version
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - name: Install pytest
-        run: python -m pip install pytest==8.3.5
-      - name: Install ripgrep
-        shell: pwsh
-        run: |
-          # Fetch ripgrep straight from its GitHub release (pinned, so the hits
-          # the search tests compare against stay deterministic) rather than the
-          # Chocolatey community feed, whose 504s were silently leaving the runner
-          # without rg and failing the ripgrep-backed search tests.
-          $version = "14.1.1"
-          $name = "ripgrep-$version-x86_64-pc-windows-msvc"
-          $url = "https://github.com/BurntSushi/ripgrep/releases/download/$version/$name.zip"
-          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\rg.zip"
-          Expand-Archive "$env:RUNNER_TEMP\rg.zip" -DestinationPath "$env:RUNNER_TEMP\rg"
-          $dir = "$env:RUNNER_TEMP\rg\$name"
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-          # Fail loudly here if rg is not actually runnable, instead of letting a
-          # silent miss resurface later as RegexNeedsRipgrep test failures.
-          & "$dir\rg.exe" --version
+      - uses: ./.github/actions/setup
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
@@ -68,59 +82,31 @@ jobs:
           python tools/forbidden_words.py --check
           python tools/vendor_manifest.py --check
 
-  nightly:
+  nightly-slow:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 240
-    env:
-      SLICE: ${{ github.run_number }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Install Zig
-        shell: pwsh
-        run: |
-          $zip = "zig-x86_64-windows-$env:ZIG_VERSION.zip"
-          $url = "https://ziglang.org/download/$env:ZIG_VERSION/$zip"
-          Invoke-WebRequest $url -OutFile $zip
-          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
-          Remove-Item $zip
-          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
-      - run: zig version
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - name: Install pytest
-        run: python -m pip install pytest==8.3.5
-      - name: Install ripgrep
-        shell: pwsh
-        run: |
-          # Fetch ripgrep straight from its GitHub release (pinned, so the hits
-          # the search tests compare against stay deterministic) rather than the
-          # Chocolatey community feed, whose 504s were silently leaving the runner
-          # without rg and failing the ripgrep-backed search tests.
-          $version = "14.1.1"
-          $name = "ripgrep-$version-x86_64-pc-windows-msvc"
-          $url = "https://github.com/BurntSushi/ripgrep/releases/download/$version/$name.zip"
-          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\rg.zip"
-          Expand-Archive "$env:RUNNER_TEMP\rg.zip" -DestinationPath "$env:RUNNER_TEMP\rg"
-          $dir = "$env:RUNNER_TEMP\rg\$name"
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-          # Fail loudly here if rg is not actually runnable, instead of letting a
-          # silent miss resurface later as RegexNeedsRipgrep test failures.
-          & "$dir\rg.exe" --version
-      - name: Require a clean working tree
-        shell: pwsh
-        run: |
-          $dirty = git status --porcelain --untracked-files=all
-          if ($dirty) {
-            Write-Output "::error::the mutation harness needs a clean working tree"
-            $dirty
-            exit 1
-          }
+      - uses: ./.github/actions/setup
       - name: Every test, the slow ones included
         run: zig build test -Dslow=true --summary all
-      - name: Every test 20 times under load
+
+  nightly-stress:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: nightly-stress (${{ matrix.shard }}/4)
+    env:
+      RUNS: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Every test 5 times under load, 20 times across the four shards
         shell: pwsh
         run: |
           zig build test-bin
@@ -132,32 +118,54 @@ jobs:
             while ($true) { & $exe --jobs 2 --slow *> $null }
           }
           try {
-            for ($i = 1; $i -le 20; $i++) {
-              Write-Output "run $i of 20"
+            for ($i = 1; $i -le [int]$env:RUNS; $i++) {
+              Write-Output "run $i of $env:RUNS on shard ${{ matrix.shard }}/4"
               & $exe --jobs 8 --slow
-              if ($LASTEXITCODE -ne 0) { Write-Output "::error::run $i of 20 failed"; exit 1 }
+              if ($LASTEXITCODE -ne 0) { Write-Output "::error::run $i of $env:RUNS on shard ${{ matrix.shard }}/4 failed"; exit 1 }
             }
           } finally {
             Stop-Job $load
             Remove-Job $load -Force
           }
-      - run: zig build mutate-tool
-      - name: The whole mutation corpus from the schema binary
+
+  nightly-mutate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [1, 2, 3, 4]
+    name: nightly-mutate (${{ matrix.slice }}/4)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Require a clean working tree
         shell: pwsh
-        run: ./zig-out/bin/emetgate-mutate.exe --jobs=4
+        run: |
+          $dirty = git status --porcelain --untracked-files=all
+          if ($dirty) {
+            Write-Output "::error::the mutation harness needs a clean working tree"
+            $dirty
+            exit 1
+          }
+      - run: zig build mutate-tool
+      - name: A quarter of the mutation corpus from the schema binary, the four slices cover all of it
+        shell: pwsh
+        run: ./zig-out/bin/emetgate-mutate.exe --jobs=4 "--slice=${{ matrix.slice }}/4"
       - name: Summarize unexpected outcomes
         if: always()
         shell: pwsh
         run: |
           $path = ".zig-cache/mutate/report.json"
           if (-not (Test-Path $path)) {
-            "No report was written; see the harness log above." >> $env:GITHUB_STEP_SUMMARY
+            "No report was written for slice ${{ matrix.slice }}/4; see the harness log above." >> $env:GITHUB_STEP_SUMMARY
             exit 0
           }
           $outcomes = Get-Content $path -Raw | ConvertFrom-Json
           $bad = @($outcomes | Where-Object { -not $_.ok })
           $schema = @($outcomes | Where-Object { $_.origin -eq 'schema' }).Count
-          "## Mutation corpus" >> $env:GITHUB_STEP_SUMMARY
+          "## Mutation corpus, slice ${{ matrix.slice }}/4" >> $env:GITHUB_STEP_SUMMARY
           "$($outcomes.Count) run ($schema from the schema binary), $($outcomes.Count - $bad.Count) as expected, $($bad.Count) not as expected" >> $env:GITHUB_STEP_SUMMARY
           if ($bad.Count -gt 0) {
             "" >> $env:GITHUB_STEP_SUMMARY
@@ -173,23 +181,53 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutation-report
+          name: mutation-report-${{ matrix.slice }}
           path: .zig-cache/mutate/report.json
           if-no-files-found: warn
+
+  nightly-mutate-compare:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      SLICE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Require a clean working tree
+        shell: pwsh
+        run: |
+          $dirty = git status --porcelain --untracked-files=all
+          if ($dirty) {
+            Write-Output "::error::the mutation harness needs a clean working tree"
+            $dirty
+            exit 1
+          }
+      - run: zig build mutate-tool
       - name: A rotating tenth of the corpus, schema binary against one build per mutant
         shell: pwsh
         run: |
           $slice = ([int]$env:SLICE % 10) + 1
           ./zig-out/bin/emetgate-mutate.exe --jobs=4 --skip-survivors --compare "--slice=$slice/10"
+
+  nightly-fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [regex, protocol, ledger, cas, journal]
+    name: nightly-fuzz (${{ matrix.target }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
       - run: zig build fuzz-tool
-      - name: Time-boxed random fuzzing, a few minutes per target
+      - name: Time-boxed random fuzzing for three minutes
         shell: pwsh
         run: |
-          foreach ($target in "regex", "protocol", "ledger", "cas", "journal") {
-            Write-Output "fuzzing $target"
-            ./zig-out/bin/emetgate-fuzz.exe $target 180
-            if ($LASTEXITCODE -ne 0) { Write-Output "::error::fuzz target $target failed"; exit 1 }
-          }
+          ./zig-out/bin/emetgate-fuzz.exe ${{ matrix.target }} 180
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::fuzz target ${{ matrix.target }} failed"; exit 1 }
 
   nightly-attacker:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

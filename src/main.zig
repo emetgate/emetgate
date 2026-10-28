@@ -409,8 +409,8 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
 
 fn printLeftBehind(trace: runner.Trace) void {
     const tree = trace.tree orelse return;
-    const err = tree.left_behind orelse return;
-    std.debug.print("warning: the gate tree could not be removed and stays under the shadow root: {t}\n", .{err});
+    if (tree.left_behind) |err| std.debug.print("warning: the gate tree could not be removed and stays under the shadow root: {t}\n", .{err});
+    if (tree.stale_left) |err| std.debug.print("warning: a stale shadow of a removed repository could not be removed and stays under the shadow root: {t}\n", .{err});
 }
 
 fn printShadowNote(gpa: std.mem.Allocator, override: ?[]const u8, trace: runner.Trace) void {
@@ -589,7 +589,7 @@ fn rulesCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 
 
 fn hookPromptCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) u8 {
     answerPrompt(init, runtime, out) catch |err| {
-        std.debug.print("error: {t}\n", .{err});
+        if (err == error.HookInputEmpty) std.debug.print("error: {t}: the hook got no JSON on stdin\n", .{err}) else std.debug.print("error: {t}\n", .{err});
         return prompt_hook.blocking_exit_code;
     };
     return 0;

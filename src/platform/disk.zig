@@ -803,7 +803,7 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, shadow
     const location = try shadow_root.locate(gpa, root_abs, shadow_root_dir);
     defer location.deinit(gpa);
     const removal = shadow.removeWorkspace(io, location.base, location.workspace);
-    _ = shadow_root.sweep(gpa, io, location.base, location.workspace) catch 0;
+    const swept = shadow_root.sweep(gpa, io, location.base, location.workspace);
 
     try err_out.print("recovered {d} file(s), rolled forward {d}, removed {d} orphaned temp file(s), skipped {d}, failed {d}, not indexed {d}\n", .{ report.restored, report.rolled_forward, report.removed_temps, report.skipped, report.failed, report.not_indexed });
     const c = report.commits;
@@ -817,7 +817,18 @@ pub fn recoverWorkspace(gpa: Allocator, io: std.Io, root_abs: []const u8, shadow
         try err_out.print("could not remove shadow: {t}\n", .{err});
         return recover_failed_exit_code;
     }
-    return if (report.failed > 0 or report.not_indexed > 0 or c.pending > 0 or c.failed > 0) recover_failed_exit_code else 0;
+    const stale_failed = try reportSweep(err_out, swept);
+    return if (stale_failed or report.failed > 0 or report.not_indexed > 0 or c.pending > 0 or c.failed > 0) recover_failed_exit_code else 0;
+}
+
+fn reportSweep(err_out: *std.Io.Writer, swept: anyerror!shadow_root.Swept) !bool {
+    const done = swept catch |err| {
+        try err_out.print("could not sweep stale shadows: {t}\n", .{err});
+        return true;
+    };
+    const err = done.first_failure orelse return false;
+    try err_out.print("could not remove {d} stale shadow(s) of removed repositories: {t}\n", .{ done.failed, err });
+    return true;
 }
 
 const Verified = enum { deleted, missing, mismatch };

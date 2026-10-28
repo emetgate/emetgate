@@ -150,6 +150,7 @@ pub const rules_command = @import("protocol/rules_command.zig");
 pub const console_raw = @import("platform/console_raw.zig");
 pub const prompt_words = @import("protocol/prompt_words.zig");
 pub const prompt_hook = @import("protocol/prompt_hook.zig");
+pub const json_input = @import("protocol/json_input.zig");
 pub const facts_command = @import("protocol/facts_command.zig");
 pub const map_command = @import("protocol/map_command.zig");
 pub const map_tools = @import("protocol/map_tools.zig");

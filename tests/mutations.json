@@ -3412,8 +3412,8 @@
     {
       "id": "RC2-recover-reports-shadow-error-but-exits-0",
       "file": "src/platform/disk.zig",
-      "from": "return recover_failed_exit_code;",
-      "to": "return 0;",
+      "from": "        try err_out.print(\"could not remove shadow: {t}\\n\", .{err});\n        return recover_failed_exit_code;",
+      "to": "        try err_out.print(\"could not remove shadow: {t}\\n\", .{err});\n        return 0;",
       "kills": [
         "purple recover: a shadow that cannot be removed exits 16 and says so after the summary"
       ]
@@ -9305,8 +9305,8 @@
     {
       "id": "KT4-label-propagated-onto-linked-files",
       "file": "src/platform/shadow.zig",
-      "from": "try labelWithoutPropagation(options.shadow_abs);",
-      "to": "try grantLowIntegrityWrite(options.shadow_abs);",
+      "from": "labelWithoutPropagation(self.options.shadow_abs)",
+      "to": "grantLowIntegrityWrite(self.options.shadow_abs)",
       "kills": [
         "the kept tree holds the working files themselves, stays after the call and says what it is",
         "redteam gate tree: every write the sandbox tries on a linked tracked file is denied and the working file stays as it was",
@@ -11339,8 +11339,8 @@
     {
       "id": "LB5-compact-committed-reply-hides-left-behind",
       "file": "src/protocol/wire.zig",
-      "from": "    if (tree.left_behind != null) try writeGateTree(js, tree);\n",
-      "to": "    if (tree.left_behind != null and full) try writeGateTree(js, tree);\n",
+      "from": "    if (tree.left_behind != null or tree.stale_left != null) try writeGateTree(js, tree);\n",
+      "to": "    if ((tree.left_behind != null or tree.stale_left != null) and full) try writeGateTree(js, tree);\n",
       "kills": [
         "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
       ]
@@ -13958,8 +13958,8 @@
     {
       "id": "B19-temp-env-dropped",
       "file": "src/platform/runner.zig",
-      "from": ".limits = limits, .temp = temp, .env = env.items });",
-      "to": ".limits = limits, .env = env.items });",
+      "from": ".limits = limits, .temp = temp, .env = env.items })",
+      "to": ".limits = limits, .env = env.items })",
       "kills": [
         "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run"
       ]
@@ -14636,7 +14636,7 @@
     {
       "id": "CACHE2-cache-not-low-writable",
       "file": "src/platform/shadow.zig",
-      "from": "            try grantLowIntegrityWrite(cache_abs);\n",
+      "from": "    try labelOrReplace(void, RebuiltDir{ .io = io, .dir_abs = cache_abs, .label = labelWithoutPropagation });\n",
       "to": "",
       "kills": [
         "a gated command gets writable package caches next to its directory that survive the run"
@@ -16552,6 +16552,288 @@
       "to": "pub const verbatim_under: usize = 512;",
       "kills": [
         "run output past the old 512 byte cut and under the cap comes back verbatim with its pass lines"
+      ]
+    },
+    {
+      "id": "FW1-write-tool-leaves-find-index-fresh",
+      "file": "src/protocol/handlers.zig",
+      "from": "    defer if (!readOnly(name)) policy.invalidate();\n",
+      "to": "",
+      "kills": [
+        "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
+        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+      ]
+    },
+    {
+      "id": "FW2-fence-without-watcher-skips-rescan",
+      "file": "src/protocol/find_tools.zig",
+      "from": "            if (fence) self.dirtyAll();\n",
+      "to": "",
+      "kills": [
+        "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
+      ]
+    },
+    {
+      "id": "FW3-every-tool-counted-read-only",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (std.mem.eql(u8, tool, name)) return true;",
+      "to": "        _ = tool;\n        _ = name;\n        return true;",
+      "kills": [
+        "find after write: a read only tool leaves the find index alone and every other tool marks it stale",
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
+      ]
+    },
+    {
+      "id": "FW4-stale-find-skips-settle",
+      "file": "src/protocol/find_tools.zig",
+      "from": "        if (self.stale.swap(false, .acq_rel)) {",
+      "to": "        if (false) {",
+      "kills": [
+        "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
+        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+      ]
+    },
+    {
+      "id": "FW6-write-leaves-find-session-fresh",
+      "file": "src/protocol/policy.zig",
+      "from": "        if (self.find_session) |session| session.invalidate();\n",
+      "to": "",
+      "kills": [
+        "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
+        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+      ]
+    },
+    {
+      "id": "FW8-map-names-ignore-changed-files",
+      "file": "src/protocol/map_tools.zig",
+      "from": "report.full_link) self.tables_stale = true;",
+      "to": "report.full_link) {}",
+      "kills": [
+        "find after write: evidence and explore know a function renamed through emetgate_edit on the very next call",
+        "find after write: evidence and explore know a function renamed by an editor outside emetgate on the very next call"
+      ]
+    },
+    {
+      "id": "FW9-map-names-rebuilt-on-unchanged-call",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        if (!self.tables_stale) return;\n",
+      "to": "",
+      "kills": [
+        "find after write: evidence and explore know a function renamed by an editor outside emetgate on the very next call"
+      ]
+    },
+    {
+      "id": "FW10-map-names-miss-edited-files",
+      "file": "src/protocol/map_tools.zig",
+      "from": "report.extracted != 0 or report.removed != 0 or report.full_link",
+      "to": "report.removed != 0 or report.full_link",
+      "kills": [
+        "find after write: evidence and explore know a function renamed through emetgate_edit on the very next call",
+        "find after write: evidence and explore know a function renamed by an editor outside emetgate on the very next call"
+      ]
+    },
+    {
+      "id": "LD1-foreign-label-no-owner-grant",
+      "file": "src/platform/shadow.zig",
+      "from": "    grantOwnWriteOwner(wide) catch |err| return if (err == error.LabelDenied) noteLabelDenied(dir_abs) else err;",
+      "to": "    if (false) grantOwnWriteOwner(wide) catch |err| return if (err == error.LabelDenied) noteLabelDenied(dir_abs) else err;",
+      "kills": [
+        "a folder this account owns but whose permissions withhold relabelling gets a write-owner grant and is labelled"
+      ]
+    },
+    {
+      "id": "LD2-owner-grant-without-write-owner",
+      "file": "src/platform/shadow.zig",
+      "from": ".access_permissions = win.read_control | win.write_owner,",
+      "to": ".access_permissions = win.read_control,",
+      "kills": [
+        "a folder this account owns but whose permissions withhold relabelling gets a write-owner grant and is labelled"
+      ]
+    },
+    {
+      "id": "LD3-foreign-kept-shadow-not-replaced",
+      "file": "src/platform/shadow.zig",
+      "from": "    try owned.replace();",
+      "to": "    if (false) try owned.replace();",
+      "kills": [
+        "a kept shadow whose owner rights withhold relabelling from this account is replaced and the sandbox runs confined in it",
+        "an existing cache whose owner rights withhold relabelling is rebuilt and the sandbox writes into it"
+      ]
+    },
+    {
+      "id": "LD4-label-denied-fix-loses-folder",
+      "file": "src/platform/shadow.zig",
+      "from": "    @memcpy(denied_buf[0..denied_len], dir_abs[0..denied_len]);",
+      "to": "",
+      "kills": [
+        "a shadow root that never lets this account relabel is refused with LabelDenied and a fix naming the folder"
+      ]
+    },
+    {
+      "id": "LD5-existing-cache-not-relabelled",
+      "file": "src/platform/shadow.zig",
+      "from": "    try labelOrReplace(void, RebuiltDir{ .io = io, .dir_abs = cache_abs, .label = labelWithoutPropagation });",
+      "to": "    if (false) try labelOrReplace(void, RebuiltDir{ .io = io, .dir_abs = cache_abs, .label = labelWithoutPropagation });",
+      "kills": [
+        "an existing cache whose owner rights withhold relabelling is rebuilt and the sandbox writes into it"
+      ]
+    },
+    {
+      "id": "SL1-remove-leaves-private-temp",
+      "file": "src/platform/shadow.zig",
+      "from": "const shadow_siblings = [_][]const u8{ \"-cache\", \"-tmp\" };",
+      "to": "const shadow_siblings = [_][]const u8{\"-cache\"};",
+      "kills": [
+        "removing a full copy also removes the TEMP and cache left next to it, and then the whole workspace"
+      ]
+    },
+    {
+      "id": "SL2-marker-dropped-beside-other-entries",
+      "file": "src/platform/shadow.zig",
+      "from": "        if (!std.ascii.eqlIgnoreCase(entry.name, shadow_root.marker_name)) return false;",
+      "to": "",
+      "kills": [
+        "a workspace that still holds something else keeps its marker, so a later sweep can still tell whose it is"
+      ]
+    },
+    {
+      "id": "SL3-workspace-dir-delete-error-swallowed",
+      "file": "src/platform/shadow.zig",
+      "from": "    if (try clearUnderHold(io, base_abs, shadow_abs, workspace)) try deleteEmptyDir(io, workspace);",
+      "to": "    _ = try clearUnderHold(io, base_abs, shadow_abs, workspace);",
+      "kills": [
+        "removing a full copy also removes the TEMP and cache left next to it, and then the whole workspace"
+      ]
+    },
+    {
+      "id": "SL4-remove-workspace-claims-success",
+      "file": "src/platform/shadow.zig",
+      "from": "    return error.WorkspaceNotEmpty;\n}",
+      "to": "}",
+      "kills": [
+        "a workspace that still holds something else keeps its marker, so a later sweep can still tell whose it is",
+        "sweep reports a stale workspace it could not remove, and keeps its marker so the next sweep finds it again"
+      ]
+    },
+    {
+      "id": "SL5-failed-copy-left-behind",
+      "file": "src/platform/shadow.zig",
+      "from": "        errdefer remove(io, options.base_abs, options.shadow_abs) catch {};\n",
+      "to": "",
+      "kills": [
+        "a full copy that fails while it is being made is removed before the error is returned"
+      ]
+    },
+    {
+      "id": "SL6-sweep-swallows-removal-failure",
+      "file": "src/platform/shadow_root.zig",
+      "from": "        shadow.removeWorkspace(io, base_abs, workspace) catch |err| {\n            swept.fail(err);",
+      "to": "        shadow.removeWorkspace(io, base_abs, workspace) catch |err| {\n            _ = err;",
+      "kills": [
+        "sweep reports a stale workspace it could not remove, and keeps its marker so the next sweep finds it again"
+      ]
+    },
+    {
+      "id": "SL7-sweep-trusts-marker-without-key",
+      "file": "src/platform/shadow_root.zig",
+      "from": "    if (!std.mem.eql(u8, &repoKey(recorded), name)) return false;\n",
+      "to": "",
+      "kills": [
+        "sweep leaves a workspace whose marker names a gone repository that does not own that key"
+      ]
+    },
+    {
+      "id": "SL8-sweep-ignores-lock",
+      "file": "src/platform/shadow_root.zig",
+      "from": "        error.Busy => return swept,",
+      "to": "        error.Busy => null,",
+      "kills": [
+        "only one process sweeps a shadow root at a time, and a second one leaves the stale shadows to it"
+      ]
+    },
+    {
+      "id": "SL9-trace-drops-stale-failure",
+      "file": "src/platform/runner.zig",
+      "from": "        t.tree.?.stale_left = stale_left;\n",
+      "to": "",
+      "kills": [
+        "a stale shadow that the sweep could not remove is named in the trace of the next gate"
+      ]
+    },
+    {
+      "id": "SL10-reply-hides-stale-failure",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (tree.stale_left) |err| {\n        try js.objectField(\"stale_left\");",
+      "to": "    if (false) |err| {\n        try js.objectField(\"stale_left\");",
+      "kills": [
+        "a result names a stale shadow the sweep could not remove, in a compact reply too"
+      ]
+    },
+    {
+      "id": "SL11-recover-exits-0-on-stale-failure",
+      "file": "src/platform/disk.zig",
+      "from": "    return if (stale_failed or report.failed > 0",
+      "to": "    return if (report.failed > 0",
+      "kills": [
+        "purple recover: a stale shadow of a removed repository that cannot be removed exits 16 and is named"
+      ]
+    },
+    {
+      "id": "SL12-temp-clear-error-swallowed",
+      "file": "src/platform/runner.zig",
+      "from": "    shadow.clearTemp(io, temp) catch |err| {\n        report.deinit(gpa);\n        return err;\n    };\n",
+      "to": "",
+      "kills": [
+        "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run"
+      ]
+    },
+    {
+      "id": "SURR1-lone-high-surrogate-kept",
+      "file": "src/protocol/json_input.zig",
+      "from": "    return unit >= 0xD800 and unit <= 0xDBFF;",
+      "to": "    return unit >= 0xD800 and unit <= 0xD7FF;",
+      "kills": [
+        "a lone high surrogate escape decodes as U+FFFD and the text around it is kept"
+      ]
+    },
+    {
+      "id": "SURR2-lone-low-surrogate-kept",
+      "file": "src/protocol/json_input.zig",
+      "from": "        } else if (!isLow(unit)) {",
+      "to": "        } else if (true) {",
+      "kills": [
+        "a lone low surrogate escape decodes as U+FFFD and the text around it is kept"
+      ]
+    },
+    {
+      "id": "SURR3-surrogate-pair-split",
+      "file": "src/protocol/json_input.zig",
+      "from": "                    i += 2 * escape_len;",
+      "to": "                    i += escape_len;",
+      "kills": [
+        "a valid surrogate pair escape still decodes as the one character it names"
+      ]
+    },
+    {
+      "id": "SURR4-hook-bypasses-surrogate-repair",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "    const parsed = json_input.parseLeaky(std.json.Value, arena, input, .{})",
+      "to": "    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, input, .{})",
+      "kills": [
+        "prompt hook: a prompt with a lone surrogate escape is read, and a /rule in it is still answered"
+      ]
+    },
+    {
+      "id": "SURR5-empty-hook-input-not-named",
+      "file": "src/protocol/prompt_hook.zig",
+      "from": "    if (std.mem.trim(u8, input, whitespace ++ byte_order_mark).len == 0) return error.HookInputEmpty;\n",
+      "to": "",
+      "kills": [
+        "prompt hook: empty input is refused as empty, so the hook still blocks and says why"
       ]
     }
   ]

@@ -329,7 +329,7 @@ test "redteam gate tree: a kept tree whose repository is gone is removed by the 
     try victim.tmp.dir.createDirPath(testing.io, "elsewhere");
     try victim.tmp.dir.rename("repo", victim.tmp.dir, "elsewhere/repo", testing.io);
 
-    try testing.expectEqual(@as(usize, 1), try shadow_root.sweep(gpa, testing.io, victim.base_abs, ""));
+    try testing.expectEqual(shadow_root.Swept{ .removed = 1 }, try shadow_root.sweep(gpa, testing.io, victim.base_abs, ""));
     try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, victim.shadow_abs, .{}));
     try victim.expectFile("elsewhere/repo/a.ts", a_src);
     try victim.expectFile("elsewhere/repo/node_modules/pkg/index.js", dependency_src);
