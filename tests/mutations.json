@@ -12941,7 +12941,7 @@
     },
     {
       "id": "PY-SC1-first-position-matches-any",
-      "file": "src/engine/scope.zig",
+      "file": "src/engine/sites.zig",
       "from": "        .first => if (parent.namedChild(0)) |first| first.eql(node) else false,\n",
       "to": "        .first => true,\n",
       "kills": [
@@ -12950,7 +12950,7 @@
     },
     {
       "id": "PY-SC2-rest-position-matches-any",
-      "file": "src/engine/scope.zig",
+      "file": "src/engine/sites.zig",
       "from": "        .rest => if (parent.namedChild(0)) |first| !first.eql(node) else false,\n",
       "to": "        .rest => true,\n",
       "kills": [
@@ -12961,7 +12961,7 @@
     },
     {
       "id": "PY-SC3-sole-position-matches-any",
-      "file": "src/engine/scope.zig",
+      "file": "src/engine/sites.zig",
       "from": "        .sole => parent.namedChildCount() == 1,\n",
       "to": "        .sole => true,\n",
       "kills": [
@@ -12970,7 +12970,7 @@
     },
     {
       "id": "PY-SC4-site-position-ignored",
-      "file": "src/engine/scope.zig",
+      "file": "src/engine/sites.zig",
       "from": "        if (!atPosition(parent, node, site.position)) continue;\n",
       "to": "",
       "kills": [
@@ -12979,7 +12979,7 @@
     },
     {
       "id": "PY-SC5-inert-site-taken-as-use",
-      "file": "src/engine/scope.zig",
+      "file": "src/engine/sites.zig",
       "from": "    if (matchingSite(g.inert_sites, up, node) != null) return true;\n",
       "to": "",
       "kills": [
@@ -15517,7 +15517,7 @@
     },
     {
       "id": "L4Q-multi-field-binder-first-only",
-      "file": "src/engine/scope.zig",
+      "file": "src/engine/sites.zig",
       "from": "            if (!holdsInField(grand, pf, parent)) continue;",
       "to": "            if (!(grand.childByField(pf) orelse continue).eql(parent)) continue;",
       "kills": [
@@ -15856,7 +15856,7 @@
     {
       "id": "L6B-alpha-renamed-plain-names-apart",
       "file": "src/engine/alpha.zig",
-      "from": "            const member = oneOf(kind, g.property_kinds) or scope.isProperty(g, node) or scope.isExternal(g, node);",
+      "from": "            const member = oneOf(kind, g.property_kinds) or sites.isProperty(g, node) or sites.isExternal(g, node);",
       "to": "            const member = true;",
       "kills": [
         "rename: renaming one of two free uses of a name breaks its alpha hash"

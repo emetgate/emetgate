@@ -1,7 +1,7 @@
 const std = @import("std");
 const symbol = @import("symbol.zig");
 const traversal = @import("traversal.zig");
-const scope = @import("scope.zig");
+const sites = @import("sites.zig");
 const name_list = @import("name_list.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 
@@ -64,7 +64,7 @@ pub fn hashDistinct(gpa: Allocator, snapshot: *const Snapshot, region: Span, dis
         hasher.update(&.{0});
         const listed = within(distinct, node.startByte(), node.endByte()) and name_list.holds(snapshot, node);
         if (listed or oneOf(kind, g.name_kinds)) {
-            const member = oneOf(kind, g.property_kinds) or scope.isProperty(g, node) or scope.isExternal(g, node);
+            const member = oneOf(kind, g.property_kinds) or sites.isProperty(g, node) or sites.isExternal(g, node);
             const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()));
             const key: NameKey = .{ .namespace = if (renamed) 'r' else if (oneOf(kind, g.type_kinds)) 't' else if (oneOf(kind, g.property_kinds)) 'p' else 'v', .text = text };
             const slot = try names.getOrPut(gpa, key);
