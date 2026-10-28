@@ -7793,8 +7793,8 @@
     {
       "id": "EP1-tracked-files-run-bare-git",
       "file": "src/platform/shadow.zig",
-      "from": "        .argv = &.{ git, \"ls-files\", \"-z\" },",
-      "to": "        .argv = &.{ \"git\", \"ls-files\", \"-z\" },",
+      "from": "    try argv.append(gpa, git);",
+      "to": "    try argv.append(gpa, \"git\");",
       "kills": [
         "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
       ]
