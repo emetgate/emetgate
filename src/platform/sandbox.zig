@@ -555,6 +555,10 @@ pub const daemon_flags = [_]EnvVar{
     .{ .name = "GRADLE_OPTS", .value = "-Dorg.gradle.daemon=false" },
 };
 
+pub const restricted_flags = [_]EnvVar{
+    .{ .name = "Logging__EventLog__LogLevel__Default", .value = "None" },
+};
+
 fn namedIn(name: []const u8, vars: []const EnvVar) bool {
     for (vars) |v| {
         if (std.ascii.eqlIgnoreCase(v.name, name)) return true;
@@ -571,6 +575,9 @@ pub fn commandVars(arena: Allocator, command: Command) ![]EnvVar {
     for (daemon_flags) |flag| {
         if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);
     }
+    if (command.backend != .user) for (restricted_flags) |flag| {
+        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);
+    };
     return vars.toOwnedSlice(arena);
 }
 
@@ -1481,4 +1488,23 @@ test "every sandboxed command turns off build-server reuse but keeps a value the
     try testing.expectEqual(@as(usize, 1), gradle);
     try testing.expect(namedIn("UseSharedCompilation", vars));
     try testing.expect(namedIn("DOTNET_CLI_USE_MSBUILD_SERVER", vars));
+}
+
+test "a restricted command turns off the Windows event log provider it cannot write, an unrestricted one keeps it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const low = try commandVars(arena, .{ .argv = &.{"x"}, .cwd = "." });
+    try testing.expect(namedIn("Logging__EventLog__LogLevel__Default", low));
+    const user = try commandVars(arena, .{ .argv = &.{"x"}, .cwd = ".", .backend = .user });
+    try testing.expect(!namedIn("Logging__EventLog__LogLevel__Default", user));
+    const kept = try commandVars(arena, .{ .argv = &.{"x"}, .cwd = ".", .env = &.{.{ .name = "logging__eventlog__loglevel__default", .value = "Error" }} });
+    var count: usize = 0;
+    for (kept) |v| {
+        if (std.ascii.eqlIgnoreCase(v.name, "Logging__EventLog__LogLevel__Default")) {
+            count += 1;
+            try testing.expectEqualStrings("Error", v.value);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), count);
 }
