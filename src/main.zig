@@ -36,13 +36,13 @@ const usage =
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command> | --detect-test] [--typecheck <command>] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory] [--search-internals]
+    \\       emetgate mcp [--test <command> | --detect-test] [--typecheck <command>] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--cache-max-age-days <n>] [--cache-max-mb <n>] [--allow-repo-config] [--allow-repo-memory] [--search-internals]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++
     \\       emetgate rules   (interactive checklist: pick the enforced rules with the keyboard)
     \\       emetgate hook prompt
-    \\       emetgate recover [--shadow-root <dir>]
+    \\       emetgate recover [--shadow-root <dir>] [--cache-max-age-days <n>] [--cache-max-mb <n>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
@@ -177,9 +177,8 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return hookPromptCmd(init, runtime, out);
     }
     if (std.mem.eql(u8, command, "recover")) {
-        if (args.len == 2) return recoverCmd(init, runtime, null);
-        if (args.len == 4 and std.mem.eql(u8, args[2], "--shadow-root")) return recoverCmd(init, runtime, args[3]);
-        exitWithUsage();
+        const options = parseRecover(args[2..]) orelse exitWithUsage();
+        return recoverCmd(init, runtime, options);
     }
     if (std.mem.eql(u8, command, "verify")) {
         if (parseVerifyBranch(args[2..])) |branch| return verifyBranchCmd(init, runtime, branch.options, branch.json, out);
@@ -749,7 +748,24 @@ fn commitCmd(init: std.process.Init, runtime: *Runtime, parsed: CommitArgs, out:
     }
 }
 
-fn recoverCmd(init: std.process.Init, runtime: *Runtime, shadow_root_dir: ?[]const u8) !u8 {
+const RecoverOptions = struct {
+    shadow_root: ?[]const u8 = null,
+    cache: emetgate.cache_gc.Flags = .{},
+};
+
+fn parseRecover(args: []const [:0]const u8) ?RecoverOptions {
+    var options: RecoverOptions = .{};
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (options.cache.take(args, &i) orelse return null) continue;
+        if (!std.mem.eql(u8, args[i], "--shadow-root") or options.shadow_root != null or i + 1 >= args.len) return null;
+        i += 1;
+        options.shadow_root = args[i];
+    }
+    return options;
+}
+
+fn recoverCmd(init: std.process.Init, runtime: *Runtime, options: RecoverOptions) !u8 {
     const gpa = runtime.gpa;
     const root = try runner.repoRoot(gpa, init.io);
     defer gpa.free(root);
@@ -758,9 +774,16 @@ fn recoverCmd(init: std.process.Init, runtime: *Runtime, shadow_root_dir: ?[]con
 
     var buffer: [4096]u8 = undefined;
     var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
-    const code = try disk.recoverWorkspace(gpa, init.io, root, shadow_root_dir, &stderr_writer.interface);
+    const code = try disk.recoverWorkspace(gpa, init.io, root, options.shadow_root, &stderr_writer.interface);
+    const cache_failed = try emetgate.cache_gc.writeReport(&stderr_writer.interface, sweepCaches(gpa, init.io, options.cache.policy));
     try stderr_writer.interface.flush();
-    return code;
+    return if (code == 0 and cache_failed) disk.recover_failed_exit_code else code;
+}
+
+fn sweepCaches(gpa: std.mem.Allocator, io: std.Io, policy: emetgate.cache_gc.Policy) !emetgate.cache_gc.Report {
+    const data = try emetgate.cache_lease.defaultDataDir(gpa);
+    defer gpa.free(data);
+    return emetgate.cache_gc.sweep(gpa, io, data, policy, std.Io.Clock.real.now(io).nanoseconds, null);
 }
 
 fn printSkeleton(init: std.process.Init, runtime: *Runtime, path: []const u8, out: *std.Io.Writer) !void {

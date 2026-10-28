@@ -1,4 +1,5 @@
 const std = @import("std");
+const cache_lease = @import("cache_lease.zig");
 const sandbox = @import("sandbox.zig");
 const shadow_root = @import("shadow_root.zig");
 const symbol = @import("../engine/symbol.zig");
@@ -52,11 +53,7 @@ pub const Prepared = struct {
 };
 
 pub fn indexDir(gpa: Allocator, root_abs: []const u8) ![]u8 {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
-    const key = shadow_root.repoKey(root_abs);
-    return std.fmt.allocPrint(gpa, "{s}\\emetgate\\index\\{s}", .{ local, &key });
+    return cache_lease.entryDir(gpa, root_abs, "index");
 }
 
 pub fn isRacy(stamp: Stamp, written_ns: i64) bool {

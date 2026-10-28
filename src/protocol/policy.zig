@@ -14,6 +14,7 @@ const map_tools = @import("map_tools.zig");
 const find_tools = @import("find_tools.zig");
 const batch_stage_mod = @import("batch_stage.zig");
 const shadow = @import("../platform/shadow.zig");
+const cache_gc = @import("../platform/cache_gc.zig");
 
 const Value = std.json.Value;
 
@@ -44,6 +45,7 @@ pub const Policy = struct {
     shadow_tree: ?shadow.TreeMode = null,
     shadow_private: [max_private][]const u8 = undefined,
     shadow_private_len: usize = 0,
+    cache: cache_gc.Flags = .{},
 
     pub fn invalidate(self: *const Policy) void {
         if (self.find_session) |session| session.invalidate();
@@ -145,7 +147,7 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const dir: []const u8 = args[i];
             if (dir.len == 0) return null;
             policy.shadow_root = dir;
-        } else if (std.mem.eql(u8, arg, "--shadow-tree")) {
+        } else if (policy.cache.take(args, &i) orelse return null) {} else if (std.mem.eql(u8, arg, "--shadow-tree")) {
             if (policy.shadow_tree != null or i + 1 >= args.len) return null;
             i += 1;
             policy.shadow_tree = parseTree(args[i]) orelse return null;
