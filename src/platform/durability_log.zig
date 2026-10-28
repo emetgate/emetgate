@@ -180,12 +180,19 @@ fn undo(io: std.Io, op: Op) void {
         .created => cwd.deleteFile(io, op.path) catch {},
         .removed => cwd.writeFile(io, .{ .sub_path = op.path, .data = op.saved.? }) catch {},
         .renamed => {
-            std.Io.Dir.renameAbsolute(op.path, op.from.?, io) catch return;
+            if (occupied(io, op.from.?)) {
+                cwd.deleteFile(io, op.path) catch return;
+            } else std.Io.Dir.renameAbsolute(op.path, op.from.?, io) catch return;
             if (op.saved) |bytes| cwd.writeFile(io, .{ .sub_path = op.path, .data = bytes }) catch {};
         },
         .made_dir => cwd.deleteDir(io, op.path) catch {},
         .removed_dir => cwd.createDir(io, op.path, .default_dir) catch {},
     }
+}
+
+fn occupied(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
 }
 
 fn sameDir(a: []const u8, b: []const u8) bool {

@@ -140,7 +140,7 @@
       "id": "SH1-kept-key-on-plain-name-accepted",
       "file": "src/engine/rename.zig",
       "from": "        if (!leaf.shorthand) return error.ShorthandReference;\n",
-      "to": "",
+      "to": "        if (!leaf.shorthand and false) return error.ShorthandReference;\n",
       "kills": [
         "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused",
         "red team rename: a shorthand property location and a refused rename info are both refused"
@@ -1835,7 +1835,7 @@
       "from": "        try grantLowIntegrityWrite(options.shadow_abs);\n",
       "to": "",
       "kills": [
-        "redteam sandbox: a passing test command cannot write outside the shadow, and only the target is committed"
+        "redteam sandbox: a failing test command cannot leave writes behind outside the shadow"
       ]
     },
     {
@@ -1990,10 +1990,12 @@
     },
     {
       "id": "NS8-insert-fused-statement-accepted",
+      "expect_status": "survived",
+      "note": "equivalent: insert runs expectSameShape after expectSoleDeclaration, and a statement fused across the slot start changes the tree shape outside the slot, so the fused body is refused with BodyEscape either way; JS9 is the same pair seen from the other side",
       "file": "src/engine/cas.zig",
       "from": "        if (node.startByte() < slot.start and node.endByte() > slot.start) return error.BodyEscape;\n",
       "to": "",
-      "kills": [
+      "filter": [
         "insert refuses a body that fuses with the last statement of the file"
       ]
     },
@@ -2891,8 +2893,9 @@
       "filter": [
         "no_literal"
       ],
-      "expect_status": "survived",
-      "note": "equivalent in the ECMA grammars: the only other node with key and value fields is pair_pattern, whose value is a pattern and can never be a literal; kept so a language added later whose grammar reuses key/value fields elsewhere is still limited to object properties"
+      "kills": [
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
+      ]
     },
     {
       "id": "ST1-scan-tool-cap-removed",
@@ -10802,7 +10805,8 @@
       "from": "    _ = try private.need(&.{ source, \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-q\", \"-a\", prefix });\n",
       "to": "    _ = try private.need(&.{ if (false) source else \"--no-pager\", \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-q\", \"-a\", prefix });\n",
       "kills": [
-        "commit tree: an update of the store takes attributes from HEAD, not from the working tree"
+        "commit tree: an update of the store takes attributes from HEAD, not from the working tree",
+        "commit tree: the first build of the store takes attributes from HEAD, not from the working tree"
       ]
     },
     {
@@ -14389,7 +14393,7 @@
       "id": "FE4-source-line-range-refused",
       "file": "src/protocol/handlers.zig",
       "from": "        if (lang_registry.forPath(file) != null or absentHash(item) or !hasRegion(item)) return .text;",
-      "to": "        if (absentHash(item) or !hasRegion(item)) return .text;",
+      "to": "        if ((lang_registry.forPath(file) != null and false) or absentHash(item) or !hasRegion(item)) return .text;",
       "kills": [
         "forgiving edits: a kind doc line range on a JavaScript file goes through the gate and is written",
         "commit tree: a doc edit of a source file inside a committing batch goes through the gate and commits"
@@ -14499,10 +14503,13 @@
     },
     {
       "id": "JS9-member-insert-shape-start",
+      "expect_status": "survived",
+      "note": "equivalent: a top-level insert that changes the tree shape outside its slot fuses a statement across the slot start or leaves a statement in the slot that runs past it, and topLevelStatementsIn refuses both with BodyEscape before the shape check runs; NS8 is the same pair seen from the other side",
       "file": "src/engine/cas.zig",
       "from": "    try expectSameShape(base.tree, next.tree, end, region);",
       "to": "",
-      "kills": [
+      "filter": [
+        "insert refuses a body that fuses with the last statement of the file",
         "a member is inserted after the last member of its class and nested properties keep their blank lines"
       ]
     },
@@ -14722,7 +14729,7 @@
       "id": "EG6-explore-callers-none-not-said",
       "file": "src/protocol/map_tools.zig",
       "from": "    if (listed == 0) try w.writeAll(\" none\");",
-      "to": "",
+      "to": "    if (listed == 0 and false) try w.writeAll(\" none\");",
       "kills": [
         "map tools: a function nobody calls is graphed with no callers and no impact"
       ]
@@ -14806,7 +14813,7 @@
       "id": "DG5-no-cap",
       "file": "src/protocol/output_digest.zig",
       "from": "        if (used + need > limit) break;\n",
-      "to": "",
+      "to": "        if (used + need > limit and false) break;\n",
       "kills": [
         "a flood of distinct failures stays under the cap and counts the failures it left out",
         "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
@@ -14816,7 +14823,7 @@
       "id": "DG6-more-failures-not-counted",
       "file": "src/protocol/output_digest.zig",
       "from": "        if (entry.head) more += 1;\n",
-      "to": "",
+      "to": "        if (entry.head and false) more += 1;\n",
       "kills": [
         "a flood of distinct failures stays under the cap and counts the failures it left out"
       ]
@@ -14949,7 +14956,7 @@
       "id": "DOCF5-detail-full-still-folds",
       "file": "src/protocol/handlers.zig",
       "from": "        if (self.detail == .full) return null;\n",
-      "to": "",
+      "to": "        if (self.detail == .full and false) return null;\n",
       "kills": [
         "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
       ]
@@ -15275,7 +15282,7 @@
       "id": "RR3-uncovered-export-accepted",
       "file": "src/platform/rename_require.zig",
       "from": "        if (!covered(renamed, leaf.span)) return false;\n",
-      "to": "",
+      "to": "        if (!covered(renamed, leaf.span) and false) return false;\n",
       "kills": [
         "a declaring file exports the name as a property only when every occurrence is renamed and one is a key"
       ]
@@ -15403,7 +15410,7 @@
       "id": "RT2-empty-allowlist-no-hint",
       "file": "src/protocol/run_tool.zig",
       "from": "        try js.write(empty_fix);",
-      "to": "        try js.write(toolchain_fix);",
+      "to": "        try js.write(if (empty_fix.len == 0) toolchain_fix else toolchain_fix);",
       "kills": [
         "run tool: an empty allowlist says how to get a test command and that toolchain commands still run"
       ]
@@ -15693,7 +15700,7 @@
       "id": "L5D-local-command-keeps-slashes",
       "file": "src/platform/run_command.zig",
       "from": "    std.mem.replaceScalar(u8, owned[start..end], '/', '\\\\');",
-      "to": "",
+      "to": "    std.mem.replaceScalar(u8, owned[start..end], '/', '/');",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15765,7 +15772,7 @@
       "id": "L5L-nested-python-imports-skipped",
       "file": "src/engine/modules.zig",
       "from": "                try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });",
-      "to": "",
+      "to": "                if (scoped and false) try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });",
       "kills": [
         "rename facts: a Python import nested in if, try, def or a method is renamed with the function"
       ]
@@ -15801,7 +15808,7 @@
       "id": "L5P-python-roots-ambiguity-ignored",
       "file": "src/platform/fact_modules.zig",
       "from": "                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target)) return .unindexed;",
-      "to": "",
+      "to": "                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target) and false) return .unindexed;",
       "kills": [
         "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
       ]
@@ -15810,7 +15817,7 @@
       "id": "L5Q-script-dir-not-a-root",
       "file": "src/platform/fact_modules.zig",
       "from": "        const roots = [_][]const u8{ self.scriptRoot(importer_dir), \"\", python_source_root };",
-      "to": "        const roots = [_][]const u8{ \"\", python_source_root };",
+      "to": "        const roots = [_][]const u8{ importer_dir[0..0], \"\", python_source_root };",
       "kills": [
         "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
       ]
@@ -15819,7 +15826,7 @@
       "id": "L5R-package-dir-is-script-root",
       "file": "src/platform/fact_modules.zig",
       "from": "            if (!lookup.has(init)) return dir;",
-      "to": "            return dir;",
+      "to": "            if (!lookup.has(init) or true) return dir;",
       "kills": [
         "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
       ]
@@ -15902,7 +15909,7 @@
       "id": "L6A-alpha-renamed-members-not-apart",
       "file": "src/engine/alpha.zig",
       "from": "            const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()));",
-      "to": "            const renamed = listed;",
+      "to": "            const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()) and false);",
       "kills": [
         "rename: renaming one of two same-named properties keeps the other apart in the alpha hash",
         "rename facts: same-named Python methods of two classes on one line are told apart by their class",

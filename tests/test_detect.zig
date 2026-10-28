@@ -66,6 +66,7 @@ test "test detection: a dotnet solution, or the one test project in a subfolder,
     try expectDetected(null, &.{.{ "App/App.csproj", "" }});
     try expectDetected(null, &.{ .{ "A.Tests/A.Tests.csproj", "" }, .{ "B.Tests/B.Tests.csproj", "" } });
     try expectDetected(null, &.{.{ "App/bin/Debug/X.Tests.csproj", "" }});
+    try expectDetected(null, &.{.{ "bin/X.Tests.csproj", "" }});
     try expectDetected(null, &.{.{ "a/b/c/Deep.Tests.csproj", "" }});
 }
 
