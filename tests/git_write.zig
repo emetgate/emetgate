@@ -523,3 +523,61 @@ test "git parity: stash list and show, branch rename and delete, and amend run t
     defer amend.deinit();
     try expectOk(&amend);
 }
+
+fn expectNoWorkspace(repo: *Repo, args: []const []const u8) !void {
+    const listing = try repo.git(args);
+    defer gpa.free(listing);
+    if (std.ascii.indexOfIgnoreCase(listing, ".emetgate") != null) {
+        std.debug.print("workspace picked up: {s}\n", .{listing});
+        return error.TestWorkspacePickedUp;
+    }
+}
+
+test "git parity: add, commit -a and stash never pick up or remove .emetgate" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("a.txt", "one\n");
+    try repo.writeFile(".gitignore", "*.log\n");
+    try repo.commitAll("init");
+    try repo.tmp.dir.createDirPath(testing.io, "repo/.emetgate");
+    try repo.writeFile(".emetgate/keep.txt", "state");
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var bare = try call(runtime, repo.root_abs, .{ .args = .{"add"} });
+    defer bare.deinit();
+    try expectOutputHas(&bare, "Nothing specified");
+    try repo.writeFile("b.txt", "two\n");
+    for ([_][]const []const u8{ &.{ "add", "-A" }, &.{ "add", "." }, &.{ "add", "-f", "." }, &.{ "add", "-Af" }, &.{ "add", "-u" } }) |args| {
+        var added = try call(runtime, repo.root_abs, .{ .args = args });
+        defer added.deinit();
+        try expectOk(&added);
+        try expectNoWorkspace(&repo, &.{ "ls-files", "--cached" });
+    }
+    var commit = try call(runtime, repo.root_abs, .{ .args = .{ "commit", "-m", "two" } });
+    defer commit.deinit();
+    try expectOk(&commit);
+    try repo.writeFile("a.txt", "changed\n");
+    var commit_all = try call(runtime, repo.root_abs, .{ .args = .{ "commit", "-a", "-m", "three" } });
+    defer commit_all.deinit();
+    try expectOk(&commit_all);
+    try expectNoWorkspace(&repo, &.{ "ls-tree", "-r", "--name-only", "HEAD" });
+
+    try repo.writeFile("c.txt", "untracked\n");
+    try repo.writeFile("d.log", "ignored\n");
+    for ([_][]const u8{ "-u", "--all" }) |flag| {
+        var stash = try call(runtime, repo.root_abs, .{ .args = .{ "stash", flag } });
+        defer stash.deinit();
+        try expectOk(&stash);
+        try testing.expect(exists(&repo, ".emetgate/keep.txt"));
+        try testing.expect(!exists(&repo, "c.txt"));
+        try expectNoWorkspace(&repo, &.{ "show", "--name-only", "--format=", "stash@{0}^3" });
+        var pop = try call(runtime, repo.root_abs, .{ .args = .{ "stash", "pop" } });
+        defer pop.deinit();
+        try expectOk(&pop);
+        try testing.expect(exists(&repo, "c.txt"));
+    }
+    try testing.expect(exists(&repo, "d.log"));
+    try expectNoWorkspace(&repo, &.{ "ls-files", "--cached" });
+}

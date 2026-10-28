@@ -89,6 +89,12 @@ fn words(comptime text: []const u8) []const []const u8 {
 
 const Paths = enum { none, all, clone, worktree, submodule, remote, first_remote, config };
 
+const Keep = struct {
+    scope: []const u8,
+    action: ?[]const u8 = null,
+    whole_tree: []const []const u8 = &.{},
+};
+
 const Spec = struct {
     sub: []const u8,
     flags: []const Flag,
@@ -101,7 +107,7 @@ const Spec = struct {
     lossy_actions: []const []const u8 = &.{},
     lead: []const []const u8 = &.{},
     safe_with: []const []const u8 = &.{},
-    keep_workspace: bool = false,
+    keep_workspace: ?Keep = null,
     paths: Paths = .none,
 };
 
@@ -114,8 +120,8 @@ const write_specs = [_]Spec{
     .{ .sub = "switch", .flags = fl("-c --create -d --detach -t --track --no-track --orphan -m --merge --guess --no-guess -C! --force-create! -f! --force! --discard-changes!") },
     .{ .sub = "checkout", .flags = fl("-b -t --track --no-track --detach -m --merge --orphan --ours --theirs -B! -f! --force!") },
     .{ .sub = "tag", .flags = fl("-a --annotate -m= --message= -d --delete -l --list -n --contains --no-contains --points-at --merged --no-merged --sort= --format= -f! --force!") },
-    .{ .sub = "stash", .flags = fl("-m= --message= -u --include-untracked -a --all -k --keep-index --no-keep-index -S --staged --index --stat -p --patch"), .actions = words("push save list show pop apply branch"), .lossy_actions = words("drop clear") },
-    .{ .sub = "add", .flags = fl("-A --all -u --update -N --intent-to-add -f --force --renormalize -v -n --dry-run --ignore-errors --sparse") },
+    .{ .sub = "stash", .flags = fl("-m= --message= -u --include-untracked -a --all -k --keep-index --no-keep-index -S --staged --index --stat -p --patch"), .actions = words("push list show pop apply branch"), .lossy_actions = words("drop clear"), .keep_workspace = .{ .scope = ":/", .action = "push" } },
+    .{ .sub = "add", .flags = fl("-A --all -u --update -N --intent-to-add -f --force --renormalize -v -n --dry-run --ignore-errors --sparse"), .keep_workspace = .{ .scope = ":/", .whole_tree = words("-A --all -u --update") } },
     .{ .sub = "rm", .flags = fl("--cached -r -n --dry-run --ignore-unmatch -f! --force!") },
     .{ .sub = "mv", .flags = fl("-k -n --dry-run -v -f! --force!") },
     .{ .sub = "commit", .flags = fl("-m= --message= -F@ --file@ -a --all --amend --no-edit --allow-empty --allow-empty-message --author= --date= -s --signoff -o --only -i --include --fixup= --squash= -C= --reuse-message= --trailer= --reset-author --cleanup= --dry-run --short -v --verbose") },
@@ -132,7 +138,7 @@ const write_specs = [_]Spec{
     .{ .sub = "clone", .network = true, .paths = .clone, .flags = fl("-b= --branch= --depth= --shallow-since= --single-branch --no-single-branch --no-tags --recurse-submodules --shallow-submodules --no-shallow-submodules -n --no-checkout --bare --mirror -o= --origin= --filter= --sparse -v -j= --jobs=") },
     .{ .sub = "remote", .network = true, .paths = .remote, .flags = fl("-v --verbose -f -t= -m= --tags --no-tags --push --add --delete -d --all -a --auto -n --dry-run -p --prune"), .actions = words("add rename set-url get-url set-head set-branches show prune update"), .lossy_actions = words("remove rm") },
     .{ .sub = "config", .paths = .config, .free_first = true, .flags = fl("--local --get< --get-all< --get-regexp< -l< --list< --unset% --unset-all% --add> --replace-all> --show-origin --show-scope --name-only --type= --bool --int --bool-or-int --path --default= -z --null --all --regexp --value= --fixed-value") },
-    .{ .sub = "clean", .keep_workspace = true, .safe_with = words("-n --dry-run"), .flags = fl("-n --dry-run -d -x -X -e= --exclude= -f! --force!") },
+    .{ .sub = "clean", .keep_workspace = .{ .scope = "." }, .safe_with = words("-n --dry-run"), .flags = fl("-n --dry-run -d -x -X -e= --exclude= -f! --force!") },
     .{ .sub = "worktree", .paths = .worktree, .flags = fl("-b= -B=! --detach -d --checkout --no-checkout --lock --reason= --track --no-track --guess-remote --no-guess-remote --orphan --porcelain -v --verbose -z --expire= -n --dry-run -f! --force!"), .actions = words("add list lock unlock move prune repair"), .lossy_actions = words("remove") },
     .{ .sub = "submodule", .network = true, .paths = .submodule, .flags = fl("--init --recursive --remote --no-fetch -N --checkout --rebase --merge --depth= --recommend-shallow --no-recommend-shallow -b= --branch= --name= --cached --files --all --single-branch -j= --jobs= --default -d -f! --force!"), .actions = words("add status init update summary sync set-branch set-url absorbgitdirs"), .lossy_actions = words("deinit") },
     .{ .sub = "apply", .paths = .all, .flags = fl("--check --stat --numstat --summary --index --cached -3 --3way -R --reverse -p= -C= --reject --whitespace= --ignore-space-change --ignore-whitespace --recount --unidiff-zero --directory= --exclude= --include= -v --verbose --allow-empty -N --intent-to-add") },
@@ -166,7 +172,7 @@ const all_specs = write_specs ++ read_specs;
 const config_keys = words("user.name user.email core.autocrlf core.eol core.safecrlf core.ignorecase core.filemode core.quotepath core.whitespace init.defaultbranch pull.rebase pull.ff push.default push.autosetupremote push.followtags fetch.prune fetch.prunetags merge.ff merge.conflictstyle rebase.autostash rebase.autosquash rebase.updaterefs rerere.enabled rerere.autoupdate diff.renames diff.algorithm status.showuntrackedfiles tag.sort branch.sort log.date commit.cleanup");
 const config_sub_keys = words("branch.remote branch.merge branch.rebase branch.pushremote branch.description remote.url remote.pushurl remote.fetch remote.push remote.prune remote.tagopt");
 const config_actions = words("get set unset list");
-const workspace_exclude = ":(exclude,top)" ++ shadow.workspace_dir;
+const workspace_exclude = ":(exclude,icase)" ++ shadow.workspace_dir;
 const remote_schemes = words("https:// http:// ssh:// git:// git+ssh:// ssh+git://");
 
 const prefix = [_][]const u8{
@@ -617,11 +623,28 @@ fn fullArgv(arena: Allocator, git: []const u8, lead: []const []const u8, ok: *co
         try full.append(arena, "HEAD");
         try full.appendSlice(arena, args[at..]);
     } else try full.appendSlice(arena, args[1..]);
-    if (ok.spec.keep_workspace) {
+    if (ok.spec.keep_workspace) |keep| if (workspacePaths(keep, ok, args)) |paths| {
         if (ok.dashdash == null) try full.append(arena, "--");
+        if (paths == 0) try full.append(arena, keep.scope);
         try full.append(arena, workspace_exclude);
-    }
+    };
     return full.items;
+}
+
+fn workspacePaths(keep: Keep, ok: *const Ok, args: []const []const u8) ?usize {
+    var paths = ok.npos;
+    if (keep.action) |action| if (ok.npos_before > 0) {
+        if (!std.mem.eql(u8, ok.pos[0], action)) return null;
+        paths -= 1;
+    };
+    if (paths != 0 or keep.whole_tree.len == 0) return paths;
+    for (args[1 .. ok.dashdash orelse args.len]) |arg| {
+        if (listed(keep.whole_tree, arg)) return 0;
+        if (arg.len > 2 and arg[0] == '-' and arg[1] != '-') for (keep.whole_tree) |flag| {
+            if (flag.len == 2 and std.mem.indexOfScalar(u8, arg[1..], flag[1]) != null) return 0;
+        };
+    }
+    return null;
 }
 
 const Ran = struct {

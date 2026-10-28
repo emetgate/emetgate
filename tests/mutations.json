@@ -16068,7 +16068,8 @@
       "from": "        try full.append(arena, workspace_exclude);",
       "to": "        _ = workspace_exclude;",
       "kills": [
-        "git parity: clean previews freely and deletes only with force"
+        "git parity: clean previews freely and deletes only with force",
+        "git parity: add, commit -a and stash never pick up or remove .emetgate"
       ]
     },
     {
@@ -16096,6 +16097,24 @@
       "to": "    if (true or try insideRoot(arena, root_abs, localPath(text))) return null;",
       "kills": [
         "git write keeps paths, clone targets, local remotes and config keys inside the root"
+      ]
+    },
+    {
+      "id": "GW13-add-all-picks-workspace",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (listed(keep.whole_tree, arg)) return 0;",
+      "to": "        if (listed(keep.whole_tree, arg)) return null;",
+      "kills": [
+        "git parity: add, commit -a and stash never pick up or remove .emetgate"
+      ]
+    },
+    {
+      "id": "GW14-stash-all-removes-workspace",
+      "file": "src/protocol/git_write.zig",
+      "from": ".lossy_actions = words(\"drop clear\"), .keep_workspace = .{ .scope = \":/\", .action = \"push\" } },",
+      "to": ".lossy_actions = words(\"drop clear\") },",
+      "kills": [
+        "git parity: add, commit -a and stash never pick up or remove .emetgate"
       ]
     }
   ]
