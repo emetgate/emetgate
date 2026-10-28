@@ -12100,17 +12100,8 @@
     {
       "id": "JF1-root-prefix-not-compared",
       "file": "src/platform/repo.zig",
-      "from": "    if (target.len < root_nt.len or !sameWideIgnoreCase(target[0..root_nt.len], root_nt)) return null;",
-      "to": "    if (target.len < root_nt.len) return null;",
-      "kills": [
-        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
-      ]
-    },
-    {
-      "id": "JF2-cached-root-name-reused-for-another-root",
-      "file": "src/platform/repo.zig",
-      "from": "    if (names.root_len == root.len and std.mem.eql(u8, names.root[0..names.root_len], root)) {",
-      "to": "    if (names.root_len != 0) {",
+      "from": "    if (normalized.len <= root.len or !std.ascii.startsWithIgnoreCase(normalized, root) or normalized[root.len] != '\\\\') {",
+      "to": "    if (normalized.len <= root.len or normalized[root.len] != '\\\\') {",
       "kills": [
         "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
       ]
@@ -12209,8 +12200,8 @@
     {
       "id": "LK5-jail-name-waits-in-std",
       "file": "src/platform/repo.zig",
-      "from": "    return exe_path.finalName(buf, path);",
-      "to": "    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .allow_directory = true }) catch return null;\n    defer windows.CloseHandle(file.handle);\n    return std.Io.Threaded.GetFinalPathNameByHandle(file.handle, .{ .volume_name = .Nt }, buf) catch null;",
+      "from": "    const opened = try open_nowait.realPath(gpa, path);",
+      "to": "    const opened = try std.Io.Dir.cwd().realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, gpa);",
       "kills": [
         "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms"
       ]
