@@ -14,7 +14,7 @@ const poll_ms: u32 = 25;
 
 pub const Error = error{ CacheBusy, LeaseFailed, NameTooLong, InvalidWtf8, Unsupported };
 
-pub const test_data_dir_name = "emetgate-test";
+pub const test_data_dir_relative = "zig-out\\test-appdata\\emetgate-test";
 
 pub fn defaultDataDir(gpa: Allocator) ![]u8 {
     if (builtin.is_test) return testDataDir(gpa);
@@ -29,8 +29,14 @@ pub fn testDataDir(gpa: Allocator) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const temp = (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("TEMP"))) orelse (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("TMP"))) orelse return error.TempUnavailable;
-    return std.fmt.allocPrint(gpa, "{s}\\{s}-p{d}", .{ try longForm(arena, temp), test_data_dir_name, processId() });
+    return std.fmt.allocPrint(gpa, "{s}\\{s}-p{d}", .{ try longForm(arena, try currentDir(arena)), test_data_dir_relative, processId() });
+}
+
+fn currentDir(arena: Allocator) ![]const u8 {
+    var buf: [std.fs.max_path_bytes:0]u16 = undefined;
+    const len = win.GetCurrentDirectoryW(buf.len, &buf);
+    if (len == 0 or len >= buf.len) return error.CurrentDirUnavailable;
+    return std.unicode.wtf16LeToWtf8Alloc(arena, buf[0..len]);
 }
 
 pub fn longForm(arena: Allocator, path: []const u8) ![]const u8 {
@@ -230,6 +236,7 @@ const win = struct {
     };
 
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetCurrentDirectoryW(size: windows.DWORD, buffer: [*]u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLongPathNameW(short: [*:0]const u16, long: ?[*]u16, size: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn MoveFileExW(from: [*:0]const u16, to: [*:0]const u16, flags: windows.DWORD) callconv(.winapi) windows.BOOL;
@@ -249,7 +256,7 @@ const win = struct {
     ) callconv(.winapi) windows.HANDLE;
 };
 
-test "a test build resolves every cache path to a per-run temp dir outside the real data dir" {
+test "a test build resolves every cache path to a per-run dir under the working directory, outside the real data dir" {
     const gpa = std.testing.allocator;
     const isolated = try testDataDir(gpa);
     defer gpa.free(isolated);

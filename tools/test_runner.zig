@@ -386,20 +386,15 @@ pub fn main(init: std.process.Init.Minimal) void {
     const own = redirectAppData(&own_buf);
     const code = run(gpa, init, options);
     if (own) |dir| Io.Dir.cwd().deleteTree(rio, dir) catch {};
-    removeTestDataDir(gpa);
+    removeTestDataDir();
     std.process.exit(code);
 }
 
-fn removeTestDataDir(gpa: std.mem.Allocator) void {
+fn removeTestDataDir() void {
     if (builtin.os.tag != .windows) return;
     if (emetgate_release_leases) |release| release();
-    var temp: [std.fs.max_path_bytes]u16 = undefined;
-    const len = app_data_win.GetEnvironmentVariableW(std.unicode.utf8ToUtf16LeStringLiteral("TEMP"), &temp, @intCast(temp.len));
-    if (len == 0 or len >= temp.len) return;
-    const base = std.unicode.utf16LeToUtf8Alloc(gpa, temp[0..len]) catch return;
-    defer gpa.free(base);
-    const dir = std.fmt.allocPrint(gpa, "{s}\\emetgate-test-p{d}", .{ base, app_data_win.GetCurrentProcessId() }) catch return;
-    defer gpa.free(dir);
+    var buf: [64]u8 = undefined;
+    const dir = std.fmt.bufPrint(&buf, "zig-out\\test-appdata\\emetgate-test-p{d}", .{app_data_win.GetCurrentProcessId()}) catch return;
     Io.Dir.cwd().deleteTree(rio, dir) catch {};
 }
 

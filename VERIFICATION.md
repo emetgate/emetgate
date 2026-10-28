@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2397**
-- Mutations declared in `tests/mutations.json`: **1758**
-  - killed: **1712**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2398**
+- Mutations declared in `tests/mutations.json`: **1759**
+  - killed: **1713**
   - equivalent: **8**
   - defense in depth: **9**
   - open: **4**
@@ -752,7 +752,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1105 mutation(s).
+1106 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1844,6 +1844,7 @@ python tools/verification_page.py --check
 | `SURR3-surrogate-pair-split` | `src/protocol/json_input.zig` | `i += 2 * escape_len;` -> `i += escape_len;` | a valid surrogate pair escape still decodes as the one character it names | killed |
 | `SURR4-hook-bypasses-surrogate-repair` | `src/protocol/prompt_hook.zig` | `const parsed = json_input.parseLeaky(std.json.Value, arena, inp...` -> `const parsed = std.json.parseFromSliceLeaky(std.json.Value, are...` | prompt hook: a prompt with a lone surrogate escape is read, and a /rule in it i... | killed |
 | `SURR5-empty-hook-input-not-named` | `src/protocol/prompt_hook.zig` | `if (std.mem.trim(u8, input, whitespace ++ byte_order_mark).len ...` -> `` | prompt hook: empty input is refused as empty, so the hook still blocks and says... | killed |
+| `LP1-short-temp-kept` | `src/platform/cache_lease.zig` | `if (needed == 0) return path;` -> `if (needed != 0) return path;` | a data dir named through an 8.3 short path resolves to its long name, so the sh... | killed |
 | `GC1-gone-root-not-removed` | `src/platform/cache_gc.zig` | `if (verdict != .gone and !aged and !over)` -> `if (!aged and !over)` | a cache whose recorded repository is gone is removed from every family, whether... | killed |
 | `GC3-age-ignored` | `src/platform/cache_gc.zig` | `const aged = now - last_used > policy.maxAgeNs();` -> `const aged = now - last_used > policy.maxAgeNs() * 1000;` | an entry unused for longer than the age limit is removed, and the limit can be ... | killed |
 | `GC4-lru-newest-first` | `src/platform/cache_gc.zig` | `if (a.last_used != b.last_used) return a.last_used < b.last_use...` -> `if (a.last_used != b.last_used) return a.last_used > b.last_use...` | over the size cap the least recently used entries go first, until the total fits | killed |
@@ -1856,7 +1857,7 @@ python tools/verification_page.py --check
 | `GC11-lease-marker-kept` | `src/platform/cache_lease.zig` | `if (drop_marker or self.created) {` -> `if (drop_marker and self.created) {` | a cache whose recorded repository is gone is removed from every family, whether... | killed |
 | `GC12-background-failure-dropped` | `src/platform/cache_gc.zig` | `noted.store(@intFromError(err), .release);` -> `noted.store(@intFromError(err) & 0, .release);` | an entry the sweep could not remove is reported, not swallowed, and a link targ... | killed |
 | `GC13-zero-cap-accepted` | `src/platform/cache_gc.zig` | `if (value == 0) return null;` -> `` | cache flags parse once each and refuse zero, junk and repeats | killed |
-| `GC14-test-build-uses-real-data-dir` | `src/platform/cache_lease.zig` | `if (builtin.is_test) return testDataDir(gpa);` -> `` | a test build resolves every cache path to a per-run temp dir outside the real d... | killed |
+| `GC14-test-build-uses-real-data-dir` | `src/platform/cache_lease.zig` | `if (builtin.is_test) return testDataDir(gpa);` -> `` | a test build resolves every cache path to a per-run dir under the working direc... | killed |
 | `GC15-in-use-entry-deleted-in-place` | `src/platform/cache_gc.zig` | `cache_lease.moveAside(entry_abs, try std.fmt.bufPrint(&inner_bu...` -> `_ = &inner_buf;     _ = key;     shadow.clearTemp(io, entry_abs...` | an entry with a file held open and no lease survives the age rule and the size ... | killed |
 | `GC16-tombstones-left-behind` | `src/platform/cache_gc.zig` | `for (names.items) \|name\| settleTombstone(io, family, family_a...` -> `_ = report;` | an entry with a file held open and no lease survives the age rule and the size ... | killed |
 | `SL10-sweep-ignores-lease` | `src/platform/shadow_root.zig` | `error.Busy => return,` -> `error.Busy => return shadow.removeWorkspace(io, base_abs, works...` | sweep leaves a stale workspace whose lease a live process holds, and removes it... | killed |

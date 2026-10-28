@@ -16921,7 +16921,7 @@
       "from": "    if (builtin.is_test) return testDataDir(gpa);\n",
       "to": "",
       "kills": [
-        "a test build resolves every cache path to a per-run temp dir outside the real data dir"
+        "a test build resolves every cache path to a per-run dir under the working directory, outside the real data dir"
       ]
     },
     {
