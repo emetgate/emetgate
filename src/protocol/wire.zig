@@ -610,6 +610,11 @@ fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
         try js.write("not run: only non-code files changed");
         return;
     }
+    if (n.baseline.unverified) {
+        try js.objectField("unverified");
+        try js.write(n.baseline.text());
+        return;
+    }
     if (n.baseline.failing) {
         try js.objectField("baseline_failing");
         try js.write(true);

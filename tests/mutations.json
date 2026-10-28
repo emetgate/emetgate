@@ -16270,6 +16270,105 @@
       "kills": [
         "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
       ]
+    },
+    {
+      "id": "SCR1-restricted-run-keeps-event-log",
+      "file": "src/platform/sandbox.zig",
+      "from": "    if (command.backend != .user) for (restricted_flags) |flag| {",
+      "to": "    if (false) for (restricted_flags) |flag| {",
+      "kills": [
+        "a restricted command turns off the Windows event log provider it cannot write, an unrestricted one keeps it"
+      ]
+    },
+    {
+      "id": "SCR2-python-always-pytest",
+      "file": "src/platform/test_command.zig",
+      "from": "    const pytest = (listed orelse false) or try declaresPytest(gpa, io, dir) or try hasPytest(gpa, io, dir);",
+      "to": "    const pytest = true;",
+      "kills": [
+        "test detection: a unittest project picks unittest discover with the right start dir, venv or not"
+      ]
+    },
+    {
+      "id": "SCR3-pytest-ignores-interpreter",
+      "file": "src/platform/test_command.zig",
+      "from": "    const home = (try pathInterpreter(arena, io)) orelse return false;",
+      "to": "    const home = (try pathInterpreter(arena, io)) orelse return true;",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "SCR4-unittest-misses-plain-tests-dir",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (sub.access(io, \"__init__.py\", .{})) |_| return unittest_run else |_| return candidate.run;",
+      "to": "        return unittest_run;",
+      "kills": [
+        "test detection: a unittest project picks unittest discover with the right start dir, venv or not"
+      ]
+    },
+    {
+      "id": "SCR5-shim-not-a-stop",
+      "file": "src/platform/test_command.zig",
+      "from": "        for ([_][]const u8{ \"python.exe\", \"python.bat\", \"python.cmd\" }, 0..) |name, i| {",
+      "to": "        for ([_][]const u8{\"python.exe\"}, 0..) |name, i| {",
+      "kills": [
+        "test detection: pytest is chosen only when the interpreter that runs the tests can import it"
+      ]
+    },
+    {
+      "id": "SCR6-venv-ignores-system-site",
+      "file": "src/platform/test_command.zig",
+      "from": "    return if (shared) home else null;",
+      "to": "    return null;",
+      "kills": [
+        "test detection: pytest is chosen only when the interpreter that runs the tests can import it"
+      ]
+    },
+    {
+      "id": "SCR7-pytest-mention-any-substring",
+      "file": "src/platform/test_command.zig",
+      "from": "            if ((at == 0 or !isNameByte(line[at - 1])) and (end == line.len or !isNameByte(line[end]))) return true;",
+      "to": "            return true;",
+      "kills": [
+        "test detection: a unittest project picks unittest discover with the right start dir, venv or not"
+      ]
+    },
+    {
+      "id": "SCR8-src-layout-not-on-path",
+      "file": "src/platform/runner.zig",
+      "from": "    if (try test_command_mod.pythonPath(arena, io, cwd)) |path| try env.append(arena, path);",
+      "to": "",
+      "kills": [
+        "a gated command in a Python src layout imports the src packages through PYTHONPATH"
+      ]
+    },
+    {
+      "id": "SCR9-src-layout-any-dir",
+      "file": "src/platform/test_command.zig",
+      "from": "            .file => if (std.ascii.endsWithIgnoreCase(entry.name, \".py\")) return true,",
+      "to": "            .file => return true,",
+      "kills": [
+        "test detection: a src layout is put on PYTHONPATH for the gated run, and nothing else is"
+      ]
+    },
+    {
+      "id": "SCR10-env-error-taken-as-failing-baseline",
+      "file": "src/platform/baseline.zig",
+      "from": "        if (test_outcome.envError(report)) |reason| {",
+      "to": "        if (@as(?[]const u8, null)) |reason| {",
+      "kills": [
+        "test detection: a test command that cannot start is reported unverified, never as a failing baseline"
+      ]
+    },
+    {
+      "id": "SCR11-unittest-empty-run-fails",
+      "file": "src/platform/test_outcome.zig",
+      "from": "\"collected 0 items\", \"NO TESTS RAN\" };",
+      "to": "\"collected 0 items\" };",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not"
+      ]
     }
   ]
 }
