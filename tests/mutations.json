@@ -15263,8 +15263,8 @@
     {
       "id": "GW1-hard-reset-not-lossy",
       "file": "src/protocol/git_write.zig",
-      "from": "x(\"--hard\")",
-      "to": ".{ .name = \"--hard\" }",
+      "from": "fl(\"--soft --mixed -N --keep --merge --hard!\")",
+      "to": "fl(\"--soft --mixed -N --keep --merge --hard\")",
       "kills": [
         "git write accepts the local workflow and marks only work-losing forms",
         "git write refuses a hard reset that would lose work until force is true"
@@ -15273,8 +15273,8 @@
     {
       "id": "GW2-restore-worktree-not-lossy",
       "file": "src/protocol/git_write.zig",
-      "from": "    if (std.mem.eql(u8, spec.sub, \"restore\") and !(staged and !worktree)) lossy = true;",
-      "to": "    if (std.mem.eql(u8, spec.sub, \"restore\") and false and !(staged and !worktree)) lossy = true;",
+      "from": "    if (std.mem.eql(u8, spec.sub, \"restore\") and !(walk.staged and !walk.worktree)) walk.ok.lossy = true;",
+      "to": "    if (std.mem.eql(u8, spec.sub, \"restore\") and false and !(walk.staged and !walk.worktree)) walk.ok.lossy = true;",
       "kills": [
         "git write accepts the local workflow and marks only work-losing forms"
       ]
@@ -15282,8 +15282,8 @@
     {
       "id": "GW3-push-plus-refspec-not-lossy",
       "file": "src/protocol/git_write.zig",
-      "from": "        if (spec.network and (arg[0] == '+' or arg[0] == ':')) lossy = true;",
-      "to": "        {}",
+      "from": "        if (before and spec.network and (arg[0] == '+' or arg[0] == ':')) walk.ok.lossy = true;",
+      "to": "        if (before and spec.network and false and (arg[0] == '+' or arg[0] == ':')) walk.ok.lossy = true;",
       "kills": [
         "git write accepts the local workflow and marks only work-losing forms"
       ]
@@ -15300,8 +15300,8 @@
     {
       "id": "GW5-unknown-flag-passed-to-git",
       "file": "src/protocol/git_write.zig",
-      "from": "        const found = findFlag(spec, arg) orelse return .{ .refused = .{ .reason = \"unsupported_flag\", .arg = arg } };",
-      "to": "        const found = findFlag(spec, arg) orelse continue;",
+      "from": "            return refuse(\"unsupported_flag\", arg);",
+      "to": "            continue;",
       "kills": [
         "git write refuses execution and config flags and unknown subcommands",
         "git write refuses a flag that runs a program and a subcommand outside the list"
@@ -16031,6 +16031,71 @@
       "to": "",
       "kills": [
         "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
+      ]
+    },
+    {
+      "id": "GW6-dry-run-guard-ignored",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (!walk.safe) walk.ok.lossy = true;",
+      "to": "    if (false) walk.ok.lossy = true;",
+      "kills": [
+        "git write reads short flag clusters, attached values and counts flag by flag",
+        "git parity: clean previews freely and deletes only with force"
+      ]
+    },
+    {
+      "id": "GW7-ext-url-accepted",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.indexOf(u8, text, \"::\") != null) return .{ .reason = \"unsupported_url\", .arg = text };",
+      "to": "    if (false) return .{ .reason = \"unsupported_url\", .arg = text };",
+      "kills": [
+        "git write keeps paths, clone targets, local remotes and config keys inside the root"
+      ]
+    },
+    {
+      "id": "GW8-config-key-unchecked",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (!configKeyAllowed(name)) return .{ .reason = \"unsupported_config_key\", .arg = name };",
+      "to": "    if (false) return .{ .reason = \"unsupported_config_key\", .arg = name };",
+      "kills": [
+        "git write keeps paths, clone targets, local remotes and config keys inside the root",
+        "git parity: config writes only listed keys and reads any key"
+      ]
+    },
+    {
+      "id": "GW9-clean-removes-workspace",
+      "file": "src/protocol/git_write.zig",
+      "from": "        try full.append(arena, workspace_exclude);",
+      "to": "        _ = workspace_exclude;",
+      "kills": [
+        "git parity: clean previews freely and deletes only with force"
+      ]
+    },
+    {
+      "id": "GW10-read-tool-runs-changing-form",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (ok.lossy) {",
+      "to": "    if (false) {",
+      "kills": [
+        "git parity: emetgate_git runs read-only subcommands from args and refuses changing forms"
+      ]
+    },
+    {
+      "id": "GW11-merge-strategy-unchecked",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (flag.strategy and !listed(strategies, value)) return refuse(\"unsupported_value\", value);",
+      "to": "        if (false and flag.strategy and !listed(strategies, value)) return refuse(\"unsupported_value\", value);",
+      "kills": [
+        "git write marks the new destructive forms as work-losing"
+      ]
+    },
+    {
+      "id": "GW12-local-remote-outside-root",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (try insideRoot(arena, root_abs, localPath(text))) return null;",
+      "to": "    if (true or try insideRoot(arena, root_abs, localPath(text))) return null;",
+      "kills": [
+        "git write keeps paths, clone targets, local remotes and config keys inside the root"
       ]
     }
   ]
