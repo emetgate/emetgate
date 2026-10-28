@@ -1,6 +1,97 @@
 {
   "mutations": [
     {
+      "id": "SO1-symbols-over-budget-not-outlined",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (lines.written().len + declared.written().len > budget) return writeSymbolsOutline(gpa, writer, file, table, prefix, budget);",
+      "to": "",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "SO2-outline-ignores-budget",
+      "file": "src/protocol/wire.zig",
+      "from": "        if (shown != 0 and text.written().len + line.written().len > budget) break;",
+      "to": "",
+      "kills": [
+        "symbol listings whose outline still exceeds the read budget say how many names were left out and from which line"
+      ]
+    },
+    {
+      "id": "SO3-outline-elided-note-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (shown < groups.count()) {",
+      "to": "    if (false) {",
+      "kills": [
+        "symbol listings whose outline still exceeds the read budget say how many names were left out and from which line"
+      ]
+    },
+    {
+      "id": "SO4-outline-member-count-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "            if (group.rows > 1) try line.writer.print(\" +{d}\", .{group.rows - 1});",
+      "to": "",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "SO5-within-not-filtered",
+      "file": "src/protocol/wire.zig",
+      "from": "    for (table.symbols) |entry| if (refUnder(entry.ref, prefix)) try symbols.append(arena, entry);",
+      "to": "    for (table.symbols) |entry| try symbols.append(arena, entry);",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "SO6-within-miss-not-refused",
+      "file": "src/protocol/handlers.zig",
+      "from": "return error.NoSymbolsWithin;",
+      "to": "{}",
+      "kills": [
+        "symbol listings over the read budget fold members under their class with a count and a within hint"
+      ]
+    },
+    {
+      "id": "WT1-gate-shadow-tracked-only",
+      "file": "src/platform/runner.zig",
+      "from": "        const files = try shadow.workingFiles(gpa, io, root);",
+      "to": "        const files = try shadow.trackedFiles(gpa, io, root);",
+      "kills": [
+        "batch create through the tool: the gate test sees an untracked project file of the working tree"
+      ]
+    },
+    {
+      "id": "WT2-working-listing-without-untracked",
+      "file": "src/platform/shadow.zig",
+      "from": "\"--others\",",
+      "to": "\"--cached\",",
+      "kills": [
+        "batch create through the tool: the gate test sees an untracked project file of the working tree",
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
+    },
+    {
+      "id": "WT3-working-listing-keeps-build-output",
+      "file": "src/platform/shadow.zig",
+      "from": "\"--exclude=bin/\",",
+      "to": "\"--exclude=target/\",",
+      "kills": [
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
+    },
+    {
+      "id": "WT4-working-listing-keeps-ignored",
+      "file": "src/platform/shadow.zig",
+      "from": "\"--exclude-standard\",",
+      "to": "\"--exclude=target/\",",
+      "kills": [
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
+    },
+    {
       "id": "WC1-batch-whole-create-not-recognised",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!symbol_named and (getString(item, \"body\") != null or getString(item, \"content\") != null)) return .text;",
@@ -30,7 +121,7 @@
     {
       "id": "SC1-symbols-never-compact",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table.*);",
+      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);",
       "to": "",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
@@ -15355,10 +15446,19 @@
     {
       "id": "RT2-empty-allowlist-no-hint",
       "file": "src/protocol/run_tool.zig",
-      "from": "        try js.write(empty_allowlist_fix);",
+      "from": "        try js.write(empty_fix);",
       "to": "        try js.write(toolchain_fix);",
       "kills": [
         "run tool: an empty allowlist says how to get a test command and that toolchain commands still run"
+      ]
+    },
+    {
+      "id": "RT3-empty-allowlist-ignores-detection",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        try writeAllowlist(w, allowed, if (policy.detect_test) undetected_fix else empty_allowlist_fix);",
+      "to": "        try writeAllowlist(w, allowed, empty_allowlist_fix);",
+      "kills": [
+        "run tool: with test detection on and no project file yet, an empty call says a project file names the test"
       ]
     },
     {

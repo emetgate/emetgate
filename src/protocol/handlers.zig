@@ -64,7 +64,7 @@ const success = tool_result.success;
 const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
-pub const unverified_note = "none: no test command yet, so this write ran no test; add one (package.json scripts.test, a .csproj/.sln/.slnx, Cargo.toml, go.mod, pyproject.toml, pytest.ini, build.zig) or pass --test; then every write must pass it";
+pub const unverified_note = "none: no test command yet, so this write ran no test; add one (" ++ test_command_mod.markers_hint ++ ") or pass --test; then every write must pass it";
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     wire.clearFix();
@@ -99,7 +99,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     const call = try forgive.normalize(forgiven.allocator(), given_name, given_args);
     const name = call.name;
     const args = call.args;
-    if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
+    if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_skeleton")) return rawCode(gpa, policy, try callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache));
     if (std.mem.eql(u8, name, "emetgate_read_symbol")) return rawCode(gpa, policy, try callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget));
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
@@ -171,13 +171,14 @@ fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
     }, w, &discard.writer);
 }
 
-fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
+fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize) !ToolResult {
     const file = try requireString(args, "file");
     event.label = "symbols";
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSymbols(gpa, io, runtime, root, file, tree_cache, tool_result.wantsFull(args), &buffer.writer) catch |err| {
+    const within = if (args) |a| getString(a, "within") else null;
+    renderSymbols(gpa, io, runtime, root, file, tree_cache, tool_result.wantsFull(args), within, budget, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -202,12 +203,17 @@ fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
     return .{ .place = place, .snapshot = try Snapshot.load(runtime, io, .cwd(), place.abs), .owned = true };
 }
 
-fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, full: bool, w: *Writer) !void {
+fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, full: bool, within: ?[]const u8, budget: usize, w: *Writer) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const prefix: []const []const u8 = if (within) |text| try wire.withinSegments(arena, text) else &.{};
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
-    const table = try loaded.snapshot.symbols();
-    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table.*);
-    try wire.writeSymbols(gpa, w, file, table.*);
+    const table = try wire.symbolsWithin(arena, (try loaded.snapshot.symbols()).*, prefix);
+    if (table.symbols.len + table.declarations.len + table.statements.len == 0 and prefix.len != 0) return error.NoSymbolsWithin;
+    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);
+    try wire.writeSymbols(gpa, w, file, table);
 }
 
 fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {

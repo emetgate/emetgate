@@ -1033,6 +1033,76 @@ test "symbol listings of a large file are compact lines without hashes unless de
     try testing.expect(symbols[0].object.get("hash") != null);
 }
 
+test "symbol listings over the read budget fold members under their class with a count and a within hint" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var source: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer source.deinit();
+    for (0..30) |c| {
+        try source.writer.print("class Container{d} {{\n", .{c});
+        for (0..10) |m| try source.writer.print("  memberWithADescriptiveName{d}() {{ return {d}; }}\n", .{ m, m });
+        try source.writer.writeAll("}\n");
+    }
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "classes.js", .data = source.written() });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "classes.js", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, "emetgate_symbols", .{ .file = path });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(reply.text.len < 8 * 1024);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expect(body.value.object.get("symbols") == null);
+    try testing.expect(body.value.object.get("elided") == null);
+    const outline = body.value.object.get("outline").?.string;
+    try testing.expectEqual(@as(usize, 30), std.mem.count(u8, outline, "\n"));
+    try testing.expect(std.mem.startsWith(u8, outline, "1 class Container0 +10\n13 class Container1 +10\n"));
+    try testing.expect(std.mem.indexOf(u8, body.value.object.get("members").?.string, "within:") != null);
+
+    var inner = try callTool(runtime, "emetgate_symbols", .{ .file = path, .within = "Container3" });
+    defer inner.deinit();
+    var inner_body = try inner.payload();
+    defer inner_body.deinit();
+    const listed = inner_body.value.object.get("symbols").?.array.items;
+    try testing.expectEqual(@as(usize, 10), listed.len);
+    for (listed) |entry| try testing.expect(std.mem.startsWith(u8, entry.object.get("ref").?.string, "Container3."));
+    const declared = inner_body.value.object.get("declarations").?.array.items;
+    try testing.expectEqual(@as(usize, 1), declared.len);
+    try testing.expectEqualStrings("Container3", declared[0].object.get("ref").?.string);
+
+    try expectToolError(runtime, "emetgate_symbols", .{ .file = path, .within = "Container99" }, "NoSymbolsWithin");
+}
+
+test "symbol listings whose outline still exceeds the read budget say how many names were left out and from which line" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var source: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer source.deinit();
+    for (0..600) |i| try source.writer.print("function aFunctionWithAFairlyLongName{d}() {{ return {d}; }}\n", .{ i, i });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "many.js", .data = source.written() });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "many.js", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, "emetgate_symbols", .{ .file = path });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(reply.text.len < 9 * 1024);
+    var body = try reply.payload();
+    defer body.deinit();
+    const outline = body.value.object.get("outline").?.string;
+    const shown = std.mem.count(u8, outline, "\n");
+    try testing.expect(shown > 0 and shown < 600);
+    const elided = body.value.object.get("elided").?.string;
+    const expected = try std.fmt.allocPrint(testing.allocator, "{d} more names ({d} symbols) from line {d} on;", .{ 600 - shown, 600 - shown, shown + 1 });
+    defer testing.allocator.free(expected);
+    try testing.expect(std.mem.startsWith(u8, elided, expected));
+}
+
 test "with raw code on, read replies put a one-line JSON header before the code as plain text" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

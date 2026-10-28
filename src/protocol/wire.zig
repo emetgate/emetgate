@@ -58,7 +58,61 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
 
 pub const compact_symbols_over = 40;
 
-pub fn writeSymbolsCompact(gpa: Allocator, writer: *Writer, file: []const u8, table: symbol.Table) !void {
+pub const symbols_members_hint = "+N counts the symbols nested under a name; within:\"<name>\" lists them, detail:\"full\" lists all";
+
+fn refUnder(ref: symbol.Ref, prefix: []const []const u8) bool {
+    if (prefix.len > ref.container.len + 1) return false;
+    for (prefix, 0..) |segment, i| {
+        const own = if (i < ref.container.len) ref.container[i] else ref.name;
+        if (!std.mem.eql(u8, own, segment)) return false;
+    }
+    return true;
+}
+
+fn refSegment(ref: symbol.Ref, depth: usize) ?[]const u8 {
+    if (depth < ref.container.len) return ref.container[depth];
+    if (depth == ref.container.len) return ref.name;
+    return null;
+}
+
+pub fn withinSegments(arena: Allocator, within: []const u8) ![]const []const u8 {
+    var segments: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, within, '.');
+    while (it.next()) |segment| {
+        if (segment.len == 0) return error.InvalidRef;
+        try segments.append(arena, segment);
+    }
+    return segments.toOwnedSlice(arena);
+}
+
+pub fn symbolsWithin(arena: Allocator, table: symbol.Table, prefix: []const []const u8) !symbol.Table {
+    var symbols: std.ArrayList(symbol.Symbol) = .empty;
+    for (table.symbols) |entry| if (refUnder(entry.ref, prefix)) try symbols.append(arena, entry);
+    var declarations: std.ArrayList(symbol.Declaration) = .empty;
+    for (table.declarations) |entry| if (refUnder(entry.ref, prefix)) try declarations.append(arena, entry);
+    var statements: std.ArrayList(symbol.Statement) = .empty;
+    for (table.statements) |entry| if (refUnder(entry.ref, prefix)) try statements.append(arena, entry);
+    return .{ .arena = table.arena, .symbols = symbols.items, .declarations = declarations.items, .statements = statements.items };
+}
+
+const OutlineRow = struct {
+    line: u32,
+    kind: []const u8,
+    ref: symbol.Ref,
+    ambiguous: bool,
+
+    fn before(_: void, a: OutlineRow, b: OutlineRow) bool {
+        return a.line < b.line;
+    }
+};
+
+const OutlineGroup = struct {
+    line: u32,
+    head: ?usize = null,
+    rows: usize = 0,
+};
+
+pub fn writeSymbolsCompact(gpa: Allocator, writer: *Writer, file: []const u8, table: symbol.Table, prefix: []const []const u8, budget: usize) !void {
     var lines: std.Io.Writer.Allocating = .init(gpa);
     defer lines.deinit();
     for (table.symbols) |entry| {
@@ -69,6 +123,7 @@ pub fn writeSymbolsCompact(gpa: Allocator, writer: *Writer, file: []const u8, ta
     for (table.declarations) |entry| {
         try declared.writer.print("{d} {s} {f}{s}\n", .{ entry.name.startPoint().row + 1, @tagName(entry.kind), entry.ref, if (entry.ambiguous) " ambiguous" else "" });
     }
+    if (lines.written().len + declared.written().len > budget) return writeSymbolsOutline(gpa, writer, file, table, prefix, budget);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
@@ -80,6 +135,68 @@ pub fn writeSymbolsCompact(gpa: Allocator, writer: *Writer, file: []const u8, ta
     if (table.declarations.len != 0) {
         try js.objectField("declarations");
         try js.write(declared.written());
+    }
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+fn writeSymbolsOutline(gpa: Allocator, writer: *Writer, file: []const u8, table: symbol.Table, prefix: []const []const u8, budget: usize) !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var rows: std.ArrayList(OutlineRow) = .empty;
+    for (table.symbols) |entry| try rows.append(arena, .{ .line = entry.node.startPoint().row + 1, .kind = @tagName(entry.kind), .ref = entry.ref, .ambiguous = entry.ambiguous });
+    for (table.declarations) |entry| try rows.append(arena, .{ .line = entry.name.startPoint().row + 1, .kind = @tagName(entry.kind), .ref = entry.ref, .ambiguous = entry.ambiguous });
+    std.sort.block(OutlineRow, rows.items, {}, OutlineRow.before);
+
+    const depth = prefix.len;
+    var groups: std.StringArrayHashMapUnmanaged(OutlineGroup) = .empty;
+    for (rows.items, 0..) |row, i| {
+        const segment = refSegment(row.ref, depth) orelse continue;
+        const slot = try groups.getOrPut(arena, segment);
+        if (!slot.found_existing) slot.value_ptr.* = .{ .line = row.line };
+        slot.value_ptr.rows += 1;
+        if (slot.value_ptr.head == null and row.ref.container.len == depth) slot.value_ptr.head = i;
+    }
+
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    var line: std.Io.Writer.Allocating = .init(gpa);
+    defer line.deinit();
+    var shown: usize = 0;
+    for (groups.keys(), groups.values()) |segment, group| {
+        line.clearRetainingCapacity();
+        if (group.head) |index| {
+            const row = rows.items[index];
+            try line.writer.print("{d} {s} {f}{s}", .{ row.line, row.kind, row.ref, if (row.ambiguous) " ambiguous" else "" });
+            if (group.rows > 1) try line.writer.print(" +{d}", .{group.rows - 1});
+        } else {
+            try line.writer.print("{d} ", .{group.line});
+            for (prefix) |part| try line.writer.print("{s}.", .{part});
+            try line.writer.print("{s} +{d}", .{ segment, group.rows });
+        }
+        try line.writer.writeByte('\n');
+        if (shown != 0 and text.written().len + line.written().len > budget) break;
+        try text.writer.writeAll(line.written());
+        shown += 1;
+    }
+
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("hashes");
+    try js.write("emetgate_read_symbol returns the hash, or pass detail:\"full\"");
+    try js.objectField("outline");
+    try js.write(text.written());
+    try js.objectField("members");
+    try js.write(symbols_members_hint);
+    if (shown < groups.count()) {
+        var hidden: usize = 0;
+        for (groups.values()[shown..]) |group| hidden += group.rows;
+        const elided = try std.fmt.allocPrint(arena, "{d} more names ({d} symbols) from line {d} on; detail:\"full\" lists them", .{ groups.count() - shown, hidden, groups.values()[shown].line });
+        try js.objectField("elided");
+        try js.write(elided);
     }
     try js.endObject();
     try writer.writeByte('\n');
@@ -1150,6 +1267,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "MissingHash", "deleting a symbol needs hash: its current hash from emetgate_symbols" },
     .{ "MissingFileHash", "deleting a file needs hash: its file_hash from emetgate_read_file or emetgate_skeleton" },
     .{ "SymbolNotFound", "call emetgate_symbols with this file for the exact symbol refs" },
+    .{ "NoSymbolsWithin", "no symbol ref starts with within; emetgate_symbols without within lists the names" },
     .{ "AmbiguousSymbol", "qualify the ref, e.g. Class.method; emetgate_symbols lists them" },
     .{ "InvalidRef", "symbol is a ref like add or Class.method, as emetgate_symbols lists it" },
     .{ "NoSymbolInRange", "no symbol overlaps these lines; read them with emetgate_read_symbol nodes:true or emetgate_read_file raw:true and the same line_start, line_end" },
