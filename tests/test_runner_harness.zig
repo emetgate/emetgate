@@ -91,11 +91,12 @@ fn selfRun(gpa: std.mem.Allocator, args: []const []const u8, env: ?*const std.pr
     try argv.append(gpa, exe);
     if (runner.emetgate_mutant != 0) try argv.appendSlice(gpa, &.{ "--mutant", try std.fmt.allocPrint(gpa, "{d}", .{runner.emetgate_mutant}) });
     try argv.appendSlice(gpa, args);
-    return std.process.run(gpa, testing.io, .{
+    return @import("emetgate").bounded_run.run(gpa, testing.io, .{
         .argv = argv.items,
         .environ_map = env,
         .stdout_limit = .limited(16 * 1024 * 1024),
         .stderr_limit = .limited(16 * 1024 * 1024),
+        .timeout = @import("emetgate").bounded_run.timeoutMs(600_000),
     });
 }
 

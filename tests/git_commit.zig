@@ -39,7 +39,7 @@ const Repo = struct {
         defer full.deinit(testing.allocator);
         try full.append(testing.allocator, "git");
         try full.appendSlice(testing.allocator, argv);
-        const result = try std.process.run(testing.allocator, testing.io, .{ .argv = full.items, .cwd = .{ .path = self.root } });
+        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = full.items, .cwd = .{ .path = self.root } });
         defer testing.allocator.free(result.stderr);
         errdefer testing.allocator.free(result.stdout);
         switch (result.term) {

@@ -49,7 +49,7 @@ const Repo = struct {
 };
 
 fn run(cwd: []const u8, argv: []const []const u8) !void {
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = cwd } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = cwd } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {
@@ -223,7 +223,7 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
     const ignore = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/.gitignore", testing.allocator, .unlimited);
     defer testing.allocator.free(ignore);
     try testing.expectEqualStrings("*\n", ignore);
-    const status = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "status", "--porcelain", "--untracked-files=all" }, .cwd = .{ .path = healthy.root_abs } });
+    const status = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "status", "--porcelain", "--untracked-files=all" }, .cwd = .{ .path = healthy.root_abs } });
     defer testing.allocator.free(status.stdout);
     defer testing.allocator.free(status.stderr);
     if (std.mem.indexOf(u8, status.stdout, ".emetgate") != null) return error.TestEmetgateVisibleToGit;

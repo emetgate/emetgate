@@ -52,7 +52,7 @@ const Repo = struct {
         var argv: [8][]const u8 = undefined;
         argv[0] = "git";
         @memcpy(argv[1..][0..args.len], args);
-        const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = self.root_abs } });
+        const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = self.root_abs } });
         gpa.free(result.stdout);
         gpa.free(result.stderr);
         switch (result.term) {

@@ -86,7 +86,7 @@ fn gitFails(env: *Env, argv: []const []const u8) !bool {
     var full: std.ArrayList([]const u8) = .empty;
     try full.append(env.arena(), "git");
     try full.appendSlice(env.arena(), argv);
-    const result = try std.process.run(env.arena(), testing.io, .{ .argv = full.items, .cwd = .{ .path = env.repo.root_abs } });
+    const result = try @import("emetgate").bounded_run.run(env.arena(), testing.io, .{ .argv = full.items, .cwd = .{ .path = env.repo.root_abs } });
     return switch (result.term) {
         .exited => |code| code != 0,
         else => true,
@@ -414,7 +414,7 @@ test "commit protocol: the files put back into the shadow are byte for byte what
         const path_arg = try std.fmt.allocPrint(env.arena(), "--path={s}", .{path});
         const spec = try std.fmt.allocPrint(env.arena(), "HEAD:{s}", .{path});
         var argv = [_][]const u8{ "git", "cat-file", "--filters", path_arg, spec };
-        const filtered = try std.process.run(env.arena(), testing.io, .{ .argv = &argv, .cwd = .{ .path = case.repo.root_abs } });
+        const filtered = try @import("emetgate").bounded_run.run(env.arena(), testing.io, .{ .argv = &argv, .cwd = .{ .path = case.repo.root_abs } });
         const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, try std.fmt.allocPrint(env.arena(), "{s}\\{s}", .{ out, path }), env.arena(), .unlimited);
         try testing.expectEqualStrings(filtered.stdout, got);
     }

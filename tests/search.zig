@@ -28,7 +28,7 @@ fn gitIn(root: []const u8, args: []const []const u8) !void {
     var argv: [8][]const u8 = undefined;
     argv[0] = "git";
     @memcpy(argv[1..][0..args.len], args);
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {

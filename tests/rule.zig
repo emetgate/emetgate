@@ -59,7 +59,7 @@ fn git(cwd: []const u8, args: []const []const u8) !void {
     defer argv.deinit(testing.allocator);
     try argv.append(testing.allocator, "git");
     try argv.appendSlice(testing.allocator, args);
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv.items, .cwd = .{ .path = cwd } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv.items, .cwd = .{ .path = cwd } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {

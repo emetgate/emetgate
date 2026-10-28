@@ -283,7 +283,7 @@ fn tryNewFile(repo: *Repo, runtime: *Runtime, rel: []const u8, ref_text: []const
 }
 
 fn indexed(repo: *Repo, rel: []const u8) !bool {
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--error-unmatch", "--", rel }, .cwd = .{ .path = repo.root_abs } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--error-unmatch", "--", rel }, .cwd = .{ .path = repo.root_abs } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     return switch (result.term) {

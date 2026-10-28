@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -753,7 +754,7 @@ fn listGit(io: Io, gpa: Allocator, arena: Allocator, root: Io.Dir, root_path: []
                 try argv.append(arena, "--");
                 try argv.appendSlice(arena, given[start..end]);
             }
-            const r = std.process.run(gpa, io, .{ .argv = argv.items }) catch return false;
+            const r = bounded_run.run(gpa, io, .{ .argv = argv.items }) catch return false;
             defer gpa.free(r.stdout);
             gpa.free(r.stderr);
             if (r.term != .exited or r.term.exited != 0) return false;
@@ -773,7 +774,7 @@ pub fn ignored(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, 
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(arena, &.{ "git", "-c", "core.quotePath=false", "-C", root_path, "check-ignore", "--" });
         try argv.appendSlice(arena, paths[start..end]);
-        const r = std.process.run(gpa, io, .{ .argv = argv.items }) catch return out.items;
+        const r = bounded_run.run(gpa, io, .{ .argv = argv.items }) catch return out.items;
         defer gpa.free(r.stdout);
         gpa.free(r.stderr);
         if (r.term != .exited or r.term.exited > 1) return out.items;

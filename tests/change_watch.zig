@@ -308,7 +308,7 @@ test "redteam change watch: a cookie directory that is a file or a junction is r
     defer gpa.free(target);
     const link = try std.fmt.allocPrint(gpa, "{s}\\.emetgate\\cookies", .{tree.root_abs});
     defer gpa.free(link);
-    const made = try std.process.run(gpa, testing.io, .{ .argv = &.{ "cmd.exe", "/d", "/c", "mklink", "/J", link, target } });
+    const made = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = &.{ "cmd.exe", "/d", "/c", "mklink", "/J", link, target } });
     gpa.free(made.stdout);
     gpa.free(made.stderr);
     try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, made.term);

@@ -11,8 +11,16 @@ pub fn timeoutMs(ms: u64) std.Io.Timeout {
 }
 
 pub fn run(gpa: Allocator, io: std.Io, options: std.process.RunOptions) !std.process.RunResult {
+    return runWith(gpa, io, options, null);
+}
+
+pub fn runFed(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: []const u8) !std.process.RunResult {
+    return runWith(gpa, io, options, input);
+}
+
+fn runWith(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: ?[]const u8) !std.process.RunResult {
     const timeout: std.Io.Timeout = if (options.timeout == .none) timeoutMs(default_timeout_ms) else options.timeout;
-    if (builtin.os.tag != .windows) {
+    if (builtin.os.tag != .windows and input == null) {
         var bounded = options;
         bounded.timeout = timeout;
         return std.process.run(gpa, io, bounded);
@@ -25,16 +33,24 @@ pub fn run(gpa: Allocator, io: std.Io, options: std.process.RunOptions) !std.pro
         .environ_map = options.environ_map,
         .expand_arg0 = options.expand_arg0,
         .create_no_window = options.create_no_window,
-        .stdin = .ignore,
+        .stdin = if (input == null) .ignore else .pipe,
         .stdout = .pipe,
         .stderr = .pipe,
-        .start_suspended = true,
+        .start_suspended = builtin.os.tag == .windows,
     });
     defer child.kill(io);
-    if (job) |j| j.assign(child.id.?);
-    switch (std.os.windows.ntdll.NtResumeThread(child.thread_handle, null)) {
-        .SUCCESS => {},
-        else => return error.ResumeFailed,
+    if (builtin.os.tag == .windows) {
+        if (job) |j| j.assign(child.id.?);
+        switch (std.os.windows.ntdll.NtResumeThread(child.thread_handle, null)) {
+            .SUCCESS => {},
+            else => return error.ResumeFailed,
+        }
+    }
+    if (input) |bytes| {
+        const stdin = child.stdin.?;
+        child.stdin = null;
+        defer stdin.close(io);
+        try stdin.writeStreamingAll(io, bytes);
     }
 
     var streams: MultiReader.Buffer(2) = undefined;
@@ -61,6 +77,36 @@ pub fn run(gpa: Allocator, io: std.Io, options: std.process.RunOptions) !std.pro
     const stderr = try reader.toOwnedSlice(1);
     return .{ .term = term, .stdout = stdout, .stderr = stderr };
 }
+
+pub const Guard = struct {
+    job: ?Job,
+
+    pub fn adopt(child: *const std.process.Child) Guard {
+        if (builtin.os.tag != .windows) return .{ .job = null };
+        const job = Job.create();
+        if (job) |j| j.assign(child.id.?);
+        return .{ .job = job };
+    }
+
+    pub fn wait(self: Guard, io: std.Io, child: *std.process.Child, ms: u64) !std.process.Child.Term {
+        if (builtin.os.tag == .windows) {
+            const limit: u32 = @intCast(@min(ms, std.math.maxInt(u32) - 1));
+            if (win.WaitForSingleObject(child.id.?, limit) != 0) {
+                if (self.job) |j| j.terminate();
+                child.kill(io);
+                return error.Timeout;
+            }
+        }
+        return child.wait(io);
+    }
+
+    pub fn release(self: Guard) void {
+        if (self.job) |j| {
+            j.terminate();
+            j.close();
+        }
+    }
+};
 
 const Job = struct {
     handle: std.os.windows.HANDLE,
@@ -119,6 +165,7 @@ const win = struct {
     extern "kernel32" fn SetInformationJobObject(job: windows.HANDLE, class: c_int, info: *const anyopaque, length: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn AssignProcessToJobObject(job: windows.HANDLE, process: windows.HANDLE) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn TerminateJobObject(job: windows.HANDLE, exit_code: windows.UINT) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, ms: windows.DWORD) callconv(.winapi) windows.DWORD;
 };
 
 test "a child that outlives its timeout is killed and the call returns" {

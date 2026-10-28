@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const windows = std.os.windows;
 
@@ -327,7 +328,7 @@ test "exe path: a PATH entry that reaches the repository or the working director
     const cmd = try system(testing.allocator, "cmd.exe");
     defer testing.allocator.free(cmd);
     for ([_][2][]const u8{ .{ alias, repo_root }, .{ work_alias, work } }) |pair| {
-        const made = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ cmd, "/d", "/c", "mklink", "/J", pair[0], pair[1] } });
+        const made = try bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ cmd, "/d", "/c", "mklink", "/J", pair[0], pair[1] } });
         testing.allocator.free(made.stdout);
         testing.allocator.free(made.stderr);
         if (made.term != .exited or made.term.exited != 0) return error.SkipZigTest;

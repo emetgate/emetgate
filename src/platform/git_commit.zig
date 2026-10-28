@@ -175,37 +175,16 @@ pub const Git = struct {
         var full: std.ArrayList([]const u8) = .empty;
         try full.appendSlice(self.arena, &.{ self.exe, "-c", "core.longpaths=true", "-c", "core.fsmonitor=false" });
         try full.appendSlice(self.arena, argv);
-        var child = std.process.spawn(self.io, .{
+        const result = bounded_run.runFed(self.arena, self.io, .{
             .argv = full.items,
             .cwd = .{ .path = self.root },
             .environ_map = self.env,
-            .stdin = .pipe,
-            .stdout = .pipe,
-            .stderr = .pipe,
             .create_no_window = true,
-        }) catch return error.GitFailed;
-        defer child.kill(self.io);
-        {
-            const stdin = child.stdin.?;
-            child.stdin = null;
-            defer stdin.close(self.io);
-            stdin.writeStreamingAll(self.io, input) catch return error.GitFailed;
-        }
-        var buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
-        var reader: std.Io.File.MultiReader = undefined;
-        reader.init(self.arena, self.io, buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
-        defer reader.deinit();
-        while (reader.fill(64, .none)) |_| {
-            if (reader.reader(0).buffered().len > max_git_output) return error.GitFailed;
-        } else |err| switch (err) {
-            error.EndOfStream => {},
-            else => return error.GitFailed,
-        }
-        reader.checkAnyError() catch return error.GitFailed;
-        const term = child.wait(self.io) catch return error.GitFailed;
-        const out = reader.toOwnedSlice(0) catch return error.GitFailed;
-        return switch (term) {
-            .exited => |code| if (code == 0) out else null,
+            .stdout_limit = .limited(max_git_output),
+            .stderr_limit = .limited(max_git_output),
+        }, input) catch return error.GitFailed;
+        return switch (result.term) {
+            .exited => |code| if (code == 0) result.stdout else null,
             else => error.GitFailed,
         };
     }

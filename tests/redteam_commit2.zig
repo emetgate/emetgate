@@ -110,7 +110,7 @@ fn explain(case: *Plain, rev: []const u8) void {
 }
 
 fn runOk(env: *Env, argv: []const []const u8) !void {
-    const result = try std.process.run(env.arena(), testing.io, .{ .argv = argv, .cwd = .{ .path = env.repo.root_abs } });
+    const result = try @import("emetgate").bounded_run.run(env.arena(), testing.io, .{ .argv = argv, .cwd = .{ .path = env.repo.root_abs } });
     switch (result.term) {
         .exited => |code| if (code != 0) {
             std.debug.print("{s}: {s}{s}\n", .{ argv[0], result.stdout, result.stderr });
@@ -823,7 +823,7 @@ const Reader = struct {
     fn loop(self: *Reader) void {
         while (!self.stop.load(.acquire)) {
             for ([_][]const []const u8{ &.{ "git", "status", "--porcelain" }, &.{ "git", "diff", "--cached", "--name-only" }, &.{ "git", "ls-files", "-s" } }) |argv| {
-                const result = std.process.run(std.heap.page_allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = self.root } }) catch continue;
+                const result = @import("emetgate").bounded_run.run(std.heap.page_allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = self.root } }) catch continue;
                 std.heap.page_allocator.free(result.stdout);
                 std.heap.page_allocator.free(result.stderr);
             }

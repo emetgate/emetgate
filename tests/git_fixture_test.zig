@@ -8,7 +8,7 @@ fn gitOut(cwd: []const u8, args: []const []const u8) ![]u8 {
     defer argv.deinit(testing.allocator);
     try argv.append(testing.allocator, "git");
     try argv.appendSlice(testing.allocator, args);
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv.items, .cwd = .{ .path = cwd } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv.items, .cwd = .{ .path = cwd } });
     defer testing.allocator.free(result.stderr);
     errdefer testing.allocator.free(result.stdout);
     switch (result.term) {

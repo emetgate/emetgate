@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const checker = @import("../verify/checker.zig");
 const receipt = @import("../verify/receipt.zig");
 const receipts = @import("receipts.zig");
@@ -129,7 +130,7 @@ const Context = struct {
         if (std.Io.Dir.cwd().access(self.io, modules, .{})) |_| {
             const link = try std.fmt.allocPrint(self.arena, "{s}\\node_modules", .{dir});
             const cmd = exe_path.system(self.arena, "cmd.exe") catch return error.LinkFailed;
-            const made = std.process.run(self.arena, self.io, .{ .argv = &.{ cmd, "/d", "/c", "mklink", "/J", link, modules } }) catch return error.LinkFailed;
+            const made = bounded_run.run(self.arena, self.io, .{ .argv = &.{ cmd, "/d", "/c", "mklink", "/J", link, modules } }) catch return error.LinkFailed;
             _ = made;
         } else |_| {}
         try shadow.grantLowIntegrityWrite(dir);

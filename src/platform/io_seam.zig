@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const windows = std.os.windows;
 const shadow = @import("shadow.zig");
@@ -998,7 +999,7 @@ test "the real file system lists the files a repository tracks" {
     try t.write("a.ts", "export const a = 1;\n");
     try t.write("untracked.ts", "x\n");
     for ([_][]const []const u8{ &.{ "git", "init", "-q", "--template=" }, &.{ "git", "add", "a.ts" } }) |argv| {
-        const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = t.root } });
+        const result = try bounded_run.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = t.root } });
         testing.allocator.free(result.stdout);
         testing.allocator.free(result.stderr);
         switch (result.term) {

@@ -37,7 +37,7 @@ fn join(base: []const u8, rel: []const u8) ![]u8 {
 }
 
 fn run(cwd: []const u8, argv: []const []const u8) !void {
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = cwd } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = cwd } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {

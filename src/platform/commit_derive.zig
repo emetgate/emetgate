@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const git_commit = @import("git_commit.zig");
+const bounded_run = @import("bounded_run.zig");
 const symbol = @import("../engine/symbol.zig");
 
 const Allocator = std.mem.Allocator;
@@ -84,6 +85,7 @@ fn gateEnv(git: Git, head: Head, gate_abs: []const u8, index_abs: []const u8) !G
 
 const Run = struct {
     child: ?std.process.Child = null,
+    guard: ?bounded_run.Guard = null,
     input: ?std.Io.File = null,
     output: ?std.Io.File = null,
     out_abs: []const u8 = "",
@@ -115,6 +117,7 @@ fn start(git: Git, work_dir: []const u8, number: usize, paths: []const []const u
         .stderr = .ignore,
         .create_no_window = true,
     }) catch return error.GitFailed;
+    run.guard = bounded_run.Guard.adopt(&run.child.?);
     if (builtin.is_test) probe.processes += 1;
 }
 
@@ -122,7 +125,8 @@ fn finish(git: Git, run: *Run) ![]const []const u8 {
     defer closeRun(git, run);
     var child = run.child orelse return error.GitFailed;
     run.child = null;
-    _ = child.wait(git.io) catch return error.GitFailed;
+    const guard = run.guard orelse bounded_run.Guard{ .job = null };
+    _ = guard.wait(git.io, &child, bounded_run.default_timeout_ms) catch return error.GitFailed;
     if (run.output) |file| {
         file.close(git.io);
         run.output = null;
@@ -137,6 +141,8 @@ fn finish(git: Git, run: *Run) ![]const []const u8 {
 fn closeRun(git: Git, run: *Run) void {
     if (run.child) |*child| child.kill(git.io);
     run.child = null;
+    if (run.guard) |guard| guard.release();
+    run.guard = null;
     if (run.input) |file| file.close(git.io);
     run.input = null;
     if (run.output) |file| file.close(git.io);
