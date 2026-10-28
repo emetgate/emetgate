@@ -388,7 +388,7 @@ pub fn gateDir(location: shadow_root.Location, session: *const commit_plan.Sessi
 
 pub fn openShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, linked: []const []const u8, choice: shadow.Choice, trace: ?*Trace, session: *const commit_plan.Session) !shadow.Shadow {
     const head = session.head orelse {
-        const files = try shadow.trackedFiles(gpa, io, root);
+        const files = try shadow.workingFiles(gpa, io, root);
         defer gpa.free(files);
         defer shadow.freeFileList(gpa, files);
         return prepareShadow(gpa, io, root, location, location.shadow, files, linked, choice, trace, null);

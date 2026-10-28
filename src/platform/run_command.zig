@@ -154,7 +154,7 @@ pub fn runInShadow(gpa: Allocator, io: std.Io, options: Options) !sandbox.Report
     const location = try shadow_root.locate(gpa, options.root_abs, options.shadow_root);
     defer location.deinit(gpa);
 
-    const files = try shadow.trackedFiles(gpa, io, options.root_abs);
+    const files = try shadow.workingFiles(gpa, io, options.root_abs);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
 
