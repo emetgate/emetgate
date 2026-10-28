@@ -754,6 +754,17 @@ test "rename facts: a Python submodule of a namespace package is reached, but a 
         defer planned.deinit(testing.allocator);
         try expectSource(planned, "n.py", "from q import m\n\nprint(m.double(1))\n");
     }
+    {
+        var case = try Case.init(&.{
+            .{ .rel = "r/__init__.py", .text = "x = None\n" },
+            .{ .rel = "r/m.py", .text = "def helper(v):\n    return v\n" },
+            .{ .rel = "n.py", .text = "from r import m\n\nprint(m.helper(1))\n" },
+        });
+        defer case.deinit();
+        const planned = try case.plan("r/m.py", "helper", "double", true);
+        defer planned.deinit(testing.allocator);
+        try expectSource(planned, "n.py", "from r import m\n\nprint(m.double(1))\n");
+    }
 
     var shadowed = try Case.init(&.{
         .{ .rel = "p/__init__.py", .text = "m = None\n" },
