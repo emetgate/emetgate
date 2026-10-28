@@ -695,7 +695,6 @@ fn failAs(gpa: Allocator, format: Format, err: anyerror, event: *telemetry.Event
 
 fn textFailure(gpa: Allocator, err: anyerror, detail: []const u8, event: *telemetry.Event) !ToolResult {
     event.fail(@errorName(err));
-    event.footer = false;
     const text = if (detail.len != 0)
         try std.fmt.allocPrint(gpa, "error: {s}: {s}", .{ @errorName(err), detail })
     else

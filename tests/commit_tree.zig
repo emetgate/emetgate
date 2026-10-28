@@ -70,6 +70,12 @@ fn expectLanded(env: *Env, reply: Reply, before: []const u8) !void {
     try testing.expectEqualStrings(before, try env.git(&.{ "rev-parse", "HEAD^" }));
 }
 
+fn expectLandedPassing(env: *Env, reply: Reply, before: []const u8) !void {
+    try expectLanded(env, reply, before);
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(std.mem.indexOf(u8, reply.text, "baseline_failing") == null);
+}
+
 fn expectRefused(env: *Env, reply: Reply, before: []const u8) !void {
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(reply.is_error);
@@ -391,8 +397,22 @@ test "commit tree: an update of the store takes attributes from HEAD, not from t
     try case.repo.write(".gitattributes", "*.txt -text\n");
     const before = try env.head();
     const built = commit_store.rebuilds;
-    try expectLanded(env, try swap(env, new_body, "for %I in (f.txt) do if not %~zI==9 exit 1"), before);
+    try expectLandedPassing(env, try swap(env, new_body, "for %I in (f.txt) do if not %~zI==9 exit 1"), before);
     try testing.expectEqual(built, commit_store.rebuilds);
+}
+
+test "commit tree: the first build of the store takes attributes from HEAD, not from the working tree" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&.{ util_file, text_file, only_workspace, .{ .rel = ".gitattributes", .text = "*.txt eol=crlf\n" } });
+    defer case.deinit();
+    const env = &case.env;
+    _ = try env.git(&.{ "config", "core.autocrlf", "false" });
+    try case.repo.write("f.txt", "a\nb\nc\n");
+    try byHand(env, "user: one more line");
+    try case.repo.write(".gitattributes", "*.txt -text\n");
+    const before = try env.head();
+    try expectLandedPassing(env, try swap(env, new_body, "for %I in (f.txt) do if not %~zI==9 exit 1"), before);
 }
 
 test "commit tree: two tracked names that differ only in case cannot both be stored, and the call is refused by name" {

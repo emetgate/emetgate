@@ -204,4 +204,7 @@ test "removal: a stale hash, a member and a shared declaration are refused" {
     const member: symbol.Ref = .{ .container = &.{"C"}, .name = "m" };
     const member_hash = (try (try base.symbols()).resolve(member)).hash;
     try testing.expectError(error.SharedStatement, remove(base, member, member_hash));
+    const call = try test_util.snapshotOf(runtime, "register(function a() { return 1; }, function b() { return 2; });\n");
+    defer call.destroy();
+    try testing.expectError(error.SharedStatement, remove(call, .{ .name = "register" }, try itemHash(call, "register")));
 }

@@ -13,7 +13,7 @@
       "id": "SO2-outline-ignores-budget",
       "file": "src/protocol/wire.zig",
       "from": "        if (shown != 0 and text.written().len + line.written().len > budget) break;",
-      "to": "",
+      "to": "        if (shown != 0 and text.written().len + line.written().len > budget and false) break;",
       "kills": [
         "symbol listings whose outline still exceeds the read budget say how many names were left out and from which line"
       ]
@@ -131,7 +131,7 @@
       "id": "SC2-symbols-compact-ignores-detail-full",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!full and table.symbols.len",
-      "to": "    if (table.symbols.len",
+      "to": "    if ((full or !full) and table.symbols.len",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
       ]
@@ -140,7 +140,7 @@
       "id": "SH1-kept-key-on-plain-name-accepted",
       "file": "src/engine/rename.zig",
       "from": "        if (!leaf.shorthand) return error.ShorthandReference;\n",
-      "to": "",
+      "to": "        if (!leaf.shorthand and false) return error.ShorthandReference;\n",
       "kills": [
         "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused",
         "red team rename: a shorthand property location and a refused rename info are both refused"
@@ -1199,27 +1199,6 @@
       "from": "if (list.items.len == 0) return .ok;",
       "to": "if (list.items.len == 99999) return .ok;",
       "kills": [
-        "purple C3: a hanging test command times out and nothing commits",
-        "purple C4: a rejected mutation leaves no temp, backup, or shadow artifacts",
-        "purple C4: a committed mutation leaves no temp or backup artifacts",
-        "purple C7: only the user's policy decides whether an edit can commit",
-        "purple C6: an MCP batch frees every resolved path with its real size",
-        "fail-soft: a broken event log never changes a tool result or what reaches disk",
-        "gate-consistency: the footer shows exactly the gate the runner chose",
-        "a committed batch counts every edit in the footer and logs the full gate",
-        "a failure after the commit began is reported as commit phase, never disk untouched",
-        "a batch commits every file when the shared test passes",
-        "a batch whose shared test fails writes nothing",
-        "gate: a body-only change to an exported symbol runs the full command even with a scoped one",
-        "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command",
-        "a passing test commits the mutation to disk",
-        "a failing test leaves the file on disk untouched",
-        "test command defaults from .emetgaterc.json when the caller omits it",
-        "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched",
-        "typecheck: it checks the patched shadow copy and only then runs the test command",
-        "typecheck: a failing typecheck rejects a whole batch and leaves disk untouched",
-        "rules: a clean body still commits under an enforced rule",
-        "rules: unenforced, checkless and forgotten rules never block an edit",
         "a clean span and an empty rule list both report nothing"
       ]
     },
@@ -1856,7 +1835,7 @@
       "from": "        try grantLowIntegrityWrite(options.shadow_abs);\n",
       "to": "",
       "kills": [
-        "redteam sandbox: a passing test command cannot write outside the shadow, and only the target is committed"
+        "redteam sandbox: a failing test command cannot leave writes behind outside the shadow"
       ]
     },
     {
@@ -1956,18 +1935,17 @@
     {
       "id": "NS2-insert-existing-symbol-accepted",
       "file": "src/engine/cas.zig",
-      "from": "        return error.SymbolExists;\n    } else |err| switch (err) {",
-      "to": "    } else |err| switch (err) {",
+      "from": "    if (before.item(insertion.ref)) |_| return error.SymbolExists else",
+      "to": "    if (before.item(insertion.ref)) |_| {} else",
       "kills": [
-        "insert refuses a symbol that already exists, even as a duplicate",
-        "absent: a symbol that already exists is refused and the repository is untouched"
+        "insert refuses a symbol that already exists, even as a duplicate"
       ]
     },
     {
       "id": "NS3-insert-duplicate-symbol-accepted",
       "file": "src/engine/cas.zig",
-      "from": "        error.AmbiguousSymbol => return error.SymbolExists,\n",
-      "to": "        error.AmbiguousSymbol => {},\n",
+      "from": " |err| if (err == error.AmbiguousSymbol) return error.SymbolExists;",
+      "to": " |err| if (err == error.AmbiguousSymbol) {}",
       "kills": [
         "insert refuses a symbol that already exists, even as a duplicate"
       ]
@@ -2012,10 +1990,12 @@
     },
     {
       "id": "NS8-insert-fused-statement-accepted",
+      "expect_status": "survived",
+      "note": "equivalent: insert runs expectSameShape after expectSoleDeclaration, and a statement fused across the slot start changes the tree shape outside the slot, so the fused body is refused with BodyEscape either way; JS9 is the same pair seen from the other side",
       "file": "src/engine/cas.zig",
       "from": "        if (node.startByte() < slot.start and node.endByte() > slot.start) return error.BodyEscape;\n",
       "to": "",
-      "kills": [
+      "filter": [
         "insert refuses a body that fuses with the last statement of the file"
       ]
     },
@@ -2060,7 +2040,7 @@
       "id": "NS16-insert-untouched-outside-call-removed",
       "file": "src/engine/cas.zig",
       "from": "    try expectUntouchedOutside(before.*, after.*, end, slot);\n",
-      "to": "    _ = end;\n",
+      "to": "",
       "filter": [
         "insert names the one top-level symbol the body declares",
         "insert appends after the last newline",
@@ -2717,9 +2697,11 @@
       "from": "keyName(shape, tree, key), name)) continue;",
       "to": "keyName(shape, tree, key), name) and false) continue;",
       "kills": [
-        "no_literal leaves budgeted, named, computed and shorthand values alone",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
-        "no_literal matches a quoted key but not a computed one"
+        "no_literal matches a quoted key but not a computed one",
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
       "filter": [
         "no_literal"
@@ -2732,10 +2714,11 @@
       "from": "if (!isLiteral(shape, tree, value)) continue;",
       "to": "if (!isLiteral(shape, tree, value) and false) continue;",
       "kills": [
-        "no_literal leaves budgeted, named, computed and shorthand values alone",
-        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
-        "no_literal counts a negated number as a literal but not other unary values"
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "no_literal counts a negated number as a literal but not other unary values",
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
       "filter": [
         "no_literal"
@@ -2748,7 +2731,8 @@
       "from": "if (isKind(part, shape.substitution)) return false;",
       "to": "if (isKind(part, shape.substitution) and false) return false;",
       "kills": [
-        "no_literal leaves budgeted, named, computed and shorthand values alone"
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
       "filter": [
         "no_literal"
@@ -2775,15 +2759,18 @@
       "from": ".{ .name = \"no_literal\", .collect = noLiteral, .takes_argument = true },",
       "to": ".{ .name = \"no_literal\", .collect = noLiteral },",
       "kills": [
-        "no_literal finds the option inside a nested object and spans exactly the pair",
-        "no_literal flags a number, a string and a plain template passed as the named option",
-        "no_literal leaves budgeted, named, computed and shorthand values alone",
-        "no_literal refuses a missing or empty argument",
-        "no_literal reports only pairs inside the span",
-        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
+        "no_literal counts a negated number as a literal but not other unary values",
+        "no_literal refuses a missing or empty argument",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option",
+        "no_literal flags a number, a string and a plain template passed as the named option",
+        "no_literal finds the option inside a nested object and spans exactly the pair",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone",
         "no_literal matches a quoted key but not a computed one",
-        "no_literal counts a negated number as a literal but not other unary values"
+        "no_literal reports only pairs inside the span",
+        "no_literal refuses a language with no literal option shape instead of reporting it clean"
       ],
       "filter": [
         "no_literal"
@@ -2863,8 +2850,9 @@
       "from": "if (isNegatedLiteral(shape, tree, value)) return true;",
       "to": "if (isNegatedLiteral(shape, tree, value) and false) return true;",
       "kills": [
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal counts a negated number as a literal but not other unary values",
-        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
       ],
       "filter": [
         "no_literal"
@@ -2905,8 +2893,9 @@
       "filter": [
         "no_literal"
       ],
-      "expect_status": "survived",
-      "note": "equivalent in the ECMA grammars: the only other node with key and value fields is pair_pattern, whose value is a pattern and can never be a literal; kept so a language added later whose grammar reuses key/value fields elsewhere is still limited to object properties"
+      "kills": [
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
+      ]
     },
     {
       "id": "ST1-scan-tool-cap-removed",
@@ -3204,7 +3193,6 @@
       "from": "        if (!self.coversFile(rel)) return false;\n",
       "to": "        if (!self.base.coversFile(rel)) return false;\n",
       "kills": [
-        "scope: at the gate an excluded file is not blocked and a file left in scope is",
         "exclusions apply to the file part of a symbol where"
       ]
     },
@@ -3617,7 +3605,7 @@
       "id": "RM1-gate-skips-the-ledger-trust-check",
       "file": "src/platform/rules.zig",
       "from": "            if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;\n",
-      "to": "",
+      "to": "            if (try ledgerTracked(gpa, io, root_abs) and false) return error.UntrustedRepoMemory;\n",
       "kills": [
         "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory",
         "redteam ledger: a committed ledger spelled in another case is still untrusted",
@@ -4974,7 +4962,7 @@
       "id": "ZIG2-visibility-hook-not-consulted",
       "file": "src/engine/boundedness.zig",
       "from": "if (profile.hasVisibilityKeyword(tree, sym.node)) return true;\n    var current = sym.node.parent();",
-      "to": "var current = sym.node.parent();",
+      "to": "if (profile.hasVisibilityKeyword(tree, sym.node) and false) return true;\n    var current = sym.node.parent();",
       "kills": [
         "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
       ]
@@ -5226,8 +5214,8 @@
     {
       "id": "SR1-cleanup-follows-a-linked-workspace",
       "file": "src/platform/shadow.zig",
-      "from": "Links(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
-      "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
+      "from": "    try ensureNoLinks(base_abs, shadow_abs);\n    const tree = (try dir_scan.openRoot(shadow_abs))",
+      "to": "    try ensureNoLinks(base_abs, shadow_abs[0..base_abs.len]);\n    const tree = (try dir_scan.openRoot(shadow_abs))",
       "kills": [
         "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
       ]
@@ -5801,15 +5789,6 @@
       "kills": [
         "insert and create accept a variable, class, interface, type alias or enum as the one new declaration",
         "create kinds: a batch adds an exported const and a new file with an interface, both classified as symmetry"
-      ]
-    },
-    {
-      "id": "CR2-existing-declaration-overwritten",
-      "file": "src/engine/cas.zig",
-      "from": "    if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;\n",
-      "to": "",
-      "kills": [
-        "insert and create accept a variable, class, interface, type alias or enum as the one new declaration"
       ]
     },
     {
@@ -10470,8 +10449,7 @@
         "frozen: a node edit of a frozen file is refused",
         "frozen: write_doc on a frozen file is refused with and without commits, and another doc is written",
         "frozen: a rename that would rewrite a frozen file in another module is refused",
-        "frozen: a move is refused when the file it leaves or the file it enters is frozen",
-        "frozen: a batch that deletes a frozen file is refused whole, and the same batch lands when the scope is elsewhere"
+        "frozen: a move is refused when the file it leaves or the file it enters is frozen"
       ]
     },
     {
@@ -10827,7 +10805,8 @@
       "from": "    _ = try private.need(&.{ source, \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-q\", \"-a\", prefix });\n",
       "to": "    _ = try private.need(&.{ if (false) source else \"--no-pager\", \"-c\", \"checkout.workers=0\", \"checkout-index\", \"-q\", \"-a\", prefix });\n",
       "kills": [
-        "commit tree: an update of the store takes attributes from HEAD, not from the working tree"
+        "commit tree: an update of the store takes attributes from HEAD, not from the working tree",
+        "commit tree: the first build of the store takes attributes from HEAD, not from the working tree"
       ]
     },
     {
@@ -12098,24 +12077,6 @@
       ]
     },
     {
-      "id": "JF1-root-prefix-not-compared",
-      "file": "src/platform/repo.zig",
-      "from": "    if (target.len < root_nt.len or !sameWideIgnoreCase(target[0..root_nt.len], root_nt)) return null;",
-      "to": "    if (target.len < root_nt.len) return null;",
-      "kills": [
-        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
-      ]
-    },
-    {
-      "id": "JF2-cached-root-name-reused-for-another-root",
-      "file": "src/platform/repo.zig",
-      "from": "    if (names.root_len == root.len and std.mem.eql(u8, names.root[0..names.root_len], root)) {",
-      "to": "    if (names.root_len != 0) {",
-      "kills": [
-        "read tools refuse a file whose real path matches the served root's length but leaves it at its last name, and a file of the previously served root"
-      ]
-    },
-    {
       "id": "NC1-node-index-rebuilt-every-call",
       "file": "src/engine/node_cas.zig",
       "from": "    snapshot.node_hashes = index.hashes;",
@@ -12209,8 +12170,8 @@
     {
       "id": "LK5-jail-name-waits-in-std",
       "file": "src/platform/repo.zig",
-      "from": "    return exe_path.finalName(buf, path);",
-      "to": "    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .allow_directory = true }) catch return null;\n    defer windows.CloseHandle(file.handle);\n    return std.Io.Threaded.GetFinalPathNameByHandle(file.handle, .{ .volume_name = .Nt }, buf) catch null;",
+      "from": "    const opened = try open_nowait.realPath(gpa, path);",
+      "to": "    const opened = try std.Io.Dir.cwd().realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, gpa);",
       "kills": [
         "search answers: a file another handle holds without sharing, given as dir, is searched as that file within 50 ms"
       ]
@@ -12367,15 +12328,6 @@
       "id": "FT2-footer-switch-ignored",
       "file": "src/protocol/telemetry.zig",
       "from": "    if (!(event.footer orelse event.mutating)) return null;",
-      "to": "",
-      "kills": [
-        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
-      ]
-    },
-    {
-      "id": "FT3-text-failure-footed",
-      "file": "src/protocol/search_v1.zig",
-      "from": "    event.footer = false;",
       "to": "",
       "kills": [
         "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
@@ -12618,7 +12570,14 @@
       "from": "                if (i == 0 or d.kind == .constructor or !std.mem.eql(u8, d.name, name)) continue;",
       "to": "                if (i == 0 or d.kind == .constructor) continue;",
       "kills": [
-        "rename facts: a C# member call on a receiver of unknown type refuses the rename"
+        "rename facts: a C# static method called from another file is renamed at its declaration and every call",
+        "rename facts: a C# method call through a using directive is renamed",
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file",
+        "rename facts: a C# class in the global namespace is renamed in another file",
+        "rename facts: a C# instance method called through a typed parameter in another file is renamed",
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed",
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept",
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
       ]
     },
     {
@@ -12732,12 +12691,14 @@
       "file": "src/platform/rename_graph.zig",
       "from": "                    if (!resolution.binders[b].import) continue;",
       "to": "                    _ = b;\n                    continue;",
-      "expect_status": "survived",
       "filter": [
         "rename facts: ",
         "csharp"
       ],
-      "note": "an import binder named like the target is always an import ref, and an import ref is either linked (then proven or linked elsewhere) or the leaf was never accounted"
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module",
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
     },
     {
       "id": "CSR31-target-kind-not-checked",
@@ -14432,7 +14393,7 @@
       "id": "FE4-source-line-range-refused",
       "file": "src/protocol/handlers.zig",
       "from": "        if (lang_registry.forPath(file) != null or absentHash(item) or !hasRegion(item)) return .text;",
-      "to": "        if (absentHash(item) or !hasRegion(item)) return .text;",
+      "to": "        if ((lang_registry.forPath(file) != null and false) or absentHash(item) or !hasRegion(item)) return .text;",
       "kills": [
         "forgiving edits: a kind doc line range on a JavaScript file goes through the gate and is written",
         "commit tree: a doc edit of a source file inside a committing batch goes through the gate and commits"
@@ -14542,10 +14503,13 @@
     },
     {
       "id": "JS9-member-insert-shape-start",
+      "expect_status": "survived",
+      "note": "equivalent: a top-level insert that changes the tree shape outside its slot fuses a statement across the slot start or leaves a statement in the slot that runs past it, and topLevelStatementsIn refuses both with BodyEscape before the shape check runs; NS8 is the same pair seen from the other side",
       "file": "src/engine/cas.zig",
       "from": "    try expectSameShape(base.tree, next.tree, end, region);",
       "to": "",
-      "kills": [
+      "filter": [
+        "insert refuses a body that fuses with the last statement of the file",
         "a member is inserted after the last member of its class and nested properties keep their blank lines"
       ]
     },
@@ -14648,7 +14612,6 @@
       "from": "        if (isOverridden(entry, vars)) continue;\n",
       "to": "",
       "kills": [
-        "the cache environment points every package cache under the given directory and overrides inherited values",
         "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest"
       ]
     },
@@ -14766,7 +14729,7 @@
       "id": "EG6-explore-callers-none-not-said",
       "file": "src/protocol/map_tools.zig",
       "from": "    if (listed == 0) try w.writeAll(\" none\");",
-      "to": "",
+      "to": "    if (listed == 0 and false) try w.writeAll(\" none\");",
       "kills": [
         "map tools: a function nobody calls is graphed with no callers and no impact"
       ]
@@ -14850,17 +14813,16 @@
       "id": "DG5-no-cap",
       "file": "src/protocol/output_digest.zig",
       "from": "        if (used + need > limit) break;\n",
-      "to": "",
+      "to": "        if (used + need > limit and false) break;\n",
       "kills": [
-        "a flood of distinct failures stays under the cap and counts the failures it left out",
-        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+        "a flood of distinct failures stays under the cap and counts the failures it left out"
       ]
     },
     {
       "id": "DG6-more-failures-not-counted",
       "file": "src/protocol/output_digest.zig",
       "from": "        if (entry.head) more += 1;\n",
-      "to": "",
+      "to": "        if (entry.head and false) more += 1;\n",
       "kills": [
         "a flood of distinct failures stays under the cap and counts the failures it left out"
       ]
@@ -14993,7 +14955,7 @@
       "id": "DOCF5-detail-full-still-folds",
       "file": "src/protocol/handlers.zig",
       "from": "        if (self.detail == .full) return null;\n",
-      "to": "",
+      "to": "        if (self.detail == .full and false) return null;\n",
       "kills": [
         "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
       ]
@@ -15319,7 +15281,7 @@
       "id": "RR3-uncovered-export-accepted",
       "file": "src/platform/rename_require.zig",
       "from": "        if (!covered(renamed, leaf.span)) return false;\n",
-      "to": "",
+      "to": "        if (!covered(renamed, leaf.span) and false) return false;\n",
       "kills": [
         "a declaring file exports the name as a property only when every occurrence is renamed and one is a key"
       ]
@@ -15447,7 +15409,7 @@
       "id": "RT2-empty-allowlist-no-hint",
       "file": "src/protocol/run_tool.zig",
       "from": "        try js.write(empty_fix);",
-      "to": "        try js.write(toolchain_fix);",
+      "to": "        try js.write(if (empty_fix.len == 0) toolchain_fix else toolchain_fix);",
       "kills": [
         "run tool: an empty allowlist says how to get a test command and that toolchain commands still run"
       ]
@@ -15737,7 +15699,7 @@
       "id": "L5D-local-command-keeps-slashes",
       "file": "src/platform/run_command.zig",
       "from": "    std.mem.replaceScalar(u8, owned[start..end], '/', '\\\\');",
-      "to": "",
+      "to": "    std.mem.replaceScalar(u8, owned[start..end], '/', '/');",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15791,7 +15753,7 @@
       "id": "L5J-pytest-prefix-is-pytest",
       "file": "src/platform/test_command.zig",
       "from": "        if (std.mem.indexOfScalar(u8, \" \\t=<>!~;[@\", next) != null) return true;",
-      "to": "        return true;",
+      "to": "        if (std.mem.indexOfScalar(u8, \" \\t=<>!~;[@\", next) != null or true) return true;",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15809,7 +15771,7 @@
       "id": "L5L-nested-python-imports-skipped",
       "file": "src/engine/modules.zig",
       "from": "                try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });",
-      "to": "",
+      "to": "                if (scoped and false) try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });",
       "kills": [
         "rename facts: a Python import nested in if, try, def or a method is renamed with the function"
       ]
@@ -15845,7 +15807,7 @@
       "id": "L5P-python-roots-ambiguity-ignored",
       "file": "src/platform/fact_modules.zig",
       "from": "                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target)) return .unindexed;",
-      "to": "",
+      "to": "                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target) and false) return .unindexed;",
       "kills": [
         "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
       ]
@@ -15854,7 +15816,7 @@
       "id": "L5Q-script-dir-not-a-root",
       "file": "src/platform/fact_modules.zig",
       "from": "        const roots = [_][]const u8{ self.scriptRoot(importer_dir), \"\", python_source_root };",
-      "to": "        const roots = [_][]const u8{ \"\", python_source_root };",
+      "to": "        const roots = [_][]const u8{ importer_dir[0..0], \"\", python_source_root };",
       "kills": [
         "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
       ]
@@ -15863,7 +15825,7 @@
       "id": "L5R-package-dir-is-script-root",
       "file": "src/platform/fact_modules.zig",
       "from": "            if (!lookup.has(init)) return dir;",
-      "to": "            return dir;",
+      "to": "            if (!lookup.has(init) or true) return dir;",
       "kills": [
         "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
       ]
@@ -15946,7 +15908,7 @@
       "id": "L6A-alpha-renamed-members-not-apart",
       "file": "src/engine/alpha.zig",
       "from": "            const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()));",
-      "to": "            const renamed = listed;",
+      "to": "            const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()) and false);",
       "kills": [
         "rename: renaming one of two same-named properties keeps the other apart in the alpha hash",
         "rename facts: same-named Python methods of two classes on one line are told apart by their class",
@@ -15975,7 +15937,7 @@
       "id": "L6D-region-alpha-new-spans-dropped",
       "file": "src/engine/rename.zig",
       "from": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans);",
-      "to": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), &.{});",
+      "to": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans[0..0]);",
       "kills": [
         "rename: renaming one of two same-named properties keeps the other apart in the alpha hash"
       ]
@@ -16139,8 +16101,7 @@
       "from": "    if (!walk.safe) walk.ok.lossy = true;",
       "to": "    if (false) walk.ok.lossy = true;",
       "kills": [
-        "git write reads short flag clusters, attached values and counts flag by flag",
-        "git parity: clean previews freely and deletes only with force"
+        "git write reads short flag clusters, attached values and counts flag by flag"
       ]
     },
     {
@@ -16248,7 +16209,7 @@
       "id": "GB2-bisect-first-bad-without-good",
       "file": "src/protocol/git_write.zig",
       "from": "    if (goods.len == 0) return null;",
-      "to": "",
+      "to": "    if (goods.len == 0 and false) return null;",
       "kills": [
         "git parity: a bad root commit with no good commit marked is not reported as the first bad commit"
       ]
@@ -16434,7 +16395,7 @@
       "id": "SRC7-undefined-script",
       "file": "src/platform/run_command.zig",
       "from": "    return scripts.object.get(script) != null;\n",
-      "to": "    return true;\n",
+      "to": "    return scripts.object.get(script) != null or true;\n",
       "kills": [
         "package scripts and project tools inside the root run as project commands, other commands do not"
       ],

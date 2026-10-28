@@ -149,7 +149,7 @@ fn expectOnlyTargetChanged(victim: *Victim, before: []const u8, math_expected: [
     try testing.expectEqualStrings(before, after);
 }
 
-fn runAttack(exit_code: u8) !struct { victim: Victim, before: []u8, result: runner.Result } {
+fn runAttack(exit_code: u8, tree: shadow.TreeMode) !struct { victim: Victim, before: []u8, result: runner.Result } {
     var victim = try Victim.init();
     errdefer victim.deinit();
     const runtime = try Runtime.create(gpa);
@@ -168,33 +168,38 @@ fn runAttack(exit_code: u8) !struct { victim: Victim, before: []u8, result: runn
         .expected_hash = .{ .present = try hashOfAdd(runtime, file) },
         .new_body = "{\n  return a - b;\n}",
         .test_command = command,
+        .gate_tree = .{ .tree = tree },
     });
     return .{ .victim = victim, .before = before, .result = result };
 }
 
 test "redteam sandbox: a passing test command cannot write outside the shadow, and only the target is committed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var run = try runAttack(0);
-    defer run.victim.deinit();
-    defer gpa.free(run.before);
-    defer run.result.deinit(gpa);
+    for ([_]shadow.TreeMode{ .kept, .full_copy }) |tree| {
+        var run = try runAttack(0, tree);
+        defer run.victim.deinit();
+        defer gpa.free(run.before);
+        defer run.result.deinit(gpa);
 
-    errdefer diagnostics.printResult(run.result);
-    try testing.expect(run.result == .committed);
-    try expectOnlyTargetChanged(&run.victim, run.before, "export function add(a: number, b: number): number {\n  return a - b;\n}\n");
+        errdefer diagnostics.printResult(run.result);
+        try testing.expect(run.result == .committed);
+        try expectOnlyTargetChanged(&run.victim, run.before, "export function add(a: number, b: number): number {\n  return a - b;\n}\n");
+    }
 }
 
 test "redteam sandbox: a failing test command cannot leave writes behind outside the shadow" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var run = try runAttack(1);
-    defer run.victim.deinit();
-    defer gpa.free(run.before);
-    defer run.result.deinit(gpa);
+    for ([_]shadow.TreeMode{ .kept, .full_copy }) |tree| {
+        var run = try runAttack(1, tree);
+        defer run.victim.deinit();
+        defer gpa.free(run.before);
+        defer run.result.deinit(gpa);
 
-    errdefer diagnostics.printResult(run.result);
-    try testing.expect(run.result == .rejected);
-    try testing.expectEqual(sandbox.Outcome{ .exited = 1 }, run.result.rejected.outcome);
-    try expectOnlyTargetChanged(&run.victim, run.before, math_src);
+        errdefer diagnostics.printResult(run.result);
+        try testing.expect(run.result == .rejected);
+        try testing.expectEqual(sandbox.Outcome{ .exited = 1 }, run.result.rejected.outcome);
+        try expectOnlyTargetChanged(&run.victim, run.before, math_src);
+    }
 }
 
 test "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all" {
