@@ -274,6 +274,11 @@ const Op = struct {
         if (std.mem.eql(u8, tool, "emetgate_run")) {
             return try env.call(tool, .{}, green, false);
         }
+        if (std.mem.eql(u8, tool, "emetgate_git_write")) {
+            const verb = self.pick([]const u8, &.{ "branch", "tag" });
+            const args = try std.fmt.allocPrint(env.arena(), "{s} topic-{d}", .{ verb, self.random.int(u32) });
+            return try env.call(tool, .{ .args = args }, green, false);
+        }
         return error.WriteToolWithoutGenerator;
     }
 };
@@ -322,7 +327,7 @@ fn exercise(tool: []const u8, seed: u64, tally: *Tally) !void {
             continue;
         }
         tally.accepted += 1;
-        if (std.mem.eql(u8, tool, "emetgate_run")) try testing.expectEqualStrings(before, try treeOf(env));
+        if (std.mem.eql(u8, tool, "emetgate_run") or std.mem.eql(u8, tool, "emetgate_git_write")) try testing.expectEqualStrings(before, try treeOf(env));
         var after = try violationsOf(&case);
         var it = after.iterator();
         while (it.next()) |entry| {
@@ -353,7 +358,7 @@ test "write invariant: after any accepted write through a served write tool a sc
         while (seed <= seeds_per_tool) : (seed += 1) try exercise(tool, seed * 7919 + tool.len, &tally);
         errdefer std.debug.print("write invariant: tool {s} accepted {d} refused {d} other {d}\n", .{ tool, tally.accepted, tally.refused_by_rule, tally.other });
         try testing.expect(tally.accepted != 0);
-        const writes_source = !std.mem.eql(u8, tool, "emetgate_run") and !std.mem.eql(u8, tool, "emetgate_write_doc");
+        const writes_source = !std.mem.eql(u8, tool, "emetgate_run") and !std.mem.eql(u8, tool, "emetgate_write_doc") and !std.mem.eql(u8, tool, "emetgate_git_write");
         if (writes_source) try testing.expect(tally.refused_by_rule != 0);
     }
     try testing.expect(write_tools >= 7);
