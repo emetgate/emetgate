@@ -14815,8 +14815,7 @@
       "from": "        if (used + need > limit) break;\n",
       "to": "        if (used + need > limit and false) break;\n",
       "kills": [
-        "a flood of distinct failures stays under the cap and counts the failures it left out",
-        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+        "a flood of distinct failures stays under the cap and counts the failures it left out"
       ]
     },
     {
