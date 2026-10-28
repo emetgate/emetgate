@@ -189,9 +189,10 @@ pub fn condense(gpa: Allocator, text: []const u8, summary: ?*const git_symbols.S
 
     var counts: std.StringHashMapUnmanaged(usize) = .empty;
     for (parsed.files.items) |file| for (file.blocks.items) |block| {
-        if (!collapsible(block)) continue;
-        for (block.old.items, block.new.items) |a, b| {
-            const gop = try counts.getOrPut(arena, try pairKey(arena, substitution(a, b).?));
+        const paired = @min(block.old.items.len, block.new.items.len);
+        for (block.old.items[0..paired], block.new.items[0..paired]) |a, b| {
+            const pair = substitution(a, b) orelse continue;
+            const gop = try counts.getOrPut(arena, try pairKey(arena, pair));
             gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
         }
     };
