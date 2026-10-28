@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20python%20%7C%20c%23%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Python, C#, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
   <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
@@ -121,7 +121,7 @@ branch broken: 1 commit(s)
 | 퍼즈 & 레드팀 | 무작위 뮤테이션과 공격 코퍼스 | 예상치 못하거나 적대적인 입력에서 충돌이나 탈출 없음 |
 | ripgrep 동등성 게이트 | 매 실행마다 히트 집합을 rg와 비교 | 검색이 "빠르지만 틀릴" 수 없습니다; 한 줄 한 줄 검사 |
 
-엔진의 경우: 63 mutant 오늘: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open. 목록은 [VERIFICATION.md](../VERIFICATION.md)에 있습니다.
+엔진의 경우: 69 mutant 오늘: 62 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open. 목록은 [VERIFICATION.md](../VERIFICATION.md)에 있습니다.
 
 ## 측정값
 
