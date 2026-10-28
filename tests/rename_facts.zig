@@ -744,14 +744,16 @@ test "rename facts: a Python function reached through a from-imported submodule 
 
 test "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var case = try Case.init(&.{
-        .{ .rel = "q/m.py", .text = "def helper(v):\n    return v\n" },
-        .{ .rel = "n.py", .text = "from q import m\n\nprint(m.helper(1))\n" },
-    });
-    defer case.deinit();
-    const planned = try case.plan("q/m.py", "helper", "double", true);
-    defer planned.deinit(testing.allocator);
-    try expectSource(planned, "n.py", "from q import m\n\nprint(m.double(1))\n");
+    {
+        var case = try Case.init(&.{
+            .{ .rel = "q/m.py", .text = "def helper(v):\n    return v\n" },
+            .{ .rel = "n.py", .text = "from q import m\n\nprint(m.helper(1))\n" },
+        });
+        defer case.deinit();
+        const planned = try case.plan("q/m.py", "helper", "double", true);
+        defer planned.deinit(testing.allocator);
+        try expectSource(planned, "n.py", "from q import m\n\nprint(m.double(1))\n");
+    }
 
     var shadowed = try Case.init(&.{
         .{ .rel = "p/__init__.py", .text = "m = None\n" },
@@ -795,18 +797,20 @@ test "rename facts: an import inside a Python function is not an attribute of it
 
 test "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var case = try Case.init(&.{
-        .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
-        .{ .rel = "p/__init__.py", .text = "" },
-        .{ .rel = "p/m.py", .text = "VALUE = 3\n" },
-        .{ .rel = "p/q.py", .text = "from m import helper\n\nhelper()\n" },
-        .{ .rel = "src/s.py", .text = "from m import helper\n" },
-    });
-    defer case.deinit();
-    const planned = try case.plan("m.py", "helper", "assist", true);
-    defer planned.deinit(testing.allocator);
-    try expectSource(planned, "p/q.py", "from m import assist\n\nassist()\n");
-    try expectSource(planned, "src/s.py", "from m import assist\n");
+    {
+        var case = try Case.init(&.{
+            .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
+            .{ .rel = "p/__init__.py", .text = "" },
+            .{ .rel = "p/m.py", .text = "VALUE = 3\n" },
+            .{ .rel = "p/q.py", .text = "from m import helper\n\nhelper()\n" },
+            .{ .rel = "src/s.py", .text = "from m import helper\n" },
+        });
+        defer case.deinit();
+        const planned = try case.plan("m.py", "helper", "assist", true);
+        defer planned.deinit(testing.allocator);
+        try expectSource(planned, "p/q.py", "from m import assist\n\nassist()\n");
+        try expectSource(planned, "src/s.py", "from m import assist\n");
+    }
 
     var ambiguous = try Case.init(&.{
         .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
