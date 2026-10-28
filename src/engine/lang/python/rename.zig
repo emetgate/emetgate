@@ -76,6 +76,9 @@ pub const modules: Modules = .{
     .default_keyword = "default",
     .star_token = "*",
     .from_statement = "import_from_statement",
+    .submodule_imports = true,
+    .package_init = "__init__.py",
+    .exports_bindings = true,
     .module_name_field = "module_name",
     .aliased_import = "aliased_import",
     .wildcard_import = "wildcard_import",
@@ -108,11 +111,25 @@ pub const grammar: Rename = .{
     .literal_argument = "string",
     .template_fragment = "",
     .quotes = "\"'",
+    .type_string_parents = &.{"type"},
     .property_sites = &property_sites,
     .inert_sites = &inert_sites,
     .class_scopes = &.{"class_definition"},
     .scope_bodies = &scope_bodies,
     .rebinding_statements = &.{ "global_statement", "nonlocal_statement" },
+    .name_list = .{
+        .owner = "__all__",
+        .string = "string",
+        .content = "string_content",
+        .quote_start = "string_start",
+        .containers = &.{ "list", "tuple", "expression_list", "parenthesized_expression", "argument_list" },
+        .holders = &.{
+            .{ .node = "assignment", .target_field = "left", .value_field = "right" },
+            .{ .node = "augmented_assignment", .target_field = "left", .value_field = "right" },
+            .{ .node = "call", .target_field = "function", .object_field = "object", .value_field = "arguments" },
+        },
+        .statement = "expression_statement",
+    },
 };
 
 const type_declarations = [_]DeclarationShape{
@@ -125,6 +142,7 @@ const field_declarations = [_]DeclarationShape{
 
 pub const declarations: Declarations = .{
     .types = &type_declarations,
+    .wrappers = &.{"decorated_definition"},
     .variable_statements = &.{"assignment"},
     .value_field = "right",
     .fields = &field_declarations,

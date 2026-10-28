@@ -122,8 +122,7 @@ fn matchingSite(sites: []const BinderSite, up: anytype, node: ts.Node) ?BinderSi
         if (site.parent_field) |pf| {
             const grand = up.parent(parent) orelse continue;
             if (site.grandparent) |gk| if (!std.mem.eql(u8, grand.kind(), gk)) continue;
-            const held = grand.childByField(pf) orelse continue;
-            if (!held.eql(parent)) continue;
+            if (!holdsInField(grand, pf, parent)) continue;
         } else if (site.grandparent) |gk| {
             const grand = up.parent(parent) orelse continue;
             if (!std.mem.eql(u8, grand.kind(), gk)) continue;
@@ -135,6 +134,16 @@ fn matchingSite(sites: []const BinderSite, up: anytype, node: ts.Node) ?BinderSi
         if (held.eql(node)) return site;
     }
     return null;
+}
+
+fn holdsInField(holder: ts.Node, field: []const u8, node: ts.Node) bool {
+    var i: u32 = 0;
+    while (holder.child(i)) |child| : (i += 1) {
+        if (!child.eql(node)) continue;
+        const name = holder.fieldNameForChild(i) orelse return false;
+        return std.mem.eql(u8, name, field);
+    }
+    return false;
 }
 
 pub fn isProperty(g: *const Rename, node: ts.Node) bool {
@@ -265,7 +274,7 @@ pub fn resolveName(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     while (walker.next()) |entry| {
         const node = entry.node;
         const kind = node.kind();
-        if (snapshot.profile.isComment(kind) or oneOf(kind, snapshot.profile.strings)) {
+        if (snapshot.profile.opaqueText(node)) {
             walker.skipChildren();
             continue;
         }
@@ -393,7 +402,7 @@ const Pass = struct {
             self.path.shrinkRetainingCapacity(entry.depth);
             const node = entry.node;
             const kind = node.kind();
-            if (snapshot.profile.isComment(kind) or oneOf(kind, snapshot.profile.strings)) {
+            if (snapshot.profile.opaqueText(node)) {
                 self.walker.skipChildren();
                 continue;
             }

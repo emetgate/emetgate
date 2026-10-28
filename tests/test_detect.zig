@@ -39,6 +39,9 @@ test "test detection: each project marker names its test command" {
     try expectDetected("go test ./...", &.{.{ "go.mod", "" }});
     try expectDetected("python -m pytest", &.{.{ "pyproject.toml", "" }});
     try expectDetected("python -m pytest", &.{.{ "pytest.ini", "" }});
+    try expectDetected("python -m pytest", &.{.{ "tox.ini", "" }});
+    try expectDetected("python -m pytest", &.{.{ "setup.cfg", "" }});
+    try expectDetected("python -m pytest", &.{.{ "setup.py", "" }});
     try expectDetected("dotnet test", &.{.{ "app.csproj", "" }});
     try expectDetected("dotnet test", &.{.{ "App.SLN", "" }});
 }
@@ -226,4 +229,17 @@ test "test detection: the run allowlist carries the given or detected test comma
     var plain = try run_fixture.call(run_fixture.policyWith(repo.root_abs, &.{}), .{});
     defer plain.deinit();
     try testing.expectEqual(@as(usize, 0), (try plain.field("commands")).?.array.items.len);
+}
+
+test "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest" {
+    try expectDetected(".venv\\Scripts\\python -m pytest", &.{ .{ "pyproject.toml", "" }, .{ ".venv/Scripts/python.exe", "" } });
+    try expectDetected("venv\\Scripts\\python -m pytest", &.{ .{ "setup.py", "" }, .{ "venv/Scripts/python.exe", "" } });
+    try expectDetected("python -m pytest", &.{ .{ "requirements.txt", "requests\npytest>=8\n" }, .{ "tests/test_a.py", "" } });
+    try expectDetected("python -m unittest discover", &.{ .{ "requirements.txt", "requests\npytest-cov\n" }, .{ "test_a.py", "" } });
+    try expectDetected(".venv\\Scripts\\python -m pytest", &.{ .{ "requirements.txt", "requests\n" }, .{ "tests/test_a.py", "" }, .{ ".venv/Scripts/python.exe", "" }, .{ ".venv/Lib/site-packages/pytest/__init__.py", "" } });
+    try expectDetected(".venv\\Scripts\\python -m unittest discover", &.{ .{ "requirements.txt", "requests\n" }, .{ "tests/test_a.py", "" }, .{ ".venv/Scripts/python.exe", "" } });
+    try expectDetected(null, &.{.{ "requirements.txt", "pytest\n" }});
+    try testing.expect(test_command.requiresPytest("  pytest\n"));
+    try testing.expect(test_command.requiresPytest("pytest[testing]==8.0"));
+    try testing.expect(!test_command.requiresPytest("pytest-cov\n# pytest\n"));
 }

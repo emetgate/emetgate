@@ -143,7 +143,7 @@ pub const Options = struct {
     gate_tree: shadow.Choice = .{},
     used: ?*shadow.TreeUse = null,
     blocked: ?*gate_tree.Report = null,
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
 };
 
@@ -179,11 +179,68 @@ pub fn isToolchain(command: []const u8) bool {
     return toolchain.classify(command) != null;
 }
 
+const separators = " \t\"";
+const path_separators = "\\/";
+const project_interpreters = [_][]const u8{ "python", "python3", "pytest", "mypy", "ruff", "pip", "pip3" };
+
+pub fn isToolchainIn(io: std.Io, root_abs: []const u8, command: []const u8) bool {
+    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;
+    var tokens = std.mem.tokenizeAny(u8, command, separators);
+    const first = tokens.next() orelse return false;
+    if (std.mem.indexOfAny(u8, first, path_separators) == null) return toolchain.classify(command) != null;
+    if (!projectInterpreter(io, root_abs, first)) return false;
+    var buffer: [max_entry_bytes]u8 = undefined;
+    const tool = toolName(first);
+    const rest = command[tokens.index..];
+    if (tool.len + rest.len > buffer.len) return false;
+    @memcpy(buffer[0..tool.len], tool);
+    @memcpy(buffer[tool.len..][0..rest.len], rest);
+    return toolchain.classify(buffer[0 .. tool.len + rest.len]) != null;
+}
+
+fn projectInterpreter(io: std.Io, root_abs: []const u8, token: []const u8) bool {
+    var listed = false;
+    for (project_interpreters) |name| {
+        if (std.ascii.eqlIgnoreCase(name, toolName(token))) listed = true;
+    }
+    if (!listed) return false;
+    var storage: [4 * std.fs.max_path_bytes]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&storage);
+    const a = fixed.allocator();
+    const real_root = std.Io.Dir.cwd().realPathFileAlloc(io, root_abs, a) catch return false;
+    for ([_][]const u8{ "", ".exe" }) |suffix| {
+        const joined = std.fmt.allocPrint(a, "{s}\\{s}{s}", .{ root_abs, token, suffix }) catch return false;
+        std.mem.replaceScalar(u8, joined, '/', '\\');
+        const real = std.Io.Dir.cwd().realPathFileAlloc(io, joined, a) catch continue;
+        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\') return false;
+        return inVenv(io, a, real);
+    }
+    return false;
+}
+
+fn inVenv(io: std.Io, a: Allocator, exe_abs: []const u8) bool {
+    const scripts = std.fs.path.dirnameWindows(exe_abs) orelse return false;
+    const venv = std.fs.path.dirnameWindows(scripts) orelse return false;
+    const config = std.fmt.allocPrint(a, "{s}\\pyvenv.cfg", .{venv}) catch return false;
+    std.Io.Dir.cwd().access(io, config, .{}) catch return false;
+    return true;
+}
+
+pub fn localCommand(gpa: Allocator, command: []const u8) ![]u8 {
+    const owned = try gpa.dupe(u8, command);
+    const start = std.mem.indexOfNone(u8, owned, separators) orelse return owned;
+    const end = std.mem.indexOfAnyPos(u8, owned, start, separators) orelse owned.len;
+    std.mem.replaceScalar(u8, owned[start..end], '/', '\\');
+    return owned;
+}
+
 pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
-    if (!isToolchain(command)) return error.RunCommandRefused;
+    if (!isToolchainIn(io, root_abs, command)) return error.RunCommandRefused;
+    const local = try localCommand(gpa, command);
+    defer gpa.free(local);
     const lock = try shadow.Lock.acquire(io, root_abs);
     defer lock.release();
-    return runner.runToolchain(gpa, io, root_abs, command, limits);
+    return runner.runToolchain(gpa, io, root_abs, local, limits);
 }
 
 pub const Tail = struct {

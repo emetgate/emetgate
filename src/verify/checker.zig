@@ -195,11 +195,12 @@ const Checker = struct {
         const ra = a.tree.root();
         const rb = b.tree.root();
         if (ra.childCount() != rb.childCount()) return false;
+        const changed = alpha.changedLeaves(self.arena, a, b) catch return false;
         var i: u32 = 0;
         while (ra.child(i)) |x| : (i += 1) {
             const y = rb.child(i).?;
-            const hx = alpha.hash(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }) catch return false;
-            const hy = alpha.hash(self.arena, b, .{ .start = y.startByte(), .end = y.endByte() }) catch return false;
+            const hx = alpha.hashDistinct(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }, changed.before) catch return false;
+            const hy = alpha.hashDistinct(self.arena, b, .{ .start = y.startByte(), .end = y.endByte() }, changed.after) catch return false;
             if (!std.mem.eql(u8, &hx, &hy)) return false;
         }
         return true;

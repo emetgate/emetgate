@@ -36,7 +36,7 @@ pub const BatchOptions = struct {
     doc_edits: []const DocEdit = &.{},
     test_command: []const u8,
     typecheck_command: ?[]const u8 = null,
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,

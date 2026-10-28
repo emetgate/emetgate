@@ -87,6 +87,7 @@ pub const profile: Profile = .{
     .dynamic_callees = &.{},
     .dynamic_constructors = &.{},
     .strings = &.{ "string_literal", "verbatim_string_literal", "raw_string_literal", "interpolated_string_expression" },
+    .string_holes = &.{"interpolation"},
     .class_body = "declaration_list",
     .bodyless_terminator = ";",
     .empty_body = "{}",

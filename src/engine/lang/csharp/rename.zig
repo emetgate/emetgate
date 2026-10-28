@@ -13,6 +13,7 @@ const binder_sites = [_]BinderSite{
     .{ .parent = "enum_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "delegate_declaration", .field = "name", .namespace = .both, .scope = .program },
     .{ .parent = "method_declaration", .field = "name", .scope = .block },
+    .{ .parent = "property_declaration", .field = "name", .scope = .block },
     .{ .parent = "local_function_statement", .field = "name", .scope = .block },
     .{ .parent = "parameter", .field = "name", .scope = .function },
     .{ .parent = "variable_declarator", .field = "name", .scope = .declarator },
@@ -20,6 +21,11 @@ const binder_sites = [_]BinderSite{
     .{ .parent = "foreach_statement", .field = "left", .scope = .own },
     .{ .parent = "catch_declaration", .field = "name", .scope = .own },
     .{ .parent = "type_parameter", .field = "name", .namespace = .type, .scope = .owner },
+};
+
+const inert_sites = [_]BinderSite{
+    .{ .parent = "assignment_expression", .field = "left", .grandparent = "initializer_expression" },
+    .{ .parent = "with_initializer", .field = null, .position = .first },
 };
 
 pub const modules: profile_mod.Modules = .{
@@ -55,6 +61,7 @@ pub const grammar: Rename = .{
     .import_binders = &.{},
     .export_scope_stops = &.{},
     .binder_sites = &binder_sites,
+    .inert_sites = &inert_sites,
     .block_scopes = &.{ "compilation_unit", "declaration_list", "block", "switch_body" },
     .function_scoped_statements = &.{},
     .subscript = "__csharp_no_subscript__",

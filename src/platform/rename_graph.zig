@@ -24,6 +24,24 @@ pub const Proven = struct {
     span: Span,
 };
 
+pub const Sites = struct {
+    count: usize = 0,
+    buf: [480]u8 = undefined,
+    len: usize = 0,
+
+    pub fn list(self: *const Sites) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    pub fn add(self: *Sites, rel: []const u8, source: []const u8, offset: u32) void {
+        self.count += 1;
+        const line = std.mem.count(u8, source[0..@min(offset, source.len)], "\n") + 1;
+        const sep: []const u8 = if (self.len == 0) "" else ", ";
+        const written = std.fmt.bufPrint(self.buf[self.len..], "{s}{s}:{d}", .{ sep, rel, line }) catch return;
+        self.len += written.len;
+    }
+};
+
 pub const Found = struct {
     proven: []Proven,
     member: bool,
@@ -93,6 +111,24 @@ const Graph = struct {
         }
     }
 
+    fn addPackageInits(self: *Graph, fs: io_seam.Fs, root: []const u8) !void {
+        const modules = self.profile.modules orelse return;
+        if (modules.package_init.len == 0) return;
+        var i: usize = 0;
+        while (i < self.rels.items.len) : (i += 1) {
+            var dir = std.fs.path.dirnamePosix(self.rels.items[i]) orelse continue;
+            while (true) {
+                const init_rel = try std.fmt.allocPrint(self.gpa, "{s}/{s}", .{ dir, modules.package_init });
+                defer self.gpa.free(init_rel);
+                const abs = try std.fmt.allocPrint(self.gpa, "{s}\\{s}", .{ root, init_rel });
+                defer self.gpa.free(abs);
+                std.mem.replaceScalar(u8, abs[root.len..], '/', '\\');
+                if (fs.stat(abs, .follow)) |_| try self.addRel(init_rel) else |_| {}
+                dir = std.fs.path.dirnamePosix(dir) orelse break;
+            }
+        }
+    }
+
     fn absOf(self: *const Graph, gpa: Allocator, root: []const u8, file: u32) ![]u8 {
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, self.rels.items[file] });
         std.mem.replaceScalar(u8, abs[root.len..], '/', '\\');
@@ -156,7 +192,9 @@ const Locator = struct {
     old: []const u8,
     target: Place,
     parent: ?Place,
+    sites: ?*Sites = null,
     proven: std.ArrayList(Place) = .empty,
+    elsewhere: std.ArrayList(Place) = .empty,
 
     fn prove(self: *Locator, file: u32, start: u32) !void {
         const at: Place = .{ .file = file, .index = start };
@@ -251,12 +289,23 @@ const Locator = struct {
                     .member_of_type => |t| st.facts.types[t],
                     else => continue,
                 };
-                if (t.target != .unresolved or !std.mem.eql(u8, t.member, parent.name)) continue;
+                if (t.target != .unresolved) continue;
                 const node = rename.leafAt(snapshot.tree.root(), .{ .start = ref.start, .end = ref.start + @as(u32, @intCast(self.old.len)) }) orelse continue;
-                const found = (try self.globalType(file, node, parent.name)) orelse continue;
-                if (found.eql(parent_at)) try self.prove(file, ref.start);
+                const found = (try self.globalType(file, node, t.member)) orelse continue;
+                if (found.eql(parent_at)) {
+                    try self.prove(file, ref.start);
+                } else if (!graph.hasBase(found)) {
+                    try self.elsewhere.append(self.gpa, .{ .file = file, .index = ref.start });
+                }
             }
         }
+    }
+
+    fn isElsewhere(self: *const Locator, file: u32, start: u32) bool {
+        for (self.elsewhere.items) |known| {
+            if (known.file == file and known.index == start) return true;
+        }
+        return false;
     }
 
     fn globalType(self: *const Locator, file: u32, node: ts.Node, name: []const u8) !?Place {
@@ -350,16 +399,18 @@ const Locator = struct {
             for (leaves) |leaf| {
                 if (self.isProven(file, leaf.span.start)) continue;
                 if (declares(st.facts.defs, leaf.span.start)) continue;
-                if (linkedElsewhere(st, leaf.span.start)) continue;
+                if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;
                 if (resolution.binderAt(leaf.span)) |b| {
                     if (!resolution.binders[b].import) continue;
                 }
                 if (resolution.useAt(leaf.span)) |use| {
                     if (use.binder) |b| if (!resolution.binders[b].import and !self.isProven(file, resolution.binders[b].span.start)) continue;
                 }
-                return error.RenameUnresolved;
+                const sites = self.sites orelse return error.RenameUnresolved;
+                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);
             }
         }
+        if (self.sites) |sites| if (sites.count != 0) return error.RenameUnresolved;
     }
 };
 
@@ -397,7 +448,7 @@ pub fn supports(profile: *const Profile) bool {
     return facts_extract.supports(profile);
 }
 
-pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, offset: u32, old: []const u8) !Found {
+pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, offset: u32, old: []const u8, sites: ?*Sites) !Found {
     const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;
     if (!supports(profile)) return error.UnsupportedLanguage;
     var graph = Graph.init(gpa, profile);
@@ -435,12 +486,24 @@ pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, f
 
     var real = io_seam.Real.init(gpa, io);
     defer real.deinit();
+    const before_inits = graph.rels.items.len;
+    var module_files: []u8 = &.{};
+    defer gpa.free(module_files);
+    if (profile.modules) |m| if (m.package_init.len != 0) {
+        const pattern = try std.fmt.allocPrint(gpa, "*{s}", .{std.fs.path.extension(m.package_init)});
+        defer gpa.free(pattern);
+        module_files = try repo.trackedListing(gpa, io, root, pattern);
+    };
+    try graph.addPackageInits(real.seam().fs, root);
+    try graph.load(io, runtime, root, before_inits);
     var workspace = try fact_modules.Workspace.build(gpa, real.seam().fs, root, graph.rels.items);
     defer workspace.deinit();
+    try workspace.track(module_files);
     try graph.store.linkAll(workspace.resolver());
 
-    var locator: Locator = .{ .gpa = gpa, .graph = &graph, .old = old, .target = target_place, .parent = parent };
+    var locator: Locator = .{ .gpa = gpa, .graph = &graph, .old = old, .target = target_place, .parent = parent, .sites = sites };
     defer locator.proven.deinit(gpa);
+    defer locator.elsewhere.deinit(gpa);
     try locator.refuseLookalikes();
     try locator.proveLinked();
     if (global_types) try locator.proveGlobal();

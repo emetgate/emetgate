@@ -77,6 +77,7 @@ pub const appcontainer = src.appcontainer;
 pub const tsserver = src.tsserver;
 pub const rename_batch = src.rename_batch;
 pub const rename_require = src.rename_require;
+pub const rename_graph = src.rename_graph;
 pub const move_batch = src.move_batch;
 pub const file_move = src.file_move;
 pub const file_edit = src.file_edit;

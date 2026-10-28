@@ -112,6 +112,7 @@ const Extractor = struct {
     binding_at: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     typed_at: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     skipped_uses: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    scoped_bindings: std.AutoHashMapUnmanaged(u32, void) = .empty,
     path: std.ArrayList(Step) = .empty,
     owners: std.ArrayList(u32) = .empty,
     next_owner: usize = 1,
@@ -256,9 +257,14 @@ const Extractor = struct {
                         const b = try self.addBinding(spec, self.m.default_keyword, name, entry.default_start, entry.type_only);
                         try self.addImportRef(self.m.default_keyword, entry.default_start, b);
                     }
-                    if (entry.namespace) |name| _ = try self.addBinding(spec, facts.namespace_name, name, entry.namespace_start, entry.type_only);
+                    if (entry.namespace) |name| {
+                        const b = try self.addBinding(spec, facts.namespace_name, name, entry.namespace_start, entry.type_only);
+                        if (entry.scoped) try self.scoped_bindings.put(self.arena, b, {});
+                    }
                     for (entry.named) |named| {
                         const b = try self.addBinding(spec, named.name, named.local(), named.local_start, entry.type_only or named.type_only);
+                        if (entry.scoped) try self.scoped_bindings.put(self.arena, b, {});
+                        if (self.m.submodule_imports) try self.addSubmodule(b, entry.spec, named.name, entry.statement.start);
                         try self.addImportRef(named.name, named.name_start, b);
                     }
                 },
@@ -284,6 +290,14 @@ const Extractor = struct {
         try self.bindings.append(self.arena, .{ .spec = spec, .imported = try self.keep(imported), .local = try self.keep(local), .start = start, .type_only = type_only });
         if (local.len != 0) try self.binding_at.put(self.arena, start, index);
         return index;
+    }
+
+    fn addSubmodule(self: *Extractor, binding: u32, package: []const u8, name: []const u8, start: u32) Error!void {
+        if (package.len == 0) return;
+        const separator: []const u8 = if (package[package.len - 1] == '.') "" else ".";
+        const joined = try std.mem.concat(self.arena, u8, &.{ package, separator, name });
+        self.bindings.items[binding].submodule = @intCast(self.specs.items.len);
+        try self.specs.append(self.arena, .{ .text = joined, .line = self.lineAt(start), .kind = .static });
     }
 
     fn addImportRef(self: *Extractor, name: []const u8, start: u32, binding: u32) Error!void {
@@ -363,21 +377,35 @@ const Extractor = struct {
     }
 
     fn collectShapes(self: *Extractor) Error!void {
+        var written: std.AutoHashMapUnmanaged(u32, void) = .empty;
         var walker = traversal.Walker.init(self.snapshot.tree.root());
         defer walker.deinit();
         while (walker.next()) |entry| {
             const node = entry.node;
             const kind = node.kind();
-            if (self.profile.isComment(kind) or oneOf(kind, self.profile.strings)) {
+            if (self.profile.opaqueText(node)) {
                 walker.skipChildren();
                 continue;
             }
             for (self.f.typed_binders) |site| {
                 if (!std.mem.eql(u8, site.node, kind)) continue;
-                const name = node.childByField(site.name_field) orelse continue;
+                const name = (if (site.name_field.len == 0) node.namedChild(0) else node.childByField(site.name_field)) orelse continue;
                 if (!std.mem.eql(u8, name.kind(), self.profile.identifier)) continue;
                 const declared = (try self.annotatedType(node, site.type_field)) orelse continue;
                 try self.typed_at.put(self.arena, name.startByte(), declared);
+            }
+            for (self.f.constructions) |site| {
+                if (!std.mem.eql(u8, site.node, kind)) continue;
+                const name = node.childByField(site.name_field) orelse continue;
+                if (!std.mem.eql(u8, name.kind(), self.profile.identifier) or self.typed_at.contains(name.startByte())) continue;
+                const built = (try self.builtType(node, name, site)) orelse continue;
+                try self.typed_at.put(self.arena, name.startByte(), built);
+            }
+            for (self.f.writes) |site| {
+                if (!std.mem.eql(u8, site.parent, kind)) continue;
+                const target = node.childByField(site.field) orelse continue;
+                const binder = self.binderOfUse(target.startByte()) orelse continue;
+                try written.put(self.arena, binder, {});
             }
             if (std.mem.eql(u8, kind, self.profile.declarator)) {
                 if (node.childByField("name")) |name| {
@@ -388,6 +416,66 @@ const Extractor = struct {
             }
             if (node.isNamed() and oneOf(kind, self.f.classes)) try self.classShape(node);
         }
+        if (self.f.sole_binder_types) try self.dropRebound(&written);
+    }
+
+    fn dropRebound(self: *Extractor, written: *const std.AutoHashMapUnmanaged(u32, void)) Error!void {
+        const root = self.snapshot.tree.root();
+        var index_at: std.AutoHashMapUnmanaged(u32, usize) = .empty;
+        for (self.every.binders, 0..) |binder, i| try index_at.put(self.arena, binder.span.start, i);
+        var doomed: std.ArrayList(u32) = .empty;
+        var keys = self.typed_at.keyIterator();
+        while (keys.next()) |start| {
+            const i = index_at.get(start.*) orelse {
+                try doomed.append(self.arena, start.*);
+                continue;
+            };
+            const binder = self.every.binders[i];
+            if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);
+        }
+        for (doomed.items) |start| _ = self.typed_at.remove(start);
+    }
+
+    fn soleBinder(self: *const Extractor, index: usize) bool {
+        const binders = self.every.binders;
+        const names = self.every.binder_names;
+        var i = index;
+        while (i > 0 and std.mem.eql(u8, names[i - 1], names[index])) i -= 1;
+        while (i < binders.len and std.mem.eql(u8, names[i], names[index])) : (i += 1) {
+            if (i != index and binders[i].scope.same(binders[index].scope)) return false;
+        }
+        return true;
+    }
+
+    fn builtType(self: *Extractor, node: ts.Node, name: ts.Node, site: profile_mod.Construction) Error!?u32 {
+        if (site.parent_type_field) |field| {
+            if (node.parent()) |holder| if (holder.childByField(field)) |declared| {
+                if (try self.typeRefOfName(declared)) |t| return t;
+            };
+        }
+        var value = (if (site.value_field) |field| node.childByField(field) else self.valueAfter(node, name)) orelse return null;
+        while (oneOf(value.kind(), self.profile.transparent_wrappers)) value = value.namedChild(0) orelse return null;
+        return self.constructionOf(value);
+    }
+
+    fn valueAfter(_: *const Extractor, node: ts.Node, name: ts.Node) ?ts.Node {
+        var i: u32 = 0;
+        while (node.namedChild(i)) |child| : (i += 1) {
+            if (child.startByte() > name.startByte()) return child;
+        }
+        return null;
+    }
+
+    fn constructionOf(self: *Extractor, value: ts.Node) Error!?u32 {
+        if (self.g.new_expression.len != 0 and std.mem.eql(u8, value.kind(), self.g.new_expression)) {
+            const constructor = value.childByField(self.g.new_constructor_field) orelse return null;
+            return self.typeRefOfName(constructor);
+        }
+        if (self.f.calls_construct and std.mem.eql(u8, value.kind(), self.profile.call.node)) {
+            const callee = value.childByField(self.profile.call.function_field) orelse return null;
+            return self.typeRefOfName(callee);
+        }
+        return null;
     }
 
     fn classShape(self: *Extractor, class: ts.Node) Error!void {
@@ -468,6 +556,7 @@ const Extractor = struct {
                 def.exported = true;
                 try self.exports.append(self.arena, .{ .name = def.name, .kind = .local, .index = @intCast(d) });
             }
+            if (self.m.exports_bindings) try self.exportBindings();
             return;
         }
         const root = self.snapshot.tree.root();
@@ -501,6 +590,13 @@ const Extractor = struct {
                     try self.exportName(exported, name);
                 }
             }
+        }
+    }
+
+    fn exportBindings(self: *Extractor) Error!void {
+        for (self.bindings.items, 0..) |binding, b| {
+            if (binding.type_only or self.scoped_bindings.contains(@intCast(b))) continue;
+            try self.exports.append(self.arena, .{ .name = binding.local, .kind = .binding, .index = @intCast(b) });
         }
     }
 
@@ -639,6 +735,10 @@ const Extractor = struct {
             const constructed = (try self.typeRefOfName(constructor)) orelse return .{ .unresolved = .property_needs_type };
             return .{ .member_of_type = constructed };
         }
+        if (self.f.calls_construct and std.mem.eql(u8, kind, self.profile.call.node)) {
+            const constructed = (try self.constructionOf(object)) orelse return .{ .unresolved = .property_needs_type };
+            return .{ .member_of_type = constructed };
+        }
         if (std.mem.eql(u8, kind, self.f.this_keyword)) {
             const class = self.enclosingClass() orelse return .{ .unresolved = .dynamic_this };
             return .{ .member_of_def = class.def };
@@ -702,6 +802,35 @@ const Extractor = struct {
                 return self.addLoose(name);
             },
             else => return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(property), .target = target, .static = is_static }),
+        }
+    }
+
+    fn initializerOwner(self: *const Extractor, depth: usize, initializer: *const profile_mod.Initializer) ?ts.Node {
+        if (depth == 0) return null;
+        const parent = self.path.items[depth - 1].node;
+        const list = initializer.list orelse return if (std.mem.eql(u8, parent.kind(), initializer.owner)) parent else null;
+        if (depth < 2 or !std.mem.eql(u8, parent.kind(), list)) return null;
+        const owner = self.path.items[depth - 2].node;
+        if (!std.mem.eql(u8, owner.kind(), initializer.owner)) return null;
+        const field = initializer.owner_list_field orelse return owner;
+        const held = owner.childByField(field) orelse return null;
+        return if (held.eql(parent)) owner else null;
+    }
+
+    fn initializedMember(self: *Extractor, node: ts.Node, depth: usize, initializer: *const profile_mod.Initializer) Error!void {
+        const owner = self.initializerOwner(depth, initializer) orelse return;
+        const property = (if (initializer.name_field) |field| node.childByField(field) else node.namedChild(0)) orelse return;
+        if (!std.mem.eql(u8, property.kind(), self.profile.identifier)) return;
+        const object = if (initializer.object_is_owner) owner else owner.namedChild(0) orelse return;
+        const start = property.startByte();
+        try self.skipped_uses.put(self.arena, start, {});
+        const name = try self.text(property);
+        const from = try self.ownerAt(node.startByte());
+        if (self.inError()) return self.addRef(.{ .from = from, .kind = .write, .name = name, .start = start, .line = lineOf(property), .target = .{ .unresolved = .parse_error } });
+        const target = try self.memberTarget(self.strip(object));
+        switch (target) {
+            .unresolved => return self.addLoose(name),
+            else => return self.addRef(.{ .from = from, .kind = .write, .name = name, .start = start, .line = lineOf(property), .target = target }),
         }
     }
 
@@ -790,11 +919,14 @@ const Extractor = struct {
             self.path.shrinkRetainingCapacity(depth);
             const node = entry.node;
             const kind = node.kind();
-            if (self.profile.isComment(kind) or oneOf(kind, self.profile.strings)) {
+            if (self.profile.opaqueText(node)) {
                 walker.skipChildren();
                 continue;
             }
             if (std.mem.eql(u8, kind, self.f.member)) try self.member(node, depth, entry.field);
+            for (self.f.initializers) |*initializer| {
+                if (std.mem.eql(u8, kind, initializer.entry)) try self.initializedMember(node, depth, initializer);
+            }
             if (self.f.qualified_type) |qualified| if (std.mem.eql(u8, kind, qualified)) try self.qualifiedType(node);
             if (std.mem.eql(u8, kind, self.profile.call.node)) try self.call(node);
             if (std.mem.eql(u8, kind, self.g.subscript)) self.subscriptRead(node, depth, entry.field);

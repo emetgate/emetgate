@@ -83,6 +83,15 @@ fn join(a: Allocator, base: []const u8, rel: []const u8) Allocator.Error!?[]cons
     };
 }
 
+const python_source_root = "src";
+
+fn sameTarget(a: SpecTarget, b: SpecTarget) bool {
+    return switch (a) {
+        .file => |id| b == .file and b.file == id,
+        else => std.meta.activeTag(a) == std.meta.activeTag(b),
+    };
+}
+
 pub const Workspace = struct {
     arena_state: std.heap.ArenaAllocator,
     tracked: TrackedMap = .empty,
@@ -280,6 +289,15 @@ pub const Workspace = struct {
         }
     }
 
+    pub fn track(self: *Workspace, listing: []const u8) Allocator.Error!void {
+        const a = self.arena();
+        var files = std.mem.tokenizeScalar(u8, listing, 0);
+        while (files.next()) |rel| {
+            if (self.tracked.contains(rel)) continue;
+            try self.tracked.put(a, try a.dupe(u8, rel), {});
+        }
+    }
+
     fn configFor(self: *const Workspace, importer: []const u8) ?Config {
         var dir: []const u8 = std.fs.path.dirnamePosix(importer) orelse "";
         while (true) {
@@ -317,17 +335,48 @@ pub const Workspace = struct {
         const scratch = self.resolve_scratch.allocator();
         var base: []const u8 = std.fs.path.dirnamePosix(importer) orelse "";
         var rest = spec;
-        if (rest.len > 0 and rest[0] == '.') {
-            var dots: usize = 0;
-            while (dots < rest.len and rest[dots] == '.') dots += 1;
-            var up: usize = 1;
-            while (up < dots) : (up += 1) base = std.fs.path.dirnamePosix(base) orelse "";
-            rest = rest[dots..];
-        }
+        if (rest.len == 0 or rest[0] != '.') return self.resolvePythonAbsolute(store, base, spec);
+        var dots: usize = 0;
+        while (dots < rest.len and rest[dots] == '.') dots += 1;
+        var up: usize = 1;
+        while (up < dots) : (up += 1) base = std.fs.path.dirnamePosix(base) orelse "";
+        rest = rest[dots..];
         const path = try scratch.dupe(u8, rest);
         std.mem.replaceScalar(u8, path, '.', '/');
         const joined = if (path.len == 0) base else (try join(scratch, base, path)) orelse return null;
         return self.foundPython(store, joined);
+    }
+
+    fn resolvePythonAbsolute(self: *Workspace, store: *const Store, importer_dir: []const u8, spec: []const u8) Allocator.Error!?SpecTarget {
+        const scratch = self.resolve_scratch.allocator();
+        const path = try scratch.dupe(u8, spec);
+        std.mem.replaceScalar(u8, path, '.', '/');
+        const roots = [_][]const u8{ self.scriptRoot(importer_dir), "", python_source_root };
+        var hit: ?SpecTarget = null;
+        var hit_root: []const u8 = "";
+        for (roots) |root| {
+            const joined = (try join(scratch, root, path)) orelse continue;
+            const target = (try self.foundPython(store, joined)) orelse continue;
+            if (hit) |previous| {
+                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target)) return .unindexed;
+                continue;
+            }
+            hit = target;
+            hit_root = root;
+        }
+        return hit;
+    }
+
+    fn scriptRoot(self: *Workspace, importer_dir: []const u8) []const u8 {
+        const scratch = self.resolve_scratch.allocator();
+        const lookup: Tracked = .{ .map = &self.tracked };
+        var dir = importer_dir;
+        while (dir.len > 0) {
+            const init = (join(scratch, dir, "__init__.py") catch return dir) orelse return dir;
+            if (!lookup.has(init)) return dir;
+            dir = std.fs.path.dirnamePosix(dir) orelse "";
+        }
+        return dir;
     }
 
     pub fn resolve(self: *Workspace, store: *const Store, importer: []const u8, spec: []const u8) Allocator.Error!SpecTarget {

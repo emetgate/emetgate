@@ -45,9 +45,15 @@ const markers = [_]Marker{
     .{ .file = "build.zig", .command = "zig build test" },
     .{ .file = "Cargo.toml", .command = "cargo test" },
     .{ .file = "go.mod", .command = "go test ./..." },
-    .{ .file = "pyproject.toml", .command = "python -m pytest" },
-    .{ .file = "pytest.ini", .command = "python -m pytest" },
 };
+
+const python_markers = [_][]const u8{ "pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg", "setup.py" };
+const requirement_files = [_][]const u8{ "requirements.txt", "requirements-dev.txt", "requirements-test.txt", "dev-requirements.txt" };
+pub const venv_dirs = [_][]const u8{ ".venv", "venv" };
+const pytest_run = "-m pytest";
+const unittest_run = "-m unittest discover";
+
+threadlocal var python_command: [64]u8 = undefined;
 
 pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
     var dir = std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true }) catch return null;
@@ -56,6 +62,10 @@ pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
     for (markers) |marker| {
         if (dir.access(io, marker.file, .{})) |_| return marker.command else |_| {}
     }
+    for (python_markers) |marker| {
+        if (dir.access(io, marker, .{})) |_| return pythonCommand(io, dir, pytest_run) else |_| {}
+    }
+    if (try requirementsProject(gpa, io, dir)) |run| return pythonCommand(io, dir, run);
     var it = dir.iterate();
     while (it.next(io) catch null) |entry| {
         if (entry.kind != .file) continue;
@@ -130,6 +140,70 @@ fn findTestProjects(io: std.Io, dir: std.Io.Dir, prefix: *[512]u8, prefix_len: u
         }
         if (depth < max_project_depth) findTestProjects(io, sub, prefix, sub_len, depth + 1, found);
     }
+}
+
+fn venvOf(io: std.Io, dir: std.Io.Dir) ?[]const u8 {
+    for (venv_dirs) |venv| {
+        var buffer: [32]u8 = undefined;
+        const exe = std.fmt.bufPrint(&buffer, "{s}\\Scripts\\python.exe", .{venv}) catch continue;
+        if (dir.access(io, exe, .{})) |_| return venv else |_| {}
+    }
+    return null;
+}
+
+fn pythonCommand(io: std.Io, dir: std.Io.Dir, run: []const u8) []const u8 {
+    const venv = venvOf(io, dir) orelse return if (std.mem.eql(u8, run, pytest_run)) "python -m pytest" else "python -m unittest discover";
+    return std.fmt.bufPrint(&python_command, "{s}\\Scripts\\python {s}", .{ venv, run }) catch "python -m pytest";
+}
+
+fn requirementsProject(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]const u8 {
+    var listed_pytest = false;
+    var any = false;
+    for (requirement_files) |name| {
+        const bytes = dir.readFileAlloc(io, name, gpa, .limited(max_manifest_bytes)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        defer gpa.free(bytes);
+        any = true;
+        if (requiresPytest(bytes)) listed_pytest = true;
+    }
+    if (!any or !hasPythonTests(io, dir)) return null;
+    if (listed_pytest or venvHasPytest(io, dir)) return pytest_run;
+    return unittest_run;
+}
+
+pub fn requiresPytest(bytes: []const u8) bool {
+    var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t");
+        if (!std.ascii.startsWithIgnoreCase(line, "pytest")) continue;
+        if (line.len == "pytest".len) return true;
+        const next = line["pytest".len];
+        if (std.mem.indexOfScalar(u8, " \t=<>!~;[@", next) != null) return true;
+    }
+    return false;
+}
+
+fn venvHasPytest(io: std.Io, dir: std.Io.Dir) bool {
+    const venv = venvOf(io, dir) orelse return false;
+    var buffer: [64]u8 = undefined;
+    const site = std.fmt.bufPrint(&buffer, "{s}\\Lib\\site-packages\\pytest", .{venv}) catch return false;
+    if (dir.access(io, site, .{})) |_| return true else |_| return false;
+}
+
+fn hasPythonTests(io: std.Io, dir: std.Io.Dir) bool {
+    for ([_][]const u8{ "tests", "test" }) |name| {
+        var sub = dir.openDir(io, name, .{}) catch continue;
+        sub.close(io);
+        return true;
+    }
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.ascii.startsWithIgnoreCase(entry.name, "test_") and std.ascii.endsWithIgnoreCase(entry.name, ".py")) return true;
+    }
+    return false;
 }
 
 fn packageTestScript(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {

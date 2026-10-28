@@ -132,6 +132,8 @@ pub const Rename = struct {
     class_scopes: []const []const u8 = &.{},
     scope_bodies: []const FieldSite = &.{},
     rebinding_statements: []const []const u8 = &.{},
+    type_string_parents: []const []const u8 = &.{},
+    name_list: ?NameList = null,
 };
 
 pub const Modules = struct {
@@ -151,6 +153,9 @@ pub const Modules = struct {
     default_keyword: []const u8,
     star_token: []const u8,
     from_statement: ?[]const u8 = null,
+    submodule_imports: bool = false,
+    package_init: []const u8 = "",
+    exports_bindings: bool = false,
     module_name_field: []const u8 = "",
     aliased_import: []const u8 = "",
     wildcard_import: []const u8 = "",
@@ -177,6 +182,7 @@ pub const Declarations = struct {
     destructuring: []const []const u8 = &.{},
     static_keyword: ?[]const u8 = null,
     containers: []const []const u8 = &.{},
+    wrappers: []const []const u8 = &.{},
     variable_declarator: []const u8 = "",
     variable_name_field: []const u8 = "name",
     items: Items = .{},
@@ -217,10 +223,43 @@ pub const FieldSite = struct {
     field: []const u8,
 };
 
+pub const NameListHolder = struct {
+    node: []const u8,
+    target_field: []const u8,
+    object_field: ?[]const u8 = null,
+    value_field: []const u8,
+};
+
+pub const NameList = struct {
+    owner: []const u8,
+    string: []const u8,
+    content: []const u8,
+    quote_start: []const u8,
+    containers: []const []const u8,
+    holders: []const NameListHolder,
+    statement: []const u8,
+};
+
 pub const TypedBinder = struct {
     node: []const u8,
     name_field: []const u8,
     type_field: []const u8,
+};
+
+pub const Construction = struct {
+    node: []const u8,
+    name_field: []const u8,
+    value_field: ?[]const u8 = null,
+    parent_type_field: ?[]const u8 = null,
+};
+
+pub const Initializer = struct {
+    entry: []const u8,
+    name_field: ?[]const u8 = null,
+    list: ?[]const u8 = null,
+    owner: []const u8,
+    owner_list_field: ?[]const u8 = null,
+    object_is_owner: bool,
 };
 
 pub const Facts = struct {
@@ -258,6 +297,10 @@ pub const Facts = struct {
     using_directive: ?[]const u8 = null,
     receiver_parameter: ?[]const u8 = null,
     member_wrappers: []const []const u8 = &.{},
+    constructions: []const Construction = &.{},
+    initializers: []const Initializer = &.{},
+    calls_construct: bool = false,
+    sole_binder_types: bool = false,
     class_body_field: []const u8 = "body",
     test_files: []const []const u8 = &.{},
     test_definitions: []const TestDefinition = &.{},
@@ -327,6 +370,7 @@ pub const Profile = struct {
     dynamic_callees: []const []const u8,
     dynamic_constructors: []const DynamicConstructor,
     strings: []const []const u8,
+    string_holes: []const []const u8 = &.{},
     class_body: []const u8,
     bodyless_terminator: ?[]const u8,
     empty_body: []const u8,
@@ -387,6 +431,20 @@ pub const Profile = struct {
     pub fn isDottedName(self: *const Profile, node_kind: []const u8) bool {
         const dotted = self.dotted_name orelse return false;
         return std.mem.eql(u8, dotted, node_kind);
+    }
+
+    pub fn opaqueText(self: *const Profile, node: ts.Node) bool {
+        const node_kind = node.kind();
+        if (self.isComment(node_kind)) return true;
+        for (self.strings) |kind| {
+            if (!std.mem.eql(u8, kind, node_kind)) continue;
+            var i: u32 = 0;
+            while (node.child(i)) |child| : (i += 1) {
+                for (self.string_holes) |hole| if (std.mem.eql(u8, hole, child.kind())) return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     pub fn isComment(self: *const Profile, node_kind: []const u8) bool {

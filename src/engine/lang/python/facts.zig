@@ -3,6 +3,7 @@ const profile_mod = @import("../profile.zig");
 const Facts = profile_mod.Facts;
 const FieldSite = profile_mod.FieldSite;
 const TestDefinition = profile_mod.TestDefinition;
+const TypedBinder = profile_mod.TypedBinder;
 
 const writes = [_]FieldSite{
     .{ .parent = "assignment", .field = "left" },
@@ -25,6 +26,12 @@ const test_file_infixes = [_][]const u8{ "test_", "_test" };
 const test_dirs = [_][]const u8{ "tests", "test" };
 const doc_directives = [_][]const u8{ "type:", "noqa", "pragma:", "pylint:", "mypy:", "pyright:", "fmt:" };
 
+const typed_binders = [_]TypedBinder{
+    .{ .node = "typed_parameter", .name_field = "", .type_field = "type" },
+    .{ .node = "typed_default_parameter", .name_field = "name", .type_field = "type" },
+    .{ .node = "assignment", .name_field = "left", .type_field = "type" },
+};
+
 pub const python: Facts = .{
     .branch_statements = &branch_statements,
     .test_definitions = &test_definitions,
@@ -40,7 +47,7 @@ pub const python: Facts = .{
     .qualified_name_field = "attribute",
     .generic_type = null,
     .generic_name_field = "name",
-    .type_annotation = null,
+    .type_annotation = "type",
     .this_keyword = "",
     .super_keyword = "",
     .classes = &.{"class_definition"},
@@ -48,7 +55,7 @@ pub const python: Facts = .{
     .heritage = "argument_list",
     .extends_clause = null,
     .extends_value_field = "value",
-    .typed_binders = &.{},
+    .typed_binders = &typed_binders,
     .parameter_properties = &.{},
     .property_markers = &.{},
     .writes = &writes,
@@ -58,4 +65,7 @@ pub const python: Facts = .{
     .export_declaration_field = "",
     .receiver_parameter = "parameters",
     .member_wrappers = &.{"decorated_definition"},
+    .constructions = &.{.{ .node = "assignment", .name_field = "left", .value_field = "right" }},
+    .calls_construct = true,
+    .sole_binder_types = true,
 };

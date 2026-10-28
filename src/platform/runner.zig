@@ -52,7 +52,7 @@ pub const Options = struct {
     test_command: []const u8,
     test_scoped_cmd: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,

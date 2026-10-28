@@ -5331,13 +5331,13 @@
       "from": "        if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;",
       "to": "        if (a.len != b.len) return error.AlphaMismatch;",
       "kills": [
-        "rename: renaming one of two same-named properties in a statement breaks its alpha hash"
+        "rename: renaming one of two free uses of a name breaks its alpha hash"
       ]
     },
     {
       "id": "RN2-symbol-alpha-check-skipped",
       "file": "src/engine/rename.zig",
-      "from": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;",
+      "from": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (std.mem.eql(u8, &b_hash, &try alpha.hashDistinct(gpa, next, a.declaration, next_spans))) matched = true;",
       "to": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (b_hash.len != 0) matched = true;",
       "expect_status": "survived",
       "note": "defense in depth: every symbol a rename touches lies inside a touched top-level statement, and equal name partitions over the statement imply equal ones over any part of it, so the per-symbol comparison only repeats the statement check; it is kept because it also checks that every symbol keeps its ref"
@@ -5382,8 +5382,8 @@
     {
       "id": "RN7-location-not-an-identifier-skipped",
       "file": "src/engine/rename.zig",
-      "from": "        const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;\n        keep.* = options.keepOf(span);",
-      "to": "        const leaf = findLeaf(leaves, span) orelse continue;\n        keep.* = options.keepOf(span);",
+      "from": "            if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span.start..span.end], old)) return error.NotAnIdentifier;\n",
+      "to": "",
       "kills": [
         "red team rename: a location inside a comment or a string is refused and both stay unchanged",
         "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
@@ -5400,8 +5400,8 @@
     {
       "id": "RN9-untouched-file-not-checked",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (untouched and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;\n",
-      "to": "    _ = .{ gpa, untouched };\n",
+      "from": "    if (renamed == null and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;\n",
+      "to": "    _ = gpa;\n",
       "kills": [
         "red team rename: a service that skips a whole file that still calls the old name is refused"
       ]
@@ -12503,8 +12503,8 @@
     {
       "id": "CSR16-static-call-on-global-type-not-proven",
       "file": "src/platform/rename_graph.zig",
-      "from": "                if (found.eql(parent_at)) try self.prove(file, ref.start);",
-      "to": "                _ = found;",
+      "from": "                if (found.eql(parent_at)) {\n                    try self.prove(file, ref.start);\n                } else",
+      "to": "                if (found.eql(parent_at)) {} else",
       "kills": [
         "rename facts: a C# static method called from another file is renamed at its declaration and every call"
       ]
@@ -12524,8 +12524,8 @@
     {
       "id": "CSR18-global-type-member-name-not-compared",
       "file": "src/platform/rename_graph.zig",
-      "from": "                if (t.target != .unresolved or !std.mem.eql(u8, t.member, parent.name)) continue;",
-      "to": "                if (t.target != .unresolved) continue;",
+      "from": "                if (i == 0 or d.kind == .constructor or !std.mem.eql(u8, d.name, name)) continue;",
+      "to": "                if (i == 0 or d.kind == .constructor) continue;",
       "kills": [
         "rename facts: a C# member call on a receiver of unknown type refuses the rename"
       ]
@@ -12629,8 +12629,8 @@
     {
       "id": "CSR29-unaccounted-occurrence-accepted",
       "file": "src/platform/rename_graph.zig",
-      "from": "                return error.RenameUnresolved;\n            }\n        }\n    }\n};",
-      "to": "            }\n        }\n    }\n};",
+      "from": "                const sites = self.sites orelse return error.RenameUnresolved;\n",
+      "to": "                const sites = self.sites orelse continue;\n",
       "kills": [
         "rename facts: a C# member call on a receiver of unknown type refuses the rename",
         "rename facts: a Python method called on a receiver of unknown type is refused"
@@ -14490,8 +14490,8 @@
     {
       "id": "TC4-toolchain-metachar-accepted",
       "file": "src/platform/run_command.zig",
-      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n",
-      "to": "",
+      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n    var tokens",
+      "to": "    var tokens",
       "kills": [
         "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
       ]
@@ -14499,7 +14499,7 @@
     {
       "id": "TC5-toolchain-not-routed",
       "file": "src/protocol/run_tool.zig",
-      "from": "            if (why == .not_allowed and run_command.isToolchain(command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);\n",
+      "from": "            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);\n",
       "to": "",
       "kills": [
         "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name"
@@ -15368,6 +15368,615 @@
       "to": "            if (@as(?[]u8, null)) |stat| {",
       "kills": [
         "emetgate_commit: the MCP tool commits the pending gated writes"
+      ]
+    },
+    {
+      "id": "L4A-string-holes-ignored",
+      "file": "src/engine/lang/profile.zig",
+      "from": "                for (self.string_holes) |hole| if (std.mem.eql(u8, hole, child.kind())) return false;",
+      "to": "                _ = child;",
+      "kills": [
+        "rename facts: a Python function called inside an f-string interpolation is renamed there too",
+        "rename facts: a C# method called inside an interpolated string is renamed there too"
+      ]
+    },
+    {
+      "id": "L4B-python-interpolation-not-a-hole",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .string_holes = &.{\"interpolation\"},",
+      "to": "",
+      "kills": [
+        "rename facts: a Python function called inside an f-string interpolation is renamed there too"
+      ]
+    },
+    {
+      "id": "L4C-csharp-interpolation-not-a-hole",
+      "file": "src/engine/lang/csharp/profile.zig",
+      "from": "    .string_holes = &.{\"interpolation\"},",
+      "to": "",
+      "kills": [
+        "rename facts: a C# method called inside an interpolated string is renamed there too"
+      ]
+    },
+    {
+      "id": "L4D-type-string-names-unchecked",
+      "file": "src/engine/rename.zig",
+      "from": " or typeStringNames(g, node, text, name)) and record(",
+      "to": ") and record(",
+      "kills": [
+        "rename facts: a Python class named inside a string annotation is a dynamic reference"
+      ]
+    },
+    {
+      "id": "L4E-unresolved-stops-at-first-site",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);",
+      "to": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n                return error.RenameUnresolved;",
+      "kills": [
+        "rename facts: an unproven reference refuses the rename and names every site it could not prove"
+      ]
+    },
+    {
+      "id": "L4F-unresolved-sites-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (self.sites) |sites| if (sites.count != 0) return error.RenameUnresolved;",
+      "to": "",
+      "kills": [
+        "rename facts: an unproven reference refuses the rename and names every site it could not prove"
+      ]
+    },
+    {
+      "id": "L4G-declaration-wrappers-skipped",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .wrappers = &.{\"decorated_definition\"},",
+      "to": "",
+      "kills": [
+        "python declarations: a decorated class and its annotated fields are declared, and the class span starts at its decorator"
+      ]
+    },
+    {
+      "id": "L4H-python-constructions-ignored",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .constructions = &.{.{ .node = \"assignment\", .name_field = \"left\", .value_field = \"right\" }},\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4I-python-calls-do-not-construct",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .calls_construct = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4J-python-typed-parameters-untyped",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .{ .node = \"typed_parameter\", .name_field = \"\", .type_field = \"type\" },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4K-python-binders-not-sole-checked",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .sole_binder_types = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4L-written-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (written.contains(start.*) or ",
+      "to": "if (",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4M-module-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or ",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4N-rebound-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": " or !self.soleBinder(i)) try doomed",
+      "to": ") try doomed",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4O-csharp-constructions-ignored",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .constructions = &.{.{ .node = \"variable_declarator\", .name_field = \"name\", .parent_type_field = \"type\" }},\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed"
+      ]
+    },
+    {
+      "id": "L4P-csharp-property-not-a-binder",
+      "file": "src/engine/lang/csharp/rename.zig",
+      "from": "    .{ .parent = \"property_declaration\", .field = \"name\", .scope = .block },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed"
+      ]
+    },
+    {
+      "id": "L4Q-multi-field-binder-first-only",
+      "file": "src/engine/scope.zig",
+      "from": "            if (!holdsInField(grand, pf, parent)) continue;",
+      "to": "            if (!(grand.childByField(pf) orelse continue).eql(parent)) continue;",
+      "kills": [
+        "rename facts: every name of a Python from-import binds, not only the first"
+      ]
+    },
+    {
+      "id": "L4R-package-inits-not-loaded",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try graph.addPackageInits(real.seam().fs, root);\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4S-package-init-gate-inverted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (modules.package_init.len == 0) return;",
+      "to": "        if (modules.package_init.len != 0) return;",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4T-namespace-package-no-submodule",
+      "file": "src/engine/facts_store.zig",
+      "from": "            .external => return self.submoduleOf(id, binding, .{ .unresolved = .external_module }, visit),",
+      "to": "            .external => return .{ .unresolved = .external_module },",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4U-missing-export-no-submodule",
+      "file": "src/engine/facts_store.zig",
+      "from": "        return self.submoduleOf(id, binding, found, visit);",
+      "to": "        return found;",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed"
+      ]
+    },
+    {
+      "id": "L4V-from-import-no-submodule-spec",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.m.submodule_imports) try self.addSubmodule(",
+      "to": "if (false) try self.addSubmodule(",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed",
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4W-import-bindings-not-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (self.m.exports_bindings) try self.exportBindings();",
+      "to": "",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed"
+      ]
+    },
+    {
+      "id": "L4X-tox-ini-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"setup.cfg\", \"setup.py\" };",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L4Y-setup-cfg-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.py\" };",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L4Z-setup-py-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\" };",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L5A-venv-interpreter-without-pyvenv",
+      "file": "src/platform/run_command.zig",
+      "from": "        return inVenv(io, a, real);",
+      "to": "        return true;",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5B-interpreter-outside-project",
+      "file": "src/platform/run_command.zig",
+      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return false;\n",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5C-any-venv-binary",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (!listed) return false;",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5D-local-command-keeps-slashes",
+      "file": "src/platform/run_command.zig",
+      "from": "    std.mem.replaceScalar(u8, owned[start..end], '/', '\\\\');",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5E-venv-not-linked-into-shadow",
+      "file": "src/platform/shadow.zig",
+      "from": "pub const dependency_dirs = [_][]const u8{ \"node_modules\", \".venv\", \"venv\" };",
+      "to": "pub const dependency_dirs = [_][]const u8{\"node_modules\"};",
+      "kills": [
+        "run tool: an untracked project venv is present in the shadow the command runs in"
+      ]
+    },
+    {
+      "id": "L5F-only-dot-venv-detected",
+      "file": "src/platform/test_command.zig",
+      "from": "pub const venv_dirs = [_][]const u8{ \".venv\", \"venv\" };",
+      "to": "pub const venv_dirs = [_][]const u8{\".venv\"};",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5G-requirements-project-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (try requirementsProject(gpa, io, dir)) |run| return pythonCommand(io, dir, run);",
+      "to": "",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5H-requirements-without-tests",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (!any or !hasPythonTests(io, dir)) return null;",
+      "to": "    if (!any) return null;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5I-venv-pytest-unseen",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (listed_pytest or venvHasPytest(io, dir)) return pytest_run;",
+      "to": "    if (listed_pytest) return pytest_run;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5J-pytest-prefix-is-pytest",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, \" \\t=<>!~;[@\", next) != null) return true;",
+      "to": "        return true;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5K-python-marker-ignores-venv",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (dir.access(io, marker, .{})) |_| return pythonCommand(io, dir, pytest_run) else |_| {}",
+      "to": "        if (dir.access(io, marker, .{})) |_| return \"python -m pytest\" else |_| {}",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5L-nested-python-imports-skipped",
+      "file": "src/engine/modules.zig",
+      "from": "                try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });",
+      "to": "",
+      "kills": [
+        "rename facts: a Python import nested in if, try, def or a method is renamed with the function"
+      ]
+    },
+    {
+      "id": "L5M-function-import-is-module-scope",
+      "file": "src/engine/modules.zig",
+      "from": "            const scoped = next.scoped or opensScope(snapshot.profile, kind);",
+      "to": "            const scoped = next.scoped;",
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module"
+      ]
+    },
+    {
+      "id": "L5N-scoped-binding-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (binding.type_only or self.scoped_bindings.contains(@intCast(b))) continue;",
+      "to": "            if (binding.type_only) continue;",
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module"
+      ]
+    },
+    {
+      "id": "L5O-absolute-python-import-relative-to-file",
+      "file": "src/platform/fact_modules.zig",
+      "from": "        if (rest.len == 0 or rest[0] != '.') return self.resolvePythonAbsolute(store, base, spec);",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5P-python-roots-ambiguity-ignored",
+      "file": "src/platform/fact_modules.zig",
+      "from": "                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target)) return .unindexed;",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5Q-script-dir-not-a-root",
+      "file": "src/platform/fact_modules.zig",
+      "from": "        const roots = [_][]const u8{ self.scriptRoot(importer_dir), \"\", python_source_root };",
+      "to": "        const roots = [_][]const u8{ \"\", python_source_root };",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5R-package-dir-is-script-root",
+      "file": "src/platform/fact_modules.zig",
+      "from": "            if (!lookup.has(init)) return dir;",
+      "to": "            return dir;",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5S-unloaded-modules-untracked",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try workspace.track(module_files);",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5T-fact-file-drops-submodule",
+      "file": "src/platform/fact_file.zig",
+      "from": "        b.submodule = if (submodule == 0) facts.none else submodule - 1;",
+      "to": "        b.submodule = if (submodule == 0) facts.none else facts.none;",
+      "kills": [
+        "fact store: a saved store keeps the submodule a Python from-import may name"
+      ]
+    },
+    {
+      "id": "L5U-fact-file-submodule-off-by-one",
+      "file": "src/platform/fact_file.zig",
+      "from": "        try e.varint(if (b.submodule == facts.none) 0 else b.submodule + 1);",
+      "to": "        try e.varint(if (b.submodule == facts.none) 0 else b.submodule);",
+      "kills": [
+        "fact store: a saved store keeps the submodule a Python from-import may name"
+      ]
+    },
+    {
+      "id": "L5V-csharp-initializer-members-not-bound",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (std.mem.eql(u8, kind, initializer.entry)) try self.initializedMember(node, depth, initializer);",
+      "to": "if (std.mem.eql(u8, kind, initializer.entry)) {}",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5W-csharp-with-initializer-not-bound",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .{ .entry = \"with_initializer\", .owner = \"with_expression\", .object_is_owner = false },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5X-csharp-initializer-name-is-a-use",
+      "file": "src/engine/lang/csharp/rename.zig",
+      "from": "    .{ .parent = \"assignment_expression\", .field = \"left\", .grandparent = \"initializer_expression\" },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5Y-member-of-other-class-unaccounted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;",
+      "to": "                if (linkedElsewhere(st, leaf.span.start)) continue;",
+      "kills": [
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+      ]
+    },
+    {
+      "id": "L5Z-member-of-derived-class-set-aside",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                } else if (!graph.hasBase(found)) {",
+      "to": "                } else {",
+      "expect_status": "survived",
+      "note": "defense in depth: a class with a base that declares the member again is already refused by the hierarchy check before any reference is accounted",
+      "filter": [
+        "rename facts: a same-named C# property of a derived class is refused"
+      ]
+    },
+    {
+      "id": "L6A-alpha-renamed-members-not-apart",
+      "file": "src/engine/alpha.zig",
+      "from": "            const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()));",
+      "to": "            const renamed = listed;",
+      "kills": [
+        "rename: renaming one of two same-named properties keeps the other apart in the alpha hash",
+        "rename facts: same-named Python methods of two classes on one line are told apart by their class",
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+      ]
+    },
+    {
+      "id": "L6B-alpha-renamed-plain-names-apart",
+      "file": "src/engine/alpha.zig",
+      "from": "            const member = oneOf(kind, g.property_kinds) or scope.isProperty(g, node) or scope.isExternal(g, node);",
+      "to": "            const member = true;",
+      "kills": [
+        "rename: renaming one of two free uses of a name breaks its alpha hash"
+      ]
+    },
+    {
+      "id": "L6C-verify-renamed-members-not-apart",
+      "file": "src/verify/checker.zig",
+      "from": "            const hx = alpha.hashDistinct(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }, changed.before) catch return false;",
+      "to": "            const hx = alpha.hashDistinct(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }, &.{}) catch return false;",
+      "kills": [
+        "verify: a rename of one of two same-named methods on a line verifies by alpha hash"
+      ]
+    },
+    {
+      "id": "L6D-region-alpha-new-spans-dropped",
+      "file": "src/engine/rename.zig",
+      "from": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans);",
+      "to": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), &.{});",
+      "kills": [
+        "rename: renaming one of two same-named properties keeps the other apart in the alpha hash"
+      ]
+    },
+    {
+      "id": "L6E-name-list-any-depth",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (top.parent() == null) return true;",
+      "to": "        return true;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6F-name-list-any-owner",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (!std.mem.eql(u8, textOf(snapshot, target), list.owner)) continue;",
+      "to": "        if (false) continue;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6G-name-list-prefixed-string",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (byte != '\"' and byte != '\\'') return false;",
+      "to": "        if (false) return false;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6H-name-list-hit-is-string-key",
+      "file": "src/engine/rename.zig",
+      "from": "            if (name_list.contentNaming(snapshot, node, name)) |content| {",
+      "to": "            if (@as(?ts.Node, null)) |content| {",
+      "kills": [
+        "rename facts: a Python __all__ entry naming the renamed module function is renamed with it"
+      ]
+    },
+    {
+      "id": "L6I-name-list-located-hit-refused",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (hit.kind == .name_list and found < hits.len and renamedAt(renamed, hit.start)) continue;",
+      "to": "        if (false) continue;",
+      "kills": [
+        "rename facts: a Python __all__ entry naming the renamed module function is renamed with it"
+      ]
+    },
+    {
+      "id": "L6J-name-list-without-top-binding",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (listed.len == 0 or !try rename.bindsAtTop(gpa, snapshot, old, located.spans.items)) continue;",
+      "to": "        if (listed.len == 0) continue;",
+      "kills": [
+        "rename facts: an __all__ entry whose module binds the name under an alias is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6K-name-list-nested-binding",
+      "file": "src/engine/rename.zig",
+      "from": "        if (region.start == top.startByte() and region.end == top.endByte() and std.mem.eql(u8, region.kind, top.kind())) return true;",
+      "to": "        return true;",
+      "kills": [
+        "rename facts: a top-level __all__ entry naming a nested function of the same name is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6L-name-list-span-not-accepted",
+      "file": "src/engine/rename.zig",
+      "from": "            if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span.start..span.end], old)) return error.NotAnIdentifier;",
+      "to": "            if (true) return error.NotAnIdentifier;",
+      "kills": [
+        "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash"
+      ]
+    },
+    {
+      "id": "L6M-alpha-name-list-as-text",
+      "file": "src/engine/alpha.zig",
+      "from": "        const listed = within(distinct, node.startByte(), node.endByte()) and name_list.holds(snapshot, node);",
+      "to": "        const listed = false;",
+      "kills": [
+        "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash"
+      ]
+    },
+    {
+      "id": "L6N-alpha-any-changed-string",
+      "file": "src/engine/alpha.zig",
+      "from": "            if (!x.name and !renamesAName(before, after, a, b, x.span, y.span)) continue;",
+      "to": "            if (false) continue;",
+      "kills": [
+        "rename: a Python name-list string changed to a text no renamed name took breaks the alpha check"
+      ]
+    },
+    {
+      "id": "L6O-dynamic-string-prefix-kept",
+      "file": "src/engine/rename.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at..];",
+      "to": "        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at * 0 ..];",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
       ]
     }
   ]
