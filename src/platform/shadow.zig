@@ -22,10 +22,10 @@ pub fn trackedFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
 }
 
 pub const working_listing = [_][]const u8{
-    "ls-files",                            "-z",                    "--cached",               "--others",                 "--exclude-standard",
-    "--exclude=/" ++ workspace_dir ++ "/", "--exclude=bin/",        "--exclude=obj/",         "--exclude=target/",        "--exclude=node_modules/",
-    "--exclude=.venv/",                    "--exclude=venv/",       "--exclude=__pycache__/", "--exclude=.pytest_cache/", "--exclude=.mypy_cache/",
-    "--exclude=.ruff_cache/",              "--exclude=.zig-cache/", "--exclude=zig-out/",
+    "ls-files",              "-z",                     "--cached",                 "--others",                "--exclude-standard",
+    "--exclude=bin/",        "--exclude=obj/",         "--exclude=target/",        "--exclude=node_modules/", "--exclude=.venv/",
+    "--exclude=venv/",       "--exclude=__pycache__/", "--exclude=.pytest_cache/", "--exclude=.mypy_cache/",  "--exclude=.ruff_cache/",
+    "--exclude=.zig-cache/", "--exclude=zig-out/",     "--",                       ".",                       ":(exclude,icase)" ++ workspace_dir,
 };
 
 pub fn workingFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
@@ -56,6 +56,7 @@ fn listFiles(gpa: Allocator, io: std.Io, root_abs: []const u8, listing: []const 
     errdefer files.deinit(gpa);
     var names = std.mem.tokenizeScalar(u8, result.stdout, 0);
     while (names.next()) |name| {
+        if (name[name.len - 1] == '/') continue;
         const copy = try gpa.dupe(u8, name);
         errdefer gpa.free(copy);
         try files.append(gpa, copy);

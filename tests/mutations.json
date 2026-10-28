@@ -16216,6 +16216,24 @@
       "kills": [
         "git parity: add, commit -a and stash never pick up or remove .emetgate"
       ]
+    },
+    {
+      "id": "SH1-working-listing-keeps-nested-repository",
+      "file": "src/platform/shadow.zig",
+      "from": "        if (name[name.len - 1] == '/') continue;",
+      "to": "        if (name.len == 0) continue;",
+      "kills": [
+        "a repository reached through its 8.3 short path is read, listed and gated like the same repository by its long path"
+      ]
+    },
+    {
+      "id": "SH2-working-listing-keeps-workspace",
+      "file": "src/platform/shadow.zig",
+      "from": "\":(exclude,icase)\" ++ workspace_dir,",
+      "to": "\":(exclude,icase)\" ++ workspace_dir ++ \"-x\",",
+      "kills": [
+        "batch create through the tool: the working tree listing keeps untracked files and skips ignored, build output and workspace files"
+      ]
     }
   ]
 }
