@@ -19,7 +19,9 @@ const Repo = struct {
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", gpa);
         errdefer gpa.free(root_abs);
         try git_fixture.initRepo(root_abs);
-        return .{ .tmp = tmp, .root_abs = root_abs };
+        var repo: Repo = .{ .tmp = tmp, .root_abs = root_abs };
+        gpa.free(try repo.git(&.{ "config", "core.autocrlf", "false" }));
+        return repo;
     }
 
     fn deinit(self: *Repo) void {
