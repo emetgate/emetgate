@@ -401,22 +401,47 @@ test "git parity: bisect walks to the first bad commit and resets" {
     try repo.commitAll("c2");
     try repo.writeFile("v.txt", "bad\n");
     try repo.commitAll("c3");
+    const c3 = try repo.git(&.{ "rev-parse", "HEAD" });
+    defer gpa.free(c3);
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
     var start = try call(runtime, repo.root_abs, .{ .args = .{ "bisect", "start", "HEAD", "HEAD~2" } });
     defer start.deinit();
     try expectOk(&start);
+    try testing.expect(start.string("first_bad") == null);
     var good = try call(runtime, repo.root_abs, .{ .args = .{ "bisect", "good" } });
     defer good.deinit();
     try expectOk(&good);
-    try expectOutputHas(&good, "is the first bad commit");
+    try testing.expectEqualStrings(std.mem.trim(u8, c3, " \r\n"), good.string("first_bad").?);
     var reset = try call(runtime, repo.root_abs, .{ .args = .{ "bisect", "reset" } });
     defer reset.deinit();
     try expectOk(&reset);
+    try testing.expect(reset.string("first_bad") == null);
     var run = try call(runtime, repo.root_abs, .{ .args = .{ "bisect", "run", "cmd" } });
     defer run.deinit();
     try expectRefused(&run, "unsupported_action");
+}
+
+test "git parity: a bad root commit with no good commit marked is not reported as the first bad commit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("v.txt", "bad\n");
+    try repo.commitAll("c1");
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var start = try call(runtime, repo.root_abs, .{ .args = .{ "bisect", "start" } });
+    defer start.deinit();
+    try expectOk(&start);
+    var bad = try call(runtime, repo.root_abs, .{ .args = .{ "bisect", "bad" } });
+    defer bad.deinit();
+    try expectOk(&bad);
+    try testing.expect(bad.string("first_bad") == null);
+    var reset = try call(runtime, repo.root_abs, .{ .args = .{ "bisect", "reset" } });
+    defer reset.deinit();
+    try expectOk(&reset);
 }
 
 test "git parity: a merge conflict shows as conflicted and merge --abort restores the branch" {

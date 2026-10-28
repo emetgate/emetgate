@@ -743,6 +743,7 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
     const ran = try runGit(arena, io, root_abs, try fullArgv(arena, git, &prefix, &ok, args), ok.spec.network);
     const after = try headOid(arena, io, git, root_abs);
     const branch = try capture(arena, io, git, root_abs, &.{ "branch", "--show-current" });
+    const first_bad = if (std.mem.eql(u8, ok.spec.sub, "bisect")) try bisectFirstBad(arena, io, git, root_abs) else null;
     var shortstat: ?[]const u8 = null;
     if (before != null and after != null and !std.mem.eql(u8, before.?, after.?)) {
         shortstat = try capture(arena, io, git, root_abs, &.{ "diff", "--shortstat", before.?, after.? });
@@ -769,6 +770,10 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
         try js.objectField("shortstat");
         try js.write(stat);
     };
+    if (first_bad) |oid| {
+        try js.objectField("first_bad");
+        try js.write(oid);
+    }
     const output = try tail(arena, ran.stdout, ran.stderr);
     if (output.len != 0) {
         try js.objectField("output");
@@ -788,6 +793,20 @@ fn checkoutLosesWork(arena: Allocator, io: std.Io, git: []const u8, root_abs: []
     if (resolved != null) return false;
     const remote = try capture(arena, io, git, root_abs, &.{ "for-each-ref", "--count=1", "--format=%(refname)", try std.fmt.allocPrint(arena, "refs/remotes/*/{s}", .{targets.refs[0].?}) });
     return remote == null or remote.?.len == 0;
+}
+
+fn bisectFirstBad(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8) !?[]const u8 {
+    const bad_term = try capture(arena, io, git, root_abs, &.{ "bisect", "terms", "--term-bad" }) orelse return null;
+    const good_term = try capture(arena, io, git, root_abs, &.{ "bisect", "terms", "--term-good" }) orelse return null;
+    const bad_ref = try std.fmt.allocPrint(arena, "refs/bisect/{s}", .{bad_term});
+    const bad = try capture(arena, io, git, root_abs, &.{ "rev-parse", "--verify", "--quiet", "--end-of-options", bad_ref }) orelse return null;
+    const good_pattern = try std.fmt.allocPrint(arena, "refs/bisect/{s}-*", .{good_term});
+    const goods = try capture(arena, io, git, root_abs, &.{ "for-each-ref", "--count=1", "--format=%(refname)", good_pattern }) orelse return null;
+    if (goods.len == 0) return null;
+    const good_glob = try std.fmt.allocPrint(arena, "--glob={s}", .{good_pattern});
+    const left = try capture(arena, io, git, root_abs, &.{ "rev-list", bad, "--not", good_glob }) orelse return null;
+    if (!std.mem.eql(u8, left, bad)) return null;
+    return bad;
 }
 
 fn headOid(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8) !?[]const u8 {
