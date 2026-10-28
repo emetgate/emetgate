@@ -1,5 +1,6 @@
 const std = @import("std");
 const repo = @import("repo.zig");
+const sandbox = @import("sandbox.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -48,14 +49,6 @@ const markers = [_]Marker{
     .{ .file = "go.mod", .command = "go test ./..." },
 };
 
-const python_markers = [_][]const u8{ "pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg", "setup.py" };
-const requirement_files = [_][]const u8{ "requirements.txt", "requirements-dev.txt", "requirements-test.txt", "dev-requirements.txt" };
-pub const venv_dirs = [_][]const u8{ ".venv", "venv" };
-const pytest_run = "-m pytest";
-const unittest_run = "-m unittest discover";
-
-threadlocal var python_command: [64]u8 = undefined;
-
 pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
     var dir = std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true }) catch return null;
     defer dir.close(io);
@@ -63,10 +56,7 @@ pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
     for (markers) |marker| {
         if (dir.access(io, marker.file, .{})) |_| return marker.command else |_| {}
     }
-    for (python_markers) |marker| {
-        if (dir.access(io, marker, .{})) |_| return pythonCommand(io, dir, pytest_run) else |_| {}
-    }
-    if (try requirementsProject(gpa, io, dir)) |run| return pythonCommand(io, dir, run);
+    if (try pythonProject(gpa, io, dir)) |command| return command;
     var it = dir.iterate();
     while (it.next(io) catch null) |entry| {
         if (entry.kind != .file) continue;
@@ -143,6 +133,44 @@ fn findTestProjects(io: std.Io, dir: std.Io.Dir, prefix: *[512]u8, prefix_len: u
     }
 }
 
+const python_markers = [_][]const u8{ "pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg", "setup.py" };
+const python_manifests = [_][]const u8{ "pyproject.toml", "tox.ini", "setup.cfg", "setup.py" };
+const requirement_files = [_][]const u8{ "requirements.txt", "requirements-dev.txt", "requirements-test.txt", "dev-requirements.txt" };
+pub const venv_dirs = [_][]const u8{ ".venv", "venv" };
+const pytest_run = "-m pytest";
+const unittest_run = "-m unittest discover";
+const TestDir = struct { name: []const u8, run: []const u8 };
+const unittest_dirs = [_]TestDir{
+    .{ .name = "tests", .run = unittest_run ++ " -s tests" },
+    .{ .name = "test", .run = unittest_run ++ " -s test" },
+};
+
+threadlocal var python_command: [96]u8 = undefined;
+pub threadlocal var path_override: ?[]const u8 = null;
+
+fn pythonProject(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]const u8 {
+    var marked = false;
+    for (python_markers) |marker| {
+        if (dir.access(io, marker, .{})) |_| {
+            marked = true;
+            break;
+        } else |_| {}
+    }
+    const listed = try requirementsListPytest(gpa, io, dir);
+    if (!marked and (listed == null or !hasPythonTests(io, dir))) return null;
+    const pytest = (listed orelse false) or try declaresPytest(gpa, io, dir) or try hasPytest(gpa, io, dir);
+    return pythonCommand(io, dir, if (pytest) pytest_run else unittestRun(io, dir));
+}
+
+fn unittestRun(io: std.Io, dir: std.Io.Dir) []const u8 {
+    for (unittest_dirs) |candidate| {
+        var sub = dir.openDir(io, candidate.name, .{}) catch continue;
+        defer sub.close(io);
+        if (sub.access(io, "__init__.py", .{})) |_| return unittest_run else |_| return candidate.run;
+    }
+    return unittest_run;
+}
+
 fn venvOf(io: std.Io, dir: std.Io.Dir) ?[]const u8 {
     for (venv_dirs) |venv| {
         var buffer: [32]u8 = undefined;
@@ -153,25 +181,21 @@ fn venvOf(io: std.Io, dir: std.Io.Dir) ?[]const u8 {
 }
 
 fn pythonCommand(io: std.Io, dir: std.Io.Dir, run: []const u8) []const u8 {
-    const venv = venvOf(io, dir) orelse return if (std.mem.eql(u8, run, pytest_run)) "python -m pytest" else "python -m unittest discover";
-    return std.fmt.bufPrint(&python_command, "{s}\\Scripts\\python {s}", .{ venv, run }) catch "python -m pytest";
+    const venv = venvOf(io, dir) orelse return std.fmt.bufPrint(&python_command, "python {s}", .{run}) catch unreachable;
+    return std.fmt.bufPrint(&python_command, "{s}\\Scripts\\python {s}", .{ venv, run }) catch unreachable;
 }
 
-fn requirementsProject(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]const u8 {
-    var listed_pytest = false;
-    var any = false;
+fn requirementsListPytest(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?bool {
+    var listed: ?bool = null;
     for (requirement_files) |name| {
         const bytes = dir.readFileAlloc(io, name, gpa, .limited(max_manifest_bytes)) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => continue,
         };
         defer gpa.free(bytes);
-        any = true;
-        if (requiresPytest(bytes)) listed_pytest = true;
+        listed = (listed orelse false) or requiresPytest(bytes);
     }
-    if (!any or !hasPythonTests(io, dir)) return null;
-    if (listed_pytest or venvHasPytest(io, dir)) return pytest_run;
-    return unittest_run;
+    return listed;
 }
 
 pub fn requiresPytest(bytes: []const u8) bool {
@@ -186,11 +210,116 @@ pub fn requiresPytest(bytes: []const u8) bool {
     return false;
 }
 
-fn venvHasPytest(io: std.Io, dir: std.Io.Dir) bool {
-    const venv = venvOf(io, dir) orelse return false;
-    var buffer: [64]u8 = undefined;
-    const site = std.fmt.bufPrint(&buffer, "{s}\\Lib\\site-packages\\pytest", .{venv}) catch return false;
-    if (dir.access(io, site, .{})) |_| return true else |_| return false;
+fn declaresPytest(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {
+    if (dir.access(io, "pytest.ini", .{})) |_| return true else |_| {}
+    for (python_manifests) |name| {
+        const bytes = dir.readFileAlloc(io, name, gpa, .limited(max_manifest_bytes)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        defer gpa.free(bytes);
+        if (mentionsPytest(bytes)) return true;
+    }
+    return false;
+}
+
+fn isNameByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
+}
+
+pub fn mentionsPytest(bytes: []const u8) bool {
+    var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t");
+        if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
+        var from: usize = 0;
+        while (std.mem.indexOfPos(u8, line, from, "pytest")) |at| : (from = at + 1) {
+            const end = at + "pytest".len;
+            if ((at == 0 or !isNameByte(line[at - 1])) and (end == line.len or !isNameByte(line[end]))) return true;
+        }
+    }
+    return false;
+}
+
+fn hasPytest(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    if (venvOf(io, dir)) |venv| {
+        const site = try std.fmt.allocPrint(arena, "{s}\\Lib\\site-packages", .{venv});
+        if (siteHasPytest(arena, io, dir, site)) return true;
+        const home = (try systemSiteHome(arena, io, dir, venv)) orelse return false;
+        return interpreterHasPytest(arena, io, home);
+    }
+    const home = (try pathInterpreter(arena, io)) orelse return false;
+    return interpreterHasPytest(arena, io, home);
+}
+
+fn siteHasPytest(arena: Allocator, io: std.Io, dir: std.Io.Dir, site: []const u8) bool {
+    for ([_][]const u8{ "pytest", "pytest.py" }) |name| {
+        const path = std.fmt.allocPrint(arena, "{s}\\{s}", .{ site, name }) catch return false;
+        if (dir.access(io, path, .{})) |_| return true else |_| {}
+    }
+    return false;
+}
+
+fn systemSiteHome(arena: Allocator, io: std.Io, dir: std.Io.Dir, venv: []const u8) !?[]const u8 {
+    const cfg = try std.fmt.allocPrint(arena, "{s}\\pyvenv.cfg", .{venv});
+    const bytes = dir.readFileAlloc(io, cfg, arena, .limited(64 * 1024)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    var home: ?[]const u8 = null;
+    var shared = false;
+    var lines = std.mem.tokenizeAny(u8, bytes, "\r\n");
+    while (lines.next()) |line| {
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = std.mem.trim(u8, line[0..eq], " \t");
+        const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
+        if (std.ascii.eqlIgnoreCase(key, "home")) home = value;
+        if (std.ascii.eqlIgnoreCase(key, "include-system-site-packages")) shared = std.ascii.eqlIgnoreCase(value, "true");
+    }
+    return if (shared) home else null;
+}
+
+fn pathInterpreter(arena: Allocator, io: std.Io) !?[]const u8 {
+    const path = path_override orelse (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATH"))) orelse return null;
+    var entries = std.mem.tokenizeScalar(u8, path, ';');
+    while (entries.next()) |raw| {
+        const entry = std.mem.trimEnd(u8, std.mem.trim(u8, raw, " \""), "\\/");
+        if (entry.len == 0 or !std.fs.path.isAbsolute(entry)) continue;
+        for ([_][]const u8{ "python.exe", "python.bat", "python.cmd" }, 0..) |name, i| {
+            const exe = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ entry, name });
+            std.Io.Dir.cwd().access(io, exe, .{}) catch continue;
+            return if (i == 0) entry else null;
+        }
+    }
+    return null;
+}
+
+fn interpreterHasPytest(arena: Allocator, io: std.Io, home: []const u8) bool {
+    var dir = std.Io.Dir.openDirAbsolute(io, home, .{ .iterate = true }) catch return false;
+    defer dir.close(io);
+    if (siteHasPytest(arena, io, dir, "Lib\\site-packages")) return true;
+    const appdata = (sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("APPDATA")) catch return false) orelse return false;
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (entry.kind != .file) continue;
+        const version = versionedDll(entry.name) orelse continue;
+        var user = std.Io.Dir.openDirAbsolute(io, appdata, .{}) catch return false;
+        defer user.close(io);
+        const site = std.fmt.allocPrint(arena, "Python\\Python{s}\\site-packages", .{version}) catch return false;
+        return siteHasPytest(arena, io, user, site);
+    }
+    return false;
+}
+
+fn versionedDll(name: []const u8) ?[]const u8 {
+    if (!std.ascii.startsWithIgnoreCase(name, "python") or !std.ascii.endsWithIgnoreCase(name, ".dll")) return null;
+    const digits = name["python".len .. name.len - ".dll".len];
+    if (digits.len < 2) return null;
+    for (digits) |c| if (!std.ascii.isDigit(c)) return null;
+    return digits;
 }
 
 fn hasPythonTests(io: std.Io, dir: std.Io.Dir) bool {
@@ -205,6 +334,35 @@ fn hasPythonTests(io: std.Io, dir: std.Io.Dir) bool {
         if (std.ascii.startsWithIgnoreCase(entry.name, "test_") and std.ascii.endsWithIgnoreCase(entry.name, ".py")) return true;
     }
     return false;
+}
+
+pub fn srcLayout(io: std.Io, root_abs: []const u8) bool {
+    var root = std.Io.Dir.openDirAbsolute(io, root_abs, .{}) catch return false;
+    defer root.close(io);
+    var src = root.openDir(io, "src", .{ .iterate = true }) catch return false;
+    defer src.close(io);
+    var it = src.iterate();
+    while (it.next(io) catch null) |entry| {
+        switch (entry.kind) {
+            .file => if (std.ascii.endsWithIgnoreCase(entry.name, ".py")) return true,
+            .directory => {
+                var pkg = src.openDir(io, entry.name, .{}) catch continue;
+                defer pkg.close(io);
+                if (pkg.access(io, "__init__.py", .{})) |_| return true else |_| {}
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+pub fn pythonPath(arena: Allocator, io: std.Io, root_abs: []const u8) !?sandbox.EnvVar {
+    if (!srcLayout(io, root_abs)) return null;
+    const src = try std.fmt.allocPrint(arena, "{s}\\src", .{root_abs});
+    const inherited = try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("PYTHONPATH"));
+    const rest = inherited orelse "";
+    const value = if (rest.len == 0) src else try std.fmt.allocPrint(arena, "{s};{s}", .{ src, rest });
+    return .{ .name = "PYTHONPATH", .value = value };
 }
 
 fn packageTestScript(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {

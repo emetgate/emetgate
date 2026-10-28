@@ -22,6 +22,8 @@ fn detectedWith(files: []const [2][]const u8) !?[]const u8 {
     }
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(root);
+    test_command.path_override = "";
+    defer test_command.path_override = null;
     return test_command.detectIn(gpa, testing.io, root);
 }
 
@@ -37,11 +39,12 @@ test "test detection: each project marker names its test command" {
     try expectDetected("zig build test", &.{.{ "build.zig", "" }});
     try expectDetected("cargo test", &.{.{ "Cargo.toml", "" }});
     try expectDetected("go test ./...", &.{.{ "go.mod", "" }});
-    try expectDetected("python -m pytest", &.{.{ "pyproject.toml", "" }});
+    try expectDetected("python -m pytest", &.{.{ "pyproject.toml", "[tool.pytest.ini_options]\n" }});
     try expectDetected("python -m pytest", &.{.{ "pytest.ini", "" }});
-    try expectDetected("python -m pytest", &.{.{ "tox.ini", "" }});
-    try expectDetected("python -m pytest", &.{.{ "setup.cfg", "" }});
-    try expectDetected("python -m pytest", &.{.{ "setup.py", "" }});
+    try expectDetected("python -m pytest", &.{.{ "tox.ini", "[pytest]\n" }});
+    try expectDetected("python -m pytest", &.{.{ "setup.cfg", "[tool:pytest]\n" }});
+    try expectDetected("python -m pytest", &.{.{ "setup.py", "setup(tests_require=[\"pytest\"])\n" }});
+    try expectDetected("python -m unittest discover", &.{.{ "pyproject.toml", "" }});
     try expectDetected("dotnet test", &.{.{ "app.csproj", "" }});
     try expectDetected("dotnet test", &.{.{ "App.SLN", "" }});
 }
@@ -232,14 +235,125 @@ test "test detection: the run allowlist carries the given or detected test comma
 }
 
 test "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest" {
-    try expectDetected(".venv\\Scripts\\python -m pytest", &.{ .{ "pyproject.toml", "" }, .{ ".venv/Scripts/python.exe", "" } });
-    try expectDetected("venv\\Scripts\\python -m pytest", &.{ .{ "setup.py", "" }, .{ "venv/Scripts/python.exe", "" } });
+    try expectDetected(".venv\\Scripts\\python -m pytest", &.{ .{ "pyproject.toml", "[project.optional-dependencies]\ntest = [\"pytest>=8\"]\n" }, .{ ".venv/Scripts/python.exe", "" } });
+    try expectDetected("venv\\Scripts\\python -m pytest", &.{ .{ "setup.py", "" }, .{ "venv/Scripts/python.exe", "" }, .{ "venv/Lib/site-packages/pytest/__init__.py", "" } });
     try expectDetected("python -m pytest", &.{ .{ "requirements.txt", "requests\npytest>=8\n" }, .{ "tests/test_a.py", "" } });
     try expectDetected("python -m unittest discover", &.{ .{ "requirements.txt", "requests\npytest-cov\n" }, .{ "test_a.py", "" } });
     try expectDetected(".venv\\Scripts\\python -m pytest", &.{ .{ "requirements.txt", "requests\n" }, .{ "tests/test_a.py", "" }, .{ ".venv/Scripts/python.exe", "" }, .{ ".venv/Lib/site-packages/pytest/__init__.py", "" } });
-    try expectDetected(".venv\\Scripts\\python -m unittest discover", &.{ .{ "requirements.txt", "requests\n" }, .{ "tests/test_a.py", "" }, .{ ".venv/Scripts/python.exe", "" } });
+    try expectDetected(".venv\\Scripts\\python -m unittest discover -s tests", &.{ .{ "requirements.txt", "requests\n" }, .{ "tests/test_a.py", "" }, .{ ".venv/Scripts/python.exe", "" } });
     try expectDetected(null, &.{.{ "requirements.txt", "pytest\n" }});
     try testing.expect(test_command.requiresPytest("  pytest\n"));
     try testing.expect(test_command.requiresPytest("pytest[testing]==8.0"));
     try testing.expect(!test_command.requiresPytest("pytest-cov\n# pytest\n"));
+}
+
+test "test detection: a unittest project picks unittest discover with the right start dir, venv or not" {
+    try expectDetected(".venv\\Scripts\\python -m unittest discover", &.{ .{ "pyproject.toml", "[project]\nname = \"wordstat\"\n" }, .{ ".venv/Scripts/python.exe", "" }, .{ "src/wordstat/__init__.py", "" }, .{ "tests/__init__.py", "" }, .{ "tests/test_core.py", "" } });
+    try expectDetected("python -m unittest discover -s tests", &.{ .{ "pyproject.toml", "" }, .{ "tests/test_core.py", "" } });
+    try expectDetected("python -m unittest discover -s test", &.{ .{ "setup.cfg", "[metadata]\nname = x\n" }, .{ "test/test_core.py", "" } });
+    try testing.expect(test_command.mentionsPytest("dev = [\"pytest>=8\", \"ruff\"]"));
+    try testing.expect(test_command.mentionsPytest("[tool.pytest.ini_options]"));
+    try testing.expect(test_command.mentionsPytest("commands = pytest -q"));
+    try testing.expect(!test_command.mentionsPytest("dev = [\"pytest-cov\"]\n# pytest\n; pytest\n"));
+    try testing.expect(!test_command.mentionsPytest("[tool.ruff]\nname = \"pytestish\"\n"));
+}
+
+const Interpreters = struct {
+    tmp: testing.TmpDir,
+    root: [:0]u8,
+
+    fn init(files: []const [2][]const u8) !Interpreters {
+        var tmp = testing.tmpDir(.{ .iterate = true });
+        errdefer tmp.cleanup();
+        for (files) |file| {
+            if (std.fs.path.dirnamePosix(file[0])) |parent| try tmp.dir.createDirPath(testing.io, parent);
+            try tmp.dir.writeFile(testing.io, .{ .sub_path = file[0], .data = file[1] });
+        }
+        return .{ .tmp = tmp, .root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa) };
+    }
+
+    fn deinit(self: *Interpreters) void {
+        gpa.free(self.root);
+        self.tmp.cleanup();
+    }
+
+    fn write(self: *Interpreters, rel: []const u8, data: []const u8) !void {
+        try self.tmp.dir.writeFile(testing.io, .{ .sub_path = rel, .data = data });
+    }
+
+    fn detect(self: *Interpreters, path: []const []const u8) !?[]const u8 {
+        var joined: std.ArrayList(u8) = .empty;
+        defer joined.deinit(gpa);
+        for (path) |dir| try joined.print(gpa, "{s}\\{s};", .{ self.root, dir });
+        const project = try std.fmt.allocPrint(gpa, "{s}\\proj", .{self.root});
+        defer gpa.free(project);
+        test_command.path_override = joined.items;
+        defer test_command.path_override = null;
+        return test_command.detectIn(gpa, testing.io, project);
+    }
+};
+
+test "test detection: pytest is chosen only when the interpreter that runs the tests can import it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fx = try Interpreters.init(&.{
+        .{ "proj/pyproject.toml", "[project]\nname = \"x\"\n" },
+        .{ "proj/tests/__init__.py", "" },
+        .{ "with/python.exe", "" },
+        .{ "with/Lib/site-packages/pytest/__init__.py", "" },
+        .{ "bare/python.exe", "" },
+        .{ "shim/python.bat", "" },
+    });
+    defer fx.deinit();
+    try testing.expectEqualStrings("python -m pytest", (try fx.detect(&.{"with"})).?);
+    try testing.expectEqualStrings("python -m unittest discover", (try fx.detect(&.{ "bare", "with" })).?);
+    try testing.expectEqualStrings("python -m unittest discover", (try fx.detect(&.{ "shim", "with" })).?);
+    try testing.expectEqualStrings("python -m pytest", (try fx.detect(&.{ "missing", "with" })).?);
+
+    try fx.tmp.dir.createDirPath(testing.io, "proj/.venv/Scripts");
+    try fx.write("proj/.venv/Scripts/python.exe", "");
+    const shared = try std.fmt.allocPrint(gpa, "home = {s}\\with\ninclude-system-site-packages = true\n", .{fx.root});
+    defer gpa.free(shared);
+    try fx.write("proj/.venv/pyvenv.cfg", shared);
+    try testing.expectEqualStrings(".venv\\Scripts\\python -m pytest", (try fx.detect(&.{})).?);
+    const isolated = try std.fmt.allocPrint(gpa, "home = {s}\\with\ninclude-system-site-packages = false\n", .{fx.root});
+    defer gpa.free(isolated);
+    try fx.write("proj/.venv/pyvenv.cfg", isolated);
+    try testing.expectEqualStrings(".venv\\Scripts\\python -m unittest discover", (try fx.detect(&.{"with"})).?);
+}
+
+test "test detection: a src layout is put on PYTHONPATH for the gated run, and nothing else is" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var layout = try Interpreters.init(&.{ .{ "src/wordstat/__init__.py", "" }, .{ "web/src/app.ts", "" }, .{ "flat/src/tool.py", "" } });
+    defer layout.deinit();
+    const found = (try test_command.pythonPath(arena, testing.io, layout.root)).?;
+    try testing.expectEqualStrings("PYTHONPATH", found.name);
+    const want = try std.fmt.allocPrint(arena, "{s}\\src", .{layout.root});
+    try testing.expect(std.mem.startsWith(u8, found.value, want));
+    try testing.expect(found.value.len == want.len or found.value[want.len] == ';');
+    const web = try std.fmt.allocPrint(arena, "{s}\\web", .{layout.root});
+    try testing.expect((try test_command.pythonPath(arena, testing.io, web)) == null);
+    const flat = try std.fmt.allocPrint(arena, "{s}\\flat", .{layout.root});
+    try testing.expect((try test_command.pythonPath(arena, testing.io, flat)) != null);
+    const none = try std.fmt.allocPrint(arena, "{s}\\src\\wordstat", .{layout.root});
+    try testing.expect((try test_command.pythonPath(arena, testing.io, none)) == null);
+}
+
+test "test detection: a test command that cannot start is reported unverified, never as a failing baseline" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.TsRepo.init(&.{.{ .rel = "a.txt", .text = "x\n" }});
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try create(&repo, runtime, "fresh.ts", fresh_body, .{ .test_command = "echo ModuleNotFoundError: No module named 'emetgate_absent' 1>&2& exit /b 1" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expect(reply.value.object.get("baseline_failing") == null);
+    const reason = reply.value.object.get("unverified").?.string;
+    try testing.expect(std.mem.indexOf(u8, reason, "No module named 'emetgate_absent'") != null);
+    try testing.expect(std.mem.startsWith(u8, reason, "the test command could not run"));
 }

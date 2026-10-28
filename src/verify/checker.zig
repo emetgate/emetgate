@@ -351,6 +351,10 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
                     continue;
                 }
                 if (one.exit_code != 0) outcome.raise(.mismatch, "the receipt records a failing check");
+                if (one.kind == .run) {
+                    outcome.raise(.unverified, run_not_rerun);
+                    continue;
+                }
                 const passed = c.source.check(c.source.context, one.kind, one.command_digest) orelse {
                     outcome.raise(.unverified, "the check was not rerun with the same trusted command");
                     continue;
@@ -394,6 +398,7 @@ fn checkSymmetry(c: *Checker, r: Receipt, known: []const Known, outcome: *Outcom
             }
             if (!sameMultiset(a.items, b.items)) outcome.raise(.mismatch, "the symbol and declaration hashes before and after the move differ");
         },
+        .run => outcome.raise(.mismatch, "a command run is not a symmetry change"),
         .@"try", .try_batch => {
             for (known) |k| {
                 var a: std.ArrayList(Hash) = .empty;
@@ -411,6 +416,8 @@ fn checkSymmetry(c: *Checker, r: Receipt, known: []const Known, outcome: *Outcom
         },
     }
 }
+
+pub const run_not_rerun = "the files a command wrote are recorded, not reproduced";
 
 pub fn check(arena: Allocator, runtime: *Runtime, note: ?[]const u8, source: Source) !Report {
     var c: Checker = .{ .arena = arena, .runtime = runtime, .source = source, .files = .{ .arena = arena } };

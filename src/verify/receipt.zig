@@ -14,8 +14,8 @@ pub const Hash = [16]u8;
 pub const Sha256 = [32]u8;
 
 pub const Class = enum { symmetry, spending };
-pub const Operation = enum { @"try", try_batch, rename, move, move_file };
-pub const CheckKind = enum { typecheck, @"test" };
+pub const Operation = enum { @"try", try_batch, rename, move, move_file, run };
+pub const CheckKind = enum { typecheck, @"test", run };
 
 pub const FileEntry = struct {
     path: []const u8,

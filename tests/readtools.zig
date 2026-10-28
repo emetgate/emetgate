@@ -1224,3 +1224,29 @@ test "read_symbol folds a python docstring to its first sentence" {
     try testing.expectEqualStrings("\"\"\"Return the area.\"\"\"\n    return 3.14 * r * r", body.value.object.get("body").?.string);
     try testing.expectEqualStrings("folded lines 2-6; detail:\"full\" has them", body.value.object.get("docs").?.string);
 }
+
+test "list includes untracked files that are not ignored and leaves ignored ones out" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo/src");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/a.ts", .data = "export const a = 1;\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.gitignore", .data = "secret.txt\n" });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/new.ts", .data = "export const b = 2;\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/secret.txt", .data = "x\n" });
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callToolServed(runtime, root_abs, "emetgate_list", .{ .dir = root_abs });
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    const files = fileNames(body.value);
+    try testing.expect(containsString(files, "a.ts"));
+    try testing.expect(containsString(files, "src/new.ts"));
+    try testing.expect(!containsString(files, "secret.txt"));
+}

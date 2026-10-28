@@ -2,12 +2,14 @@ const std = @import("std");
 const sandbox = @import("sandbox.zig");
 const shadow = @import("shadow.zig");
 const runner = @import("runner.zig");
+const test_outcome = @import("test_outcome.zig");
 const output_digest = @import("../protocol/output_digest.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub const Note = struct {
     failing: bool = false,
+    unverified: bool = false,
     skipped: bool = false,
     buf: [200]u8 = undefined,
     len: usize = 0,
@@ -17,12 +19,20 @@ pub const Note = struct {
     }
 
     fn keep(self: *Note, digest: []const u8) void {
-        var end = @min(digest.len, self.buf.len);
-        while (end > 0 and end < digest.len and digest[end] & 0xC0 == 0x80) end -= 1;
-        @memcpy(self.buf[0..end], digest[0..end]);
-        self.len = end;
+        self.len = 0;
+        self.append(digest);
+    }
+
+    fn append(self: *Note, text_part: []const u8) void {
+        const room = self.buf.len - self.len;
+        var end = @min(text_part.len, room);
+        while (end > 0 and end < text_part.len and text_part[end] & 0xC0 == 0x80) end -= 1;
+        @memcpy(self.buf[self.len..][0..end], text_part[0..end]);
+        self.len += end;
     }
 };
+
+pub const unverified_prefix = "the test command could not run, so no test judged this edit: ";
 
 pub const Change = struct {
     rel: []const u8,
@@ -167,10 +177,16 @@ pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
     if (!noNewFailures(.{ .stage = stage, .keys = now_keys }, before)) return after;
 
     if (gate.note) |n| {
-        n.failing = true;
-        const digest = try output_digest.digest(gpa, report.stdout, report.stderr);
-        defer gpa.free(digest.text);
-        n.keep(digest.text);
+        if (test_outcome.envError(report)) |reason| {
+            n.unverified = true;
+            n.keep(unverified_prefix);
+            n.append(reason);
+        } else {
+            n.failing = true;
+            const digest = try output_digest.digest(gpa, report.stdout, report.stderr);
+            defer gpa.free(digest.text);
+            n.keep(digest.text);
+        }
     }
     var accepted = report;
     accepted.outcome = .{ .exited = 0 };

@@ -35,7 +35,9 @@ pub const Record = struct {
     test_command: []const u8,
     typecheck_command: ?[]const u8 = null,
     test_ms: ?u64 = null,
+    check_kind: receipt.CheckKind = .@"test",
     limits: sandbox.Limits = .{},
+    integrity: []const u8 = "low",
     version: []const u8,
     commit: ?Commit = null,
 };
@@ -202,10 +204,10 @@ pub fn build(arena: Allocator, io: std.Io, root: []const u8, record: Record) !re
         try symbols.append(arena, entry);
     }
     var checks: std.ArrayList(receipt.Check) = .empty;
-    if (record.typecheck_command) |command| if (command.len != 0) {
+    if (record.typecheck_command) |command| if (command.len != 0 and record.check_kind != .run) {
         try checks.append(arena, .{ .kind = .typecheck, .command = command, .command_digest = receipt.blake3(command), .exit_code = 0, .duration_ms = null });
     };
-    try checks.append(arena, .{ .kind = .@"test", .command = record.test_command, .command_digest = receipt.blake3(record.test_command), .exit_code = 0, .duration_ms = if (record.test_ms) |ms| @intCast(ms) else null });
+    try checks.append(arena, .{ .kind = record.check_kind, .command = record.test_command, .command_digest = receipt.blake3(record.test_command), .exit_code = 0, .duration_ms = if (record.test_ms) |ms| @intCast(ms) else null });
     return .{
         .batch = batch,
         .operation = record.operation,
@@ -218,7 +220,7 @@ pub fn build(arena: Allocator, io: std.Io, root: []const u8, record: Record) !re
         .checks = checks.items,
         .rules = rule_list.items,
         .sandbox = .{
-            .integrity = "low",
+            .integrity = record.integrity,
             .job_memory_bytes = @intCast(sandbox.job_memory_bytes),
             .active_process_limit = sandbox.active_process_limit,
             .timeout_ms = @intCast(record.limits.timeout_ms),

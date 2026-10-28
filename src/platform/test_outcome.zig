@@ -142,7 +142,7 @@ const no_tests_signs = [_][]const u8{
     "no test files",
 };
 
-const pytest_no_tests_signs = [_][]const u8{ "no tests ran", "collected 0 items" };
+const pytest_no_tests_signs = [_][]const u8{ "no tests ran", "collected 0 items", "NO TESTS RAN" };
 
 const failure_signs = [_][]const u8{ "failing", "FAILED", "Failed!", " failed", "error CS", "Build FAILED", "Traceback", "SyntaxError" };
 
@@ -403,6 +403,7 @@ test "a run that collected no tests counts as passing with a note, a failing or 
         reportOf(1, "", "No test files found, exiting with code 1\n"),
         reportOf(1, "No test is available in C:/w/bin/Debug/net8.0/App.dll.\n", ""),
         reportOf(1, "", "Error: No test files found: \"test\"\n"),
+        reportOf(5, "", "\n----------------------------------------------------------------------\nRan 0 tests in 0.000s\n\nNO TESTS RAN\n"),
     }) |report| {
         errdefer std.debug.print("not treated as empty: {s}{s}\n", .{ report.stdout, report.stderr });
         try std.testing.expect(noTests(report));

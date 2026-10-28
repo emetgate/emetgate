@@ -15,6 +15,7 @@ const shadow = @import("../platform/shadow.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
+const batch_stage_mod = @import("batch_stage.zig");
 const search_session_mod = @import("../platform/search_session.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const map_tools = @import("map_tools.zig");
@@ -86,7 +87,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_try",
-        .description = "Edits code, gated: symbol+hash+body (the braced block; hash \"absent\" + whole declaration adds one), or node+text / nodes:[{node,text}] (ids from emetgate_read_symbol nodes:true).",
+        .description = "Edits code, gated: symbol+hash+body (the braced block; hash \"absent\" + whole declaration adds one), or node+text / nodes:[{node,text}] (ids: emetgate_read_symbol nodes:true).",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "", .optional = true },
@@ -274,6 +275,7 @@ pub const Served = struct {
     language_service: tsserver.Session,
     map_session: ?*map_tools.Session,
     find_session: ?*find_tools.Session,
+    batch_stage: batch_stage_mod.Store,
     policy: Policy,
 
     pub const Options = struct {
@@ -297,6 +299,7 @@ pub const Served = struct {
             .language_service = .{ .gpa = gpa, .io = io, .root = root },
             .map_session = if (root) |r| map_tools.Session.create(gpa, io, runtime, r) catch null else null,
             .find_session = if (root) |r| find_tools.Session.create(gpa, io, r) catch null else null,
+            .batch_stage = .init(gpa),
             .policy = policy,
         };
         self.policy.root = root;
@@ -306,6 +309,7 @@ pub const Served = struct {
         self.policy.language_service = &self.language_service;
         self.policy.map_session = self.map_session;
         self.policy.find_session = self.find_session;
+        self.policy.batch_stage = &self.batch_stage;
         self.search.start();
         if (self.map_session) |ms| {
             ms.store_override = options.fact_store;
@@ -317,6 +321,7 @@ pub const Served = struct {
     pub fn close(self: *Served) void {
         if (self.find_session) |fs| fs.destroy();
         if (self.map_session) |ms| ms.destroy();
+        self.batch_stage.deinit();
         self.language_service.deinit();
         self.search.deinit();
         self.tree_cache.deinit();
@@ -556,7 +561,7 @@ fn writeCommitProp(js: *std.json.Stringify) !void {
     try js.endObject();
 }
 
-pub const batch_description = "Gated edits across files: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string,replace_all?} or {file,hash,content} (whole file; hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" removes a symbol, or a file given its file_hash. A file may repeat for old_string and line-range items; they apply in order.";
+pub const batch_description = "Gated multi-file edits: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string,replace_all?} or {file,hash,content} (whole file, hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" drops a symbol, or a file by its file_hash. One file's items apply in order. On failure, send retry and only the items of files you change.";
 
 fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();
@@ -625,6 +630,11 @@ fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.write("file");
     try js.endArray();
     try js.endObject();
+    try js.endObject();
+    try js.objectField("retry");
+    try js.beginObject();
+    try js.objectField("type");
+    try js.write("string");
     try js.endObject();
     if (commit) try writeCommitProp(js);
     try js.endObject();

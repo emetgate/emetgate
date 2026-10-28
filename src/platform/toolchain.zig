@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const Family = enum { node_install, node_tool, python_install, python_tool, dotnet, cargo, go };
 
-pub const families_hint = "npm|pnpm|yarn|bun install|i|ci|add|ls|list; npx|pnpx|bunx <tool>; tsc; eslint; pip install; python -m pip|pytest|mypy|ruff|venv|unittest; uv pip|sync|add|venv|lock; pytest; mypy; ruff check; dotnet restore|build|test|new|add|sln|list; cargo build|check|test|fetch|add|clippy|tree|metadata|generate-lockfile; go build|vet|test|mod|get|list; any of these --version; dotnet --info|--list-sdks|--list-runtimes; python, pytest, mypy, ruff or pip may be a path inside the project such as .venv\\Scripts\\python";
+pub const families_hint = "npm|pnpm|yarn|bun install|i|ci|add|create|init|ls|list; npx|pnpx|bunx <tool>; tsc; eslint; pip <any>; python -m pip <any>|pytest|mypy|ruff|venv|unittest; uv pip|sync|add|venv|lock|init; pytest; mypy; ruff check; dotnet restore|build|test|new|add|sln|list; cargo build|check|test|fetch|add|clippy|tree|metadata|generate-lockfile|new|init; go build|vet|test|mod|get|list; any of these --version; dotnet --info|--list-sdks|--list-runtimes; python, pytest, mypy, ruff or pip may be a path inside the project such as .venv\\Scripts\\python; in the sandbox copy: npm|pnpm|yarn run <package.json script>, and a tool in the project venv Scripts or bin or in node_modules\\.bin";
 
 const Rule = struct {
     tools: []const []const u8,
@@ -15,20 +15,19 @@ const node_managers = [_][]const u8{ "npm", "pnpm", "yarn", "bun" };
 const node_runners = [_][]const u8{ "npx", "pnpx", "bunx" };
 const node_checkers = [_][]const u8{ "tsc", "eslint" };
 const pythons = [_][]const u8{ "python", "python3", "py" };
-const pip_subcommands = [_][]const u8{ "install", "list", "freeze", "show", "check" };
 
 const rules = [_]Rule{
-    .{ .tools = &node_managers, .family = .node_install, .subcommands = &.{ "install", "i", "ci", "add" } },
+    .{ .tools = &node_managers, .family = .node_install, .subcommands = &.{ "install", "i", "ci", "add", "create", "init" } },
     .{ .tools = &.{"yarn"}, .family = .node_install, .subcommands = &.{}, .bare = true },
     .{ .tools = &node_managers, .family = .node_tool, .subcommands = &.{ "ls", "list" } },
     .{ .tools = &node_runners, .family = .node_tool, .subcommands = null },
     .{ .tools = &node_checkers, .family = .node_tool, .subcommands = null, .bare = true },
-    .{ .tools = &.{ "pip", "pip3" }, .family = .python_install, .subcommands = &pip_subcommands },
-    .{ .tools = &.{"uv"}, .family = .python_install, .subcommands = &.{ "pip", "sync", "add", "remove", "venv", "lock", "tree" } },
+    .{ .tools = &.{ "pip", "pip3" }, .family = .python_install, .subcommands = null },
+    .{ .tools = &.{"uv"}, .family = .python_install, .subcommands = &.{ "pip", "sync", "add", "remove", "venv", "lock", "tree", "init" } },
     .{ .tools = &.{ "pytest", "mypy" }, .family = .python_tool, .subcommands = null, .bare = true },
     .{ .tools = &.{"ruff"}, .family = .python_tool, .subcommands = &.{"check"} },
     .{ .tools = &.{"dotnet"}, .family = .dotnet, .subcommands = &.{ "restore", "build", "test", "new", "add", "sln", "list" } },
-    .{ .tools = &.{"cargo"}, .family = .cargo, .subcommands = &.{ "build", "check", "test", "fetch", "add", "clippy", "tree", "metadata", "generate-lockfile" } },
+    .{ .tools = &.{"cargo"}, .family = .cargo, .subcommands = &.{ "build", "check", "test", "fetch", "add", "clippy", "tree", "metadata", "generate-lockfile", "new", "init" } },
     .{ .tools = &.{"go"}, .family = .go, .subcommands = &.{ "build", "vet", "test", "mod", "get", "list" } },
 };
 
@@ -75,11 +74,11 @@ fn firstSubcommand(tokens: *std.mem.TokenIterator(u8, .any)) ?[]const u8 {
 }
 
 pub fn classify(command: []const u8) ?Family {
-    if (hasArg(command, &forbidden_args)) return null;
     var tokens = std.mem.tokenizeAny(u8, command, " \t\"");
     const first = tokens.next() orelse return null;
     if (std.mem.indexOfAny(u8, first, "\\/:") != null) return null;
     const tool = toolName(first);
+    if (!isPip(tool, tokens) and hasArg(command, &forbidden_args)) return null;
     if (versionProbe(tool, tokens)) |family| return family;
     if (listed(&pythons, tool)) return pythonModule(&tokens);
     if (listed(&node_runners, tool) and hasArg(command, &runner_shell_args)) return null;
@@ -97,6 +96,16 @@ pub fn classify(command: []const u8) ?Family {
         if (listed(subcommands, sub)) return rule.family;
     }
     return null;
+}
+
+fn isPip(tool: []const u8, after: std.mem.TokenIterator(u8, .any)) bool {
+    if (listed(&.{ "pip", "pip3" }, tool)) return true;
+    var rest = after;
+    if (std.ascii.eqlIgnoreCase(tool, "uv")) return if (rest.next()) |sub| std.ascii.eqlIgnoreCase(sub, "pip") else false;
+    if (!listed(&pythons, tool)) return false;
+    const flag = rest.next() orelse return false;
+    const module = rest.next() orelse return false;
+    return std.mem.eql(u8, flag, "-m") and std.ascii.eqlIgnoreCase(module, "pip");
 }
 
 const version_args = [_][]const u8{ "--version", "-v", "-V", "version" };
@@ -122,10 +131,7 @@ fn pythonModule(tokens: *std.mem.TokenIterator(u8, .any)) ?Family {
     if (!std.mem.eql(u8, flag, "-m")) return null;
     const module = tokens.next() orelse return null;
     if (!listed(&python_modules, module)) return null;
-    if (std.ascii.eqlIgnoreCase(module, "pip")) {
-        const sub = firstSubcommand(tokens) orelse return null;
-        return if (listed(&pip_subcommands, sub)) .python_install else null;
-    }
+    if (std.ascii.eqlIgnoreCase(module, "pip")) return if (firstSubcommand(tokens) != null) .python_install else null;
     if (std.ascii.eqlIgnoreCase(module, "ruff")) {
         const sub = firstSubcommand(tokens) orelse return null;
         return if (std.ascii.eqlIgnoreCase(sub, "check")) .python_tool else null;
@@ -181,6 +187,17 @@ test "project toolchain commands are classified into their family" {
         .{ "uv --version", .python_tool },
         .{ "tsc --version", .node_tool },
         .{ "npx tsc --version", .node_tool },
+        .{ "pip wheel . --no-deps -w dist", .python_install },
+        .{ "python -m pip wheel . --no-deps -w dist", .python_install },
+        .{ "python -m pip uninstall -y x", .python_install },
+        .{ "pip download -d wheels requests", .python_install },
+        .{ "uv pip compile -w x", .python_install },
+        .{ "npm create vite@latest web -- --template react", .node_install },
+        .{ "npm init -y", .node_install },
+        .{ "pnpm create next-app web", .node_install },
+        .{ "npx create-react-app web", .node_tool },
+        .{ "cargo new app", .cargo },
+        .{ "uv init", .python_install },
     };
     for (cases) |case| {
         errdefer std.debug.print("command: {s}\n", .{case[0]});
@@ -198,7 +215,10 @@ test "git, shells, arbitrary runners, explicit paths and file-rewriting flags ar
         "python script.py",
         "python -c print(1)",
         "python -m http.server",
-        "python -m pip uninstall x",
+        "python -m pip",
+        "pip",
+        "npm init -w x",
+        "python -m pytest -w",
         "npm run build",
         "npm exec x",
         "npm uninstall x",

@@ -11,6 +11,7 @@ const test_outcome = @import("../platform/test_outcome.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const toolchain = @import("../platform/toolchain.zig");
 const output_digest = @import("output_digest.zig");
+const receipt_note = @import("receipt_note.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -81,9 +82,15 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         return false;
     };
     if (output_digest.logRequest(command)) |id| return output_digest.writeLog(gpa, io, root_abs, id, w);
+    var project: ?[]u8 = null;
+    defer if (project) |local| gpa.free(local);
     const entry = switch (run_command.check(allowed, command)) {
-        .refused => |why| {
+        .refused => |why| refused: {
             if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);
+            if (why == .not_allowed and run_command.isProjectCommand(gpa, io, root_abs, command)) {
+                project = try run_command.localCommand(gpa, command);
+                break :refused project.?;
+            }
             event.fail("RunRefused");
             try writeRefused(w, command, @tagName(why), allowed);
             return true;
@@ -107,12 +114,12 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         else => |e| return e,
     };
     defer report.deinit(gpa);
-    try writeRan(gpa, io, root_abs, w, entry, report, used, "shadow");
+    try writeRan(gpa, io, root_abs, w, command, report, used, "shadow");
     return false;
 }
 
 fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, allowed: []const []const u8, w: *Writer, event: *telemetry.Event) !bool {
-    const report = run_command.runInRepo(gpa, io, root_abs, command, run_command.toolchain_limits) catch |err| switch (err) {
+    const ran = run_command.runInRepo(gpa, io, root_abs, command, run_command.toolchain_limits, receipt_note.version) catch |err| switch (err) {
         error.SandboxUnavailable => {
             event.fail("SandboxUnavailable");
             try writeRefused(w, command, "sandbox_unavailable", allowed);
@@ -120,8 +127,20 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
         },
         else => |e| return e,
     };
-    defer report.deinit(gpa);
-    try writeRan(gpa, io, root_abs, w, command, report, null, "repo");
+    defer ran.report.deinit(gpa);
+    try writeRan(gpa, io, root_abs, w, command, ran.report, null, "repo");
+    if (ran.changed != 0) {
+        const field = if (ran.receipt) |id|
+            try std.fmt.allocPrint(gpa, ",\"files_changed\":{d},\"receipt\":\"{s}\"", .{ ran.changed, &id })
+        else
+            try std.fmt.allocPrint(gpa, ",\"files_changed\":{d},\"receipt_error\":\"{t}\"", .{ ran.changed, ran.receipt_error.? });
+        defer gpa.free(field);
+        try receipt_note.insert(gpa, w, field);
+    } else if (ran.receipt_error) |err| {
+        const field = try std.fmt.allocPrint(gpa, ",\"receipt_error\":\"{t}\"", .{err});
+        defer gpa.free(field);
+        try receipt_note.insert(gpa, w, field);
+    }
     return false;
 }
 

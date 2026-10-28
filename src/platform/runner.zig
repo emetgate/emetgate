@@ -155,15 +155,18 @@ pub fn runCommandWith(gpa: Allocator, io: std.Io, cwd: []const u8, command: []co
     defer gpa.free(temp);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const env: []const sandbox.EnvVar = if (cache) |dir| blk: {
+    const arena = arena_state.allocator();
+    var env: std.ArrayList(sandbox.EnvVar) = .empty;
+    if (cache) |dir| {
         try shadow.ensureCache(io, dir);
-        break :blk try sandbox.cacheEnvironment(arena_state.allocator(), dir);
-    } else &.{};
+        try env.appendSlice(arena, try sandbox.cacheEnvironment(arena, dir));
+    }
+    if (try test_command_mod.pythonPath(arena, io, cwd)) |path| try env.append(arena, path);
     try shadow.freshTemp(io, temp);
     defer shadow.clearTemp(io, temp) catch {};
     var attempt: usize = 1;
     while (true) : (attempt += 1) {
-        const report = try sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env });
+        const report = try sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env.items });
         if (attempt == start_attempts or !neverStarted(report)) return report;
         report.deinit(gpa);
         try shadow.freshTemp(io, temp);
@@ -453,6 +456,27 @@ test "a gated command gets its own writable TEMP and TMP next to its directory, 
     defer testing.allocator.free(expected);
     try testing.expectEqualStrings(expected, report.stdout);
     try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, temp, .{}));
+}
+
+test "a gated command in a Python src layout imports the src packages through PYTHONPATH" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work/src/wordstat");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "work/src/wordstat/__init__.py", .data = "" });
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{top});
+    defer testing.allocator.free(work);
+    try shadow.grantLowIntegrityWrite(work);
+
+    const report = try runCommand(testing.allocator, testing.io, work, "echo %PYTHONPATH%", .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expect(report.passed());
+    const src = try std.fmt.allocPrint(testing.allocator, "{s}\\src", .{work});
+    defer testing.allocator.free(src);
+    try testing.expect(std.mem.startsWith(u8, report.stdout, src));
 }
 
 test "a stale temp directory that is a junction is removed without touching its target" {

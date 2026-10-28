@@ -97,6 +97,7 @@ const Context = struct {
         const trusted = switch (kind) {
             .@"test" => self.options.test_command,
             .typecheck => self.options.typecheck_command,
+            .run => null,
         } orelse return null;
         if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest)) return null;
         const ran = if (kind == .@"test") &self.tests_ran else &self.typecheck_ran;

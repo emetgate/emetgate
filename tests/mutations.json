@@ -9606,8 +9606,8 @@
     {
       "id": "GC5-hand-edited-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "            if (!std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;\n",
-      "to": "            if (false and !std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and !pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "git commit: a target edited by hand is refused, and an edit to another file is not in the way",
         "commit on write: a target edited by hand is refused and keeps the hand edit",
@@ -10086,8 +10086,8 @@
     {
       "id": "PV3-untracked-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "            const head_entry = in_head orelse return error.TargetNotInHead;\n",
-      "to": "            const head_entry = in_head orelse continue;\n",
+      "from": "                if (!pre_written) return error.TargetNotInHead;\n",
+      "to": "                if (false) return error.TargetNotInHead;\n",
       "kills": [
         "commit write_doc: a target git does not track yet is refused and stays as it was"
       ],
@@ -10579,8 +10579,8 @@
     {
       "id": "P1f-staged-entry-in-the-index-copy-not-compared",
       "file": "src/platform/git_commit.zig",
-      "from": "            if (!std.mem.eql(u8, found.oid, oid) or !std.mem.eql(u8, found.mode, &mode)) return error.TargetHasUncommittedChanges;\n",
-      "to": "            if (false and (!std.mem.eql(u8, found.oid, oid) or !std.mem.eql(u8, found.mode, &mode))) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!std.mem.eql(u8, found.oid, was.oid.?) or !std.mem.eql(u8, found.mode, &mode)) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and (!std.mem.eql(u8, found.oid, was.oid.?) or !std.mem.eql(u8, found.mode, &mode))) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "redteam2 commit: a change staged on the target between its last measurement and the lock is still staged afterwards"
       ]
@@ -13958,8 +13958,8 @@
     {
       "id": "B19-temp-env-dropped",
       "file": "src/platform/runner.zig",
-      "from": ".limits = limits, .temp = temp, .env = env });",
-      "to": ".limits = limits, .env = env });",
+      "from": ".limits = limits, .temp = temp, .env = env.items });",
+      "to": ".limits = limits, .env = env.items });",
       "kills": [
         "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run"
       ]
@@ -14561,7 +14561,7 @@
     {
       "id": "TC2-toolchain-write-flags-accepted",
       "file": "src/platform/toolchain.zig",
-      "from": "    if (hasArg(command, &forbidden_args)) return null;\n",
+      "from": "    if (!isPip(tool, tokens) and hasArg(command, &forbidden_args)) return null;\n",
       "to": "",
       "kills": [
         "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands",
@@ -14581,7 +14581,7 @@
     {
       "id": "TC4-toolchain-metachar-accepted",
       "file": "src/platform/run_command.zig",
-      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n    var tokens",
+      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes or argumentsEscape(command)) return false;\n    var tokens",
       "to": "    var tokens",
       "kills": [
         "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
@@ -14627,8 +14627,8 @@
     {
       "id": "CACHE1-gate-run-without-cache-env",
       "file": "src/platform/runner.zig",
-      "from": "        break :blk try sandbox.cacheEnvironment(arena_state.allocator(), dir);",
-      "to": "        break :blk &.{};",
+      "from": "        try env.appendSlice(arena, try sandbox.cacheEnvironment(arena, dir));\n",
+      "to": "",
       "kills": [
         "a gated command gets writable package caches next to its directory that survive the run"
       ]
@@ -15119,8 +15119,8 @@
     {
       "id": "SBX2-daemon-flags-dropped",
       "file": "src/platform/sandbox.zig",
-      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
-      "to": "        _ = flag;",
+      "from": "    for (daemon_flags) |flag| {\n        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "    for (daemon_flags) |flag| {\n        _ = flag;",
       "kills": [
         "every sandboxed command turns off build-server reuse but keeps a value the caller set"
       ]
@@ -15128,8 +15128,8 @@
     {
       "id": "SBX3-daemon-flags-override-caller",
       "file": "src/platform/sandbox.zig",
-      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
-      "to": "        try vars.append(arena, flag);",
+      "from": "    for (daemon_flags) |flag| {\n        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "    for (daemon_flags) |flag| {\n        try vars.append(arena, flag);",
       "kills": [
         "every sandboxed command turns off build-server reuse but keeps a value the caller set"
       ]
@@ -15709,8 +15709,8 @@
     {
       "id": "L5A-venv-interpreter-without-pyvenv",
       "file": "src/platform/run_command.zig",
-      "from": "        return inVenv(io, a, real);",
-      "to": "        return true;",
+      "from": "    const real = realInRoot(io, a, root_abs, token, &.{ \"\", \".exe\" }) orelse return false;\n    return inVenv(io, a, real);",
+      "to": "    _ = realInRoot(io, a, root_abs, token, &.{ \"\", \".exe\" }) orelse return false;\n    return true;",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15718,8 +15718,8 @@
     {
       "id": "L5B-interpreter-outside-project",
       "file": "src/platform/run_command.zig",
-      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return false;\n",
-      "to": "",
+      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return null;\n",
+      "to": "        _ = real_root;\n",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15727,8 +15727,8 @@
     {
       "id": "L5C-any-venv-binary",
       "file": "src/platform/run_command.zig",
-      "from": "    if (!listed) return false;",
-      "to": "",
+      "from": "    if (!listed) return false;\n    var storage",
+      "to": "    var storage",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15763,8 +15763,8 @@
     {
       "id": "L5G-requirements-project-ignored",
       "file": "src/platform/test_command.zig",
-      "from": "    if (try requirementsProject(gpa, io, dir)) |run| return pythonCommand(io, dir, run);",
-      "to": "",
+      "from": "    if (!marked and (listed == null or !hasPythonTests(io, dir))) return null;",
+      "to": "    if (!marked) return null;",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15772,8 +15772,8 @@
     {
       "id": "L5H-requirements-without-tests",
       "file": "src/platform/test_command.zig",
-      "from": "    if (!any or !hasPythonTests(io, dir)) return null;",
-      "to": "    if (!any) return null;",
+      "from": "    if (!marked and (listed == null or !hasPythonTests(io, dir))) return null;",
+      "to": "    if (!marked and listed == null) return null;",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15781,8 +15781,8 @@
     {
       "id": "L5I-venv-pytest-unseen",
       "file": "src/platform/test_command.zig",
-      "from": "    if (listed_pytest or venvHasPytest(io, dir)) return pytest_run;",
-      "to": "    if (listed_pytest) return pytest_run;",
+      "from": "        if (siteHasPytest(arena, io, dir, site)) return true;\n",
+      "to": "        _ = site;\n",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15799,8 +15799,8 @@
     {
       "id": "L5K-python-marker-ignores-venv",
       "file": "src/platform/test_command.zig",
-      "from": "        if (dir.access(io, marker, .{})) |_| return pythonCommand(io, dir, pytest_run) else |_| {}",
-      "to": "        if (dir.access(io, marker, .{})) |_| return \"python -m pytest\" else |_| {}",
+      "from": "    return pythonCommand(io, dir, if (pytest) pytest_run else unittestRun(io, dir));",
+      "to": "    if (marked and pytest) return \"python \" ++ pytest_run;\n    return pythonCommand(io, dir, if (pytest) pytest_run else unittestRun(io, dir));",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -16269,6 +16269,289 @@
       "to": "",
       "kills": [
         "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
+      ]
+    },
+    {
+      "id": "SCR1-restricted-run-keeps-event-log",
+      "file": "src/platform/sandbox.zig",
+      "from": "    if (command.backend != .user) for (restricted_flags) |flag| {",
+      "to": "    if (false) for (restricted_flags) |flag| {",
+      "kills": [
+        "a restricted command turns off the Windows event log provider it cannot write, an unrestricted one keeps it"
+      ]
+    },
+    {
+      "id": "SCR2-python-always-pytest",
+      "file": "src/platform/test_command.zig",
+      "from": "    const pytest = (listed orelse false) or try declaresPytest(gpa, io, dir) or try hasPytest(gpa, io, dir);",
+      "to": "    const pytest = true;",
+      "kills": [
+        "test detection: a unittest project picks unittest discover with the right start dir, venv or not"
+      ]
+    },
+    {
+      "id": "SCR3-pytest-ignores-interpreter",
+      "file": "src/platform/test_command.zig",
+      "from": "    const home = (try pathInterpreter(arena, io)) orelse return false;",
+      "to": "    const home = (try pathInterpreter(arena, io)) orelse return true;",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "SCR4-unittest-misses-plain-tests-dir",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (sub.access(io, \"__init__.py\", .{})) |_| return unittest_run else |_| return candidate.run;",
+      "to": "        return unittest_run;",
+      "kills": [
+        "test detection: a unittest project picks unittest discover with the right start dir, venv or not"
+      ]
+    },
+    {
+      "id": "SCR5-shim-not-a-stop",
+      "file": "src/platform/test_command.zig",
+      "from": "        for ([_][]const u8{ \"python.exe\", \"python.bat\", \"python.cmd\" }, 0..) |name, i| {",
+      "to": "        for ([_][]const u8{\"python.exe\"}, 0..) |name, i| {",
+      "kills": [
+        "test detection: pytest is chosen only when the interpreter that runs the tests can import it"
+      ]
+    },
+    {
+      "id": "SCR6-venv-ignores-system-site",
+      "file": "src/platform/test_command.zig",
+      "from": "    return if (shared) home else null;",
+      "to": "    return null;",
+      "kills": [
+        "test detection: pytest is chosen only when the interpreter that runs the tests can import it"
+      ]
+    },
+    {
+      "id": "SCR7-pytest-mention-any-substring",
+      "file": "src/platform/test_command.zig",
+      "from": "            if ((at == 0 or !isNameByte(line[at - 1])) and (end == line.len or !isNameByte(line[end]))) return true;",
+      "to": "            return true;",
+      "kills": [
+        "test detection: a unittest project picks unittest discover with the right start dir, venv or not"
+      ]
+    },
+    {
+      "id": "SCR8-src-layout-not-on-path",
+      "file": "src/platform/runner.zig",
+      "from": "    if (try test_command_mod.pythonPath(arena, io, cwd)) |path| try env.append(arena, path);",
+      "to": "",
+      "kills": [
+        "a gated command in a Python src layout imports the src packages through PYTHONPATH"
+      ]
+    },
+    {
+      "id": "SCR9-src-layout-any-dir",
+      "file": "src/platform/test_command.zig",
+      "from": "            .file => if (std.ascii.endsWithIgnoreCase(entry.name, \".py\")) return true,",
+      "to": "            .file => return true,",
+      "kills": [
+        "test detection: a src layout is put on PYTHONPATH for the gated run, and nothing else is"
+      ]
+    },
+    {
+      "id": "SCR10-env-error-taken-as-failing-baseline",
+      "file": "src/platform/baseline.zig",
+      "from": "        if (test_outcome.envError(report)) |reason| {",
+      "to": "        if (@as(?[]const u8, null)) |reason| {",
+      "kills": [
+        "test detection: a test command that cannot start is reported unverified, never as a failing baseline"
+      ]
+    },
+    {
+      "id": "SCR11-unittest-empty-run-fails",
+      "file": "src/platform/test_outcome.zig",
+      "from": "\"collected 0 items\", \"NO TESTS RAN\" };",
+      "to": "\"collected 0 items\" };",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not"
+      ]
+    },
+    {
+      "id": "SRC1-list-tracked-only",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    const files = try shadow.workingFiles(gpa, io, place.root);\n",
+      "to": "    const files = try shadow.trackedFiles(gpa, io, place.root);\n",
+      "kills": [
+        "list includes untracked files that are not ignored and leaves ignored ones out"
+      ],
+      "note": "the list must show the untracked files a scaffold created"
+    },
+    {
+      "id": "SRC2-pip-flags-forbidden",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (!isPip(tool, tokens) and hasArg(command, &forbidden_args)) return null;\n",
+      "to": "    if (hasArg(command, &forbidden_args)) return null;\n",
+      "kills": [
+        "project toolchain commands are classified into their family"
+      ],
+      "note": "pip -w names a wheel directory, not a rewrite flag"
+    },
+    {
+      "id": "SRC3-rewrite-flags-allowed",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (!isPip(tool, tokens) and hasArg(command, &forbidden_args)) return null;\n",
+      "to": "    if (!isPip(tool, tokens) and false) return null;\n",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands"
+      ],
+      "note": "outside pip the rewrite flags stay refused"
+    },
+    {
+      "id": "SRC4-toolchain-path-escape",
+      "file": "src/platform/run_command.zig",
+      "from": "pub fn isToolchain(command: []const u8) bool {\n    if (hasShellMetacharacter(command) or command.len > max_entry_bytes or argumentsEscape(command)) return false;\n",
+      "to": "pub fn isToolchain(command: []const u8) bool {\n    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n",
+      "kills": [
+        "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
+      ],
+      "note": "an argument naming a path outside the root would let the repo run write there"
+    },
+    {
+      "id": "SRC5-dotdot-escape",
+      "file": "src/platform/run_command.zig",
+      "from": "            if (depth == 0) return true;\n",
+      "to": "            if (false) return true;\n",
+      "kills": [
+        "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
+      ],
+      "note": "a .. that climbs above the root escapes it"
+    },
+    {
+      "id": "SRC6-project-command-escape",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (argumentsEscape(command)) return false;\n",
+      "to": "",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "a package script given an outside path writes outside the sandbox copy"
+    },
+    {
+      "id": "SRC7-undefined-script",
+      "file": "src/platform/run_command.zig",
+      "from": "    return scripts.object.get(script) != null;\n",
+      "to": "    return true;\n",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "only a script package.json defines may run"
+    },
+    {
+      "id": "SRC8-scripts-without-venv",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (std.ascii.eqlIgnoreCase(dir_name, \"Scripts\") or std.ascii.eqlIgnoreCase(dir_name, \"bin\")) return inVenv(io, a, real);\n",
+      "to": "    if (std.ascii.eqlIgnoreCase(dir_name, \"Scripts\") or std.ascii.eqlIgnoreCase(dir_name, \"bin\")) return true;\n",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "a Scripts directory is a tool directory only inside a venv"
+    },
+    {
+      "id": "SRC9-tool-outside-root",
+      "file": "src/platform/run_command.zig",
+      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return null;\n",
+      "to": "        if (false) return null;\n",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "a tool resolved outside the root is not a project tool"
+    },
+    {
+      "id": "SRC10-new-file-stale-stage",
+      "file": "src/platform/git_commit.zig",
+      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "to": "",
+      "kills": [
+        "emetgate_commit: a new file staged with other content than its run receipt is refused, the staged copy kept"
+      ],
+      "note": "the commit would replace what the user staged"
+    },
+    {
+      "id": "SRC11-unborn-log-error",
+      "file": "src/protocol/git_tools.zig",
+      "from": "        if (std.mem.eql(u8, sub, \"status\") or std.mem.eql(u8, sub, \"diff\") or opts.cursor != null or opts.rev != null or !try unbornHead(gpa, io, git, place.root)) {\n",
+      "to": "        if (true) {\n",
+      "kills": [
+        "git log on a repository with no commits answers no commits yet, show refuses with NoCommitYet"
+      ],
+      "note": "an empty repository answers no commits yet, not a failed git command"
+    },
+    {
+      "id": "SRC12-run-check-verified",
+      "file": "src/verify/checker.zig",
+      "from": "                    outcome.raise(.unverified, run_not_rerun);\n",
+      "to": "",
+      "kills": [
+        "emetgate_commit: files a run created or changed commit through the run receipt"
+      ],
+      "note": "a command's writes are recorded, never reproduced, so they never verify"
+    },
+    {
+      "id": "BR1-stale-kept-file-accepted",
+      "file": "src/protocol/batch_stage.zig",
+      "from": "            if (sameHash(now_hash, s.hash)) continue;",
+      "to": "            if (sameHash(now_hash, now_hash)) continue;",
+      "kills": [
+        "a kept batch whose untouched file changed on disk is refused as stale and dropped",
+        "batch retry: a kept batch whose file changed on disk is refused as stale and nothing is written"
+      ]
+    },
+    {
+      "id": "BR2-kept-batch-never-expires",
+      "file": "src/protocol/batch_stage.zig",
+      "from": "    return now - entry.staged_at > ttl_ns;",
+      "to": "    return now - entry.staged_at < 0;",
+      "kills": [
+        "a kept batch expires, belongs to its root, and the oldest is evicted past the limit"
+      ]
+    },
+    {
+      "id": "BR3-kept-batch-any-root",
+      "file": "src/protocol/batch_stage.zig",
+      "from": "            if (expired(entry.*, now) or !std.mem.eql(u8, entry.root, root orelse \"\")) return null;",
+      "to": "            _ = root;\n            if (expired(entry.*, now)) return null;",
+      "kills": [
+        "a kept batch expires, belongs to its root, and the oldest is evicted past the limit"
+      ]
+    },
+    {
+      "id": "BR4-committed-batch-stays-kept",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (retry) |id| store.remove(id);",
+      "to": "        _ = &retry;",
+      "kills": [
+        "batch retry: a rejected batch is kept under a retry id, and a retry that sends only the changed item commits the whole merged batch"
+      ]
+    },
+    {
+      "id": "BR5-batch-kept-after-commit-started",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!is_error or event.trace.commit_attempted) {",
+      "to": "    if (!is_error) {",
+      "kills": [
+        "batch retry: a batch whose commit started and failed is not kept for a retry"
+      ]
+    },
+    {
+      "id": "VF1-verified-without-tests",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (!n.tested or n.baseline.skipped) return;",
+      "to": "    if (n.baseline.skipped) return;",
+      "kills": [
+        "a committed reply says the tests ran on a mirror only when they ran and were not skipped"
+      ]
+    },
+    {
+      "id": "RO1-short-run-output-digested",
+      "file": "src/protocol/output_digest.zig",
+      "from": "pub const verbatim_under: usize = cap;",
+      "to": "pub const verbatim_under: usize = 512;",
+      "kills": [
+        "run output past the old 512 byte cut and under the cap comes back verbatim with its pass lines"
       ]
     }
   ]

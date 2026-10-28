@@ -35,6 +35,7 @@ const disk = @import("../platform/disk.zig");
 const scan_command = @import("scan_command.zig");
 const tool_result = @import("tool_result.zig");
 const recovery = @import("recovery.zig");
+const batch_stage = @import("batch_stage.zig");
 const runner = @import("../platform/runner.zig");
 const test_command_mod = @import("../platform/test_command.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
@@ -957,9 +958,23 @@ fn jailItem(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, may
 
 fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     const arguments = args orelse return tool_result.missing(edits_missing, .{});
-    const edits_val = getField(arguments, "edits") orelse return tool_result.missing(edits_missing, .{});
-    if (edits_val != .array or edits_val.array.items.len == 0) return tool_result.missing(edits_missing, .{});
-    for (edits_val.array.items, 0..) |item, i| {
+    const retry = getString(arguments, "retry");
+    const given: []const Value = if (getField(arguments, "edits")) |edits_val| switch (edits_val) {
+        .array => |list| list.items,
+        else => return tool_result.missing(edits_missing, .{}),
+    } else &.{};
+    if (given.len == 0 and retry == null) return tool_result.missing(edits_missing, .{});
+    var merge_state = std.heap.ArenaAllocator.init(gpa);
+    defer merge_state.deinit();
+    const now = batch_stage.clock(io);
+    const items: []const Value = if (retry) |id| merged: {
+        const store = policy.batch_stage orelse return batchFailure(gpa, event, error.StagedBatchUnknown);
+        break :merged store.merge(merge_state.allocator(), io, policy.root, id, given, now) catch |err| switch (err) {
+            error.StagedBatchUnknown, error.StagedBatchStale => return batchFailure(gpa, event, err),
+            else => |e| return e,
+        };
+    } else given;
+    for (items, 0..) |item, i| {
         const file = getString(item, "file") orelse return tool_result.missing("edits[{d}].file (string)", .{i});
         switch (try itemKind(item)) {
             .doc => {
@@ -985,19 +1000,35 @@ fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
 
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = batchInto(gpa, io, runtime, edits_val.array.items, arguments, policy, &buffer.writer, event) catch |err| blk: {
+    const is_error = batchInto(gpa, io, runtime, items, given, arguments, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
-        recovery.afterBatch(gpa, io, runtime, policy.root, edits_val.array.items, err);
+        recovery.afterBatch(gpa, io, runtime, policy.root, items, err);
         buffer.clearRetainingCapacity();
         if (err == error.WrittenButNotIndexed) {
-            try wire.writeNotIndexed(&buffer.writer, firstAbsentFile(edits_val.array.items));
+            try wire.writeNotIndexed(&buffer.writer, firstAbsentFile(items));
         } else {
             try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         }
         break :blk true;
     };
-    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+    const store = policy.batch_stage orelse return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+    if (!is_error or event.trace.commit_attempted) {
+        if (retry) |id| store.remove(id);
+        return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+    }
+    const kept = try store.stage(io, policy.root, items, retry, now);
+    const text = try batch_stage.withRetry(gpa, buffer.written(), kept);
+    defer gpa.free(text);
+    return .{ .text = try dupTrim(gpa, text), .is_error = true };
+}
+
+fn batchFailure(gpa: Allocator, event: *telemetry.Event, err: anyerror) !ToolResult {
+    event.fail(@errorName(err));
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    try wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err));
+    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };
 }
 
 const edits_missing = "edits (non-empty array of objects, one per file)";
@@ -1047,6 +1078,13 @@ fn firstAbsentFile(items: []const Value) []const u8 {
     return getString(items[0], "file").?;
 }
 
+fn sentNow(given: []const Value, item: Value) bool {
+    for (given) |fresh| {
+        if (fresh == .object and item == .object and fresh.object.keys().ptr == item.object.keys().ptr) return true;
+    }
+    return false;
+}
+
 fn recordBatch(gpa: Allocator, io: std.Io, root: []const u8, places: []const repo.Jailed, edits: []const runner.Edit, prepared: []const batch_mod.Prepared, before_hashes: []const ?symbol.Hash, committed: []const batch_mod.Committed, test_command: []const u8, typecheck_command: ?[]const u8, test_ms: ?u64, w: *Writer, full: bool, request: ?*commit_plan.Request) !void {
     if (edits.len == 0) return;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -1094,7 +1132,7 @@ fn recordBatch(gpa: Allocator, io: std.Io, root: []const u8, places: []const rep
     }, w, full, request);
 }
 
-fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value, sent_items: []const Value, args: Value, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
     const given = try trustedTestCommand(args, policy);
     var commit = try policy_mod.commitRequest(args, policy, runtime);
     defer if (commit) |request| request.deinit(gpa);
@@ -1222,6 +1260,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
 
     var sent: usize = 0;
     for (items, node_lists) |item, list| {
+        if (!sentNow(sent_items, item)) continue;
         sent += node_tool.sentChars(list);
         inline for (.{ "symbol", "hash", "body", "content", "old_string", "new_string" }) |field| {
             if (getString(item, field)) |text| sent += text.len;

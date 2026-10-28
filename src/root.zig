@@ -159,6 +159,7 @@ pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
 pub const telemetry = @import("protocol/telemetry.zig");
 pub const handlers = @import("protocol/handlers.zig");
+pub const batch_stage = @import("protocol/batch_stage.zig");
 pub const batch_merge = @import("protocol/batch_merge.zig");
 pub const recovery = @import("protocol/recovery.zig");
 pub const forgive = @import("protocol/forgive.zig");
