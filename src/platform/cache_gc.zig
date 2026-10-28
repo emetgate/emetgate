@@ -133,6 +133,7 @@ fn writeStamp(io: std.Io, data_abs: []const u8, now: i96) !void {
 
 fn collect(gpa: Allocator, io: std.Io, data_abs: []const u8, policy: Policy, now: i96, cancel: ?*const std.atomic.Value(bool)) !Report {
     var report: Report = .{ .ran = true };
+    try clearTombstones(gpa, io, data_abs, &report);
     var entries: std.AutoArrayHashMapUnmanaged(Key, Entry) = .empty;
     defer entries.deinit(gpa);
     var unmeasured: std.AutoArrayHashMapUnmanaged(Key, void) = .empty;
@@ -193,7 +194,7 @@ fn settle(gpa: Allocator, io: std.Io, data_abs: []const u8, policy: Policy, now:
     const aged = now - last_used > policy.maxAgeNs();
     const over = total > policy.maxBytes();
     if (verdict != .gone and !aged and !over) return if (verdict == .refused) .refused else .kept;
-    try removeEntries(gpa, io, data_abs, &entry.key);
+    if (!try removeEntries(gpa, io, data_abs, &entry.key)) return .live;
     drop = true;
     return .removed;
 }
@@ -212,24 +213,127 @@ fn recordedVerdict(gpa: Allocator, io: std.Io, data_abs: []const u8, held: cache
     return shadow_root.verdict(io, recorded, key);
 }
 
-fn removeEntries(gpa: Allocator, io: std.Io, data_abs: []const u8, key: []const u8) !void {
+pub const tomb_marker = ".gc-";
+
+const Moved = struct { family: []const u8, entry: []u8, tomb: []u8 };
+
+fn removeEntries(gpa: Allocator, io: std.Io, data_abs: []const u8, key: []const u8) !bool {
+    var moved: [families.len]Moved = undefined;
+    var count: usize = 0;
+    defer for (moved[0..count]) |item| {
+        gpa.free(item.entry);
+        gpa.free(item.tomb);
+    };
     for (families) |family| {
         const family_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ data_abs, family });
         defer gpa.free(family_abs);
         if (try shadow.isReparsePoint(family_abs)) return error.CacheFamilyIsLink;
         const entry_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ family_abs, key });
-        defer gpa.free(entry_abs);
+        var stored = false;
+        defer if (!stored) gpa.free(entry_abs);
         if (try shadow.isReparsePoint(entry_abs)) return error.CacheEntryIsLink;
         Dir.accessAbsolute(io, entry_abs, .{}) catch |err| switch (err) {
             error.FileNotFound => continue,
             else => |e| return e,
         };
-        if (std.mem.eql(u8, family, shadow_family)) {
-            try shadow.removeWorkspace(io, family_abs, entry_abs);
-        } else {
-            try shadow.clearTemp(io, entry_abs);
+        const tomb = try std.fmt.allocPrint(gpa, "{s}{s}{d}", .{ entry_abs, tomb_marker, cache_lease.processId() });
+        defer if (!stored) gpa.free(tomb);
+        if (!try buryInto(io, entry_abs, tomb, key)) {
+            for (moved[0..count]) |item| restore(io, item.entry, item.tomb, key);
+            return false;
         }
+        moved[count] = .{ .family = family, .entry = entry_abs, .tomb = tomb };
+        count += 1;
+        stored = true;
     }
+    var failure: ?anyerror = null;
+    for (moved[0..count]) |item| bury(io, item.family, item.tomb, key) catch |err| {
+        restore(io, item.entry, item.tomb, key);
+        if (failure == null) failure = err;
+    };
+    if (failure) |err| return err;
+    return true;
+}
+
+fn buryInto(io: std.Io, entry_abs: []const u8, tomb_abs: []const u8, key: []const u8) !bool {
+    try cache_lease.makeDirAbsolute(tomb_abs);
+    var inner_buf: [std.fs.max_path_bytes]u8 = undefined;
+    cache_lease.moveAside(entry_abs, try std.fmt.bufPrint(&inner_buf, "{s}\\{s}", .{ tomb_abs, key })) catch |err| {
+        Dir.cwd().deleteDir(io, tomb_abs) catch {};
+        if (err == error.EntryInUse) return false;
+        return err;
+    };
+    return true;
+}
+
+fn restore(io: std.Io, entry_abs: []const u8, tomb_abs: []const u8, key: []const u8) void {
+    var inner_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const inner = std.fmt.bufPrint(&inner_buf, "{s}\\{s}", .{ tomb_abs, key }) catch return;
+    cache_lease.moveAside(inner, entry_abs) catch {};
+    Dir.cwd().deleteDir(io, tomb_abs) catch {};
+}
+
+fn bury(io: std.Io, family: []const u8, tomb_abs: []const u8, key: []const u8) !void {
+    if (!std.mem.eql(u8, family, shadow_family)) return shadow.clearTemp(io, tomb_abs);
+    var inner_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try shadow.removeWorkspace(io, tomb_abs, try std.fmt.bufPrint(&inner_buf, "{s}\\{s}", .{ tomb_abs, key }));
+    try Dir.cwd().deleteDir(io, tomb_abs);
+}
+
+fn isTombstone(name: []const u8) bool {
+    if (name.len <= shadow_root.key_len + tomb_marker.len) return false;
+    if (!shadow_root.isKey(name[0..shadow_root.key_len])) return false;
+    if (!std.mem.startsWith(u8, name[shadow_root.key_len..], tomb_marker)) return false;
+    for (name[shadow_root.key_len + tomb_marker.len ..]) |c| if (!std.ascii.isDigit(c)) return false;
+    return true;
+}
+
+fn clearTombstones(gpa: Allocator, io: std.Io, data_abs: []const u8, report: *Report) !void {
+    for (families) |family| {
+        const family_abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ data_abs, family });
+        defer gpa.free(family_abs);
+        if (try shadow.isReparsePoint(family_abs)) continue;
+        var names: std.ArrayList([]u8) = .empty;
+        defer {
+            for (names.items) |name| gpa.free(name);
+            names.deinit(gpa);
+        }
+        {
+            var dir = Dir.openDirAbsolute(io, family_abs, .{ .iterate = true, .follow_symlinks = false }) catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => |e| return e,
+            };
+            defer dir.close(io);
+            var it = dir.iterate();
+            while (try it.next(io)) |item| {
+                if (item.kind != .directory or !isTombstone(item.name)) continue;
+                const name = try gpa.dupe(u8, item.name);
+                names.append(gpa, name) catch |err| {
+                    gpa.free(name);
+                    return err;
+                };
+            }
+        }
+        for (names.items) |name| settleTombstone(io, family, family_abs, name) catch |err| report.fail(err);
+    }
+}
+
+fn settleTombstone(io: std.Io, family: []const u8, family_abs: []const u8, name: []const u8) !void {
+    const key = name[0..shadow_root.key_len];
+    var tomb_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var entry_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tomb = try std.fmt.bufPrint(&tomb_buf, "{s}\\{s}", .{ family_abs, name });
+    const entry = try std.fmt.bufPrint(&entry_buf, "{s}\\{s}", .{ family_abs, key });
+    if (try shadow.isReparsePoint(tomb)) return Dir.cwd().deleteDir(io, tomb);
+    Dir.accessAbsolute(io, entry, .{}) catch |err| switch (err) {
+        error.FileNotFound => restore(io, entry, tomb, key),
+        else => |e| return e,
+    };
+    Dir.accessAbsolute(io, tomb, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => |e| return e,
+    };
+    try bury(io, family, tomb, key);
 }
 
 fn scanFamily(gpa: Allocator, io: std.Io, data_abs: []const u8, family: []const u8, entries: *std.AutoArrayHashMapUnmanaged(Key, Entry), unmeasured: *std.AutoArrayHashMapUnmanaged(Key, void), report: *Report) !void {
@@ -534,6 +638,43 @@ test "an entry whose lease a live process holds is never removed" {
     try testing.expect(fx.present("facts", &key));
     try testing.expectEqual(@as(usize, 1), (try fx.sweepAt(.{}, fx.now)).removed);
     try testing.expect(!fx.present("facts", &key));
+}
+
+test "an entry with a file held open and no lease survives the age rule and the size cap, and leftover tombstones are cleared" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fx = try Fixture.init();
+    defer fx.deinit();
+    const key = shadow_root.repoKey("C:\\pre\\lease\\emetgate");
+    try fx.cache("find", &key, mib, fx.now);
+    try fx.cache("index", &key, 2 * mib, fx.now);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const spare = try std.fmt.allocPrint(testing.allocator, "data/index/{s}/spare", .{&key});
+    defer testing.allocator.free(spare);
+    try fx.tmp.dir.writeFile(testing.io, .{ .sub_path = spare, .data = "s" });
+    const stale_key = shadow_root.repoKey("C:\\crashed\\sweep");
+    const tomb = try std.fmt.allocPrint(testing.allocator, "{s}{s}77", .{ &stale_key, tomb_marker });
+    defer testing.allocator.free(tomb);
+    try fx.tmp.dir.createDirPath(testing.io, try std.fmt.bufPrint(&buf, "data/facts/{s}/{s}/deep", .{ tomb, &stale_key }));
+    var open = try fx.tmp.dir.openFile(testing.io, try std.fmt.bufPrint(&buf, "data/index/{s}/blob", .{&key}), .{});
+    var closed = false;
+    defer if (!closed) open.close(testing.io);
+
+    const aged = try fx.sweepAt(.{}, fx.now + 90 * day);
+    try testing.expect(!fx.present("facts", tomb));
+    try testing.expect(!fx.present("facts", &stale_key));
+    const capped = try fx.sweepAt(.{ .max_mb = 1 }, fx.now);
+    for ([_]Report{ aged, capped }, [_]usize{ 1, 0 }) |report, removed| {
+        try testing.expectEqual(@as(usize, 1), report.live);
+        try testing.expectEqual(removed, report.removed);
+        try testing.expectEqual(@as(usize, 0), report.failed);
+    }
+    try testing.expect(fx.present("find", &key));
+    try fx.tmp.dir.access(testing.io, spare, .{});
+    open.close(testing.io);
+    closed = true;
+    try testing.expectEqual(@as(usize, 1), (try fx.sweepAt(.{}, fx.now + 90 * day)).removed);
+    try testing.expect(!fx.present("find", &key));
+    try testing.expect(!fx.present("index", &key));
 }
 
 test "only one process sweeps the caches at a time, and a second one leaves them alone" {

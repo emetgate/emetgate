@@ -14,11 +14,44 @@ const poll_ms: u32 = 25;
 
 pub const Error = error{ CacheBusy, LeaseFailed, NameTooLong, InvalidWtf8, Unsupported };
 
+pub const test_data_dir_name = "emetgate-test";
+
 pub fn defaultDataDir(gpa: Allocator) ![]u8 {
+    if (builtin.is_test) return testDataDir(gpa);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
     return std.fmt.allocPrint(gpa, "{s}\\{s}", .{ local, data_dir_name });
+}
+
+pub fn testDataDir(gpa: Allocator) ![]u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const temp = (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("TEMP"))) orelse (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("TMP"))) orelse return error.TempUnavailable;
+    return std.fmt.allocPrint(gpa, "{s}\\{s}-p{d}", .{ temp, test_data_dir_name, processId() });
+}
+
+pub fn processId() u32 {
+    if (builtin.os.tag != .windows) return 0;
+    return win.GetCurrentProcessId();
+}
+
+pub fn moveAside(from_abs: []const u8, to_abs: []const u8) error{ EntryInUse, TombstoneFailed, NameTooLong, InvalidWtf8, Unsupported }!void {
+    if (builtin.os.tag != .windows) return error.Unsupported;
+    var from_wide: commit_record.WidePath = undefined;
+    var to_wide: commit_record.WidePath = undefined;
+    const from = commit_record.toWide(&from_wide, from_abs) catch |err| return narrow(err);
+    const to = commit_record.toWide(&to_wide, to_abs) catch |err| return narrow(err);
+    if (win.MoveFileExW(from, to, 0) != .FALSE) return;
+    return switch (win.GetLastError()) {
+        win.error_sharing_violation, win.error_access_denied => error.EntryInUse,
+        else => error.TombstoneFailed,
+    };
+}
+
+pub fn makeDirAbsolute(dir_abs: []const u8) error{ LeaseFailed, NameTooLong, InvalidWtf8 }!void {
+    return makeDir(dir_abs);
 }
 
 pub fn entryDir(gpa: Allocator, root_abs: []const u8, family: []const u8) ![]u8 {
@@ -97,6 +130,14 @@ pub fn holdForProcess(data_abs: []const u8, root_abs: []const u8) Error!void {
     }
     const lease = try acquire(data_abs, root_abs, default_wait_ms);
     held.append(std.heap.page_allocator, .{ .key = key, .lease = lease }) catch lease.release();
+    if (builtin.is_test and @hasDecl(@import("root"), "emetgate_release_leases")) @import("root").emetgate_release_leases = releaseHeld;
+}
+
+pub fn releaseHeld() void {
+    while (!held_mutex.tryLock()) std.atomic.spinLoopHint();
+    defer held_mutex.unlock();
+    for (held.items) |item| item.lease.release();
+    held.clearAndFree(std.heap.page_allocator);
 }
 
 pub const Claim = struct {
@@ -177,6 +218,8 @@ const win = struct {
     };
 
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn MoveFileExW(from: [*:0]const u16, to: [*:0]const u16, flags: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn Sleep(ms: windows.DWORD) callconv(.winapi) void;
     extern "kernel32" fn CreateDirectoryW(name: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn WriteFile(handle: windows.HANDLE, data: [*]const u8, len: windows.DWORD, written: *windows.DWORD, overlapped: ?*anyopaque) callconv(.winapi) windows.BOOL;
@@ -192,3 +235,28 @@ const win = struct {
         template: ?windows.HANDLE,
     ) callconv(.winapi) windows.HANDLE;
 };
+
+test "a test build resolves every cache path to a per-run temp dir outside the real data dir" {
+    const gpa = std.testing.allocator;
+    const isolated = try testDataDir(gpa);
+    defer gpa.free(isolated);
+    const data = try defaultDataDir(gpa);
+    defer gpa.free(data);
+    try std.testing.expectEqualStrings(isolated, data);
+    const entry = try entryDir(gpa, "C:\\emetgate-test-missing\\repo", "find");
+    defer gpa.free(entry);
+    const base = try shadow_root.defaultBase(gpa);
+    defer gpa.free(base);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "LOCALAPPDATA", "USERPROFILE" }, [_][]const u8{ "", "\\AppData\\Local" }) |name, suffix| {
+        const wide = try std.unicode.utf8ToUtf16LeAllocZ(arena, name);
+        const value = (try sandbox.environmentValue(arena, wide)) orelse continue;
+        const real = try std.fmt.allocPrint(arena, "{s}{s}\\{s}", .{ value, suffix, data_dir_name });
+        for ([_][]const u8{ entry, base }) |path| {
+            try std.testing.expect(std.ascii.startsWithIgnoreCase(path, isolated));
+            try std.testing.expect(!std.ascii.startsWithIgnoreCase(path, real));
+        }
+    }
+}

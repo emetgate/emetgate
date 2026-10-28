@@ -16944,6 +16944,42 @@
       "kills": [
         "cache flags parse once each and refuse zero, junk and repeats"
       ]
+    },
+    {
+      "id": "GC14-test-build-uses-real-data-dir",
+      "file": "src/platform/cache_lease.zig",
+      "from": "    if (builtin.is_test) return testDataDir(gpa);\n",
+      "to": "",
+      "kills": [
+        "a test build resolves every cache path to a per-run temp dir outside the real data dir"
+      ]
+    },
+    {
+      "id": "GC15-in-use-entry-deleted-in-place",
+      "file": "src/platform/cache_gc.zig",
+      "from": "    cache_lease.moveAside(entry_abs, try std.fmt.bufPrint(&inner_buf, \"{s}\\\\{s}\", .{ tomb_abs, key })) catch |err| {",
+      "to": "    _ = &inner_buf;\n    _ = key;\n    shadow.clearTemp(io, entry_abs) catch |err| {",
+      "kills": [
+        "an entry with a file held open and no lease survives the age rule and the size cap, and leftover tombstones are cleared"
+      ]
+    },
+    {
+      "id": "GC16-tombstones-left-behind",
+      "file": "src/platform/cache_gc.zig",
+      "from": "        for (names.items) |name| settleTombstone(io, family, family_abs, name) catch |err| report.fail(err);\n",
+      "to": "        _ = report;\n",
+      "kills": [
+        "an entry with a file held open and no lease survives the age rule and the size cap, and leftover tombstones are cleared"
+      ]
+    },
+    {
+      "id": "SL10-sweep-ignores-lease",
+      "file": "src/platform/shadow_root.zig",
+      "from": "        error.Busy => return,\n",
+      "to": "        error.Busy => return shadow.removeWorkspace(io, base_abs, workspace) catch {},\n",
+      "kills": [
+        "sweep leaves a stale workspace whose lease a live process holds, and removes it with the lease once let go"
+      ]
     }
   ]
 }
