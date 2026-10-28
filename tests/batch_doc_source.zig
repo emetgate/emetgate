@@ -6,6 +6,8 @@ const telemetry = @import("emetgate").telemetry;
 const memory = @import("emetgate").memory;
 const symbol = @import("emetgate").symbol;
 const batch_plan = @import("emetgate").batch_plan;
+const runner = @import("emetgate").runner;
+const doc_writer = @import("emetgate").doc_writer;
 const Runtime = @import("emetgate").runtime.Runtime;
 const Snapshot = @import("emetgate").loader.Snapshot;
 
@@ -41,7 +43,7 @@ const Reply = struct {
     fn expectCommitted(self: *Reply) !void {
         errdefer std.debug.print("reply: {s}\n", .{self.text});
         try testing.expect(!self.is_error);
-        try testing.expect(std.mem.indexOf(u8, self.text, "\"status\":\"committed\"") != null);
+        try testing.expect(std.mem.indexOf(u8, self.text, "\"status\":\"written\"") != null);
     }
 };
 
@@ -49,7 +51,7 @@ fn git(root_abs: []const u8, args: []const []const u8) !void {
     var argv: [8][]const u8 = undefined;
     argv[0] = "git";
     @memcpy(argv[1..][0..args.len], args);
-    const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+    const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
     gpa.free(result.stdout);
     gpa.free(result.stderr);
     switch (result.term) {
@@ -156,7 +158,7 @@ const Repo = struct {
     }
 };
 
-fn refusedSourceDocBatch(check: []const u8, enforce: bool, content: []const u8) !void {
+fn gatedSourceDocBatch(check: []const u8, enforce: bool, content: []const u8) !void {
     var repo = try Repo.init();
     defer repo.deinit();
     try repo.rule("a rule", enforce, check);
@@ -168,23 +170,29 @@ fn refusedSourceDocBatch(check: []const u8, enforce: bool, content: []const u8) 
         .{ .kind = "doc", .file = cart, .hash = hash[0..], .line_start = @as(i64, 2), .line_end = @as(i64, 2), .content = content },
     } });
     defer reply.deinit();
-    try reply.expectError("UseSymbolToolsForSource");
+    if (!enforce) {
+        try reply.expectCommitted();
+        try repo.expectLastEvent("emetgate_try_batch", "committed");
+        return;
+    }
+    try testing.expect(reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "rule_violation") != null);
     try repo.expectFile("src/cart.ts", cart_ts);
-    try repo.expectLastEvent("emetgate_try_batch", "UseSymbolToolsForSource");
+    try repo.expectLastEvent("emetgate_try_batch", "rejected");
 }
 
-test "batch doc on source: a line range that adds comments under an enforced no_comment rule is refused, nothing is written and the call is logged" {
+test "batch doc on source: a line range that adds comments under an enforced no_comment rule goes through the gate, is rejected, nothing is written and the call is logged" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try refusedSourceDocBatch("no_comment", true, commented_lines);
+    try gatedSourceDocBatch("no_comment", true, commented_lines);
 }
 
-test "batch doc on source: the same edit is refused under an enforced forbid rule and under an advisory rule" {
+test "batch doc on source: the same edit is rejected under an enforced forbid rule and committed under an advisory rule" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try refusedSourceDocBatch("forbid:Math.abs", true, "  taxCents(): number {\n    Math.abs(1);\n");
-    try refusedSourceDocBatch("no_comment", false, commented_lines);
+    try gatedSourceDocBatch("forbid:Math.abs", true, "  taxCents(): number {\n    Math.abs(1);\n");
+    try gatedSourceDocBatch("no_comment", false, commented_lines);
 }
 
-test "write_doc on source: a line range of a source file is refused like the batch, and nothing is written" {
+test "write_doc on source: a line range of a source file goes through the gate like the batch, and a rule breach writes nothing" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -195,9 +203,10 @@ test "write_doc on source: a line range of a source file is refused like the bat
 
     var reply = try repo.call("emetgate_write_doc", .{ .file = cart, .hash = hash[0..], .line_start = @as(i64, 2), .line_end = @as(i64, 2), .content = commented_lines });
     defer reply.deinit();
-    try reply.expectError("UseSymbolToolsForSource");
+    try testing.expect(reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "rule_violation") != null);
     try repo.expectFile("src/cart.ts", cart_ts);
-    try repo.expectLastEvent("emetgate_write_doc", "UseSymbolToolsForSource");
+    try repo.expectLastEvent("emetgate_write_doc", "rejected");
 }
 
 test "batch doc on a document: a batch of one Markdown edit commits, answers, is logged and leaves no receipt" {
@@ -220,7 +229,7 @@ test "batch doc on a document: a batch of one Markdown edit commits, answers, is
     try testing.expectEqual(@as(usize, 0), try repo.receiptCount());
 }
 
-test "mixed batch: a symbol edit of one file and a doc edit of another source file are refused together" {
+test "mixed batch: a symbol edit of one file and a doc edit of another source file that breaks a rule are rejected together" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -237,13 +246,14 @@ test "mixed batch: a symbol edit of one file and a doc edit of another source fi
         .{ .kind = "doc", .file = cart, .hash = line_hash[0..], .line_start = @as(i64, 2), .line_end = @as(i64, 2), .content = commented_lines },
     } });
     defer reply.deinit();
-    try reply.expectError("UseSymbolToolsForSource");
+    try testing.expect(reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "rule_violation") != null);
     try repo.expectFile("src/cart.ts", cart_ts);
     try repo.expectFile("src/math.ts", math_ts);
-    try repo.expectLastEvent("emetgate_try_batch", "UseSymbolToolsForSource");
+    try repo.expectLastEvent("emetgate_try_batch", "rejected");
 }
 
-test "mixed batch: a symbol edit and a doc edit of the same source file are refused as a source doc edit" {
+test "mixed batch: a symbol edit and a doc edit of the same source file are refused as one file named twice" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -257,7 +267,7 @@ test "mixed batch: a symbol edit and a doc edit of the same source file are refu
         .{ .kind = "doc", .file = math, .hash = line_hash[0..], .line_start = @as(i64, 2), .line_end = @as(i64, 2), .content = "  // note\n  return a + b;\n" },
     } });
     defer reply.deinit();
-    try reply.expectError("UseSymbolToolsForSource");
+    try reply.expectError("DuplicateBatchFile");
     try repo.expectFile("src/math.ts", math_ts);
 }
 
@@ -320,4 +330,147 @@ test "planDoc refuses a file of a registered language before it reads it" {
     const rel = try gpa.dupe(u8, "src/cart.TS");
     defer gpa.free(rel);
     try testing.expectError(error.UseSymbolToolsForSource, batch_plan.planDoc(gpa, testing.io, edit, rel));
+}
+
+fn sourceDocEdit() batch_plan.DocEdit {
+    return .{
+        .file_abs = "C:\\no-such-directory\\src\\cart.TS",
+        .selector = .{ .line_range = .{ .start = 1, .end = 1 } },
+        .expected_hash = symbol.hashOf("x\n"),
+        .new_text = "y\n",
+    };
+}
+
+test "the batch engine refuses a doc edit of a source file before it looks for the repository" {
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const edits = [_]batch_plan.DocEdit{sourceDocEdit()};
+    try testing.expectError(error.UseSymbolToolsForSource, runner.tryMutateBatch(gpa, testing.io, runtime, .{ .doc_edits = &edits, .test_command = "exit 0" }));
+}
+
+test "the doc writer refuses a source file before it looks for the repository" {
+    const edit = sourceDocEdit();
+    try testing.expectError(error.UseSymbolToolsForSource, doc_writer.tryWriteDoc(gpa, testing.io, .{
+        .file_abs = edit.file_abs,
+        .selector = edit.selector,
+        .expected_hash = edit.expected_hash,
+        .new_text = edit.new_text,
+        .test_command = "exit 0",
+    }, null));
+}
+
+test "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const created_ts = "export function twice(n: number): number {\n  return n * 2;\n}\n";
+    const created_json = "{\n  \"compilerOptions\": {}\n}\n";
+    const twice = try repo.path("lib\\deep\\twice.ts");
+    defer gpa.free(twice);
+    const tsconfig = try repo.path("tsconfig.json");
+    defer gpa.free(tsconfig);
+    const other = try repo.path("lib\\deep\\other.ts");
+    defer gpa.free(other);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = twice, .hash = "absent", .content = created_ts },
+        .{ .kind = "doc", .file = tsconfig, .hash = "absent", .content = created_json },
+        .{ .file = other, .hash = "absent", .body = math_ts },
+    } });
+    defer reply.deinit();
+    try reply.expectCommitted();
+    try repo.expectFile("lib/deep/twice.ts", created_ts);
+    try repo.expectFile("tsconfig.json", created_json);
+    try repo.expectFile("lib/deep/other.ts", math_ts);
+}
+
+test "try_batch whole-file create refuses a file that already exists and leaves it untouched" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .hash = "absent", .content = cart_ts },
+    } });
+    defer reply.deinit();
+    try reply.expectError("FileExists");
+    try repo.expectFile("src/math.ts", math_ts);
+}
+
+test "try_batch whole-file create with a syntax error creates no file and no directory" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const fresh = try repo.path("fresh\\new.ts");
+    defer gpa.free(fresh);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = fresh, .hash = "absent", .content = "export function broken( {\n" },
+    } });
+    defer reply.deinit();
+    try reply.expectError("MutationSyntaxInvalid");
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/fresh", .{}));
+}
+
+test "same-file batch: two old_string items for one file apply in order and commit as one write" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .old_string = "return a + b;", .new_string = "return a + b + 0;" },
+        .{ .file = math, .old_string = "b + 0;", .new_string = "b + 1;" },
+    } });
+    defer reply.deinit();
+    try reply.expectCommitted();
+    try repo.expectFile("src/math.ts", "export function add(a: number, b: number): number {\n  return a + b + 1;\n}\n");
+}
+
+test "same-file batch: a whole-file item and an old_string item for one file are refused naming both indexes" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    const file_hash = symbol.formatHash(symbol.fileHash(math_ts));
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .hash = file_hash[0..], .content = "export const x = 1;\n" },
+        .{ .file = math, .old_string = "a + b", .new_string = "b + a" },
+    } });
+    defer reply.deinit();
+    try reply.expectError("ConflictingBatchEdits");
+    try testing.expect(std.mem.indexOf(u8, reply.text, "edits[0]") != null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "edits[1]") != null);
+    try repo.expectFile("src/math.ts", math_ts);
+}
+
+test "same-file batch: a missing old_string in the second item names that item and writes nothing" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .old_string = "a + b", .new_string = "b + a" },
+        .{ .file = math, .old_string = "a + b", .new_string = "a - b" },
+    } });
+    defer reply.deinit();
+    try reply.expectError("OldStringNotFound");
+    try testing.expect(std.mem.indexOf(u8, reply.text, "edits[1].old_string") != null);
+    try repo.expectFile("src/math.ts", math_ts);
+}
+
+test "multi-file batch: replace_all items across two files commit together" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const math = try repo.path("src\\math.ts");
+    defer gpa.free(math);
+    const notes = try repo.path("notes.md");
+    defer gpa.free(notes);
+    var reply = try repo.call("emetgate_try_batch", .{ .edits = .{
+        .{ .file = math, .old_string = "number", .new_string = "bigint", .replace_all = true },
+        .{ .file = notes, .old_string = "old", .new_string = "new", .replace_all = true },
+    } });
+    defer reply.deinit();
+    try reply.expectCommitted();
+    try repo.expectFile("src/math.ts", "export function add(a: bigint, b: bigint): bigint {\n  return a + b;\n}\n");
+    try repo.expectFile("notes.md", "# Notes\n\n## Setup\n\nnew\n");
 }

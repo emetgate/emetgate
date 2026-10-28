@@ -48,7 +48,7 @@ fn git(root_abs: []const u8, args: []const []const u8) !void {
     var argv: [8][]const u8 = undefined;
     argv[0] = "git";
     @memcpy(argv[1..][0..args.len], args);
-    const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+    const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
     gpa.free(result.stdout);
     gpa.free(result.stderr);
     switch (result.term) {
@@ -185,7 +185,7 @@ test "write_doc refuses a path that only reaches .git through a junction" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
-    const made = try std.process.run(gpa, testing.io, .{ .argv = &.{ "cmd", "/c", "mklink", "/J", "alias", ".git" }, .cwd = .{ .path = repo.root_abs } });
+    const made = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = &.{ "cmd", "/c", "mklink", "/J", "alias", ".git" }, .cwd = .{ .path = repo.root_abs } });
     gpa.free(made.stdout);
     gpa.free(made.stderr);
     try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, made.term);

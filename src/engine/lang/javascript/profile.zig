@@ -55,6 +55,7 @@ pub const profile: Profile = .{
     .directives = &ecma.directives,
     .literal_values = ecma.literal_values,
     .memberTraits = memberTraits,
+    .language_service = true,
     .rename = &ecma_rename.grammar,
     .modules = &ecma_rename.modules,
     .declarations = ecma_rename.declarations(.{ .node = field_shape.node, .kind = .field, .name_field = field_shape.name_field }),

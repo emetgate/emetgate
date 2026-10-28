@@ -53,7 +53,7 @@ fn git(root_abs: []const u8, args: []const []const u8) !void {
     var argv: [8][]const u8 = undefined;
     argv[0] = "git";
     @memcpy(argv[1..][0..args.len], args);
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {
@@ -208,7 +208,7 @@ test "redteam batch create: a new file in a batch is committed with a symmetry c
     const response = try call(&repo, &.{.{ .file = file }});
     defer testing.allocator.free(response);
     errdefer std.debug.print("response: {s}\n", .{response});
-    try testing.expect(std.mem.indexOf(u8, response, "committed") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "written") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\\\"class\\\":\\\"symmetry\\\"") != null);
     try testing.expect(repo.exists("repo/src/fresh.ts"));
 }

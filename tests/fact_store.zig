@@ -19,7 +19,7 @@ fn git(root: []const u8, args: []const []const u8) !void {
     defer argv.deinit(testing.allocator);
     try argv.append(testing.allocator, "git");
     try argv.appendSlice(testing.allocator, args);
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv.items, .cwd = .{ .path = root } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv.items, .cwd = .{ .path = root } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {
@@ -604,4 +604,31 @@ test "fact store: a refresh reads past a file another handle holds at once, name
     const free = try repo.refresh();
     try testing.expectEqual(@as(usize, 1), free.extracted);
     try testing.expectEqual(emetgate.facts_store.Status.indexed, repo.store.file(id).status);
+}
+
+test "fact store: a saved store keeps the submodule a Python from-import may name" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "p/__init__.py", .data = "" },
+        .{ .path = "p/m.py", .data = "def helper():\n    return 1\n" },
+        .{ .path = "n.py", .data = "import os\nfrom p import m\n" },
+    });
+    defer fixture.deinit();
+    {
+        const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+        defer repo.deinit();
+        const report = try repo.refresh();
+        try testing.expect(report.saved);
+    }
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    try testing.expectEqual(fact_store.Load.loaded, repo.load);
+    const id = repo.store.fileId("n.py") orelse return error.TestUnexpectedResult;
+    const loaded = repo.store.file(id).facts;
+    try testing.expectEqual(@as(usize, 2), loaded.bindings.len);
+    try testing.expectEqual(facts.none, loaded.bindings[0].submodule);
+    const sub = loaded.bindings[1].submodule;
+    try testing.expect(sub != facts.none);
+    try testing.expectEqualStrings("p.m", loaded.specs[sub].text);
 }

@@ -37,8 +37,10 @@ pub const Case = struct {
     repo: TsRepo,
     runtime: *Runtime,
     session: tsserver.Session,
+    dynamic: ?*rename_batch.DynamicSites = null,
 
     pub fn init(self: *Case, files: []const fixture.File, stub: bool) !void {
+        self.dynamic = null;
         self.repo = try TsRepo.init(files);
         errdefer self.repo.deinit();
         if (stub) try self.repo.installStub();
@@ -71,7 +73,7 @@ pub const Case = struct {
         defer testing.allocator.free(file);
         const hash = try support.hashOfRef(testing.allocator, testing.io, self.runtime, file, ref_text);
         return rename_batch.tryRename(testing.allocator, testing.io, self.runtime, .{
-            .request = .{ .file_abs = file, .ref_text = ref_text, .expected_hash = hash, .new_name = new_name, .interface_change = interface_change },
+            .request = .{ .file_abs = file, .ref_text = ref_text, .expected_hash = hash, .new_name = new_name, .interface_change = interface_change, .dynamic = self.dynamic },
             .test_command = test_command,
             .commit_step = step,
             .language_service = &self.session,
@@ -239,7 +241,7 @@ test "rename: the tool answers with the class, the resolver, the evidence and ev
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, result.text, .{});
     defer parsed.deinit();
     const body = parsed.value.object;
-    try testing.expectEqualStrings("committed", body.get("status").?.string);
+    try testing.expectEqualStrings("written", body.get("status").?.string);
     try testing.expectEqualStrings("symmetry", body.get("class").?.string);
     try testing.expectEqualStrings("language_service", body.get("resolver").?.string);
     try testing.expectEqualStrings("sum", body.get("new_symbol").?.string);

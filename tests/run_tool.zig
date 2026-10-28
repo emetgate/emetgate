@@ -50,6 +50,18 @@ test "run tool: a call without command lists the allowlist" {
     try testing.expectEqualStrings("npm run lint", commands[1].string);
 }
 
+test "run tool: a call without command runs the only allowlisted command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{.{ .name = "say.cmd", .body = "@echo off\r\necho only one\r\n" }});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{".\\say.cmd"}), .{});
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("ran", try reply.string("status"));
+    try testing.expectEqualStrings("only one\r\n", try reply.string("stdout"));
+}
+
 test "run tool: an allowlisted command runs in the shadow and reports its exit code and output" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try fixture.Repo.init(&.{.{ .name = "say.cmd", .body = "@echo off\r\necho hello from the shadow\r\nexit /b 3\r\n" }});
@@ -96,4 +108,117 @@ test "run tool: the repository's run list counts only with --allow-repo-config" 
     errdefer std.debug.print("{s}\n", .{trusted.text});
     try testing.expect(!trusted.is_error);
     try testing.expectEqual(@as(i64, 0), (try trusted.field("exit_code")).?.integer);
+}
+
+test "run tool: an empty allowlist says how to get a test command and that toolchain commands still run" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{}), .{});
+    defer reply.deinit();
+    try testing.expectEqualStrings("allowlist", try reply.string("status"));
+    const fix = try reply.string("fix");
+    try testing.expect(std.mem.indexOf(u8, fix, "--detect-test") != null);
+    try testing.expect(std.mem.indexOf(u8, fix, "cargo") != null);
+
+    var listed = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{});
+    defer listed.deinit();
+    try testing.expect((try listed.field("fix")) == null);
+}
+
+test "run tool: a refused git command points at the git tools" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{}), .{ .command = "git switch -c topic" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, try reply.string("fix"), "emetgate_git_write") != null);
+}
+
+test "run tool: a refusal names the toolchain families the model can run instead" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{ .command = "node build.js" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings("not_allowed", try reply.string("reason"));
+    const fix = try reply.string("fix");
+    for ([_][]const u8{ "npm|pnpm|yarn|bun install", "npx", "pip install", "dotnet restore", "cargo", "go build" }) |family| {
+        errdefer std.debug.print("fix lacks {s}: {s}\n", .{ family, fix });
+        try testing.expect(std.mem.indexOf(u8, fix, family) != null);
+    }
+}
+
+test "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{.{ .name = "pytest.cmd", .body = "@echo off\r\necho planted> planted.txt\r\n" }});
+    defer repo.deinit();
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{ .command = "pytest -q" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("ran", try reply.string("status"));
+    try testing.expectEqualStrings("repo", try reply.string("ran_in"));
+    try testing.expect(!repo.exists("repo\\planted.txt"));
+}
+
+test "run tool: toolchain commands that write files or open a shell stay refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    for ([_][]const u8{ "npx eslint --fix src", "npx -c whoami", "git commit -m x", "cmd /c dir", "dotnet run" }) |command| {
+        errdefer std.debug.print("accepted: {s}\n", .{command});
+        var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{"npm test"}), .{ .command = command });
+        defer reply.deinit();
+        try testing.expect(reply.is_error);
+        try testing.expectEqualStrings("refused", try reply.string("status"));
+    }
+}
+
+test "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo/.venv/Scripts");
+    try tmp.dir.createDirPath(testing.io, "repo/tools");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/Scripts/python.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/Scripts/pytest.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/pyvenv.cfg", .data = "home = C:\\Python\r\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tools/npm.cmd", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/Scripts/npm.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tools/python.exe", .data = "" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "pyvenv.cfg", .data = "" });
+    try tmp.dir.createDirPath(testing.io, "x");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "x/python.exe", .data = "" });
+    const base = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(base);
+    const root = try std.fmt.allocPrint(gpa, "{s}\\repo", .{base});
+    defer gpa.free(root);
+    for ([_][]const u8{ ".venv\\Scripts\\python -m pytest -q", ".venv/Scripts/python.exe -m pytest", ".venv\\Scripts\\pytest", ".\\.venv\\Scripts\\python -m pytest", "python -m pytest" }) |command| {
+        errdefer std.debug.print("refused: {s}\n", .{command});
+        try testing.expect(run_command.isToolchainIn(testing.io, root, command));
+    }
+    for ([_][]const u8{ ".venv\\Scripts\\python script.py", "venv\\Scripts\\python -m pytest", "..\\x\\python -m pytest", "C:\\Python\\python -m pytest", "\\python -m pytest", "tools\\npm install", "tools\\python -m pytest", ".venv\\Scripts\\npm install" }) |command| {
+        errdefer std.debug.print("accepted: {s}\n", .{command});
+        try testing.expect(!run_command.isToolchainIn(testing.io, root, command));
+    }
+    const local = try run_command.localCommand(gpa, ".venv/Scripts/python -m pytest a/b.py");
+    defer gpa.free(local);
+    try testing.expectEqualStrings(".venv\\Scripts\\python -m pytest a/b.py", local);
+}
+
+test "run tool: an untracked project venv is present in the shadow the command runs in" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{.{ .name = "show.cmd", .body = "@echo off\r\ntype .venv\\pyvenv.cfg\r\ntype venv\\pyvenv.cfg\r\n" }});
+    defer repo.deinit();
+    try repo.tmp.dir.createDirPath(testing.io, "repo/.venv");
+    try repo.tmp.dir.createDirPath(testing.io, "repo/venv");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.venv/pyvenv.cfg", .data = "home = dot\r\n" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/venv/pyvenv.cfg", .data = "home = plain\r\n" });
+    var reply = try fixture.call(fixture.policyWith(repo.root_abs, &.{".\\show.cmd"}), .{ .command = ".\\show.cmd" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings("home = dot\r\nhome = plain\r\n", try reply.string("stdout"));
 }

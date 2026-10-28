@@ -57,7 +57,7 @@ const Clone = struct {
         var argv: [8][]const u8 = undefined;
         argv[0] = "git";
         @memcpy(argv[1..][0..args.len], args);
-        const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+        const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
         gpa.free(result.stdout);
         gpa.free(result.stderr);
         switch (result.term) {
@@ -382,7 +382,7 @@ test "redteam ledger: over mcp only the flag emetgate was started with trusts a 
         const trusted = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .allow_repo_memory = true, .root = clone.root_abs });
         defer gpa.free(trusted);
         errdefer std.debug.print("{s}: {s}\n", .{ tool, trusted });
-        try testing.expect(std.mem.indexOf(u8, trusted, "\\\"status\\\":\\\"committed\\\"") != null);
+        try testing.expect(std.mem.indexOf(u8, trusted, "\\\"status\\\":\\\"written\\\"") != null);
         try testing.expect(clone.markerExists());
     }
 }

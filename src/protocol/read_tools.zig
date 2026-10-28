@@ -13,6 +13,11 @@ const line_range = @import("../engine/line_range.zig");
 const json_pointer = @import("../engine/lang/json/pointer.zig");
 const markdown_heading = @import("../engine/lang/markdown/heading.zig");
 const ts = @import("../engine/tree_sitter.zig");
+const outline = @import("outline.zig");
+const read_cache = @import("read_cache.zig");
+const tree_cache_mod = @import("../engine/tree_cache.zig");
+const Runtime = @import("../engine/runtime.zig").Runtime;
+const Snapshot = @import("../engine/loader.zig").Snapshot;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -56,7 +61,12 @@ fn hasExtension(file: []const u8, ext: []const u8) bool {
     return std.ascii.eqlIgnoreCase(file[file.len - ext.len ..], ext);
 }
 
-pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror) !ToolResult {
+pub const Source = struct {
+    runtime: *Runtime,
+    tree_cache: ?*tree_cache_mod.TreeCache,
+};
+
+pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, source: ?Source) !ToolResult {
     const file = try requireString(args, "file");
     const raw = if (args) |a| tool_result.getBool(a, "raw") orelse false else false;
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
@@ -68,17 +78,17 @@ pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderReadFile(gpa, io, root, file, raw, force, pointer, heading, line_start, line_end, mirror, &buffer.writer, event) catch |err| {
+    renderReadFile(gpa, io, root, file, raw, force, pointer, heading, line_start, line_end, mirror, source, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, raw: bool, force: bool, pointer: ?[]const u8, heading: ?[]const u8, line_start: ?i64, line_end: ?i64, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, raw: bool, force: bool, pointer: ?[]const u8, heading: ?[]const u8, line_start: ?i64, line_end: ?i64, mirror: ?*mirror_mod.Mirror, source: ?Source, w: *Writer, event: *telemetry.Event) !void {
     const place = try repo.jail(gpa, io, root, file);
     defer place.deinit(gpa);
-    if (!raw and lang_registry.forPath(file) != null) return error.UseSymbolToolsForSource;
+    const profile = lang_registry.forPath(file);
     const bytes = try open_nowait.readFileAlloc(gpa, place.abs, max_read_source_bytes);
     defer gpa.free(bytes);
     if (looksBinary(bytes)) return error.BinaryFile;
@@ -92,9 +102,15 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     if (line_start != null or line_end != null) {
         return renderRange(gpa, file, bytes, line_start, line_end, force, mirror, w, event);
     }
+    if (profile != null and bytes.len > outline.threshold) {
+        if (source) |s| {
+            if (try renderOutline(gpa, io, s, place.abs, file, bytes, force, mirror, w, event)) return;
+        }
+    }
 
     const shown = utf8Prefix(bytes, max_read_bytes);
     if (!std.unicode.utf8ValidateSlice(shown)) return error.NotUtf8;
+    if (shown.len == bytes.len) try read_cache.recordWhole(gpa, mirror, file, symbol.fileHash(bytes));
     if (mirror) |m| {
         const hash = symbol.hashOf(shown);
         const key = try std.fmt.allocPrint(gpa, "file:{s}", .{file});
@@ -112,14 +128,41 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     try js.objectField("file");
     try js.write(file);
     try wire.writeFileHash(&js, symbol.fileHash(bytes));
-    try js.objectField("bytes");
-    try js.write(bytes.len);
-    try js.objectField("truncated");
-    try js.write(shown.len < bytes.len);
+    if (shown.len < bytes.len) {
+        try js.objectField("bytes");
+        try js.write(bytes.len);
+        try js.objectField("truncated");
+        try js.write(true);
+    }
     try js.objectField("content");
     try js.write(shown);
     try js.endObject();
     try w.writeByte('\n');
+}
+
+fn renderOutline(gpa: Allocator, io: std.Io, source: Source, abs: []const u8, file: []const u8, bytes: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !bool {
+    const snapshot = if (source.tree_cache) |cache| try cache.load(source.runtime, io, abs) else try Snapshot.load(source.runtime, io, .cwd(), abs);
+    defer if (source.tree_cache == null) snapshot.destroy();
+    const table = snapshot.symbols() catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.SourceHasErrors => return false,
+    };
+    const text = try outline.render(gpa, file, snapshot.source, table);
+    defer gpa.free(text);
+    event.chars_fullfile = bytes.len;
+    if (mirror) |m| {
+        const key = try std.fmt.allocPrint(gpa, "outline:{s}", .{file});
+        defer gpa.free(key);
+        const hash = symbol.hashOf(text);
+        if (try m.check(key, hash, force) == .unchanged) {
+            event.chars_emetgate = 0;
+            try wire.writeUnchanged(w, file, null, hash, symbol.fileHash(snapshot.source));
+            return true;
+        }
+    }
+    event.chars_emetgate = text.len;
+    try w.writeAll(text);
+    return true;
 }
 
 fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
@@ -263,7 +306,7 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
     try w.writeByte('\n');
 }
 
-fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
     if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
     const start = line_start orelse return error.MissingArgument;
     const end = line_end orelse return error.MissingArgument;
@@ -275,6 +318,11 @@ fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: 
     const span = try line_range.byteRangeForLines(bytes, @intCast(start), @intCast(shown_end));
     const text = bytes[span.start..span.end];
     const hash = symbol.hashOf(text);
+    if (try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(bytes), force)) {
+        event.chars_emetgate = 0;
+        event.chars_fullfile = bytes.len;
+        return read_cache.writeCovered(w, file, null, symbol.fileHash(bytes));
+    }
     if (mirror) |m| {
         const key = try std.fmt.allocPrint(gpa, "range:{s}:{d}-{d}", .{ file, start, end });
         defer gpa.free(key);
@@ -357,8 +405,10 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w:
         count += 1;
     }
     try js.endArray();
-    try js.objectField("truncated");
-    try js.write(truncated);
+    if (truncated) {
+        try js.objectField("truncated");
+        try js.write(true);
+    }
     try js.endObject();
     try w.writeByte('\n');
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const exe_path = @import("exe_path.zig");
 const shadow = @import("shadow.zig");
@@ -144,7 +145,7 @@ pub const Git = struct {
         var full: std.ArrayList([]const u8) = .empty;
         try full.appendSlice(self.arena, &.{ self.exe, "-c", "core.longpaths=true", "-c", "core.fsmonitor=false" });
         try full.appendSlice(self.arena, argv);
-        const result = std.process.run(self.arena, self.io, .{
+        const result = bounded_run.run(self.arena, self.io, .{
             .argv = full.items,
             .cwd = .{ .path = self.root },
             .environ_map = self.env,
@@ -174,37 +175,16 @@ pub const Git = struct {
         var full: std.ArrayList([]const u8) = .empty;
         try full.appendSlice(self.arena, &.{ self.exe, "-c", "core.longpaths=true", "-c", "core.fsmonitor=false" });
         try full.appendSlice(self.arena, argv);
-        var child = std.process.spawn(self.io, .{
+        const result = bounded_run.runFed(self.arena, self.io, .{
             .argv = full.items,
             .cwd = .{ .path = self.root },
             .environ_map = self.env,
-            .stdin = .pipe,
-            .stdout = .pipe,
-            .stderr = .pipe,
             .create_no_window = true,
-        }) catch return error.GitFailed;
-        defer child.kill(self.io);
-        {
-            const stdin = child.stdin.?;
-            child.stdin = null;
-            defer stdin.close(self.io);
-            stdin.writeStreamingAll(self.io, input) catch return error.GitFailed;
-        }
-        var buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
-        var reader: std.Io.File.MultiReader = undefined;
-        reader.init(self.arena, self.io, buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
-        defer reader.deinit();
-        while (reader.fill(64, .none)) |_| {
-            if (reader.reader(0).buffered().len > max_git_output) return error.GitFailed;
-        } else |err| switch (err) {
-            error.EndOfStream => {},
-            else => return error.GitFailed,
-        }
-        reader.checkAnyError() catch return error.GitFailed;
-        const term = child.wait(self.io) catch return error.GitFailed;
-        const out = reader.toOwnedSlice(0) catch return error.GitFailed;
-        return switch (term) {
-            .exited => |code| if (code == 0) out else null,
+            .stdout_limit = .limited(max_git_output),
+            .stderr_limit = .limited(max_git_output),
+        }, input) catch return error.GitFailed;
+        return switch (result.term) {
+            .exited => |code| if (code == 0) result.stdout else null,
             else => error.GitFailed,
         };
     }
@@ -457,7 +437,7 @@ const Facts = struct {
 
 fn facts(git: Git) !Facts {
     const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "--git-path", "info/attributes", "HEAD^{commit}", "HEAD^{tree}", "--symbolic-full-name", "HEAD" })) orelse {
-        if (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" }) == null) return error.NoCommitYet;
+        if (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" }) == null) return unbornFacts(git);
         return error.GitFailed;
     };
     var lines = std.mem.tokenizeAny(u8, out, "\r\n");
@@ -468,6 +448,36 @@ fn facts(git: Git) !Facts {
     const tree = lines.next() orelse return error.GitFailed;
     const branch = lines.next() orelse return error.DetachedHead;
     if (!std.mem.startsWith(u8, branch, branch_prefix)) return error.DetachedHead;
+    return .{ .git_dir = git_dir, .index = try listedPath(git, listed), .attributes = try listedPath(git, attributes_listed), .oid = oid, .tree = tree, .branch = branch };
+}
+
+const empty_tree_sha1 = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const empty_tree_sha256 = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321";
+
+pub fn isUnborn(oid: []const u8) bool {
+    if (oid.len == 0) return false;
+    for (oid) |c| {
+        if (c != '0') return false;
+    }
+    return true;
+}
+
+pub fn emptyTreeFor(object_format: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, object_format, "sha1")) return empty_tree_sha1;
+    if (std.mem.eql(u8, object_format, "sha256")) return empty_tree_sha256;
+    return null;
+}
+
+fn unbornFacts(git: Git) !Facts {
+    const branch = try branchOf(git);
+    const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "--git-path", "info/attributes", "--show-object-format" })) orelse return error.GitFailed;
+    var lines = std.mem.tokenizeAny(u8, out, "\r\n");
+    const git_dir = lines.next() orelse return error.GitFailed;
+    const listed = lines.next() orelse return error.GitFailed;
+    const attributes_listed = lines.next() orelse return error.GitFailed;
+    const tree = emptyTreeFor(lines.next() orelse return error.GitFailed) orelse return error.NoCommitYet;
+    const oid = try git.arena.alloc(u8, tree.len);
+    @memset(oid, '0');
     return .{ .git_dir = git_dir, .index = try listedPath(git, listed), .attributes = try listedPath(git, attributes_listed), .oid = oid, .tree = tree, .branch = branch };
 }
 
@@ -638,7 +648,7 @@ pub var listings_read: usize = 0;
 
 fn treeListing(git: Git, commit: []const u8, tree: []const u8) ![]const u8 {
     if (try keptListing(git.arena, tree)) |kept| return kept;
-    const out = try git.needRaw(&.{ "ls-tree", "-r", "-z", commit });
+    const out = try git.needRaw(&.{ "ls-tree", "-r", "-z", if (isUnborn(commit)) tree else commit });
     if (builtin.is_test) listings_read += 1;
     keepListing(tree, out);
     return out;
@@ -763,7 +773,11 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, lines: 
         made += 1;
     }
 
-    const commit = try gpa.dupe(u8, try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p", head.oid, "-F", "-" }, try commit_message.stored(arena, message)));
+    const stored = try commit_message.stored(arena, message);
+    const commit = try gpa.dupe(u8, if (isUnborn(head.oid))
+        try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-F", "-" }, stored)
+    else
+        try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p", head.oid, "-F", "-" }, stored));
     keepListing(tree, lines);
     return .{ .commit = commit, .entries = entries };
 }
@@ -807,20 +821,31 @@ pub const StagedIndex = struct {
     digest: Digest,
 };
 
+fn indexOrNone(arena: Allocator, io: std.Io, index: []const u8) !Digest {
+    if (try digestOf(arena, io, index)) |found| return found;
+    var none: Digest = undefined;
+    Sha256.hash("", &none, .{});
+    return none;
+}
+
+fn copyIndex(arena: Allocator, io: std.Io, index: []const u8, staged_abs: []const u8) !Digest {
+    const base = try indexOrNone(arena, io, index);
+    Dir.deleteFileAbsolute(io, staged_abs) catch {};
+    if (try digestOf(arena, io, index) == null) return base;
+    disk.copyWithTimes(io, index, staged_abs) catch return error.GitFailed;
+    errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
+    const copied = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
+    if (!std.mem.eql(u8, &copied, &base)) return error.IndexChanged;
+    return base;
+}
+
 pub fn stageIndex(gpa: Allocator, io: std.Io, root: []const u8, entries: []const Entry, staged_abs: []const u8) !StagedIndex {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const git = try Git.init(arena, io, root);
-    const index = try indexPath(git);
-    const bytes = Dir.cwd().readFileAlloc(io, index, arena, .limited(max_index_bytes)) catch return error.GitFailed;
-    var base: Digest = undefined;
-    Sha256.hash(bytes, &base, .{});
-    Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    disk.copyWithTimes(io, index, staged_abs) catch return error.GitFailed;
+    const base = try copyIndex(arena, io, try indexPath(git), staged_abs);
     errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    const copied = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
-    if (!std.mem.eql(u8, &copied, &base)) return error.IndexChanged;
     try applyEntries(try git.withIndex(staged_abs), entries);
     const digest = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
     return .{ .base = base, .digest = digest };
@@ -831,14 +856,8 @@ pub fn stageChecked(gpa: Allocator, io: std.Io, root: []const u8, head: Head, en
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const git = try Git.init(arena, io, root);
-    const bytes = Dir.cwd().readFileAlloc(io, head.index, arena, .limited(max_index_bytes)) catch return error.GitFailed;
-    var base: Digest = undefined;
-    Sha256.hash(bytes, &base, .{});
-    Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    disk.copyWithTimes(io, head.index, staged_abs) catch return error.GitFailed;
+    const base = try copyIndex(arena, io, head.index, staged_abs);
     errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    const copied = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
-    if (!std.mem.eql(u8, &copied, &base)) return error.IndexChanged;
 
     var private = try git.withIndex(staged_abs);
     private.hex = head.oid.len;
@@ -874,8 +893,8 @@ pub fn acquireHeld(gpa: Allocator, io: std.Io, head: Head, staged_abs: []const u
         error.PathAlreadyExists => return error.IndexLocked,
         else => return error.GitFailed,
     };
-    const now = try digestOf(arena, io, head.index);
-    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {
+    const now = try indexOrNone(arena, io, head.index);
+    if (!std.mem.eql(u8, &now, &staged.base)) {
         guard.deleteSelf() catch {};
         return error.IndexChanged;
     }
@@ -906,8 +925,8 @@ pub fn acquireIndex(gpa: Allocator, io: std.Io, root: []const u8, staged_abs: []
         error.PathAlreadyExists => return error.IndexLocked,
         else => return error.GitFailed,
     };
-    const now = try digestOf(arena, io, try indexPath(git));
-    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {
+    const now = try indexOrNone(arena, io, try indexPath(git));
+    if (!std.mem.eql(u8, &now, &staged.base)) {
         Dir.deleteFileAbsolute(io, lock) catch {};
         return error.IndexChanged;
     }
@@ -1030,10 +1049,10 @@ pub fn lineage(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8,
     const listed = (try git.run(&.{ "rev-list", "--parents", "-n", "1", commit })) orelse return null;
     var ids = std.mem.tokenizeAny(u8, listed, " \r\n");
     const self_id = ids.next() orelse return null;
-    const parent = ids.next() orelse return null;
+    const parent = ids.next() orelse if (isUnborn(base)) base else return null;
     if (ids.next() != null) return null;
     if (!std.mem.eql(u8, self_id, commit) or !std.mem.eql(u8, parent, base)) return null;
-    const before = try treeEntries(git, base, paths);
+    const before: []const TreeEntry = if (isUnborn(base)) &.{} else try treeEntries(git, base, paths);
     const after = try treeEntries(git, commit, paths);
     const base_oids = try gpa.alloc([]u8, paths.len);
     var made: usize = 0;
@@ -1163,7 +1182,7 @@ pub fn checkoutInto(gpa: Allocator, io: std.Io, root: []const u8, head: Head, pa
     defer work.done();
     const dir = work.dir;
     const private = try git.withIndex(try std.fs.path.join(arena, &.{ dir, "index" }));
-    _ = try private.need(&.{ "read-tree", head.oid });
+    _ = try private.need(&.{ "read-tree", head.tree });
     const prefix = try std.fmt.allocPrint(arena, "--prefix={s}/", .{try slashed(arena, target_abs)});
     var at: usize = 0;
     while (at < paths.len) {
@@ -1231,6 +1250,7 @@ pub fn checkoutTree(gpa: Allocator, io: std.Io, root: []const u8, tree: []const 
         if (entry.len < 6) return error.GitFailed;
         if (holdsFile(entry[0..6])) count += 1;
     }
+    try std.Io.Dir.cwd().createDirPath(io, target_abs);
     try checkoutAll(git, private, tree, target_abs);
     return count;
 }

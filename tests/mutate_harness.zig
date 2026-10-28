@@ -141,7 +141,7 @@ test "harness: a timeout kills the grandchildren a command leaves behind" {
     const elapsed_ns = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).nanoseconds;
     try testing.expect(elapsed_ns < 20 * std.time.ns_per_s);
 
-    const probe = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{
+    const probe = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{
         "powershell", "-NoProfile", "-Command",
         "@(Get-CimInstance Win32_Process -Filter \"Name = 'PING.EXE'\" | Where-Object { $_.CommandLine -like '*127.0.0.77*' }).Count",
     } });

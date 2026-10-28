@@ -5,6 +5,7 @@ const mirror_mod = @import("mirror.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
+const test_command_mod = @import("../platform/test_command.zig");
 const commit_message = @import("../platform/commit_message.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const search_session_mod = @import("../platform/search_session.zig");
@@ -19,10 +20,12 @@ pub const Policy = struct {
     test_command: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
     allow_repo_config: bool = false,
+    detect_test: bool = false,
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
     mirror_enabled: bool = false,
+    raw_code: bool = false,
     read_budget: usize = read_budget_mod.default_budget,
     read_budget_set: bool = false,
     mirror: ?*mirror_mod.Mirror = null,
@@ -72,7 +75,9 @@ pub fn refusedRunEntry(args: anytype) ?RunRefusal {
 }
 
 pub fn parsePolicy(args: anytype) ?Policy {
-    var policy: Policy = .{ .search_text = true, .search_internals = false };
+    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };
+    var json_code = false;
+    var mirror_flag = false;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg: []const u8 = args[i];
@@ -88,6 +93,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.test_command = command;
+        } else if (std.mem.eql(u8, arg, "--detect-test")) {
+            if (policy.detect_test) return null;
+            policy.detect_test = true;
         } else if (std.mem.eql(u8, arg, "--allow-run")) {
             if (i + 1 >= args.len or policy.allow_run_len == run_command.max_entries) return null;
             i += 1;
@@ -103,9 +111,14 @@ pub fn parsePolicy(args: anytype) ?Policy {
         } else if (std.mem.eql(u8, arg, "--search-internals")) {
             if (policy.search_internals) return null;
             policy.search_internals = true;
-        } else if (std.mem.eql(u8, arg, "--mirror")) {
-            if (policy.mirror_enabled) return null;
-            policy.mirror_enabled = true;
+        } else if (std.mem.eql(u8, arg, "--mirror") or std.mem.eql(u8, arg, "--no-mirror")) {
+            if (mirror_flag) return null;
+            mirror_flag = true;
+            policy.mirror_enabled = arg.len == "--mirror".len;
+        } else if (std.mem.eql(u8, arg, "--json-code")) {
+            if (json_code) return null;
+            json_code = true;
+            policy.raw_code = false;
         } else if (std.mem.eql(u8, arg, "--typecheck")) {
             if (policy.typecheck_command != null or i + 1 >= args.len) return null;
             i += 1;
@@ -155,7 +168,7 @@ pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestP
     if (args) |a| {
         if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null or tool_result.getField(a, "allow_repo_memory") != null or tool_result.getField(a, "shadow_root") != null) return error.ModelSuppliedTestPolicy;
     }
-    return policy.test_command orelse "";
+    return policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "";
 }
 
 pub fn trustedTypecheckCommand(policy: Policy) []const u8 {

@@ -126,9 +126,15 @@ class Git:
     def form(self, rev, path):
         stored = self.blob(rev, path)
         if stored is None or not self.filtered(rev, path):
-            return stored, False, True
+            return stored, False, True, self.converted(rev, path, stored)
         text = self.run("--attr-source=" + rev, "cat-file", "--filters", rev + ":" + path)
-        return text, True, text is not None
+        return text, True, text is not None, None
+
+    def converted(self, rev, path, stored):
+        if stored is None or self.filtered(rev, path):
+            return None
+        text = self.run("--attr-source=" + rev, "cat-file", "--filters", rev + ":" + path)
+        return None if text is None or text == stored else text
 
     def changed(self, rev):
         out = self.run("diff-tree", "--no-commit-id", "--root", "-r", "--name-only", "-z", rev)
@@ -315,8 +321,8 @@ def verify(git, spec):
 
     def current(path):
         if path not in state:
-            data, driven, available = git.form(parent, path)
-            state[path] = (blob_digest(data), driven, available)
+            data, driven, available, alt = git.form(parent, path)
+            state[path] = ([blob_digest(data)] + ([blob_digest(alt)] if alt is not None else []), driven, available)
         return state[path]
 
     index = 0
@@ -334,14 +340,16 @@ def verify(git, spec):
         stored = r["form"] == "stored"
         for f in r["files"]:
             if stored and f["path"] not in state:
-                state[f["path"]] = (blob_digest(git.blob(parent, f["path"])), False, True)
+                state[f["path"]] = ([blob_digest(git.blob(parent, f["path"]))], False, True)
             before, driven, available = current(f["path"])
-            if driven and (not available or before != f["before"]):
+            if driven and (not available or f["before"] not in before):
                 outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
-            elif before != f["before"]:
+            elif f["before"] not in before:
                 outcome.raise_to(MISMATCH, "the before digest does not match the parent commit or the previous receipt")
             if last[f["path"]] == index:
-                data, driven, available = (git.blob(rev, f["path"]), False, True) if stored else git.form(rev, f["path"])
+                data, driven, available, alt = (git.blob(rev, f["path"]), False, True, None) if stored else git.form(rev, f["path"])
+                if alt is not None and blob_digest(data) != f["after"] and blob_digest(alt) == f["after"]:
+                    data = alt
                 if not available:
                     outcome.raise_to(UNVERIFIED, NOT_CHECKED_OUT)
                     raise_file(f["path"], UNVERIFIED, NOT_CHECKED_OUT)
@@ -351,7 +359,7 @@ def verify(git, spec):
                             outcome.raise_to(MISMATCH, "a subject's sha256 does not match the commit")
                 else:
                     raise_file(f["path"], UNVERIFIED, "the file changed after the receipt, outside the gate")
-            state[f["path"]] = (f["after"], False, True)
+            state[f["path"]] = ([f["after"]], False, True)
         for c in r["checks"]:
             if blake3_128(c["command"].encode("utf-8")) != c["command_digest"]:
                 outcome.raise_to(MISMATCH, "a check's command does not match its digest")

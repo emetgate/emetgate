@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const exe_path = @import("exe_path.zig");
 const lockdown_marks = @import("lockdown_marks.zig");
 const lockdown_slash = @import("lockdown_slash.zig");
@@ -9,8 +10,15 @@ pub const claude_program = "claude";
 pub const allowed_builtin_tools = "";
 pub const mcp_config_name = ".mcp.json";
 pub const own_mcp_config_name = "mcp.json";
+pub const project_mcp_config_name = "project-mcp";
+pub const always_load_field = "alwaysLoad";
 pub const own_server_name = "emetgate";
 pub const own_server_args = [_][]const u8{"mcp"};
+pub const detect_flag = "--detect-test";
+pub const test_flag = "--test";
+pub const setting_sources_flag = "--setting-sources";
+pub const setting_sources = "project";
+const user_settings_off = [_][]const u8{ setting_sources_flag, setting_sources };
 pub const max_mcp_config_bytes = 1024 * 1024;
 pub const tool_search_variable = "ENABLE_TOOL_SEARCH";
 pub const tool_search_value = "false";
@@ -41,6 +49,7 @@ const reserved_flags = [_][]const u8{
     "--mcp-config",
     "--strict-mcp-config",
     "--settings",
+    "--setting-sources",
     "--plugin-dir",
     "--agents",
     "--dangerously-skip-permissions",
@@ -71,7 +80,8 @@ fn permissionMode(args: []const []const u8, i: usize) ?[]const u8 {
 
 pub fn buildArgv(gpa: Allocator, mcp_config_abs: []const u8, allowed_tools: []const u8, passthrough: []const []const u8) ![][]const u8 {
     try refuseReserved(passthrough);
-    const fixed = [_][]const u8{ claude_program, "--tools", allowed_builtin_tools, "--allowedTools", allowed_tools, "--mcp-config", mcp_config_abs, "--strict-mcp-config" };
+    const locked = [_][]const u8{ claude_program, "--tools", allowed_builtin_tools, "--allowedTools", allowed_tools, "--mcp-config", mcp_config_abs, "--strict-mcp-config" };
+    const fixed = locked[0..1].* ++ user_settings_off ++ locked[1..].*;
     const argv = try gpa.alloc([]const u8, fixed.len + passthrough.len);
     @memcpy(argv[0..fixed.len], &fixed);
     @memcpy(argv[fixed.len..], passthrough);
@@ -92,6 +102,43 @@ pub fn emetgateServer(gpa: Allocator, mcp_config: []const u8) ![]u8 {
         found = entry.key_ptr.*;
     }
     return toolNamePart(gpa, found orelse return error.NoEmetgateServer);
+}
+
+pub fn alwaysLoadConfig(gpa: Allocator, mcp_config: []const u8) !?[]u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, gpa, mcp_config, .{}) catch return error.McpConfigInvalid;
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.McpConfigInvalid;
+    const servers = parsed.value.object.getPtr("mcpServers") orelse return error.NoEmetgateServer;
+    if (servers.* != .object) return error.McpConfigInvalid;
+    var changed = false;
+    var entries = servers.object.iterator();
+    while (entries.next()) |entry| {
+        if (!isEmetgateServer(entry.value_ptr.*)) continue;
+        const args = &entry.value_ptr.object.getPtr("args").?.array;
+        if (!namesTest(args.items)) {
+            try args.append(.{ .string = detect_flag });
+            changed = true;
+        }
+        if (entry.value_ptr.object.get(always_load_field)) |present| {
+            if (present == .bool and present.bool) continue;
+        }
+        try entry.value_ptr.object.put(parsed.arena.allocator(), always_load_field, .{ .bool = true });
+        changed = true;
+    }
+    if (!changed) return null;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try std.json.Stringify.value(parsed.value, .{}, &out.writer);
+    return try out.toOwnedSlice();
+}
+
+fn namesTest(args: []const std.json.Value) bool {
+    for (args) |arg| {
+        if (arg != .string) continue;
+        if (std.mem.eql(u8, arg.string, test_flag) or std.mem.eql(u8, arg.string, detect_flag)) return true;
+        if (std.mem.startsWith(u8, arg.string, test_flag ++ "=")) return true;
+    }
+    return false;
 }
 
 fn isEmetgateServer(server: std.json.Value) bool {
@@ -158,7 +205,7 @@ pub fn resolveMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir) ![:0]u8 {
     };
 }
 
-pub fn ownMcpConfigJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
+pub fn ownMcpConfigJson(gpa: Allocator, exe_abs: []const u8, test_command: ?[]const u8) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     var js: std.json.Stringify = .{ .writer = &out.writer };
@@ -170,25 +217,74 @@ pub fn ownMcpConfigJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
     try js.objectField("command");
     try js.write(exe_abs);
     try js.objectField("args");
-    try js.write(own_server_args);
+    try js.beginArray();
+    for (own_server_args) |arg| try js.write(arg);
+    if (test_command) |command| {
+        try js.write(test_flag);
+        try js.write(command);
+    } else try js.write(detect_flag);
+    try js.endArray();
+    try js.objectField(always_load_field);
+    try js.write(true);
     try js.endObject();
     try js.endObject();
     try js.endObject();
     return out.toOwnedSlice();
 }
 
-pub fn chooseMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir, state_dir: []const u8, exe_abs: []const u8) ![:0]u8 {
-    return resolveMcpConfig(gpa, io, dir) catch |err| switch (err) {
+pub const TestChoice = struct {
+    command: ?[]const u8,
+    rest: []const []const u8,
+};
+
+pub fn chooseTest(args: []const []const u8) !TestChoice {
+    if (args.len == 0) return .{ .command = null, .rest = args };
+    const first = args[0];
+    if (std.mem.eql(u8, first, test_flag)) {
+        if (args.len < 2 or std.mem.trim(u8, args[1], " \t").len == 0) return error.LockdownTestCommandMissing;
+        return .{ .command = args[1], .rest = args[2..] };
+    }
+    if (std.mem.startsWith(u8, first, test_flag ++ "=")) {
+        const command = first[test_flag.len + 1 ..];
+        if (std.mem.trim(u8, command, " \t").len == 0) return error.LockdownTestCommandMissing;
+        return .{ .command = command, .rest = args[1..] };
+    }
+    return .{ .command = null, .rest = args };
+}
+
+pub fn chooseMcpConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir, state_dir: []const u8, exe_abs: []const u8, given_test: ?[]const u8) ![:0]u8 {
+    const found = resolveMcpConfig(gpa, io, dir) catch |err| switch (err) {
         error.McpConfigMissing => {
-            const own = try std.fs.path.joinZ(gpa, &.{ state_dir, own_mcp_config_name });
-            errdefer gpa.free(own);
-            const json = try ownMcpConfigJson(gpa, exe_abs);
+            const json = try ownMcpConfigJson(gpa, exe_abs, given_test);
             defer gpa.free(json);
+            const own = try configPath(gpa, state_dir, own_mcp_config_name, json);
+            errdefer gpa.free(own);
             try lockdown_slash.place(gpa, io, own, json);
             return own;
         },
         else => return err,
     };
+    if (given_test != null) {
+        gpa.free(found);
+        return error.LockdownTestWithMcpConfig;
+    }
+    defer gpa.free(found);
+    const config = try std.Io.Dir.cwd().readFileAlloc(io, found, gpa, .limited(max_mcp_config_bytes));
+    defer gpa.free(config);
+    const loaded = alwaysLoadConfig(gpa, config) catch return gpa.dupeZ(u8, found);
+    const json = loaded orelse return gpa.dupeZ(u8, found);
+    defer gpa.free(json);
+    const copy = try configPath(gpa, state_dir, project_mcp_config_name, json);
+    errdefer gpa.free(copy);
+    try lockdown_slash.place(gpa, io, copy, json);
+    return copy;
+}
+
+fn configPath(gpa: Allocator, state_dir: []const u8, stem: []const u8, json: []const u8) ![:0]u8 {
+    const base = if (std.mem.endsWith(u8, stem, ".json")) stem[0 .. stem.len - ".json".len] else stem;
+    var name_buf: [96]u8 = undefined;
+    const name = try std.fmt.bufPrint(&name_buf, "{s}-{x:0>16}.json", .{ base, std.hash.Wyhash.hash(0, json) });
+    return std.fs.path.joinZ(gpa, &.{ state_dir, name });
 }
 
 pub fn childEnviron(gpa: Allocator, parent: *const std.process.Environ.Map) !std.process.Environ.Map {
@@ -198,6 +294,40 @@ pub fn childEnviron(gpa: Allocator, parent: *const std.process.Environ.Map) !std
     return env;
 }
 
+pub const git_init_notice = "emetgate lockdown: the directory was not a git repository, ran git init\n";
+
+fn gitSucceeds(gpa: Allocator, io: std.Io, git: []const u8, dir_abs: []const u8, env: *const std.process.Environ.Map, args: []const []const u8) !bool {
+    var argv: [4][]const u8 = undefined;
+    argv[0] = git;
+    @memcpy(argv[1..][0..args.len], args);
+    const result = bounded_run.run(gpa, io, .{
+        .argv = argv[0 .. args.len + 1],
+        .cwd = .{ .path = dir_abs },
+        .environ_map = env,
+    }) catch return error.GitFailed;
+    gpa.free(result.stdout);
+    gpa.free(result.stderr);
+    return switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+pub fn ensureRepo(gpa: Allocator, io: std.Io, dir_abs: []const u8, env: *const std.process.Environ.Map) !bool {
+    const git = try exe_path.git(gpa, dir_abs);
+    defer gpa.free(git);
+    if (try gitSucceeds(gpa, io, git, dir_abs, env, &.{ "rev-parse", "--show-toplevel" })) return false;
+    if (!try gitSucceeds(gpa, io, git, dir_abs, env, &.{ "init", "-q" })) return error.GitInitFailed;
+    return true;
+}
+
+fn ensureRepoAt(gpa: Allocator, io: std.Io, dir: std.Io.Dir, env: *const std.process.Environ.Map) !void {
+    const dir_abs = try dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_abs);
+    if (!try ensureRepo(gpa, io, dir_abs, env)) return;
+    std.Io.File.stderr().writeStreamingAll(io, git_init_notice) catch {};
+}
+
 pub fn launch(gpa: Allocator, io: std.Io, parent_env: *const std.process.Environ.Map, passthrough: []const []const u8) !u8 {
     const self_exe = try std.process.executablePathAlloc(io, gpa);
     defer gpa.free(self_exe);
@@ -205,13 +335,15 @@ pub fn launch(gpa: Allocator, io: std.Io, parent_env: *const std.process.Environ
 }
 
 pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const std.process.Environ.Map, program: []const u8, self_exe: []const u8, args: []const []const u8) !u8 {
-    const marks = lockdown_marks.choose(args);
+    const tests = try chooseTest(args);
+    const marks = lockdown_marks.choose(tests.rest);
     const passthrough = marks.rest;
     try refuseReserved(passthrough);
     const local_app_data = parent_env.get(lockdown_slash.local_app_data_variable) orelse return error.LocalAppDataUnavailable;
+    try ensureRepoAt(gpa, io, dir, parent_env);
     const slash = try lockdown_slash.install(gpa, io, local_app_data, self_exe);
     defer slash.deinit(gpa);
-    const config_abs = try chooseMcpConfig(gpa, io, dir, slash.dir, self_exe);
+    const config_abs = try chooseMcpConfig(gpa, io, dir, slash.dir, self_exe, tests.command);
     defer gpa.free(config_abs);
     const config = try std.Io.Dir.cwd().readFileAlloc(io, config_abs, gpa, .limited(max_mcp_config_bytes));
     defer gpa.free(config);

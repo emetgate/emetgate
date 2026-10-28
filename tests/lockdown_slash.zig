@@ -116,7 +116,7 @@ test "lockdown slash: the hook flags come before the lock and the prompt stays t
     var settings = "C:\\state\\k\\settings.json".*;
     const argv = try lockdown_slash.extend(testing.allocator, locked, .{ .dir = &dir, .settings = &settings });
     defer testing.allocator.free(argv);
-    const expected = [_][]const u8{ "claude", "--add-dir", "C:\\state\\k", "--settings", "C:\\state\\k\\settings.json", "--tools", "", "--allowedTools", "mcp__emetgate__emetgate_search", "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "hello" };
+    const expected = [_][]const u8{ "claude", "--add-dir", "C:\\state\\k", "--settings", "C:\\state\\k\\settings.json", "--setting-sources", "project", "--tools", "", "--allowedTools", "mcp__emetgate__emetgate_search", "--mcp-config", "C:\\repo\\.mcp.json", "--strict-mcp-config", "hello" };
     try testing.expectEqual(expected.len, argv.len);
     for (expected, argv) |want, got| try testing.expectEqualStrings(want, got);
 }
@@ -130,7 +130,8 @@ const probe =
     "@if not \"%~3\"==\"--settings\" exit /b 4\r\n" ++
     "@if not exist \"%~2\\.claude\\commands\\rule.md\" exit /b 5\r\n" ++
     "@if not exist \"%~4\" exit /b 6\r\n" ++
-    "@if not \"%~5\"==\"--tools\" exit /b 8\r\n" ++
+    "@if not \"%~5\"==\"--setting-sources\" exit /b 8\r\n" ++
+    "@if not \"%~7\"==\"--tools\" exit /b 7\r\n" ++
     "@exit /b 9\r\n";
 
 test "lockdown slash: the launched claude gets the hook settings and the command directory, and the project gains no file" {

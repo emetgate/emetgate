@@ -10,6 +10,7 @@ const test_util = @import("test_util.zig");
 const Allocator = std.mem.Allocator;
 const Span = symbol.Span;
 const Modules = profile_mod.Modules;
+const Profile = profile_mod.Profile;
 const Namespace = profile_mod.Namespace;
 
 pub const Named = struct {
@@ -37,6 +38,7 @@ pub const Import = struct {
     namespace: ?[]const u8 = null,
     namespace_start: u32 = 0,
     named: []const Named = &.{},
+    scoped: bool = false,
 };
 
 fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
@@ -142,12 +144,30 @@ fn firstSegment(node: ts.Node) ts.Node {
     return node.namedChild(0) orelse node;
 }
 
+const Pending = struct { node: ts.Node, scoped: bool };
+
+fn opensScope(profile: *const Profile, kind: []const u8) bool {
+    for (profile.functions) |f| {
+        if (std.mem.eql(u8, f.node, kind)) return true;
+    }
+    for (profile.containers) |c| {
+        if (std.mem.eql(u8, c.node, kind)) return true;
+    }
+    return false;
+}
+
 fn pythonImports(arena: Allocator, snapshot: *const Snapshot, m: *const Modules) ![]Import {
     var out: std.ArrayList(Import) = .empty;
-    const root = snapshot.tree.root();
-    var i: u32 = 0;
-    while (root.namedChild(i)) |statement| : (i += 1) {
+    var pending: std.ArrayList(Pending) = .empty;
+    var top: u32 = snapshot.tree.root().namedChildCount();
+    while (top > 0) {
+        top -= 1;
+        try pending.append(arena, .{ .node = snapshot.tree.root().namedChild(top).?, .scoped = false });
+    }
+    while (pending.pop()) |next| {
+        const statement = next.node;
         const kind = statement.kind();
+        const first = out.items.len;
         if (std.mem.eql(u8, kind, m.import_statement)) {
             var j: u32 = 0;
             while (statement.namedChild(j)) |name_node| : (j += 1) {
@@ -187,7 +207,15 @@ fn pythonImports(arena: Allocator, snapshot: *const Snapshot, m: *const Modules)
             } else {
                 try out.append(arena, .{ .statement = span(statement), .spec = spec, .form = .import, .type_only = false, .named = named.items });
             }
+        } else {
+            const scoped = next.scoped or opensScope(snapshot.profile, kind);
+            var j: u32 = statement.namedChildCount();
+            while (j > 0) {
+                j -= 1;
+                try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });
+            }
         }
+        for (out.items[first..]) |*entry| entry.scoped = next.scoped;
     }
     return out.items;
 }

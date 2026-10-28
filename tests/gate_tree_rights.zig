@@ -29,7 +29,7 @@ fn icacls(args: []const []const u8) !void {
     var argv: [8][]const u8 = undefined;
     argv[0] = "icacls";
     @memcpy(argv[1..][0..args.len], args);
-    const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1] });
+    const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1] });
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     errdefer std.debug.print("icacls: {s}{s}\n", .{ result.stdout, result.stderr });
@@ -78,7 +78,7 @@ fn deleteChildDenied(repo: *fixture.Repo) bool {
 }
 
 fn showAcl(dir_abs: []const u8) void {
-    const result = std.process.run(gpa, testing.io, .{ .argv = &.{ "icacls", dir_abs } }) catch return;
+    const result = @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = &.{ "icacls", dir_abs } }) catch return;
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     std.debug.print("{s}", .{result.stdout});
@@ -215,11 +215,11 @@ test "gate tree rights: a doc write and a batch are committed in a repository th
     policy.test_command = "cmd /c exit 0";
     const doc = try writeDoc(policy, repo.root_abs);
     defer gpa.free(doc);
-    try expectHas(doc, "\"status\":\"committed\"");
+    try expectHas(doc, "\"status\":\"written\"");
     try expectFile(&repo, "repo/notes.txt", "line one\nline 2\n");
     const batch = try tryBatch(policy, repo.root_abs);
     defer gpa.free(batch);
-    try expectHas(batch, "\"status\":\"committed\"");
+    try expectHas(batch, "\"status\":\"written\"");
     try expectFile(&repo, "repo/calc.ts", "export function two(): number {\n  return 1 + 1;\n}\n");
     const last = try run(policy);
     defer gpa.free(last);
@@ -319,7 +319,7 @@ fn gitIn(root_abs: []const u8, args: []const []const u8) !void {
     var argv: [8][]const u8 = undefined;
     argv[0] = "git";
     @memcpy(argv[1..][0..args.len], args);
-    const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+    const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     errdefer std.debug.print("{s}{s}", .{ result.stdout, result.stderr });

@@ -65,7 +65,7 @@ const Case = struct {
         var full: std.ArrayList([]const u8) = .empty;
         try full.append(self.arena(), "git");
         try full.appendSlice(self.arena(), argv);
-        const result = try std.process.run(self.arena(), testing.io, .{ .argv = full.items, .cwd = .{ .path = self.repo.root_abs }, .stdout_limit = .limited(4 * 1024 * 1024) });
+        const result = try @import("emetgate").bounded_run.run(self.arena(), testing.io, .{ .argv = full.items, .cwd = .{ .path = self.repo.root_abs }, .stdout_limit = .limited(4 * 1024 * 1024) });
         return switch (result.term) {
             .exited => |code| if (code == 0) result.stdout else null,
             else => null,

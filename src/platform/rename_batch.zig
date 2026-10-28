@@ -11,6 +11,8 @@ const batch_plan = @import("batch_plan.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const runner = @import("runner.zig");
+const rename_graph = @import("rename_graph.zig");
+const rename_require = @import("rename_require.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -25,15 +27,39 @@ pub const Request = struct {
     expected_hash: symbol.Hash,
     new_name: []const u8,
     interface_change: bool = false,
+    dynamic: ?*DynamicSites = null,
+    unresolved: ?*rename_graph.Sites = null,
 };
 
-pub const Resolver = enum { language_service, text };
+pub const DynamicSites = struct {
+    allow: bool = false,
+    count: usize = 0,
+    buf: [480]u8 = undefined,
+    len: usize = 0,
+
+    pub fn list(self: *const DynamicSites) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    fn add(self: *DynamicSites, rel: []const u8, line: usize, kind: rename.Dynamic) void {
+        self.count += 1;
+        const sep: []const u8 = if (self.len == 0) "" else ", ";
+        const written = std.fmt.bufPrint(self.buf[self.len..], "{s}{s}:{d} ({s})", .{ sep, rel, line, @tagName(kind) }) catch return;
+        self.len += written.len;
+    }
+};
+
+fn lineAt(source: []const u8, offset: u32) usize {
+    return std.mem.count(u8, source[0..@min(offset, source.len)], "\n") + 1;
+}
+
+pub const Resolver = enum { language_service, text, facts };
 
 pub const Options = struct {
     request: Request,
     test_command: []const u8,
     typecheck_command: ?[]const u8 = null,
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
@@ -47,31 +73,51 @@ pub const Options = struct {
 const Located = struct {
     abs: []u8,
     spans: std.ArrayList(Span) = .empty,
+    kept_keys: std.ArrayList(Span) = .empty,
+    kept_values: std.ArrayList(Span) = .empty,
+
+    fn deinit(self: *Located, gpa: Allocator) void {
+        gpa.free(self.abs);
+        self.spans.deinit(gpa);
+        self.kept_keys.deinit(gpa);
+        self.kept_values.deinit(gpa);
+    }
+
+    fn put(self: *Located, gpa: Allocator, span: Span, keep: rename.Keep) !void {
+        if (containsSpan(self.spans.items, span)) return;
+        try self.spans.append(gpa, span);
+        switch (keep) {
+            .none => {},
+            .key => try self.kept_keys.append(gpa, span),
+            .value => try self.kept_values.append(gpa, span),
+        }
+    }
 };
 
 const Locations = struct {
     files: std.ArrayList(Located) = .empty,
 
     fn deinit(self: *Locations, gpa: Allocator) void {
-        for (self.files.items) |*f| {
-            gpa.free(f.abs);
-            f.spans.deinit(gpa);
-        }
+        for (self.files.items) |*f| f.deinit(gpa);
         self.files.deinit(gpa);
     }
 
     fn add(self: *Locations, gpa: Allocator, abs: []u8, span: Span) !void {
+        return self.addKept(gpa, abs, span, .none);
+    }
+
+    fn addKept(self: *Locations, gpa: Allocator, abs: []u8, span: Span, keep: rename.Keep) !void {
         for (self.files.items) |*f| {
             if (!tsserver.sameFile(f.abs, abs)) continue;
             gpa.free(abs);
-            try f.spans.append(gpa, span);
+            try f.put(gpa, span, keep);
             return;
         }
         {
             errdefer gpa.free(abs);
             try self.files.append(gpa, .{ .abs = abs });
         }
-        try self.files.items[self.files.items.len - 1].spans.append(gpa, span);
+        try self.files.items[self.files.items.len - 1].put(gpa, span, keep);
     }
 
     fn find(self: *const Locations, abs: []const u8) ?*const Located {
@@ -113,14 +159,23 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const old = ref.name;
     if (!rename.validName(request.new_name) or std.mem.eql(u8, old, request.new_name)) return error.InvalidName;
     const offset = target.offset;
-    const member = ref.container.len != 0;
+    var member = ref.container.len != 0;
 
     var locations: Locations = .{};
     defer locations.deinit(gpa);
     var resolver: Resolver = .text;
     var fallback: ?anyerror = error.NoLanguageService;
-    if (session) |s| {
-        switch (try fromService(gpa, io, root, s, request.file_abs, offset, &locations)) {
+    var free_uses = false;
+    if (!base.profile.language_service and rename_graph.supports(base.profile)) {
+        const found = try rename_graph.locate(gpa, io, runtime, root, request.file_abs, offset, old, request.unresolved);
+        defer found.deinit(gpa);
+        for (found.proven) |p| try locations.add(gpa, try gpa.dupe(u8, p.abs), p.span);
+        resolver = .facts;
+        fallback = null;
+        member = found.member;
+        free_uses = found.free_uses;
+    } else if (session) |s| {
+        switch (try fromService(gpa, io, root, s, request.file_abs, offset, !request.interface_change, &locations)) {
             .ok => {
                 resolver = .language_service;
                 fallback = null;
@@ -131,14 +186,16 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             },
         }
     }
+    if (resolver == .language_service and request.interface_change) try addModuleMembers(gpa, io, runtime, root, base, request.file_abs, old, &locations);
     if (resolver == .text) try fromText(gpa, io, root, base, request.file_abs, old, member, &locations);
 
     const own = locations.find(request.file_abs) orelse return error.IncompleteRename;
     if (!startsAt(own.spans.items, offset)) return error.IncompleteRename;
-    const top_name = if (member) ref.container[0] else old;
-    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name);
+    const top_name = if (ref.container.len != 0) ref.container[0] else old;
+    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name) or (resolver == .facts and visibleAt(base, offset, old)) or try collapsesShorthand(gpa, io, runtime, &locations, old);
     if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
-    try refuseDynamic(gpa, io, runtime, root, &locations, old, member);
+    if (!member) try addNameLists(gpa, io, runtime, &locations, old);
+    try refuseDynamic(gpa, io, runtime, root, &locations, old, member, request.dynamic);
 
     var new_ref = ref;
     new_ref.name = request.new_name;
@@ -162,7 +219,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         const declaring = tsserver.sameFile(located.abs, request.file_abs);
         const file_base = try Snapshot.load(runtime, io, .cwd(), located.abs);
         errdefer file_base.destroy();
-        const renamed = try rename.apply(gpa, file_base, old, request.new_name, located.spans.items);
+        const renamed = try rename.applyWith(gpa, file_base, old, request.new_name, located.spans.items, .{ .free_uses = free_uses, .kept_keys = located.kept_keys.items, .kept_values = located.kept_values.items });
         defer gpa.free(renamed.spans);
         errdefer renamed.snapshot.destroy();
         const holes = try renamedHoles(gpa, located.spans.items, renamed.spans);
@@ -258,6 +315,12 @@ fn declarationOf(table: symbol.Table, ref: symbol.Ref, kind: symbol.DeclarationK
     return null;
 }
 
+fn visibleAt(base: *Snapshot, offset: u32, old: []const u8) bool {
+    const name = rename.leafAt(base.tree.root(), .{ .start = offset, .end = offset + @as(u32, @intCast(old.len)) }) orelse return true;
+    const holder = name.parent() orelse return true;
+    return base.profile.hasVisibilityKeyword(base.tree, holder);
+}
+
 fn startsAt(spans: []const Span, offset: u32) bool {
     for (spans) |span| {
         if (span.start == offset) return true;
@@ -267,7 +330,35 @@ fn startsAt(spans: []const Span, offset: u32) bool {
 
 const ServiceAnswer = union(enum) { ok, unavailable: anyerror };
 
-fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.Session, file_abs: []const u8, offset: u32, locations: *Locations) !ServiceAnswer {
+fn collapsesShorthand(gpa: Allocator, io: std.Io, runtime: *Runtime, locations: *const Locations, old: []const u8) !bool {
+    for (locations.files.items) |located| {
+        const snapshot = try Snapshot.load(runtime, io, .cwd(), located.abs);
+        defer snapshot.destroy();
+        const leaves = try rename.leavesNamed(gpa, snapshot, old);
+        defer gpa.free(leaves);
+        for (leaves) |leaf| {
+            if (!leaf.shorthand or !containsSpan(located.spans.items, leaf.span)) continue;
+            if (containsSpan(located.kept_keys.items, leaf.span) or containsSpan(located.kept_values.items, leaf.span)) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn containsSpan(spans: []const Span, wanted: Span) bool {
+    for (spans) |span| {
+        if (span.start == wanted.start and span.end == wanted.end) return true;
+    }
+    return false;
+}
+
+fn keepOf(location: tsserver.Location) rename.Keep {
+    if (location.prefix.len != 0) return .key;
+    if (location.suffix.len != 0) return .value;
+    return .none;
+}
+
+fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.Session, file_abs: []const u8, offset: u32, keep_keys: bool, locations: *Locations) !ServiceAnswer {
     const client = session.get() catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return .{ .unavailable = err },
@@ -275,17 +366,17 @@ fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.
     const file = try gpa.dupe(u8, file_abs);
     defer gpa.free(file);
     std.mem.replaceScalar(u8, file, '\\', '/');
-    const answer = client.rename(file, offset) catch |err| switch (err) {
+    const answer = client.rename(file, offset, keep_keys) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return .{ .unavailable = err },
     };
     defer answer.deinit();
     if (!answer.value.can_rename or answer.value.locations.len == 0) return error.RenameRefused;
     for (answer.value.locations) |location| {
-        if (location.prefix) return error.ShorthandReference;
+        if (location.prefix.len != 0 and location.suffix.len != 0) return error.ShorthandReference;
         if (location.end < location.start) return error.RenameOutsideRepo;
         const abs = try jailLocation(gpa, io, root, location.file);
-        try locations.add(gpa, abs, .{ .start = location.start, .end = location.end });
+        try locations.addKept(gpa, abs, .{ .start = location.start, .end = location.end }, keepOf(location));
     }
     return .ok;
 }
@@ -335,8 +426,46 @@ fn fromText(gpa: Allocator, io: std.Io, root: []const u8, base: *Snapshot, file_
     for (leaves) |leaf| try locations.add(gpa, try gpa.dupe(u8, file_abs), leaf.span);
 }
 
-fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, locations: *const Locations, old: []const u8, member: bool) !void {
-    for (locations.files.items) |located| try refuseDynamicIn(gpa, runtime, io, located.abs, old, member, false);
+fn addModuleMembers(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, base: *Snapshot, declaring_abs: []const u8, old: []const u8, locations: *Locations) !void {
+    const own = locations.find(declaring_abs) orelse return;
+    if (!try rename_require.exportsAsProperty(gpa, base, old, own.spans.items)) return;
+    const listing = try repo.filesMentioning(gpa, io, root, old);
+    defer gpa.free(listing);
+    var sites: std.ArrayList(rename_require.Site) = .empty;
+    defer sites.deinit(gpa);
+    var files = std.mem.tokenizeScalar(u8, listing, 0);
+    while (files.next()) |rel| {
+        const profile = registry.forPath(rel) orelse continue;
+        if (!profile.language_service or !rename.supports(profile)) continue;
+        const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, rel });
+        defer gpa.free(abs);
+        if (tsserver.sameFile(abs, declaring_abs)) continue;
+        const snapshot = try Snapshot.load(runtime, io, .cwd(), abs);
+        defer snapshot.destroy();
+        if (snapshot.tree.root().hasError()) continue;
+        sites.clearRetainingCapacity();
+        try rename_require.sitesIn(gpa, snapshot, std.fs.path.dirname(abs) orelse root, declaring_abs, old, &sites);
+        for (sites.items) |site| try locations.addKept(gpa, try gpa.dupe(u8, abs), site.span, site.keep);
+    }
+}
+
+fn addNameLists(gpa: Allocator, io: std.Io, runtime: *Runtime, locations: *Locations, old: []const u8) !void {
+    const count = locations.files.items.len;
+    for (0..count) |i| {
+        const located = locations.files.items[i];
+        const snapshot = try Snapshot.load(runtime, io, .cwd(), located.abs);
+        defer snapshot.destroy();
+        const listed = try rename.nameListSpans(gpa, snapshot, old);
+        defer gpa.free(listed);
+        if (listed.len == 0 or !try rename.bindsAtTop(gpa, snapshot, old, located.spans.items)) continue;
+        for (listed) |span| try locations.add(gpa, try gpa.dupe(u8, located.abs), span);
+    }
+}
+
+fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, locations: *const Locations, old: []const u8, member: bool, given: ?*DynamicSites) !void {
+    var local: DynamicSites = .{};
+    const sites = given orelse &local;
+    for (locations.files.items) |located| try refuseDynamicIn(gpa, runtime, io, root, located.abs, old, member, located.spans.items, sites);
     const listing = try repo.filesMentioning(gpa, io, root, old);
     defer gpa.free(listing);
     var files = std.mem.tokenizeScalar(u8, listing, 0);
@@ -346,16 +475,33 @@ fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, rel });
         defer gpa.free(abs);
         if (locations.find(abs) != null) continue;
-        try refuseDynamicIn(gpa, runtime, io, abs, old, member, true);
+        try refuseDynamicIn(gpa, runtime, io, root, abs, old, member, null, sites);
     }
+    if (sites.count != 0 and !sites.allow) return error.DynamicReference;
 }
 
-fn refuseDynamicIn(gpa: Allocator, runtime: *Runtime, io: std.Io, abs: []const u8, old: []const u8, member: bool, untouched: bool) !void {
+fn renamedAt(spans: ?[]const Span, start: u32) bool {
+    for (spans orelse return false) |span| {
+        if (span.start == start) return true;
+    }
+    return false;
+}
+
+fn refuseDynamicIn(gpa: Allocator, runtime: *Runtime, io: std.Io, root: []const u8, abs: []const u8, old: []const u8, member: bool, renamed: ?[]const Span, sites: *DynamicSites) !void {
     const snapshot = try Snapshot.load(runtime, io, .cwd(), abs);
     defer snapshot.destroy();
     if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
-    if (rename.dynamicAccess(snapshot, old, member) != null) return error.DynamicReference;
-    if (untouched and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;
+    var hits: [8]rename.Hit = undefined;
+    const found = rename.dynamicHits(snapshot, old, member, &hits);
+    const rel = if (abs.len > root.len + 1 and std.ascii.startsWithIgnoreCase(abs, root)) abs[root.len + 1 ..] else abs;
+    var refused: usize = 0;
+    for (hits[0..found]) |hit| {
+        if (hit.kind == .name_list and found < hits.len and renamedAt(renamed, hit.start)) continue;
+        sites.add(rel, lineAt(snapshot.source, hit.start), hit.kind);
+        refused += 1;
+    }
+    if (refused != 0 and !sites.allow) return;
+    if (renamed == null and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;
 }
 
 pub const Outcome = struct {

@@ -134,6 +134,50 @@ test "verify: a file edited by hand after the gate is unverified, the gated one 
     try testing.expect(result.report.verdict != .verified);
 }
 
+test "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try support.Repo.git(case.repo.root_abs, &.{ "config", "core.autocrlf", "true" });
+    try case.repo.write("src/math.ts", "export function add(a: number, b: number): number {\r\n  return a + b;\r\n}\r\n");
+    _ = try case.tryBody("{\n  return b + a;\n}", green);
+    const written = try case.repo.read("src/math.ts");
+    defer testing.allocator.free(written);
+    try testing.expectEqualStrings("export function add(a: number, b: number): number {\r\n  return b + a;\r\n}\r\n", written);
+    try case.commit("gated under autocrlf");
+    try testing.expectEqual(@as(usize, 1), try case.attach());
+    const blob = try receipts.git(case.arena(), testing.io, case.repo.root_abs, &.{ "cat-file", "blob", "HEAD:src/math.ts" });
+    try testing.expect(std.mem.indexOfScalar(u8, blob.?, '\r') == null);
+
+    const result = try case.verify(.{ .commit = "HEAD", .test_command = green });
+    try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
+    try testing.expectEqual(@as(?checker.Verdict, .verified), fileVerdict(result, "src/math.ts"));
+
+    const original = try case.note();
+    const at = std.mem.indexOf(u8, original, "\"before\":\"").? + "\"before\":\"".len;
+    const forged = try case.arena().dupe(u8, original);
+    forged[at] = if (forged[at] == '0') '1' else '0';
+    try case.replaceNote(forged);
+    try testing.expectEqual(checker.Verdict.mismatch, (try case.verify(.{ .commit = "HEAD", .test_command = green })).report.verdict);
+}
+
+test "verify: under core.autocrlf a receipt over an LF working file still verifies against the blob" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try support.Repo.git(case.repo.root_abs, &.{ "config", "core.autocrlf", "true" });
+    _ = try case.tryBody("{\n  return b + a;\n}", green);
+    const written = try case.repo.read("src/math.ts");
+    defer testing.allocator.free(written);
+    try testing.expect(std.mem.indexOfScalar(u8, written, '\r') == null);
+    try case.commit("gated over an LF file under autocrlf");
+    try testing.expectEqual(@as(usize, 1), try case.attach());
+    const result = try case.verify(.{ .commit = "HEAD", .test_command = green });
+    try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
+}
+
 test "verify: a forged digest, a non-canonical note, an added and a removed receipt are caught" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
@@ -250,6 +294,54 @@ test "verify: a rename's symmetry receipt verifies by alpha hash without running
     const result = try case.verify(.{ .commit = "HEAD", .skip_tests = true });
     try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
     try testing.expectEqualStrings("rename", result.report.receipts[0].operation);
+}
+
+test "verify: a rename of one of two same-named methods on a line verifies by alpha hash" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.repo.write("m.py", "class A:\n    def run(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef main():\n    return A().run() + B().run()\n");
+    try case.commit("methods");
+    const file = try case.repo.abs(case.arena(), "m.py");
+    const hash = symbol.formatHash(try support.hashOfRef(testing.allocator, testing.io, case.runtime, file, "A.run"));
+    var args: std.json.ObjectMap = .empty;
+    try args.put(case.arena(), "file", .{ .string = file });
+    try args.put(case.arena(), "symbol", .{ .string = "A.run" });
+    try args.put(case.arena(), "hash", .{ .string = try case.arena().dupe(u8, &hash) });
+    try args.put(case.arena(), "new_name", .{ .string = "go" });
+    _ = try case.call("emetgate_rename", args, green);
+    const renamed = try case.repo.read("m.py");
+    defer testing.allocator.free(renamed);
+    try testing.expectEqualStrings("class A:\n    def go(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef main():\n    return A().go() + B().run()\n", renamed);
+    try case.commit("rename");
+    _ = try case.attach();
+    const result = try case.verify(.{ .commit = "HEAD", .skip_tests = true });
+    try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
+}
+
+test "verify: a rename that also renames its __all__ entry verifies by alpha hash" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.repo.write("m.py", "__all__ = [\"helper\"]\n\n\ndef helper():\n    return 1\n\n\ndef main():\n    return helper()\n");
+    try case.commit("listed");
+    const file = try case.repo.abs(case.arena(), "m.py");
+    const hash = symbol.formatHash(try support.hashOfRef(testing.allocator, testing.io, case.runtime, file, "helper"));
+    var args: std.json.ObjectMap = .empty;
+    try args.put(case.arena(), "file", .{ .string = file });
+    try args.put(case.arena(), "symbol", .{ .string = "helper" });
+    try args.put(case.arena(), "hash", .{ .string = try case.arena().dupe(u8, &hash) });
+    try args.put(case.arena(), "new_name", .{ .string = "assist" });
+    _ = try case.call("emetgate_rename", args, green);
+    const renamed = try case.repo.read("m.py");
+    defer testing.allocator.free(renamed);
+    try testing.expectEqualStrings("__all__ = [\"assist\"]\n\n\ndef assist():\n    return 1\n\n\ndef main():\n    return assist()\n", renamed);
+    try case.commit("rename");
+    _ = try case.attach();
+    const result = try case.verify(.{ .commit = "HEAD", .skip_tests = true });
+    try testing.expectEqual(checker.Verdict.verified, result.report.verdict);
 }
 
 test "verify: a spending change relabelled as a symmetric rename fails the alpha hash" {

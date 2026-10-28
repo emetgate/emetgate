@@ -221,6 +221,24 @@ const Op = struct {
         if (std.mem.eql(u8, tool, "emetgate_write_doc")) {
             return try self.send(tool, (try self.docArgs(false)) orelse return null);
         }
+        if (std.mem.eql(u8, tool, "emetgate_edit")) {
+            const Spot = struct { rel: []const u8, old: []const u8 };
+            const spot = self.pick(Spot, &.{
+                .{ .rel = "src/core/a.ts", .old = "return x + 1;" },
+                .{ .rel = "src/core/b.ts", .old = "return 2;" },
+                .{ .rel = "src/util/c.ts", .old = "return three;" },
+                .{ .rel = "docs/n.md", .old = "old\n" },
+            });
+            if (!env.repo.exists(spot.rel)) return null;
+            if (std.mem.indexOf(u8, try env.read(spot.rel), spot.old) == null) return null;
+            const new = if (self.random.boolean()) "return \"evil\"; // evil" else "return 12;";
+            return try self.send(tool, try self.value(.{ .file = try env.abs(spot.rel), .old_string = spot.old, .new_string = new }));
+        }
+        if (std.mem.eql(u8, tool, "emetgate_write")) {
+            const rel = self.pick([]const u8, &.{ "src/core/a.ts", "src/core/new/w.ts", "src/util/w.ts" });
+            const content = try std.fmt.allocPrint(env.arena(), "export function written() {s}\n", .{self.text()});
+            return try self.send(tool, try self.value(.{ .file = try env.abs(rel), .content = content }));
+        }
         if (std.mem.eql(u8, tool, "emetgate_rename")) {
             const site = self.pick(Site, &.{ .{ .rel = "src/core/a.ts", .name = "helper" }, .{ .rel = "src/core/b.ts", .name = "spare" }, .{ .rel = "src/util/c.ts", .name = "lonely" } });
             if (!env.repo.exists(site.rel)) return null;
@@ -255,6 +273,11 @@ const Op = struct {
         }
         if (std.mem.eql(u8, tool, "emetgate_run")) {
             return try env.call(tool, .{}, green, false);
+        }
+        if (std.mem.eql(u8, tool, "emetgate_git_write")) {
+            const verb = self.pick([]const u8, &.{ "branch", "tag" });
+            const args = try std.fmt.allocPrint(env.arena(), "{s} topic-{d}", .{ verb, self.random.int(u32) });
+            return try env.call(tool, .{ .args = args }, green, false);
         }
         return error.WriteToolWithoutGenerator;
     }
@@ -304,7 +327,7 @@ fn exercise(tool: []const u8, seed: u64, tally: *Tally) !void {
             continue;
         }
         tally.accepted += 1;
-        if (std.mem.eql(u8, tool, "emetgate_run")) try testing.expectEqualStrings(before, try treeOf(env));
+        if (std.mem.eql(u8, tool, "emetgate_run") or std.mem.eql(u8, tool, "emetgate_git_write")) try testing.expectEqualStrings(before, try treeOf(env));
         var after = try violationsOf(&case);
         var it = after.iterator();
         while (it.next()) |entry| {
@@ -335,7 +358,7 @@ test "write invariant: after any accepted write through a served write tool a sc
         while (seed <= seeds_per_tool) : (seed += 1) try exercise(tool, seed * 7919 + tool.len, &tally);
         errdefer std.debug.print("write invariant: tool {s} accepted {d} refused {d} other {d}\n", .{ tool, tally.accepted, tally.refused_by_rule, tally.other });
         try testing.expect(tally.accepted != 0);
-        const writes_source = !std.mem.eql(u8, tool, "emetgate_run") and !std.mem.eql(u8, tool, "emetgate_write_doc");
+        const writes_source = !std.mem.eql(u8, tool, "emetgate_run") and !std.mem.eql(u8, tool, "emetgate_write_doc") and !std.mem.eql(u8, tool, "emetgate_git_write");
         if (writes_source) try testing.expect(tally.refused_by_rule != 0);
     }
     try testing.expect(write_tools >= 7);

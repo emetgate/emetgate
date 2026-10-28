@@ -6,6 +6,7 @@ const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
+const recovery = @import("recovery.zig");
 const runner = @import("../platform/runner.zig");
 const batch = @import("../platform/batch.zig");
 const repo = @import("../platform/repo.zig");
@@ -39,9 +40,9 @@ pub fn parse(gpa: Allocator, item: Value) ![]node_cas.Edit {
         out[0] = try one(item);
         return out;
     }
-    const entries = switch (list orelse return error.MissingArgument) {
+    const entries = switch (list orelse return tool_result.missing("nodes (array of {{node, text}})", .{})) {
         .array => |array| array.items,
-        else => return error.MissingArgument,
+        else => return tool_result.missing("nodes (array of {{node, text}})", .{}),
     };
     if (entries.len == 0) return error.NoNodeEdits;
     if (entries.len > node_cas.max_edits) return error.TooManyNodeEdits;
@@ -53,8 +54,8 @@ pub fn parse(gpa: Allocator, item: Value) ![]node_cas.Edit {
 
 fn one(item: Value) error{MissingArgument}!node_cas.Edit {
     return .{
-        .address = tool_result.getString(item, "node") orelse return error.MissingArgument,
-        .text = tool_result.getString(item, "text") orelse return error.MissingArgument,
+        .address = tool_result.getString(item, "node") orelse return tool_result.missing("node (string id from emetgate_read_symbol nodes:true)", .{}),
+        .text = tool_result.getString(item, "text") orelse return tool_result.missing("text (string; empty deletes the node)", .{}),
     };
 }
 
@@ -81,6 +82,7 @@ pub fn callTry(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
     const is_error = tryInto(gpa, io, runtime, file, args.?, policy, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
+        recovery.afterNodeEdit(gpa, io, runtime, policy.root, file, args.?, err);
         buffer.clearRetainingCapacity();
         try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         break :blk true;

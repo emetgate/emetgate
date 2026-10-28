@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("bounded_run.zig");
 const sandbox = @import("sandbox.zig");
 const exe_path = @import("exe_path.zig");
 const registry = @import("../engine/lang/registry.zig");
@@ -26,7 +27,8 @@ pub const Location = struct {
     file: []const u8,
     start: u32,
     end: u32,
-    prefix: bool = false,
+    prefix: []const u8 = "",
+    suffix: []const u8 = "",
     definition: bool = false,
 };
 
@@ -123,8 +125,8 @@ pub const Client = struct {
         try self.start();
     }
 
-    pub fn rename(self: *Client, file: []const u8, offset: u32) !Parsed {
-        return self.ask("rename", file, offset);
+    pub fn rename(self: *Client, file: []const u8, offset: u32, keep_keys: bool) !Parsed {
+        return self.askKeeping("rename", file, offset, keep_keys);
     }
 
     pub fn references(self: *Client, file: []const u8, offset: u32) !Parsed {
@@ -151,6 +153,10 @@ pub const Client = struct {
     }
 
     fn ask(self: *Client, op: []const u8, file: []const u8, offset: u32) !Parsed {
+        return self.askKeeping(op, file, offset, true);
+    }
+
+    fn askKeeping(self: *Client, op: []const u8, file: []const u8, offset: u32, keep_keys: bool) !Parsed {
         try self.ensure();
         const files = try programFiles(self.gpa, self.io, self.root);
         defer freeFiles(self.gpa, files);
@@ -164,6 +170,8 @@ pub const Client = struct {
         try js.write(file);
         try js.objectField("offset");
         try js.write(offset);
+        try js.objectField("keep_keys");
+        try js.write(keep_keys);
         try js.objectField("files");
         try js.write(files);
         return self.exchange(head.written(), "}");
@@ -214,7 +222,7 @@ pub const Client = struct {
 pub fn programFiles(gpa: Allocator, io: std.Io, root: []const u8) ![][]u8 {
     const git = try exe_path.git(gpa, root);
     defer gpa.free(git);
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = &.{ git, "ls-files", "-z" },
         .cwd = .{ .path = root },
         .stdout_limit = .limited(max_listing_bytes),

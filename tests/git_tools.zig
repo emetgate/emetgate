@@ -52,7 +52,7 @@ const Repo = struct {
         var argv: [8][]const u8 = undefined;
         argv[0] = "git";
         @memcpy(argv[1..][0..args.len], args);
-        const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = self.root_abs } });
+        const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = self.root_abs } });
         gpa.free(result.stdout);
         gpa.free(result.stderr);
         switch (result.term) {
@@ -270,7 +270,7 @@ test "git diff folds a big diff under the budget and names the elided span" {
 
     var big_after: std.Io.Writer.Allocating = .init(gpa);
     defer big_after.deinit();
-    for (0..1500) |i| try big_after.writer.print("changed {d}\n", .{i});
+    for (0..1500) |i| try big_after.writer.print("changed {d} again\n", .{i});
     try repo.writeFile("big.txt", big_after.written());
 
     const runtime = try Runtime.create(gpa);
@@ -357,7 +357,7 @@ test "symbol diff reports a changed function body at the symbol level" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -375,7 +375,7 @@ test "symbol diff reports an added function and an added type" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -396,7 +396,7 @@ test "symbol diff flags a comment-only change as a non-symbol change" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -405,7 +405,8 @@ test "symbol diff flags a comment-only change as a non-symbol change" {
     const files = body.value.object.get("symbol_changes").?.array;
     try testing.expect(files.items.len == 1);
     try testing.expect(files.items[0].object.get("non_symbol_change").?.bool);
-    try testing.expect(files.items[0].object.get("mapped").?.bool);
+    try testing.expect(files.items[0].object.get("mapped") == null);
+    try testing.expect(files.items[0].object.get("symbol_changes_truncated") == null);
 }
 
 test "symbol blame maps a symbol to the commit that last changed it" {
@@ -444,6 +445,35 @@ test "symbol blame maps a symbol to the commit that last changed it" {
     try testing.expect(full_body.value.object.get("output") != null);
 }
 
+test "symbol blame of a line window in a file whose whole blame is huge stays mapped and returns" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    for (0..1800) |_| {
+        try text.writer.writeAll("# ");
+        try text.writer.splatByteAll('x', 1200);
+        try text.writer.writeByte('\n');
+    }
+    try text.writer.writeAll("def tail():\n    return 1\n");
+    try repo.writeFile("big.py", text.written());
+    try repo.commitAll("add big");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file_abs = try std.fmt.allocPrint(gpa, "{s}/big.py", .{repo.root_abs});
+    defer gpa.free(file_abs);
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs, .line_start = 1801, .line_end = 1801 });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    const blame = body.value.object.get("symbol_blame") orelse return error.TestNoSymbolBlame;
+    try testing.expect(blame.object.get("mapped").?.bool);
+    try testing.expectEqualStrings("tail", blame.object.get("symbols").?.array.items[0].object.get("ref").?.string);
+}
+
 test "cross-language symbol_changes populate for python and c#" {
     var repo = try Repo.init();
     defer repo.deinit();
@@ -456,7 +486,7 @@ test "cross-language symbol_changes populate for python and c#" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -490,7 +520,7 @@ test "symbol diff tolerates a binary file change without crashing" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs });
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer reply.deinit();
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
@@ -499,9 +529,9 @@ test "symbol diff tolerates a binary file change without crashing" {
     const files = body.value.object.get("symbol_changes").?.array;
     try testing.expect(files.items.len == 1);
     const f = files.items[0];
-    try testing.expect(f.object.get("mapped").?.bool);
+    try testing.expect(f.object.get("mapped") == null);
     try testing.expect(f.object.get("note") != null);
-    try testing.expect(f.object.get("symbols").?.array.items.len == 0);
+    try testing.expect(f.object.get("symbols") == null);
 }
 
 test "symbol blame requires a file path" {

@@ -40,7 +40,7 @@ const Repo = struct {
         var argv: [8][]const u8 = undefined;
         argv[0] = "git";
         @memcpy(argv[1..][0..args.len], args);
-        const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
         testing.allocator.free(result.stdout);
         testing.allocator.free(result.stderr);
         switch (result.term) {
@@ -92,6 +92,7 @@ const Repo = struct {
                 var it = workspace.iterate();
                 var names: usize = 0;
                 while (try it.next(testing.io)) |entry| {
+                    if (std.mem.eql(u8, entry.name, "shadow-cache")) continue;
                     if (!std.mem.eql(u8, entry.name, shadow_root.marker_name) and !std.mem.eql(u8, entry.name, "shadow")) return false;
                     names += 1;
                 }
@@ -892,7 +893,7 @@ test "purple C7: only the user's policy decides whether an edit can commit" {
     const committed = try respondWith(runtime, line, .{ .allow_repo_config = true, .root = repo.root_abs });
     defer testing.allocator.free(committed);
     errdefer std.debug.print("response={s}\n", .{committed});
-    try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"committed\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, committed, "\\\"status\\\":\\\"written\\\"") != null);
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);
     try testing.expectEqualStrings(edited_source, on_disk);
@@ -1023,13 +1024,13 @@ test "purple: hash absent on a missing file creates it through emetgate_try, and
     const created = try respondWith(runtime, try_line, policy);
     defer testing.allocator.free(created);
     errdefer std.debug.print("try: {s}\n", .{created});
-    try testing.expect(std.mem.indexOf(u8, created, "\\\"status\\\":\\\"committed\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, created, "\\\"status\\\":\\\"written\\\"") != null);
     const on_disk = try repo.tmp.dir.readFileAlloc(testing.io, "repo/src/mul.ts", testing.allocator, .unlimited);
     defer testing.allocator.free(on_disk);
     try testing.expectEqualStrings("export function mul(a: number, b: number): number { return a * b; }\n", on_disk);
 }
 
-test "purple: hash absent in a directory that does not exist is refused by name through MCP" {
+test "purple: hash absent in a directory that does not exist is refused by name through emetgate_mutate" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -1038,14 +1039,32 @@ test "purple: hash absent in a directory that does not exist is refused by name 
     const file = try std.fmt.allocPrint(testing.allocator, "{s}\\src\\nested\\mul.ts", .{repo.root_abs});
     defer testing.allocator.free(file);
 
-    for ([_][]const u8{ "emetgate_try", "emetgate_mutate" }) |tool| {
-        const line = try newFileCall(tool, file);
-        defer testing.allocator.free(line);
-        const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
-        defer testing.allocator.free(response);
-        errdefer std.debug.print("{s}: {s}\n", .{ tool, response });
-        try testing.expect(std.mem.indexOf(u8, response, "ParentDirectoryMissing") != null);
-    }
+    const line = try newFileCall("emetgate_mutate", file);
+    defer testing.allocator.free(line);
+    const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
+    defer testing.allocator.free(response);
+    errdefer std.debug.print("{s}\n", .{response});
+    try testing.expect(std.mem.indexOf(u8, response, "ParentDirectoryMissing") != null);
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/nested", .{}));
     try expectPristine(&repo);
+}
+
+test "purple: hash absent in a directory that does not exist creates the directory and the file through emetgate_try" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const file = try std.fmt.allocPrint(testing.allocator, "{s}\\src\\nested\\mul.ts", .{repo.root_abs});
+    defer testing.allocator.free(file);
+
+    const line = try newFileCall("emetgate_try", file);
+    defer testing.allocator.free(line);
+    const response = try respondWith(runtime, line, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
+    defer testing.allocator.free(response);
+    errdefer std.debug.print("{s}\n", .{response});
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"status\\\":\\\"written\\\"") != null);
+    const on_disk = try repo.tmp.dir.readFileAlloc(testing.io, "repo/src/nested/mul.ts", testing.allocator, .unlimited);
+    defer testing.allocator.free(on_disk);
+    try testing.expect(std.mem.indexOf(u8, on_disk, "export function mul(a: number, b: number): number { return a * b; }") != null);
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const bounded_run = @import("../platform/bounded_run.zig");
 const symbol = @import("../engine/symbol.zig");
 const line_range = @import("../engine/line_range.zig");
 const registry = @import("../engine/lang/registry.zig");
@@ -293,10 +294,11 @@ pub fn analyzeBlame(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const
         return .{ .arena = arena_state, .file = try arena.dupe(u8, rel), .symbols = &.{}, .mapped = false, .note = "could not map to symbols: the source did not parse cleanly" };
 
     const lines = try parsePorcelain(arena, porcelain);
+    const newlines = try newlineOffsets(arena, snapshot.source);
 
     var out: std.ArrayList(BlameSymbol) = .empty;
-    for (table.symbols) |*s| try blameUnit(arena, &out, snapshot.source, lines, @tagName(s.kind), s.ref, s.declaration);
-    for (table.declarations) |*d| try blameUnit(arena, &out, snapshot.source, lines, @tagName(d.kind), d.ref, d.declaration);
+    for (table.symbols) |*s| try blameUnit(arena, &out, newlines, lines, @tagName(s.kind), s.ref, s.declaration);
+    for (table.declarations) |*d| try blameUnit(arena, &out, newlines, lines, @tagName(d.kind), d.ref, d.declaration);
 
     const truncated = out.items.len > max_symbols_per_file;
     if (truncated) out.shrinkRetainingCapacity(max_symbols_per_file);
@@ -309,9 +311,25 @@ pub fn analyzeBlame(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const
     };
 }
 
-fn blameUnit(arena: Allocator, out: *std.ArrayList(BlameSymbol), source: []const u8, lines: []const ?LineInfo, kind: []const u8, ref: anytype, span: symbol.Span) !void {
-    const start_line: u32 = @intCast(std.mem.count(u8, source[0..span.start], "\n") + 1);
-    const end_line: u32 = @intCast(std.mem.count(u8, source[0..span.end], "\n") + 1);
+fn newlineOffsets(arena: Allocator, source: []const u8) ![]const usize {
+    var offsets: std.ArrayList(usize) = .empty;
+    for (source, 0..) |c, i| if (c == '\n') try offsets.append(arena, i);
+    return offsets.items;
+}
+
+fn lineAt(newlines: []const usize, offset: usize) u32 {
+    var lo: usize = 0;
+    var hi: usize = newlines.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (newlines[mid] < offset) lo = mid + 1 else hi = mid;
+    }
+    return @intCast(lo + 1);
+}
+
+fn blameUnit(arena: Allocator, out: *std.ArrayList(BlameSymbol), newlines: []const usize, lines: []const ?LineInfo, kind: []const u8, ref: anytype, span: symbol.Span) !void {
+    const start_line = lineAt(newlines, span.start);
+    const end_line = lineAt(newlines, span.end);
     var best: ?LineInfo = null;
     var line = start_line;
     while (line <= end_line) : (line += 1) {
@@ -392,7 +410,7 @@ fn readRev(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rev: [
     const spec = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ rev, rel });
     defer gpa.free(spec);
     const argv = [_][]const u8{ git, "--no-pager", "show", spec };
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = &argv,
         .cwd = .{ .path = root },
         .stdout_limit = .limited(max_blob_bytes),

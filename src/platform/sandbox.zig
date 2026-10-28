@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const appcontainer = @import("appcontainer.zig");
+const console_text = @import("console_text.zig");
 
 const Allocator = std.mem.Allocator;
 const MultiReader = std.Io.File.MultiReader;
@@ -27,10 +28,11 @@ pub const Report = struct {
     stderr: []u8,
     truncated: bool,
     killed_leftovers: bool,
+    no_tests: bool = false,
 
     pub fn passed(self: Report) bool {
         return switch (self.outcome) {
-            .exited => |code| code == 0 and !self.killed_leftovers,
+            .exited => |code| (code == 0 or self.no_tests) and !self.killed_leftovers,
             .crashed, .timed_out, .output_limit => false,
         };
     }
@@ -44,13 +46,18 @@ pub const Report = struct {
 pub const Backend = union(enum) {
     low_integrity,
     app_container: *const appcontainer.Profile,
+    user,
 };
+
+pub const EnvVar = struct { name: []const u8, value: []const u8 };
 
 pub const Command = struct {
     argv: []const []const u8,
     cwd: []const u8,
     limits: Limits = .{},
     backend: Backend = .low_integrity,
+    temp: ?[]const u8 = null,
+    env: []const EnvVar = &.{},
 };
 
 const ntstatus_error_floor: u32 = 0xC0000000;
@@ -75,18 +82,19 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
 
     const token: ?LowToken = switch (command.backend) {
         .low_integrity => try LowToken.create(),
-        .app_container => null,
+        .app_container, .user => null,
     };
     defer if (token) |t| t.close();
     const spawn_backend: SpawnBackend = switch (command.backend) {
         .low_integrity => .{ .low = token.? },
         .app_container => |profile| .{ .app = profile },
+        .user => .user,
     };
 
     const started = std.Io.Timestamp.now(io, .awake);
     var child = try spawnRestricted(gpa, spawn_backend, command, .command);
     defer child.kill(io);
-    try requireLowIntegrity(child.id.?);
+    if (command.backend != .user) try requireLowIntegrity(child.id.?);
     try job.assign(child.id.?);
     try resumeMainThread(child.thread_handle);
 
@@ -120,8 +128,8 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
                 if (killed_leftovers) continue;
                 if (drain_end) |end| {
                     if (std.Io.Clock.Timestamp.now(io, .awake).compare(.gte, end)) {
+                        if ((job.leftovers(consoleHost(child.id.?)) catch 1) != 0) killed_leftovers = true;
                         job.terminate();
-                        killed_leftovers = true;
                     }
                 } else if (hasExited(child.id.?)) {
                     drain_end = graceEnd(io, deadline);
@@ -154,9 +162,10 @@ pub fn run(gpa: Allocator, io: std.Io, command: Command) !Report {
     const duration_ns: u64 = @intCast(started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds);
 
     var truncated = false;
-    const stdout = try takeStream(gpa, &reader, 0, limit, &truncated);
+    const code_page = console_text.oemCodePage();
+    const stdout = try console_text.toText(gpa, try takeStream(gpa, &reader, 0, limit, &truncated), code_page);
     errdefer gpa.free(stdout);
-    const stderr = try takeStream(gpa, &reader, 1, limit, &truncated);
+    const stderr = try console_text.toText(gpa, try takeStream(gpa, &reader, 1, limit, &truncated), code_page);
 
     return .{
         .outcome = stopped orelse exitOutcome(exit_code),
@@ -188,6 +197,16 @@ fn consoleHost(process: std.os.windows.HANDLE) ?usize {
     if (win.NtQueryInformationProcess(process, win.process_console_host_process, &value, @sizeOf(usize), null) != .SUCCESS) return null;
     const pid = value & ~@as(usize, 3);
     return if (pid == 0) null else pid;
+}
+
+pub const toolchain_daemons = [_][]const u8{ "VBCSCompiler.exe", "MSBuild.exe", "dotnet.exe", "MSBuildTaskHost.exe" };
+
+pub fn isToolchainDaemon(image_path: []const u8) bool {
+    const base = std.fs.path.basename(image_path);
+    for (toolchain_daemons) |name| {
+        if (std.ascii.eqlIgnoreCase(base, name)) return true;
+    }
+    return false;
 }
 
 pub fn leftoverCount(pids: []const usize, console_host: ?usize) usize {
@@ -332,10 +351,11 @@ const Stdio = enum { command, service };
 const SpawnBackend = union(enum) {
     low: LowToken,
     app: *const appcontainer.Profile,
+    user,
 
     fn attributeCount(self: SpawnBackend) std.os.windows.DWORD {
         return switch (self) {
-            .low => 1,
+            .low, .user => 1,
             .app => |profile| if (profile.lpac) 3 else 2,
         };
     }
@@ -350,6 +370,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     const program = try resolveProgram(arena, command.cwd, command.argv[0]);
     const command_line = try commandLine(arena, command.argv);
     const cwd = try std.unicode.wtf8ToWtf16LeAllocZ(arena, command.cwd);
+    const environment: ?*anyopaque = @ptrCast((try commandEnvironment(arena, command)).ptr);
 
     const nul = try openNul();
     defer std.os.windows.CloseHandle(nul);
@@ -377,7 +398,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     var capabilities: appcontainer.SecurityCapabilities = undefined;
     var lpac_policy: u32 = appcontainer.all_application_packages_opt_out;
     switch (backend) {
-        .low => {},
+        .low, .user => {},
         .app => |profile| {
             capabilities = profile.securityCapabilities();
             if (win.UpdateProcThreadAttribute(list.ptr, 0, appcontainer.proc_thread_attribute_security_capabilities, &capabilities, @sizeOf(appcontainer.SecurityCapabilities), null, null) == .FALSE) return error.SandboxUnavailable;
@@ -399,8 +420,8 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     var info: std.os.windows.PROCESS.INFORMATION = undefined;
     const flags = win.create_suspended | win.create_unicode_environment | win.create_no_window | win.extended_startupinfo_present;
     const spawned: std.os.windows.BOOL = switch (backend) {
-        .low => |token| win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
-        .app => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, null, cwd, &startup, &info),
+        .low => |token| win.CreateProcessAsUserW(token.handle, program, command_line, null, null, .TRUE, flags, environment, cwd, &startup, &info),
+        .app, .user => win.CreateProcessW(program, command_line, null, null, .TRUE, flags, environment, cwd, &startup, &info),
     };
     if (spawned == .FALSE) return switch (win.GetLastError()) {
         win.error_file_not_found, win.error_path_not_found, win.error_directory => error.FileNotFound,
@@ -470,6 +491,137 @@ pub fn environmentValue(arena: Allocator, name: [:0]const u16) !?[]u8 {
     const written = win.GetEnvironmentVariableW(name.ptr, value_w.ptr, needed);
     if (written == 0 or written >= needed) return null;
     return try std.unicode.wtf16LeToWtf8Alloc(arena, value_w[0..written]);
+}
+
+const temp_names = [_][]const u8{ "TEMP", "TMP" };
+
+fn isNamedEntry(entry: []const u16, name: []const u8) bool {
+    if (entry.len <= name.len or entry[name.len] != '=') return false;
+    for (name, entry[0..name.len]) |want, got| {
+        if (got > 0x7f or std.ascii.toUpper(@intCast(got)) != std.ascii.toUpper(want)) return false;
+    }
+    return true;
+}
+
+fn isTempEntry(entry: []const u16) bool {
+    for (temp_names) |name| {
+        if (isNamedEntry(entry, name)) return true;
+    }
+    return false;
+}
+
+fn isOverridden(entry: []const u16, vars: []const EnvVar) bool {
+    for (vars) |v| {
+        if (isNamedEntry(entry, v.name)) return true;
+    }
+    return false;
+}
+
+pub fn environmentWith(arena: Allocator, vars: []const EnvVar) ![:0]u16 {
+    const block = win.GetEnvironmentStringsW() orelse return error.SandboxUnavailable;
+    defer _ = win.FreeEnvironmentStringsW(block);
+    var out: std.ArrayList(u16) = .empty;
+    var index: usize = 0;
+    while (block[index] != 0) {
+        const start = index;
+        while (block[index] != 0) index += 1;
+        const entry = block[start..index];
+        index += 1;
+        if (isOverridden(entry, vars)) continue;
+        try out.appendSlice(arena, entry);
+        try out.append(arena, 0);
+    }
+    for (vars) |v| {
+        const value_w = try std.unicode.wtf8ToWtf16LeAlloc(arena, v.value);
+        for (v.name) |c| try out.append(arena, c);
+        try out.append(arena, '=');
+        try out.appendSlice(arena, value_w);
+        try out.append(arena, 0);
+    }
+    return out.toOwnedSliceSentinel(arena, 0);
+}
+
+pub fn environmentWithTemp(arena: Allocator, temp: []const u8) ![:0]u16 {
+    return environmentWith(arena, &.{ .{ .name = "TEMP", .value = temp }, .{ .name = "TMP", .value = temp } });
+}
+
+pub const daemon_flags = [_]EnvVar{
+    .{ .name = "MSBUILDDISABLENODEREUSE", .value = "1" },
+    .{ .name = "DOTNET_CLI_USE_MSBUILD_SERVER", .value = "0" },
+    .{ .name = "UseSharedCompilation", .value = "false" },
+    .{ .name = "DOTNET_CLI_TELEMETRY_OPTOUT", .value = "1" },
+    .{ .name = "DOTNET_NOLOGO", .value = "1" },
+    .{ .name = "DOTNET_SKIP_FIRST_TIME_EXPERIENCE", .value = "1" },
+    .{ .name = "GRADLE_OPTS", .value = "-Dorg.gradle.daemon=false" },
+};
+
+fn namedIn(name: []const u8, vars: []const EnvVar) bool {
+    for (vars) |v| {
+        if (std.ascii.eqlIgnoreCase(v.name, name)) return true;
+    }
+    return false;
+}
+
+pub fn commandVars(arena: Allocator, command: Command) ![]EnvVar {
+    var vars: std.ArrayList(EnvVar) = .empty;
+    if (command.temp) |temp| {
+        for (temp_names) |name| try vars.append(arena, .{ .name = name, .value = temp });
+    }
+    try vars.appendSlice(arena, command.env);
+    for (daemon_flags) |flag| {
+        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);
+    }
+    return vars.toOwnedSlice(arena);
+}
+
+fn commandEnvironment(arena: Allocator, command: Command) ![:0]u16 {
+    return environmentWith(arena, try commandVars(arena, command));
+}
+
+const CacheDir = struct { name: []const u8, sub: []const u8 };
+
+pub const cache_dirs = [_]CacheDir{
+    .{ .name = "NUGET_PACKAGES", .sub = "nuget\\packages" },
+    .{ .name = "NUGET_HTTP_CACHE_PATH", .sub = "nuget\\http" },
+    .{ .name = "NUGET_PLUGINS_CACHE_PATH", .sub = "nuget\\plugins" },
+    .{ .name = "DOTNET_CLI_HOME", .sub = "dotnet" },
+    .{ .name = "npm_config_cache", .sub = "npm" },
+    .{ .name = "npm_config_store_dir", .sub = "pnpm" },
+    .{ .name = "YARN_CACHE_FOLDER", .sub = "yarn" },
+    .{ .name = "PIP_CACHE_DIR", .sub = "pip" },
+    .{ .name = "UV_CACHE_DIR", .sub = "uv" },
+    .{ .name = "GOCACHE", .sub = "go-build" },
+    .{ .name = "GOMODCACHE", .sub = "go-mod" },
+    .{ .name = "CARGO_HOME", .sub = "cargo" },
+};
+
+const cache_flags = [_]EnvVar{
+    .{ .name = "DOTNET_SKIP_FIRST_TIME_EXPERIENCE", .value = "1" },
+    .{ .name = "DOTNET_NOLOGO", .value = "1" },
+    .{ .name = "DOTNET_CLI_TELEMETRY_OPTOUT", .value = "1" },
+    .{ .name = "DOTNET_GENERATE_ASPNET_CERTIFICATE", .value = "false" },
+};
+
+pub fn cacheEnvironment(arena: Allocator, cache: []const u8) ![]EnvVar {
+    var vars: std.ArrayList(EnvVar) = .empty;
+    for (cache_dirs) |dir| {
+        try vars.append(arena, .{ .name = dir.name, .value = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ cache, dir.sub }) });
+    }
+    try vars.appendSlice(arena, &cache_flags);
+    if (try userNugetPackages(arena)) |packages| try vars.append(arena, .{ .name = "NUGET_FALLBACK_PACKAGES", .value = packages });
+    return vars.toOwnedSlice(arena);
+}
+
+fn userNugetPackages(arena: Allocator) !?[]u8 {
+    const configured = try environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("NUGET_PACKAGES"));
+    const packages = configured orelse blk: {
+        const profile = (try environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("USERPROFILE"))) orelse return null;
+        break :blk try std.fmt.allocPrint(arena, "{s}\\.nuget\\packages", .{profile});
+    };
+    const wide = std.unicode.wtf8ToWtf16LeAllocZ(arena, packages) catch return null;
+    const attributes = win.GetFileAttributesW(wide);
+    if (attributes == win.invalid_file_attributes or attributes & win.file_attribute_directory == 0) return null;
+    return packages;
 }
 
 fn resolveProgram(arena: Allocator, cwd: []const u8, name: []const u8) ![:0]u16 {
@@ -625,6 +777,8 @@ const win = struct {
     extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetEnvironmentStringsW() callconv(.winapi) ?[*]u16;
+    extern "kernel32" fn FreeEnvironmentStringsW(block: [*]u16) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, buffer: ?[*]u16, size: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn CreateNamedPipeW(name: [*:0]const u16, open_mode: windows.DWORD, pipe_mode: windows.DWORD, max_instances: windows.DWORD, out_size: windows.DWORD, in_size: windows.DWORD, timeout: windows.DWORD, security: ?*SecurityAttributes) callconv(.winapi) windows.HANDLE;
     extern "kernel32" fn CreateFileW(name: [*:0]const u16, access: windows.DWORD, share: windows.DWORD, security: ?*SecurityAttributes, disposition: windows.DWORD, flags: windows.DWORD, template: ?windows.HANDLE) callconv(.winapi) windows.HANDLE;
@@ -707,6 +861,7 @@ const win = struct {
     extern "kernel32" fn GetExitCodeProcess(process: windows.HANDLE, code: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn OpenProcess(access: windows.DWORD, inherit: windows.BOOL, pid: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
     extern "kernel32" fn IsProcessInJob(process: windows.HANDLE, job: windows.HANDLE, result: *windows.BOOL) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn QueryFullProcessImageNameW(process: windows.HANDLE, flags: windows.DWORD, name: [*]u16, size: *windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn GetProcessId(process: windows.HANDLE) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn CreateIoCompletionPort(file: windows.HANDLE, existing: ?windows.HANDLE, key: usize, threads: windows.DWORD) callconv(.winapi) ?windows.HANDLE;
     extern "kernel32" fn GetQueuedCompletionStatus(port: windows.HANDLE, bytes: *windows.DWORD, key: *usize, overlapped: *?*anyopaque, milliseconds: windows.DWORD) callconv(.winapi) windows.BOOL;
@@ -754,7 +909,25 @@ const Job = struct {
 
     fn leftovers(self: Job, console_host: ?usize) !usize {
         var list: PidList = .{};
-        return leftoverCount(try self.members(&list), console_host);
+        const pids = try self.members(&list);
+        var count: usize = 0;
+        for (pids) |pid| {
+            if (console_host != null and pid == console_host.?) continue;
+            if (daemonPid(pid)) continue;
+            count += 1;
+        }
+        return count;
+    }
+
+    fn daemonPid(pid: usize) bool {
+        const handle = win.OpenProcess(win.process_query_limited_information, .FALSE, @intCast(pid)) orelse return false;
+        defer std.os.windows.CloseHandle(handle);
+        var buf: [1024]u16 = undefined;
+        var size: std.os.windows.DWORD = buf.len;
+        if (win.QueryFullProcessImageNameW(handle, 0, &buf, &size) == .FALSE) return false;
+        var utf8: [3 * 1024]u8 = undefined;
+        const len = std.unicode.wtf16LeToWtf8(&utf8, buf[0..size]);
+        return isToolchainDaemon(utf8[0..len]);
     }
 
     fn outlasts(self: Job, console_host: ?usize, wait_ms: std.os.windows.DWORD) bool {
@@ -840,6 +1013,89 @@ fn processIsGone(pid: u32) bool {
     const handle = win.OpenProcess(win.synchronize, .FALSE, pid) orelse return true;
     defer std.os.windows.CloseHandle(handle);
     return win.WaitForSingleObject(handle, 5000) == win.wait_object_0;
+}
+
+test "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const block = try environmentWithTemp(arena, "D:\\gate\\shadow-tmp");
+    var temps: usize = 0;
+    var tmps: usize = 0;
+    var path_seen = false;
+    var entries = std.mem.splitScalar(u16, block, 0);
+    while (entries.next()) |entry_w| {
+        if (entry_w.len == 0) continue;
+        const entry = try std.unicode.wtf16LeToWtf8Alloc(arena, entry_w);
+        if (std.ascii.startsWithIgnoreCase(entry, "TEMP=")) {
+            try testing.expectEqualStrings("TEMP=D:\\gate\\shadow-tmp", entry);
+            temps += 1;
+        }
+        if (std.ascii.startsWithIgnoreCase(entry, "TMP=")) {
+            try testing.expectEqualStrings("TMP=D:\\gate\\shadow-tmp", entry);
+            tmps += 1;
+        }
+        if (std.ascii.startsWithIgnoreCase(entry, "PATH=")) path_seen = true;
+    }
+    try testing.expectEqual(@as(usize, 1), temps);
+    try testing.expectEqual(@as(usize, 1), tmps);
+    try testing.expect(path_seen);
+    try testing.expectEqual(@as(u16, 0), block[block.len - 1]);
+    try testing.expect(isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("tmp=x")));
+    try testing.expect(!isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("TEMPLATE=x")));
+    try testing.expect(!isTempEntry(std.unicode.utf8ToUtf16LeStringLiteral("TMP")));
+}
+
+test "the cache environment points every package cache under the given directory and overrides inherited values" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const vars = try cacheEnvironment(arena, "D:\\gate\\shadow-cache");
+    var nuget_seen = false;
+    for (cache_dirs) |dir| {
+        var found = false;
+        for (vars) |v| {
+            if (!std.mem.eql(u8, v.name, dir.name)) continue;
+            try testing.expect(std.mem.startsWith(u8, v.value, "D:\\gate\\shadow-cache\\"));
+            found = true;
+        }
+        try testing.expect(found);
+    }
+    for (vars) |v| {
+        if (std.mem.eql(u8, v.name, "NUGET_PACKAGES")) {
+            try testing.expectEqualStrings("D:\\gate\\shadow-cache\\nuget\\packages", v.value);
+            nuget_seen = true;
+        }
+    }
+    try testing.expect(nuget_seen);
+    const block = try environmentWith(arena, vars);
+    var nuget_entries: usize = 0;
+    var entries = std.mem.splitScalar(u16, block, 0);
+    while (entries.next()) |entry_w| {
+        if (entry_w.len == 0) continue;
+        const entry = try std.unicode.wtf16LeToWtf8Alloc(arena, entry_w);
+        if (std.ascii.startsWithIgnoreCase(entry, "NUGET_PACKAGES=")) {
+            try testing.expectEqualStrings("NUGET_PACKAGES=D:\\gate\\shadow-cache\\nuget\\packages", entry);
+            nuget_entries += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), nuget_entries);
+    try testing.expect(isNamedEntry(std.unicode.utf8ToUtf16LeStringLiteral("NPM_CONFIG_CACHE=x"), "npm_config_cache"));
+    try testing.expect(!isNamedEntry(std.unicode.utf8ToUtf16LeStringLiteral("npm_config_cache_x=x"), "npm_config_cache"));
+}
+
+test "the user backend runs without the low-integrity check while a sandboxed run still fails closed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    defer injected_fault = null;
+    injected_fault = .verify;
+    const argv = [_][]const u8{ build_options.probe_path, "both" };
+    try testing.expectError(error.SandboxUnavailable, run(testing.allocator, testing.io, .{ .argv = &argv, .cwd = ".", .limits = .{ .timeout_ms = 10_000 } }));
+    const report = try run(testing.allocator, testing.io, .{ .argv = &argv, .cwd = ".", .limits = .{ .timeout_ms = 10_000 }, .backend = .user });
+    defer report.deinit(testing.allocator);
+    try testing.expect(report.passed());
+    try testing.expectEqualStrings("to stdout\n", report.stdout);
 }
 
 test "the job actually carries every limit we claim to set" {
@@ -1199,4 +1455,30 @@ test "a spawn fault is decided before the process is created, so no child of the
     var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
     try testing.expectEqual(before + 1, try ownChildrenNamed(image));
     service.stop();
+}
+
+test "toolchain build daemons left in the job are recognized by image name, whatever the path or case" {
+    try testing.expect(isToolchainDaemon("C:\\Program Files\\dotnet\\sdk\\8.0.100\\Roslyn\\bincore\\VBCSCompiler.exe"));
+    try testing.expect(isToolchainDaemon("C:\\Program Files\\dotnet\\dotnet.exe"));
+    try testing.expect(isToolchainDaemon("msbuild.EXE"));
+    try testing.expect(!isToolchainDaemon("C:\\tools\\probe.exe"));
+    try testing.expect(!isToolchainDaemon("C:\\tools\\dotnet.exe.bak"));
+    try testing.expect(!isToolchainDaemon(""));
+}
+
+test "every sandboxed command turns off build-server reuse but keeps a value the caller set" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const vars = try commandVars(arena, .{ .argv = &.{"x"}, .cwd = ".", .env = &.{.{ .name = "gradle_opts", .value = "-Xmx1g" }} });
+    var reuse: ?[]const u8 = null;
+    var gradle: usize = 0;
+    for (vars) |v| {
+        if (std.mem.eql(u8, v.name, "MSBUILDDISABLENODEREUSE")) reuse = v.value;
+        if (std.ascii.eqlIgnoreCase(v.name, "GRADLE_OPTS")) gradle += 1;
+    }
+    try testing.expectEqualStrings("1", reuse.?);
+    try testing.expectEqual(@as(usize, 1), gradle);
+    try testing.expect(namedIn("UseSharedCompilation", vars));
+    try testing.expect(namedIn("DOTNET_CLI_USE_MSBUILD_SERVER", vars));
 }

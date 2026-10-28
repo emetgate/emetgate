@@ -63,14 +63,14 @@ pub const catalog = [_]Entry{
     .{ .num = 8, .group = "Code style", .label = "no dangerouslySetInnerHTML", .check = "forbid:dangerouslySetInnerHTML", .lang = .js_ts, .scopable = true },
     .{ .num = 9, .group = "Code style", .label = "no focused tests (.only)", .check = "forbid:.only", .lang = .js_ts, .scopable = true },
     .{ .num = 10, .group = "Code style", .label = "no @ts-ignore", .check = "forbid:@ts-ignore", .lang = .js_ts, .scopable = true },
-    .{ .num = 11, .group = "Code style", .label = "no print", .check = "forbid:print", .lang = .python, .scopable = true },
-    .{ .num = 12, .group = "Code style", .label = "no exec", .check = "forbid:exec", .lang = .python, .scopable = true },
-    .{ .num = 13, .group = "Code style", .label = "no assert", .check = "forbid:assert", .lang = .python, .scopable = true },
-    .{ .num = 14, .group = "Code style", .label = "no bare except", .check = "forbid:except:", .lang = .python, .scopable = true },
-    .{ .num = 15, .group = "Code style", .label = "no pickle", .check = "forbid:pickle", .lang = .python, .scopable = true },
-    .{ .num = 16, .group = "Code style", .label = "no Console.WriteLine", .check = "forbid:Console.WriteLine", .lang = .csharp, .scopable = true },
-    .{ .num = 17, .group = "Code style", .label = "no Debug.WriteLine", .check = "forbid:Debug.WriteLine", .lang = .csharp, .scopable = true },
-    .{ .num = 18, .group = "Code style", .label = "no Thread.Sleep", .check = "forbid:Thread.Sleep", .lang = .csharp, .scopable = true },
+    .{ .num = 11, .group = "Code style", .label = "no print", .check = "q:(print_statement) @violation ((call function: (identifier) @violation) (#eq? @violation \"print\"))", .lang = .python, .scopable = true },
+    .{ .num = 12, .group = "Code style", .label = "no exec", .check = "q:(exec_statement) @violation ((call function: (identifier) @violation) (#eq? @violation \"exec\"))", .lang = .python, .scopable = true },
+    .{ .num = 13, .group = "Code style", .label = "no assert", .check = "q:(assert_statement) @violation", .lang = .python, .scopable = true },
+    .{ .num = 14, .group = "Code style", .label = "no bare except", .check = "q:(except_clause !value) @violation", .lang = .python, .scopable = true },
+    .{ .num = 15, .group = "Code style", .label = "no pickle", .check = "forbid_import:pickle", .lang = .python, .scopable = true },
+    .{ .num = 16, .group = "Code style", .label = "no Console.WriteLine", .check = "q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \"Console\") (#eq? @violation \"WriteLine\"))", .lang = .csharp, .scopable = true },
+    .{ .num = 17, .group = "Code style", .label = "no Debug.WriteLine", .check = "q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \"Debug\") (#eq? @violation \"WriteLine\"))", .lang = .csharp, .scopable = true },
+    .{ .num = 18, .group = "Code style", .label = "no Thread.Sleep", .check = "q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \"Thread\") (#eq? @violation \"Sleep\"))", .lang = .csharp, .scopable = true },
     .{ .num = 19, .group = "Code style", .label = "no new comments", .check = "added:no_comment", .scopable = true },
     .{ .num = 20, .group = "Code style", .label = "require a doc comment on definitions", .check = "require_comment", .scopable = true },
     .{ .num = 21, .group = "Code style", .label = "max function length (50 lines)", .check = "max_function_lines:50", .scopable = true },
@@ -247,7 +247,7 @@ fn pickDecided(num: u8, path: ?[]const u8) rule_command.Decided {
 }
 
 test "catalog renders every entry grouped and numbered" {
-    var buf: [2048]u8 = undefined;
+    var buf: [8192]u8 = undefined;
     var w: Writer = .fixed(&buf);
     try render(&w);
     const text = w.buffered();
@@ -304,15 +304,12 @@ test "the new catalog entries map to the exact verified check specs and carry th
     const conventional = pickDecided(29, null);
     try testing.expectEqualStrings("message:conventional", conventional.check.?);
 
-    // The forward-compatible language-specific rows (activate with their profiles).
-    try testing.expectEqualStrings("forbid:print", find(11).?.check);
-    try testing.expectEqual(Lang.python, find(11).?.lang);
-    try testing.expectEqualStrings("forbid:except:", find(14).?.check);
-    try testing.expectEqual(Lang.python, find(14).?.lang);
-    try testing.expectEqualStrings("forbid:Console.WriteLine", find(16).?.check);
-    try testing.expectEqual(Lang.csharp, find(16).?.lang);
-    try testing.expectEqualStrings("forbid:Thread.Sleep", find(18).?.check);
-    try testing.expectEqual(Lang.csharp, find(18).?.lang);
+    try testing.expectEqualStrings("q:(except_clause !value) @violation", find(14).?.check);
+    try testing.expectEqualStrings("forbid_import:pickle", find(15).?.check);
+    for (catalog) |entry| {
+        if (entry.num >= 11 and entry.num <= 15) try testing.expectEqual(Lang.python, entry.lang);
+        if (entry.num >= 16 and entry.num <= 18) try testing.expectEqual(Lang.csharp, entry.lang);
+    }
 
     // Language tags are set where they matter and absent for universal rules.
     try testing.expectEqual(Lang.js_ts, find(1).?.lang);
@@ -487,4 +484,63 @@ test "plan: a trailing in with no path leaves whole-repo scope and emits a note"
     try testing.expectEqual(@as(?[]const u8, null), steps.items[0].add.path);
     try testing.expectEqual(@as(?[]const u8, null), steps.items[1].add.path);
     try testing.expectEqual(Note.scope_without_path, steps.items[2].note);
+}
+
+const ts = @import("../engine/tree_sitter.zig");
+const lang = @import("../engine/lang/registry.zig");
+const checks = @import("../engine/checks.zig");
+const alloc_bridge = @import("../engine/alloc_bridge.zig");
+
+fn presetHits(num: u8, path: []const u8, source: []const u8) ![]const []const u8 {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const profile = lang.forPath(path).?;
+    const parser = try ts.Parser.init(profile.grammar());
+    defer parser.deinit();
+    const tree = try parser.parse(source);
+    defer tree.deinit();
+    const violations = try checks.run(testing.allocator, profile, tree, .{ .start = 0, .end = @intCast(source.len) }, &.{find(num).?.check});
+    defer testing.allocator.free(violations);
+    const texts = try testing.allocator.alloc([]const u8, violations.len);
+    for (violations, texts) |v, *text| text.* = source[v.span.start..v.span.end];
+    return texts;
+}
+
+fn expectPreset(num: u8, path: []const u8, source: []const u8, expected: []const []const u8) !void {
+    const texts = try presetHits(num, path, source);
+    defer testing.allocator.free(texts);
+    errdefer for (texts) |text| std.debug.print("preset {d} flagged: {s}\n", .{ num, text });
+    try testing.expectEqual(expected.len, texts.len);
+    for (expected, texts) |want, got| try testing.expectEqualStrings(want, got);
+}
+
+test "python presets flag the construct itself and not a name, string or comment that mentions it" {
+    try expectPreset(11, "a.py", "print(x)\nlog.print(x)\nblueprint(x)\ns = \"print\"\n# print\n", &.{"print"});
+    try expectPreset(12, "a.py", "exec(code)\nexecute(code)\nself.exec(q)\ns = \"exec\"\n", &.{"exec"});
+    try expectPreset(13, "a.py", "assert x\nassertEqual(a, b)\nself.assertTrue(a)\n", &.{"assert x"});
+    try expectPreset(14, "a.py", "try:\n    f()\nexcept:\n    pass\n", &.{"except:\n    pass"});
+    try expectPreset(14, "a.py", "try:\n    f()\nexcept ValueError:\n    pass\nexcept (A, B) as e:\n    pass\n", &.{});
+    try expectPreset(15, "a.py", "import pickle\nimport pickle as p\nfrom pickle import loads\nimport pickle.x\n", &.{ "import pickle", "import pickle as p", "from pickle import loads", "import pickle.x" });
+    try expectPreset(15, "a.py", "import pickles\nimport cloudpickle\nfrom mypickle import x\ns = \"pickle\"\n", &.{});
+}
+
+test "c# presets flag the named member call and not another type or member of the same name" {
+    const source =
+        \\class A {
+        \\    void F() {
+        \\        Console.WriteLine(1);
+        \\        System.Console.WriteLine(2);
+        \\        Debug.WriteLine(3);
+        \\        Thread.Sleep(4);
+        \\        MyConsole.WriteLine(5);
+        \\        Console.Write(6);
+        \\        var s = "Console.WriteLine";
+        \\        Sleep(7);
+        \\    }
+        \\}
+        \\
+    ;
+    try expectPreset(16, "a.cs", source, &.{ "WriteLine", "WriteLine" });
+    try expectPreset(17, "a.cs", source, &.{"WriteLine"});
+    try expectPreset(18, "a.cs", source, &.{"Sleep"});
 }

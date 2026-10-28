@@ -17,7 +17,7 @@ fn linkTypeScript(case: *Case, target: []const u8) !void {
     try case.repo.tmp.dir.createDirPath(testing.io, "repo/node_modules");
     const link = try case.repo.abs(testing.allocator, "node_modules/typescript");
     defer testing.allocator.free(link);
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "cmd.exe", "/d", "/c", "mklink", "/J", link, target } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "cmd.exe", "/d", "/c", "mklink", "/J", link, target } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {

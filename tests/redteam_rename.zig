@@ -147,6 +147,27 @@ test "red team rename: a string key, eval or a computed require in a touched fil
     }
 }
 
+test "red team rename: a refused dynamic reference names its file and line, and allow_dynamic renames the static ones and returns the site" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const b = "import { add } from \"./a\";\nexport function twice(x: number): number {\n  return add(x, x) + eval(\"1\");\n}\n";
+    var case: Case = undefined;
+    try case.init(&.{ .{ .rel = "src/a.ts", .text = tool.a_src }, .{ .rel = "src/b.ts", .text = b } }, true);
+    defer case.deinit();
+    try case.plan(&.{ tool.all_locations[0], tool.all_locations[1], tool.all_locations[2] });
+    var refused: rename_batch.DynamicSites = .{};
+    case.dynamic = &refused;
+    try testing.expectError(error.DynamicReference, case.rename("src/a.ts", "add", "sum", true, null));
+    try testing.expect(std.mem.indexOf(u8, refused.list(), "b.ts:3 (eval)") != null);
+    try case.expectFile("src/b.ts", b);
+
+    var allowed: rename_batch.DynamicSites = .{ .allow = true };
+    case.dynamic = &allowed;
+    const outcome = try case.rename("src/a.ts", "add", "sum", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try testing.expect(std.mem.indexOf(u8, allowed.list(), "b.ts:3 (eval)") != null);
+}
+
 test "red team rename: a shorthand property location and a refused rename info are both refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
@@ -159,4 +180,32 @@ test "red team rename: a shorthand property location and a refused rename info a
     try case.repo.setPlan("{\"canRename\":false}");
     try testing.expectError(error.RenameRefused, case.rename("src/a.ts", "add", "sum", true, null));
     try case.expectOld();
+}
+
+test "red team rename: a shorthand the service marks with a kept key is written as key and new name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    const source = "function add(a: number): number {\n  return a + 1;\n}\nexport const api = { add };\n";
+    try case.init(&.{.{ .rel = "src/a.ts", .text = source }}, true);
+    defer case.deinit();
+    try case.plan(&.{ .{ .rel = "src/a.ts", .needle = "function add", .name = "add" }, .{ .rel = "src/a.ts", .needle = "{ add }", .name = "add", .prefix = true } });
+    const outcome = try case.rename("src/a.ts", "add", "sum", false, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/a.ts", "function sum(a: number): number {\n  return a + 1;\n}\nexport const api = { add: sum };\n");
+}
+
+test "red team rename: a shorthand the service leaves bare collapses only with interface approval" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    const source = "function add(a: number): number {\n  return a + 1;\n}\nexport const api = { add };\n";
+    try case.init(&.{.{ .rel = "src/a.ts", .text = source }}, true);
+    defer case.deinit();
+    try case.plan(&.{ .{ .rel = "src/a.ts", .needle = "function add", .name = "add" }, .{ .rel = "src/a.ts", .needle = "{ add }", .name = "add" }, .{ .rel = "src/a.ts", .needle = "{ add }", .name = "add" } });
+    try testing.expectError(error.InterfaceChangeNeedsApproval, case.rename("src/a.ts", "add", "sum", false, null));
+    try case.expectFile("src/a.ts", source);
+    const outcome = try case.rename("src/a.ts", "add", "sum", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/a.ts", "function sum(a: number): number {\n  return a + 1;\n}\nexport const api = { sum };\n");
 }

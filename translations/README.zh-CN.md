@@ -121,7 +121,7 @@ branch broken: 1 commit(s)
 | 模糊测试与红队 | 随机变异加攻击语料 | 对意外或敌意输入不崩溃、不逃逸 |
 | ripgrep 一致性闸门 | 每次运行都把命中集与 rg 比对 | 搜索不能“快却是错的”；逐行核对 |
 
-就引擎而言：61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open。列表在 [VERIFICATION.md](../VERIFICATION.md) 中。
+就引擎而言：63 mutants today: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open。列表在 [VERIFICATION.md](../VERIFICATION.md) 中。
 
 ## 已测量
 

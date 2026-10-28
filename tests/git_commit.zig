@@ -39,7 +39,7 @@ const Repo = struct {
         defer full.deinit(testing.allocator);
         try full.append(testing.allocator, "git");
         try full.appendSlice(testing.allocator, argv);
-        const result = try std.process.run(testing.allocator, testing.io, .{ .argv = full.items, .cwd = .{ .path = self.root } });
+        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = full.items, .cwd = .{ .path = self.root } });
         defer testing.allocator.free(result.stderr);
         errdefer testing.allocator.free(result.stdout);
         switch (result.term) {
@@ -216,15 +216,40 @@ test "git commit: a detached HEAD is refused" {
     try testing.expectError(error.DetachedHead, git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"}));
 }
 
-test "git commit: a repository with no commit yet is refused" {
+test "git commit: a repository with no commit yet gets a root commit with no parent" {
     try skipOffWindows();
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.createDirPath(testing.io, "repo");
-    const root = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
-    defer testing.allocator.free(root);
-    try git_fixture.initRepo(root);
-    try testing.expectError(error.NoCommitYet, git_commit.preflight(testing.allocator, testing.io, root, &.{"a.ts"}));
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    tmp.dir.createDirPath(testing.io, "repo/src") catch |err| {
+        tmp.cleanup();
+        return err;
+    };
+    const root = tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator) catch |err| {
+        tmp.cleanup();
+        return err;
+    };
+    var repo: Repo = .{ .tmp = tmp, .root = root };
+    defer repo.deinit();
+    try git_fixture.initRepo(repo.root);
+    const head = try git_commit.preflight(testing.allocator, testing.io, repo.root, &.{"src\\a.ts"});
+    defer head.deinit(testing.allocator);
+    try testing.expect(git_commit.isUnborn(head.oid));
+    try testing.expectEqualStrings(git_commit.emptyTreeFor("sha1").?, head.tree);
+    const prepared = try repo.prepare(head, &.{.{ .rel = "src\\a.ts", .content = "export const a = 1;\n" }}, "feat: first");
+    defer prepared.deinit(testing.allocator);
+    try repo.land(head, prepared);
+    try repo.expectOut("1", &.{ "rev-list", "--count", "HEAD" });
+    try repo.expectOut("feat: first", &.{ "log", "-1", "--format=%s" });
+    try repo.expectOut("src/a.ts", &.{ "ls-tree", "-r", "--name-only", "HEAD" });
+    try repo.expectOut("0", &.{ "rev-list", "--count", "--min-parents=1", "HEAD" });
+}
+
+test "git commit: only an all-zero id stands for an unborn branch" {
+    try testing.expect(git_commit.isUnborn("0000000000000000000000000000000000000000"));
+    try testing.expect(!git_commit.isUnborn(""));
+    try testing.expect(!git_commit.isUnborn("4b825dc642cb6eb9a060e54bf8d69288fbee4904"));
+    try testing.expect(!git_commit.isUnborn("0000000000000000000000000000000000000001"));
+    try testing.expectEqual(@as(usize, 64), git_commit.emptyTreeFor("sha256").?.len);
+    try testing.expect(git_commit.emptyTreeFor("md5") == null);
 }
 
 test "git commit: a merge in progress is refused" {

@@ -222,14 +222,16 @@ fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
 fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span, arg: ?[]const u8, _: query.Limits, out: *std.ArrayList(Violation)) CollectError!void {
     const name = arg orelse return;
     const shape = profile.literal_values;
+    if (shape.pair.len == 0) return error.QueryNotForLanguage;
     var walker = traversal.Walker.init(tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
         const node = entry.node;
         if (node.startByte() < span.start or node.endByte() > span.end) continue;
-        if (!isKind(node, shape.pair)) continue;
-        const key = node.childByField(shape.key_field) orelse continue;
-        const value = node.childByField(shape.value_field) orelse continue;
+        const fields = literalFields(shape, node) orelse continue;
+        const key = node.childByField(fields.key) orelse continue;
+        const value = node.childByField(fields.value) orelse continue;
+        if (!fields.bare_key and !isKind(key, shape.quoted_key)) continue;
         if (!std.mem.eql(u8, keyName(shape, tree, key), name)) continue;
         if (!isLiteral(shape, tree, value)) continue;
         try out.append(gpa, .{ .check = "no_literal", .span = .{ .start = node.startByte(), .end = node.endByte() } });
@@ -387,7 +389,11 @@ fn forbidImport(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Sp
             continue;
         }
         if (node.startByte() < span.start or node.endByte() > span.end) continue;
-        if (isKind(node, m.import_statement)) {
+        if (m.from_statement) |from_statement| {
+            if (dottedImportNames(m, from_statement, tree, node, module)) {
+                try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+            }
+        } else if (isKind(node, m.import_statement)) {
             const source = node.childByField(m.source_field) orelse continue;
             if (std.mem.eql(u8, unquote(tree.text(source)), module)) {
                 try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
@@ -412,6 +418,25 @@ fn callImportsModule(profile: *const Profile, tree: ts.Tree, node: ts.Node, modu
     return std.mem.eql(u8, unquote(tree.text(first)), module);
 }
 
+fn dottedImportNames(m: *const profile_mod.Modules, from_statement: []const u8, tree: ts.Tree, node: ts.Node, module: []const u8) bool {
+    if (isKind(node, from_statement)) {
+        const source = node.childByField(m.module_name_field) orelse return false;
+        return importsModule(tree.text(source), module);
+    }
+    if (!isKind(node, m.import_statement)) return false;
+    var i: u32 = 0;
+    while (node.namedChild(i)) |child| : (i += 1) {
+        const name = if (isKind(child, m.aliased_import)) child.childByField(m.name_field) orelse continue else child;
+        if (isKind(name, m.dotted_name) and importsModule(tree.text(name), module)) return true;
+    }
+    return false;
+}
+
+fn importsModule(dotted: []const u8, module: []const u8) bool {
+    if (!std.mem.startsWith(u8, dotted, module)) return false;
+    return dotted.len == module.len or dotted[module.len] == '.';
+}
+
 fn unquote(text: []const u8) []const u8 {
     if (text.len < 2) return text;
     const quote = text[0];
@@ -419,10 +444,30 @@ fn unquote(text: []const u8) []const u8 {
     return text;
 }
 
+const LiteralFields = struct { key: []const u8, value: []const u8, bare_key: bool };
+
+fn literalFields(shape: profile_mod.LiteralValues, node: ts.Node) ?LiteralFields {
+    if (isKind(node, shape.pair)) return .{ .key = shape.key_field, .value = shape.value_field, .bare_key = shape.bare_pair_key };
+    if (shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return .{ .key = shape.named_argument_name_field, .value = shape.named_argument_value_field, .bare_key = true };
+    return null;
+}
+
 fn keyName(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) []const u8 {
     if (!isKind(key, shape.quoted_key)) return tree.text(key);
+    if (shape.quoted_key_content.len != 0) return quotedContent(shape, tree, key);
     if (key.namedChildCount() != 1) return "";
     return tree.text(key.namedChild(0).?);
+}
+
+fn quotedContent(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) []const u8 {
+    var found: ?ts.Node = null;
+    var i: u32 = 0;
+    while (key.namedChild(i)) |part| : (i += 1) {
+        if (isKind(part, shape.substitution)) return "";
+        if (isKind(part, shape.quoted_key_content)) found = part;
+    }
+    const content = found orelse return "";
+    return tree.text(content);
 }
 
 fn isNegatedLiteral(shape: profile_mod.LiteralValues, tree: ts.Tree, value: ts.Node) bool {
@@ -958,9 +1003,12 @@ test "forbid_import ignores a different module and a bare matching string" {
 }
 
 fn runPython(source: []const u8, specs: []const []const u8) ![]Violation {
+    return runIn(&@import("lang/python/profile.zig").profile, source, specs);
+}
+
+fn runIn(profile: *const Profile, source: []const u8, specs: []const []const u8) ![]Violation {
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
-    const profile = &@import("lang/python/profile.zig").profile;
     const parser = try ts.Parser.init(profile.grammar());
     defer parser.deinit();
     const tree = try parser.parse(source);
@@ -1000,4 +1048,37 @@ test "python: no_comment flags a # comment, forbid flags a print call, require_c
     const mfl_ok = try runPython(long, &.{"max_function_lines:10"});
     defer testing.allocator.free(mfl_ok);
     try testing.expectEqual(@as(usize, 0), mfl_ok.len);
+}
+
+fn expectPythonLiterals(source: []const u8, expected: []const []const u8) !void {
+    const violations = try runPython(source, &.{"no_literal:timeout"});
+    defer testing.allocator.free(violations);
+    errdefer for (violations) |v| std.debug.print("flagged: {s}\n", .{source[v.span.start..v.span.end]});
+    try testing.expectEqual(expected.len, violations.len);
+    for (expected, violations) |want, got| {
+        try testing.expectEqualStrings("no_literal", got.check);
+        try testing.expectEqualStrings(want, source[got.span.start..got.span.end]);
+    }
+}
+
+test "python: no_literal flags a literal keyword argument and a literal dict entry of the named option" {
+    try expectPythonLiterals("requests.get(u, timeout=30)\n", &.{"timeout=30"});
+    try expectPythonLiterals("run(timeout=1.5, other=2)\n", &.{"timeout=1.5"});
+    try expectPythonLiterals("run(timeout=-5)\n", &.{"timeout=-5"});
+    try expectPythonLiterals("run(timeout=\"30s\")\n", &.{"timeout=\"30s\""});
+    try expectPythonLiterals("cfg = {\"timeout\": 30, 'timeout': 5}\n", &.{ "\"timeout\": 30", "'timeout': 5" });
+}
+
+test "python: no_literal leaves computed, named, interpolated and differently named values alone" {
+    try expectPythonLiterals("run(timeout=budget(ms))\n", &.{});
+    try expectPythonLiterals("run(timeout=ms)\n", &.{});
+    try expectPythonLiterals("run(timeout=f\"{ms}s\")\n", &.{});
+    try expectPythonLiterals("run(timeout=-ms, timeout2=5, delay=5)\n", &.{});
+    try expectPythonLiterals("run(timeout=True, timeout=None)\n", &.{});
+    try expectPythonLiterals("cfg = {timeout: 5, \"timeouts\": 5, \"\": 5, f\"{timeout}\": 5, f\"timeout{x}\": 5}\n", &.{});
+}
+
+test "no_literal refuses a language with no literal option shape instead of reporting it clean" {
+    const zig_profile = &@import("lang/zig/profile.zig").profile;
+    try testing.expectError(error.QueryNotForLanguage, runIn(zig_profile, "const x = .{ .timeout = 5 };\n", &.{"no_literal:timeout"}));
 }

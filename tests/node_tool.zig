@@ -123,7 +123,7 @@ test "node edit: read_symbol with nodes gives hash|code lines and a node try com
     try case.expectFile("src/math.ts", std.mem.replaceOwned(u8, case.arena(), math_src, "  return x;\n}\nexport function twice", "  return Math.max(x, 0);\n}\nexport function twice") catch unreachable);
 
     const parsed = try std.json.parseFromSliceLeaky(Value, case.arena(), reply.text, .{});
-    try testing.expectEqualStrings("committed", parsed.object.get("status").?.string);
+    try testing.expectEqualStrings("written", parsed.object.get("status").?.string);
     const nodes = parsed.object.get("nodes").?.array.items;
     try testing.expectEqual(@as(usize, 1), nodes.len);
     try testing.expectEqual(@as(usize, 1), nodes[0].array.items.len);

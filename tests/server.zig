@@ -68,7 +68,7 @@ test "tools/list offers the commit message on the tools that commit only when co
     defer testing.allocator.free(on);
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, on, .{});
     defer parsed.deinit();
-    const committing = [_][]const u8{ "emetgate_try", "emetgate_try_batch", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc" };
+    const committing = [_][]const u8{ "emetgate_try", "emetgate_try_batch", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc", "emetgate_edit", "emetgate_write" };
     var offered: usize = 0;
     for (parsed.value.object.get("result").?.object.get("tools").?.array.items) |tool| {
         const name = tool.object.get("name").?.string;
@@ -214,7 +214,7 @@ test "a broken source is a tool error carrying the typed payload" {
     try testing.expect(std.mem.indexOf(u8, response, "\\\"exit_code\\\":3") != null);
 }
 
-test "emetgate_skeleton call returns the outline with bodies elided" {
+test "emetgate_skeleton call returns a file under 8 KiB whole" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
@@ -224,7 +224,7 @@ test "emetgate_skeleton call returns the outline with bodies elided" {
     defer testing.allocator.free(response);
 
     try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
-    try testing.expect(std.mem.indexOf(u8, response, "\\\"skeleton\\\":\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\\\"content\\\":\\\"") != null);
 }
 
 test "emetgate_read_symbol returns one body and its hash" {
@@ -271,7 +271,7 @@ test "emetgate_read_symbol with a line range widens to the symbol boundary" {
     try testing.expect(std.mem.indexOf(u8, response, "\\\"end_line\\\":11") != null);
 }
 
-test "emetgate_read_symbol with a line range hitting no symbol is a tool error" {
+test "emetgate_read_symbol with a line range hitting no symbol returns those lines" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
@@ -280,8 +280,8 @@ test "emetgate_read_symbol with a line range hitting no symbol is a tool error" 
     )).?;
     defer testing.allocator.free(response);
 
-    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, response, "\\\"error\\\":\\\"NoSymbolInRange\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "\"isError\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "import { readFile } from") != null);
 }
 
 test "with --mirror, a repeated identical read_symbol comes back unchanged, and force overrides it" {
@@ -388,7 +388,10 @@ const served_tools = [_][]const u8{
     "emetgate_scan",
     "emetgate_commit",
     "emetgate_git",
+    "emetgate_git_write",
     "emetgate_run",
+    "emetgate_edit",
+    "emetgate_write",
     "emetgate_write_doc",
 };
 

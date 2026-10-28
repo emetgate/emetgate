@@ -48,7 +48,7 @@ fn git(root: []const u8, args: []const []const u8) !void {
     argv[0] = try exe_path.git(gpa, root);
     defer gpa.free(argv[0]);
     @memcpy(argv[1..][0..args.len], args);
-    const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root } });
+    const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root } });
     gpa.free(result.stdout);
     gpa.free(result.stderr);
     switch (result.term) {
@@ -136,7 +136,7 @@ fn rgSpots(arena: std.mem.Allocator, root: []const u8, pattern: []const u8) ![]S
         else => |e| return e,
     };
     defer gpa.free(rg);
-    const result = try std.process.run(arena, testing.io, .{
+    const result = try @import("emetgate").bounded_run.run(arena, testing.io, .{
         .argv = &.{ rg, "-n", "--no-heading", "--with-filename", "--hidden", "--no-config", "--crlf", "--path-separator", "/", "-g", "!.git", "-e", pattern, "." },
         .cwd = .{ .path = root },
     });
@@ -173,7 +173,7 @@ fn rgChars(root: []const u8, pattern: []const u8) !usize {
         else => |e| return e,
     };
     defer gpa.free(rg);
-    const result = try std.process.run(gpa, testing.io, .{
+    const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{
         .argv = &.{ rg, "-n", "--no-heading", "--with-filename", "--hidden", "--no-config", "--path-separator", "/", "-g", "!.git", "-e", pattern, "." },
         .cwd = .{ .path = root },
     });

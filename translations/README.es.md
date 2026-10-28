@@ -121,7 +121,7 @@ branch broken: 1 commit(s)
 | fuzz y red-team | mutación aleatoria más corpus de ataque | sin caída ni escape ante entrada inesperada u hostil |
 | puerta de paridad con ripgrep | compara el conjunto de aciertos contra rg en cada ejecución | la búsqueda no puede ser "rápida pero errónea"; se verifica línea por línea |
 
-Para el motor: 61 mutants today: 54 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open. La lista está en [VERIFICATION.md](../VERIFICATION.md).
+Para el motor: 63 mutants today: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open. La lista está en [VERIFICATION.md](../VERIFICATION.md).
 
 ## Medido
 

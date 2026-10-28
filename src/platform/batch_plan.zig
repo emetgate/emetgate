@@ -8,8 +8,11 @@ const docnode = @import("../engine/docnode.zig");
 const ts = @import("../engine/tree_sitter.zig");
 const repo = @import("repo.zig");
 const create = @import("create.zig");
+const file_edit = @import("file_edit.zig");
 const tsserver = @import("tsserver.zig");
 const rename = @import("../engine/rename.zig");
+const line_range = @import("../engine/line_range.zig");
+const registry = @import("../engine/lang/registry.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -25,6 +28,13 @@ pub const Edit = struct {
     op: Op = .write,
     move_source: ?[]const u8 = null,
     nodes: []const node_cas.Edit = &.{},
+    text: ?Text = null,
+};
+
+pub const Text = union(enum) {
+    whole: []const u8,
+    replace: struct { old: []const u8, new: []const u8, all: bool = false },
+    region: struct { selector: docnode.Selector, new_text: []const u8 },
 };
 
 pub const Action = enum { write, insert, create, delete_symbol, delete_file, move_file, write_doc };
@@ -154,6 +164,7 @@ fn planNodes(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u
 
 fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     if (edit.nodes.len != 0) return planNodes(gpa, io, runtime, edit, rel);
+    if (edit.text) |text| return planText(gpa, io, runtime, edit, text, rel);
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     switch (edit.expected_hash) {
@@ -174,6 +185,57 @@ fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, ed
             return .{ .rel = rel, .action = if (p.base_hash == null) .create else .insert, .base_hash = p.base_hash, .hash = p.applied.hash, .snapshot = p.applied.snapshot, .body = p.applied.body, .base = p.base, .holes = holes };
         },
     }
+}
+
+pub fn textAfter(gpa: Allocator, base: ?[]const u8, expected: symbol.Expected, text: Text) ![]u8 {
+    switch (text) {
+        .whole => |content| {
+            if (expected == .absent and base != null) return error.FileExists;
+            if (expected == .present) {
+                const current = base orelse return error.FileNotFound;
+                if (!std.mem.eql(u8, &expected.present, &symbol.fileHash(current))) return error.HashMismatch;
+            }
+            return gpa.dupe(u8, content);
+        },
+        .replace => |r| {
+            var matches: usize = 0;
+            return file_edit.replaceUnique(gpa, base orelse return error.FileNotFound, r.old, r.new, r.all, &matches);
+        },
+        .region => |r| {
+            const current = base orelse return error.FileNotFound;
+            const wanted = switch (expected) {
+                .present => |hash| hash,
+                .absent => return error.HashMismatch,
+            };
+            const parser = ts.Parser.create();
+            defer parser.deinit();
+            const applied = docnode.apply(gpa, parser, current, r.selector, wanted, r.new_text) catch |err| switch (err) {
+                error.HashMismatch => if (std.mem.eql(u8, &wanted, &symbol.fileHash(current))) return regionUnderFileHash(gpa, parser, current, r.selector, r.new_text) else return err,
+                else => |e| return e,
+            };
+            return applied.source;
+        },
+    }
+}
+
+pub fn regionUnderFileHash(gpa: Allocator, parser: ts.Parser, source: []const u8, selector: docnode.Selector, new_text: []const u8) ![]u8 {
+    const range = switch (selector) {
+        .line_range => |r| r,
+        else => return error.HashMismatch,
+    };
+    const span = try line_range.byteRangeForLines(source, range.start, range.end);
+    const applied = try docnode.apply(gpa, parser, source, selector, symbol.hashOf(source[span.start..span.end]), new_text);
+    return applied.source;
+}
+
+fn planText(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, text: Text, rel: []u8) !Prepared {
+    try repo.refuseInternal(rel);
+    const code = registry.forPath(edit.file_abs) != null;
+    const base = try file_edit.readBase(gpa, io, edit.file_abs, code);
+    defer if (base) |b| gpa.free(b);
+    const after = try textAfter(gpa, base, edit.expected_hash, text);
+    defer gpa.free(after);
+    return file_edit.prepare(gpa, runtime, edit.file_abs, rel, base, after);
 }
 
 fn planFileDeletion(gpa: Allocator, io: std.Io, edit: Edit, rel: []u8) !Prepared {
@@ -201,8 +263,9 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const removed = try removal.remove(base, ref, expected);
     errdefer removed.snapshot.destroy();
-    const declaration = (try (try base.symbols()).resolve(ref)).declaration;
+    const declaration = removed.span;
     const offset = try nameOffset(gpa, base, ref.name, declaration);
+    const local = deletionScope(base, ref, removed);
     const holes = try gpa.dupe(symbol.Hole, &.{.{ .old = removed.cut, .new = .{ .start = removed.cut.start, .end = removed.cut.start } }});
     return .{
         .rel = rel,
@@ -210,12 +273,29 @@ fn planSymbolDeletion(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit,
         .base_hash = symbol.hashOf(base.source),
         .hash = expected,
         .snapshot = removed.snapshot,
-        .removed = symmetry.inspect(base, removed.cut),
+        .removed = local,
         .removed_span = declaration,
         .name_offset = offset,
         .base = base,
         .holes = holes,
     };
+}
+
+pub fn deletionScope(base: *const Snapshot, ref: symbol.Ref, removed: removal.Removed) ?symmetry.Local {
+    const top_level = ref.container.len == 0 and (removed.role == .symbol or removed.role == .declaration) and !requires(base, removed.span);
+    return switch (removed.role) {
+        .statement, .property => null,
+        else => if (top_level) symmetry.inspect(base, removed.cut) else .{ .parses = true, .no_top_level_effect = true, .exported = false },
+    };
+}
+
+fn requires(base: *const Snapshot, span: symbol.Span) bool {
+    const root = base.tree.root();
+    var i: u32 = 0;
+    while (root.namedChild(i)) |node| : (i += 1) {
+        if (node.startByte() <= span.start and span.start < node.endByte()) return cas.importLike(base.profile, base.tree, node);
+    }
+    return false;
 }
 
 pub fn nameOffset(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, declaration: symbol.Span) !?u32 {
@@ -316,4 +396,29 @@ pub fn quotedAnywhere(gpa: Allocator, io: std.Io, root: []const u8, name: []cons
         }
     }
     return false;
+}
+
+const test_util = @import("../engine/test_util.zig");
+
+fn scopeOf(source: []const u8, ref_text: []const u8) !?symmetry.Local {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const base = try test_util.snapshotIn(runtime, source, ".js");
+    defer base.destroy();
+    const ref = try symbol.Ref.parse(std.testing.allocator, ref_text);
+    defer ref.deinit(std.testing.allocator);
+    const hash = (try (try base.symbols()).item(ref)).hash;
+    const removed = try removal.remove(base, ref, hash);
+    defer removed.snapshot.destroy();
+    return deletionScope(base, ref, removed);
+}
+
+test "deleting a require binding or a class member has no top-level effect, a bare statement skips the reference scan" {
+    const local = (try scopeOf("const os = require('os');\nfunction f() { return 1; }\n", "os")) orelse return error.TestExpectedLocal;
+    try std.testing.expect(local.no_top_level_effect);
+    const member = (try scopeOf("class C {\n  m() {\n    return 1;\n  }\n}\n", "C.m")) orelse return error.TestExpectedLocal;
+    try std.testing.expect(member.no_top_level_effect);
+    const effect = (try scopeOf("const x = new Map();\nfunction f() { return 1; }\n", "x")) orelse return error.TestExpectedLocal;
+    try std.testing.expect(!effect.no_top_level_effect);
+    try std.testing.expectEqual(@as(?symmetry.Local, null), try scopeOf("module.exports = { a: 1 };\nfunction f() { return 1; }\n", "module.exports"));
 }

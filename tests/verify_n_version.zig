@@ -61,7 +61,7 @@ pub const Python = struct {
 };
 
 pub fn run(arena: Allocator, root: []const u8, commit: []const u8) !Python {
-    const result = try std.process.run(arena, testing.io, .{ .argv = &.{ "python", script, commit, "--repo", root, "--json" } });
+    const result = try @import("emetgate").bounded_run.run(arena, testing.io, .{ .argv = &.{ "python", script, commit, "--repo", root, "--json" } });
     const code: u8 = switch (result.term) {
         .exited => |c| @intCast(c),
         else => return error.PythonCheckerCrashed,
@@ -139,7 +139,7 @@ pub fn compare(arena: Allocator, root: []const u8, zig: verify_run.Result) !void
 }
 
 test "n-version: the python checker's blake3 matches the official vectors and its JCS the RFC 8785 cases" {
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "python", "tools/verify_py/selftest.py" } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "python", "tools/verify_py/selftest.py" } });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
     errdefer std.debug.print("{s}{s}\n", .{ result.stdout, result.stderr });

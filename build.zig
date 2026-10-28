@@ -254,13 +254,13 @@ const cli_cases = [_]CliCase{
         .name = "symbols json emits one line with typed fields",
         .args = &.{ "symbols", e2e_fixture, "--json" },
         .exit_code = 0,
-        .stdout_contains = "\"hash\":\"" ++ e2e_add_hash ++ "\",\"kind\":\"function\",\"ref\":\"add\",\"line\":9,\"col\":8,\"ambiguous\":false",
+        .stdout_contains = "\"hash\":\"" ++ e2e_add_hash ++ "\",\"kind\":\"function\",\"ref\":\"add\",\"line\":9,\"col\":8}",
     },
     .{
         .name = "symbols json on a broken source is a typed error payload",
         .args = &.{ "symbols", "tests/fixtures/broken.ts", "--json" },
         .exit_code = 3,
-        .stdout = "{\"status\":\"error\",\"error\":\"SourceHasErrors\",\"exit_code\":3}\n",
+        .stdout = "{\"status\":\"error\",\"error\":\"SourceHasErrors\",\"exit_code\":3,\"fix\":\"the file does not parse now; fix it first with emetgate_try_batch old_string/new_string or a whole-file item\"}\n",
     },
     .{
         .name = "mutate json emits the transformed source and both hashes on one line",
@@ -272,7 +272,7 @@ const cli_cases = [_]CliCase{
         .name = "mutate json on a stale hash is a typed error payload",
         .args = &.{ "mutate", e2e_fixture, "--symbol", "add", "--hash", e2e_zero_hash, "--body", "{ return 0; }", "--json" },
         .exit_code = 6,
-        .stdout = "{\"status\":\"error\",\"error\":\"HashMismatch\",\"exit_code\":6}\n",
+        .stdout = "{\"status\":\"error\",\"error\":\"HashMismatch\",\"exit_code\":6,\"fix\":\"the hash is stale or of the wrong kind: symbol hashes come from emetgate_symbols, node ids from emetgate_read_symbol nodes:true, file and doc hashes from emetgate_read_file; read again and retry\"}\n",
     },
     .{
         .name = "output larger than the stdout buffer",
@@ -324,7 +324,7 @@ const cli_cases = [_]CliCase{
         .name = "mutate json with hash absent and a mismatched name",
         .args = &.{ "mutate", e2e_fixture, "--symbol", "extra", "--hash", "absent", "--body", "function other() { return 1; }", "--json" },
         .exit_code = 25,
-        .stdout = "{\"status\":\"error\",\"error\":\"SymbolNameMismatch\",\"exit_code\":25}\n",
+        .stdout = "{\"status\":\"error\",\"error\":\"SymbolNameMismatch\",\"exit_code\":25,\"fix\":\"the declared name must equal symbol\"}\n",
     },
     .{
         .name = "mutate with an inline body",

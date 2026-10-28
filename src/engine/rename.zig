@@ -4,6 +4,7 @@ const symbol = @import("symbol.zig");
 const traversal = @import("traversal.zig");
 const scope = @import("scope.zig");
 const alpha = @import("alpha.zig");
+const name_list = @import("name_list.zig");
 const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 const test_util = @import("test_util.zig");
@@ -71,7 +72,7 @@ pub fn leavesNamed(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     while (walker.next()) |entry| {
         const node = entry.node;
         const kind = node.kind();
-        if (snapshot.profile.isComment(kind) or oneOf(kind, snapshot.profile.strings)) {
+        if (snapshot.profile.opaqueText(node)) {
             walker.skipChildren();
             continue;
         }
@@ -141,7 +142,7 @@ pub fn binderCount(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     return count;
 }
 
-pub const Dynamic = enum { string_key, eval, computed_module, computed_member };
+pub const Dynamic = enum { string_key, name_list, eval, computed_module, computed_member };
 
 fn calleeName(snapshot: *const Snapshot, call: ts.Node) ?[]const u8 {
     const callee = call.childByField(snapshot.profile.call.function_field) orelse return null;
@@ -155,7 +156,23 @@ fn literalArgument(snapshot: *const Snapshot, g: *const Rename, call: ts.Node) b
     return std.mem.eql(u8, first.kind(), g.literal_argument);
 }
 
+pub const Hit = struct { kind: Dynamic, start: u32 };
+
 pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) ?Dynamic {
+    var one: [1]Hit = undefined;
+    return if (dynamicHits(snapshot, name, member, &one) != 0) one[0].kind else null;
+}
+
+fn unprefixed(text: []const u8, quotes: []const u8) []const u8 {
+    for (text, 0..) |byte, at| {
+        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at..];
+        if (!std.ascii.isAlphabetic(byte) and byte != '@' and byte != '$') return text;
+    }
+    return text;
+}
+
+pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, out: []Hit) usize {
+    var found: usize = 0;
     const g = grammarOf(snapshot);
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
@@ -167,29 +184,75 @@ pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) 
             walker.skipChildren();
             continue;
         }
-        if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, g.template_fragment)) {
+        if ((oneOf(kind, snapshot.profile.strings) and snapshot.profile.opaqueText(node)) or std.mem.eql(u8, kind, g.template_fragment)) {
             walker.skipChildren();
-            if (std.mem.eql(u8, std.mem.trim(u8, text, g.quotes), name)) return .string_key;
+            if (name_list.contentNaming(snapshot, node, name)) |content| {
+                if (record(out, &found, .name_list, content)) return found;
+                continue;
+            }
+            if ((std.mem.eql(u8, std.mem.trim(u8, unprefixed(text, g.quotes), g.quotes), name) or typeStringNames(g, node, text, name)) and record(out, &found, .string_key, node)) return found;
             continue;
         }
         if (std.mem.eql(u8, kind, snapshot.profile.call.node)) {
             const callee = calleeName(snapshot, node) orelse continue;
-            if (oneOf(callee, g.eval_callees)) return .eval;
-            if (oneOf(callee, g.module_callees) and !literalArgument(snapshot, g, node)) return .computed_module;
+            if (oneOf(callee, g.eval_callees)) {
+                if (record(out, &found, .eval, node)) return found;
+            } else if (oneOf(callee, g.module_callees) and !literalArgument(snapshot, g, node)) {
+                if (record(out, &found, .computed_module, node)) return found;
+            }
             continue;
         }
         if (std.mem.eql(u8, kind, g.new_expression)) {
             const constructor = node.childByField(g.new_constructor_field) orelse continue;
-            if (oneOf(snapshot.source[constructor.startByte()..constructor.endByte()], g.constructor_callees)) return .eval;
+            if (oneOf(snapshot.source[constructor.startByte()..constructor.endByte()], g.constructor_callees) and record(out, &found, .eval, node)) return found;
             continue;
         }
         if (std.mem.eql(u8, kind, g.subscript)) {
             const index = node.childByField(g.subscript_index_field) orelse continue;
-            if (oneOf(index.kind(), g.literal_index_kinds)) continue;
-            if (member or oneOf(index.kind(), g.constructed_index_kinds)) return .computed_member;
+            if (oneOf(index.kind(), g.literal_index_kinds) or cannotSpell(snapshot.source, g.constructed_index_kinds, index, name)) continue;
+            if ((member or oneOf(index.kind(), g.constructed_index_kinds)) and record(out, &found, .computed_member, node)) return found;
         }
     }
-    return null;
+    return found;
+}
+
+const numeric_operators = [_][]const u8{ "-", "/", "//", "<<", ">>", ">>>", "&", "|", "^", "**", "==", "!=", "===", "!==", "<", ">", "<=", ">=", "instanceof", "in" };
+
+fn cannotSpell(source: []const u8, constructed: []const []const u8, index: ts.Node, name: []const u8) bool {
+    if (std.mem.eql(u8, index.kind(), "binary_expression") and oneOf(index.kind(), constructed)) {
+        const op = index.childByField("operator") orelse return false;
+        return oneOf(source[op.startByte()..op.endByte()], &numeric_operators);
+    }
+    const text = source[index.startByte()..index.endByte()];
+    if (text.len < 2 or text[0] != '`' or text[text.len - 1] != '`') return false;
+    const open = std.mem.indexOf(u8, text, "${") orelse return false;
+    const close = std.mem.lastIndexOfScalar(u8, text, '}') orelse return false;
+    const prefix = text[1..open];
+    const suffix = if (close + 1 < text.len - 1) text[close + 1 .. text.len - 1] else "";
+    return !std.mem.startsWith(u8, name, prefix) or !std.mem.endsWith(u8, name, suffix);
+}
+
+fn typeStringNames(g: *const Rename, node: ts.Node, text: []const u8, name: []const u8) bool {
+    const parent = node.parent() orelse return false;
+    if (!oneOf(parent.kind(), g.type_string_parents)) return false;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, text, at, name)) |start| : (at = start + 1) {
+        const end = start + name.len;
+        const before_ok = start == 0 or !isWordByte(text[start - 1]);
+        const after_ok = end == text.len or !isWordByte(text[end]);
+        if (before_ok and after_ok) return true;
+    }
+    return false;
+}
+
+fn isWordByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
+fn record(out: []Hit, found: *usize, kind: Dynamic, node: ts.Node) bool {
+    out[found.*] = .{ .kind = kind, .start = node.startByte() };
+    found.* += 1;
+    return found.* == out.len;
 }
 
 fn lessThan(_: void, a: Span, b: Span) bool {
@@ -223,6 +286,28 @@ fn nodeSpan(node: ts.Node) Span {
     return .{ .start = node.startByte(), .end = node.endByte() };
 }
 
+fn listedAt(snapshot: *const Snapshot, span: Span) bool {
+    const node = leafAt(snapshot.tree.root(), span) orelse return false;
+    return name_list.holds(snapshot, node);
+}
+
+pub const nameListSpans = name_list.spans;
+
+pub fn bindsAtTop(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, spans: []const Span) !bool {
+    const resolution = scope.resolveName(gpa, snapshot, name) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedLanguage => return false,
+    };
+    defer resolution.deinit(gpa);
+    const top = snapshot.tree.root();
+    for (spans) |span| {
+        const index = resolution.binderAt(span) orelse continue;
+        const region = resolution.binders[index].scope;
+        if (region.start == top.startByte() and region.end == top.endByte() and std.mem.eql(u8, region.kind, top.kind())) return true;
+    }
+    return false;
+}
+
 fn findLeaf(leaves: []const Leaf, span: Span) ?Leaf {
     for (leaves) |leaf| {
         if (leaf.span.start == span.start and leaf.span.end == span.end) return leaf;
@@ -237,7 +322,60 @@ fn containsSpan(spans: []const Span, wanted: Span) bool {
     return false;
 }
 
+pub const Keep = enum { none, key, value };
+
+pub const Options = struct {
+    free_uses: bool = false,
+    kept_keys: []const Span = &.{},
+    kept_values: []const Span = &.{},
+
+    fn keepOf(self: Options, span: Span) Keep {
+        if (containsSpan(self.kept_keys, span)) return .key;
+        if (containsSpan(self.kept_values, span)) return .value;
+        return .none;
+    }
+};
+
+const Rewritten = struct {
+    text: []u8,
+    targets: []Span,
+    wholes: []Span,
+
+    fn deinit(self: Rewritten, gpa: Allocator) void {
+        gpa.free(self.text);
+        gpa.free(self.targets);
+        gpa.free(self.wholes);
+    }
+};
+
+fn rewrite(gpa: Allocator, source: []const u8, spans: []const Span, keeps: []const Keep, old: []const u8, name: []const u8) Allocator.Error!Rewritten {
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    const targets = try gpa.alloc(Span, spans.len);
+    errdefer gpa.free(targets);
+    const wholes = try gpa.alloc(Span, spans.len);
+    errdefer gpa.free(wholes);
+    var cursor: usize = 0;
+    for (spans, keeps, targets, wholes) |span, keep, *target, *whole| {
+        try text.appendSlice(gpa, source[cursor..span.start]);
+        const start: u32 = @intCast(text.items.len);
+        if (keep == .key) try text.print(gpa, "{s}: ", .{old});
+        const at: u32 = @intCast(text.items.len);
+        try text.appendSlice(gpa, name);
+        target.* = .{ .start = at, .end = at + @as(u32, @intCast(name.len)) };
+        if (keep == .value) try text.print(gpa, ": {s}", .{old});
+        whole.* = .{ .start = start, .end = @intCast(text.items.len) };
+        cursor = span.end;
+    }
+    try text.appendSlice(gpa, source[cursor..]);
+    return .{ .text = try text.toOwnedSlice(gpa), .targets = targets, .wholes = wholes };
+}
+
 pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, proposed: []const Span) Error!Renamed {
+    return applyWith(gpa, base, old, new, proposed, .{});
+}
+
+pub fn applyWith(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, proposed: []const Span, options: Options) Error!Renamed {
     if (!supports(base.profile)) return error.UnsupportedLanguage;
     if (!validName(old) or !validName(new) or std.mem.eql(u8, old, new)) return error.InvalidName;
     if (base.tree.root().hasError()) return error.SourceHasErrors;
@@ -250,42 +388,46 @@ pub fn apply(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const u8, 
 
     const leaves = try leavesNamed(gpa, base, old);
     defer gpa.free(leaves);
-    for (spans) |span| {
-        const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;
-        if (leaf.shorthand) return error.ShorthandReference;
+    const keeps = try gpa.alloc(Keep, spans.len);
+    defer gpa.free(keeps);
+    var expanding = false;
+    for (spans, keeps) |span, *keep| {
+        const leaf = findLeaf(leaves, span) orelse {
+            if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span.start..span.end], old)) return error.NotAnIdentifier;
+            keep.* = .none;
+            continue;
+        };
+        keep.* = options.keepOf(span);
+        if (keep.* == .none) continue;
+        if (!leaf.shorthand) return error.ShorthandReference;
+        expanding = true;
     }
     const taken = try leavesNamed(gpa, base, new);
     defer gpa.free(taken);
     if (taken.len != 0) return error.NameTaken;
-    const resolved = try crossCheck(gpa, base, old, spans);
 
-    var text: std.ArrayList(u8) = .empty;
-    defer text.deinit(gpa);
-    const moved = try gpa.alloc(Span, spans.len);
-    defer gpa.free(moved);
-    var cursor: usize = 0;
-    for (spans, moved) |span, *slot| {
-        try text.appendSlice(gpa, base.source[cursor..span.start]);
-        const start: u32 = @intCast(text.items.len);
-        try text.appendSlice(gpa, new);
-        slot.* = .{ .start = start, .end = start + @as(u32, @intCast(new.len)) };
-        cursor = span.end;
-    }
-    try text.appendSlice(gpa, base.source[cursor..]);
+    const expanded = try rewrite(gpa, base.source, spans, keeps, old, old);
+    defer expanded.deinit(gpa);
+    const checked = if (expanding) try Snapshot.fromSource(base.runtime, base.profile, try base.runtime.gpa.dupe(u8, expanded.text)) else base;
+    defer if (expanding) checked.destroy();
+    if (checked.tree.root().hasError()) return error.MutationSyntaxInvalid;
+    const resolved = try crossCheck(gpa, checked, old, expanded.targets, options.free_uses);
 
-    const source = try base.runtime.gpa.dupe(u8, text.items);
+    const renamed = try rewrite(gpa, base.source, spans, keeps, old, new);
+    defer renamed.deinit(gpa);
+    const source = try base.runtime.gpa.dupe(u8, renamed.text);
     const next = try Snapshot.fromSource(base.runtime, base.profile, source);
     errdefer next.destroy();
     if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;
 
-    const regions = try compareRegions(gpa, base, next, spans);
+    const regions = try compareRegions(gpa, checked, next, expanded.targets, renamed.targets);
     try checkSurvivors(gpa, next, old);
-    const symbols_checked = try compareSymbols(gpa, base, next, old, new, spans);
+    const symbols_checked = try compareSymbols(gpa, checked, next, old, new, expanded.targets, renamed.targets);
 
-    return .{ .snapshot = next, .spans = try gpa.dupe(Span, moved), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
+    return .{ .snapshot = next, .spans = try gpa.dupe(Span, renamed.wholes), .regions_checked = regions, .symbols_checked = symbols_checked, .resolved_checked = resolved };
 }
 
-fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const Span) Error!usize {
+fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const Span, free_uses: bool) Error!usize {
     const resolution = scope.resolveName(gpa, base, old) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedLanguage => return error.UnsupportedLanguage,
@@ -307,7 +449,10 @@ fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const S
     var checked: usize = 0;
     for (spans) |span| {
         const use = resolution.useAt(span) orelse continue;
-        const index = use.binder orelse return error.ResolutionMismatch;
+        const index = use.binder orelse {
+            if (free_uses) continue;
+            return error.ResolutionMismatch;
+        };
         if (!renamed[index]) return error.ResolutionMismatch;
         checked += 1;
     }
@@ -318,7 +463,7 @@ fn crossCheck(gpa: Allocator, base: *Snapshot, old: []const u8, spans: []const S
     return checked;
 }
 
-fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []const Span) Error!usize {
+fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []const Span, next_spans: []const Span) Error!usize {
     const before = base.tree.root();
     const after = next.tree.root();
     if (before.childCount() != after.childCount()) return error.AlphaMismatch;
@@ -332,8 +477,8 @@ fn compareRegions(gpa: Allocator, base: *Snapshot, next: *Snapshot, spans: []con
         if (!touched) continue;
         const twin = after.child(i).?;
         if (!std.mem.eql(u8, statement.kind(), twin.kind())) return error.AlphaMismatch;
-        const a = try alphaHash(gpa, base, nodeSpan(statement));
-        const b = try alphaHash(gpa, next, nodeSpan(twin));
+        const a = try alpha.hashDistinct(gpa, base, nodeSpan(statement), spans);
+        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans);
         if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;
         checked += 1;
     }
@@ -367,20 +512,37 @@ const Mapping = struct {
     new: []const u8,
     spans: []const Span,
     containers: bool,
+    owners: []const []const []const u8 = &.{},
 
     fn name(self: Mapping, part: []const u8, renamed: bool) []const u8 {
         return if (renamed and std.mem.eql(u8, part, self.old)) self.new else part;
     }
 
+    fn owned(self: Mapping, path: []const []const u8, at: usize) bool {
+        for (self.owners) |owner| {
+            if (owner.len != at) continue;
+            if (eqlPath(owner, path[0..at])) return true;
+        }
+        return false;
+    }
+
     fn same(self: Mapping, before: symbol.Ref, after: symbol.Ref, renamed: bool) bool {
         if (!std.mem.eql(u8, self.name(before.name, renamed), after.name)) return false;
         if (before.container.len != after.container.len) return false;
-        for (before.container, after.container) |a, b| {
-            if (!std.mem.eql(u8, self.name(a, self.containers), b)) return false;
+        for (before.container, after.container, 0..) |a, b, i| {
+            if (!std.mem.eql(u8, self.name(a, self.containers or self.owned(before.container, i)), b)) return false;
         }
         return before.accessor == after.accessor and before.is_static == after.is_static;
     }
 };
+
+fn eqlPath(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!std.mem.eql(u8, x, y)) return false;
+    }
+    return true;
+}
 
 fn startsWithin(spans: []const Span, start: u32) bool {
     for (spans) |span| {
@@ -398,38 +560,42 @@ fn functionNameRenamed(gpa: Allocator, snapshot: *const Snapshot, found: symbol.
     return false;
 }
 
-fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const u8, new: []const u8, spans: []const Span) Error!usize {
+fn compareSymbols(gpa: Allocator, base: *Snapshot, next: *Snapshot, old: []const u8, new: []const u8, spans: []const Span, next_spans: []const Span) Error!usize {
     const before = try base.symbols();
     const after = next.symbols() catch |err| switch (err) {
         error.SourceHasErrors => return error.MutationSyntaxInvalid,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    var owners: std.ArrayList([]const []const u8) = .empty;
+    defer owners.deinit(gpa);
     var mapping: Mapping = .{ .old = old, .new = new, .spans = spans, .containers = false };
     for (before.declarations) |d| {
-        if (d.ref.container.len == 0 and startsWithin(spans, d.name.startByte())) mapping.containers = true;
+        if (!startsWithin(spans, d.name.startByte())) continue;
+        if (d.ref.container.len == 0) mapping.containers = true else try owners.append(gpa, d.ref.container);
     }
+    mapping.owners = owners.items;
     for (before.symbols) |f| {
         if (f.ref.container.len == 0 and try functionNameRenamed(gpa, base, f, spans)) mapping.containers = true;
     }
     if (before.symbols.len != after.symbols.len) return error.AlphaMismatch;
     for (before.symbols) |b| {
-        const b_hash = try alphaHash(gpa, base, b.declaration);
+        const b_hash = try alpha.hashDistinct(gpa, base, b.declaration, spans);
         const renamed = try functionNameRenamed(gpa, base, b, spans);
         var matched = false;
         for (after.symbols) |a| {
             if (!mapping.same(b.ref, a.ref, renamed)) continue;
-            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;
+            if (std.mem.eql(u8, &b_hash, &try alpha.hashDistinct(gpa, next, a.declaration, next_spans))) matched = true;
         }
         if (!matched) return error.AlphaMismatch;
     }
     if (before.declarations.len != after.declarations.len) return error.AlphaMismatch;
     for (before.declarations) |b| {
-        const b_hash = try alphaHash(gpa, base, b.declaration);
+        const b_hash = try alpha.hashDistinct(gpa, base, b.declaration, spans);
         const renamed = startsWithin(spans, b.name.startByte());
         var matched = false;
         for (after.declarations) |a| {
             if (a.kind != b.kind or !mapping.same(b.ref, a.ref, renamed)) continue;
-            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;
+            if (std.mem.eql(u8, &b_hash, &try alpha.hashDistinct(gpa, next, a.declaration, next_spans))) matched = true;
         }
         if (!matched) return error.AlphaMismatch;
     }
@@ -549,14 +715,26 @@ test "rename: a wrong rename inside a top-level block that is no symbol is caugh
     try testing.expectEqualStrings("function plus(a: number): number { return a; }\nlet total = plus(1);\n{ const add = 2; total += add; }\n", renamed.snapshot.source);
 }
 
-test "rename: renaming one of two same-named properties in a statement breaks its alpha hash" {
+test "rename: renaming one of two same-named properties keeps the other apart in the alpha hash" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
     const source = "const o = { run: 1 };\nconst p = { run: 2 };\nconsole.log(o.run + p.run);\n";
     const base = try test_util.snapshotOf(runtime, source);
     defer base.destroy();
     const one = [_]Span{ spanOf(source, "{ run", 0, "run"), spanOf(source, "o.run", 0, "run") };
-    try testing.expectError(error.AlphaMismatch, apply(testing.allocator, base, "run", "go", &one));
+    const renamed = try apply(testing.allocator, base, "run", "go", &one);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("const o = { go: 1 };\nconst p = { run: 2 };\nconsole.log(o.go + p.run);\n", renamed.snapshot.source);
+}
+
+test "rename: renaming one of two free uses of a name breaks its alpha hash" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "console.log(run, run);\n";
+    const base = try test_util.snapshotOf(runtime, source);
+    defer base.destroy();
+    const one = [_]Span{spanOf(source, "run", 0, "run")};
+    try testing.expectError(error.AlphaMismatch, applyWith(testing.allocator, base, "run", "go", &one, .{ .free_uses = true }));
 }
 
 test "rename: renaming a class and only one of an interface merged with it is refused, renaming both is accepted" {
@@ -602,11 +780,53 @@ test "rename: a span that is not an occurrence, a taken name, a bad name, a dupl
     try testing.expectError(error.InvalidName, apply(testing.allocator, base, "add", "not-a-name", spans));
     try testing.expectError(error.DuplicateLocation, apply(testing.allocator, base, "add", "sum", &.{ spans[0], spans[0] }));
 
-    const shorthand = try test_util.snapshotOf(runtime, "function add(): number { return 1; }\nconst api = { add };\n");
+    try testing.expectError(error.ShorthandReference, applyWith(testing.allocator, base, "add", "sum", spans, .{ .kept_keys = spans[0..1] }));
+}
+
+test "rename: a shorthand property collapses to the new name when the key is renamed with the binding" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const shorthand = try test_util.snapshotOf(runtime, "function add() { return 1; }\nmodule.exports = { add };\n");
     defer shorthand.destroy();
-    const short_spans = try spansOf(testing.allocator, shorthand, "add");
-    defer testing.allocator.free(short_spans);
-    try testing.expectError(error.ShorthandReference, apply(testing.allocator, shorthand, "add", "sum", short_spans));
+    const spans = try spansOf(testing.allocator, shorthand, "add");
+    defer testing.allocator.free(spans);
+    const renamed = try apply(testing.allocator, shorthand, "add", "sum", spans);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("function sum() { return 1; }\nmodule.exports = { sum };\n", renamed.snapshot.source);
+}
+
+test "rename: a shorthand property keeps its key when only the binding is renamed" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "function add() { return 1; }\nmodule.exports = { add };\n";
+    const shorthand = try test_util.snapshotOf(runtime, source);
+    defer shorthand.destroy();
+    const spans = try spansOf(testing.allocator, shorthand, "add");
+    defer testing.allocator.free(spans);
+    const kept = [_]Span{spanOf(source, "{ add }", 0, "add")};
+    const renamed = try applyWith(testing.allocator, shorthand, "add", "sum", spans, .{ .kept_keys = &kept });
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("function sum() { return 1; }\nmodule.exports = { add: sum };\n", renamed.snapshot.source);
+    const whole = renamed.spans[1];
+    try testing.expectEqualStrings("add: sum", renamed.snapshot.source[whole.start..whole.end]);
+}
+
+test "rename: a destructured shorthand collapses with its uses or keeps its local name when only the key is renamed" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "const { add } = require(\"./math\");\nconst total = add(1);\n";
+    const pattern = try test_util.snapshotOf(runtime, source);
+    defer pattern.destroy();
+    const spans = try spansOf(testing.allocator, pattern, "add");
+    defer testing.allocator.free(spans);
+    const collapsed = try apply(testing.allocator, pattern, "add", "sum", spans);
+    defer collapsed.deinit(testing.allocator);
+    try testing.expectEqualStrings("const { sum } = require(\"./math\");\nconst total = sum(1);\n", collapsed.snapshot.source);
+    const key = [_]Span{spanOf(source, "{ add }", 0, "add")};
+    const keyed = try applyWith(testing.allocator, pattern, "add", "sum", &key, .{ .kept_values = &key });
+    defer keyed.deinit(testing.allocator);
+    try testing.expectEqualStrings("const { sum: add } = require(\"./math\");\nconst total = add(1);\n", keyed.snapshot.source);
+    try testing.expectError(error.IncompleteRename, apply(testing.allocator, pattern, "add", "sum", &key));
 }
 
 test "rename: a string that is exactly the name, eval, computed requires and constructed keys are dynamic access" {
@@ -621,6 +841,9 @@ test "rename: a string that is exactly the name, eval, computed requires and con
         .{ .source = "function add() { return 1; }\nconst m = require(\"./\" + \"x\");\n", .member = false, .expected = .computed_module },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst v = o[\"a\" + \"dd\"];\n", .member = false, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k];\n", .member = true, .expected = .computed_member },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = 1;\nconst v = o[k - 1] + o[k >> 1] + o[`es${k}`] + o[`${k}_x`];\n", .member = true, .expected = null },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"d\";\nconst v = o[`a${k}d`];\n", .member = false, .expected = .computed_member },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"d\";\nconst v = o[k + \"d\"];\n", .member = true, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k] + o[0];\nconst m = require(\"./m\");\n// add in a comment\nconst t = `${add()} and add`;\nconst e = \"add failed\";\n", .member = false, .expected = null },
     };
     for (cases) |case| {
@@ -644,4 +867,56 @@ test "rename: an export statement or an export clause marks the name exported" {
     try testing.expect(try exportedName(testing.allocator, clause, "add"));
     try testing.expect(!try exportedName(testing.allocator, local, "add"));
     try testing.expectEqual(@as(usize, 1), try binderCount(testing.allocator, local, "add"));
+}
+
+fn pythonSnapshot(runtime: anytype, source: []const u8) !*Snapshot {
+    return Snapshot.fromSource(runtime, &@import("lang/python/profile.zig").profile, try testing.allocator.dupe(u8, source));
+}
+
+fn alphaPair(before: *const Snapshot, after: *const Snapshot) !bool {
+    const changed = try alpha.changedLeaves(testing.allocator, before, after);
+    defer testing.allocator.free(changed.before);
+    defer testing.allocator.free(changed.after);
+    const a = try alpha.hashDistinct(testing.allocator, before, .{ .start = 0, .end = @intCast(before.source.len) }, changed.before);
+    const b = try alpha.hashDistinct(testing.allocator, after, .{ .start = 0, .end = @intCast(after.source.len) }, changed.after);
+    return std.mem.eql(u8, &a, &b);
+}
+
+test "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "__all__ = [\"helper\"]\n\n\ndef helper():\n    return 1\n";
+    const base = try pythonSnapshot(runtime, source);
+    defer base.destroy();
+    const listed = try nameListSpans(testing.allocator, base, "helper");
+    defer testing.allocator.free(listed);
+    try testing.expectEqual(@as(usize, 1), listed.len);
+    const spans = [_]Span{ listed[0], spanOf(source, "def helper", 0, "helper") };
+    const renamed = try apply(testing.allocator, base, "helper", "assist", &spans);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("__all__ = [\"assist\"]\n\n\ndef assist():\n    return 1\n", renamed.snapshot.source);
+    try testing.expect(try alphaPair(base, renamed.snapshot));
+}
+
+test "rename: a Python name-list string changed to a text no renamed name took breaks the alpha check" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const before = try pythonSnapshot(runtime, "__all__ = [\"helper\"]\n\n\ndef helper():\n    return 1\n");
+    defer before.destroy();
+    const after = try pythonSnapshot(runtime, "__all__ = [\"other\"]\n\n\ndef assist():\n    return 1\n");
+    defer after.destroy();
+    try testing.expect(!try alphaPair(before, after));
+}
+
+test "rename: a string outside a name list is not renamed as a name" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "names = [\"helper\"]\n\n\ndef helper():\n    return 1\n";
+    const base = try pythonSnapshot(runtime, source);
+    defer base.destroy();
+    const listed = try nameListSpans(testing.allocator, base, "helper");
+    defer testing.allocator.free(listed);
+    try testing.expectEqual(@as(usize, 0), listed.len);
+    const spans = [_]Span{ spanOf(source, "\"helper\"", 0, "helper"), spanOf(source, "def helper", 0, "helper") };
+    try testing.expectError(error.NotAnIdentifier, apply(testing.allocator, base, "helper", "assist", &spans));
 }

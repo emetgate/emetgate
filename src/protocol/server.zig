@@ -5,7 +5,10 @@ const telemetry = @import("telemetry.zig");
 const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
+const wire = @import("wire.zig");
 const run_tool = @import("run_tool.zig");
+const git_write = @import("git_write.zig");
+const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
 const shadow = @import("../platform/shadow.zig");
@@ -38,183 +41,212 @@ const max_message_bytes = 4 * 1024 * 1024;
 pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string" };
 pub const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
 
+const budget_text = std.fmt.comptimePrint("{d}", .{read_budget.default_budget});
+
 pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_explore",
         .description = map_tools.explore_description,
         .props = &.{
-            .{ .name = "question", .desc = "the question" },
-            .{ .name = "names", .desc = "symbol names", .optional = true, .ty = "array" },
+            .{ .name = "question", .desc = "" },
+            .{ .name = "names", .desc = "", .optional = true, .ty = "array" },
         },
     },
     .{
         .name = "emetgate_evidence",
         .description = map_tools.evidence_description,
-        .props = &.{.{ .name = "names", .desc = "qualified names, Class.method or function", .ty = "array" }},
+        .props = &.{.{ .name = "names", .desc = "Class.method or function", .ty = "array" }},
     },
     .{
         .name = "emetgate_symbols",
-        .description = "Returns the function symbols of a source file with their content hashes.",
-        .props = &.{.{ .name = "file", .desc = "path to a source file in a registered language" }},
+        .description = "Lists a source file's symbols.",
+        .props = &.{.{ .name = "file", .desc = "" }},
     },
     .{
         .name = "emetgate_skeleton",
-        .description = "Returns the outline of a source file: every symbol's signature without its body, the file hash, and every adopted rule that covers the file. With --mirror an unchanged outline is returned as one line; force:true returns it in full.",
+        .description = "Outline of a source file (whole if under 8 KiB) with file_hash and covering rules.",
         .props = &.{
-            .{ .name = "file", .desc = "path to a source file in a registered language" },
-            .{ .name = "force", .desc = "return the outline in full", .optional = true, .ty = "boolean" },
+            .{ .name = "file", .desc = "" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Returns the body of a symbol and its hash. symbols reads several; line_start and line_end read a line range widened to the symbols it overlaps; exactly one of symbol, symbols or the line pair. A body over the read budget (" ++ std.fmt.comptimePrint("{d}", .{read_budget.default_budget}) ++ " characters) is returned folded, with each elided line range named in place; detail:\"full\" returns every line. With --mirror an unchanged symbol is returned as one line; force:true returns it in full. nodes:true prefixes every line that starts a syntax node with that node's hash (hash|code).",
+        .description = "Reads symbol bodies with hashes by symbol, symbols or line_start+line_end; docs fold, bodies over " ++ budget_text ++ " chars too, unless detail:\"full\". nodes:true adds node ids for emetgate_try.",
         .props = &.{
-            .{ .name = "file", .desc = "path to a source file in a registered language" },
-            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add", .optional = true },
-            .{ .name = "symbols", .desc = "array of symbol refs to read together", .optional = true, .ty = "array" },
-            .{ .name = "line_start", .desc = "1-based first line", .optional = true, .ty = "integer" },
-            .{ .name = "line_end", .desc = "1-based last line", .optional = true, .ty = "integer" },
-            .{ .name = "force", .desc = "return the body in full", .optional = true, .ty = "boolean" },
-            .{ .name = "nodes", .desc = "true for node hashes (hash|code)", .optional = true, .ty = "boolean" },
-            .{ .name = "detail", .desc = "\"full\" or \"budgeted\" (default)", .optional = true },
+            .{ .name = "file", .desc = "" },
+            .{ .name = "symbol", .desc = "ref, e.g. Class.method or add", .optional = true },
+            .{ .name = "symbols", .desc = "", .optional = true, .ty = "array" },
+            .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "nodes", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "detail", .desc = "\"full\" or \"budgeted\"", .optional = true },
         },
     },
     .{
         .name = "emetgate_try",
-        .description = "Replaces a symbol body, runs the configured typecheck and test commands in a sandbox, and writes only if they pass. Takes symbol, hash and body; or node and text, where node is a node hash from emetgate_read_symbol with nodes:true and an empty text deletes the node; or nodes: [{node, text}, ...] for several nodes of one file. Every byte outside the replaced span must stay unchanged.",
+        .description = "Edits code, gated: symbol+hash+body (the braced block; hash \"absent\" + whole declaration adds one), or node+text / nodes:[{node,text}] (ids from emetgate_read_symbol nodes:true).",
         .props = &.{
-            .{ .name = "file", .desc = "path to a source file in a registered language" },
-            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add", .optional = true },
-            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols", .optional = true },
-            .{ .name = "body", .desc = "new function body including braces", .optional = true },
-            .{ .name = "node", .desc = "node hash from emetgate_read_symbol with nodes:true", .optional = true },
-            .{ .name = "text", .desc = "new source of that node; empty deletes it", .optional = true },
-            .{ .name = "nodes", .desc = "array of {node, text} for several nodes of the same file", .optional = true, .ty = "array" },
+            .{ .name = "file", .desc = "" },
+            .{ .name = "symbol", .desc = "", .optional = true },
+            .{ .name = "hash", .desc = "from emetgate_symbols, or \"absent\"", .optional = true },
+            .{ .name = "body", .desc = "", .optional = true },
+            .{ .name = "node", .desc = "", .optional = true },
+            .{ .name = "text", .desc = "", .optional = true },
+            .{ .name = "nodes", .desc = "", .optional = true, .ty = "array" },
         },
     },
     .{
         .name = "emetgate_rename",
-        .description = "Renames a symbol and every reference to it as one batch, and writes only if the configured typecheck and test commands pass. A rename that touches another file or an exported symbol needs interface_change:true. Refused when a reference cannot be resolved (RenameUnresolved) or the name is also used as a string, in eval or as a computed key (DynamicReference).",
+        .description = "Renames a symbol and its references, gated; other files or exports need interface_change:true.",
         .props = &.{
-            .{ .name = "file", .desc = "path to the TypeScript or JavaScript file that declares the symbol" },
-            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
-            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
-            .{ .name = "new_name", .desc = "the new identifier" },
-            .{ .name = "interface_change", .desc = "true to allow renaming across files or an exported symbol", .optional = true, .ty = "boolean" },
+            .{ .name = "file", .desc = "TS, JS, Python or C# file declaring it" },
+            .{ .name = "symbol", .desc = "" },
+            .{ .name = "hash", .desc = "" },
+            .{ .name = "new_name", .desc = "" },
+            .{ .name = "interface_change", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "allow_dynamic", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_move",
-        .description = "Moves a top-level function, class, interface, type, enum or variable to another file, existing or new, and rewrites every import as one batch; writes only if the configured typecheck and test commands pass. An exported symbol needs interface_change:true; a source or target with module-level side effects needs order_change:true. Refused: export default, a namespace import or re-export of the moved name, a name already bound in the target, a new import cycle.",
+        .description = "Moves a top-level declaration to target_file, rewriting imports, gated. Exports need interface_change:true, side effects order_change:true.",
         .props = &.{
-            .{ .name = "file", .desc = "path to the TypeScript or JavaScript file that declares the symbol" },
-            .{ .name = "symbol", .desc = "ref of a top-level symbol or declaration" },
-            .{ .name = "hash", .desc = "current 32-hex hash from emetgate_symbols (symbols or declarations)" },
-            .{ .name = "target_file", .desc = "path of the target file; its directory must exist" },
-            .{ .name = "interface_change", .desc = "true to allow moving an exported symbol", .optional = true, .ty = "boolean" },
-            .{ .name = "order_change", .desc = "true to allow a change of module evaluation order", .optional = true, .ty = "boolean" },
+            .{ .name = "file", .desc = "TS or JS file declaring it" },
+            .{ .name = "symbol", .desc = "" },
+            .{ .name = "hash", .desc = "" },
+            .{ .name = "target_file", .desc = "" },
+            .{ .name = "interface_change", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "order_change", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_move_file",
-        .description = "Moves or renames a TypeScript or JavaScript file and rewrites every relative import to and from it as one batch; writes only if the configured typecheck and test commands pass. The target must not exist. A file named by package.json or tsconfig paths needs interface_change:true. Refused: a rename that only changes letter case, a require or dynamic import that reaches the file.",
+        .description = "Moves a TS/JS file, rewriting relative imports, gated; one named in package.json or tsconfig paths needs interface_change:true.",
         .props = &.{
-            .{ .name = "from", .desc = "path of the file to move" },
-            .{ .name = "to", .desc = "new path inside the repo; must not exist" },
-            .{ .name = "from_hash", .desc = "whole-file hash (file_hash from emetgate_read_file or emetgate_skeleton)" },
-            .{ .name = "interface_change", .desc = "true to allow moving a file named by package.json or tsconfig paths", .optional = true, .ty = "boolean" },
+            .{ .name = "from", .desc = "" },
+            .{ .name = "to", .desc = "must not exist" },
+            .{ .name = "from_hash", .desc = "file_hash of from" },
+            .{ .name = "interface_change", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_mutate",
-        .description = "Returns the source and the new hash that replacing a symbol body would produce, without writing.",
+        .description = "Previews a symbol body replacement without writing.",
         .props = &.{
-            .{ .name = "file", .desc = "path to a source file in a registered language" },
-            .{ .name = "symbol", .desc = "symbol ref, e.g. Class.method or add" },
-            .{ .name = "hash", .desc = "current 32-hex hash of the symbol from emetgate_symbols" },
-            .{ .name = "body", .desc = "new function body including braces" },
+            .{ .name = "file", .desc = "" },
+            .{ .name = "symbol", .desc = "" },
+            .{ .name = "hash", .desc = "" },
+            .{ .name = "body", .desc = "" },
         },
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Returns a non-code file of the repository. A .json file returns its key tree with a hash per pointer, or with pointer one value. A .md file returns its heading tree, or with heading one section. Any other file returns at most 16 KiB, or with line_start and line_end a line range. A source file needs raw:true. With --mirror unchanged content is returned as one line; force:true returns it in full.",
+        .description = "Reads a file: .json key tree or value by pointer; .md headings or section by heading; else up to 16 KiB or line_start..line_end.",
         .props = &.{
-            .{ .name = "file", .desc = "path inside the repo" },
-            .{ .name = "raw", .desc = "true for the raw text of a source, .json or .md file", .optional = true, .ty = "boolean" },
-            .{ .name = "pointer", .desc = "JSON pointer, e.g. /dependencies/express", .optional = true },
-            .{ .name = "heading", .desc = "exact heading text", .optional = true },
-            .{ .name = "line_start", .desc = "1-based first line; a source, .json or .md file also needs raw:true", .optional = true, .ty = "integer" },
-            .{ .name = "line_end", .desc = "1-based last line, inclusive", .optional = true, .ty = "integer" },
-            .{ .name = "force", .desc = "return the content in full", .optional = true, .ty = "boolean" },
+            .{ .name = "file", .desc = "" },
+            .{ .name = "raw", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "pointer", .desc = "e.g. /a/b", .optional = true },
+            .{ .name = "heading", .desc = "", .optional = true },
+            .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_list",
-        .description = "Returns the git-tracked files under a directory, at most 2000.",
-        .props = &.{.{ .name = "dir", .desc = "directory inside the repo; defaults to the repo root", .optional = true }},
+        .description = "Lists up to 2000 tracked files under dir.",
+        .props = &.{.{ .name = "dir", .desc = "", .optional = true }},
     },
     .{
         .name = "emetgate_search",
-        .description = "Find a literal (or, with regex:true, a regular expression) case-sensitive pattern in the git-tracked text files under dir, a directory or one file. The reply is plain text: each file path on its own line, then its matching lines as line:text, with a * after the line number on a definition; leading spaces are dropped and a line over 120 characters is cut around the match with \u{2026} at each cut. A text met on more than one line is written once in a legend line |N text, and those lines read line|N. The last line is \u{2713} when every tracked text file in scope was searched and every match is shown; otherwise it starts with partial: and names the matches shown (matches A-B of T), the files that could not be read or fully evaluated, and next offset:N to page on. Binary files, files over 16 MiB and internal paths are excluded. A regular expression the index cannot run (for example \\b or {n,m}) is searched by ripgrep over the same files. The reply holds about 5000 characters; detail:\"full\" lifts that to 200 matches. A write is in the answer once its writer has closed or flushed the file.",
+        .description = "Finds a case-sensitive literal (or regex:true) in tracked text under dir: path, then line:text per hit (* definition, |N legend). Ends \u{2713} if complete, else next offset; detail:\"full\" allows 200.",
         .props = &.{
-            .{ .name = "pattern", .desc = "text or, with regex:true, a regular expression to find" },
-            .{ .name = "dir", .desc = "directory or file inside the repo; defaults to the repo root", .optional = true },
-            .{ .name = "regex", .desc = "treat pattern as a regular expression instead of a literal substring", .optional = true, .ty = "boolean" },
-            .{ .name = "kinds", .desc = "keep only hits of these kinds, e.g. [\"code\"] to skip comments and strings", .optional = true, .ty = "array" },
-            .{ .name = "offset", .desc = "skip this many ranked hits, to page through a long answer", .optional = true, .ty = "integer" },
-            .{ .name = "detail", .desc = "\"full\" lifts the reply size budget (up to 200 hits); the default is \"compact\"", .optional = true },
+            .{ .name = "pattern", .desc = "" },
+            .{ .name = "dir", .desc = "", .optional = true },
+            .{ .name = "regex", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "kinds", .desc = "[\"code\"] skips comments and strings", .optional = true, .ty = "array" },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "detail", .desc = "\"full\" or \"compact\"", .optional = true },
         },
     },
     .{
         .name = "emetgate_find",
         .description = find_tools.description,
-        .props = &.{.{ .name = "pattern", .desc = "text to find, 1 to 4096 bytes" }},
+        .props = &.{.{ .name = "pattern", .desc = "1 to 4096 bytes" }},
     },
     .{
         .name = "emetgate_scan",
-        .description = "Returns the violations of one check expression in the git-tracked files, at most 100; writes nothing.",
+        .description = "Lists up to 100 violations of one check in tracked files.",
         .props = &.{
-            .{ .name = "check", .desc = "check expression, e.g. forbid:networkidle" },
-            .{ .name = "where", .desc = "scope: a file, a directory ending in /, or file#symbol; defaults to the whole repo", .optional = true },
+            .{ .name = "check", .desc = "e.g. forbid:networkidle" },
+            .{ .name = "where", .desc = "file, dir/ or file#symbol", .optional = true },
         },
     },
     .{
         .name = "emetgate_commit",
-        .description = "Commits the pending gated changes as ONE verified commit. Every prior gated write left a receipt under .emetgate/; this groups those receipts, checks the working tree still matches each one byte for byte (refusing with the file list if any changed outside the gate), builds a single commit from HEAD, and chains + attaches the receipts as its note so that emetgate verify --branch returns \"verified\". It reuses the existing evidence and never re-runs the typecheck or tests.",
-        .props = &.{.{ .name = "message", .desc = "commit message for the grouped changes" }},
+        .description = "Commits pending gated changes; refused if a file changed outside the gate.",
+        .props = &.{.{ .name = "message", .desc = "" }},
     },
     .{
         .name = "emetgate_git",
-        .description = "Returns read-only git output, compact and symbol-anchored by default so the reply costs few tokens without losing recoverable detail. Every reply is assembled under the server read budget (" ++ std.fmt.comptimePrint("{d}", .{read_budget.default_budget}) ++ " characters); detail:\"full\" lifts the budget and returns the full raw git text (the legacy shape). sub is one of: status, diff, log, show, blame. diff/show: the primary view is symbol_changes (per file, which functions/types/methods were added/removed/changed, plus non_symbol_change for edits outside any symbol and mapped:false when a side did not parse); the raw diff follows as output, folded under the budget with the elided line range named in place — pass symbols_only:true for the symbol summary with zero raw bytes, or detail:\"full\" for every hunk. status: grouped compact counts (staged/unstaged/untracked) with entries capped (\"more\") and untracked directories collapsed to dir+count. log: one line per commit (commit/date/subject + verification mark); instead of a silent cap it returns next_cursor when more commits follow — pass it back as cursor to page on. blame: the primary view is symbol_blame (the commit that last changed each symbol); raw per-line blame is returned only under detail:\"full\" or when line_start/line_end request a window. blame requires a single file path.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes a symbol or line range.",
         .props = &.{
-            .{ .name = "sub", .desc = "one of: status, diff, log, show, blame" },
-            .{ .name = "path", .desc = "limit to this file or directory inside the repo (required for blame)", .optional = true },
-            .{ .name = "detail", .desc = "\"budgeted\" (default, compact) or \"full\" (lift the budget, full raw git text)", .optional = true },
-            .{ .name = "symbols_only", .desc = "diff/show only: return just the symbol_changes summary, no raw diff bytes", .optional = true, .ty = "boolean" },
-            .{ .name = "staged", .desc = "diff only: true for the staged (--cached) diff instead of the working tree", .optional = true, .ty = "boolean" },
-            .{ .name = "n", .desc = "log only: how many commits, newest first (default 20, at most 200)", .optional = true, .ty = "integer" },
-            .{ .name = "cursor", .desc = "log only: a commit id from a previous reply's next_cursor, to page to older commits", .optional = true },
-            .{ .name = "commit", .desc = "show only: a commit hash (4 to 40 hex characters) or HEAD, optionally with ~N or ^N", .optional = true },
-            .{ .name = "line_start", .desc = "blame only: first line of a window; returns raw per-line blame for it", .optional = true, .ty = "integer" },
-            .{ .name = "line_end", .desc = "blame only: last line of the window (defaults to line_start)", .optional = true, .ty = "integer" },
+            .{ .name = "sub", .desc = "status, diff, log, show or blame" },
+            .{ .name = "path", .desc = "required for blame", .optional = true },
+            .{ .name = "detail", .desc = "", .optional = true },
+            .{ .name = "symbols_only", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "staged", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "n", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "cursor", .desc = "", .optional = true },
+            .{ .name = "commit", .desc = "", .optional = true },
+            .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
+        },
+    },
+    .{
+        .name = "emetgate_git_write",
+        .description = git_write.description,
+        .props = &.{
+            .{ .name = "args", .desc = "", .ty = "array" },
+            .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_run",
         .description = run_tool.description,
-        .props = &.{.{ .name = "command", .desc = "one allowlist entry, byte for byte; omit to list the allowlist", .optional = true }},
+        .props = &.{.{ .name = "command", .desc = "one allowlist entry, verbatim", .optional = true }},
+    },
+    .{
+        .name = "emetgate_edit",
+        .description = edit_tool.edit_description,
+        .props = &.{
+            .{ .name = "file", .desc = "" },
+            .{ .name = "old_string", .desc = "" },
+            .{ .name = "new_string", .desc = "" },
+            .{ .name = "replace_all", .desc = "", .optional = true, .ty = "boolean" },
+        },
+    },
+    .{
+        .name = "emetgate_write",
+        .description = edit_tool.write_description,
+        .props = &.{
+            .{ .name = "file", .desc = "" },
+            .{ .name = "content", .desc = "" },
+        },
     },
     .{
         .name = "emetgate_write_doc",
-        .description = "Replaces one node of a non-code file: a JSON pointer's value, a Markdown section or a line range of a text file; writes only if the configured typecheck and test commands pass in a sandbox. Exactly one of pointer, heading or the line pair. A JSON value must be valid JSON; a Markdown section must start with a heading line.",
+        .description = "Replaces a JSON value, Markdown section or line range, gated.",
         .props = &.{
-            .{ .name = "file", .desc = "path to a .json, .md or plain text file inside the repo" },
-            .{ .name = "hash", .desc = "content hash of the current node, from emetgate_read_file" },
-            .{ .name = "content", .desc = "replacement text for the selected node" },
-            .{ .name = "pointer", .desc = "JSON pointer, e.g. /dependencies/express", .optional = true },
-            .{ .name = "heading", .desc = "exact heading text", .optional = true },
-            .{ .name = "line_start", .desc = "1-based first line", .optional = true, .ty = "integer" },
-            .{ .name = "line_end", .desc = "1-based last line", .optional = true, .ty = "integer" },
+            .{ .name = "file", .desc = "" },
+            .{ .name = "hash", .desc = "from emetgate_read_file" },
+            .{ .name = "content", .desc = "" },
+            .{ .name = "pointer", .desc = "", .optional = true },
+            .{ .name = "heading", .desc = "", .optional = true },
+            .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
+            .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
         },
     },
 };
@@ -380,6 +412,8 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     const arguments = getField(params, "arguments");
 
     var event: telemetry.Event = .{ .tool = name };
+    tool_result.clearMissing();
+    wire.clearFix();
     const result = callAny(gpa, io, runtime, name, arguments, &event, policy) catch |err| {
         if (observer) |obs| {
             event.fail(@errorName(err));
@@ -387,7 +421,7 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
         }
         return switch (err) {
             error.UnknownTool => writeRpcError(out, id, -32602, "Unknown tool"),
-            error.MissingArgument => writeRpcError(out, id, -32602, "Missing or invalid argument"),
+            error.MissingArgument => writeMissingArgument(out, id),
             else => writeRpcError(out, id, -32603, "Internal error"),
         };
     };
@@ -433,9 +467,13 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
     try js.objectField("version");
     try js.write(server_version);
     try js.endObject();
+    try js.objectField("instructions");
+    try js.write(instructions);
     try js.endObject();
     try js.endObject();
 }
+
+pub const instructions = "Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Edit code with emetgate_try, several files with emetgate_try_batch, and non-code files with emetgate_write_doc; each writes only if typecheck and tests pass, and takes the hash you last read. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
 
 fn writeEmptyResult(out: *Writer, id: Value) !void {
     var js: std.json.Stringify = .{ .writer = out };
@@ -447,7 +485,7 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
     try js.endObject();
 }
 
-pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc" };
+pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc", "emetgate_edit", "emetgate_write" };
 const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
 
 fn commits(tool: []const u8) bool {
@@ -482,8 +520,10 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
             try js.beginObject();
             try js.objectField("type");
             try js.write(prop.ty);
-            try js.objectField("description");
-            try js.write(prop.desc);
+            if (prop.desc.len > 0) {
+                try js.objectField("description");
+                try js.write(prop.desc);
+            }
             try js.endObject();
         }
         const with_message = commit and commits(tool.name);
@@ -515,12 +555,14 @@ fn writeCommitProp(js: *std.json.Stringify) !void {
     try js.endObject();
 }
 
+pub const batch_description = "Gated edits across files: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string,replace_all?} or {file,hash,content} (whole file; hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" removes a symbol, or a file given its file_hash. A file may repeat for old_string and line-range items; they apply in order.";
+
 fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();
     try js.objectField("name");
     try js.write("emetgate_try_batch");
     try js.objectField("description");
-    try js.write("Applies several edits across files as one unit: runs the configured typecheck and test commands once and writes every file only if they pass. One edit per file. kind \"code\" (default): {file, symbol, hash, body} to write, {file, op: \"delete\", symbol, hash} to remove a symbol, {file, op: \"delete\"} to delete a file, {file, node, text} or {file, nodes: [{node, text}, ...]} to replace syntax nodes; hash \"absent\" adds a new top-level symbol or a new file. kind \"doc\": {file, hash, content} plus exactly one of pointer, heading or the line pair.");
+    try js.write(batch_description);
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");
@@ -531,8 +573,6 @@ fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();
     try js.objectField("type");
     try js.write("array");
-    try js.objectField("description");
-    try js.write("the edits, one per file");
     try js.objectField("items");
     try js.beginObject();
     try js.objectField("type");
@@ -615,6 +655,15 @@ fn writeToolResult(out: *Writer, id: Value, text: []const u8, is_error: bool) !v
     try js.write(is_error);
     try js.endObject();
     try js.endObject();
+}
+
+pub const missing_argument_message = "Missing or invalid argument";
+
+fn writeMissingArgument(out: *Writer, id: Value) !void {
+    const field = tool_result.missingField() orelse return writeRpcError(out, id, -32602, missing_argument_message);
+    var buf: [512]u8 = undefined;
+    const message = std.fmt.bufPrint(&buf, missing_argument_message ++ ": {s}", .{field}) catch missing_argument_message;
+    return writeRpcError(out, id, -32602, message);
 }
 
 fn writeRpcError(out: *Writer, id: Value, code: i32, message: []const u8) !void {

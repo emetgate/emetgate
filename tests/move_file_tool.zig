@@ -83,7 +83,7 @@ pub fn moveFile(case: *Case, args: Args) !file_move.Outcome {
 }
 
 pub fn tracked(case: *Case, rel: []const u8) !bool {
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--", rel }, .cwd = .{ .path = case.repo.root_abs } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--", rel }, .cwd = .{ .path = case.repo.root_abs } });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
     return std.mem.trim(u8, result.stdout, " \r\n").len != 0;

@@ -1,9 +1,11 @@
 const std = @import("std");
+const bounded_run = @import("../platform/bounded_run.zig");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
 const exe_path = @import("../platform/exe_path.zig");
 const git_symbols = @import("git_symbols.zig");
+const diff_digest = @import("diff_digest.zig");
 const read_budget = @import("read_budget.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -140,6 +142,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
 
     var count_buf: [24]u8 = undefined;
     var show_commit: ?[]const u8 = null;
+    var blame_range: ?[]const u8 = null;
     if (std.mem.eql(u8, sub, "status")) {
         argv[n] = "status";
         n += 1;
@@ -205,6 +208,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
             argv[n] = "-L";
             n += 1;
             argv[n] = std.fmt.bufPrint(&count_buf, "{d},{d}", .{ ls, le }) catch return error.InvalidCount;
+            blame_range = argv[n];
             n += 1;
         }
     } else {
@@ -218,7 +222,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         n += 1;
     }
 
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = argv[0..n],
         .cwd = .{ .path = place.root },
         .stdout_limit = .limited(max_git_output_bytes),
@@ -268,7 +272,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     var porcelain: ?[]u8 = null;
     defer if (porcelain) |p| gpa.free(p);
     if (std.mem.eql(u8, sub, "blame")) {
-        porcelain = blamePorcelain(gpa, io, git, place.root, place.rel) catch null;
+        porcelain = blamePorcelain(gpa, io, git, place.root, place.rel, blame_range) catch null;
         if (porcelain) |text|
             blame = git_symbols.analyzeBlame(gpa, io, runtime, place.root, place.rel, text) catch null;
     }
@@ -279,10 +283,11 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
 /// Second blame pass in machine-readable form, used only to map symbols to the
 /// commit that last changed them. Best-effort: a failure returns null and the
 /// raw blame stays the whole answer.
-fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rel: []const u8) !?[]u8 {
-    const argv = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "--", rel };
-    const result = std.process.run(gpa, io, .{
-        .argv = &argv,
+fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8, rel: []const u8, range: ?[]const u8) !?[]u8 {
+    const whole = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "--", rel };
+    const windowed = [_][]const u8{ git, "--no-pager", "blame", "--line-porcelain", "-L", range orelse "", "--", rel };
+    const result = bounded_run.run(gpa, io, .{
+        .argv = if (range != null) &windowed else &whole,
         .cwd = .{ .path = root },
         .stdout_limit = .limited(max_git_output_bytes * 8),
         .stderr_limit = .limited(max_git_output_bytes),
@@ -306,7 +311,7 @@ fn blamePorcelain(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8,
 fn annotatedCommits(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8) ![]const []const u8 {
     const argv = [_][]const u8{ git, "--no-pager", "notes", "--ref=emetgate", "list" };
     const limit: std.Io.Limit = .limited(max_git_output_bytes);
-    const result = std.process.run(gpa, io, .{
+    const result = bounded_run.run(gpa, io, .{
         .argv = &argv,
         .cwd = .{ .path = root },
         .stdout_limit = limit,
@@ -448,7 +453,7 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
         try js.objectField("subject");
         try js.write(subject);
         try js.objectField("verification");
-        try js.write(if (isAnnotated(annotated, oid)) "verified" else "unverified");
+        try js.write(if (isAnnotated(annotated, oid)) "receipt" else "no_receipt");
         try js.endObject();
         shown += 1;
         size += line.len + 48;
@@ -456,6 +461,8 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
     try js.endArray();
     try js.objectField("commits_shown");
     try js.write(shown);
+    try js.objectField("verification_note");
+    try js.write("receipt means a receipt note is attached, not that it holds; emetgate verify <commit> checks it");
     if (next_cursor) |c| {
         try js.objectField("next_cursor");
         try js.write(c);
@@ -598,7 +605,7 @@ const Folded = struct {
 };
 
 fn isHunkBoundary(line: []const u8) bool {
-    return std.mem.startsWith(u8, line, "@@") or std.mem.startsWith(u8, line, "diff --git ");
+    return std.mem.startsWith(u8, line, "@");
 }
 
 fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
@@ -622,7 +629,7 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
 
     var hunks_elided: usize = 0;
     for (lines.items[keep..]) |l| {
-        if (std.mem.startsWith(u8, l, "@@")) hunks_elided += 1;
+        if (std.mem.startsWith(u8, l, "@")) hunks_elided += 1;
     }
     const remaining = total - keep;
 
@@ -648,7 +655,9 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
 
 fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path: ?[]const u8, stdout: []const u8, summary: ?*const git_symbols.Summary, opts: Options) !void {
     try writeBase(js, sub, path, opts);
-    if (summary) |s| try writeSymbolSummary(js, s.*);
+    if (opts.symbols_only or opts.detail == .full) {
+        if (summary) |s| try writeSymbolSummary(js, s.*);
+    }
 
     if (opts.symbols_only) {
         try js.objectField("symbols_only");
@@ -665,10 +674,16 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
         return;
     }
 
-    const folded = try foldDiff(gpa, stdout, opts.budget);
+    const condensed = try diff_digest.condense(gpa, stdout, summary);
+    defer gpa.free(condensed);
+    const folded = try foldDiff(gpa, condensed, opts.budget);
     defer folded.deinit(gpa);
     try js.objectField("output");
     try js.write(folded.text);
+    if (!folded.elided) {
+        try js.endObject();
+        return;
+    }
     try js.objectField("lines_shown");
     try js.write(folded.lines_shown);
     try js.objectField("lines_total");
@@ -693,7 +708,7 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
     }
     try js.endArray();
     try js.objectField("note");
-    try js.write("compact: symbol_changes is the primary view; the raw diff is folded under the read budget — pass detail:\"full\" for every hunk, or symbols_only:true for zero raw bytes");
+    try js.write("compact diff folded under the read budget; pass detail:\"full\" for every hunk, or symbols_only:true for symbol_changes only");
     try js.endObject();
 }
 
@@ -720,16 +735,20 @@ fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !vo
         try js.write(file.path);
         try js.objectField("status");
         try js.write(file.status);
-        try js.objectField("mapped");
-        try js.write(file.mapped);
-        try js.objectField("non_symbol_change");
-        try js.write(file.non_symbol_change);
+        if (!file.mapped) {
+            try js.objectField("mapped");
+            try js.write(false);
+        }
+        if (file.non_symbol_change) {
+            try js.objectField("non_symbol_change");
+            try js.write(true);
+        }
         if (file.note) |note| {
             try js.objectField("note");
             try js.write(note);
         }
-        try js.objectField("symbols");
-        try js.beginArray();
+        if (file.symbols.len != 0) try js.objectField("symbols");
+        if (file.symbols.len != 0) try js.beginArray();
         for (file.symbols) |sym| {
             try js.beginObject();
             try js.objectField("ref");
@@ -740,12 +759,14 @@ fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !vo
             try js.write(@tagName(sym.change));
             try js.endObject();
         }
-        try js.endArray();
+        if (file.symbols.len != 0) try js.endArray();
         try js.endObject();
     }
     try js.endArray();
-    try js.objectField("symbol_changes_truncated");
-    try js.write(summary.truncated);
+    if (summary.truncated) {
+        try js.objectField("symbol_changes_truncated");
+        try js.write(true);
+    }
 }
 
 fn writeBlameSummary(js: *std.json.Stringify, blame: git_symbols.BlameReport) !void {

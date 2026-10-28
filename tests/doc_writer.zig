@@ -37,7 +37,7 @@ const Fixture = struct {
         var argv: [8][]const u8 = undefined;
         argv[0] = "git";
         @memcpy(argv[1..][0..args.len], args);
-        const result = try std.process.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
+        const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
         gpa.free(result.stdout);
         gpa.free(result.stderr);
         switch (result.term) {
@@ -84,7 +84,7 @@ test "doc_writer: a passing test command commits a json pointer write and touche
     try testing.expectEqualStrings("{\"name\": \"demo\", \"scripts\": {\"build\": \"tsc --noEmit\"}}\n", after);
 }
 
-test "doc_writer: a failing test command rejects a markdown section write and leaves disk untouched" {
+test "doc_writer: a markdown section write is not test-gated, so a failing test command still lets it through" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fx = try Fixture.init();
     defer fx.deinit();
@@ -99,11 +99,11 @@ test "doc_writer: a failing test command rejects a markdown section write and le
         .test_command = "cmd /c exit 1",
     }, null);
     defer result.deinit(gpa);
-    try testing.expect(result == .rejected);
+    try testing.expect(result == .committed);
 
     const after = try fx.read("README.md");
     defer gpa.free(after);
-    try testing.expectEqualStrings(readme_md, after);
+    try testing.expect(std.mem.indexOf(u8, after, "new instructions") != null);
 }
 
 test "doc_writer: a stale hash on a line range write is refused before any sandbox run" {

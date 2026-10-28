@@ -3,6 +3,7 @@ const profile_mod = @import("../profile.zig");
 const Facts = profile_mod.Facts;
 const FieldSite = profile_mod.FieldSite;
 const TypedBinder = profile_mod.TypedBinder;
+const Initializer = profile_mod.Initializer;
 
 const writes = [_]FieldSite{
     .{ .parent = "assignment_expression", .field = "left" },
@@ -32,6 +33,11 @@ const typed_binders = [_]TypedBinder{
     .{ .node = "parameter", .name_field = "name", .type_field = "type" },
 };
 
+const initializers = [_]Initializer{
+    .{ .entry = "assignment_expression", .name_field = "left", .list = "initializer_expression", .owner = "object_creation_expression", .owner_list_field = "initializer", .object_is_owner = true },
+    .{ .entry = "with_initializer", .owner = "with_expression", .object_is_owner = false },
+};
+
 pub const csharp: Facts = .{
     .branch_statements = &branch_statements,
     .test_calls = &.{},
@@ -49,7 +55,7 @@ pub const csharp: Facts = .{
     .type_annotation = null,
     .this_keyword = "this",
     .super_keyword = "base",
-    .classes = &.{ "class_declaration", "struct_declaration", "record_declaration", "record_struct_declaration" },
+    .classes = &.{ "class_declaration", "struct_declaration", "record_declaration" },
     .class_fields = &.{"property_declaration"},
     .heritage = "base_list",
     .extends_clause = null,
@@ -62,4 +68,9 @@ pub const csharp: Facts = .{
     .error_node = "ERROR",
     .export_value_field = "value",
     .export_declaration_field = "declaration",
+    .global_types = true,
+    .namespaces = &.{"namespace_declaration"},
+    .using_directive = "using_directive",
+    .constructions = &.{.{ .node = "variable_declarator", .name_field = "name", .parent_type_field = "type" }},
+    .initializers = &initializers,
 };

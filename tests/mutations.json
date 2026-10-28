@@ -1,6 +1,116 @@
 {
   "mutations": [
     {
+      "id": "WC1-batch-whole-create-not-recognised",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!symbol_named and (getString(item, \"body\") != null or getString(item, \"content\") != null)) return .text;",
+      "to": "    if (false) return .text;",
+      "kills": [
+        "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory"
+      ]
+    },
+    {
+      "id": "WC2-batch-whole-create-overwrites-existing",
+      "file": "src/platform/batch_plan.zig",
+      "from": "            if (expected == .absent and base != null) return error.FileExists;\n",
+      "to": "",
+      "kills": [
+        "try_batch whole-file create refuses a file that already exists and leaves it untouched"
+      ]
+    },
+    {
+      "id": "WC3-batch-whole-create-new-dirs-dropped",
+      "file": "src/protocol/handlers.zig",
+      "from": "            if (!known) try dirs.append(gpa, try gpa.dupe(u8, dir));",
+      "to": "            _ = known;",
+      "kills": [
+        "try_batch creates whole files from content with hash absent and no symbol, including a doc file and a new directory"
+      ]
+    },
+    {
+      "id": "SC1-symbols-never-compact",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table.*);",
+      "to": "",
+      "kills": [
+        "symbol listings of a large file are compact lines without hashes unless detail full"
+      ]
+    },
+    {
+      "id": "SC2-symbols-compact-ignores-detail-full",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!full and table.symbols.len",
+      "to": "    if (table.symbols.len",
+      "kills": [
+        "symbol listings of a large file are compact lines without hashes unless detail full"
+      ]
+    },
+    {
+      "id": "SH1-kept-key-on-plain-name-accepted",
+      "file": "src/engine/rename.zig",
+      "from": "        if (!leaf.shorthand) return error.ShorthandReference;\n",
+      "to": "",
+      "kills": [
+        "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused",
+        "red team rename: a shorthand property location and a refused rename info are both refused"
+      ]
+    },
+    {
+      "id": "SH2-kept-key-dropped",
+      "file": "src/engine/rename.zig",
+      "from": "        if (keep == .key) try text.print(gpa, \"{s}: \", .{old});",
+      "to": "",
+      "kills": [
+        "rename: a shorthand property keeps its key when only the binding is renamed",
+        "red team rename: a shorthand the service marks with a kept key is written as key and new name"
+      ]
+    },
+    {
+      "id": "SH3-kept-value-dropped",
+      "file": "src/engine/rename.zig",
+      "from": "        if (keep == .value) try text.print(gpa, \": {s}\", .{old});",
+      "to": "",
+      "kills": [
+        "rename: a destructured shorthand collapses with its uses or keeps its local name when only the key is renamed"
+      ]
+    },
+    {
+      "id": "SH4-checks-run-on-unexpanded-base",
+      "file": "src/engine/rename.zig",
+      "from": "    const resolved = try crossCheck(gpa, checked, old, expanded.targets, options.free_uses);",
+      "to": "    const resolved = try crossCheck(gpa, base, old, spans, options.free_uses);",
+      "kills": [
+        "rename: a destructured shorthand collapses with its uses or keeps its local name when only the key is renamed"
+      ]
+    },
+    {
+      "id": "SH5-service-keep-ignored",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (location.prefix.len != 0) return .key;",
+      "to": "    if (false) return .key;",
+      "kills": [
+        "red team rename: a shorthand the service marks with a kept key is written as key and new name"
+      ]
+    },
+    {
+      "id": "SH6-collapsed-shorthand-not-an-interface-change",
+      "file": "src/platform/rename_batch.zig",
+      "from": " or try collapsesShorthand(gpa, io, runtime, &locations, old);",
+      "to": ";",
+      "kills": [
+        "red team rename: a shorthand the service leaves bare collapses only with interface approval"
+      ]
+    },
+    {
+      "id": "SH7-duplicate-service-span-kept",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (containsSpan(self.spans.items, span)) return;\n",
+      "to": "",
+      "kills": [
+        "red team rename: a shorthand the service leaves bare collapses only with interface approval"
+      ]
+    },
+    {
       "id": "RF1-read-file-raw-range-ignored",
       "file": "src/protocol/read_tools.zig",
       "from": "    if (line_start != null or line_end != null) {\n        return renderRange(",
@@ -862,8 +972,8 @@
     {
       "id": "B1-body-only-bounded-shortcut-restored",
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);",
-      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);",
+      "from": "    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);",
+      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);",
       "kills": [
         "body-only: an exported declaration is UNBOUNDED",
         "body-only: a callback escape is UNBOUNDED",
@@ -1252,7 +1362,7 @@
         "body-only: an exported declaration is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);\n",
+      "from": "    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);\n",
       "to": ""
     },
     {
@@ -1633,8 +1743,8 @@
     {
       "id": "SB3-sandbox-child-integrity-check-removed",
       "file": "src/platform/sandbox.zig",
-      "from": "    try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
-      "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
+      "from": "    if (command.backend != .user) try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n",
+      "to": "    try job.assign(child.id.?);\n",
       "kills": [
         "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all",
         "redteam sandbox: an unavailable sandbox rejects the proposal and leaves the repository untouched"
@@ -1793,8 +1903,8 @@
     {
       "id": "NS6-insert-blank-line-always-added",
       "file": "src/engine/cas.zig",
-      "from": "const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) \"\" else eol;",
-      "to": "const separator: []const u8 = eol;",
+      "from": ".lead = if (grouped) \"\" else eol };",
+      "to": ".lead = eol };",
       "kills": [
         "insert appends after the last newline with exactly one blank line added only when none is there"
       ]
@@ -1802,8 +1912,8 @@
     {
       "id": "NS7-insert-blank-line-never-added",
       "file": "src/engine/cas.zig",
-      "from": "const separator: []const u8 = if (std.mem.endsWith(u8, base.source[0 .. base.source.len - eol.len], eol)) \"\" else eol;",
-      "to": "const separator: []const u8 = \"\";",
+      "from": ".lead = if (grouped) \"\" else eol };",
+      "to": ".lead = \"\" };",
       "kills": [
         "insert appends after the last newline with exactly one blank line added only when none is there",
         "absent: a new top-level symbol is appended, committed, parses and joins the symbol table"
@@ -1821,8 +1931,8 @@
     {
       "id": "NS9-insert-extra-top-level-code-accepted",
       "file": "src/engine/cas.zig",
-      "from": "    if (statements != 1) return error.ExtraTopLevelCode;\n",
-      "to": "    if (statements != 1 and false) return error.ExtraTopLevelCode;\n",
+      "from": "    if (statements != holdersIn(profile, root, table, slot)) return error.ExtraTopLevelCode;\n",
+      "to": "    if (statements != holdersIn(profile, root, table, slot) and false) return error.ExtraTopLevelCode;\n",
       "kills": [
         "insert refuses top-level code beside the one symbol"
       ]
@@ -1913,7 +2023,7 @@
       "to": "        error.FileNotFound => return error.FileNotFound,\n",
       "kills": [
         "new file: a missing directory is refused and nothing is created",
-        "purple: hash absent in a directory that does not exist is refused by name through MCP"
+        "purple: hash absent in a directory that does not exist is refused by name through emetgate_mutate"
       ]
     },
     {
@@ -2557,8 +2667,8 @@
     {
       "id": "NL4-literal-pair-outside-span-reported",
       "file": "src/engine/checks.zig",
-      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        if (!isKind(node, shape.pair))",
-      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        if (!isKind(node, shape.pair))",
+      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        const fields = literalFields(shape, node)",
+      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        const fields = literalFields(shape, node)",
       "kills": [
         "no_literal reports only pairs inside the span",
         "scope: a no_literal rule scoped to one symbol reports only its literal options"
@@ -2699,8 +2809,8 @@
     {
       "id": "NL14-literal-pair-kind-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (!isKind(node, shape.pair)) continue;",
-      "to": "if (!isKind(node, shape.pair) and false) continue;",
+      "from": "if (isKind(node, shape.pair)) return .{ .key",
+      "to": "if (true) return .{ .key",
       "filter": [
         "no_literal"
       ],
@@ -2748,7 +2858,7 @@
     {
       "id": "ST4-scan-tool-non-string-where-ignored",
       "file": "src/protocol/handlers.zig",
-      "from": "        else => return error.MissingArgument,\n    } else null;",
+      "from": "        else => return tool_result.missing(\"where (string)\", .{}),\n    } else null;",
       "to": "        else => null,\n    } else null;",
       "kills": [
         "scan tool: a call without check or with a non-string where is a missing argument"
@@ -3339,8 +3449,8 @@
     {
       "id": "CMD7-spawned-integrity-not-verified",
       "file": "src/platform/sandbox.zig",
-      "from": "    try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
-      "to": "    try job.assign(child.id.?);\n    try resumeMainThread(child.thread_handle);\n\n",
+      "from": "    if (command.backend != .user) try requireLowIntegrity(child.id.?);\n    try job.assign(child.id.?);\n",
+      "to": "    try job.assign(child.id.?);\n",
       "kills": [
         "cmd rule: a sandbox that cannot be built refuses the command instead of running it unrestricted",
         "redteam sandbox: every failure to build the low-integrity token refuses to run the command at all"
@@ -3377,8 +3487,8 @@
     {
       "id": "RO3-rules-dropped-from-the-skeleton",
       "file": "src/protocol/handlers.zig",
-      "from": "    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, adopted.items);",
-      "to": "    try wire.writeSkeleton(gpa, w, file, symbol.fileHash(snapshot.source), text, table, &.{});",
+      "from": ", text, adopted.items, if (docs)",
+      "to": ", text, &.{}, if (docs)",
       "kills": [
         "rule: the skeleton the model reads carries every adopted rule that covers the file"
       ]
@@ -3928,8 +4038,8 @@
     {
       "id": "LW3-console-host-counted",
       "file": "src/platform/sandbox.zig",
-      "from": "        if (console_host != null and pid == console_host.?) continue;\n",
-      "to": "        if (console_host == null and pid == 0) continue;\n",
+      "from": "        if (console_host != null and pid == console_host.?) continue;\n        count += 1;\n",
+      "to": "        if (console_host == null and pid == 0) continue;\n        count += 1;\n",
       "kills": [
         "the exited command's own console host is not a leftover, any other process in the job is"
       ]
@@ -4763,8 +4873,8 @@
     {
       "id": "ZIG1-pub-check-inverted",
       "file": "src/engine/lang/profile.zig",
-      "from": "if (std.mem.eql(u8, keyword, child.kind())) return true;",
-      "to": "if (std.mem.eql(u8, keyword, child.kind())) return false;",
+      "from": "if (std.mem.eql(u8, keyword, word)) return true;",
+      "to": "if (std.mem.eql(u8, keyword, word)) return false;",
       "kills": [
         "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
       ]
@@ -4772,7 +4882,7 @@
     {
       "id": "ZIG2-visibility-hook-not-consulted",
       "file": "src/engine/boundedness.zig",
-      "from": "if (profile.hasVisibilityKeyword(sym.node)) return true;\n    var current = sym.node.parent();",
+      "from": "if (profile.hasVisibilityKeyword(tree, sym.node)) return true;\n    var current = sym.node.parent();",
       "to": "var current = sym.node.parent();",
       "kills": [
         "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
@@ -4876,7 +4986,7 @@
       "from": "if (overlaps(entry.declaration, range)) try out.append(gpa, entry);",
       "to": "if (overlaps(range, range)) try out.append(gpa, entry);",
       "kills": [
-        "emetgate_read_symbol with a line range hitting no symbol is a tool error"
+        "emetgate_read_symbol with a line range hitting no symbol returns those lines"
       ]
     },
     {
@@ -4904,7 +5014,7 @@
     {
       "id": "R13-cache-not-invalidated-after-try-batch",
       "file": "src/protocol/handlers.zig",
-      "from": "if (policy.tree_cache) |cache| for (edits) |edit| cache.invalidate(edit.file_abs);",
+      "from": "if (policy.tree_cache) |cache| for (edits[0..code_used]) |edit| cache.invalidate(edit.file_abs);",
       "to": "",
       "expect_status": "survived",
       "note": "defense-in-depth: same as R12, the content hash on the next load catches the batch edit even without invalidation",
@@ -5018,8 +5128,8 @@
       "from": "                .directory => {",
       "to": "                .directory, .sym_link => {",
       "kills": [
-        "build hardlinks every file, recreates every directory and never follows a reparse point",
-        "redteam link tree: a junction inside a linked directory is not followed into the shadow"
+        "build hardlinks every file, recreates every directory and mirrors a reparse point as a junction to the same target",
+        "redteam link tree: a junction inside a linked directory is mirrored read-only, and writes through it never reach its target"
       ]
     },
     {
@@ -5191,8 +5301,8 @@
     {
       "id": "FH3-skeleton-without-file-hash",
       "file": "src/protocol/wire.zig",
-      "from": "    try js.write(file);\n    try writeFileHash(&js, file_hash);\n    try js.objectField(\"skeleton\");",
-      "to": "    try js.write(file);\n    _ = file_hash;\n    try js.objectField(\"skeleton\");",
+      "from": "    try js.write(file);\n    try writeFileHash(&js, file_hash);\n    if (adopted.len != 0) {",
+      "to": "    try js.write(file);\n    _ = file_hash;\n    if (adopted.len != 0) {",
       "kills": [
         "redteam batch delete: an unreferenced file is deleted through the tool and reported as deleted"
       ]
@@ -5221,13 +5331,13 @@
       "from": "        if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;",
       "to": "        if (a.len != b.len) return error.AlphaMismatch;",
       "kills": [
-        "rename: renaming one of two same-named properties in a statement breaks its alpha hash"
+        "rename: renaming one of two free uses of a name breaks its alpha hash"
       ]
     },
     {
       "id": "RN2-symbol-alpha-check-skipped",
       "file": "src/engine/rename.zig",
-      "from": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (std.mem.eql(u8, &b_hash, &try alphaHash(gpa, next, a.declaration))) matched = true;",
+      "from": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (std.mem.eql(u8, &b_hash, &try alpha.hashDistinct(gpa, next, a.declaration, next_spans))) matched = true;",
       "to": "        for (after.symbols) |a| {\n            if (!mapping.same(b.ref, a.ref, renamed)) continue;\n            if (b_hash.len != 0) matched = true;",
       "expect_status": "survived",
       "note": "defense in depth: every symbol a rename touches lies inside a touched top-level statement, and equal name partitions over the statement imply equal ones over any part of it, so the per-symbol comparison only repeats the statement check; it is kept because it also checks that every symbol keeps its ref"
@@ -5272,8 +5382,8 @@
     {
       "id": "RN7-location-not-an-identifier-skipped",
       "file": "src/engine/rename.zig",
-      "from": "        const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;\n        if (leaf.shorthand) return error.ShorthandReference;",
-      "to": "        const leaf = findLeaf(leaves, span) orelse continue;\n        if (leaf.shorthand) return error.ShorthandReference;",
+      "from": "            if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span.start..span.end], old)) return error.NotAnIdentifier;\n",
+      "to": "",
       "kills": [
         "red team rename: a location inside a comment or a string is refused and both stay unchanged",
         "rename: a span that is not an occurrence, a taken name, a bad name, a duplicate and a shorthand are refused"
@@ -5290,8 +5400,8 @@
     {
       "id": "RN9-untouched-file-not-checked",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (untouched and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;\n",
-      "to": "    _ = .{ gpa, untouched };\n",
+      "from": "    if (renamed == null and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;\n",
+      "to": "    _ = gpa;\n",
       "kills": [
         "red team rename: a service that skips a whole file that still calls the old name is refused"
       ]
@@ -5308,8 +5418,8 @@
     {
       "id": "RN11-dynamic-access-ignored",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (rename.dynamicAccess(snapshot, old, member) != null) return error.DynamicReference;\n",
-      "to": "    _ = member;\n",
+      "from": "    if (sites.count != 0 and !sites.allow) return error.DynamicReference;\n",
+      "to": "\n",
       "kills": [
         "red team rename: a string key, eval or a computed require in a touched file is unresolved dynamic access"
       ]
@@ -5478,8 +5588,8 @@
     {
       "id": "KD3-exported-type-approval-skipped",
       "file": "src/platform/rename_batch.zig",
-      "from": "    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name);",
-      "to": "    const interface_change = locations.files.items.len > 1 or top_name.len == 0;",
+      "from": "    const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name) or (resolver",
+      "to": "    const interface_change = locations.files.items.len > 1 or top_name.len == 0 or (resolver",
       "kills": [
         "rename kinds: a class field is renamed with its this and obj accesses the service reports",
         "rename kinds: a local export alias keeps its public name and only the local name changes"
@@ -5506,8 +5616,8 @@
     {
       "id": "KD6-function-values-listed-twice",
       "file": "src/engine/declarations.zig",
-      "from": "            if (self.isFunctionValue(child)) continue;\n            if (declarators == 1) {",
-      "to": "            if (declarators == 1) {",
+      "from": "        if (self.isFunctionValue(child)) return;\n        if (declarators == 1) {",
+      "to": "        if (declarators == 1) {",
       "kills": [
         "declarations: a merged interface and class share a ref and are marked ambiguous, a destructuring and a function value are not declarations"
       ]
@@ -5595,8 +5705,8 @@
     {
       "id": "CR1-create-ignores-declarations",
       "file": "src/engine/cas.zig",
-      "from": "    for (table.declarations) |candidate| {\n        if (candidate.declaration.start < slot.start or candidate.ref.container.len != 0) continue;\n        if (found != null) return error.MultipleTopLevelSymbols;\n        found = .{ .ref = candidate.ref, .hash = candidate.hash, .body = null };\n    }\n",
-      "to": "",
+      "from": "    inline for (.{ table.symbols, table.declarations, table.statements }) |list| {\n        for (list) |candidate| {\n            if (!within(candidate.declaration, slot)) continue;\n",
+      "to": "    inline for (.{ table.symbols, table.statements }) |list| {\n        for (list) |candidate| {\n            if (!within(candidate.declaration, slot)) continue;\n",
       "kills": [
         "insert and create accept a variable, class, interface, type alias or enum as the one new declaration",
         "create kinds: a batch adds an exported const and a new file with an interface, both classified as symmetry"
@@ -5744,11 +5854,11 @@
     },
     {
       "id": "RUN4-output-cap-removed",
-      "file": "src/protocol/run_tool.zig",
-      "from": "    const cut = run_command.tail(bytes, max_output_lines, max_output_bytes);\n",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    const cut = run_command.tail(bytes, max_log_lines, max_log_bytes);\n",
       "to": "    const cut = run_command.tail(bytes, std.math.maxInt(usize), std.math.maxInt(usize));\n",
       "kills": [
-        "redteam run: a flood of output comes back cut to the last lines with a count of the rest"
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
       ]
     },
     {
@@ -6086,8 +6196,8 @@
     {
       "id": "DW9-try-batch-drops-doc-edits",
       "file": "src/protocol/handlers.zig",
-      "from": ".{ .edits = edits, .doc_edits = doc_edits, .test_command = resolved,",
-      "to": ".{ .edits = edits, .test_command = resolved,",
+      "from": ".doc_edits = doc_edits, .test_command = resolved,",
+      "to": ".test_command = resolved,",
       "kills": [
         "emetgate_try_batch commits a code edit and a doc edit together"
       ]
@@ -9383,16 +9493,6 @@
       "note": "a commit would move a detached HEAD and belong to no branch"
     },
     {
-      "id": "GC2-unborn-branch-accepted",
-      "file": "src/platform/git_commit.zig",
-      "from": "        if (try git.run(&.{ \"rev-parse\", \"--verify\", \"-q\", \"HEAD^{commit}\" }) == null) return error.NoCommitYet;\n",
-      "to": "",
-      "kills": [
-        "git commit: a repository with no commit yet is refused"
-      ],
-      "note": "a first commit has no parent to compare with and no tree to start from"
-    },
-    {
       "id": "GC3-operation-in-progress-accepted",
       "file": "src/platform/git_commit.zig",
       "from": "        if (try exists(io, path)) return error.OperationInProgress;\n",
@@ -9672,8 +9772,8 @@
     {
       "id": "BC4-moved-source-stays-in-the-commit",
       "file": "src/platform/batch.zig",
-      "from": "        if (p.source_rel) |from| try changes.append(gpa, .{ .rel = from, .content = null });\n",
-      "to": "",
+      "from": "        if (p.source_rel) |from| try changes.append(gpa, .{ .rel = from, .content = null });\n        try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source(), .mode_from",
+      "to": "        try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source(), .mode_from",
       "kills": [
         "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
       ],
@@ -9682,8 +9782,8 @@
     {
       "id": "BC5-deleted-file-committed-as-empty",
       "file": "src/platform/batch.zig",
-      "from": "if (p.action == .delete_file) null else p.source()",
-      "to": "if (false and p.action == .delete_file) null else p.source()",
+      "from": "if (p.action == .delete_file) null else p.source(), .mode_from",
+      "to": "if (false and p.action == .delete_file) null else p.source(), .mode_from",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
@@ -9692,8 +9792,8 @@
     {
       "id": "BC6-doc-edit-left-out-of-the-commit",
       "file": "src/platform/batch.zig",
-      "from": "    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
-      "to": "    for (doc_prepared) |p| if (false) try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n",
+      "from": "    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n    return changes.toOwnedSlice(gpa);",
+      "to": "    for (doc_prepared) |p| if (false) try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n    return changes.toOwnedSlice(gpa);",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
@@ -9743,8 +9843,8 @@
     {
       "id": "BC11-try-batch-handler-drops-the-commit-request",
       "file": "src/protocol/handlers.zig",
-      "from": ".language_service = policy.language_service, .commit = if (commit) |*request| request else null };",
-      "to": ".language_service = policy.language_service, .commit = if (commit) |*request| (if (false) request else null) else null };",
+      "from": ".language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs",
+      "to": ".language_service = policy.language_service, .commit = if (commit) |*request| (if (false) request else null) else null, .created_dirs",
       "kills": [
         "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
       ],
@@ -9935,8 +10035,8 @@
     {
       "id": "PV7-commit-encoding-taken-from-config",
       "file": "src/platform/git_commit.zig",
-      "from": "\"-c\", \"i18n.commitEncoding=UTF-8\", ",
-      "to": "",
+      "from": "\"-c\", \"i18n.commitEncoding=UTF-8\", \"commit-tree\", tree, \"-p\"",
+      "to": "\"commit-tree\", tree, \"-p\"",
       "kills": [
         "redteam commit: a commit encoding setting does not mislabel the UTF-8 message"
       ],
@@ -9966,8 +10066,8 @@
     {
       "id": "PV10-changed-index-replaced",
       "file": "src/platform/git_commit.zig",
-      "from": "    if (now == null or !std.mem.eql(u8, &now.?, &staged.base)) {\n        guard.deleteSelf() catch {};",
-      "to": "    if (false and (now == null or !std.mem.eql(u8, &now.?, &staged.base))) {\n        guard.deleteSelf() catch {};",
+      "from": "    if (!std.mem.eql(u8, &now, &staged.base)) {\n        guard.deleteSelf() catch {};",
+      "to": "    if (false and !std.mem.eql(u8, &now, &staged.base)) {\n        guard.deleteSelf() catch {};",
       "kills": [
         "commit window: an entry staged on another file between the index copy and the lock is still staged after the commit lands"
       ],
@@ -10142,8 +10242,8 @@
     {
       "id": "PV29-recover-deletes-a-file-the-replaced-commit-does-not-hold",
       "file": "src/platform/git_commit.zig",
-      "from": "    const parent = ids.next() orelse return null;\n    if (ids.next() != null) return null;\n",
-      "to": "    const parent = ids.next() orelse base;\n    if (ids.next() != null) return null;\n",
+      "from": "    const parent = ids.next() orelse if (isUnborn(base)) base else return null;\n",
+      "to": "    const parent = ids.next() orelse base;\n",
       "kills": [
         "commit protocol: a record that did not come from a commit cannot delete a file the replaced commit does not hold"
       ],
@@ -10863,11 +10963,6 @@
       "from": "    if (registry.forPath(path) != null) return error.UseSymbolToolsForSource;\n",
       "to": "    if (false and registry.forPath(path) != null) return error.UseSymbolToolsForSource;\n",
       "kills": [
-        "batch doc on source: a line range that adds comments under an enforced no_comment rule is refused, nothing is written and the call is logged",
-        "batch doc on source: the same edit is refused under an enforced forbid rule and under an advisory rule",
-        "write_doc on source: a line range of a source file is refused like the batch, and nothing is written",
-        "mixed batch: a symbol edit of one file and a doc edit of another source file are refused together",
-        "mixed batch: a symbol edit and a doc edit of the same source file are refused as a source doc edit",
         "planDoc refuses a file of a registered language before it reads it"
       ]
     },
@@ -10877,7 +10972,7 @@
       "from": "    try docnode.refuseSource(options.file_abs);\n",
       "to": "",
       "kills": [
-        "write_doc on source: a line range of a source file is refused like the batch, and nothing is written"
+        "the doc writer refuses a source file before it looks for the repository"
       ]
     },
     {
@@ -10886,7 +10981,7 @@
       "from": "    for (options.doc_edits) |edit| try docnode.refuseSource(edit.file_abs);\n",
       "to": "",
       "kills": [
-        "mixed batch: a symbol edit and a doc edit of the same source file are refused as a source doc edit"
+        "the batch engine refuses a doc edit of a source file before it looks for the repository"
       ]
     },
     {
@@ -12153,8 +12248,8 @@
     {
       "id": "TX8-served-face-takes-internals",
       "file": "src/protocol/policy.zig",
-      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false };",
-      "to": "    var policy: Policy = .{ .search_text = true };",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };",
+      "to": "    var policy: Policy = .{ .search_text = true, .mirror_enabled = true, .raw_code = true };",
       "kills": [
         "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
       ]
@@ -12162,8 +12257,8 @@
     {
       "id": "TX9-model-schema-offers-certificate",
       "file": "src/protocol/server.zig",
-      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },",
-      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" lifts the reply size budget (up to 200 hits); the default is \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
+      "from": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" or \\\"compact\\\"\", .optional = true },",
+      "to": "            .{ .name = \"detail\", .desc = \"\\\"full\\\" or \\\"compact\\\"\", .optional = true },\n            .{ .name = \"certificate\", .desc = \"reply in JSON with the answer's certificate: snapshot root, scope counts, excluded paths and budgets\", .optional = true, .ty = \"boolean\" },",
       "kills": [
         "search text: the model's tool offers and obeys no format, certificate or stats, and only --search-internals turns them on"
       ]
@@ -12180,7 +12275,7 @@
     {
       "id": "FT2-footer-switch-ignored",
       "file": "src/protocol/telemetry.zig",
-      "from": "    if (!event.footer) return null;",
+      "from": "    if (!(event.footer orelse event.mutating)) return null;",
       "to": "",
       "kills": [
         "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
@@ -12257,6 +12352,3631 @@
       "kills": [
         "an entry left out as too large is read again once the size limit admits it",
         "search text: a file an older index left out as too large is read again once the size limit admits it"
+      ]
+    },
+    {
+      "id": "CSR1-facts-resolver-never-chosen",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
+      "to": "    if (false and rename_graph.supports(base.profile)) {",
+      "kills": [
+        "rename facts: a C# static method called from another file is renamed at its declaration and every call",
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file",
+        "rename facts: a Python function imported by another module is renamed at its import and its call"
+      ]
+    },
+    {
+      "id": "CSR2-facts-resolver-for-service-languages",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
+      "to": "    if (rename_graph.supports(base.profile)) {",
+      "kills": [
+        "rename kinds: a class is renamed in its declaration, an import, extends, a return type, a variable type and new"
+      ]
+    },
+    {
+      "id": "CSR3-free-uses-not-passed",
+      "file": "src/platform/rename_batch.zig",
+      "from": ".{ .free_uses = free_uses, .kept_keys",
+      "to": ".{ .free_uses = false, .kept_keys",
+      "kills": [
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
+      ]
+    },
+    {
+      "id": "CSR4-visibility-not-an-interface-change",
+      "file": "src/platform/rename_batch.zig",
+      "from": " or (resolver == .facts and visibleAt(base, offset, old))",
+      "to": "",
+      "kills": [
+        "rename facts: a public C# method in one file still needs interface approval"
+      ]
+    },
+    {
+      "id": "CSR5-free-use-reported-as-mismatch",
+      "file": "src/engine/rename.zig",
+      "from": "            if (free_uses) continue;\n",
+      "to": "            if (free_uses and false) continue;\n",
+      "kills": [
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
+      ]
+    },
+    {
+      "id": "CSR6-interface-member-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "            .interface => return error.RenameUnresolved,",
+      "to": "            .interface => {},",
+      "kills": [
+        "rename facts: a C# interface method is refused even when no class declares it"
+      ]
+    },
+    {
+      "id": "CSR7-member-of-derived-class-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (graph.hasBase(holder)) return error.RenameUnresolved;\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# class method implementing an interface method is refused"
+      ]
+    },
+    {
+      "id": "CSR8-same-named-type-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                    return error.RenameUnresolved;\n                }\n                if (self.parent",
+      "to": "                }\n                if (self.parent",
+      "kills": [
+        "rename facts: a C# partial class declared in two files is refused"
+      ]
+    },
+    {
+      "id": "CSR9-constructor-counted-as-a-twin-type",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                    if (file == self.target.file and d.parent == self.target.index and d.kind == .constructor) continue;\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
+      ]
+    },
+    {
+      "id": "CSR10-overload-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (self.parent != null and file == self.target.file and d.parent == target.parent) return error.RenameUnresolved;\n",
+      "to": "",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "an overloaded name never reaches the facts resolver: the symbol table refuses the ref as AmbiguousSymbol first, so this guard is defence in depth"
+    },
+    {
+      "id": "CSR11-redeclaring-subclass-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (d.parent != 0 and graph.hasBase(.{ .file = file, .index = d.parent })) return error.RenameUnresolved;\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# method that a derived class declares again is refused"
+      ]
+    },
+    {
+      "id": "CSR12-constructor-name-not-proven",
+      "file": "src/platform/rename_graph.zig",
+      "from": "and std.mem.eql(u8, d.name, self.old)) try self.prove(self.target.file, d.name_start);",
+      "to": "and std.mem.eql(u8, d.name, self.old)) {}",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "a constructor name is a declaration, so the account step accepts it unproven, and the declaring file's own rename already rewrites it through the type owner mapping"
+    },
+    {
+      "id": "CSR13-linked-reference-not-proven",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (linked.eql(self.target)) try self.prove(file, ref.start);",
+      "to": "                _ = linked;",
+      "kills": [
+        "rename facts: a Python function imported by another module is renamed at its import and its call"
+      ]
+    },
+    {
+      "id": "CSR14-scope-bound-use-not-proven",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (self.isProven(file, resolution.binders[b].span.start)) try self.prove(file, use.span.start);",
+      "to": "                if (self.isProven(file, resolution.binders[b].span.start)) {}",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "the facts store records every scope-bound use of the name as a ref linked to the def, called or passed as a value, so the linked step has proven it before this one runs"
+    },
+    {
+      "id": "CSR15-global-type-use-not-proven",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                    if (found.eql(self.target)) try self.prove(file, use.span.start);",
+      "to": "                    _ = found;",
+      "kills": [
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
+      ]
+    },
+    {
+      "id": "CSR16-static-call-on-global-type-not-proven",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (found.eql(parent_at)) {\n                    try self.prove(file, ref.start);\n                } else",
+      "to": "                if (found.eql(parent_at)) {} else",
+      "kills": [
+        "rename facts: a C# static method called from another file is renamed at its declaration and every call"
+      ]
+    },
+    {
+      "id": "CSR17-static-shape-not-compared",
+      "file": "src/platform/rename_graph.zig",
+      "from": " or ref.static != target.is_static) continue;",
+      "to": ") continue;",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "a static-form call to an instance member, or an instance-form call to a static one, does not compile in C#, so no fixture can tell the two apart"
+    },
+    {
+      "id": "CSR18-global-type-member-name-not-compared",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (i == 0 or d.kind == .constructor or !std.mem.eql(u8, d.name, name)) continue;",
+      "to": "                if (i == 0 or d.kind == .constructor) continue;",
+      "kills": [
+        "rename facts: a C# member call on a receiver of unknown type refuses the rename"
+      ]
+    },
+    {
+      "id": "CSR19-ambiguous-global-type-accepted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (found != null) return null;\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# call through a type name that the enclosing namespace also declares is refused"
+      ]
+    },
+    {
+      "id": "CSR20-nested-type-accepted-as-global",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (!d.kind.isType() or d.parent != 0) return null;",
+      "to": "        if (!d.kind.isType()) return null;",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "the facts store names a nested type with its outer type in the qname, so the namespace test that follows already fails for it"
+    },
+    {
+      "id": "CSR21-using-alias-ignored",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (self.aliased(name)) return null;\n",
+      "to": "",
+      "kills": [
+        "rename facts: a type alias with the class name in a using directive refuses the rename"
+      ]
+    },
+    {
+      "id": "CSR22-global-namespace-type-not-visible",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (prefix.len == 0) return at;",
+      "to": "        if (prefix.len == 0) return null;",
+      "kills": [
+        "rename facts: a C# class in the global namespace is renamed in another file"
+      ]
+    },
+    {
+      "id": "CSR23-enclosing-namespace-not-visible",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (try self.enclosedBy(file, node, namespace)) return at;\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# static method called from another file is renamed at its declaration and every call"
+      ]
+    },
+    {
+      "id": "CSR24-using-namespace-not-visible",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (self.imports(file, node, namespace)) return at;\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# method call through a using directive is renamed"
+      ]
+    },
+    {
+      "id": "CSR25-nested-namespace-not-visible",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        return joined.len > namespace.len and std.mem.startsWith(u8, joined, namespace) and joined[namespace.len] == '.';",
+      "to": "        return false;",
+      "kills": [
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
+      ]
+    },
+    {
+      "id": "CSR26-any-namespace-visible",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (try self.enclosedBy(file, node, namespace)) return at;\n        if (self.imports(file, node, namespace)) return at;\n        return null;",
+      "to": "        _ = .{ file, node, namespace };\n        return at;",
+      "kills": [
+        "rename facts: a C# method call on a type from a namespace the file does not import is refused"
+      ]
+    },
+    {
+      "id": "CSR27-using-scope-not-checked",
+      "file": "src/platform/rename_graph.zig",
+      "from": "            if (node.startByte() < holder.startByte() or node.endByte() > holder.endByte()) continue;\n",
+      "to": "            _ = .{ holder, node };\n",
+      "kills": [
+        "rename facts: a using directive inside another namespace block does not reach a call outside it"
+      ]
+    },
+    {
+      "id": "CSR28-alias-directive-imports-a-namespace",
+      "file": "src/platform/rename_graph.zig",
+      "from": "            if (directive.childByField(\"name\") != null) continue;\n",
+      "to": "",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "an alias directive's first named child is the alias name, which never equals a namespace path unless the alias is named after the namespace itself"
+    },
+    {
+      "id": "CSR29-unaccounted-occurrence-accepted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                const sites = self.sites orelse return error.RenameUnresolved;\n",
+      "to": "                const sites = self.sites orelse continue;\n",
+      "kills": [
+        "rename facts: a C# member call on a receiver of unknown type refuses the rename",
+        "rename facts: a Python method called on a receiver of unknown type is refused"
+      ]
+    },
+    {
+      "id": "CSR30-import-binder-accepted-unproven",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                    if (!resolution.binders[b].import) continue;",
+      "to": "                    _ = b;\n                    continue;",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "an import binder named like the target is always an import ref, and an import ref is either linked (then proven or linked elsewhere) or the leaf was never accounted"
+    },
+    {
+      "id": "CSR31-target-kind-not-checked",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    if (!renameable(target)) return error.RenameUnresolved;\n",
+      "to": "",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "every symbol-table ref that targetOf accepts is a function, class, field, enum member or top-level variable; enum members and locals are still refused when their uses cannot be proven"
+    },
+    {
+      "id": "CSR32-global-type-never-built",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (!self.f.global_types) return null;",
+      "to": "        if (true) return null;",
+      "kills": [
+        "rename facts: a C# static method called from another file is renamed at its declaration and every call"
+      ]
+    },
+    {
+      "id": "CSR33-global-type-call-never-static",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            .member_of_type => is_static = std.mem.eql(u8, object_kind, self.profile.identifier) and self.binderOfUse(object.startByte()) == null,",
+      "to": "            .member_of_type => is_static = false,",
+      "kills": [
+        "rename facts: a C# static method called from another file is renamed at its declaration and every call"
+      ]
+    },
+    {
+      "id": "CSR34-global-type-for-every-language",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (!self.f.global_types) return null;\n",
+      "to": "",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "for TypeScript and Python the unbound object gets a member_of_type over an unresolved global type, which the store resolves to the same unresolved global link as before"
+    },
+    {
+      "id": "CSF1-accessor-def-not-skipped",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (borrowsName(self.profile, s.node)) continue;\n",
+      "to": "",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "an accessor def carries its property's name, which only the facts outline and rename lookalike checks see; property renames are refused by the kind check either way"
+    },
+    {
+      "id": "CSF2-property-accessor-holder-not-skipped",
+      "file": "src/engine/facts_extract.zig",
+      "from": "                        const holder = if (i >= 5 and oneOf(self.path.items[i - 3].node.kind(), self.f.class_fields)) i - 5 else i - 3;",
+      "to": "                        const holder = i - 3;",
+      "expect_status": "survived",
+      "filter": [
+        "rename facts: ",
+        "csharp"
+      ],
+      "note": "this.X inside a property accessor is the only path through the accessor holder, and no plan test renames through one"
+    },
+    {
+      "id": "CSF4-accessor-owner-depth-ignored",
+      "file": "src/engine/functions.zig",
+      "from": "        for (0..named.owner_depth) |_| owner = owner.parent() orelse return null;\n",
+      "to": "",
+      "kills": [
+        "csharp symbols: types, members, accessors, fields and properties share one namespace-qualified container"
+      ]
+    },
+    {
+      "id": "CSF5-file-scoped-namespace-not-qualified",
+      "file": "src/engine/symbol.zig",
+      "from": "    if (fileScopedName(profile, node)) |name| {",
+      "to": "    if (@as(?ts.Node, null)) |name| {",
+      "kills": [
+        "csharp symbols: a file-scoped namespace qualifies the types and members declared after it"
+      ]
+    },
+    {
+      "id": "CSF6-modifier-keyword-not-read",
+      "file": "src/engine/lang/profile.zig",
+      "from": "            const word = if (!child.isNamed()) child.kind() else if (self.isModifier(child.kind())) tree.text(child) else continue;",
+      "to": "            const word = if (!child.isNamed()) child.kind() else if (self.isModifier(child.kind())) tree.text(child)[0..0] else continue;",
+      "kills": [
+        "csharp symbols: public, protected and internal members are visible, private and default members are not"
+      ]
+    },
+    {
+      "id": "CSF7-type-owner-not-renamed-in-members",
+      "file": "src/engine/rename.zig",
+      "from": "            if (!std.mem.eql(u8, self.name(a, self.containers or self.owned(before.container, i)), b)) return false;",
+      "to": "            if (!std.mem.eql(u8, self.name(a, self.containers or i > before.container.len), b)) return false;",
+      "kills": [
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file"
+      ]
+    },
+    {
+      "id": "CSF8-field-statement-not-static",
+      "file": "src/engine/declarations.zig",
+      "from": "        const is_static = self.hasKeywordBefore(member, holder);",
+      "to": "        const is_static = false;",
+      "kills": [
+        "csharp symbols: types, members, accessors, fields and properties share one namespace-qualified container"
+      ]
+    },
+    {
+      "id": "CSF9-field-statements-skipped",
+      "file": "src/engine/declarations.zig",
+      "from": "            if (oneOf(member.kind(), self.profile.declarations.field_statements)) {\n                try self.fieldStatement(member, container);\n                continue;\n            }\n",
+      "to": "",
+      "kills": [
+        "csharp symbols: types, members, accessors, fields and properties share one namespace-qualified container"
+      ]
+    },
+    {
+      "id": "CSF10-modifier-static-not-read",
+      "file": "src/engine/declarations.zig",
+      "from": "            if (self.profile.isModifier(child.kind()) and std.mem.eql(u8, keyword, self.text(child))) return true;\n",
+      "to": "",
+      "kills": [
+        "csharp symbols: types, members, accessors, fields and properties share one namespace-qualified container"
+      ]
+    },
+    {
+      "id": "PY-NL1-unmeasured-literal-shape-reported-clean",
+      "file": "src/engine/checks.zig",
+      "from": "    if (shape.pair.len == 0) return error.QueryNotForLanguage;\n",
+      "to": "",
+      "kills": [
+        "no_literal refuses a language with no literal option shape instead of reporting it clean"
+      ]
+    },
+    {
+      "id": "PY-NL2-keyword-argument-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "    if (shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
+      "to": "    if (false and shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
+      "kills": [
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
+      ]
+    },
+    {
+      "id": "PY-NL3-bare-dict-key-taken-as-option-name",
+      "file": "src/engine/checks.zig",
+      "from": "        if (!fields.bare_key and !isKind(key, shape.quoted_key)) continue;\n",
+      "to": "",
+      "kills": [
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
+      ]
+    },
+    {
+      "id": "PY-NL4-interpolated-key-read-as-plain",
+      "file": "src/engine/checks.zig",
+      "from": "        if (isKind(part, shape.substitution)) return \"\";\n",
+      "to": "",
+      "kills": [
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
+      ]
+    },
+    {
+      "id": "PY-NL5-quoted-key-content-dropped",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .quoted_key_content = \"string_content\",\n",
+      "to": "",
+      "kills": [
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
+      ]
+    },
+    {
+      "id": "PY-NL6-python-bare-pair-key-allowed",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .bare_pair_key = false,\n",
+      "to": "",
+      "kills": [
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
+      ]
+    },
+    {
+      "id": "PY-CAT11-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(print_statement) @violation ((call function: (identifier) @violation) (#eq? @violation \\\"print\\\"))\"",
+      "to": ".check = \"forbid:print\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT12-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(exec_statement) @violation ((call function: (identifier) @violation) (#eq? @violation \\\"exec\\\"))\"",
+      "to": ".check = \"forbid:exec\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT13-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(assert_statement) @violation\"",
+      "to": ".check = \"forbid:assert\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT14-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:(except_clause !value) @violation\"",
+      "to": ".check = \"forbid:except:\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT15-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"forbid_import:pickle\"",
+      "to": ".check = \"forbid:pickle\"",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-CAT16-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \\\"Console\\\") (#eq? @violation \\\"WriteLine\\\"))\"",
+      "to": ".check = \"forbid:Console.WriteLine\"",
+      "kills": [
+        "c# presets flag the named member call and not another type or member of the same name"
+      ]
+    },
+    {
+      "id": "PY-CAT17-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \\\"Debug\\\") (#eq? @violation \\\"WriteLine\\\"))\"",
+      "to": ".check = \"forbid:Debug.WriteLine\"",
+      "kills": [
+        "c# presets flag the named member call and not another type or member of the same name"
+      ]
+    },
+    {
+      "id": "PY-CAT18-preset-back-to-substring-forbid",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": ".check = \"q:((invocation_expression function: (member_access_expression expression: [(identifier) @type (member_access_expression name: (identifier) @type) (qualified_name name: (identifier) @type)] name: (identifier) @violation)) (#eq? @type \\\"Thread\\\") (#eq? @violation \\\"Sleep\\\"))\"",
+      "to": ".check = \"forbid:Thread.Sleep\"",
+      "kills": [
+        "c# presets flag the named member call and not another type or member of the same name"
+      ]
+    },
+    {
+      "id": "PY-FI1-python-import-shape-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "        if (m.from_statement) |from_statement| {\n",
+      "to": "        if (@as(?[]const u8, null)) |from_statement| {\n",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-FI2-module-prefix-taken-as-module",
+      "file": "src/engine/checks.zig",
+      "from": "    return dotted.len == module.len or dotted[module.len] == '.';",
+      "to": "    return true;",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-FI3-aliased-import-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "const name = if (isKind(child, m.aliased_import)) child.childByField(m.name_field) orelse continue else child;",
+      "to": "const name = child;",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-FI4-from-import-ignored",
+      "file": "src/engine/checks.zig",
+      "from": "        return importsModule(tree.text(source), module);\n",
+      "to": "        return importsModule(tree.text(source), module) and false;\n",
+      "kills": [
+        "python presets flag the construct itself and not a name, string or comment that mentions it"
+      ]
+    },
+    {
+      "id": "PY-SC1-first-position-matches-any",
+      "file": "src/engine/sites.zig",
+      "from": "        .first => if (parent.namedChild(0)) |first| first.eql(node) else false,\n",
+      "to": "        .first => true,\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC2-rest-position-matches-any",
+      "file": "src/engine/sites.zig",
+      "from": "        .rest => if (parent.namedChild(0)) |first| !first.eql(node) else false,\n",
+      "to": "        .rest => true,\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ],
+      "expect_status": "survived",
+      "note": "every first element at a rest-position inert site is already taken by a binder site or by the use path before inert sites are consulted, so no Python input reaches it"
+    },
+    {
+      "id": "PY-SC3-sole-position-matches-any",
+      "file": "src/engine/sites.zig",
+      "from": "        .sole => parent.namedChildCount() == 1,\n",
+      "to": "        .sole => true,\n",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-SC4-site-position-ignored",
+      "file": "src/engine/sites.zig",
+      "from": "        if (!atPosition(parent, node, site.position)) continue;\n",
+      "to": "",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC5-inert-site-taken-as-use",
+      "file": "src/engine/sites.zig",
+      "from": "    if (matchingSite(g.inert_sites, up, node) != null) return true;\n",
+      "to": "",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC6-import-flag-without-import-statement",
+      "file": "src/engine/scope.zig",
+      "from": "        if (oneOf(ancestor.kind(), g.import_statements)) return true;\n",
+      "to": "        return true;\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-SC7-class-scope-visible-in-methods",
+      "file": "src/engine/scope.zig",
+      "from": "        if (!class_scope or !crossed) {\n",
+      "to": "        {\n",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-SC8-function-scope-never-crossed",
+      "file": "src/engine/scope.zig",
+      "from": "        if (!class_scope and oneOf(ancestor.kind(), g.block_scopes)) crossed = true;\n",
+      "to": "        if (!class_scope and oneOf(ancestor.kind(), g.block_scopes)) crossed = false;\n",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-SC9-default-read-inside-function",
+      "file": "src/engine/scope.zig",
+      "from": "        if (!inScopeBody(g, ancestor, from)) continue;\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function",
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-SC10-rebound-name-binds-locally",
+      "file": "src/engine/scope.zig",
+      "from": "            if (!isRebound(rebound, scope_node, name)) {\n                try binders",
+      "to": "            if (true) {\n                try binders",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name"
+      ]
+    },
+    {
+      "id": "PY-SC11-rebound-name-binds-locally-in-pass",
+      "file": "src/engine/scope.zig",
+      "from": "                if (!isRebound(rebound, scope_node, name)) {\n                    const binder",
+      "to": "                if (true) {\n                    const binder",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name"
+      ]
+    },
+    {
+      "id": "PY-RN1-no-rebinding-statements",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .rebinding_statements = &.{ \"global_statement\", \"nonlocal_statement\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name",
+        "python rename: a module name is renamed through a global statement"
+      ]
+    },
+    {
+      "id": "PY-RN2-nonlocal-not-rebinding",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "&.{ \"global_statement\", \"nonlocal_statement\" }",
+      "to": "&.{\"global_statement\"}",
+      "kills": [
+        "python scope: global and nonlocal statements make an assignment rebind the outer name"
+      ]
+    },
+    {
+      "id": "PY-RN3-function-body-not-scope-body",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"function_definition\", .field = \"body\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN4-lambda-body-not-scope-body",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"lambda\", .field = \"body\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN5-class-body-not-scope-body",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"class_definition\", .field = \"body\" },\n};",
+      "to": "};",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-RN6-lambda-and-comprehensions-not-scopes",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ", \"lambda\", \"list_comprehension\", \"set_comprehension\", \"dictionary_comprehension\", \"generator_expression\" }",
+      "to": " }",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN7-generator-not-scope",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ", \"dictionary_comprehension\", \"generator_expression\" }",
+      "to": ", \"dictionary_comprehension\" }",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN8-no-class-scopes",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .class_scopes = &.{\"class_definition\"},\n",
+      "to": "",
+      "kills": [
+        "python scope: a class body name is not visible inside its methods but is in the class body and its defaults"
+      ]
+    },
+    {
+      "id": "PY-RN9-walrus-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"named_expression\", .field = \"name\", .scope = .function },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN10-walrus-binds-in-comprehension",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ".{ .parent = \"named_expression\", .field = \"name\", .scope = .function }",
+      "to": ".{ .parent = \"named_expression\", .field = \"name\" }",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN11-as-pattern-target-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"as_pattern_target\", .field = null },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN12-match-capture-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"dotted_name\", .field = null, .grandparent = \"case_pattern\", .position = .sole },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN13-mapping-splat-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"splat_pattern\", .field = null },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN14-unpacking-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"pattern_list\", .field = null, .scope = .pattern },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN15-starred-unpacking-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"list_splat_pattern\", .field = null, .grandparent = \"pattern_list\", .scope = .pattern },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ],
+      "expect_status": "survived",
+      "note": "the general list_splat_pattern site binds the same starred name in the same scope for every unpacking target, so dropping the pattern-scoped site changes no resolution"
+    },
+    {
+      "id": "PY-RN16-comprehension-target-not-binder",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"for_in_clause\", .field = \"left\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: comprehension and lambda names stay inside them, and a default value is read outside the function"
+      ]
+    },
+    {
+      "id": "PY-RN17-keyword-pattern-name-read",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"keyword_pattern\", .field = null, .position = .first },\n",
+      "to": "",
+      "kills": [
+        "python scope: with-as, except-as, walrus, unpacking and match captures bind their names"
+      ]
+    },
+    {
+      "id": "PY-RN18-relative-import-module-read",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"dotted_name\", .field = null, .grandparent = \"relative_import\" },\n",
+      "to": "",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-RN19-import-binds-module-scope",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .{ .parent = \"aliased_import\", .field = \"alias\", .namespace = .both },\n",
+      "to": "    .{ .parent = \"aliased_import\", .field = \"alias\", .namespace = .both, .scope = .program },\n",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-RN20-dotted-import-binds-every-part",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ".grandparent = \"import_statement\", .namespace = .both, .position = .first },",
+      "to": ".grandparent = \"import_statement\", .namespace = .both },",
+      "kills": [
+        "python scope: only the bound name of an import binds, and an import inside a function stays there"
+      ]
+    },
+    {
+      "id": "PY-DC1-assignment-not-a-variable",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .variable_statements = &.{\"assignment\"},\n",
+      "to": "",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC2-class-assignment-not-a-field",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .fields = &field_declarations,\n",
+      "to": "",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC3-attribute-target-declared",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "\"list_splat_pattern\", \"attribute\", \"subscript\" }",
+      "to": "\"list_splat_pattern\", \"subscript\" }",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC4-unpacking-target-declared",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": ".destructuring = &.{ \"pattern_list\", \"tuple_pattern\",",
+      "to": ".destructuring = &.{ \"tuple_pattern\",",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-DC5-self-declarator-statement-skipped",
+      "file": "src/engine/declarations.zig",
+      "from": "        if (std.mem.eql(u8, statement_node.kind(), declarator_kind)) return self.declareVariable(statement_node, outer, 1, statement_node.startByte());\n",
+      "to": "",
+      "kills": [
+        "python declarations: a module-level assignment is a variable and an unpacking or attribute target is not"
+      ]
+    },
+    {
+      "id": "PY-PF1-lambda-not-a-function",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .{ .node = \"lambda\", .kind = .arrow },\n",
+      "to": "",
+      "kills": [
+        "python profile treats a lambda as a function named by the assignment that holds it"
+      ]
+    },
+    {
+      "id": "PY-PF2-assignment-not-a-binding",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": ".{ .parent = \"assignment\", .value_field = \"right\", .name_field = \"left\" },",
+      "to": ".{ .parent = \"\", .value_field = \"right\", .name_field = \"left\" },",
+      "kills": [
+        "python profile treats a lambda as a function named by the assignment that holds it"
+      ]
+    },
+    {
+      "id": "PY-PF3-decorator-outside-class-read",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    if (!std.mem.eql(u8, owner.kind(), \"block\") or !std.mem.eql(u8, class.kind(), \"class_definition\")) return .{};\n",
+      "to": "    if (!std.mem.eql(u8, owner.kind(), \"block\")) return .{};\n    _ = class;\n",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-PF4-staticmethod-keeps-receiver",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "                traits.receiver = false;\n",
+      "to": "",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only",
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-PF5-classmethod-not-static",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "            .classmethod => traits.is_static = true,\n",
+      "to": "            .classmethod => {},\n",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only",
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-PF6-property-not-getter",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "            .property => traits.accessor = .get,\n",
+      "to": "            .property => {},\n",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-PF7-setter-not-setter",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "            .setter => traits.accessor = .set,\n",
+      "to": "            .setter => {},\n",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-PF8-staticmethod-name-ignored",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "        if (std.mem.eql(u8, name, \"staticmethod\")) return .staticmethod;\n",
+      "to": "",
+      "kills": [
+        "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
+      ]
+    },
+    {
+      "id": "PY-FT1-no-test-definitions",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .test_definitions = &test_definitions,\n",
+      "to": "",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT2-conftest-not-a-test-file",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .test_files = &.{\"conftest.py\"},\n",
+      "to": "",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT3-test-file-name-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "    if (oneOf(name, table.test_files)) return true;\n",
+      "to": "",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT4-test-prefix-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "        if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix)) return null;\n",
+      "to": "        if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix) and false) return null;\n",
+      "kills": [
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-RC1-no-receiver-parameter",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .receiver_parameter = \"parameters\",\n",
+      "to": "",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-RC2-decorated-method-not-a-member",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .member_wrappers = &.{\"decorated_definition\"},\n",
+      "to": "",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-RC3-staticmethod-parameter-taken-as-receiver",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (!traits.receiver) return null;\n",
+      "to": "",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "PY-RC4-any-parameter-taken-as-receiver",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (first.startByte() != binder) continue;\n",
+      "to": "            if (first.startByte() != binder and false) continue;\n",
+      "kills": [
+        "python facts: a receiver is only the first parameter of a method directly in the class body"
+      ]
+    },
+    {
+      "id": "PY-RC5-function-anywhere-in-class-is-member",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        return if (body.eql(holder)) class else null;\n",
+      "to": "        return if (body.eql(holder) or true) class else null;\n",
+      "kills": [
+        "python facts: a receiver is only the first parameter of a method directly in the class body"
+      ]
+    },
+    {
+      "id": "PY-RC6-receiver-static-flag-dropped",
+      "file": "src/engine/facts_extract.zig",
+      "from": "\n            is_static = class.is_static;\n",
+      "to": "\n            is_static = class.is_static and false;\n",
+      "kills": [
+        "python facts: a receiver reaches its class from a nested function, a classmethod receiver is static and a staticmethod has none"
+      ]
+    },
+    {
+      "id": "GV1-empty-branch-range-green",
+      "file": "src/platform/verify_branch.zig",
+      "from": "    if (links.items.len == 0) branch = .empty;",
+      "to": "",
+      "kills": [
+        "verify --branch: an empty range is not green"
+      ]
+    },
+    {
+      "id": "GV2-git-log-calls-a-receipt-note-verified",
+      "file": "src/protocol/git_tools.zig",
+      "from": "(isAnnotated(annotated, oid)) \"receipt\" else",
+      "to": "(isAnnotated(annotated, oid)) \"verified\" else",
+      "kills": [
+        "git log: a commit with a receipt note is marked receipt, never verified, even when the note is forged"
+      ]
+    },
+    {
+      "id": "GV3-verify-reads-the-blob-not-the-eol-converted-checkout",
+      "file": "src/platform/verify_run.zig",
+      "from": "        if (try self.converted(r, path)) |bytes| return .{ .converted = bytes };\n",
+      "to": "",
+      "kills": [
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV4-checked-out-receipt-over-an-unconverted-working-file-rejected",
+      "file": "src/verify/checker.zig",
+      "from": "    if (eqlOptional(digestOf(blob), digest)) return .{ .bytes = blob };",
+      "to": "    if (false and eqlOptional(digestOf(blob), digest)) return .{ .bytes = blob };",
+      "kills": [
+        "verify: under core.autocrlf a receipt over an LF working file still verifies against the blob"
+      ]
+    },
+    {
+      "id": "GV5-python-before-ignores-the-eol-converted-checkout",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "[blob_digest(data)] + ([blob_digest(alt)] if alt is not None else [])",
+      "to": "[blob_digest(data)]",
+      "kills": [
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV6-python-after-ignores-the-eol-converted-checkout",
+      "file": "tools/verify_py/emetgate_verify.py",
+      "from": "                    data = alt\n",
+      "to": "                    pass\n",
+      "kills": [
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV7-try-splices-an-lf-body-into-a-crlf-file",
+      "file": "src/engine/cas.zig",
+      "from": "normalizeBody(mutation.new_body), crlfOf(base.source));",
+      "to": "normalizeBody(mutation.new_body), null);",
+      "kills": [
+        "a replacement body spliced into a CRLF file takes CRLF line endings, an LF file keeps the body as sent",
+        "verify: under core.autocrlf a receipt over the CRLF working file verifies against the LF blob, a forged one does not"
+      ]
+    },
+    {
+      "id": "GV8-insert-keeps-an-lf-body-in-a-crlf-file",
+      "file": "src/engine/cas.zig",
+      "from": "normalizeBody(insertion.new_body), crlfOf(eol));",
+      "to": "normalizeBody(insertion.new_body), null);",
+      "kills": [
+        "an inserted symbol follows a CRLF file's line ending inside its body too"
+      ]
+    },
+    {
+      "id": "RH1-stale-hash-equality-inverted",
+      "file": "src/protocol/recovery.zig",
+      "from": "    if (std.mem.eql(u8, &hex, given)) return false;",
+      "to": "    if (!std.mem.eql(u8, &hex, given)) return false;",
+      "kills": [
+        "recovery hints: a stale symbol hash is answered with the current hash"
+      ]
+    },
+    {
+      "id": "RH2-symbol-hash-as-node-not-named",
+      "file": "src/protocol/recovery.zig",
+      "from": "            if (pair.node.len < node_cas.min_address_len or !std.mem.startsWith(u8, &hex, pair.node)) continue;",
+      "to": "            if (pair.node.len < node_cas.min_address_len or std.mem.startsWith(u8, &hex, pair.node)) continue;",
+      "kills": [
+        "recovery hints: a symbol hash sent as a node id is named as such"
+      ]
+    },
+    {
+      "id": "RH3-unknown-node-check-inverted",
+      "file": "src/protocol/recovery.zig",
+      "from": "        if (std.mem.indexOf(u8, annotated, pair.node) != null) continue;",
+      "to": "        if (std.mem.indexOf(u8, annotated, pair.node) == null) continue;",
+      "kills": [
+        "recovery hints: a symbol hash sent as a node id is named as such"
+      ]
+    },
+    {
+      "id": "RH4-closing-brace-not-counted",
+      "file": "src/protocol/recovery.zig",
+      "from": "        '}' => balance -= 1,",
+      "to": "        '}' => {},",
+      "kills": [
+        "recovery hints: brace balance counts opening minus closing braces",
+        "recovery hints: a body that closes more braces than it opens is named with the surplus"
+      ]
+    },
+    {
+      "id": "RH5-empty-prop-description-written",
+      "file": "src/protocol/server.zig",
+      "from": "            if (prop.desc.len > 0) {",
+      "to": "            if (true) {",
+      "kills": [
+        "recovery hints: tools/list stays under 9000 characters and initialize says which tool reads, searches and edits"
+      ]
+    },
+    {
+      "id": "RH6-non-source-batch-item-hint-inverted",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (lang_registry.forPath(file) == null) return tool_result.missing(",
+      "to": "    if (lang_registry.forPath(file) != null) return tool_result.missing(",
+      "kills": [
+        "recovery hints: a missing argument names the field and its type"
+      ]
+    },
+    {
+      "id": "RH7-fix-not-cleared-per-call",
+      "file": "src/protocol/handlers.zig",
+      "from": "    wire.clearFix();",
+      "to": "",
+      "kills": [
+        "recovery hints: a hint left from an earlier call never reaches the next error"
+      ]
+    },
+    {
+      "id": "RH8-batch-item-label-dropped",
+      "file": "src/protocol/recovery.zig",
+      "from": "        const label = std.fmt.bufPrint(&label_buf, \"edits[{d}]: \", .{i}) catch \"\";",
+      "to": "        const label = std.fmt.bufPrint(&label_buf, \"item {d}: \", .{i}) catch \"\";",
+      "kills": [
+        "recovery hints: a stale hash inside a batch names the item and the current hash"
+      ]
+    },
+    {
+      "id": "RD1-outline-at-the-threshold",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (profile != null and bytes.len > outline.threshold) {",
+      "to": "    if (profile != null and bytes.len >= outline.threshold) {",
+      "kills": [
+        "read_file at exactly the outline threshold still returns the text"
+      ]
+    },
+    {
+      "id": "RD2-outline-never-served",
+      "file": "src/protocol/read_tools.zig",
+      "from": "            if (try renderOutline(gpa, io, s, place.abs, file, bytes, force, mirror, w, event)) return;",
+      "to": "            _ = s;",
+      "kills": [
+        "read_file returns the outline of a source file over the threshold, with line ranges and hashes, and text for a line range"
+      ]
+    },
+    {
+      "id": "RD3-truncated-read-covers-the-file",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (shown.len == bytes.len) try read_cache.recordWhole(gpa, mirror, file, symbol.fileHash(bytes));",
+      "to": "    try read_cache.recordWhole(gpa, mirror, file, symbol.fileHash(bytes));",
+      "kills": [
+        "a truncated read_file does not cover a later line range read"
+      ]
+    },
+    {
+      "id": "RD4-range-ignores-whole-read",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    if (try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(bytes), force)) {",
+      "to": "    if (try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(bytes), true)) {",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD5-symbol-ignores-whole-read",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!nodes and try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force)) {",
+      "to": "    if (!nodes and try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), true)) {",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD6-symbols-ignore-whole-read",
+      "file": "src/protocol/handlers.zig",
+      "from": "        var unchanged = covered;",
+      "to": "        var unchanged = false;",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD7-symbol-range-ignores-whole-read",
+      "file": "src/protocol/handlers.zig",
+      "from": "        var unchanged = whole_read;",
+      "to": "        var unchanged = false;",
+      "kills": [
+        "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
+      ]
+    },
+    {
+      "id": "RD8-force-does-not-bypass-whole-read",
+      "file": "src/protocol/read_cache.zig",
+      "from": "    if (force or !m.enabled) return false;",
+      "to": "    if ((force and false) or !m.enabled) return false;",
+      "kills": [
+        "a whole read covers later reads of the same file only while its hash holds"
+      ]
+    },
+    {
+      "id": "RD9-empty-symbol-range-is-an-error",
+      "file": "src/protocol/handlers.zig",
+      "from": "        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, w, event),",
+      "to": "        error.NoSymbolInRange => return error.NoSymbolInRange,",
+      "kills": [
+        "read_symbol over a line range that holds no symbol returns the raw lines instead of an error",
+        "emetgate_read_symbol with a line range hitting no symbol returns those lines"
+      ]
+    },
+    {
+      "id": "RD10-read-cache-off-by-default",
+      "file": "src/protocol/policy.zig",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };",
+      "to": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = false, .raw_code = true };",
+      "kills": [
+        "policy: the read cache is on by default, --no-mirror turns it off, and a mirror flag is given at most once"
+      ]
+    },
+    {
+      "id": "RD11-raw-code-off-by-default",
+      "file": "src/protocol/policy.zig",
+      "from": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };",
+      "to": "    var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = false };",
+      "kills": [
+        "policy: the read cache is on by default, --no-mirror turns it off, and a mirror flag is given at most once"
+      ]
+    },
+    {
+      "id": "RD12-json-code-flag-repeatable",
+      "file": "src/protocol/policy.zig",
+      "from": "            if (json_code) return null;\n",
+      "to": "",
+      "kills": [
+        "policy: the read cache is on by default, --no-mirror turns it off, and a mirror flag is given at most once"
+      ]
+    },
+    {
+      "id": "RD13-ambiguous-always-written",
+      "file": "src/protocol/wire.zig",
+      "from": "        if (entry.ambiguous) {\n            try js.objectField(\"ambiguous\");\n            try js.write(true);\n        }\n        try js.endObject();\n    }\n    try js.endArray();\n    try writeDeclarations(",
+      "to": "        if (true) {\n            try js.objectField(\"ambiguous\");\n            try js.write(entry.ambiguous);\n        }\n        try js.endObject();\n    }\n    try js.endArray();\n    try writeDeclarations(",
+      "kills": [
+        "symbol listings name ambiguity only where it holds"
+      ]
+    },
+    {
+      "id": "RD14-raw-code-ignored",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!policy.raw_code or result.is_error) return result;",
+      "to": "    if (policy.raw_code or !policy.raw_code or result.is_error) return result;",
+      "kills": [
+        "with raw code on, read replies put a one-line JSON header before the code as plain text"
+      ]
+    },
+    {
+      "id": "RD15-raw-code-always-on",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!policy.raw_code or result.is_error) return result;",
+      "to": "    if ((!policy.raw_code and false) or result.is_error) return result;",
+      "kills": [
+        "read_file returns the outline of a source file over the threshold, with line ranges and hashes, and text for a line range",
+        "read_file at exactly the outline threshold still returns the text"
+      ]
+    },
+    {
+      "id": "RD16-skeleton-never-whole",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const whole = snapshot.source.len <= outline.threshold;",
+      "to": "    const whole = false;",
+      "kills": [
+        "emetgate_skeleton call returns a file under 8 KiB whole",
+        "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; a small file comes back whole and covers later reads"
+      ]
+    },
+    {
+      "id": "RD17-whole-skeleton-not-recorded",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);",
+      "to": "",
+      "kills": [
+        "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; a small file comes back whole and covers later reads"
+      ]
+    },
+    {
+      "id": "RD18-skeleton-not-folded",
+      "file": "src/protocol/handlers.zig",
+      "from": "else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);",
+      "to": "else try skeleton.skeletonize(gpa, runtime.parser, snapshot.profile, snapshot.tree);",
+      "kills": [
+        "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; a small file comes back whole and covers later reads"
+      ]
+    },
+    {
+      "id": "RD19-empty-rules-written",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (adopted.len != 0) {",
+      "to": "    if (true) {",
+      "kills": [
+        "skeleton payload embeds the outline as one JSON line"
+      ]
+    },
+    {
+      "id": "RD20-doc-block-kept-whole",
+      "file": "src/engine/skeleton.zig",
+      "from": "    if (!std.mem.startsWith(u8, comment, \"/*\")) return .{ .text = std.mem.trimEnd(u8, comment[0..newline], \" \\t\\r\") };",
+      "to": "    if (newline != std.math.maxInt(usize)) return .{ .text = comment };",
+      "kills": [
+        "a skeleton folds every doc block to its first line and keeps one-line comments"
+      ]
+    },
+    {
+      "id": "RD21-adjacent-comments-not-grouped",
+      "file": "src/engine/skeleton.zig",
+      "from": "        while (i < comments.items.len and isBlank(source[last.end..comments.items[i].start])) : (i += 1) last = comments.items[i];\n",
+      "to": "        while (false and i < comments.items.len and isBlank(source[last.end..comments.items[i].start])) : (i += 1) last = comments.items[i];\n",
+      "kills": [
+        "a skeleton keeps only the first of adjacent comments and drops a block with no text"
+      ]
+    },
+    {
+      "id": "RD22-empty-block-kept",
+      "file": "src/engine/skeleton.zig",
+      "from": "        if (kept.text.len == 0) {",
+      "to": "        if (false) {",
+      "kills": [
+        "a skeleton keeps only the first of adjacent comments and drops a block with no text"
+      ]
+    },
+    {
+      "id": "RD23-raw-header-keeps-code",
+      "file": "src/protocol/raw_reply.zig",
+      "from": "        if (std.mem.eql(u8, field.key_ptr.*, skip)) continue;\n",
+      "to": "        if (skip.len == 0 and std.mem.eql(u8, field.key_ptr.*, skip)) continue;\n",
+      "kills": [
+        "a code field leaves the JSON header and follows it verbatim, with no escapes",
+        "each symbol entry gets its own header line and raw code"
+      ]
+    },
+    {
+      "id": "RD24-raw-entries-not-split",
+      "file": "src/protocol/raw_reply.zig",
+      "from": "    } else if (entriesWithCode(object)) |entries| {",
+      "to": "    } else if (if (false) entriesWithCode(object) else null) |entries| {",
+      "kills": [
+        "each symbol entry gets its own header line and raw code"
+      ]
+    },
+    {
+      "id": "RD25-raw-accepts-non-string-code",
+      "file": "src/protocol/raw_reply.zig",
+      "from": "        if (value == .string) return name;",
+      "to": "        if (value == .string or value != .string) return name;",
+      "kills": [
+        "replies without code, and text that is not a JSON object, stay as they are"
+      ]
+    },
+    {
+      "id": "C21-mirror-low-writable-target",
+      "file": "src/platform/link_tree.zig",
+      "from": "    if (!try lowWriteBlocked(&final_w)) return error.LinkTargetLowWritable;",
+      "to": "",
+      "kills": [
+        "a link whose target a low-integrity process could write is skipped, never mirrored"
+      ]
+    },
+    {
+      "id": "C21-top-level-link-not-mirrored",
+      "file": "src/platform/link_tree.zig",
+      "from": "    if (try isLink(source_abs)) return mirror(io, source_abs, dest_abs, stats);",
+      "to": "",
+      "kills": [
+        "a top-level link is mirrored, and a dangling one is skipped"
+      ]
+    },
+    {
+      "id": "C21-inner-link-not-mirrored",
+      "file": "src/platform/link_tree.zig",
+      "from": "    stats.mirrored += 1;",
+      "to": "",
+      "kills": [
+        "build hardlinks every file, recreates every directory and mirrors a reparse point as a junction to the same target",
+        "a top-level link is mirrored, and a dangling one is skipped"
+      ]
+    },
+    {
+      "id": "C21-kept-links-not-mirrored",
+      "file": "src/platform/shadow.zig",
+      "from": "        link_tree.mirror(io, try joinWindows(&link_buf, options.root_abs, link), dest, stats);",
+      "to": "        if (false) link_tree.mirror(io, try joinWindows(&link_buf, options.root_abs, link), dest, stats);",
+      "kills": [
+        "a node_modules that is a junction is a junction to the same target in the kept and the copied tree, and removal leaves the target",
+        "a link inside a real node_modules is mirrored in the kept tree"
+      ]
+    },
+    {
+      "id": "C21-commit-through-mirrored-junction",
+      "file": "src/platform/shadow.zig",
+      "from": "            if (under_links) try ensureNoLinks(options.shadow_abs, try std.fs.path.join(arena, &.{ options.shadow_abs, entry.path }));",
+      "to": "",
+      "kills": [
+        "a committed file is never copied through a mirrored node_modules junction"
+      ]
+    },
+    {
+      "id": "B19-temp-junction-followed",
+      "file": "src/platform/shadow.zig",
+      "from": "    if (!try isReparsePoint(temp_abs)) {",
+      "to": "    if (true) {",
+      "kills": [
+        "a stale temp directory that is a junction is removed without touching its target"
+      ]
+    },
+    {
+      "id": "B19-temp-env-dropped",
+      "file": "src/platform/runner.zig",
+      "from": ".limits = limits, .temp = temp, .env = env });",
+      "to": ".limits = limits, .env = env });",
+      "kills": [
+        "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run"
+      ]
+    },
+    {
+      "id": "B19-temp-entry-prefix-match",
+      "file": "src/platform/sandbox.zig",
+      "from": "    if (entry.len <= name.len or entry[name.len] != '=') return false;",
+      "to": "    if (entry.len <= name.len) return false;",
+      "kills": [
+        "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest"
+      ]
+    },
+    {
+      "id": "C22-env-error-on-success",
+      "file": "src/platform/test_outcome.zig",
+      "from": "    if (code == 0) return null;",
+      "to": "",
+      "kills": [
+        "a missing command or module is an environment error, a failing test or a relative import is not"
+      ]
+    },
+    {
+      "id": "C22-relative-module-is-env-error",
+      "file": "src/platform/test_outcome.zig",
+      "from": "                if (relativeModule(line)) break;",
+      "to": "",
+      "kills": [
+        "a missing command or module is an environment error, a failing test or a relative import is not"
+      ]
+    },
+    {
+      "id": "C22-env-error-reported-as-failure",
+      "file": "src/protocol/wire.zig",
+      "from": "else if (test_outcome.envError(report) != null) \"test_env_error\" ",
+      "to": "",
+      "kills": [
+        "a test command that could not start is a test_env_error with its first useful line, never tests_failed"
+      ]
+    },
+    {
+      "id": "B18-ansi-digits-count",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (line[index] == 0x1b) {",
+      "to": "        if (false) {",
+      "kills": [
+        "a passing run is summed up by its count lines, oldest first and under the size cap"
+      ]
+    },
+    {
+      "id": "B18-rejected-summary-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (std.mem.eql(u8, reason, \"tests_failed\")) {",
+      "to": "    if (false) {",
+      "kills": [
+        "a test command that could not start is a test_env_error with its first useful line, never tests_failed"
+      ]
+    },
+    {
+      "id": "TF-frames-uncapped",
+      "file": "src/platform/test_outcome.zig",
+      "from": "            if (frames > frames_per_stack) {",
+      "to": "            if (false) {",
+      "kills": [
+        "test output keeps its failure lines, drops repeated stacks and frames past the third, and fits the budget"
+      ]
+    },
+    {
+      "id": "TF-repeated-frames-kept",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (frames != 0 and (try seen.getOrPut(arena, body)).found_existing) {",
+      "to": "        if (frames != 0 and (try seen.getOrPut(arena, body)).found_existing and false) {",
+      "kills": [
+        "test output keeps its failure lines, drops repeated stacks and frames past the third, and fits the budget"
+      ]
+    },
+    {
+      "id": "TF-pass-lines-kept",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (isPassLine(body)) {",
+      "to": "        if (false) {",
+      "kills": [
+        "test output keeps its failure lines, drops repeated stacks and frames past the third, and fits the budget"
+      ]
+    },
+    {
+      "id": "TF-diagnostics-uncapped",
+      "file": "src/protocol/wire.zig",
+      "from": "        if (shown == max_rejected_diagnostics) break;",
+      "to": "",
+      "kills": [
+        "a rejected reply caps its test output and diagnostics and says how much it dropped"
+      ]
+    },
+    {
+      "id": "FE1-repeated-old-string-accepted",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (matches > 1 and !all) return error.OldStringNotUnique;",
+      "to": "",
+      "kills": [
+        "replaceUnique replaces one exact match and refuses a missing or repeated old string with its count",
+        "emetgate_edit refuses an old_string that is missing or repeated and states the match count"
+      ]
+    },
+    {
+      "id": "FE2-missing-old-string-accepted",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (matches == 0) return error.OldStringNotFound;",
+      "to": "",
+      "kills": [
+        "replaceUnique replaces one exact match and refuses a missing or repeated old string with its count",
+        "emetgate_edit refuses an old_string that is missing or repeated and states the match count"
+      ]
+    },
+    {
+      "id": "FE3-broken-syntax-accepted",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (next.tree.root().hasError() and (base == null or old_clean)) return error.MutationSyntaxInvalid;",
+      "to": "",
+      "kills": [
+        "emetgate_edit refuses a code edit that breaks the syntax of a clean file",
+        "emetgate_write that fails the gate leaves no file and no created directory behind"
+      ]
+    },
+    {
+      "id": "FE4-ignored-new-file-written",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (base == null and try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;",
+      "to": "",
+      "kills": [
+        "emetgate_write refuses binary content and a new file under an ignored path"
+      ]
+    },
+    {
+      "id": "FE5-missing-dirs-not-created",
+      "file": "src/platform/file_edit.zig",
+      "from": "        .created_dirs = if (base == null) options.created_dirs else &.{},",
+      "to": "        .created_dirs = &.{},",
+      "kills": [
+        "emetgate_write creates a code file under missing directories and non-code files at the root"
+      ]
+    },
+    {
+      "id": "FE6-identical-write-gated",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (base) |b| if (std.mem.eql(u8, b, after)) return .{ .root = root, .rel = rel, .before = before_hash, .after = before_hash.?, .created = false, .unchanged = true, .matches = matches.* };",
+      "to": "",
+      "kills": [
+        "emetgate_write creates a code file under missing directories and non-code files at the root"
+      ]
+    },
+    {
+      "id": "FE7-binary-content-written",
+      "file": "src/platform/file_edit.zig",
+      "from": "        try docnode.checkReadable(after);",
+      "to": "",
+      "kills": [
+        "emetgate_write refuses binary content and a new file under an ignored path"
+      ]
+    },
+    {
+      "id": "FE8-crlf-retry-dropped",
+      "file": "src/platform/file_edit.zig",
+      "from": "    if (matches.* == 0 and std.mem.indexOf(u8, source, \"\\r\\n\") != null and std.mem.indexOfScalar(u8, old, '\\n') != null and std.mem.indexOfScalar(u8, old, '\\r') == null) {",
+      "to": "    if (false) {",
+      "kills": [
+        "replaceUnique matches a LF old string against a CRLF file and keeps CRLF",
+        "emetgate_edit matches a LF old_string in a CRLF file"
+      ]
+    },
+    {
+      "id": "DR1-doctor-warning-blocks",
+      "file": "src/platform/doctor.zig",
+      "from": "    for (checks) |check| if (check.status == .fail) return 1;",
+      "to": "    for (checks) |check| if (check.status != .ok) return 1;",
+      "kills": [
+        "doctor: exit is non-zero only when a check fails, a warning alone does not block"
+      ]
+    },
+    {
+      "id": "DR2-doctor-failure-exits-zero",
+      "file": "src/platform/doctor.zig",
+      "from": "    for (checks) |check| if (check.status == .fail) return 1;",
+      "to": "    for (checks) |check| if (check.status == .fail) return 0;",
+      "kills": [
+        "doctor: exit is non-zero only when a check fails, a warning alone does not block",
+        "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix",
+        "doctor: in a repository with a Unicode, spaced path the repo, tests, write, state and sandbox checks pass",
+        "doctor: a repository with no test command fails the tests check before lockdown starts",
+        "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up"
+      ]
+    },
+    {
+      "id": "DR3-doctor-signed-out-passes",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (signed_in) return .{ .name = \"login\", .status = .ok, .detail = \"signed in\" };",
+      "to": "    if (signed_in or true) return .{ .name = \"login\", .status = .ok, .detail = \"signed in\" };",
+      "kills": [
+        "doctor: a signed-out claude blocks lockdown with claude auth login, an unreadable status only warns"
+      ]
+    },
+    {
+      "id": "DR4-doctor-repo-config-flag-ignored",
+      "file": "src/platform/doctor.zig",
+      "from": "            if (std.mem.eql(u8, arg.string, \"--allow-repo-config\")) found.allow_repo_config = true;\n",
+      "to": "",
+      "kills": [
+        "doctor: the test command lockdown will use comes from the emetgate server's --test in .mcp.json"
+      ]
+    },
+    {
+      "id": "DR5-doctor-no-test-command-only-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "        error.NoTestCommand => .{ .name = \"tests\", .status = .fail,",
+      "to": "        error.NoTestCommand => .{ .name = \"tests\", .status = .warn,",
+      "kills": [
+        "doctor: no test command blocks lockdown, and the fix names --test",
+        "doctor: a repository with no test command fails the tests check before lockdown starts"
+      ]
+    },
+    {
+      "id": "DR6-doctor-code-page-never-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (code_page == 0 or code_page == utf8_code_page) return",
+      "to": "    if (code_page == 0 or true) return",
+      "kills": [
+        "doctor: a non-UTF-8 console code page is a warning with chcp 65001"
+      ]
+    },
+    {
+      "id": "DR7-doctor-claude-not-found-no-hint",
+      "file": "src/platform/doctor.zig",
+      "from": "        error.ClaudeNotFound => \"claude (Claude Code) is not on PATH; install it with: \" ++ claude_install ++ \"  then open a new terminal\",\n",
+      "to": "",
+      "kills": [
+        "doctor: a startup error names what is wrong and the exact fix command on one line"
+      ]
+    },
+    {
+      "id": "DR8-doctor-tests-looked-up-outside-repo",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (root == null) return .{ .name = \"tests\", .status = .fail, .detail = \"skipped: needs a git repository\" };\n",
+      "to": "",
+      "kills": [
+        "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix"
+      ]
+    },
+    {
+      "id": "DR9-doctor-not-in-repo-only-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "        try checks.append(arena, .{ .name = \"repo\", .status = .fail,",
+      "to": "        try checks.append(arena, .{ .name = \"repo\", .status = .warn,",
+      "kills": [
+        "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix"
+      ]
+    },
+    {
+      "id": "DR10-doctor-quoted-program-split",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (trimmed.len != 0 and trimmed[0] == '\"') {",
+      "to": "    if (false) {",
+      "kills": [
+        "doctor: the program of a test command is its first word, quoted or not"
+      ]
+    },
+    {
+      "id": "DR11-doctor-bad-mcp-config-only-warns",
+      "file": "src/platform/doctor.zig",
+      "from": "    return .{ .name = \".mcp.json\", .status = .fail,",
+      "to": "    return .{ .name = \".mcp.json\", .status = .warn,",
+      "kills": [
+        "doctor: no test command blocks lockdown, and the fix names --test",
+        "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up"
+      ]
+    },
+    {
+      "id": "BLD1-user-settings-loaded",
+      "file": "src/platform/lockdown.zig",
+      "from": "const user_settings_off = [_][]const u8{ setting_sources_flag, setting_sources };",
+      "to": "const user_settings_off = [_][]const u8{};",
+      "kills": [
+        "lockdown argv allows no built-in tool and only the strict .mcp.json servers, then the user's args"
+      ]
+    },
+    {
+      "id": "BLD2-setting-sources-not-reserved",
+      "file": "src/platform/lockdown.zig",
+      "from": "    \"--setting-sources\",\n",
+      "to": "",
+      "kills": [
+        "a passthrough arg that would override the lock is refused in both spellings"
+      ]
+    },
+    {
+      "id": "BLD3-own-config-without-detect",
+      "file": "src/platform/lockdown.zig",
+      "from": "    } else try js.write(detect_flag);",
+      "to": "    }",
+      "kills": [
+        "lockdown's own config hands the server --test with a given command and --detect-test without one"
+      ]
+    },
+    {
+      "id": "BLD4-test-with-mcp-json-accepted",
+      "file": "src/platform/lockdown.zig",
+      "from": "    if (given_test != null) {",
+      "to": "    if (false) {",
+      "kills": [
+        "lockdown --test with the project's own .mcp.json is refused, since that config sets the server's arguments"
+      ]
+    },
+    {
+      "id": "BLD5-blank-test-command-accepted",
+      "file": "src/platform/lockdown.zig",
+      "from": "if (args.len < 2 or std.mem.trim(u8, args[1], \" \\t\").len == 0) return error.LockdownTestCommandMissing;",
+      "to": "if (args.len < 2) return error.LockdownTestCommandMissing;",
+      "kills": [
+        "lockdown --test takes the next argument or the joined value and leaves the rest to claude"
+      ]
+    },
+    {
+      "id": "BLD6-git-init-inside-a-repository",
+      "file": "src/platform/lockdown.zig",
+      "from": "    if (try gitSucceeds(gpa, io, git, dir_abs, env, &.{ \"rev-parse\", \"--show-toplevel\" })) return false;",
+      "to": "",
+      "kills": [
+        "lockdown makes a folder outside any repository a git repository once, and leaves a repository alone"
+      ]
+    },
+    {
+      "id": "BLD7-unverified-not-flagged",
+      "file": "src/platform/test_command.zig",
+      "from": "    unverified = true;\n",
+      "to": "",
+      "kills": [
+        "test detection: detect mode resolves per write, falls back to an unverified pass, and reports it once",
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "BLD8-npm-placeholder-counts-as-tests",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (std.mem.indexOf(u8, script.string, npm_placeholder) != null) return false;\n",
+      "to": "",
+      "kills": [
+        "test detection: an empty folder, npm's placeholder script and a package without scripts name no test command"
+      ]
+    },
+    {
+      "id": "BLD9-markers-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "if (dir.access(io, marker.file, .{})) |_| return marker.command else |_| {}",
+      "to": "_ = marker;",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "BLD10-empty-command-detects",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (!detecting) return error.NoTestCommand;\n",
+      "to": "",
+      "kills": [
+        "test detection: detect mode resolves per write, falls back to an unverified pass, and reports it once"
+      ]
+    },
+    {
+      "id": "BLD11-unverified-status-dropped",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (test_command_mod.takeUnverified()) {",
+      "to": "    if (false) {",
+      "kills": [
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "BLD12-commit-not-promoted",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "    try promote(gpa, w);\n",
+      "to": "",
+      "kills": [
+        "commit on write: an accepted try is one commit with the given message and bytes, and its receipt rides on it"
+      ]
+    },
+    {
+      "id": "BLD13-uncommitted-write-says-committed",
+      "file": "src/protocol/wire.zig",
+      "from": "pub const written_status = \"written\";",
+      "to": "pub const written_status = \"committed\";",
+      "kills": [
+        "test detection: a write that ran a test without a commit says written, not committed"
+      ]
+    },
+    {
+      "id": "BLD14-run-allowlist-without-test",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    const tests: ?[]const u8 = policy.test_command orelse if (policy.detect_test) try test_command.detectIn(gpa, io, root_abs) else null;",
+      "to": "    const tests: ?[]const u8 = null;",
+      "kills": [
+        "test detection: the run allowlist carries the given or detected test command"
+      ]
+    },
+    {
+      "id": "BLD15-detect-policy-ignored",
+      "file": "src/protocol/policy.zig",
+      "from": "    return policy.test_command orelse if (policy.detect_test) test_command_mod.detect else \"\";",
+      "to": "    return policy.test_command orelse \"\";",
+      "kills": [
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "BLD16-detect-flag-repeatable",
+      "file": "src/protocol/policy.zig",
+      "from": "            if (policy.detect_test) return null;\n",
+      "to": "",
+      "kills": [
+        "test detection: --detect-test is parsed once"
+      ]
+    },
+    {
+      "id": "BLD17-new-directory-has-no-root",
+      "file": "src/platform/repo.zig",
+      "from": "    return gitToplevel(gpa, io, existingAncestor(io, file_abs) orelse return error.InvalidPath);",
+      "to": "    return gitToplevel(gpa, io, file_abs);",
+      "kills": [
+        "test detection: detect mode resolves per write, falls back to an unverified pass, and reports it once"
+      ]
+    },
+    {
+      "id": "BLD18-no-test-command-without-fix",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (std.mem.eql(u8, name, \"NoTestCommand\")) return no_test_command_fix;\n",
+      "to": "",
+      "kills": [
+        "test detection: a server with no test command and no detection refuses the write with the fix for the user"
+      ]
+    },
+    {
+      "id": "FE1-whole-file-ignores-stale-hash",
+      "file": "src/platform/batch_plan.zig",
+      "from": "                if (!std.mem.eql(u8, &expected.present, &symbol.fileHash(current))) return error.HashMismatch;\n",
+      "to": "                _ = current;\n",
+      "kills": [
+        "forgiving edits: a whole-file write under a stale hash is refused and nothing is written",
+        "textAfter keeps a whole-file write to its hash and reads a line range under the file hash"
+      ]
+    },
+    {
+      "id": "FE2-line-range-under-file-hash-refused",
+      "file": "src/platform/batch_plan.zig",
+      "from": "error.HashMismatch => if (std.mem.eql(u8, &wanted, &symbol.fileHash(current)))",
+      "to": "error.HashMismatch => if (false)",
+      "kills": [
+        "forgiving edits: a line range is accepted under the whole file's hash too",
+        "textAfter keeps a whole-file write to its hash and reads a line range under the file hash"
+      ]
+    },
+    {
+      "id": "FE3-batch-new-directory-refused",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (err != error.ParentDirectoryMissing or !may_create) return err;",
+      "to": "        if (true) return err;",
+      "kills": [
+        "forgiving edits: try_batch with hash absent and content but no symbol creates the whole file in a new directory",
+        "purple: hash absent in a directory that does not exist creates the directory and the file through emetgate_try"
+      ]
+    },
+    {
+      "id": "FE4-source-line-range-refused",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (lang_registry.forPath(file) != null or absentHash(item) or !hasRegion(item)) return .text;",
+      "to": "        if (absentHash(item) or !hasRegion(item)) return .text;",
+      "kills": [
+        "forgiving edits: a kind doc line range on a JavaScript file goes through the gate and is written",
+        "commit tree: a doc edit of a source file inside a committing batch goes through the gate and commits"
+      ]
+    },
+    {
+      "id": "FE5-no-symbol-content-needs-symbol",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!symbol_named and (getString(item, \"body\") != null or getString(item, \"content\") != null)) return .text;",
+      "to": "",
+      "kills": [
+        "forgiving edits: try with path and body but no symbol creates a source file whole",
+        "forgiving edits: try_batch with hash absent and content but no symbol creates the whole file in a new directory"
+      ]
+    },
+    {
+      "id": "FE6-aliases-ignored",
+      "file": "src/protocol/forgive.zig",
+      "from": "            try map.put(arena, alias[0], value);\n            break;",
+      "to": "            if (false) try map.put(arena, alias[0], value);\n            break;",
+      "kills": [
+        "normalizeItem maps path and content aliases and reads an empty hash as absent",
+        "forgiving edits: emetgate_write takes body as content"
+      ]
+    },
+    {
+      "id": "FE7-write-doc-not-rerouted",
+      "file": "src/protocol/forgive.zig",
+      "from": "        if (!needsBatch(item)) return .{ .name = name, .args = item };",
+      "to": "        if (true) return .{ .name = name, .args = item };",
+      "kills": [
+        "normalize sends write_doc through try_batch as a doc item and keeps the top-level fields",
+        "forgiving edits: write_doc with hash absent and no selector creates a document"
+      ]
+    },
+    {
+      "id": "JS1-item-span-escape-unchecked",
+      "file": "src/engine/cas.zig",
+      "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;",
+      "to": "    if (false) return error.BodyEscape;",
+      "kills": [
+        "a replaced item that grows into its neighbour or changes its name is refused"
+      ]
+    },
+    {
+      "id": "JS2-item-shape-unchecked",
+      "file": "src/engine/cas.zig",
+      "from": "    try expectSameShape(base.tree, next.tree, cut, slot);",
+      "to": "",
+      "kills": [
+        "a replaced item that grows into its neighbour or changes its name is refused"
+      ]
+    },
+    {
+      "id": "JS3-item-separator-doubled",
+      "file": "src/engine/cas.zig",
+      "from": "    if (text.len > 0 and (text[text.len - 1] == ',' or text[text.len - 1] == ';') and span.end < base.source.len",
+      "to": "    if (false and (text[text.len - 1] == ',' or text[text.len - 1] == ';') and span.end < base.source.len",
+      "kills": [
+        "a whole top-level statement, binding, method or property is replaced by its ref without resending its neighbours"
+      ]
+    },
+    {
+      "id": "JS4-node-separator-doubled",
+      "file": "src/engine/node_cas.zig",
+      "from": "    if ((last == ',' or last == ';') and source[end] == last) return text[0 .. text.len - 1];",
+      "to": "    if (false) return text[0 .. text.len - 1];",
+      "kills": [
+        "a separator the text repeats from right after its node is dropped instead of doubled"
+      ]
+    },
+    {
+      "id": "JS5-removal-blank-lines-all-eaten",
+      "file": "src/engine/removal.zig",
+      "from": "    if (bottom) |at| cut.end = at else cut.start = top.?;",
+      "to": "",
+      "kills": [
+        "removal: statements, members, bindings and properties leave exactly one blank line between neighbours"
+      ]
+    },
+    {
+      "id": "JS6-removal-shared-declaration-cut",
+      "file": "src/engine/removal.zig",
+      "from": "    if (whole and topLevelSymbolsIn(before.*, owned) > 1) return error.SharedStatement;",
+      "to": "",
+      "kills": [
+        "removal: a stale hash, a member and a shared declaration are refused"
+      ]
+    },
+    {
+      "id": "JS7-removal-shared-line-cut",
+      "file": "src/engine/removal.zig",
+      "from": "    const owned = lines orelse return error.SharedStatement;",
+      "to": "    const owned = lines orelse target.span;",
+      "kills": [
+        "removal: a stale hash, a member and a shared declaration are refused"
+      ]
+    },
+    {
+      "id": "JS8-require-delete-is-effect",
+      "file": "src/platform/batch_plan.zig",
+      "from": " and !requires(base, removed.span);",
+      "to": ";",
+      "kills": [
+        "deleting a require binding or a class member has no top-level effect, a bare statement skips the reference scan"
+      ]
+    },
+    {
+      "id": "JS9-member-insert-shape-start",
+      "file": "src/engine/cas.zig",
+      "from": "    try expectSameShape(base.tree, next.tree, end, region);",
+      "to": "",
+      "kills": [
+        "a member is inserted after the last member of its class and nested properties keep their blank lines"
+      ]
+    },
+    {
+      "id": "TC1-toolchain-path-tool-accepted",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (std.mem.indexOfAny(u8, first, \"\\\\/:\") != null) return null;\n",
+      "to": "",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands"
+      ]
+    },
+    {
+      "id": "TC2-toolchain-write-flags-accepted",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (hasArg(command, &forbidden_args)) return null;\n",
+      "to": "",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands",
+        "run tool: toolchain commands that write files or open a shell stay refused"
+      ]
+    },
+    {
+      "id": "TC3-toolchain-runner-shell-accepted",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (listed(&node_runners, tool) and hasArg(command, &runner_shell_args)) return null;\n",
+      "to": "",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands",
+        "run tool: toolchain commands that write files or open a shell stay refused"
+      ]
+    },
+    {
+      "id": "TC4-toolchain-metachar-accepted",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n    var tokens",
+      "to": "    var tokens",
+      "kills": [
+        "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
+      ]
+    },
+    {
+      "id": "TC5-toolchain-not-routed",
+      "file": "src/protocol/run_tool.zig",
+      "from": "            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);\n",
+      "to": "",
+      "kills": [
+        "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name"
+      ]
+    },
+    {
+      "id": "TC6-toolchain-searches-current-dir",
+      "file": "src/platform/runner.zig",
+      "from": "const toolchain_env = [_]sandbox.EnvVar{.{ .name = \"NoDefaultCurrentDirectoryInExePath\", .value = \"1\" }};",
+      "to": "const toolchain_env = [_]sandbox.EnvVar{};",
+      "kills": [
+        "a toolchain command writes into its real directory and never runs a same-named script from it",
+        "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name"
+      ]
+    },
+    {
+      "id": "TC7-low-integrity-check-skipped",
+      "file": "src/platform/sandbox.zig",
+      "from": "    if (command.backend != .user) try requireLowIntegrity(child.id.?);\n",
+      "to": "    if (false) try requireLowIntegrity(child.id.?);\n",
+      "kills": [
+        "the user backend runs without the low-integrity check while a sandboxed run still fails closed"
+      ]
+    },
+    {
+      "id": "TC8-refusal-without-toolchain-fix",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    if (std.mem.eql(u8, reason, \"not_allowed\")) {",
+      "to": "    if (false) {",
+      "kills": [
+        "run tool: a refusal names the toolchain families the model can run instead"
+      ]
+    },
+    {
+      "id": "CACHE1-gate-run-without-cache-env",
+      "file": "src/platform/runner.zig",
+      "from": "        break :blk try sandbox.cacheEnvironment(arena_state.allocator(), dir);",
+      "to": "        break :blk &.{};",
+      "kills": [
+        "a gated command gets writable package caches next to its directory that survive the run"
+      ]
+    },
+    {
+      "id": "CACHE2-cache-not-low-writable",
+      "file": "src/platform/shadow.zig",
+      "from": "            try grantLowIntegrityWrite(cache_abs);\n",
+      "to": "",
+      "kills": [
+        "a gated command gets writable package caches next to its directory that survive the run"
+      ]
+    },
+    {
+      "id": "CACHE3-inherited-env-not-overridden",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (isOverridden(entry, vars)) continue;\n",
+      "to": "",
+      "kills": [
+        "the cache environment points every package cache under the given directory and overrides inherited values",
+        "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest"
+      ]
+    },
+    {
+      "id": "NT1-no-tests-fails-the-gate",
+      "file": "src/platform/sandbox.zig",
+      "from": "            .exited => |code| (code == 0 or self.no_tests) and !self.killed_leftovers,",
+      "to": "            .exited => |code| code == 0 and !self.killed_leftovers,",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not",
+        "a gated test run that collected no tests passes with a note instead of failing the write"
+      ]
+    },
+    {
+      "id": "NT2-failure-beside-no-tests-ignored",
+      "file": "src/platform/test_outcome.zig",
+      "from": "    if (containsAny(report, &failure_signs)) return false;\n",
+      "to": "",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not"
+      ]
+    },
+    {
+      "id": "NT3-any-exit-5-is-no-tests",
+      "file": "src/platform/test_outcome.zig",
+      "from": "    if (code == pytest_no_tests and containsAny(report, &pytest_no_tests_signs)) return true;",
+      "to": "    if (code == pytest_no_tests) return true;",
+      "kills": [
+        "a run that collected no tests counts as passing with a note, a failing or crashing run does not"
+      ]
+    },
+    {
+      "id": "NT4-no-tests-not-recorded-by-gate",
+      "file": "src/platform/runner.zig",
+      "from": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = test_outcome.noTests(report);\n",
+      "to": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = false;\n",
+      "kills": [
+        "a gated test run that collected no tests passes with a note instead of failing the write"
+      ]
+    },
+    {
+      "id": "UTF1-code-page-output-not-decoded",
+      "file": "src/platform/console_text.zig",
+      "from": "    if (bytes.len - valid >= max_sequence) {",
+      "to": "    if (false) {",
+      "kills": [
+        "console code page output is decoded to UTF-8 text"
+      ]
+    },
+    {
+      "id": "UTF2-sandbox-returns-raw-bytes",
+      "file": "src/platform/sandbox.zig",
+      "from": "    const stdout = try console_text.toText(gpa, try takeStream(gpa, &reader, 0, limit, &truncated), code_page);",
+      "to": "    const stdout = try takeStream(gpa, &reader, 0, limit, &truncated);",
+      "kills": [
+        "a command's console output reaches the caller as UTF-8 text"
+      ]
+    },
+    {
+      "id": "UTF3-tail-starts-mid-character",
+      "file": "src/platform/run_command.zig",
+      "from": "    while (start < bytes.len and bytes[start] & 0xC0 == 0x80) start += 1;\n",
+      "to": "",
+      "kills": [
+        "output cut by bytes never starts inside a multi-byte character"
+      ]
+    },
+    {
+      "id": "EG1-explore-named-not-graphed",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                try graphed.append(arena, f);\n            }\n            if (!any)",
+      "to": "            }\n            if (!any)",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line",
+        "map tools: a function nobody calls is graphed with no callers and no impact"
+      ]
+    },
+    {
+      "id": "EG2-explore-graph-question-ignored",
+      "file": "src/protocol/map_tools.zig",
+      "from": "std.ascii.eqlIgnoreCase(word[0..g.len], g) and isGraphSuffix(word[g.len..])) return true;",
+      "to": "std.mem.eql(u8, word[0..g.len], g) and isGraphSuffix(word[g.len..])) return true;",
+      "kills": [
+        "map tools: only a question about calls or impact graphs the functions it names in its words"
+      ]
+    },
+    {
+      "id": "EG3-explore-graph-asked-always",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        const graph_asked = asksGraph(question);",
+      "to": "        const graph_asked = true;",
+      "kills": [
+        "map tools: only a question about calls or impact graphs the functions it names in its words"
+      ]
+    },
+    {
+      "id": "EG4-explore-callees-from-callers",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        const callees = edgesOf(try repo.query(arena, .{ .relation = .callees,",
+      "to": "        const callees = edgesOf(try repo.query(arena, .{ .relation = .callers,",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line"
+      ]
+    },
+    {
+      "id": "EG5-explore-impact-files-lost",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            _ = try files.getOrPut(arena, site.path);",
+      "to": "            _ = try files.getOrPut(arena, \"\");",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line"
+      ]
+    },
+    {
+      "id": "EG6-explore-callers-none-not-said",
+      "file": "src/protocol/map_tools.zig",
+      "from": "    if (listed == 0) try w.writeAll(\" none\");",
+      "to": "",
+      "kills": [
+        "map tools: a function nobody calls is graphed with no callers and no impact"
+      ]
+    },
+    {
+      "id": "EG7-explore-graph-dropped",
+      "file": "src/protocol/map_tools.zig",
+      "from": "            try self.graph(arena, &out.writer, f);",
+      "to": "            try self.graph(arena, &notes.writer, f);",
+      "kills": [
+        "map tools: explore names the callers, callees and impact of a named function with file and line"
+      ]
+    },
+    {
+      "id": "AL1-own-config-not-always-load",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try js.objectField(always_load_field);\n    try js.write(true);\n",
+      "to": "",
+      "kills": [
+        "lockdown marks the emetgate server alwaysLoad so Claude Code does not defer its tools behind tool search"
+      ]
+    },
+    {
+      "id": "AL2-project-config-not-marked",
+      "file": "src/platform/lockdown.zig",
+      "from": "        try entry.value_ptr.object.put(parsed.arena.allocator(), always_load_field, .{ .bool = true });\n        changed = true;",
+      "to": "        changed = true;",
+      "kills": [
+        "lockdown marks the emetgate server alwaysLoad so Claude Code does not defer its tools behind tool search",
+        "without a .mcp.json lockdown serves the running emetgate from its own config"
+      ]
+    },
+    {
+      "id": "AL3-project-config-copied-when-already-loaded",
+      "file": "src/platform/lockdown.zig",
+      "from": "            if (present == .bool and present.bool) continue;",
+      "to": "            if (present == .bool and present.bool) {}",
+      "kills": [
+        "lockdown marks the emetgate server alwaysLoad so Claude Code does not defer its tools behind tool search",
+        "without a .mcp.json lockdown serves the running emetgate from its own config"
+      ]
+    },
+    {
+      "id": "DG1-vendor-frames-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "                    if ((frame_kept and !python) or isVendorFrame(text)) {",
+      "to": "                    if (frame_kept and !python) {",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing"
+      ]
+    },
+    {
+      "id": "DG2-every-frame-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "                    frame_kept = true;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing"
+      ]
+    },
+    {
+      "id": "DG3-duplicates-not-collapsed",
+      "file": "src/protocol/output_digest.zig",
+      "from": "            if (gop.found_existing) {",
+      "to": "            if (false) {",
+      "kills": [
+        "identical compiler errors and repeated warnings collapse to one line with a count, ANSI codes are stripped",
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+      ]
+    },
+    {
+      "id": "DG4-warnings-keyed-by-location",
+      "file": "src/protocol/output_digest.zig",
+      "from": "            const key = warn orelse text;",
+      "to": "            const key = text;",
+      "kills": [
+        "identical compiler errors and repeated warnings collapse to one line with a count, ANSI codes are stripped"
+      ]
+    },
+    {
+      "id": "DG5-no-cap",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (used + need > limit) break;\n",
+      "to": "",
+      "kills": [
+        "a flood of distinct failures stays under the cap and counts the failures it left out",
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+      ]
+    },
+    {
+      "id": "DG6-more-failures-not-counted",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (entry.head) more += 1;\n",
+      "to": "",
+      "kills": [
+        "a flood of distinct failures stays under the cap and counts the failures it left out"
+      ]
+    },
+    {
+      "id": "DG7-ansi-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (line[i] == 0x1b and i + 1 < line.len and line[i + 1] == '[') {",
+      "to": "        if (false) {",
+      "kills": [
+        "identical compiler errors and repeated warnings collapse to one line with a count, ANSI codes are stripped"
+      ]
+    },
+    {
+      "id": "DG8-pass-lines-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (isPass(text)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing",
+        "a cargo panic keeps the panic location and left and right, drops passing tests and the backtrace note"
+      ]
+    },
+    {
+      "id": "DG9-progress-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (isProgress(text)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a pytest failure keeps the assertion and the location, drops the session header, rules and progress"
+      ]
+    },
+    {
+      "id": "DG10-code-context-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (isCodeContext(text)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing"
+      ]
+    },
+    {
+      "id": "DG11-summary-dropped-from-digest",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (out.items.len + summary.len + 1 > cap) break;",
+      "to": "        break;",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing",
+        "a pytest failure keeps the assertion and the location, drops the session header, rules and progress",
+        "a cargo panic keeps the panic location and left and right, drops passing tests and the backtrace note"
+      ]
+    },
+    {
+      "id": "DG12-pass-line-without-summary",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (c.summaries.items.len == 0) return null;\n",
+      "to": "",
+      "kills": [
+        "a passing run with a count line is one line with its duration, a run without one is not"
+      ]
+    },
+    {
+      "id": "DG13-log-request-any-length",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (id.len != id_len) return null;\n",
+      "to": "",
+      "kills": [
+        "a log request names eight hex digits after log and nothing else"
+      ]
+    },
+    {
+      "id": "DG14-log-request-not-served",
+      "file": "src/protocol/run_tool.zig",
+      "from": "    if (output_digest.logRequest(command)) |id| return output_digest.writeLog(gpa, io, root_abs, id, w);\n",
+      "to": "",
+      "kills": [
+        "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
+      ]
+    },
+    {
+      "id": "DG15-noise-kept",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (startsAny(text, &noise_starts)) return .drop;\n",
+      "to": "",
+      "kills": [
+        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing",
+        "a pytest failure keeps the assertion and the location, drops the session header, rules and progress",
+        "a cargo panic keeps the panic location and left and right, drops passing tests and the backtrace note"
+      ]
+    },
+    {
+      "id": "DOCF1-jsdoc-never-folded",
+      "file": "src/engine/doc_fold.zig",
+      "from": "    if (std.mem.startsWith(u8, comment, \"/**/\")) return null;\n",
+      "to": "    return null;\n",
+      "kills": [
+        "a multi-line JSDoc folds to its first sentence and reports the original lines",
+        "a fold limited to a byte range returns only that range"
+      ]
+    },
+    {
+      "id": "DOCF2-plain-comments-folded",
+      "file": "src/engine/doc_fold.zig",
+      "from": "    const prefix = docPrefix(comment) orelse return null;\n",
+      "to": "    const prefix = docPrefix(comment) orelse \"/*\";\n",
+      "kills": [
+        "plain comments and one-line docs stay byte for byte"
+      ]
+    },
+    {
+      "id": "DOCF3-license-not-collapsed",
+      "file": "src/engine/doc_fold.zig",
+      "from": "            if (mentionsLicense(source[first.start..top.end])) {\n",
+      "to": "            if (false) {\n",
+      "kills": [
+        "a license header at the top of the file collapses to its first line"
+      ]
+    },
+    {
+      "id": "DOCF4-docstring-not-recognised",
+      "file": "src/engine/doc_fold.zig",
+      "from": "    if (!wrapped and !isString(profile, node.kind())) return false;\n",
+      "to": "    return false;\n",
+      "kills": [
+        "a python docstring folds to a one-line docstring with the same quotes",
+        "read_symbol folds a python docstring to its first sentence"
+      ]
+    },
+    {
+      "id": "DOCF5-detail-full-still-folds",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (self.detail == .full) return null;\n",
+      "to": "",
+      "kills": [
+        "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
+      ]
+    },
+    {
+      "id": "DOCF6-docs-field-dropped",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (docs.len == 0) return;\n",
+      "to": "    return;\n",
+      "kills": [
+        "a skeleton with folded docs names the original lines and how to get them",
+        "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
+      ]
+    },
+    {
+      "id": "DOCF7-skeleton-whole-unfolded",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const text = if (docs) |d| try gpa.dupe(u8, d.text) else",
+      "to": "    const text = if (docs) |_| try gpa.dupe(u8, snapshot.source) else",
+      "kills": [
+        "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
+      ]
+    },
+    {
+      "id": "DOCR1-folded-doc-not-restored",
+      "file": "src/engine/doc_fold.zig",
+      "from": "        restored = true;\n",
+      "to": "",
+      "kills": [
+        "a body sent back with its docs folded as read keeps the full docs, a dropped doc stays dropped"
+      ]
+    },
+    {
+      "id": "LKC1-shared-lockdown-config-path",
+      "file": "src/platform/lockdown.zig",
+      "from": "std.hash.Wyhash.hash(0, json)",
+      "to": "@as(u64, 0)",
+      "kills": [
+        "without a .mcp.json lockdown serves the running emetgate from its own config"
+      ]
+    },
+    {
+      "id": "BMG1-same-file-items-not-chained",
+      "file": "src/protocol/batch_merge.zig",
+      "from": "        gpa.free(current);\n        current = next;\n    }\n    return .{",
+      "to": "        gpa.free(next);\n    }\n    return .{",
+      "kills": [
+        "two old_string items for one file apply in order against the result of the first"
+      ]
+    },
+    {
+      "id": "BMG2-whole-file-conflict-ignored",
+      "file": "src/protocol/batch_merge.zig",
+      "from": "        return error.ConflictingBatchEdits;\n",
+      "to": "        continue;\n",
+      "kills": [
+        "a whole-file item next to another item for the same file is refused with a fix"
+      ]
+    },
+    {
+      "id": "BMG3-overlapping-ranges-accepted",
+      "file": "src/protocol/batch_merge.zig",
+      "from": "        return error.OverlappingLineRanges;\n",
+      "to": "        continue;\n",
+      "kills": [
+        "overlapping line ranges for one file are refused with both indexes"
+      ]
+    },
+    {
+      "id": "BSL1-new-failure-accepted",
+      "file": "src/platform/baseline.zig",
+      "from": "        if (i == before.keys.len or before.keys[i] != key) return false;\n",
+      "to": "\n",
+      "kills": [
+        "an edit is accepted only when its failures were already failing before it, in the same stage"
+      ]
+    },
+    {
+      "id": "BSL2-other-stage-accepted",
+      "file": "src/platform/baseline.zig",
+      "from": "    if (after.stage == null or after.stage.? != stage) return false;\n",
+      "to": "    _ = stage;\n",
+      "kills": [
+        "an edit is accepted only when its failures were already failing before it, in the same stage"
+      ]
+    },
+    {
+      "id": "BSL3-unrecognized-failure-accepted",
+      "file": "src/platform/baseline.zig",
+      "from": "    if (after.keys.len == 0 or before.keys.len == 0) return false;\n",
+      "to": "\n",
+      "kills": [
+        "an edit is accepted only when its failures were already failing before it, in the same stage"
+      ]
+    },
+    {
+      "id": "BSL4-code-file-skips-gate",
+      "file": "src/platform/baseline.zig",
+      "from": "    for (changes) |change| if (!inert(change.rel)) return false;\n",
+      "to": "\n",
+      "kills": [
+        "non-code files are never test-gated"
+      ]
+    },
+    {
+      "id": "BSL5-failure-key-keeps-digits",
+      "file": "src/protocol/output_digest.zig",
+      "from": "            if (!digits) hasher.update(\"#\");\n            digits = true;\n            continue;\n",
+      "to": "            digits = true;\n",
+      "kills": [
+        "failure keys ignore numbers and summary lines, so the same failures in another run compare equal"
+      ]
+    },
+    {
+      "id": "SBX1-daemon-name-needs-exact-path",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (std.ascii.eqlIgnoreCase(base, name)) return true;",
+      "to": "        if (std.mem.eql(u8, image_path, name)) return true;",
+      "kills": [
+        "toolchain build daemons left in the job are recognized by image name, whatever the path or case"
+      ]
+    },
+    {
+      "id": "SBX2-daemon-flags-dropped",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "        _ = flag;",
+      "kills": [
+        "every sandboxed command turns off build-server reuse but keeps a value the caller set"
+      ]
+    },
+    {
+      "id": "SBX3-daemon-flags-override-caller",
+      "file": "src/platform/sandbox.zig",
+      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "        try vars.append(arena, flag);",
+      "kills": [
+        "every sandboxed command turns off build-server reuse but keeps a value the caller set"
+      ]
+    },
+    {
+      "id": "TC1-dotnet-info-probe-refused",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (std.ascii.eqlIgnoreCase(tool, \"dotnet\") and listed(&dotnet_info_args, arg)) return .dotnet;\n",
+      "to": "",
+      "kills": [
+        "project toolchain commands are classified into their family"
+      ]
+    },
+    {
+      "id": "TC2-npm-ls-refused",
+      "file": "src/platform/toolchain.zig",
+      "from": "    .{ .tools = &node_managers, .family = .node_tool, .subcommands = &.{ \"ls\", \"list\" } },\n",
+      "to": "",
+      "kills": [
+        "project toolchain commands are classified into their family"
+      ]
+    },
+    {
+      "id": "GC1-unborn-refused",
+      "file": "src/platform/git_commit.zig",
+      "from": "return unbornFacts(git);",
+      "to": "return error.NoCommitYet;",
+      "kills": [
+        "git commit: a repository with no commit yet gets a root commit with no parent"
+      ]
+    },
+    {
+      "id": "GC2-root-commit-given-zero-parent",
+      "file": "src/platform/git_commit.zig",
+      "from": "    const commit = try gpa.dupe(u8, if (isUnborn(head.oid))",
+      "to": "    const commit = try gpa.dupe(u8, if (head.oid.len == 0)",
+      "kills": [
+        "git commit: a repository with no commit yet gets a root commit with no parent"
+      ]
+    },
+    {
+      "id": "GC3-empty-id-counts-as-unborn",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (oid.len == 0) return false;\n    for (oid) |c| {",
+      "to": "    for (oid) |c| {",
+      "kills": [
+        "git commit: only an all-zero id stands for an unborn branch"
+      ]
+    },
+    {
+      "id": "GC4-unborn-listing-reads-zero-commit",
+      "file": "src/platform/git_commit.zig",
+      "from": "if (isUnborn(commit)) tree else commit",
+      "to": "commit",
+      "kills": [
+        "git commit: a repository with no commit yet gets a root commit with no parent"
+      ]
+    },
+    {
+      "id": "RN1-unverified-echoes-whole-receipt",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "    try js.objectField(\"tests\");\n    try js.write(hint);\n    try js.endObject();\n    try out.writer.writeByte('\\n');\n    return try out.toOwnedSlice();",
+      "to": "    try js.endObject();\n    return restated(gpa, text, to, hint);",
+      "kills": [
+        "receipt note: an unverified write is one short line that names the files and drops the symbol listing",
+        "test detection: a write in a project with no test command lands as unverified_no_tests and says why"
+      ]
+    },
+    {
+      "id": "RN2-unverified-files-repeated",
+      "file": "src/protocol/receipt_note.zig",
+      "from": "        if (std.mem.eql(u8, seen, file.string)) return;",
+      "to": "        _ = seen;",
+      "kills": [
+        "receipt note: an unverified write is one short line that names the files and drops the symbol listing"
+      ]
+    },
+    {
+      "id": "TD1-nested-test-project-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "    return nestedTestProject(io, dir);",
+      "to": "    return null;",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "TD2-slnx-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "\".sln\", \".slnx\", ",
+      "to": "\".sln\", ",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "TD3-bin-dir-searched",
+      "file": "src/platform/test_command.zig",
+      "from": "\"bin\", \"obj\", ",
+      "to": "\"obj\", ",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "TD4-one-of-many-test-projects-picked",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (found.count != 1) return null;",
+      "to": "    if (found.count == 0) return null;",
+      "kills": [
+        "test detection: a dotnet solution, or the one test project in a subfolder, names its test command"
+      ]
+    },
+    {
+      "id": "DG1-digest-errors-not-first",
+      "file": "src/protocol/output_digest.zig",
+      "from": "        if (!isErrorEntry(entry) or used + need > budget / 2) continue;",
+      "to": "        if (isErrorEntry(entry) or used + need > budget / 2) continue;",
+      "kills": [
+        "an error line repeated under hundreds of failing test titles is shown even when the titles alone fill the cap"
+      ]
+    },
+    {
+      "id": "TO1-count-lines-not-scanned",
+      "file": "src/platform/test_outcome.zig",
+      "from": "        if (countLines(report.stdout, &summary)) return summary;\n",
+      "to": "",
+      "kills": [
+        "a failing run whose count lines sit above a long failure list is summed up by them, not by a stack frame"
+      ]
+    },
+    {
+      "id": "DD1-punctuation-substituted",
+      "file": "src/protocol/diff_digest.zig",
+      "from": "        if (!isWord(a[0]) or !isWord(b[0])) return null;\n",
+      "to": "",
+      "kills": [
+        "a word for word substitution is one pair, anything else is not"
+      ]
+    },
+    {
+      "id": "DD2-single-substitution-collapsed",
+      "file": "src/protocol/diff_digest.zig",
+      "from": ".? < 2) break false;",
+      "to": ".? < 1) break false;",
+      "kills": [
+        "consecutive collapsed lines print as a range and a single substitution is shown raw"
+      ]
+    },
+    {
+      "id": "RD1-numeric-index-flagged",
+      "file": "src/engine/rename.zig",
+      "from": "{ \"-\", \"/\", \"//\", ",
+      "to": "{ \"/\", \"//\", ",
+      "kills": [
+        "rename: a string that is exactly the name, eval, computed requires and constructed keys are dynamic access"
+      ]
+    },
+    {
+      "id": "RD2-template-prefix-ignored",
+      "file": "src/engine/rename.zig",
+      "from": "    return !std.mem.startsWith(u8, name, prefix) or !std.mem.endsWith(u8, name, suffix);",
+      "to": "    return prefix.len > name.len or !std.mem.endsWith(u8, name, suffix);",
+      "kills": [
+        "rename: a string that is exactly the name, eval, computed requires and constructed keys are dynamic access"
+      ]
+    },
+    {
+      "id": "RR1-module-member-not-renamed",
+      "file": "src/platform/rename_require.zig",
+      "from": "            try out.append(gpa, .{ .span = spanOf(property), .keep = .none });\n",
+      "to": "",
+      "kills": [
+        "a member read through a required or imported module binding is a rename site, other objects and modules are not"
+      ]
+    },
+    {
+      "id": "RR2-rebound-module-name-renamed",
+      "file": "src/platform/rename_require.zig",
+      "from": "        if (try oneBinder(gpa, snapshot, binder)) try binders.append(gpa, binder);",
+      "to": "        if (try oneBinder(gpa, snapshot, binder) or true) try binders.append(gpa, binder);",
+      "kills": [
+        "a local rebinding of the module name stops member sites from being renamed"
+      ]
+    },
+    {
+      "id": "RR3-uncovered-export-accepted",
+      "file": "src/platform/rename_require.zig",
+      "from": "        if (!covered(renamed, leaf.span)) return false;\n",
+      "to": "",
+      "kills": [
+        "a declaring file exports the name as a property only when every occurrence is renamed and one is a key"
+      ]
+    },
+    {
+      "id": "RR4-destructured-local-renamed",
+      "file": "src/platform/rename_require.zig",
+      "from": ".span = spanOf(child), .keep = .value",
+      "to": ".span = spanOf(child), .keep = .none",
+      "kills": [
+        "a member read through a required or imported module binding is a rename site, other objects and modules are not"
+      ]
+    },
+    {
+      "id": "RN1-sole-command-not-run",
+      "file": "src/protocol/run_tool.zig",
+      "from": "orelse if (allowed.len == 1) allowed[0] else {",
+      "to": "orelse if (allowed.len == 0) allowed[0] else {",
+      "kills": [
+        "run tool: a call without command runs the only allowlisted command"
+      ]
+    },
+    {
+      "id": "DG2-errors-in-original-order",
+      "file": "src/protocol/output_digest.zig",
+      "from": "    if (chosen.errors_first) {\n",
+      "to": "    if (false) {\n",
+      "kills": [
+        "an error line repeated under hundreds of failing test titles is shown even when the titles alone fill the cap"
+      ]
+    },
+    {
+      "id": "GW1-hard-reset-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "x(\"--hard\")",
+      "to": ".{ .name = \"--hard\" }",
+      "kills": [
+        "git write accepts the local workflow and marks only work-losing forms",
+        "git write refuses a hard reset that would lose work until force is true"
+      ]
+    },
+    {
+      "id": "GW2-restore-worktree-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.eql(u8, spec.sub, \"restore\") and !(staged and !worktree)) lossy = true;",
+      "to": "    if (std.mem.eql(u8, spec.sub, \"restore\") and false and !(staged and !worktree)) lossy = true;",
+      "kills": [
+        "git write accepts the local workflow and marks only work-losing forms"
+      ]
+    },
+    {
+      "id": "GW3-push-plus-refspec-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (spec.network and (arg[0] == '+' or arg[0] == ':')) lossy = true;",
+      "to": "        {}",
+      "kills": [
+        "git write accepts the local workflow and marks only work-losing forms"
+      ]
+    },
+    {
+      "id": "GW4-checkout-path-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.eql(u8, ok.spec.sub, \"checkout\") and !lossy) lossy =",
+      "to": "    if (std.mem.eql(u8, ok.spec.sub, \"checkout\") and false) lossy =",
+      "kills": [
+        "git write treats checkout of a branch as a switch and checkout of a path as work-losing"
+      ]
+    },
+    {
+      "id": "GW5-unknown-flag-passed-to-git",
+      "file": "src/protocol/git_write.zig",
+      "from": "        const found = findFlag(spec, arg) orelse return .{ .refused = .{ .reason = \"unsupported_flag\", .arg = arg } };",
+      "to": "        const found = findFlag(spec, arg) orelse continue;",
+      "kills": [
+        "git write refuses execution and config flags and unknown subcommands",
+        "git write refuses a flag that runs a program and a subcommand outside the list"
+      ]
+    },
+    {
+      "id": "BR1-output-limit-unchecked",
+      "file": "src/platform/bounded_run.zig",
+      "from": "        if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) return error.StreamTooLong;",
+      "to": "        _ = options.stdout_limit;",
+      "kills": [
+        "output over the limit stops the child instead of hanging"
+      ]
+    },
+    {
+      "id": "GT1-blame-porcelain-whole-file",
+      "file": "src/protocol/git_tools.zig",
+      "from": "        .argv = if (range != null) &windowed else &whole,",
+      "to": "        .argv = &whole,",
+      "kills": [
+        "symbol blame of a line window in a file whose whole blame is huge stays mapped and returns"
+      ]
+    },
+    {
+      "id": "CG1-restored-file-counts-as-drift",
+      "file": "src/platform/commit_group.zig",
+      "from": "        if (try equalsHead(arena, io, root, item.rel, bytes)) continue;",
+      "to": "        _ = &equalsHead;",
+      "kills": [
+        "emetgate_commit: a gated file that git put back to HEAD is skipped, not refused as drift"
+      ]
+    },
+    {
+      "id": "LD1-lockdown-keeps-server-without-test",
+      "file": "src/platform/lockdown.zig",
+      "from": "        if (!namesTest(args.items)) {",
+      "to": "        if (false) {",
+      "kills": [
+        "lockdown gives a project emetgate server without a test flag --detect-test so writes and emetgate_run work"
+      ]
+    },
+    {
+      "id": "RT1-git-refusal-gets-toolchain-fix",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        try js.write(if (isGit(command)) git_fix else toolchain_fix);",
+      "to": "        try js.write(toolchain_fix);",
+      "kills": [
+        "run tool: a refused git command points at the git tools"
+      ]
+    },
+    {
+      "id": "RT2-empty-allowlist-no-hint",
+      "file": "src/protocol/run_tool.zig",
+      "from": "        try js.write(empty_allowlist_fix);",
+      "to": "        try js.write(toolchain_fix);",
+      "kills": [
+        "run tool: an empty allowlist says how to get a test command and that toolchain commands still run"
+      ]
+    },
+    {
+      "id": "HS1-commit-shortstat-dropped",
+      "file": "src/protocol/handlers.zig",
+      "from": "            if (try commitShortstat(gpa, io, root, c.base, c.oid)) |stat| {",
+      "to": "            if (@as(?[]u8, null)) |stat| {",
+      "kills": [
+        "emetgate_commit: the MCP tool commits the pending gated writes"
+      ]
+    },
+    {
+      "id": "L4A-string-holes-ignored",
+      "file": "src/engine/lang/profile.zig",
+      "from": "                for (self.string_holes) |hole| if (std.mem.eql(u8, hole, child.kind())) return false;",
+      "to": "                _ = child;",
+      "kills": [
+        "rename facts: a Python function called inside an f-string interpolation is renamed there too",
+        "rename facts: a C# method called inside an interpolated string is renamed there too"
+      ]
+    },
+    {
+      "id": "L4B-python-interpolation-not-a-hole",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .string_holes = &.{\"interpolation\"},",
+      "to": "",
+      "kills": [
+        "rename facts: a Python function called inside an f-string interpolation is renamed there too"
+      ]
+    },
+    {
+      "id": "L4C-csharp-interpolation-not-a-hole",
+      "file": "src/engine/lang/csharp/profile.zig",
+      "from": "    .string_holes = &.{\"interpolation\"},",
+      "to": "",
+      "kills": [
+        "rename facts: a C# method called inside an interpolated string is renamed there too"
+      ]
+    },
+    {
+      "id": "L4D-type-string-names-unchecked",
+      "file": "src/engine/rename.zig",
+      "from": " or typeStringNames(g, node, text, name)) and record(",
+      "to": ") and record(",
+      "kills": [
+        "rename facts: a Python class named inside a string annotation is a dynamic reference"
+      ]
+    },
+    {
+      "id": "L4E-unresolved-stops-at-first-site",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);",
+      "to": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n                return error.RenameUnresolved;",
+      "kills": [
+        "rename facts: an unproven reference refuses the rename and names every site it could not prove"
+      ]
+    },
+    {
+      "id": "L4F-unresolved-sites-not-refused",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (self.sites) |sites| if (sites.count != 0) return error.RenameUnresolved;",
+      "to": "",
+      "kills": [
+        "rename facts: an unproven reference refuses the rename and names every site it could not prove"
+      ]
+    },
+    {
+      "id": "L4G-declaration-wrappers-skipped",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "    .wrappers = &.{\"decorated_definition\"},",
+      "to": "",
+      "kills": [
+        "python declarations: a decorated class and its annotated fields are declared, and the class span starts at its decorator"
+      ]
+    },
+    {
+      "id": "L4H-python-constructions-ignored",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .constructions = &.{.{ .node = \"assignment\", .name_field = \"left\", .value_field = \"right\" }},\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4I-python-calls-do-not-construct",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .calls_construct = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4J-python-typed-parameters-untyped",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .{ .node = \"typed_parameter\", .name_field = \"\", .type_field = \"type\" },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method reached through a typed parameter, a constructed local or a constructor call is renamed"
+      ]
+    },
+    {
+      "id": "L4K-python-binders-not-sole-checked",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .sole_binder_types = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4L-written-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (written.contains(start.*) or ",
+      "to": "if (",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4M-module-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or ",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4N-rebound-binders-keep-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": " or !self.soleBinder(i)) try doomed",
+      "to": ") try doomed",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "L4O-csharp-constructions-ignored",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .constructions = &.{.{ .node = \"variable_declarator\", .name_field = \"name\", .parent_type_field = \"type\" }},\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed"
+      ]
+    },
+    {
+      "id": "L4P-csharp-property-not-a-binder",
+      "file": "src/engine/lang/csharp/rename.zig",
+      "from": "    .{ .parent = \"property_declaration\", .field = \"name\", .scope = .block },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed"
+      ]
+    },
+    {
+      "id": "L4Q-multi-field-binder-first-only",
+      "file": "src/engine/sites.zig",
+      "from": "            if (!holdsInField(grand, pf, parent)) continue;",
+      "to": "            if (!(grand.childByField(pf) orelse continue).eql(parent)) continue;",
+      "kills": [
+        "rename facts: every name of a Python from-import binds, not only the first"
+      ]
+    },
+    {
+      "id": "L4R-package-inits-not-loaded",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try graph.addPackageInits(real.seam().fs, root);\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4S-package-init-gate-inverted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "        if (modules.package_init.len == 0) return;",
+      "to": "        if (modules.package_init.len != 0) return;",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4T-namespace-package-no-submodule",
+      "file": "src/engine/facts_store.zig",
+      "from": "            .external => return self.submoduleOf(id, binding, .{ .unresolved = .external_module }, visit),",
+      "to": "            .external => return .{ .unresolved = .external_module },",
+      "kills": [
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4U-missing-export-no-submodule",
+      "file": "src/engine/facts_store.zig",
+      "from": "        return self.submoduleOf(id, binding, found, visit);",
+      "to": "        return found;",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed"
+      ]
+    },
+    {
+      "id": "L4V-from-import-no-submodule-spec",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.m.submodule_imports) try self.addSubmodule(",
+      "to": "if (false) try self.addSubmodule(",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed",
+        "rename facts: a Python submodule of a namespace package is reached, but a package attribute of the same name wins"
+      ]
+    },
+    {
+      "id": "L4W-import-bindings-not-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (self.m.exports_bindings) try self.exportBindings();",
+      "to": "",
+      "kills": [
+        "rename facts: a Python function reached through a from-imported submodule or a package re-export is renamed"
+      ]
+    },
+    {
+      "id": "L4X-tox-ini-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"setup.cfg\", \"setup.py\" };",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L4Y-setup-cfg-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.py\" };",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L4Z-setup-py-not-a-marker",
+      "file": "src/platform/test_command.zig",
+      "from": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\", \"setup.py\" };",
+      "to": "const python_markers = [_][]const u8{ \"pyproject.toml\", \"pytest.ini\", \"tox.ini\", \"setup.cfg\" };",
+      "kills": [
+        "test detection: each project marker names its test command"
+      ]
+    },
+    {
+      "id": "L5A-venv-interpreter-without-pyvenv",
+      "file": "src/platform/run_command.zig",
+      "from": "        return inVenv(io, a, real);",
+      "to": "        return true;",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5B-interpreter-outside-project",
+      "file": "src/platform/run_command.zig",
+      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return false;\n",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5C-any-venv-binary",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (!listed) return false;",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5D-local-command-keeps-slashes",
+      "file": "src/platform/run_command.zig",
+      "from": "    std.mem.replaceScalar(u8, owned[start..end], '/', '\\\\');",
+      "to": "",
+      "kills": [
+        "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
+      ]
+    },
+    {
+      "id": "L5E-venv-not-linked-into-shadow",
+      "file": "src/platform/shadow.zig",
+      "from": "pub const dependency_dirs = [_][]const u8{ \"node_modules\", \".venv\", \"venv\" };",
+      "to": "pub const dependency_dirs = [_][]const u8{\"node_modules\"};",
+      "kills": [
+        "run tool: an untracked project venv is present in the shadow the command runs in"
+      ]
+    },
+    {
+      "id": "L5F-only-dot-venv-detected",
+      "file": "src/platform/test_command.zig",
+      "from": "pub const venv_dirs = [_][]const u8{ \".venv\", \"venv\" };",
+      "to": "pub const venv_dirs = [_][]const u8{\".venv\"};",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5G-requirements-project-ignored",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (try requirementsProject(gpa, io, dir)) |run| return pythonCommand(io, dir, run);",
+      "to": "",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5H-requirements-without-tests",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (!any or !hasPythonTests(io, dir)) return null;",
+      "to": "    if (!any) return null;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5I-venv-pytest-unseen",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (listed_pytest or venvHasPytest(io, dir)) return pytest_run;",
+      "to": "    if (listed_pytest) return pytest_run;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5J-pytest-prefix-is-pytest",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, \" \\t=<>!~;[@\", next) != null) return true;",
+      "to": "        return true;",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5K-python-marker-ignores-venv",
+      "file": "src/platform/test_command.zig",
+      "from": "        if (dir.access(io, marker, .{})) |_| return pythonCommand(io, dir, pytest_run) else |_| {}",
+      "to": "        if (dir.access(io, marker, .{})) |_| return \"python -m pytest\" else |_| {}",
+      "kills": [
+        "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
+      ]
+    },
+    {
+      "id": "L5L-nested-python-imports-skipped",
+      "file": "src/engine/modules.zig",
+      "from": "                try pending.append(arena, .{ .node = statement.namedChild(j).?, .scoped = scoped });",
+      "to": "",
+      "kills": [
+        "rename facts: a Python import nested in if, try, def or a method is renamed with the function"
+      ]
+    },
+    {
+      "id": "L5M-function-import-is-module-scope",
+      "file": "src/engine/modules.zig",
+      "from": "            const scoped = next.scoped or opensScope(snapshot.profile, kind);",
+      "to": "            const scoped = next.scoped;",
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module"
+      ]
+    },
+    {
+      "id": "L5N-scoped-binding-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (binding.type_only or self.scoped_bindings.contains(@intCast(b))) continue;",
+      "to": "            if (binding.type_only) continue;",
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module"
+      ]
+    },
+    {
+      "id": "L5O-absolute-python-import-relative-to-file",
+      "file": "src/platform/fact_modules.zig",
+      "from": "        if (rest.len == 0 or rest[0] != '.') return self.resolvePythonAbsolute(store, base, spec);",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5P-python-roots-ambiguity-ignored",
+      "file": "src/platform/fact_modules.zig",
+      "from": "                if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, target)) return .unindexed;",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5Q-script-dir-not-a-root",
+      "file": "src/platform/fact_modules.zig",
+      "from": "        const roots = [_][]const u8{ self.scriptRoot(importer_dir), \"\", python_source_root };",
+      "to": "        const roots = [_][]const u8{ \"\", python_source_root };",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5R-package-dir-is-script-root",
+      "file": "src/platform/fact_modules.zig",
+      "from": "            if (!lookup.has(init)) return dir;",
+      "to": "            return dir;",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5S-unloaded-modules-untracked",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try workspace.track(module_files);",
+      "to": "",
+      "kills": [
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
+    },
+    {
+      "id": "L5T-fact-file-drops-submodule",
+      "file": "src/platform/fact_file.zig",
+      "from": "        b.submodule = if (submodule == 0) facts.none else submodule - 1;",
+      "to": "        b.submodule = if (submodule == 0) facts.none else facts.none;",
+      "kills": [
+        "fact store: a saved store keeps the submodule a Python from-import may name"
+      ]
+    },
+    {
+      "id": "L5U-fact-file-submodule-off-by-one",
+      "file": "src/platform/fact_file.zig",
+      "from": "        try e.varint(if (b.submodule == facts.none) 0 else b.submodule + 1);",
+      "to": "        try e.varint(if (b.submodule == facts.none) 0 else b.submodule);",
+      "kills": [
+        "fact store: a saved store keeps the submodule a Python from-import may name"
+      ]
+    },
+    {
+      "id": "L5V-csharp-initializer-members-not-bound",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (std.mem.eql(u8, kind, initializer.entry)) try self.initializedMember(node, depth, initializer);",
+      "to": "if (std.mem.eql(u8, kind, initializer.entry)) {}",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5W-csharp-with-initializer-not-bound",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .{ .entry = \"with_initializer\", .owner = \"with_expression\", .object_is_owner = false },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5X-csharp-initializer-name-is-a-use",
+      "file": "src/engine/lang/csharp/rename.zig",
+      "from": "    .{ .parent = \"assignment_expression\", .field = \"left\", .grandparent = \"initializer_expression\" },\n",
+      "to": "",
+      "kills": [
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept"
+      ]
+    },
+    {
+      "id": "L5Y-member-of-other-class-unaccounted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;",
+      "to": "                if (linkedElsewhere(st, leaf.span.start)) continue;",
+      "kills": [
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+      ]
+    },
+    {
+      "id": "L5Z-member-of-derived-class-set-aside",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                } else if (!graph.hasBase(found)) {",
+      "to": "                } else {",
+      "expect_status": "survived",
+      "note": "defense in depth: a class with a base that declares the member again is already refused by the hierarchy check before any reference is accounted",
+      "filter": [
+        "rename facts: a same-named C# property of a derived class is refused"
+      ]
+    },
+    {
+      "id": "L6A-alpha-renamed-members-not-apart",
+      "file": "src/engine/alpha.zig",
+      "from": "            const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()));",
+      "to": "            const renamed = listed;",
+      "kills": [
+        "rename: renaming one of two same-named properties keeps the other apart in the alpha hash",
+        "rename facts: same-named Python methods of two classes on one line are told apart by their class",
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+      ]
+    },
+    {
+      "id": "L6B-alpha-renamed-plain-names-apart",
+      "file": "src/engine/alpha.zig",
+      "from": "            const member = oneOf(kind, g.property_kinds) or sites.isProperty(g, node) or sites.isExternal(g, node);",
+      "to": "            const member = true;",
+      "kills": [
+        "rename: renaming one of two free uses of a name breaks its alpha hash"
+      ]
+    },
+    {
+      "id": "L6C-verify-renamed-members-not-apart",
+      "file": "src/verify/checker.zig",
+      "from": "            const hx = alpha.hashDistinct(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }, changed.before) catch return false;",
+      "to": "            const hx = alpha.hashDistinct(self.arena, a, .{ .start = x.startByte(), .end = x.endByte() }, &.{}) catch return false;",
+      "kills": [
+        "verify: a rename of one of two same-named methods on a line verifies by alpha hash"
+      ]
+    },
+    {
+      "id": "L6D-region-alpha-new-spans-dropped",
+      "file": "src/engine/rename.zig",
+      "from": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans);",
+      "to": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), &.{});",
+      "kills": [
+        "rename: renaming one of two same-named properties keeps the other apart in the alpha hash"
+      ]
+    },
+    {
+      "id": "L6E-name-list-any-depth",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (top.parent() == null) return true;",
+      "to": "        return true;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6F-name-list-any-owner",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (!std.mem.eql(u8, textOf(snapshot, target), list.owner)) continue;",
+      "to": "        if (false) continue;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6G-name-list-prefixed-string",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (byte != '\"' and byte != '\\'') return false;",
+      "to": "        if (false) return false;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6H-name-list-hit-is-string-key",
+      "file": "src/engine/rename.zig",
+      "from": "            if (name_list.contentNaming(snapshot, node, name)) |content| {",
+      "to": "            if (@as(?ts.Node, null)) |content| {",
+      "kills": [
+        "rename facts: a Python __all__ entry naming the renamed module function is renamed with it"
+      ]
+    },
+    {
+      "id": "L6I-name-list-located-hit-refused",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (hit.kind == .name_list and found < hits.len and renamedAt(renamed, hit.start)) continue;",
+      "to": "        if (false) continue;",
+      "kills": [
+        "rename facts: a Python __all__ entry naming the renamed module function is renamed with it"
+      ]
+    },
+    {
+      "id": "L6J-name-list-without-top-binding",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (listed.len == 0 or !try rename.bindsAtTop(gpa, snapshot, old, located.spans.items)) continue;",
+      "to": "        if (listed.len == 0) continue;",
+      "kills": [
+        "rename facts: an __all__ entry whose module binds the name under an alias is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6K-name-list-nested-binding",
+      "file": "src/engine/rename.zig",
+      "from": "        if (region.start == top.startByte() and region.end == top.endByte() and std.mem.eql(u8, region.kind, top.kind())) return true;",
+      "to": "        return true;",
+      "kills": [
+        "rename facts: a top-level __all__ entry naming a nested function of the same name is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6L-name-list-span-not-accepted",
+      "file": "src/engine/rename.zig",
+      "from": "            if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span.start..span.end], old)) return error.NotAnIdentifier;",
+      "to": "            if (true) return error.NotAnIdentifier;",
+      "kills": [
+        "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash"
+      ]
+    },
+    {
+      "id": "L6M-alpha-name-list-as-text",
+      "file": "src/engine/alpha.zig",
+      "from": "        const listed = within(distinct, node.startByte(), node.endByte()) and name_list.holds(snapshot, node);",
+      "to": "        const listed = false;",
+      "kills": [
+        "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash"
+      ]
+    },
+    {
+      "id": "L6N-alpha-any-changed-string",
+      "file": "src/engine/alpha.zig",
+      "from": "            if (!x.name and !renamesAName(before, after, a, b, x.span, y.span)) continue;",
+      "to": "            if (false) continue;",
+      "kills": [
+        "rename: a Python name-list string changed to a text no renamed name took breaks the alpha check"
+      ]
+    },
+    {
+      "id": "L6O-dynamic-string-prefix-kept",
+      "file": "src/engine/rename.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at..];",
+      "to": "        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at * 0 ..];",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
       ]
     }
   ]

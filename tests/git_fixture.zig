@@ -33,7 +33,7 @@ fn makeTemplate() !Template {
     defer tmp.cleanup();
     const dir_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(dir_abs);
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "init", "-q", "--template=" }, .cwd = .{ .path = dir_abs } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "init", "-q", "--template=" }, .cwd = .{ .path = dir_abs } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {

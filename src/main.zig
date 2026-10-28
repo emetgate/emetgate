@@ -14,6 +14,7 @@ const shadow = emetgate.shadow;
 const shadow_root = emetgate.shadow_root;
 const lockdown = emetgate.lockdown;
 const lockdown_slash = emetgate.lockdown_slash;
+const doctor = emetgate.doctor;
 const prompt_hook = emetgate.prompt_hook;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
@@ -35,7 +36,7 @@ const usage =
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command>] [--typecheck <command>] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory] [--search-internals]
+    \\       emetgate mcp [--test <command> | --detect-test] [--typecheck <command>] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--allow-repo-config] [--allow-repo-memory] [--search-internals]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++
@@ -46,7 +47,9 @@ const usage =
     \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate receipts attach [<commit>]
     \\       emetgate commit -m <message> [--shadow-root <dir>]
-    \\       emetgate lockdown [--no-marks] [<claude args>...]
+    \\       emetgate lockdown [--test <command>] [--no-marks] [<claude args>...]
+    \\       emetgate doctor   (first run: checks claude, git, the test command and the sandbox; exit 1 if lockdown would not work)
+    \\       emetgate --version | help
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
     \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
     \\       emetgate facts defined_at <name> [--file <path>] [--budget <chars>] [--json]
@@ -84,6 +87,12 @@ const usage =
     \\It also loads a plugin from the same place (--plugin-dir) that only draws: it marks
     \\each emetgate write in the transcript as passed or refused. /golem off, /golem on
     \\and /golem scene switch it inside claude; lockdown --no-marks starts without it.
+    \\Without a .mcp.json, lockdown --test <command> sets the server's test command;
+    \\with neither, the server finds one before each write (package.json scripts.test,
+    \\build.zig, Cargo.toml, go.mod, pyproject.toml, pytest.ini, .sln/.csproj) and,
+    \\while there is none, writes land untested with status unverified_no_tests.
+    \\Outside a git repository lockdown runs git init first and says so on stderr.
+    \\User settings and their hooks are not loaded (--setting-sources project).
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
     \\For mutate/try with --hash <hex> (an existing symbol), --body/--body-file is
@@ -196,6 +205,15 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         const options = find_command.parse(args[2..]) orelse exitWithUsage();
         return find_command.run(runtime.gpa, init.io, options, out);
     }
+    if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
+        try out.print("emetgate {s}\n", .{server.server_version});
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
+        try out.writeAll(usage);
+        return 0;
+    }
+    if (std.mem.eql(u8, command, "doctor") and args.len == 2) return doctorCmd(init, runtime, out);
     if (std.mem.eql(u8, command, "lockdown")) {
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
         for (args[2..], 0..) |arg, i| passthrough[i] = arg;
@@ -235,8 +253,21 @@ fn extractFlags(init: std.process.Init, args: []const [:0]const u8) Extracted {
     return .{ .json = json, .allow_repo_config = allow_repo_config, .allow_repo_memory = allow_repo_memory, .rest = rest };
 }
 
+fn doctorCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 {
+    const arena = init.arena.allocator();
+    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(init.io, ".", arena);
+    const self_exe = try std.process.executablePathAlloc(init.io, arena);
+    return doctor.run(runtime.gpa, init.io, .{
+        .cwd = cwd,
+        .self_exe = self_exe,
+        .local_app_data = init.environ_map.get(lockdown_slash.local_app_data_variable),
+        .version = server.server_version,
+        .code_page = doctor.consoleCodePage(),
+    }, out);
+}
+
 fn fail(err: anyerror) u8 {
-    std.debug.print("error: {t}\n", .{err});
+    doctor.printError(err);
     return exitCodeFor(err);
 }
 

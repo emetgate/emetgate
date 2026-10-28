@@ -6,6 +6,7 @@ const shadow = @import("shadow.zig");
 const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
+const test_outcome = @import("test_outcome.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const exe_path = @import("exe_path.zig");
@@ -20,6 +21,7 @@ const commit_plan = @import("commit_plan.zig");
 const git_commit = @import("git_commit.zig");
 const commit_store = @import("commit_store.zig");
 const commit_refusal = @import("commit_refusal.zig");
+const baseline = @import("baseline.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -50,7 +52,7 @@ pub const Options = struct {
     test_command: []const u8,
     test_scoped_cmd: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
@@ -77,8 +79,15 @@ pub const Trace = struct {
     skipped_links: usize = 0,
     tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
+    tests: test_outcome.Summary = .{},
     blocked: gate_tree.Report = .{},
+    baseline: baseline.Note = .{},
 };
+
+pub fn noteSummary(trace: ?*Trace, report: sandbox.Report) void {
+    const t = trace orelse return;
+    t.tests = test_outcome.summarize(report);
+}
 
 pub const Result = union(enum) {
     committed: symbol.Hash,
@@ -118,19 +127,68 @@ pub fn runMessageRules(gpa: Allocator, io: std.Io, root: []const u8, shadow_abs:
 }
 
 pub fn runStages(gpa: Allocator, io: std.Io, cwd: []const u8, typecheck_command: ?[]const u8, test_command: []const u8, limits: sandbox.Limits) !ShadowRun {
+    const cache = try cacheDir(gpa, cwd);
+    defer gpa.free(cache);
     if (typecheck_command) |typecheck| {
-        const checked = try runCommand(gpa, io, cwd, typecheck, limits);
+        const checked = try runCommandWith(gpa, io, cwd, typecheck, limits, cache);
         if (!checked.passed()) return .{ .typecheck = checked };
         checked.deinit(gpa);
     }
-    return .{ .tests = try runCommand(gpa, io, cwd, test_command, limits) };
+    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);
+    report.no_tests = test_outcome.noTests(report);
+    return .{ .tests = report };
+}
+
+pub fn cacheDir(gpa: Allocator, cwd: []const u8) ![]u8 {
+    return std.fmt.allocPrint(gpa, "{s}-cache", .{cwd});
 }
 
 pub fn runCommand(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
+    return runCommandWith(gpa, io, cwd, command, limits, null);
+}
+
+pub fn runCommandWith(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const u8, limits: sandbox.Limits, cache: ?[]const u8) !sandbox.Report {
     const cmd = try exe_path.system(gpa, "cmd.exe");
     defer gpa.free(cmd);
     const argv = [_][]const u8{ cmd, "/d", "/c", command };
-    return sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits });
+    const temp = try std.fmt.allocPrint(gpa, "{s}-tmp", .{cwd});
+    defer gpa.free(temp);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const env: []const sandbox.EnvVar = if (cache) |dir| blk: {
+        try shadow.ensureCache(io, dir);
+        break :blk try sandbox.cacheEnvironment(arena_state.allocator(), dir);
+    } else &.{};
+    try shadow.freshTemp(io, temp);
+    defer shadow.clearTemp(io, temp) catch {};
+    var attempt: usize = 1;
+    while (true) : (attempt += 1) {
+        const report = try sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env });
+        if (attempt == start_attempts or !neverStarted(report)) return report;
+        report.deinit(gpa);
+        try shadow.freshTemp(io, temp);
+    }
+}
+
+const start_attempts = 3;
+const status_dll_init_failed: u32 = 0xC0000142;
+
+fn neverStarted(report: sandbox.Report) bool {
+    return switch (report.outcome) {
+        .crashed => |code| code == status_dll_init_failed,
+        else => false,
+    };
+}
+
+const toolchain_env = [_]sandbox.EnvVar{.{ .name = "NoDefaultCurrentDirectoryInExePath", .value = "1" }};
+
+pub fn runToolchain(gpa: Allocator, io: std.Io, cwd: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
+    const cmd = try exe_path.system(gpa, "cmd.exe");
+    defer gpa.free(cmd);
+    const argv = [_][]const u8{ cmd, "/d", "/c", command };
+    var report = try sandbox.run(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .backend = .user, .env = &toolchain_env });
+    report.no_tests = test_outcome.noTests(report);
+    return report;
 }
 
 pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Result {
@@ -205,6 +263,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
 
     if (!report.passed()) return .{ .rejected = report };
     if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
+    noteSummary(options.trace, report);
     defer report.deinit(gpa);
     const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
     defer gpa.free(journal_dir);
@@ -243,6 +302,7 @@ fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ro
     defer report.deinit(gpa);
 
     const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};
+    noteSummary(options.trace, report);
     try session.prepare(gpa, io, root, &change);
     if (options.trace) |t| t.commit_attempted = true;
     if (session.committing()) {
@@ -275,7 +335,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     try deriveGate(gpa, io, root, location, session, &.{.{ .rel = rel, .content = patched }});
 
     if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
-    return runStages(gpa, io, gate_abs, options.typecheck_command, command, options.limits);
+    return baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = patched }}, .{ .root = root, .gate_dir = gate_abs, .typecheck_command = options.typecheck_command, .test_command = command, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null });
 }
 
 fn linkedPath(path: []const u8, linked: []const []const u8) bool {
@@ -368,4 +428,131 @@ pub fn prepareShadow(gpa: Allocator, io: std.Io, root: []const u8, location: sha
         t.skipped_links = workspace.link_stats.skipped_links;
     }
     return workspace;
+}
+
+const testing = std.testing;
+
+test "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{top});
+    defer testing.allocator.free(work);
+    const temp = try std.fmt.allocPrint(testing.allocator, "{s}-tmp", .{work});
+    defer testing.allocator.free(temp);
+    try shadow.grantLowIntegrityWrite(work);
+
+    const report = try runCommand(testing.allocator, testing.io, work, "echo %TEMP%& echo %TMP%& echo written>%TEMP%\\probe.txt& type %TEMP%\\probe.txt", .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expect(report.passed());
+    const expected = try std.fmt.allocPrint(testing.allocator, "{s}\r\n{s}\r\nwritten\r\n", .{ temp, temp });
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, report.stdout);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, temp, .{}));
+}
+
+test "a stale temp directory that is a junction is removed without touching its target" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "target");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "target/keep.txt", .data = "keep\n" });
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const temp = try std.fmt.allocPrint(testing.allocator, "{s}\\work-tmp", .{top});
+    defer testing.allocator.free(temp);
+    const target = try std.fmt.allocPrint(testing.allocator, "{s}\\target", .{top});
+    defer testing.allocator.free(target);
+    try shadow.createJunction(testing.io, temp, target);
+
+    try shadow.freshTemp(testing.io, temp);
+    try testing.expect(!try shadow.isReparsePoint(temp));
+    try shadow.clearTemp(testing.io, temp);
+    const kept = try tmp.dir.readFileAlloc(testing.io, "target/keep.txt", testing.allocator, .unlimited);
+    defer testing.allocator.free(kept);
+    try testing.expectEqualStrings("keep\n", kept);
+}
+
+test "a toolchain command writes into its real directory and never runs a same-named script from it" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "whoami.cmd", .data = "@echo off\r\necho planted> planted.txt\r\n" });
+    const work = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(work);
+
+    const report = try runToolchain(testing.allocator, testing.io, work, "echo kept> kept.txt", .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expect(report.passed());
+    try tmp.dir.access(testing.io, "kept.txt", .{});
+
+    const planted = try runToolchain(testing.allocator, testing.io, work, "whoami", .{ .timeout_ms = 20_000 });
+    defer planted.deinit(testing.allocator);
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "planted.txt", .{}));
+}
+
+test "a gated command gets writable package caches next to its directory that survive the run" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{top});
+    defer testing.allocator.free(work);
+    try shadow.grantLowIntegrityWrite(work);
+
+    const staged = try runStages(testing.allocator, testing.io, work, null, "echo %NUGET_PACKAGES%& mkdir %NUGET_PACKAGES%& echo cached>%NUGET_PACKAGES%\\probe.txt", .{ .timeout_ms = 20_000 });
+    const report = staged.tests;
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expect(report.passed());
+    const expected = try std.fmt.allocPrint(testing.allocator, "{s}-cache\\nuget\\packages\r\n", .{work});
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, report.stdout);
+    try tmp.dir.access(testing.io, "work-cache\\nuget\\packages\\probe.txt", .{});
+}
+
+test "a gated test run that collected no tests passes with a note instead of failing the write" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{top});
+    defer testing.allocator.free(work);
+    try shadow.grantLowIntegrityWrite(work);
+
+    const staged = try runStages(testing.allocator, testing.io, work, null, "echo collected 0 items& echo no tests ran in 0.01s& exit /b 5", .{ .timeout_ms = 20_000 });
+    const report = staged.tests;
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expectEqual(sandbox.Outcome{ .exited = 5 }, report.outcome);
+    try testing.expect(report.no_tests);
+    try testing.expect(report.passed());
+    try testing.expect(std.mem.startsWith(u8, test_outcome.summarize(report).text(), test_outcome.no_tests_note));
+}
+
+test "a command's console output reaches the caller as UTF-8 text" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{top});
+    defer testing.allocator.free(work);
+    try shadow.grantLowIntegrityWrite(work);
+
+    const report = try runCommand(testing.allocator, testing.io, work, "echo \u{e7}\u{e7}\u{e7}\u{e7}", .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {any}\n", .{report.stdout});
+    try testing.expect(std.unicode.utf8ValidateSlice(report.stdout));
+    try testing.expectEqualStrings("\u{e7}\u{e7}\u{e7}\u{e7}\r\n", report.stdout);
 }

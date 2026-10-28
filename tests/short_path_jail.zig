@@ -37,7 +37,7 @@ fn join(base: []const u8, rel: []const u8) ![]u8 {
 }
 
 fn run(cwd: []const u8, argv: []const []const u8) !void {
-    const result = try std.process.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = cwd } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = cwd } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {
@@ -147,7 +147,7 @@ fn expectGated(runtime: *Runtime, served: *Served, root: []const u8, file: []con
     defer tried.deinit();
     errdefer std.debug.print("try: {s}\n", .{tried.text});
     try testing.expect(!tried.is_error);
-    try testing.expectEqualStrings("committed", tried.field("status").?.string);
+    try testing.expectEqualStrings("written", tried.field("status").?.string);
     const on_disk = try served.tmp.dir.readFileAlloc(testing.io, repo_dir ++ "/" ++ source_rel, testing.allocator, .unlimited);
     defer testing.allocator.free(on_disk);
     try testing.expect(std.mem.indexOf(u8, on_disk, body) != null);
@@ -225,7 +225,7 @@ test "a new file is created through a short-spelled parent directory, and not in
     defer created.deinit();
     errdefer std.debug.print("try: {s}\n", .{created.text});
     try testing.expect(!created.is_error);
-    try testing.expectEqualStrings("committed", created.field("status").?.string);
+    try testing.expectEqualStrings("written", created.field("status").?.string);
     try served.tmp.dir.access(testing.io, repo_dir ++ "/source-directory-long/mul.ts", .{});
 
     const workspace_short = try served.shortFile(".emetgate");

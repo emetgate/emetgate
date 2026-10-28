@@ -10,7 +10,7 @@ const Store = facts_store.Store;
 const none = facts.none;
 
 pub const magic = "EMGFACTS";
-pub const version: u32 = 4;
+pub const version: u32 = 6;
 pub const checksum_len = 16;
 pub const max_store_bytes: usize = std.math.maxInt(u32);
 
@@ -197,6 +197,7 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
         try e.str(b.local);
         try e.varint(b.start);
         try e.byte(@intFromBool(b.type_only));
+        try e.varint(if (b.submodule == facts.none) 0 else b.submodule + 1);
     }
     try e.varint(f.exports.len);
     for (f.exports) |x| {
@@ -302,6 +303,9 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         b.local = try d.str();
         b.start = try d.int();
         b.type_only = try d.flag();
+        const submodule = try d.int();
+        b.submodule = if (submodule == 0) facts.none else submodule - 1;
+        if (b.submodule != facts.none and b.submodule >= specs.len) return error.Corrupt;
     }
     const exports = try a.alloc(facts.Export, try d.count(3));
     for (exports) |*x| {

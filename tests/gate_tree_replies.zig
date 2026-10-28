@@ -136,7 +136,7 @@ test "gate tree replies: a full copy that could not be removed after the call is
     copy.test_command = "cmd /c exit 0";
     const committed = try writeDoc(copy, repo.root_abs);
     defer gpa.free(committed);
-    try expectHas(committed, "\"status\":\"committed\"");
+    try expectHas(committed, "\"status\":\"written\"");
     try expectHas(committed, left_field);
     try testing.expect(std.mem.indexOf(u8, committed, "\"shadow\":") == null);
 

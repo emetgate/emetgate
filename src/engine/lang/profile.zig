@@ -25,6 +25,12 @@ pub const Binding = struct {
 
 pub const NameSource = enum { field, field_or_binding, binding };
 
+pub const FunctionName = struct {
+    node: []const u8,
+    owner_depth: u8 = 0,
+    field: ?[]const u8,
+};
+
 pub const Container = struct {
     node: []const u8,
     name: NameSource,
@@ -56,6 +62,11 @@ pub const LiteralValues = struct {
     negatable: []const []const u8,
     template: []const u8,
     substitution: []const u8,
+    quoted_key_content: []const u8 = "",
+    bare_pair_key: bool = true,
+    named_argument: []const u8 = "",
+    named_argument_name_field: []const u8 = "",
+    named_argument_value_field: []const u8 = "",
 };
 
 pub const Namespace = enum {
@@ -70,6 +81,8 @@ pub const Namespace = enum {
 
 pub const ScopeRule = enum { block, function, own, owner, pattern, declarator, program };
 
+pub const Position = enum { any, first, rest, sole };
+
 pub const BinderSite = struct {
     parent: []const u8,
     field: ?[]const u8,
@@ -78,6 +91,7 @@ pub const BinderSite = struct {
     scope: ScopeRule = .block,
     parent_field: ?[]const u8 = null,
     grandparent: ?[]const u8 = null,
+    position: Position = .any,
 };
 
 pub const ExternalSite = struct {
@@ -114,6 +128,12 @@ pub const Rename = struct {
     template_fragment: []const u8,
     quotes: []const u8,
     property_sites: []const FieldSite = &.{},
+    inert_sites: []const BinderSite = &.{},
+    class_scopes: []const []const u8 = &.{},
+    scope_bodies: []const FieldSite = &.{},
+    rebinding_statements: []const []const u8 = &.{},
+    type_string_parents: []const []const u8 = &.{},
+    name_list: ?NameList = null,
 };
 
 pub const Modules = struct {
@@ -133,6 +153,9 @@ pub const Modules = struct {
     default_keyword: []const u8,
     star_token: []const u8,
     from_statement: ?[]const u8 = null,
+    submodule_imports: bool = false,
+    package_init: []const u8 = "",
+    exports_bindings: bool = false,
     module_name_field: []const u8 = "",
     aliased_import: []const u8 = "",
     wildcard_import: []const u8 = "",
@@ -152,18 +175,47 @@ pub const Declarations = struct {
     variable_statements: []const []const u8 = &.{},
     value_field: []const u8 = "value",
     fields: []const DeclarationShape = &.{},
+    field_statements: []const []const u8 = &.{},
     enum_body: ?[]const u8 = null,
     enum_members: []const DeclarationShape = &.{},
     enum_bare_member: ?[]const u8 = null,
     destructuring: []const []const u8 = &.{},
     static_keyword: ?[]const u8 = null,
     containers: []const []const u8 = &.{},
+    wrappers: []const []const u8 = &.{},
+    variable_declarator: []const u8 = "",
+    variable_name_field: []const u8 = "name",
+    items: Items = .{},
+};
+
+pub const Items = struct {
+    assignment: ?[]const u8 = null,
+    assignment_left: []const u8 = "left",
+    assignment_right: []const u8 = "right",
+    member_chain: ?[]const u8 = null,
+    chain_object: []const u8 = "object",
+    chain_property: []const u8 = "property",
+    chain_root: []const u8 = "identifier",
+    chain_segment: []const u8 = "property_identifier",
+    imports: []const []const u8 = &.{},
+    import_source: []const u8 = "source",
+    alias_field: []const u8 = "alias",
+    pattern_names: []const []const u8 = &.{},
+    pattern_skip_fields: []const []const u8 = &.{},
+    object: ?[]const u8 = null,
+    pair: []const u8 = "pair",
+    pair_key: []const u8 = "key",
+    pair_value: []const u8 = "value",
+    property_keys: []const []const u8 = &.{},
+    require: ?[]const u8 = null,
+    member_separator: ?u8 = null,
 };
 
 pub const MemberTraits = struct {
     accessor: Accessor = .none,
     is_static: bool = false,
     is_constructor: bool = false,
+    receiver: bool = true,
 };
 
 pub const FieldSite = struct {
@@ -171,10 +223,43 @@ pub const FieldSite = struct {
     field: []const u8,
 };
 
+pub const NameListHolder = struct {
+    node: []const u8,
+    target_field: []const u8,
+    object_field: ?[]const u8 = null,
+    value_field: []const u8,
+};
+
+pub const NameList = struct {
+    owner: []const u8,
+    string: []const u8,
+    content: []const u8,
+    quote_start: []const u8,
+    containers: []const []const u8,
+    holders: []const NameListHolder,
+    statement: []const u8,
+};
+
 pub const TypedBinder = struct {
     node: []const u8,
     name_field: []const u8,
     type_field: []const u8,
+};
+
+pub const Construction = struct {
+    node: []const u8,
+    name_field: []const u8,
+    value_field: ?[]const u8 = null,
+    parent_type_field: ?[]const u8 = null,
+};
+
+pub const Initializer = struct {
+    entry: []const u8,
+    name_field: ?[]const u8 = null,
+    list: ?[]const u8 = null,
+    owner: []const u8,
+    owner_list_field: ?[]const u8 = null,
+    object_is_owner: bool,
 };
 
 pub const Facts = struct {
@@ -207,6 +292,24 @@ pub const Facts = struct {
     test_file_infixes: []const []const u8 = &.{},
     test_dirs: []const []const u8 = &.{},
     doc_directives: []const []const u8 = &.{},
+    global_types: bool = false,
+    namespaces: []const []const u8 = &.{},
+    using_directive: ?[]const u8 = null,
+    receiver_parameter: ?[]const u8 = null,
+    member_wrappers: []const []const u8 = &.{},
+    constructions: []const Construction = &.{},
+    initializers: []const Initializer = &.{},
+    calls_construct: bool = false,
+    sole_binder_types: bool = false,
+    class_body_field: []const u8 = "body",
+    test_files: []const []const u8 = &.{},
+    test_definitions: []const TestDefinition = &.{},
+};
+
+pub const TestDefinition = struct {
+    node: []const u8,
+    name_field: []const u8 = "name",
+    prefix: []const u8,
 };
 
 pub const MapEntryKind = enum { route, command, event, api };
@@ -267,6 +370,7 @@ pub const Profile = struct {
     dynamic_callees: []const []const u8,
     dynamic_constructors: []const DynamicConstructor,
     strings: []const []const u8,
+    string_holes: []const []const u8 = &.{},
     class_body: []const u8,
     bodyless_terminator: ?[]const u8,
     empty_body: []const u8,
@@ -276,22 +380,38 @@ pub const Profile = struct {
     literal_values: LiteralValues,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
     visibility_keywords: []const []const u8 = &.{},
+    modifier: ?[]const u8 = null,
+    function_names: []const FunctionName = &.{},
+    file_scoped_containers: []const []const u8 = &.{},
+    language_service: bool = false,
     rename: ?*const Rename = null,
     modules: ?*const Modules = null,
     declarations: Declarations = .{},
     facts: ?*const Facts = null,
     map: ?*const MapTable = null,
 
-    pub fn hasVisibilityKeyword(self: *const Profile, node: ts.Node) bool {
+    pub fn hasVisibilityKeyword(self: *const Profile, tree: ts.Tree, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;
         var i: u32 = 0;
         while (node.child(i)) |child| : (i += 1) {
-            if (child.isNamed()) continue;
+            const word = if (!child.isNamed()) child.kind() else if (self.isModifier(child.kind())) tree.text(child) else continue;
             for (self.visibility_keywords) |keyword| {
-                if (std.mem.eql(u8, keyword, child.kind())) return true;
+                if (std.mem.eql(u8, keyword, word)) return true;
             }
         }
         return false;
+    }
+
+    pub fn isModifier(self: *const Profile, node_kind: []const u8) bool {
+        const modifier = self.modifier orelse return false;
+        return std.mem.eql(u8, modifier, node_kind);
+    }
+
+    pub fn functionName(self: *const Profile, node_kind: []const u8) ?FunctionName {
+        for (self.function_names) |entry| {
+            if (std.mem.eql(u8, entry.node, node_kind)) return entry;
+        }
+        return null;
     }
 
     pub fn handles(self: *const Profile, path: []const u8) bool {
@@ -311,6 +431,20 @@ pub const Profile = struct {
     pub fn isDottedName(self: *const Profile, node_kind: []const u8) bool {
         const dotted = self.dotted_name orelse return false;
         return std.mem.eql(u8, dotted, node_kind);
+    }
+
+    pub fn opaqueText(self: *const Profile, node: ts.Node) bool {
+        const node_kind = node.kind();
+        if (self.isComment(node_kind)) return true;
+        for (self.strings) |kind| {
+            if (!std.mem.eql(u8, kind, node_kind)) continue;
+            var i: u32 = 0;
+            while (node.child(i)) |child| : (i += 1) {
+                for (self.string_holes) |hole| if (std.mem.eql(u8, hole, child.kind())) return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     pub fn isComment(self: *const Profile, node_kind: []const u8) bool {

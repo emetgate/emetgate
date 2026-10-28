@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
+const baseline = @import("baseline.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
@@ -35,7 +36,7 @@ pub const BatchOptions = struct {
     doc_edits: []const DocEdit = &.{},
     test_command: []const u8,
     typecheck_command: ?[]const u8 = null,
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
@@ -83,7 +84,7 @@ pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOp
     for (options.doc_edits) |edit| try docnode.refuseSource(edit.file_abs);
 
     const first_file = if (options.edits.len != 0) options.edits[0].file_abs else options.doc_edits[0].file_abs;
-    const dir0 = std.fs.path.dirname(first_file) orelse return error.InvalidPath;
+    const dir0 = @import("file_edit.zig").existingAncestor(io, first_file) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir0);
     errdefer gpa.free(root);
     const lock = try shadow.Lock.acquire(io, root);
@@ -175,6 +176,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     };
     if (!report.passed()) return .{ .rejected = report };
     if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
+    runner.noteSummary(options.trace, report);
     defer report.deinit(gpa);
 
     const committed = try classifyAll(gpa, io, root, prepared, edits, doc_prepared.items);
@@ -305,5 +307,12 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
     }
     if (try runner.runCommandRulesFor(gpa, io, root, runner.gateDir(location, session), targets[0..built], null, options.limits, options.allow_repo_memory)) |gated| return gated;
 
-    return runner.runStages(gpa, io, runner.gateDir(location, session), options.typecheck_command, options.test_command, options.limits);
+    var changes: std.ArrayList(baseline.Change) = .empty;
+    defer changes.deinit(gpa);
+    for (prepared) |p| {
+        if (p.source_rel) |from| try changes.append(gpa, .{ .rel = from, .content = null });
+        try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source() });
+    }
+    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });
+    return baseline.run(gpa, io, &workspace, changes.items, .{ .root = root, .gate_dir = runner.gateDir(location, session), .typecheck_command = options.typecheck_command, .test_command = options.test_command, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null });
 }

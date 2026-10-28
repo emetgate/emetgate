@@ -153,7 +153,39 @@ test "verify --branch: a forged receipt note makes the branch broken and shifts 
     try testing.expectEqual(@as(u8, 54), verify_branch.exitCode(tampered.verdict));
 }
 
-test "git log: proof-marks each commit as verified when a receipt note is attached" {
+test "verify --branch: an empty range is not green" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.gatedCommit("{\n  return b + a;\n}", "c1");
+
+    const result = try case.verify("HEAD");
+    try testing.expectEqual(verify_branch.BranchVerdict.empty, result.verdict);
+    try testing.expectEqual(@as(usize, 0), result.count);
+    try testing.expectEqual(@as(u8, 53), verify_branch.exitCode(result.verdict));
+
+    var buffer: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buffer);
+    try verify_branch.writeText(&w, result);
+    try testing.expect(std.mem.startsWith(u8, w.buffered(), "branch empty: 0 commit(s)\n"));
+    try testing.expect(std.mem.indexOf(u8, w.buffered(), "nothing was verified") != null);
+}
+
+test "verify --branch: an empty base walks the whole history" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.gatedCommit("{\n  return b + a;\n}", "c1");
+
+    const result = try case.verify("");
+    try testing.expect(result.count >= 2);
+    try testing.expect(result.verdict != .empty);
+    try testing.expect(result.links[result.links.len - 1].has_receipt);
+}
+
+test "git log: a commit with a receipt note is marked receipt, never verified, even when the note is forged" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
     try case.init();
@@ -162,6 +194,12 @@ test "git log: proof-marks each commit as verified when a receipt note is attach
     const gated_oid = try case.arena().dupe(u8, try case.head());
     try case.handCommit("export function add(a: number, b: number): number {\n  return a - b;\n}\n", "by hand");
     const hand_oid = try case.arena().dupe(u8, try case.head());
+
+    const original = try case.note(gated_oid);
+    const at = std.mem.indexOf(u8, original, "\"after\":\"").? + "\"after\":\"".len;
+    const forged = try case.arena().dupe(u8, original);
+    forged[at] = if (forged[at] == '0') '1' else '0';
+    try case.replaceNote(gated_oid, forged);
 
     var args: std.json.ObjectMap = .empty;
     try args.put(case.arena(), "sub", .{ .string = "log" });
@@ -182,13 +220,15 @@ test "git log: proof-marks each commit as verified when a receipt note is attach
         const mark = c.object.get("verification").?.string;
         if (std.mem.eql(u8, oid, gated_oid)) {
             saw_gated = true;
-            try testing.expectEqualStrings("verified", mark);
+            try testing.expectEqualStrings("receipt", mark);
         } else if (std.mem.eql(u8, oid, hand_oid)) {
             saw_hand = true;
-            try testing.expectEqualStrings("unverified", mark);
+            try testing.expectEqualStrings("no_receipt", mark);
         }
+        try testing.expect(!std.mem.eql(u8, mark, "verified"));
     }
     try testing.expect(saw_gated and saw_hand);
+    try testing.expect(parsed.value.object.get("verification_note") != null);
 }
 
 test "verify --branch: range parsing splits base..head" {

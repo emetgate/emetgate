@@ -54,7 +54,7 @@ fn analyzeInner(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_s
 
     const class: MutationClass = if (isBodyOnly(sym.*, mutation_span)) .body_only_no_op else .signature_change;
 
-    if (isExported(profile, sym.*)) return unbounded(class, .exported_escape);
+    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);
     if (hasReexportOf(profile, snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);
     if (hasDynamicConstruct(profile, snapshot)) return unbounded(class, .dynamic_construct);
     if (hasStringKey(profile, snapshot, ref.name)) return unbounded(class, .string_key_escape);
@@ -127,8 +127,8 @@ fn isWithin(node: ts.Node, span: symbol.Span) bool {
     return node.startByte() >= span.start and node.endByte() <= span.end;
 }
 
-fn isExported(profile: *const Profile, sym: symbol.Symbol) bool {
-    if (profile.hasVisibilityKeyword(sym.node)) return true;
+fn isExported(profile: *const Profile, tree: ts.Tree, sym: symbol.Symbol) bool {
+    if (profile.hasVisibilityKeyword(tree, sym.node)) return true;
     var current = sym.node.parent();
     var hops: u8 = 0;
     while (current) |p| : (hops += 1) {

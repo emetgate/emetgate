@@ -3,16 +3,23 @@ const symbol = @import("../engine/symbol.zig");
 const symmetry = @import("../engine/symmetry.zig");
 const node_cas = @import("../engine/node_cas.zig");
 const sandbox = @import("../platform/sandbox.zig");
+const test_outcome = @import("../platform/test_outcome.zig");
+const output_digest = @import("output_digest.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
 const runner = @import("../platform/runner.zig");
+const baseline = @import("../platform/baseline.zig");
 const shadow = @import("../platform/shadow.zig");
 const gate_tree = @import("../platform/gate_tree.zig");
 const read_budget = @import("read_budget.zig");
+const doc_fold = @import("../engine/doc_fold.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
+
+pub const written_status = "written";
+pub const committed_status = "committed";
 
 pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: symbol.Table) !void {
     var js: std.json.Stringify = .{ .writer = writer };
@@ -37,12 +44,43 @@ pub fn writeSymbols(gpa: Allocator, writer: *Writer, file: []const u8, table: sy
         try js.write(point.row + 1);
         try js.objectField("col");
         try js.write(point.column + 1);
-        try js.objectField("ambiguous");
-        try js.write(entry.ambiguous);
+        if (entry.ambiguous) {
+            try js.objectField("ambiguous");
+            try js.write(true);
+        }
         try js.endObject();
     }
     try js.endArray();
     try writeDeclarations(gpa, &js, table);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub const compact_symbols_over = 40;
+
+pub fn writeSymbolsCompact(gpa: Allocator, writer: *Writer, file: []const u8, table: symbol.Table) !void {
+    var lines: std.Io.Writer.Allocating = .init(gpa);
+    defer lines.deinit();
+    for (table.symbols) |entry| {
+        try lines.writer.print("{d} {s} {f}{s}\n", .{ entry.node.startPoint().row + 1, @tagName(entry.kind), entry.ref, if (entry.ambiguous) " ambiguous" else "" });
+    }
+    var declared: std.Io.Writer.Allocating = .init(gpa);
+    defer declared.deinit();
+    for (table.declarations) |entry| {
+        try declared.writer.print("{d} {s} {f}{s}\n", .{ entry.name.startPoint().row + 1, @tagName(entry.kind), entry.ref, if (entry.ambiguous) " ambiguous" else "" });
+    }
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try js.objectField("hashes");
+    try js.write("emetgate_read_symbol returns the hash, or pass detail:\"full\"");
+    try js.objectField("symbols");
+    try js.write(lines.written());
+    if (table.declarations.len != 0) {
+        try js.objectField("declarations");
+        try js.write(declared.written());
+    }
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -66,6 +104,28 @@ pub fn writeDeclarations(gpa: Allocator, js: *std.json.Stringify, table: symbol.
         try js.write(point.row + 1);
         try js.objectField("col");
         try js.write(point.column + 1);
+        if (entry.ambiguous) {
+            try js.objectField("ambiguous");
+            try js.write(true);
+        }
+        try js.endObject();
+    }
+    for (table.statements) |entry| {
+        const point = entry.node.startPoint();
+        const hex = symbol.formatHash(entry.hash);
+        const ref = try std.fmt.allocPrint(gpa, "{f}", .{entry.ref});
+        defer gpa.free(ref);
+        try js.beginObject();
+        try js.objectField("hash");
+        try js.write(hex[0..]);
+        try js.objectField("kind");
+        try js.write(@tagName(entry.kind));
+        try js.objectField("ref");
+        try js.write(ref);
+        try js.objectField("line");
+        try js.write(point.row + 1);
+        try js.objectField("col");
+        try js.write(point.column + 1);
         try js.objectField("ambiguous");
         try js.write(entry.ambiguous);
         try js.endObject();
@@ -73,37 +133,56 @@ pub fn writeDeclarations(gpa: Allocator, js: *std.json.Stringify, table: symbol.
     try js.endArray();
 }
 
-pub fn writeSkeleton(gpa: Allocator, writer: *Writer, file: []const u8, file_hash: symbol.Hash, skeleton_text: []const u8, table: ?*const symbol.Table, adopted: []const rules.Adopted) !void {
+pub const SkeletonKind = enum { skeleton, content };
+
+pub const skeleton_docs_hint = "emetgate_read_file raw:true has them";
+pub const symbol_docs_hint = "detail:\"full\" has them";
+
+fn writeDocs(js: *std.json.Stringify, docs: []const doc_fold.LineSpan, hint: []const u8) !void {
+    if (docs.len == 0) return;
+    try js.objectField("docs");
+    try js.beginWriteRaw();
+    try js.writer.writeAll("\"folded lines ");
+    for (docs, 0..) |span, i| try js.writer.print("{s}{d}-{d}", .{ if (i == 0) "" else ",", span.first, span.last });
+    try js.writer.writeAll("; ");
+    try std.json.Stringify.encodeJsonStringChars(hint, .{}, js.writer);
+    try js.writer.writeByte('"');
+    js.endWriteRaw();
+}
+
+pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, kind: SkeletonKind, text: []const u8, adopted: []const rules.Adopted, docs: []const doc_fold.LineSpan) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
     try js.write(file);
     try writeFileHash(&js, file_hash);
-    try js.objectField("skeleton");
-    try js.write(skeleton_text);
-    if (table) |t| try writeDeclarations(gpa, &js, t.*);
-    try js.objectField("rules");
-    try js.beginArray();
-    for (adopted) |rule| {
-        try js.beginObject();
-        try js.objectField("id");
-        try js.write(rule.id);
-        try js.objectField("text");
-        try js.write(rule.text);
-        try js.objectField("mode");
-        try js.write(rule.mode);
-        try js.objectField("check");
-        try js.write(rule.check);
-        try js.objectField("where");
-        try js.write(rule.where);
-        try js.endObject();
+    if (adopted.len != 0) {
+        try js.objectField("rules");
+        try js.beginArray();
+        for (adopted) |rule| {
+            try js.beginObject();
+            try js.objectField("id");
+            try js.write(rule.id);
+            try js.objectField("text");
+            try js.write(rule.text);
+            try js.objectField("mode");
+            try js.write(rule.mode);
+            try js.objectField("check");
+            try js.write(rule.check);
+            try js.objectField("where");
+            try js.write(rule.where);
+            try js.endObject();
+        }
+        try js.endArray();
     }
-    try js.endArray();
+    try writeDocs(&js, docs, skeleton_docs_hint);
+    try js.objectField(@tagName(kind));
+    try js.write(text);
     try js.endObject();
     try writer.writeByte('\n');
 }
 
-pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, body: []const u8) !void {
+pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, body: []const u8, docs: []const doc_fold.LineSpan) !void {
     const hex = symbol.formatHash(hash);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -113,6 +192,7 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try js.write(ref);
     try js.objectField("hash");
     try js.write(hex[0..]);
+    try writeDocs(&js, docs, symbol_docs_hint);
     try js.objectField("body");
     try js.write(body);
     try js.endObject();
@@ -260,6 +340,7 @@ pub const SymbolEntry = struct {
     body: ?[]const u8,
     nodes: bool = false,
     folded: ?Folded = null,
+    docs: []const doc_fold.LineSpan = &.{},
 };
 
 pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const SymbolEntry) !void {
@@ -283,6 +364,7 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
             try js.objectField("body");
             try js.write(folded.view.text);
         } else if (entry.body) |body| {
+            try writeDocs(&js, entry.docs, symbol_docs_hint);
             try js.objectField(if (entry.nodes) "nodes" else "body");
             try js.write(body);
         } else {
@@ -303,6 +385,7 @@ pub const RangeEntry = struct {
     start_line: u32,
     end_line: u32,
     folded: ?Folded = null,
+    docs: []const doc_fold.LineSpan = &.{},
 };
 
 pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32, requested_end: u32, entries: []const RangeEntry) !void {
@@ -334,6 +417,7 @@ pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32,
             try js.write(entry.start_line);
             try js.objectField("end_line");
             try js.write(entry.end_line);
+            try writeDocs(&js, entry.docs, symbol_docs_hint);
             try js.objectField("text");
             try js.write(text);
         } else {
@@ -359,6 +443,8 @@ pub const ShadowNote = struct {
     skipped_links: usize,
     tree: ?shadow.TreeUse = null,
     tree_only: bool = false,
+    tests: test_outcome.Summary = .{},
+    baseline: baseline.Note = .{},
 };
 
 pub fn treeNote(trace: runner.Trace) ?ShadowNote {
@@ -396,8 +482,26 @@ pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
 fn writeNote(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void {
     if (full) return writeShadowNote(js, note);
     const n = note orelse return;
+    try writeTests(js, &n);
     const tree = n.tree orelse return;
     if (tree.left_behind != null) try writeGateTree(js, tree);
+}
+
+fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
+    if (n.baseline.skipped) {
+        try js.objectField("tests");
+        try js.write("not run: only non-code files changed");
+        return;
+    }
+    if (n.baseline.failing) {
+        try js.objectField("baseline_failing");
+        try js.write(true);
+        try js.objectField("baseline");
+        try js.write(n.baseline.text());
+    }
+    if (n.tests.len == 0) return;
+    try js.objectField("tests");
+    try js.write(n.tests.text());
 }
 
 pub const shadow_path_warning = "the shadow root has a path segment starting with a dot; tools that refuse dot directories (the send package behind express res.sendFile is one) fail there; start emetgate with --shadow-root <dir> on a path without one";
@@ -410,12 +514,15 @@ pub fn shadowNote(root: []const u8, trace: runner.Trace) ShadowNote {
         .copied_files = trace.copied_files,
         .skipped_links = trace.skipped_links,
         .tree = trace.tree,
+        .tests = trace.tests,
+        .baseline = trace.baseline,
     };
 }
 
 fn writeShadowNote(js: *std.json.Stringify, note: ?ShadowNote) !void {
     const n = note orelse return;
     if (n.tree_only) return writeGateTree(js, n.tree);
+    try writeTests(js, &n);
     try js.objectField("shadow");
     try js.beginObject();
     try js.objectField("root");
@@ -441,7 +548,7 @@ pub fn writeCommitted(writer: *Writer, sym: []const u8, old_hash: symbol.Expecte
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("symbol");
     try js.write(sym);
     if (full) {
@@ -498,7 +605,7 @@ pub fn writeNodesCommitted(writer: *Writer, file: []const u8, applied: node_cas.
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("file");
     try js.write(file);
     try writeNodeFields(&js, applied);
@@ -511,7 +618,7 @@ pub fn writeBatchCommitted(writer: *Writer, edits: []const BatchEdit, note: ?Sha
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("edits");
     try js.beginArray();
     for (edits) |edit| {
@@ -567,13 +674,14 @@ pub const RenameSummary = struct {
     regions_checked: usize,
     symbols_checked: usize,
     files: []const RenamedFile,
+    dynamic_sites: []const u8 = "",
 };
 
 pub fn writeRenameCommitted(writer: *Writer, summary: RenameSummary, note: ?ShadowNote) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("class");
     try js.write("symmetry");
     try js.objectField("symbol");
@@ -599,6 +707,12 @@ pub fn writeRenameCommitted(writer: *Writer, summary: RenameSummary, note: ?Shad
     try js.objectField("alpha_symbols");
     try js.write(summary.symbols_checked);
     try js.endObject();
+    if (summary.dynamic_sites.len != 0) {
+        try js.objectField("dynamic_sites");
+        try js.write(summary.dynamic_sites);
+        try js.objectField("review");
+        try js.write("these dynamic references were not renamed; update them by hand if they name the symbol");
+    }
     try js.objectField("files");
     try js.beginArray();
     for (summary.files) |file| {
@@ -654,7 +768,7 @@ pub fn writeFileMoveCommitted(writer: *Writer, summary: FileMoveSummary, note: ?
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("class");
     try js.write("symmetry");
     try js.objectField("from");
@@ -699,7 +813,7 @@ pub fn writeMoveCommitted(writer: *Writer, summary: MoveSummary, note: ?ShadowNo
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("committed");
+    try js.write(written_status);
     try js.objectField("class");
     try js.write(summary.class);
     try js.objectField("symbol");
@@ -781,6 +895,53 @@ pub fn writeMutated(writer: *Writer, sym: []const u8, old_hash: symbol.Expected,
     try js.write(source);
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+pub const FileWrite = struct {
+    file: []const u8,
+    created: bool,
+    replaced: usize,
+    old_hash: ?symbol.Hash,
+    new_hash: symbol.Hash,
+    test_ms: ?u64,
+};
+
+pub fn writeFileCommitted(writer: *Writer, change: FileWrite, note: ?ShadowNote, full: bool) !void {
+    var js: std.json.Stringify = .{ .writer = writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("committed");
+    if (change.created) {
+        try js.objectField("created");
+        try js.write(true);
+    }
+    if (change.replaced > 1) {
+        try js.objectField("replaced");
+        try js.write(change.replaced);
+    }
+    if (change.test_ms) |ms| {
+        try js.objectField("test_ms");
+        try js.write(ms);
+    }
+    if (full) {
+        try js.objectField("file");
+        try js.write(change.file);
+        if (change.old_hash) |old| {
+            const old_hex = symbol.formatHash(old);
+            try js.objectField("old_hash");
+            try js.write(old_hex[0..]);
+        }
+        const new_hex = symbol.formatHash(change.new_hash);
+        try js.objectField("new_hash");
+        try js.write(new_hex[0..]);
+    }
+    try writeNote(&js, note, full);
+    try js.endObject();
+    try writer.writeByte('\n');
+}
+
+pub fn writeFileUnchanged(writer: *Writer) !void {
+    try writer.writeAll("{\"status\":\"unchanged\"}\n");
 }
 
 pub fn writeRejected(gpa: Allocator, writer: *Writer, test_cmd: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {
@@ -978,8 +1139,148 @@ pub fn writeErrorMessage(writer: *Writer, name: []const u8, exit_code: u8, messa
     try js.write(exit_code);
     try js.objectField("message");
     try js.write(message);
+    try writeFix(&js, name);
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+const fixes = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "HashMismatch", "the hash is stale or of the wrong kind: symbol hashes come from emetgate_symbols, node ids from emetgate_read_symbol nodes:true, file and doc hashes from emetgate_read_file; read again and retry" },
+    .{ "InvalidHash", "hash is 32 hex characters from emetgate_symbols or emetgate_read_file, or \"absent\" to create with emetgate_try or emetgate_try_batch" },
+    .{ "MissingHash", "deleting a symbol needs hash: its current hash from emetgate_symbols" },
+    .{ "MissingFileHash", "deleting a file needs hash: its file_hash from emetgate_read_file or emetgate_skeleton" },
+    .{ "SymbolNotFound", "call emetgate_symbols with this file for the exact symbol refs" },
+    .{ "AmbiguousSymbol", "qualify the ref, e.g. Class.method; emetgate_symbols lists them" },
+    .{ "InvalidRef", "symbol is a ref like add or Class.method, as emetgate_symbols lists it" },
+    .{ "NoSymbolInRange", "no symbol overlaps these lines; read them with emetgate_read_symbol nodes:true or emetgate_read_file raw:true and the same line_start, line_end" },
+    .{ "InvalidLineRange", "line_start and line_end are 1-based and line_start <= line_end" },
+    .{ "LineOutOfRange", "line_start is past the end of the file" },
+    .{ "FileOutsideRepo", "the path resolves outside the repository (for example a linked node_modules); only files inside it are readable; take a dependency's version from package.json or the lockfile" },
+    .{ "InternalPath", ".git and .emetgate are internal; the test command is the server's --test option, which only the user sets" },
+    .{ "FileNotFound", "no such file; emetgate_list or emetgate_search shows the tracked paths" },
+    .{ "UseSymbolToolsForSource", "a source file is read with emetgate_skeleton, emetgate_read_symbol or emetgate_read_file raw:true, and edited with emetgate_try" },
+    .{ "UnsupportedLanguage", "not a registered source language: read it with emetgate_read_file, edit it with emetgate_write_doc" },
+    .{ "UntrustedRepoConfig", "the repository's .emetgaterc.json is used only when the user starts the server with --allow-repo-config" },
+    .{ "ParentDirectoryMissing", "the target's directory does not exist; emetgate_move_file creates missing directories of its target" },
+    .{ "MutationSyntaxInvalid", "body does not parse: for an existing symbol it is the block with its braces only; with hash \"absent\" it is the whole declaration" },
+    .{ "BodyEscape", "the new text reaches outside the replaced span; replace one whole node (ids from emetgate_read_symbol nodes:true) or the whole symbol" },
+    .{ "AmbiguousNode", "the node id prefix matches several nodes; use the full id from emetgate_read_symbol nodes:true" },
+    .{ "MixedEditForms", "use one form: symbol+hash+body, node+text, or nodes" },
+    .{ "OverlappingNodes", "two node edits overlap; edit the outer node only" },
+    .{ "SymbolExists", "the symbol exists; pass its hash from emetgate_symbols instead of \"absent\"" },
+    .{ "FileExists", "the file exists; pass its file_hash from emetgate_read_file as hash to overwrite it, or edit its symbols with their hashes from emetgate_symbols" },
+    .{ "NoTopLevelSymbol", "with hash \"absent\" body is one complete top-level declaration" },
+    .{ "MultipleTopLevelSymbols", "with hash \"absent\" body holds one declaration; add the others as separate edits" },
+    .{ "ExtraTopLevelCode", "with hash \"absent\" body holds one declaration and nothing else" },
+    .{ "SymbolNameMismatch", "the declared name must equal symbol" },
+    .{ "InterfaceChangeNeedsApproval", "pass interface_change:true" },
+    .{ "ModuleSideEffect", "pass order_change:true" },
+    .{ "DeclaredSideEffect", "pass order_change:true" },
+    .{ "InvalidOp", "op is \"write\" or \"delete\"; kind is \"code\" or \"doc\"" },
+    .{ "UnknownDetail", "detail is \"full\" or \"budgeted\"" },
+    .{ "PointerNotFound", "emetgate_read_file on the file lists its pointers" },
+    .{ "HeadingNotFound", "emetgate_read_file on the file lists its headings" },
+    .{ "InvalidJson", "content must be valid JSON" },
+    .{ "DocSyntaxInvalid", "a Markdown section starts with its heading line" },
+    .{ "UnknownGitSubcommand", "sub is status, diff, log, show or blame; changes go through emetgate_git_write" },
+    .{ "MissingGitArgs", "args is the git argv, e.g. [\"switch\",\"-c\",\"topic\"]" },
+    .{ "TooManyGitArgs", "at most 32 args; split the work into several calls" },
+    .{ "InvalidGitArg", "each arg is a string without NUL bytes" },
+    .{ "MissingCommit", "sub show needs commit, e.g. HEAD" },
+    .{ "WorkspaceBusy", "another gated write is running; retry" },
+    .{ "NotAnIdentifier", "new_name must be a plain identifier" },
+    .{ "NoClobber", "the target path exists; choose a new path" },
+    .{ "DuplicateBatchFile", "one file is in two items that cannot be combined (a symbol, node, delete or doc item next to another item for it); several old_string/new_string and line-range items for one file are fine, otherwise send one item per file" },
+    .{ "ConflictingBatchEdits", "a whole-file item and another item name the same file; send that file once with its final content" },
+    .{ "OverlappingLineRanges", "two line-range items for one file overlap; merge them into one item" },
+    .{ "OldStringNotFound", "old_string matches 0 times; copy it exactly from emetgate_read_file raw:true" },
+    .{ "OldStringNotUnique", "old_string matches several places; add surrounding lines so it matches once, or pass replace_all:true" },
+    .{ "NoChange", "old_string equals new_string; nothing to change" },
+    .{ "EmptyOldString", "old_string is empty; give the exact text to replace" },
+    .{ "DynamicReference", "the name is also reached dynamically (string key, eval, computed member or computed require); pass allow_dynamic:true to rename the static references and get the dynamic sites back to review" },
+    .{ "RenameUnresolved", "the references could not be resolved with certainty; rename by hand with emetgate_try_batch old_string/new_string items, one per file, with replace_all:true" },
+    .{ "IncompleteRename", "a file outside the rename still uses the old name; rename by hand with emetgate_try_batch old_string/new_string items with replace_all:true, all files in one batch" },
+    .{ "ShorthandReference", "the name is used in an object shorthand; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "DuplicateLocation", "the language service reported one reference twice; retry, or rename by hand with emetgate_try_batch" },
+    .{ "AlphaMismatch", "the rename would change more than the name; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "ResolutionMismatch", "the parser and the language service disagree on the references; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "MergedDeclaration", "the name has merged declarations; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "NameTaken", "new_name is already declared in scope; choose another name" },
+    .{ "InvalidName", "new_name must be a plain identifier different from the old one" },
+    .{ "RenameRefused", "the language service refuses to rename this symbol; rename by hand with emetgate_try_batch old_string/new_string items" },
+    .{ "RenameOutsideRepo", "a reference lives outside the repository; rename by hand inside it with emetgate_try_batch" },
+    .{ "SourceHasErrors", "the file does not parse now; fix it first with emetgate_try_batch old_string/new_string or a whole-file item" },
+    .{ "SkeletonInvalid", "the file does not parse; read it with emetgate_read_file raw:true" },
+    .{ "PlaceholderBody", "body is a placeholder such as ...; send the real code" },
+    .{ "MissingTrailingNewline", "end the content with a newline" },
+    .{ "NotUtf8", "the file is not UTF-8 text; it cannot be edited with these tools" },
+    .{ "BinaryFile", "binary files cannot be read or edited with these tools" },
+    .{ "DocTooLarge", "the file is over the size limit; edit it with old_string/new_string items" },
+    .{ "EmptyPattern", "pass a non-empty pattern" },
+    .{ "IgnoredPath", "the path is git-ignored; write tracked files only" },
+    .{ "InvalidPath", "pass a path relative to the repository root" },
+    .{ "NoNodeEdits", "nodes is empty; send at least one {node, text}" },
+    .{ "TooManyNodeEdits", "too many node edits in one call; split them" },
+    .{ "Conflict", "the file changed on disk during the write; read it again and retry" },
+    .{ "WrittenButUnverified", "the write landed but could not be verified; read the file again before the next edit" },
+    .{ "WorkspaceLockFailed", "another gated write holds the workspace; retry" },
+    .{ "ModelSuppliedTestPolicy", "omit test and typecheck commands; only the user sets them" },
+    .{ "InvalidConfig", ".emetgaterc.json is invalid; the user must fix it" },
+    .{ "UntrustedRepoMemory", "repository rules are used only when the user starts the server with --allow-repo-memory" },
+    .{ "GitCommandFailed", "the git command failed; check the arguments with emetgate_git sub status" },
+    .{ "InvalidCommit", "commit is a ref such as HEAD, HEAD~1 or a hash" },
+    .{ "InvalidCount", "count is a positive integer" },
+    .{ "SameFile", "the target is the source file; pick another target file" },
+    .{ "NotTopLevel", "only top-level declarations can be moved" },
+    .{ "ExportDefault", "a default export cannot be moved; move it by hand with emetgate_try_batch" },
+    .{ "SharedStatement", "the declaration shares a statement with others; split it first, then move" },
+    .{ "MoveNeedsExport", "the moved symbol is used by its old file; export it there or move by hand" },
+    .{ "ImportCycle", "the move would create an import cycle; pick another target file" },
+    .{ "CaseOnlyRename", "a case-only rename is not supported; move to a temporary name first" },
+    .{ "DynamicPathUse", "the file path is built at runtime somewhere; move it by hand and update those sites" },
+    .{ "CommitNotEnabled", "omit message: commits are off on this server" },
+    .{ "MissingCommitMessage", "pass message" },
+});
+
+pub fn fixFor(name: []const u8) ?[]const u8 {
+    return setupFix(name) orelse fixes.get(name);
+}
+
+threadlocal var fix_buffer: [768]u8 = undefined;
+threadlocal var fix_len: usize = 0;
+
+pub fn setFix(comptime fmt: []const u8, args: anytype) void {
+    const written = std.fmt.bufPrint(&fix_buffer, fmt, args) catch fix_buffer[0..];
+    fix_len = written.len;
+}
+
+pub fn clearFix() void {
+    fix_len = 0;
+}
+
+pub fn hasFix() bool {
+    return fix_len > 0;
+}
+
+pub fn takeFixForTest() []const u8 {
+    const given = fix_buffer[0..fix_len];
+    fix_len = 0;
+    return given;
+}
+
+fn takeFix(name: []const u8) ?[]const u8 {
+    if (fix_len > 0) {
+        const given = fix_buffer[0..fix_len];
+        fix_len = 0;
+        return given;
+    }
+    return fixFor(name);
+}
+
+fn writeFix(js: *std.json.Stringify, name: []const u8) !void {
+    const fix = takeFix(name) orelse return;
+    try js.objectField("fix");
+    try js.write(fix);
 }
 
 fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, command_field: []const u8, command: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {
@@ -998,6 +1299,19 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
     try js.write(command);
     try js.objectField("outcome");
     try js.write(outcomeTag(report.outcome));
+    if (std.mem.eql(u8, reason, "tests_failed")) {
+        const tests = test_outcome.summarize(report);
+        if (tests.len != 0) {
+            try js.objectField("tests");
+            try js.write(tests.text());
+        }
+    }
+    if (std.mem.eql(u8, reason, "test_env_error")) {
+        try js.objectField("env_error");
+        try js.write(test_outcome.envError(report).?);
+        try js.objectField("hint");
+        try js.write(env_error_hint);
+    }
     switch (report.outcome) {
         .crashed => |code| {
             var code_buf: [10]u8 = undefined;
@@ -1008,13 +1322,25 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
     }
     try js.objectField("diagnostics");
     try js.beginArray();
-    for (from_out) |d| try writeDiagnostic(&js, d);
-    for (from_err) |d| try writeDiagnostic(&js, d);
+    var shown: usize = 0;
+    for ([_][]const diagnostics.Diagnostic{ from_out, from_err }) |found| for (found) |d| {
+        if (shown == max_rejected_diagnostics) break;
+        try writeDiagnostic(&js, d);
+        shown += 1;
+    };
     try js.endArray();
-    try js.objectField("stdout");
-    try js.write(report.stdout);
-    try js.objectField("stderr");
-    try js.write(report.stderr);
+    if (from_out.len + from_err.len > shown) {
+        try js.objectField("diagnostics_dropped");
+        try js.write(from_out.len + from_err.len - shown);
+    }
+    const digested = try output_digest.digest(gpa, report.stdout, report.stderr);
+    defer gpa.free(digested.text);
+    try js.objectField("output");
+    try js.write(digested.text);
+    if (digested.dropped_lines != 0) {
+        try js.objectField("output_dropped_lines");
+        try js.write(digested.dropped_lines);
+    }
     try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
@@ -1033,9 +1359,13 @@ fn writeDiagnostic(js: *std.json.Stringify, d: diagnostics.Diagnostic) !void {
     try js.endObject();
 }
 
+const max_rejected_diagnostics = 20;
+
+pub const env_error_hint = "the test command could not start (a missing program or module), so no test judged the edit; the edit is not the cause; fix the test setup or pass a different --test command";
+
 pub fn rejectionReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
-        .exited => |code| if (code != 0) "tests_failed" else "leftover_processes",
+        .exited => |code| if (code == 0) "leftover_processes" else if (test_outcome.envError(report) != null) "test_env_error" else "tests_failed",
         .crashed => "test_crashed",
         .timed_out => "timed_out",
         .output_limit => "output_limit",
@@ -1099,7 +1429,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.WorkspaceBusy, error.WorkspaceLockFailed => 14,
         error.Conflict => 11,
         error.WrittenButUnverified => 12,
-        error.UnknownGitSubcommand, error.MissingCommit, error.InvalidCommit, error.InvalidCount, error.GitCommandFailed => 39,
+        error.UnknownGitSubcommand, error.MissingCommit, error.InvalidCommit, error.InvalidCount, error.GitCommandFailed, error.MissingGitArgs, error.TooManyGitArgs, error.InvalidGitArg => 39,
         error.RenameUnresolved, error.DynamicReference => 40,
         error.InterfaceChangeNeedsApproval => 41,
         error.AlphaMismatch, error.IncompleteRename, error.NotAnIdentifier, error.DuplicateLocation, error.ShorthandReference => 42,
@@ -1158,8 +1488,18 @@ pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
     try js.write(name);
     try js.objectField("exit_code");
     try js.write(exit_code);
+    try writeFix(&js, name);
     try js.endObject();
     try writer.writeByte('\n');
+}
+
+pub const no_test_command_fix = "the server has no test command: the user restarts it with emetgate mcp --test \"<command>\" or --detect-test, or emetgate lockdown --test \"<command>\"; emetgate lockdown without --test detects one per write";
+pub const not_in_repo_fix = "the file is not inside a git repository: the user runs git init in the project folder (emetgate lockdown does this itself) and the call is retried";
+
+pub fn setupFix(name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, name, "NoTestCommand")) return no_test_command_fix;
+    if (std.mem.eql(u8, name, "NotInRepo")) return not_in_repo_fix;
+    return null;
 }
 
 const testing = std.testing;
@@ -1191,7 +1531,7 @@ test "symbols render as one NDJSON line with typed fields" {
     try testing.expect(std.mem.indexOf(u8, json, "\"ref\":\"add\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"kind\":\"function\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"line\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"ambiguous\":false") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"ambiguous\"") == null);
 }
 
 test "file paths with backslashes and quotes are JSON-escaped" {
@@ -1209,13 +1549,21 @@ test "file paths with backslashes and quotes are JSON-escaped" {
 test "skeleton payload embeds the outline as one JSON line" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSkeleton(testing.allocator, &buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(a: number, b: number): number;\n", null, &.{});
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(a: number, b: number): number;\n", &.{}, &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
     try testing.expect(std.mem.indexOf(u8, json, "\"file\":\"src/a.ts\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"skeleton\":\"export function add(a: number, b: number): number;\\n\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json, "\"rules\":[]") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"rules\"") == null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"docs\"") == null);
+}
+
+test "a skeleton with folded docs names the original lines and how to get them" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .content, "/** Adds. */", &.{}, &.{ .{ .first = 2, .last = 5 }, .{ .first = 9, .last = 12 } });
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"docs\":\"folded lines 2-5,9-12; emetgate_read_file raw:true has them\"") != null);
 }
 
 test "the skeleton payload carries every adopted rule as data, with no way to change one" {
@@ -1225,7 +1573,7 @@ test "the skeleton payload carries every adopted rule as data, with no way to ch
         .{ .id = "m1", .text = "no console.log", .mode = "enforce", .check = "cmd:npx eslint", .where = "src/" },
         .{ .id = "m2", .text = "prefer Money", .mode = "advisory" },
     };
-    try writeSkeleton(testing.allocator, &buffer.writer, "src/a.ts", symbol.hashOf(""), "export function add(): void;\n", null, &adopted);
+    try writeSkeleton(&buffer.writer, "src/a.ts", symbol.hashOf(""), .skeleton, "export function add(): void;\n", &adopted, &.{});
 
     const json = buffer.written();
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json, "\n"));
@@ -1236,7 +1584,7 @@ test "the skeleton payload carries every adopted rule as data, with no way to ch
 test "symbol body payload carries ref, hash and the escaped body" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
-    try writeSymbolBody(&buffer.writer, "src/a.ts", "add", symbol.hashOf("x"), "{\n  return a + b;\n}");
+    try writeSymbolBody(&buffer.writer, "src/a.ts", "add", symbol.hashOf("x"), "{\n  return a + b;\n}", &.{});
 
     const json = buffer.written();
     try testing.expect(std.mem.indexOf(u8, json, "\"symbol\":\"add\"") != null);
@@ -1250,7 +1598,7 @@ test "committed payload names the symbol and both hashes" {
     try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), null, true);
 
     try testing.expectEqualStrings(
-        "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
+        "{\"status\":\"written\",\"symbol\":\"validateOrder\"," ++
             "\"old_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("a")) ++ "\"," ++
             "\"new_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("b")) ++ "\"}\n",
         buffer.written(),
@@ -1264,7 +1612,7 @@ test "compact committed payload drops the old hash and the shadow note" {
     try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), note, false);
 
     try testing.expectEqualStrings(
-        "{\"status\":\"committed\",\"symbol\":\"validateOrder\"," ++
+        "{\"status\":\"written\",\"symbol\":\"validateOrder\"," ++
             "\"new_hash\":\"" ++ &symbol.formatHash(symbol.hashOf("b")) ++ "\"}\n",
         buffer.written(),
     );
@@ -1308,6 +1656,83 @@ test "rejected reason reflects the real outcome, not always tests_failed" {
         var tag_buf: [64]u8 = undefined;
         try testing.expect(std.mem.indexOf(u8, json, try std.fmt.bufPrint(&tag_buf, "\"outcome\":\"{s}\"", .{case.tag})) != null);
         try testing.expect(std.mem.indexOf(u8, json, "\"test_cmd\":\"npm test\"") != null);
+    }
+}
+
+test "a test command that could not start is a test_env_error with its first useful line, never tests_failed" {
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 1 },
+        .duration_ns = 0,
+        .stdout = @constCast(""),
+        .stderr = @constCast("node:internal/modules/cjs/loader:1228\n  throw err;\n\nError: Cannot find module 'mocha'\n"),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    try testing.expectEqualStrings("test_env_error", rejectionReason(report));
+    try writeRejected(testing.allocator, &buffer.writer, "npm test", report, null);
+    const json = buffer.written();
+    errdefer std.debug.print("{s}\n", .{json});
+    try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"test_env_error\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"env_error\":\"Error: Cannot find module 'mocha'\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"hint\":\"") != null);
+
+    var failed: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer failed.deinit();
+    var plain = report;
+    plain.stderr = @constCast("  41 passing\n  1 failing\n");
+    try writeRejected(testing.allocator, &failed.writer, "npm test", plain, null);
+    try testing.expect(std.mem.indexOf(u8, failed.written(), "\"reason\":\"tests_failed\"") != null);
+    try testing.expect(std.mem.indexOf(u8, failed.written(), "\"tests\":\"41 passing") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"tests\"") == null);
+    try testing.expect(std.mem.indexOf(u8, failed.written(), "env_error") == null);
+}
+
+test "a rejected reply caps its test output and diagnostics and says how much it dropped" {
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(testing.allocator);
+    for (0..11) |index| try output.print(testing.allocator, "  {d}) suite case {d}\n  Error: same failure\n    at a (x.js:1:1)\n    at b (x.js:2:2)\n    at c (x.js:3:3)\n    at d (x.js:4:4)\n", .{ index + 1, index });
+    for (0..30) |index| try output.print(testing.allocator, "src/x.ts({d},1): error TS2322: bad type\n", .{index + 1});
+    for (0..100) |index| try output.print(testing.allocator, "noise line {d} that takes up room in the reply\n", .{index});
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 1 },
+        .duration_ns = 0,
+        .stdout = output.items,
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeRejected(testing.allocator, &buffer.writer, "npm test", report, null);
+    const json = buffer.written();
+    errdefer std.debug.print("{s}\n", .{json});
+    try testing.expect(json.len < 5000);
+    try testing.expectEqual(@as(usize, max_rejected_diagnostics), std.mem.count(u8, json, "\"file\":"));
+    try testing.expect(std.mem.indexOf(u8, json, "\"diagnostics_dropped\":10") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"output_dropped_lines\":") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "1) suite case 0") != null);
+}
+
+test "a committed reply carries the test summary, compact or full" {
+    const report: sandbox.Report = .{
+        .outcome = .{ .exited = 0 },
+        .duration_ns = 0,
+        .stdout = @constCast("  ok\n\n  12 passing (40ms)\n"),
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    var trace: runner.Trace = .{};
+    runner.noteSummary(&trace, report);
+    const note = shadowNote("D:\\shadows", trace);
+    for ([_]bool{ false, true }) |full| {
+        var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buffer.deinit();
+        try writeCommitted(&buffer.writer, "validateOrder", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), note, full);
+        errdefer std.debug.print("{s}\n", .{buffer.written()});
+        try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"tests\":\"12 passing (40ms)\"") != null);
     }
 }
 
@@ -1407,7 +1832,7 @@ test "error payload carries the name and exit code on one line" {
     try writeError(&buffer.writer, "PlaceholderBody", 13);
 
     try testing.expectEqualStrings(
-        "{\"status\":\"error\",\"error\":\"PlaceholderBody\",\"exit_code\":13}\n",
+        "{\"status\":\"error\",\"error\":\"PlaceholderBody\",\"exit_code\":13,\"fix\":\"body is a placeholder such as ...; send the real code\"}\n",
         buffer.written(),
     );
 }

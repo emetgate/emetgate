@@ -36,7 +36,7 @@ pub const Options = struct {
     message: []const u8,
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
-    linked: []const []const u8 = &.{"node_modules"},
+    linked: []const []const u8 = &shadow.dependency_dirs,
     runtime: ?*Runtime = null,
 };
 
@@ -141,6 +141,24 @@ fn eqlPath(a: []const u8, b: []const u8) bool {
     return true;
 }
 
+fn equalsHead(arena: Allocator, io: std.Io, root: []const u8, rel: []const u8, bytes: ?[]const u8) !bool {
+    const head = receipts.checkedOut(arena, io, root, "HEAD", try receipts.slashed(arena, rel)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
+    if (bytes == null or head == null) return bytes == null and head == null;
+    if (std.mem.eql(u8, bytes.?, head.?)) return true;
+    return cleanEqualsHead(arena, io, root, rel);
+}
+
+fn cleanEqualsHead(arena: Allocator, io: std.Io, root: []const u8, rel: []const u8) !bool {
+    const path = try receipts.slashed(arena, rel);
+    const spec = try std.fmt.allocPrint(arena, "HEAD:{s}", .{path});
+    const blob = (receipts.git(arena, io, root, &.{ "rev-parse", "--verify", "--quiet", spec }) catch return false) orelse return false;
+    const clean = (receipts.git(arena, io, root, &.{ "hash-object", "--", path }) catch return false) orelse return false;
+    return std.mem.eql(u8, std.mem.trim(u8, blob, " \r\n"), std.mem.trim(u8, clean, " \r\n"));
+}
+
 fn backslashed(arena: Allocator, rel: []const u8) ![]u8 {
     const out = try arena.dupe(u8, rel);
     std.mem.replaceScalar(u8, out, '/', '\\');
@@ -170,6 +188,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
             error.OutOfMemory => return error.OutOfMemory,
             else => return err,
         };
+        if (try equalsHead(arena, io, root, item.rel, bytes)) continue;
         const matches = if (item.after) |want|
             bytes != null and std.mem.eql(u8, &receipt.blake3(bytes.?), &want)
         else
