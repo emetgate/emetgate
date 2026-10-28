@@ -16799,6 +16799,15 @@
       ]
     },
     {
+      "id": "LP1-short-temp-kept",
+      "file": "src/platform/cache_lease.zig",
+      "from": "if (needed == 0) return path;",
+      "to": "if (needed != 0) return path;",
+      "kills": [
+        "a data dir named through an 8.3 short path resolves to its long name, so the shadow root under it is accepted"
+      ]
+    },
+    {
       "id": "GC1-gone-root-not-removed",
       "file": "src/platform/cache_gc.zig",
       "from": "if (verdict != .gone and !aged and !over)",

@@ -20,8 +20,9 @@ pub fn defaultDataDir(gpa: Allocator) ![]u8 {
     if (builtin.is_test) return testDataDir(gpa);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const local = (try sandbox.environmentValue(arena_state.allocator(), std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
-    return std.fmt.allocPrint(gpa, "{s}\\{s}", .{ local, data_dir_name });
+    const arena = arena_state.allocator();
+    const local = (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA"))) orelse return error.LocalAppDataUnavailable;
+    return std.fmt.allocPrint(gpa, "{s}\\{s}", .{ try longForm(arena, local), data_dir_name });
 }
 
 pub fn testDataDir(gpa: Allocator) ![]u8 {
@@ -29,7 +30,18 @@ pub fn testDataDir(gpa: Allocator) ![]u8 {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const temp = (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("TEMP"))) orelse (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("TMP"))) orelse return error.TempUnavailable;
-    return std.fmt.allocPrint(gpa, "{s}\\{s}-p{d}", .{ temp, test_data_dir_name, processId() });
+    return std.fmt.allocPrint(gpa, "{s}\\{s}-p{d}", .{ try longForm(arena, temp), test_data_dir_name, processId() });
+}
+
+pub fn longForm(arena: Allocator, path: []const u8) ![]const u8 {
+    if (builtin.os.tag != .windows) return path;
+    const wide = try std.unicode.wtf8ToWtf16LeAllocZ(arena, path);
+    const needed = win.GetLongPathNameW(wide.ptr, null, 0);
+    if (needed == 0) return path;
+    const long = try arena.alloc(u16, needed);
+    const written = win.GetLongPathNameW(wide.ptr, long.ptr, needed);
+    if (written == 0 or written >= needed) return path;
+    return std.unicode.wtf16LeToWtf8Alloc(arena, long[0..written]);
 }
 
 pub fn processId() u32 {
@@ -219,6 +231,7 @@ const win = struct {
 
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetLongPathNameW(short: [*:0]const u16, long: ?[*]u16, size: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn MoveFileExW(from: [*:0]const u16, to: [*:0]const u16, flags: windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "kernel32" fn Sleep(ms: windows.DWORD) callconv(.winapi) void;
     extern "kernel32" fn CreateDirectoryW(name: [*:0]const u16, security: ?*anyopaque) callconv(.winapi) windows.BOOL;
@@ -260,3 +273,31 @@ test "a test build resolves every cache path to a per-run temp dir outside the r
         }
     }
 }
+
+test "a data dir named through an 8.3 short path resolves to its long name, so the shadow root under it is accepted" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(std.testing.io, "a long folder name");
+    const long = try tmp.dir.realPathFileAlloc(std.testing.io, "a long folder name", gpa);
+    defer gpa.free(long);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const long_wide = try std.unicode.wtf8ToWtf16LeAllocZ(arena, long);
+    var short_wide: [std.fs.max_path_bytes:0]u16 = undefined;
+    const short_len = short_test_win.GetShortPathNameW(long_wide.ptr, &short_wide, short_wide.len);
+    if (short_len == 0 or short_len >= short_wide.len) return error.SkipZigTest;
+    const short = try std.unicode.wtf16LeToWtf8Alloc(arena, short_wide[0..short_len]);
+    if (std.mem.indexOfScalar(u8, short, '~') == null) return error.SkipZigTest;
+
+    try std.testing.expectEqualStrings(long, try longForm(arena, short));
+    const base = try shadow_root.validBase(gpa, try std.fmt.allocPrint(arena, "{s}\\shadow", .{try longForm(arena, short)}));
+    gpa.free(base);
+    try std.testing.expectError(error.InvalidShadowRoot, shadow_root.validBase(gpa, try std.fmt.allocPrint(arena, "{s}\\shadow", .{short})));
+}
+
+const short_test_win = struct {
+    extern "kernel32" fn GetShortPathNameW(long: [*:0]const u16, short: [*]u16, size: windows.DWORD) callconv(.winapi) windows.DWORD;
+};
