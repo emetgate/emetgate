@@ -4,7 +4,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Zig">
+  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20python%20%7C%20c%23%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Python, C#, Zig">
   <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
   <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
@@ -18,7 +18,7 @@ LLMs are fast and capable — hours of work in minutes. But whether they follow 
 
 The usual answer is a better prompt, a longer `AGENTS.md` — rules the model is *asked* to obey. Emetgate takes the other path: a layer between the model and your source tree. Not an instruction it can skip — a gate it has to pass. The model proposes a change; the kernel verifies it; nothing reaches disk unless it passes.
 
-It runs as an MCP server, on Windows, for TypeScript, JavaScript and Zig. Below, each capability is broken into its parts — what each part is, and what it does here. No claim without the code and the real output under it.
+It runs as an MCP server, on Windows, for TypeScript, JavaScript, Python, C# and Zig. Below, each capability is broken into its parts — what each part is, and what it does here. No claim without the code and the real output under it.
 
 ## The gate
 
@@ -119,7 +119,7 @@ branch broken: 1 commit(s)
 | fuzz & red-team | random mutation plus attack corpora | no crash or escape on unexpected or hostile input |
 | ripgrep parity gate | compares the hit-set against rg on every run | search cannot be "fast but wrong"; checked line for line |
 
-For the engine: <!-- generated:engine-mutant-summary -->63 mutants today: 56 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
+For the engine: <!-- generated:engine-mutant-summary -->69 mutants today: 62 killed, 4 proven equivalent, 2 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
 
 ## Measured
 
@@ -153,7 +153,7 @@ Then, in the project folder:
 emetgate lockdown --test "npm test"
 ```
 
-Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` starts the agent with only the emetgate tools, fail-closed. Leave `--test` out and the test command is detected on every write (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, a `.sln` or `.csproj`). In an empty folder lockdown runs `git init`, and writes land as `unverified_no_tests` until the project has a test command.
+Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown` starts the agent with only the emetgate tools, fail-closed. Leave `--test` out and the test command is detected on every write (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, a `.sln` or `.csproj`). In an empty folder lockdown runs `git init`, and writes land as `unverified_no_tests` until the project has a test command.
 
 Lockdown reads only the project's own `.mcp.json`, never a server registered at user scope. To use emetgate as a server next to the other tools, or to give lockdown your own server arguments, register it for the project:
 
@@ -171,7 +171,7 @@ With that `.mcp.json` in place, lockdown takes the test command from it, and `em
 
 ## Limits
 
-Windows only; TypeScript, JavaScript and Zig. The sandbox blocks writes, not reads or the network. Passing the gate proves a change parses and passes *your* tests — it is only as strong as those tests. The benchmarks are our own, from one machine, and reproducible.
+Windows only; TypeScript, JavaScript, Python, C# and Zig. The sandbox blocks writes, not reads or the network. Passing the gate proves a change parses and passes *your* tests — it is only as strong as those tests. The benchmarks are our own, from one machine, and reproducible.
 
 ## Where the name comes from
 
