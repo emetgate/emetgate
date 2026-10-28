@@ -1,0 +1,14 @@
+const assert = require("node:assert");
+const m = require(process.argv[2]);
+const eq = (a, b) => assert.strictEqual(a, b);
+eq(m.parseDuration("1h30m"), 5400000);
+eq(m.parseDuration("45s"), 45000);
+eq(m.parseDuration("2d"), 172800000);
+eq(m.parseDuration("500ms"), 500);
+eq(m.parseDuration("1m30s250ms"), 90250);
+for (const bad of ["", "abc", "10", "5x", "1h 30m"]) assert.throws(() => m.parseDuration(bad), bad);
+eq(m.formatDuration(5400000), "1h30m");
+eq(m.formatDuration(1500), "1s500ms");
+eq(m.formatDuration(0), "0ms");
+eq(m.formatDuration(90061001), "1d1h1m1s1ms");
+console.log("duration check ok");

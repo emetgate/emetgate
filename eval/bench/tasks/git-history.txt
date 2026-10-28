@@ -1,0 +1,1 @@
+This is a clone of the more-itertools repository with its full git history. Using the git history, find the commit that first added the function `sample` (its `def sample(` line) to the library. Report that commit's full hash, its author name, its date and subject line, and list every file the commit changed with its added/removed line counts. Do not modify any files.

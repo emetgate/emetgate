@@ -1,0 +1,1 @@
+This is a copy of the more-itertools repository. `python -m pytest -q tests/test_more.py` currently has a failing test. Find the root cause in the library code and fix it there. Do not modify, skip or delete any tests. At the end `python -m pytest -q tests` must pass. Briefly explain the root cause and the fix.
