@@ -147,7 +147,16 @@ fn equalsHead(arena: Allocator, io: std.Io, root: []const u8, rel: []const u8, b
         else => return false,
     };
     if (bytes == null or head == null) return bytes == null and head == null;
-    return std.mem.eql(u8, bytes.?, head.?);
+    if (std.mem.eql(u8, bytes.?, head.?)) return true;
+    return cleanEqualsHead(arena, io, root, rel);
+}
+
+fn cleanEqualsHead(arena: Allocator, io: std.Io, root: []const u8, rel: []const u8) !bool {
+    const path = try receipts.slashed(arena, rel);
+    const spec = try std.fmt.allocPrint(arena, "HEAD:{s}", .{path});
+    const blob = (receipts.git(arena, io, root, &.{ "rev-parse", "--verify", "--quiet", spec }) catch return false) orelse return false;
+    const clean = (receipts.git(arena, io, root, &.{ "hash-object", "--", path }) catch return false) orelse return false;
+    return std.mem.eql(u8, std.mem.trim(u8, blob, " \r\n"), std.mem.trim(u8, clean, " \r\n"));
 }
 
 fn backslashed(arena: Allocator, rel: []const u8) ![]u8 {
