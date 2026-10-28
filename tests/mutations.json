@@ -1938,8 +1938,7 @@
       "from": "    if (before.item(insertion.ref)) |_| return error.SymbolExists else",
       "to": "    if (before.item(insertion.ref)) |_| {} else",
       "kills": [
-        "insert refuses a symbol that already exists, even as a duplicate",
-        "absent: a symbol that already exists is refused and the repository is untouched"
+        "insert refuses a symbol that already exists, even as a duplicate"
       ]
     },
     {
@@ -2696,9 +2695,11 @@
       "from": "keyName(shape, tree, key), name)) continue;",
       "to": "keyName(shape, tree, key), name) and false) continue;",
       "kills": [
-        "no_literal leaves budgeted, named, computed and shorthand values alone",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
-        "no_literal matches a quoted key but not a computed one"
+        "no_literal matches a quoted key but not a computed one",
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
       "filter": [
         "no_literal"
@@ -2711,10 +2712,11 @@
       "from": "if (!isLiteral(shape, tree, value)) continue;",
       "to": "if (!isLiteral(shape, tree, value) and false) continue;",
       "kills": [
-        "no_literal leaves budgeted, named, computed and shorthand values alone",
-        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
-        "no_literal counts a negated number as a literal but not other unary values"
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "no_literal counts a negated number as a literal but not other unary values",
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
       "filter": [
         "no_literal"
@@ -2755,15 +2757,18 @@
       "from": ".{ .name = \"no_literal\", .collect = noLiteral, .takes_argument = true },",
       "to": ".{ .name = \"no_literal\", .collect = noLiteral },",
       "kills": [
-        "no_literal finds the option inside a nested object and spans exactly the pair",
-        "no_literal flags a number, a string and a plain template passed as the named option",
-        "no_literal leaves budgeted, named, computed and shorthand values alone",
-        "no_literal refuses a missing or empty argument",
-        "no_literal reports only pairs inside the span",
-        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
+        "no_literal counts a negated number as a literal but not other unary values",
+        "no_literal refuses a missing or empty argument",
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option",
+        "no_literal flags a number, a string and a plain template passed as the named option",
+        "no_literal finds the option inside a nested object and spans exactly the pair",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone",
         "no_literal matches a quoted key but not a computed one",
-        "no_literal counts a negated number as a literal but not other unary values"
+        "no_literal reports only pairs inside the span",
+        "no_literal refuses a language with no literal option shape instead of reporting it clean"
       ],
       "filter": [
         "no_literal"
@@ -3597,7 +3602,7 @@
       "id": "RM1-gate-skips-the-ledger-trust-check",
       "file": "src/platform/rules.zig",
       "from": "            if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;\n",
-      "to": "",
+      "to": "            if (try ledgerTracked(gpa, io, root_abs) and false) return error.UntrustedRepoMemory;\n",
       "kills": [
         "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory",
         "redteam ledger: a committed ledger spelled in another case is still untrusted",
@@ -12561,7 +12566,14 @@
       "from": "                if (i == 0 or d.kind == .constructor or !std.mem.eql(u8, d.name, name)) continue;",
       "to": "                if (i == 0 or d.kind == .constructor) continue;",
       "kills": [
-        "rename facts: a C# member call on a receiver of unknown type refuses the rename"
+        "rename facts: a C# static method called from another file is renamed at its declaration and every call",
+        "rename facts: a C# method call through a using directive is renamed",
+        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file",
+        "rename facts: a C# class in the global namespace is renamed in another file",
+        "rename facts: a C# instance method called through a typed parameter in another file is renamed",
+        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed",
+        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept",
+        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
       ]
     },
     {
@@ -12675,12 +12687,14 @@
       "file": "src/platform/rename_graph.zig",
       "from": "                    if (!resolution.binders[b].import) continue;",
       "to": "                    _ = b;\n                    continue;",
-      "expect_status": "survived",
       "filter": [
         "rename facts: ",
         "csharp"
       ],
-      "note": "an import binder named like the target is always an import ref, and an import ref is either linked (then proven or linked elsewhere) or the leaf was never accounted"
+      "kills": [
+        "rename facts: an import inside a Python function is not an attribute of its module",
+        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+      ]
     },
     {
       "id": "CSR31-target-kind-not-checked",
@@ -16081,8 +16095,7 @@
       "from": "    if (!walk.safe) walk.ok.lossy = true;",
       "to": "    if (false) walk.ok.lossy = true;",
       "kills": [
-        "git write reads short flag clusters, attached values and counts flag by flag",
-        "git parity: clean previews freely and deletes only with force"
+        "git write reads short flag clusters, attached values and counts flag by flag"
       ]
     },
     {
