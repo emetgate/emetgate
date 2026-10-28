@@ -27,6 +27,13 @@ jobs:
           Remove-Item $zip
           Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
       - run: zig version
+      - name: Tag matches the manifest version
+        shell: pwsh
+        run: |
+          $m = Select-String -Path build.zig.zon -Pattern '\.version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $m) { throw "build.zig.zon has no .version" }
+          $want = "v" + $m.Matches[0].Groups[1].Value
+          if ($env:GITHUB_REF_NAME -ne $want) { throw "tag $env:GITHUB_REF_NAME does not match build.zig.zon version $want" }
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -42,6 +49,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "emetgate symbols exited with $LASTEXITCODE" }
           $out
           if (-not ($out -match "function\s+add$")) { throw "emetgate symbols did not list add" }
+          $v = (& zig-out/bin/emetgate.exe --version | Out-String).Trim()
+          if (-not $v.Contains($env:GITHUB_REF_NAME.TrimStart('v'))) { throw "emetgate --version printed '$v', expected $env:GITHUB_REF_NAME" }
       - name: Compute the SHA-256 checksum
         shell: pwsh
         run: |
