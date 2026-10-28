@@ -284,13 +284,6 @@ pub fn propose(base: *Snapshot, ref: symbol.Ref, expected: symbol.Expected, new_
 
 pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
     const before = try base.symbols();
-    if (before.resolve(insertion.ref)) |_| {
-        return error.SymbolExists;
-    } else |err| switch (err) {
-        error.AmbiguousSymbol => return error.SymbolExists,
-        error.SymbolNotFound => {},
-    }
-    if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;
     if (before.item(insertion.ref)) |_| return error.SymbolExists else |err| if (err == error.AmbiguousSymbol) return error.SymbolExists;
 
     const eol = try lineEnding(base.source);
