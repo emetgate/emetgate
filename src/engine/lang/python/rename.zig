@@ -117,6 +117,19 @@ pub const grammar: Rename = .{
     .class_scopes = &.{"class_definition"},
     .scope_bodies = &scope_bodies,
     .rebinding_statements = &.{ "global_statement", "nonlocal_statement" },
+    .name_list = .{
+        .owner = "__all__",
+        .string = "string",
+        .content = "string_content",
+        .quote_start = "string_start",
+        .containers = &.{ "list", "tuple", "expression_list", "parenthesized_expression", "argument_list" },
+        .holders = &.{
+            .{ .node = "assignment", .target_field = "left", .value_field = "right" },
+            .{ .node = "augmented_assignment", .target_field = "left", .value_field = "right" },
+            .{ .node = "call", .target_field = "function", .object_field = "object", .value_field = "arguments" },
+        },
+        .statement = "expression_statement",
+    },
 };
 
 const type_declarations = [_]DeclarationShape{

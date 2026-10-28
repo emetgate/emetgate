@@ -15676,6 +15676,105 @@
       "kills": [
         "rename: renaming one of two same-named properties keeps the other apart in the alpha hash"
       ]
+    },
+    {
+      "id": "L6E-name-list-any-depth",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (top.parent() == null) return true;",
+      "to": "        return true;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6F-name-list-any-owner",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (!std.mem.eql(u8, textOf(snapshot, target), list.owner)) continue;",
+      "to": "        if (false) continue;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6G-name-list-prefixed-string",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (byte != '\"' and byte != '\\'') return false;",
+      "to": "        if (false) return false;",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6H-name-list-hit-is-string-key",
+      "file": "src/engine/rename.zig",
+      "from": "            if (name_list.contentNaming(snapshot, node, name)) |content| {",
+      "to": "            if (@as(?ts.Node, null)) |content| {",
+      "kills": [
+        "rename facts: a Python __all__ entry naming the renamed module function is renamed with it"
+      ]
+    },
+    {
+      "id": "L6I-name-list-located-hit-refused",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (hit.kind == .name_list and found < hits.len and renamedAt(renamed, hit.start)) continue;",
+      "to": "        if (false) continue;",
+      "kills": [
+        "rename facts: a Python __all__ entry naming the renamed module function is renamed with it"
+      ]
+    },
+    {
+      "id": "L6J-name-list-without-top-binding",
+      "file": "src/platform/rename_batch.zig",
+      "from": "        if (listed.len == 0 or !try rename.bindsAtTop(gpa, snapshot, old, located.spans.items)) continue;",
+      "to": "        if (listed.len == 0) continue;",
+      "kills": [
+        "rename facts: an __all__ entry whose module binds the name under an alias is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6K-name-list-nested-binding",
+      "file": "src/engine/rename.zig",
+      "from": "        if (region.start == top.startByte() and region.end == top.endByte() and std.mem.eql(u8, region.kind, top.kind())) return true;",
+      "to": "        return true;",
+      "kills": [
+        "rename facts: a top-level __all__ entry naming a nested function of the same name is still a dynamic reference"
+      ]
+    },
+    {
+      "id": "L6L-name-list-span-not-accepted",
+      "file": "src/engine/rename.zig",
+      "from": "            if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span.start..span.end], old)) return error.NotAnIdentifier;",
+      "to": "            if (true) return error.NotAnIdentifier;",
+      "kills": [
+        "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash"
+      ]
+    },
+    {
+      "id": "L6M-alpha-name-list-as-text",
+      "file": "src/engine/alpha.zig",
+      "from": "        const listed = within(distinct, node.startByte(), node.endByte()) and name_list.holds(snapshot, node);",
+      "to": "        const listed = false;",
+      "kills": [
+        "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash"
+      ]
+    },
+    {
+      "id": "L6N-alpha-any-changed-string",
+      "file": "src/engine/alpha.zig",
+      "from": "            if (!x.name and !renamesAName(before, after, a, b, x.span, y.span)) continue;",
+      "to": "            if (false) continue;",
+      "kills": [
+        "rename: a Python name-list string changed to a text no renamed name took breaks the alpha check"
+      ]
+    },
+    {
+      "id": "L6O-dynamic-string-prefix-kept",
+      "file": "src/engine/rename.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at..];",
+      "to": "        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at * 0 ..];",
+      "kills": [
+        "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
+      ]
     }
   ]
 }

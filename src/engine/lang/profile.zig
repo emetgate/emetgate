@@ -133,6 +133,7 @@ pub const Rename = struct {
     scope_bodies: []const FieldSite = &.{},
     rebinding_statements: []const []const u8 = &.{},
     type_string_parents: []const []const u8 = &.{},
+    name_list: ?NameList = null,
 };
 
 pub const Modules = struct {
@@ -220,6 +221,23 @@ pub const MemberTraits = struct {
 pub const FieldSite = struct {
     parent: []const u8,
     field: []const u8,
+};
+
+pub const NameListHolder = struct {
+    node: []const u8,
+    target_field: []const u8,
+    object_field: ?[]const u8 = null,
+    value_field: []const u8,
+};
+
+pub const NameList = struct {
+    owner: []const u8,
+    string: []const u8,
+    content: []const u8,
+    quote_start: []const u8,
+    containers: []const []const u8,
+    holders: []const NameListHolder,
+    statement: []const u8,
 };
 
 pub const TypedBinder = struct {

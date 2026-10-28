@@ -2,6 +2,7 @@ const std = @import("std");
 const symbol = @import("symbol.zig");
 const traversal = @import("traversal.zig");
 const scope = @import("scope.zig");
+const name_list = @import("name_list.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 
 const Allocator = std.mem.Allocator;
@@ -61,9 +62,10 @@ pub fn hashDistinct(gpa: Allocator, snapshot: *const Snapshot, region: Span, dis
         const text = snapshot.source[node.startByte()..node.endByte()];
         hasher.update(kind);
         hasher.update(&.{0});
-        if (oneOf(kind, g.name_kinds)) {
+        const listed = within(distinct, node.startByte(), node.endByte()) and name_list.holds(snapshot, node);
+        if (listed or oneOf(kind, g.name_kinds)) {
             const member = oneOf(kind, g.property_kinds) or scope.isProperty(g, node) or scope.isExternal(g, node);
-            const renamed = member and within(distinct, node.startByte(), node.endByte());
+            const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()));
             const key: NameKey = .{ .namespace = if (renamed) 'r' else if (oneOf(kind, g.type_kinds)) 't' else if (oneOf(kind, g.property_kinds)) 'p' else 'v', .text = text };
             const slot = try names.getOrPut(gpa, key);
             if (!slot.found_existing) slot.value_ptr.* = names.count() - 1;
@@ -88,16 +90,32 @@ pub const Changed = struct {
     after: []Span,
 };
 
-fn leaves(gpa: Allocator, snapshot: *const Snapshot) ![]Span {
-    var out: std.ArrayList(Span) = .empty;
+const Leaf = struct { span: Span, name: bool };
+
+fn leaves(gpa: Allocator, snapshot: *const Snapshot) ![]Leaf {
+    const g = snapshot.profile.rename orelse return error.UnsupportedLanguage;
+    var out: std.ArrayList(Leaf) = .empty;
     errdefer out.deinit(gpa);
     var walker = traversal.Walker.init(snapshot.tree.root());
     defer walker.deinit();
     while (walker.next()) |entry| {
-        if (entry.node.childCount() != 0) continue;
-        try out.append(gpa, .{ .start = entry.node.startByte(), .end = entry.node.endByte() });
+        const node = entry.node;
+        if (node.childCount() != 0) continue;
+        try out.append(gpa, .{ .span = .{ .start = node.startByte(), .end = node.endByte() }, .name = oneOf(node.kind(), g.name_kinds) });
     }
     return out.toOwnedSlice(gpa);
+}
+
+fn textAt(snapshot: *const Snapshot, span: Span) []const u8 {
+    return snapshot.source[span.start..span.end];
+}
+
+fn renamesAName(before: *const Snapshot, after: *const Snapshot, a: []const Leaf, b: []const Leaf, x: Span, y: Span) bool {
+    for (a, b) |p, q| {
+        if (!p.name) continue;
+        if (std.mem.eql(u8, textAt(before, p.span), textAt(before, x)) and std.mem.eql(u8, textAt(after, q.span), textAt(after, y))) return true;
+    }
+    return false;
 }
 
 pub fn changedLeaves(gpa: Allocator, before: *const Snapshot, after: *const Snapshot) !Changed {
@@ -111,9 +129,10 @@ pub fn changedLeaves(gpa: Allocator, before: *const Snapshot, after: *const Snap
     errdefer to.deinit(gpa);
     if (a.len == b.len) {
         for (a, b) |x, y| {
-            if (std.mem.eql(u8, before.source[x.start..x.end], after.source[y.start..y.end])) continue;
-            try from.append(gpa, x);
-            try to.append(gpa, y);
+            if (std.mem.eql(u8, textAt(before, x.span), textAt(after, y.span))) continue;
+            if (!x.name and !renamesAName(before, after, a, b, x.span, y.span)) continue;
+            try from.append(gpa, x.span);
+            try to.append(gpa, y.span);
         }
     }
     return .{ .before = try from.toOwnedSlice(gpa), .after = try to.toOwnedSlice(gpa) };

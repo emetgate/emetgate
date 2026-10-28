@@ -4,6 +4,7 @@ const symbol = @import("symbol.zig");
 const traversal = @import("traversal.zig");
 const scope = @import("scope.zig");
 const alpha = @import("alpha.zig");
+const name_list = @import("name_list.zig");
 const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 const test_util = @import("test_util.zig");
@@ -141,7 +142,7 @@ pub fn binderCount(gpa: Allocator, snapshot: *const Snapshot, name: []const u8) 
     return count;
 }
 
-pub const Dynamic = enum { string_key, eval, computed_module, computed_member };
+pub const Dynamic = enum { string_key, name_list, eval, computed_module, computed_member };
 
 fn calleeName(snapshot: *const Snapshot, call: ts.Node) ?[]const u8 {
     const callee = call.childByField(snapshot.profile.call.function_field) orelse return null;
@@ -162,6 +163,14 @@ pub fn dynamicAccess(snapshot: *const Snapshot, name: []const u8, member: bool) 
     return if (dynamicHits(snapshot, name, member, &one) != 0) one[0].kind else null;
 }
 
+fn unprefixed(text: []const u8, quotes: []const u8) []const u8 {
+    for (text, 0..) |byte, at| {
+        if (std.mem.indexOfScalar(u8, quotes, byte) != null) return text[at..];
+        if (!std.ascii.isAlphabetic(byte) and byte != '@' and byte != '$') return text;
+    }
+    return text;
+}
+
 pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, out: []Hit) usize {
     var found: usize = 0;
     const g = grammarOf(snapshot);
@@ -177,7 +186,11 @@ pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, ou
         }
         if ((oneOf(kind, snapshot.profile.strings) and snapshot.profile.opaqueText(node)) or std.mem.eql(u8, kind, g.template_fragment)) {
             walker.skipChildren();
-            if ((std.mem.eql(u8, std.mem.trim(u8, text, g.quotes), name) or typeStringNames(g, node, text, name)) and record(out, &found, .string_key, node)) return found;
+            if (name_list.contentNaming(snapshot, node, name)) |content| {
+                if (record(out, &found, .name_list, content)) return found;
+                continue;
+            }
+            if ((std.mem.eql(u8, std.mem.trim(u8, unprefixed(text, g.quotes), g.quotes), name) or typeStringNames(g, node, text, name)) and record(out, &found, .string_key, node)) return found;
             continue;
         }
         if (std.mem.eql(u8, kind, snapshot.profile.call.node)) {
@@ -255,6 +268,28 @@ fn regionOf(root: ts.Node, offset: u32) ?u32 {
 
 fn nodeSpan(node: ts.Node) Span {
     return .{ .start = node.startByte(), .end = node.endByte() };
+}
+
+fn listedAt(snapshot: *const Snapshot, span: Span) bool {
+    const node = leafAt(snapshot.tree.root(), span) orelse return false;
+    return name_list.holds(snapshot, node);
+}
+
+pub const nameListSpans = name_list.spans;
+
+pub fn bindsAtTop(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, spans: []const Span) !bool {
+    const resolution = scope.resolveName(gpa, snapshot, name) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedLanguage => return false,
+    };
+    defer resolution.deinit(gpa);
+    const top = snapshot.tree.root();
+    for (spans) |span| {
+        const index = resolution.binderAt(span) orelse continue;
+        const region = resolution.binders[index].scope;
+        if (region.start == top.startByte() and region.end == top.endByte() and std.mem.eql(u8, region.kind, top.kind())) return true;
+    }
+    return false;
 }
 
 fn findLeaf(leaves: []const Leaf, span: Span) ?Leaf {
@@ -341,7 +376,11 @@ pub fn applyWith(gpa: Allocator, base: *Snapshot, old: []const u8, new: []const 
     defer gpa.free(keeps);
     var expanding = false;
     for (spans, keeps) |span, *keep| {
-        const leaf = findLeaf(leaves, span) orelse return error.NotAnIdentifier;
+        const leaf = findLeaf(leaves, span) orelse {
+            if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span.start..span.end], old)) return error.NotAnIdentifier;
+            keep.* = .none;
+            continue;
+        };
         keep.* = options.keepOf(span);
         if (keep.* == .none) continue;
         if (!leaf.shorthand) return error.ShorthandReference;
@@ -809,4 +848,56 @@ test "rename: an export statement or an export clause marks the name exported" {
     try testing.expect(try exportedName(testing.allocator, clause, "add"));
     try testing.expect(!try exportedName(testing.allocator, local, "add"));
     try testing.expectEqual(@as(usize, 1), try binderCount(testing.allocator, local, "add"));
+}
+
+fn pythonSnapshot(runtime: anytype, source: []const u8) !*Snapshot {
+    return Snapshot.fromSource(runtime, &@import("lang/python/profile.zig").profile, try testing.allocator.dupe(u8, source));
+}
+
+fn alphaPair(before: *const Snapshot, after: *const Snapshot) !bool {
+    const changed = try alpha.changedLeaves(testing.allocator, before, after);
+    defer testing.allocator.free(changed.before);
+    defer testing.allocator.free(changed.after);
+    const a = try alpha.hashDistinct(testing.allocator, before, .{ .start = 0, .end = @intCast(before.source.len) }, changed.before);
+    const b = try alpha.hashDistinct(testing.allocator, after, .{ .start = 0, .end = @intCast(after.source.len) }, changed.after);
+    return std.mem.eql(u8, &a, &b);
+}
+
+test "rename: a Python __all__ entry is renamed with the function and keeps the alpha hash" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "__all__ = [\"helper\"]\n\n\ndef helper():\n    return 1\n";
+    const base = try pythonSnapshot(runtime, source);
+    defer base.destroy();
+    const listed = try nameListSpans(testing.allocator, base, "helper");
+    defer testing.allocator.free(listed);
+    try testing.expectEqual(@as(usize, 1), listed.len);
+    const spans = [_]Span{ listed[0], spanOf(source, "def helper", 0, "helper") };
+    const renamed = try apply(testing.allocator, base, "helper", "assist", &spans);
+    defer renamed.deinit(testing.allocator);
+    try testing.expectEqualStrings("__all__ = [\"assist\"]\n\n\ndef assist():\n    return 1\n", renamed.snapshot.source);
+    try testing.expect(try alphaPair(base, renamed.snapshot));
+}
+
+test "rename: a Python name-list string changed to a text no renamed name took breaks the alpha check" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const before = try pythonSnapshot(runtime, "__all__ = [\"helper\"]\n\n\ndef helper():\n    return 1\n");
+    defer before.destroy();
+    const after = try pythonSnapshot(runtime, "__all__ = [\"other\"]\n\n\ndef assist():\n    return 1\n");
+    defer after.destroy();
+    try testing.expect(!try alphaPair(before, after));
+}
+
+test "rename: a string outside a name list is not renamed as a name" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const source = "names = [\"helper\"]\n\n\ndef helper():\n    return 1\n";
+    const base = try pythonSnapshot(runtime, source);
+    defer base.destroy();
+    const listed = try nameListSpans(testing.allocator, base, "helper");
+    defer testing.allocator.free(listed);
+    try testing.expectEqual(@as(usize, 0), listed.len);
+    const spans = [_]Span{ spanOf(source, "\"helper\"", 0, "helper"), spanOf(source, "def helper", 0, "helper") };
+    try testing.expectError(error.NotAnIdentifier, apply(testing.allocator, base, "helper", "assist", &spans));
 }

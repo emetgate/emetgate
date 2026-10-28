@@ -875,3 +875,61 @@ test "rename facts: same-named Python methods of two classes on one line are tol
     defer planned.deinit(testing.allocator);
     try expectSource(planned, "m.py", "class A:\n    def go(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n\n\ndef main():\n    return A().go() + B().run()\n");
 }
+
+test "rename facts: a Python __all__ entry naming the renamed module function is renamed with it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "__all__ = [\"helper\", \"other\"]\n\n\ndef helper():\n    return 1\n\n\ndef other():\n    return helper()\n" }});
+    defer case.deinit();
+    const planned = try case.plan("m.py", "helper", "assist", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "m.py", "__all__ = [\"assist\", \"other\"]\n\n\ndef assist():\n    return 1\n\n\ndef other():\n    return assist()\n");
+}
+
+test "rename facts: a package __all__ built by assignment, augmented assignment, append and extend is renamed with its re-export" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "pkg/__init__.py", .text = "from .m import helper\n\n__all__ = (\"helper\",)\n__all__ += [\"helper\"]\n__all__.append('helper')\n__all__.extend([\"helper\"])\n" },
+        .{ .rel = "pkg/m.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "main.py", .text = "from pkg import helper\n\nprint(helper())\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("pkg/m.py", "helper", "assist", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "pkg/__init__.py", "from .m import assist\n\n__all__ = (\"assist\",)\n__all__ += [\"assist\"]\n__all__.append('assist')\n__all__.extend([\"assist\"])\n");
+    try expectSource(planned, "main.py", "from pkg import assist\n\nprint(assist())\n");
+}
+
+test "rename facts: an __all__ entry whose module binds the name under an alias is still a dynamic reference" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "pkg/__init__.py", .text = "from .m import helper as h\n\n__all__ = [\"helper\", \"h\"]\n" },
+        .{ .rel = "pkg/m.py", .text = "def helper():\n    return 1\n" },
+    });
+    defer case.deinit();
+    try testing.expectError(error.DynamicReference, case.plan("pkg/m.py", "helper", "assist", true));
+}
+
+test "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const sources = [_][]const u8{
+        "__all__ = [\"helper\"] + []\n\n\ndef helper():\n    return 1\n",
+        "names = [\"helper\"]\n\n\ndef helper():\n    return 1\n",
+        "def helper():\n    __all__ = [\"helper\"]\n    return __all__\n",
+        "__all__ = [r\"helper\"]\n\n\ndef helper():\n    return 1\n",
+        "key = f\"helper\"\n\n\ndef helper():\n    return 1\n",
+        "other.__all__.append(\"helper\")\n\n\ndef helper():\n    return 1\n",
+        "__all__ = [\"helper\"]\n\n\ndef helper():\n    return 1\n\n\ndef via(mod):\n    return getattr(mod, \"helper\")\n",
+    };
+    for (sources) |source| {
+        var case = try Case.init(&.{.{ .rel = "m.py", .text = source }});
+        defer case.deinit();
+        try testing.expectError(error.DynamicReference, case.plan("m.py", "helper", "assist", true));
+    }
+}
+
+test "rename facts: a top-level __all__ entry naming a nested function of the same name is still a dynamic reference" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "__all__ = [\"helper\"]\n\n\ndef outer():\n    def helper():\n        return 1\n    return helper()\n" }});
+    defer case.deinit();
+    try testing.expectError(error.DynamicReference, case.plan("m.py", "outer.helper", "assist", true));
+}
