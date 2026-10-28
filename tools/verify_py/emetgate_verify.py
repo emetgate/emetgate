@@ -19,9 +19,9 @@ STATEMENT_TYPE = "https://in-toto.io/Statement/v1"
 PREDICATE_TYPE = "https://emetgate.dev/receipt/v1"
 FILE_DIGEST = "blake3-128"
 NOTES_REF = "emetgate"
-OPERATIONS = {"try", "try_batch", "rename", "move", "move_file"}
+OPERATIONS = {"try", "try_batch", "rename", "move", "move_file", "run"}
 CLASSES = {"symmetry", "spending"}
-CHECK_KINDS = {"typecheck", "test"}
+CHECK_KINDS = {"typecheck", "test", "run"}
 HEX = re.compile(r"^[0-9a-f]*$")
 
 VERIFIED = "verified"
@@ -365,6 +365,8 @@ def verify(git, spec):
                 outcome.raise_to(MISMATCH, "a check's command does not match its digest")
             if c["exit_code"] != 0:
                 outcome.raise_to(MISMATCH, "the receipt records a failing check")
+            if c["kind"] == "run":
+                outcome.raise_to(UNVERIFIED, "the files a command wrote are recorded, not reproduced")
         if r["class"] == "spending" and not r["checks"]:
             outcome.raise_to(UNVERIFIED, "a spending receipt without a check")
         result["not_checked"] = not_checked(r)

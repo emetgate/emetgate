@@ -161,7 +161,7 @@ test "run tool: a refusal names the toolchain families the model can run instead
     try testing.expect(reply.is_error);
     try testing.expectEqualStrings("not_allowed", try reply.string("reason"));
     const fix = try reply.string("fix");
-    for ([_][]const u8{ "npm|pnpm|yarn|bun install", "npx", "pip install", "dotnet restore", "cargo", "go build" }) |family| {
+    for ([_][]const u8{ "npm|pnpm|yarn|bun install", "npx", "pip <any>", "dotnet restore", "cargo", "go build" }) |family| {
         errdefer std.debug.print("fix lacks {s}: {s}\n", .{ family, fix });
         try testing.expect(std.mem.indexOf(u8, fix, family) != null);
     }

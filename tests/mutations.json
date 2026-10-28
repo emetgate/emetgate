@@ -10086,8 +10086,8 @@
     {
       "id": "PV3-untracked-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "            const head_entry = in_head orelse return error.TargetNotInHead;\n",
-      "to": "            const head_entry = in_head orelse continue;\n",
+      "from": "                if (!pre_written) return error.TargetNotInHead;\n",
+      "to": "                if (false) return error.TargetNotInHead;\n",
       "kills": [
         "commit write_doc: a target git does not track yet is refused and stays as it was"
       ],
@@ -16369,6 +16369,126 @@
       "kills": [
         "a run that collected no tests counts as passing with a note, a failing or crashing run does not"
       ]
+    },
+    {
+      "id": "SRC1-list-tracked-only",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    const files = try shadow.workingFiles(gpa, io, place.root);\n",
+      "to": "    const files = try shadow.trackedFiles(gpa, io, place.root);\n",
+      "kills": [
+        "list includes untracked files that are not ignored and leaves ignored ones out"
+      ],
+      "note": "the list must show the untracked files a scaffold created"
+    },
+    {
+      "id": "SRC2-pip-flags-forbidden",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (!isPip(tool, tokens) and hasArg(command, &forbidden_args)) return null;\n",
+      "to": "    if (hasArg(command, &forbidden_args)) return null;\n",
+      "kills": [
+        "project toolchain commands are classified into their family"
+      ],
+      "note": "pip -w names a wheel directory, not a rewrite flag"
+    },
+    {
+      "id": "SRC3-rewrite-flags-allowed",
+      "file": "src/platform/toolchain.zig",
+      "from": "    if (!isPip(tool, tokens) and hasArg(command, &forbidden_args)) return null;\n",
+      "to": "    if (!isPip(tool, tokens) and false) return null;\n",
+      "kills": [
+        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands"
+      ],
+      "note": "outside pip the rewrite flags stay refused"
+    },
+    {
+      "id": "SRC4-toolchain-path-escape",
+      "file": "src/platform/run_command.zig",
+      "from": "pub fn isToolchain(command: []const u8) bool {\n    if (hasShellMetacharacter(command) or command.len > max_entry_bytes or argumentsEscape(command)) return false;\n",
+      "to": "pub fn isToolchain(command: []const u8) bool {\n    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n",
+      "kills": [
+        "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
+      ],
+      "note": "an argument naming a path outside the root would let the repo run write there"
+    },
+    {
+      "id": "SRC5-dotdot-escape",
+      "file": "src/platform/run_command.zig",
+      "from": "            if (depth == 0) return true;\n",
+      "to": "            if (false) return true;\n",
+      "kills": [
+        "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
+      ],
+      "note": "a .. that climbs above the root escapes it"
+    },
+    {
+      "id": "SRC6-project-command-escape",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (argumentsEscape(command)) return false;\n",
+      "to": "",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "a package script given an outside path writes outside the sandbox copy"
+    },
+    {
+      "id": "SRC7-undefined-script",
+      "file": "src/platform/run_command.zig",
+      "from": "    return scripts.object.get(script) != null;\n",
+      "to": "    return true;\n",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "only a script package.json defines may run"
+    },
+    {
+      "id": "SRC8-scripts-without-venv",
+      "file": "src/platform/run_command.zig",
+      "from": "    if (std.ascii.eqlIgnoreCase(dir_name, \"Scripts\") or std.ascii.eqlIgnoreCase(dir_name, \"bin\")) return inVenv(io, a, real);\n",
+      "to": "    if (std.ascii.eqlIgnoreCase(dir_name, \"Scripts\") or std.ascii.eqlIgnoreCase(dir_name, \"bin\")) return true;\n",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "a Scripts directory is a tool directory only inside a venv"
+    },
+    {
+      "id": "SRC9-tool-outside-root",
+      "file": "src/platform/run_command.zig",
+      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return null;\n",
+      "to": "        if (false) return null;\n",
+      "kills": [
+        "package scripts and project tools inside the root run as project commands, other commands do not"
+      ],
+      "note": "a tool resolved outside the root is not a project tool"
+    },
+    {
+      "id": "SRC10-new-file-stale-stage",
+      "file": "src/platform/git_commit.zig",
+      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "to": "",
+      "kills": [
+        "emetgate_commit: a new file staged with other content than its run receipt is refused, the staged copy kept"
+      ],
+      "note": "the commit would replace what the user staged"
+    },
+    {
+      "id": "SRC11-unborn-log-error",
+      "file": "src/protocol/git_tools.zig",
+      "from": "        if (std.mem.eql(u8, sub, \"status\") or std.mem.eql(u8, sub, \"diff\") or opts.cursor != null or opts.rev != null or !try unbornHead(gpa, io, git, place.root)) {\n",
+      "to": "        if (true) {\n",
+      "kills": [
+        "git log on a repository with no commits answers no commits yet, show refuses with NoCommitYet"
+      ],
+      "note": "an empty repository answers no commits yet, not a failed git command"
+    },
+    {
+      "id": "SRC12-run-check-verified",
+      "file": "src/verify/checker.zig",
+      "from": "                    outcome.raise(.unverified, run_not_rerun);\n",
+      "to": "",
+      "kills": [
+        "emetgate_commit: files a run created or changed commit through the run receipt"
+      ],
+      "note": "a command's writes are recorded, never reproduced, so they never verify"
     }
   ]
 }

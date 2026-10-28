@@ -6,6 +6,8 @@ const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const test_command = @import("test_command.zig");
 const toolchain = @import("toolchain.zig");
+const receipts = @import("receipts.zig");
+const receipt = @import("../verify/receipt.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -175,7 +177,7 @@ pub fn runInShadow(gpa: Allocator, io: std.Io, options: Options) !sandbox.Report
 pub const toolchain_limits: sandbox.Limits = .{ .timeout_ms = 600_000, .max_output_bytes = 4 * 1024 * 1024 };
 
 pub fn isToolchain(command: []const u8) bool {
-    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;
+    if (hasShellMetacharacter(command) or command.len > max_entry_bytes or argumentsEscape(command)) return false;
     return toolchain.classify(command) != null;
 }
 
@@ -184,7 +186,7 @@ const path_separators = "\\/";
 const project_interpreters = [_][]const u8{ "python", "python3", "pytest", "mypy", "ruff", "pip", "pip3" };
 
 pub fn isToolchainIn(io: std.Io, root_abs: []const u8, command: []const u8) bool {
-    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;
+    if (hasShellMetacharacter(command) or command.len > max_entry_bytes or argumentsEscape(command)) return false;
     var tokens = std.mem.tokenizeAny(u8, command, separators);
     const first = tokens.next() orelse return false;
     if (std.mem.indexOfAny(u8, first, path_separators) == null) return toolchain.classify(command) != null;
@@ -207,13 +209,109 @@ fn projectInterpreter(io: std.Io, root_abs: []const u8, token: []const u8) bool 
     var storage: [4 * std.fs.max_path_bytes]u8 = undefined;
     var fixed = std.heap.FixedBufferAllocator.init(&storage);
     const a = fixed.allocator();
-    const real_root = std.Io.Dir.cwd().realPathFileAlloc(io, root_abs, a) catch return false;
-    for ([_][]const u8{ "", ".exe" }) |suffix| {
-        const joined = std.fmt.allocPrint(a, "{s}\\{s}{s}", .{ root_abs, token, suffix }) catch return false;
+    const real = realInRoot(io, a, root_abs, token, &.{ "", ".exe" }) orelse return false;
+    return inVenv(io, a, real);
+}
+
+fn realInRoot(io: std.Io, a: Allocator, root_abs: []const u8, token: []const u8, suffixes: []const []const u8) ?[]const u8 {
+    const real_root = std.Io.Dir.cwd().realPathFileAlloc(io, root_abs, a) catch return null;
+    for (suffixes) |suffix| {
+        const joined = std.fmt.allocPrint(a, "{s}\\{s}{s}", .{ root_abs, token, suffix }) catch return null;
         std.mem.replaceScalar(u8, joined, '/', '\\');
         const real = std.Io.Dir.cwd().realPathFileAlloc(io, joined, a) catch continue;
-        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\') return false;
-        return inVenv(io, a, real);
+        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\') return null;
+        return real;
+    }
+    return null;
+}
+
+const script_runners = [_][]const u8{ "npm", "pnpm", "yarn" };
+const tool_suffixes = [_][]const u8{ "", ".exe", ".cmd" };
+
+pub fn isProjectCommand(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8) bool {
+    validateEntry(command) catch return false;
+    if (argumentsEscape(command)) return false;
+    var tokens = std.mem.tokenizeAny(u8, command, separators);
+    const first = tokens.next() orelse return false;
+    if (std.mem.indexOfAny(u8, first, path_separators) != null) return projectTool(io, root_abs, first);
+    var listed = false;
+    for (script_runners) |name| {
+        if (std.ascii.eqlIgnoreCase(name, toolName(first))) listed = true;
+    }
+    if (!listed) return false;
+    const verb = tokens.next() orelse return false;
+    if (!std.mem.eql(u8, verb, "run") and !std.mem.eql(u8, verb, "run-script")) return false;
+    const script = tokens.next() orelse return false;
+    return packageScript(gpa, io, root_abs, script) catch false;
+}
+
+fn projectTool(io: std.Io, root_abs: []const u8, token: []const u8) bool {
+    var storage: [4 * std.fs.max_path_bytes]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&storage);
+    const a = fixed.allocator();
+    const real = realInRoot(io, a, root_abs, token, &tool_suffixes) orelse return false;
+    const dir = std.fs.path.dirnameWindows(real) orelse return false;
+    const parent = std.fs.path.dirnameWindows(dir) orelse return false;
+    const dir_name = std.fs.path.basenameWindows(dir);
+    if (std.ascii.eqlIgnoreCase(dir_name, ".bin")) return std.ascii.eqlIgnoreCase(std.fs.path.basenameWindows(parent), "node_modules");
+    if (std.ascii.eqlIgnoreCase(dir_name, "Scripts") or std.ascii.eqlIgnoreCase(dir_name, "bin")) return inVenv(io, a, real);
+    return false;
+}
+
+fn packageScript(gpa: Allocator, io: std.Io, root_abs: []const u8, script: []const u8) !bool {
+    const path = try std.fmt.allocPrint(gpa, "{s}\\package.json", .{root_abs});
+    defer gpa.free(path);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1024 * 1024));
+    defer gpa.free(bytes);
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, bytes, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const scripts = parsed.value.object.get("scripts") orelse return false;
+    if (scripts != .object) return false;
+    return scripts.object.get(script) != null;
+}
+
+pub fn argumentsEscape(command: []const u8) bool {
+    var tokens = std.mem.tokenizeAny(u8, command, separators);
+    _ = tokens.next() orelse return false;
+    while (tokens.next()) |token| {
+        if (argumentEscapes(token)) return true;
+    }
+    return false;
+}
+
+fn argumentEscapes(token: []const u8) bool {
+    if (token.len > 1 and token[0] == '/') {
+        const colon = std.mem.indexOfScalar(u8, token, ':') orelse return true;
+        if (!isSwitchName(token[1..colon])) return true;
+        return argumentEscapes(token[colon + 1 ..]);
+    }
+    if (pathEscapes(token)) return true;
+    if (std.mem.indexOfScalar(u8, token, '=')) |eq| {
+        if (argumentEscapes(token[eq + 1 ..])) return true;
+    }
+    return token.len > 2 and token[0] == '-' and token[1] != '-' and pathEscapes(token[2..]);
+}
+
+fn isSwitchName(name: []const u8) bool {
+    if (name.len == 0 or !std.ascii.isAlphabetic(name[0])) return false;
+    for (name) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '-') return false;
+    }
+    return true;
+}
+
+fn pathEscapes(value: []const u8) bool {
+    if (value.len == 0) return false;
+    if (value[0] == '\\' or value[0] == '/' or value[0] == '~') return true;
+    if (value.len >= 2 and value[1] == ':') return true;
+    var depth: usize = 0;
+    var parts = std.mem.tokenizeAny(u8, value, path_separators);
+    while (parts.next()) |part| {
+        if (std.mem.eql(u8, part, "..")) {
+            if (depth == 0) return true;
+            depth -= 1;
+        } else if (!std.mem.eql(u8, part, ".")) depth += 1;
     }
     return false;
 }
@@ -234,14 +332,100 @@ pub fn localCommand(gpa: Allocator, command: []const u8) ![]u8 {
     return owned;
 }
 
-pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits) !sandbox.Report {
+pub const RepoRun = struct {
+    report: sandbox.Report,
+    changed: usize = 0,
+    receipt: ?[64]u8 = null,
+    receipt_error: ?anyerror = null,
+};
+
+pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits, version: []const u8) !RepoRun {
     if (!isToolchainIn(io, root_abs, command)) return error.RunCommandRefused;
     const local = try localCommand(gpa, command);
     defer gpa.free(local);
     const lock = try shadow.Lock.acquire(io, root_abs);
     defer lock.release();
-    return runner.runToolchain(gpa, io, root_abs, local, limits);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const before = try snapshot(arena, gpa, io, root_abs);
+    var ran: RepoRun = .{ .report = try runner.runToolchain(gpa, io, root_abs, local, limits) };
+    const clean = switch (ran.report.outcome) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!clean) return ran;
+    const changes = changedSince(arena, gpa, io, root_abs, &before) catch |err| {
+        ran.receipt_error = err;
+        return ran;
+    };
+    ran.changed = changes.len;
+    if (changes.len == 0) return ran;
+    const written = receipts.write(gpa, io, root_abs, .{
+        .operation = .run,
+        .class = .spending,
+        .evidence = "run",
+        .files = changes,
+        .test_command = command,
+        .check_kind = .run,
+        .test_ms = ran.report.duration_ns / std.time.ns_per_ms,
+        .limits = limits,
+        .integrity = "user",
+        .version = version,
+    }) catch |err| {
+        ran.receipt_error = err;
+        return ran;
+    };
+    gpa.free(written.batch);
+    ran.receipt = written.id;
+    return ran;
 }
+
+const Seen = std.StringArrayHashMapUnmanaged(receipt.Hash);
+
+fn snapshot(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8) !Seen {
+    var seen: Seen = .empty;
+    for (try shadow.workingFiles(arena, io, root_abs)) |rel| {
+        const hash = hashAt(gpa, io, root_abs, rel) orelse continue;
+        try seen.put(arena, rel, hash);
+    }
+    return seen;
+}
+
+fn changedSince(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8, before: *const Seen) ![]receipts.FileChange {
+    var changes: std.ArrayList(receipts.FileChange) = .empty;
+    var present: std.StringHashMapUnmanaged(void) = .empty;
+    for (try shadow.workingFiles(arena, io, root_abs)) |rel| {
+        try present.put(arena, rel, {});
+        const now = hashAt(gpa, io, root_abs, rel) orelse continue;
+        const was = before.get(rel);
+        if (was) |hash| if (std.mem.eql(u8, &hash, &now)) continue;
+        try changes.append(arena, .{ .rel = rel, .before = was, .after_abs = try absOf(arena, root_abs, rel) });
+    }
+    for (before.keys(), before.values()) |rel, hash| {
+        if (present.contains(rel)) continue;
+        if (std.Io.Dir.cwd().access(io, try absOf(arena, root_abs, rel), .{})) |_| continue else |_| {}
+        try changes.append(arena, .{ .rel = rel, .before = hash, .after_abs = null });
+    }
+    return changes.items;
+}
+
+fn absOf(arena: Allocator, root_abs: []const u8, rel: []const u8) ![]u8 {
+    const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root_abs, rel });
+    std.mem.replaceScalar(u8, abs, '/', '\\');
+    return abs;
+}
+
+fn hashAt(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8) ?receipt.Hash {
+    var buffer: [2 * std.fs.max_path_bytes]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+    const abs = absOf(fixed.allocator(), root_abs, rel) catch return null;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_hashed_bytes)) catch return null;
+    defer gpa.free(bytes);
+    return receipt.blake3(bytes);
+}
+
+const max_hashed_bytes = 256 * 1024 * 1024;
 
 pub const Tail = struct {
     text: []const u8,
@@ -336,12 +520,40 @@ test "output cut by bytes never starts inside a multi-byte character" {
 }
 
 test "toolchain commands are accepted for the repo run while shells, git and metacharacters are not" {
-    for ([_][]const u8{ "npm install", "npx tsc --noEmit", "dotnet restore", "python -m pip install -r requirements.txt", "pytest -q" }) |command| {
+    for ([_][]const u8{ "npm install", "npx tsc --noEmit", "dotnet restore", "python -m pip install -r requirements.txt", "pytest -q", "pip wheel . --no-deps -w dist", "dotnet build /p:Configuration=Release", "go test ./...", "pip install -e src\\..\\lib", "pip install --index-url=https://pypi.org/simple x" }) |command| {
         errdefer std.debug.print("refused: {s}\n", .{command});
         try testing.expect(isToolchain(command));
     }
-    for ([_][]const u8{ "npm install & del x", "npm install | more", "git push", "cmd /c npm install", "npx tsc %x%", "a" ** (max_entry_bytes + 1) }) |command| {
+    for ([_][]const u8{ "npm install & del x", "npm install | more", "git push", "cmd /c npm install", "npx tsc %x%", "a" ** (max_entry_bytes + 1), "pip wheel . -w C:\\out", "pip download -d ..\\out x", "pip install --target=\\\\host\\share x", "dotnet build -o../out", "dotnet build /p:OutDir=D:\\x", "dotnet build /out", "npm init -y ~", "pip install src\\..\\..\\x" }) |command| {
         errdefer std.debug.print("accepted: {s}\n", .{command});
         try testing.expect(!isToolchain(command));
+    }
+}
+
+fn makeFile(dir: std.Io.Dir, sub_path: []const u8, data: []const u8) !void {
+    if (std.fs.path.dirname(sub_path)) |parent| try dir.createDirPath(testing.io, parent);
+    try dir.writeFile(testing.io, .{ .sub_path = sub_path, .data = data });
+}
+
+test "package scripts and project tools inside the root run as project commands, other commands do not" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try makeFile(tmp.dir, "repo/package.json", "{\"scripts\":{\"build\":\"vite build\",\"lint\":\"eslint .\"}}");
+    try makeFile(tmp.dir, "repo/.venv/pyvenv.cfg", "home = x\n");
+    try makeFile(tmp.dir, "repo/.venv/Scripts/wordstat.exe", "x");
+    try makeFile(tmp.dir, "repo/node_modules/.bin/vite.cmd", "x");
+    try makeFile(tmp.dir, "repo/tools/run.exe", "x");
+    try makeFile(tmp.dir, "repo/lib/Scripts/x.exe", "x");
+    try makeFile(tmp.dir, "outside/.venv/pyvenv.cfg", "home = x\n");
+    try makeFile(tmp.dir, "outside/.venv/Scripts/evil.exe", "x");
+    const root = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
+    defer testing.allocator.free(root);
+    for ([_][]const u8{ "npm run build", "pnpm run lint -- --max-warnings 0", "yarn run-script build", ".venv\\Scripts\\wordstat --top 3 README.md", ".venv/Scripts/wordstat", "node_modules\\.bin\\vite build" }) |command| {
+        errdefer std.debug.print("refused: {s}\n", .{command});
+        try testing.expect(isProjectCommand(testing.allocator, testing.io, root, command));
+    }
+    for ([_][]const u8{ "npm run deploy", "npm run", "npm exec build", "bun run build", "npm run build & del x", "npm run build -- --outDir C:\\x", "npm run build -- --outDir=..\\x", "tools\\run.exe", "lib\\Scripts\\x", "..\\outside\\.venv\\Scripts\\evil", ".venv\\Scripts\\pip install x", "node_modules\\.bin\\missing" }) |command| {
+        errdefer std.debug.print("accepted: {s}\n", .{command});
+        try testing.expect(!isProjectCommand(testing.allocator, testing.io, root, command));
     }
 }

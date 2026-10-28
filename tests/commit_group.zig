@@ -216,3 +216,117 @@ test "emetgate_commit: the MCP tool refuses drift and names the uncertified file
     try testing.expectEqual(@as(usize, 1), paths.items.len);
     try testing.expectEqualStrings("src/math.ts", paths.items[0].string);
 }
+
+const run_command = @import("emetgate").run_command;
+const git_fixture = @import("git_fixture.zig");
+
+fn runReceipt(root: []const u8, files: []const receipts.FileChange) !void {
+    const written = try receipts.write(testing.allocator, testing.io, root, .{
+        .operation = .run,
+        .class = .spending,
+        .evidence = "run",
+        .files = files,
+        .test_command = "npm install",
+        .check_kind = .run,
+        .integrity = "user",
+        .version = "test",
+    });
+    testing.allocator.free(written.batch);
+}
+
+test "emetgate_commit: files a run created or changed commit through the run receipt" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    const base = try case.arena().dupe(u8, try case.head());
+    const old = try case.repo.read("src/util.ts");
+    defer testing.allocator.free(old);
+    try case.repo.write("src/util.ts", "export const lock = 1;\n");
+    try case.repo.write("package-lock.json", "{}\n");
+    try runReceipt(case.repo.root_abs, &.{
+        .{ .rel = "src/util.ts", .before = @import("emetgate").receipt.blake3(old), .after_abs = try case.repo.abs(case.arena(), "src/util.ts") },
+        .{ .rel = "package-lock.json", .before = null, .after_abs = try case.repo.abs(case.arena(), "package-lock.json") },
+    });
+
+    var result = try commit_group.commit(testing.allocator, testing.io, case.repo.root_abs, .{ .message = "lock", .runtime = case.runtime });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+    try testing.expectEqual(@as(usize, 2), result.committed.files);
+
+    const verdict = try case.verify(base);
+    try testing.expectEqual(@as(usize, 1), verdict.count);
+    try testing.expect(verdict.links[0].has_receipt);
+    try testing.expectEqual(checker.Verdict.unverified, verdict.links[0].verdict);
+}
+
+test "emetgate_commit: a run receipt makes the first commit of an unborn branch" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.gitignore", .data = ".emetgate/\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/package.json", .data = "{\"name\":\"x\"}\n" });
+    const root = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
+    defer testing.allocator.free(root);
+    try git_fixture.initRepo(root);
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try runReceipt(root, &.{
+        .{ .rel = ".gitignore", .before = null, .after_abs = try std.fmt.allocPrint(arena, "{s}\\.gitignore", .{root}) },
+        .{ .rel = "package.json", .before = null, .after_abs = try std.fmt.allocPrint(arena, "{s}\\package.json", .{root}) },
+    });
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var result = try commit_group.commit(testing.allocator, testing.io, root, .{ .message = "init", .runtime = runtime });
+    defer result.deinit(testing.allocator);
+    errdefer std.debug.print("{any}\n", .{result});
+    try testing.expect(result == .committed);
+    try testing.expectEqual(@as(usize, 2), result.committed.files);
+    const tree = try receipts.git(arena, testing.io, root, &.{ "ls-tree", "-r", "--name-only", "HEAD" });
+    try testing.expect(std.mem.indexOf(u8, tree.?, "package.json") != null);
+}
+
+test "emetgate_run: a toolchain command that writes files leaves a run receipt for them" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    var ran = run_command.runInRepo(testing.allocator, testing.io, case.repo.root_abs, "npm init -y", run_command.toolchain_limits, "test") catch return error.SkipZigTest;
+    defer ran.report.deinit(testing.allocator);
+    switch (ran.report.outcome) {
+        .exited => |code| if (code != 0) return error.SkipZigTest,
+        else => return error.SkipZigTest,
+    }
+    try testing.expect(ran.receipt != null);
+    try testing.expectEqual(@as(usize, 1), ran.changed);
+
+    var result = try commit_group.commit(testing.allocator, testing.io, case.repo.root_abs, .{ .message = "package", .runtime = case.runtime });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .committed);
+    try testing.expectEqual(@as(usize, 1), result.committed.files);
+}
+
+test "emetgate_commit: a new file staged with other content than its run receipt is refused, the staged copy kept" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.repo.write("package-lock.json", "{\"staged\":true}\n");
+    try @import("runner_support.zig").Repo.git(case.repo.root_abs, &.{ "add", "package-lock.json" });
+    try case.repo.write("package-lock.json", "{}\n");
+    try runReceipt(case.repo.root_abs, &.{
+        .{ .rel = "package-lock.json", .before = null, .after_abs = try case.repo.abs(case.arena(), "package-lock.json") },
+    });
+
+    const before = try case.arena().dupe(u8, try case.head());
+    var result = commit_group.commit(testing.allocator, testing.io, case.repo.root_abs, .{ .message = "lock", .runtime = case.runtime }) catch |err| {
+        try testing.expectEqual(error.TargetHasUncommittedChanges, err);
+        try testing.expectEqualStrings(before, try case.head());
+        return;
+    };
+    defer result.deinit(testing.allocator);
+    return error.TestUnexpectedResult;
+}
