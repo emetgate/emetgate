@@ -16489,6 +16489,61 @@
         "emetgate_commit: files a run created or changed commit through the run receipt"
       ],
       "note": "a command's writes are recorded, never reproduced, so they never verify"
+    },
+    {
+      "id": "BR1-stale-kept-file-accepted",
+      "file": "src/protocol/batch_stage.zig",
+      "from": "            if (sameHash(now_hash, s.hash)) continue;",
+      "to": "            if (sameHash(now_hash, now_hash)) continue;",
+      "kills": [
+        "a kept batch whose untouched file changed on disk is refused as stale and dropped",
+        "batch retry: a kept batch whose file changed on disk is refused as stale and nothing is written"
+      ]
+    },
+    {
+      "id": "BR2-kept-batch-never-expires",
+      "file": "src/protocol/batch_stage.zig",
+      "from": "    return now - entry.staged_at > ttl_ns;",
+      "to": "    return now - entry.staged_at < 0;",
+      "kills": [
+        "a kept batch expires, belongs to its root, and the oldest is evicted past the limit"
+      ]
+    },
+    {
+      "id": "BR3-kept-batch-any-root",
+      "file": "src/protocol/batch_stage.zig",
+      "from": "            if (expired(entry.*, now) or !std.mem.eql(u8, entry.root, root orelse \"\")) return null;",
+      "to": "            _ = root;\n            if (expired(entry.*, now)) return null;",
+      "kills": [
+        "a kept batch expires, belongs to its root, and the oldest is evicted past the limit"
+      ]
+    },
+    {
+      "id": "BR4-committed-batch-stays-kept",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (retry) |id| store.remove(id);",
+      "to": "        _ = &retry;",
+      "kills": [
+        "batch retry: a rejected batch is kept under a retry id, and a retry that sends only the changed item commits the whole merged batch"
+      ]
+    },
+    {
+      "id": "BR5-batch-kept-after-commit-started",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!is_error or event.trace.commit_attempted) {",
+      "to": "    if (!is_error) {",
+      "kills": [
+        "batch retry: a batch whose commit started and failed is not kept for a retry"
+      ]
+    },
+    {
+      "id": "VF1-verified-without-tests",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (!n.tested or n.baseline.skipped) return;",
+      "to": "    if (n.baseline.skipped) return;",
+      "kills": [
+        "a committed reply says the tests ran on a mirror only when they ran and were not skipped"
+      ]
     }
   ]
 }

@@ -172,6 +172,7 @@ pub const doc_fold = src.doc_fold;
 pub const output_digest = src.output_digest;
 pub const diff_digest = src.diff_digest;
 pub const baseline = src.baseline;
+pub const batch_stage = src.batch_stage;
 pub const batch_merge = src.batch_merge;
 
 comptime {
@@ -222,6 +223,7 @@ test {
     _ = @import("tests/run_tool.zig");
     _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
+    _ = @import("tests/batch_retry.zig");
     _ = @import("tests/batch_crash.zig");
     _ = @import("tests/batch_crash_tool.zig");
     _ = @import("tests/batch_create_crash.zig");

@@ -562,6 +562,7 @@ pub const ShadowNote = struct {
     tree_only: bool = false,
     tests: test_outcome.Summary = .{},
     baseline: baseline.Note = .{},
+    tested: bool = false,
 };
 
 pub fn treeNote(trace: runner.Trace) ?ShadowNote {
@@ -597,11 +598,25 @@ pub fn writeGateTree(js: *std.json.Stringify, used: ?shadow.TreeUse) !void {
 }
 
 fn writeNote(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void {
+    try writeNoteFields(js, note, full);
+    try writeVerified(js, note);
+}
+
+fn writeNoteFields(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void {
     if (full) return writeShadowNote(js, note);
     const n = note orelse return;
     try writeTests(js, &n);
     const tree = n.tree orelse return;
     if (tree.left_behind != null) try writeGateTree(js, tree);
+}
+
+pub const verified_text = "tests ran on a mirror of this exact tree; no need to rerun them";
+
+fn writeVerified(js: *std.json.Stringify, note: ?ShadowNote) !void {
+    const n = note orelse return;
+    if (!n.tested or n.baseline.skipped) return;
+    try js.objectField("verified");
+    try js.write(verified_text);
 }
 
 fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
@@ -638,6 +653,7 @@ pub fn shadowNote(root: []const u8, trace: runner.Trace) ShadowNote {
         .tree = trace.tree,
         .tests = trace.tests,
         .baseline = trace.baseline,
+        .tested = trace.test_ms != null,
     };
 }
 
@@ -1271,6 +1287,8 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "InvalidHash", "hash is 32 hex characters from emetgate_symbols or emetgate_read_file, or \"absent\" to create with emetgate_try or emetgate_try_batch" },
     .{ "MissingHash", "deleting a symbol needs hash: its current hash from emetgate_symbols" },
     .{ "MissingFileHash", "deleting a file needs hash: its file_hash from emetgate_read_file or emetgate_skeleton" },
+    .{ "StagedBatchUnknown", "no kept batch has this retry id: it expired after 15 minutes, was committed or was replaced; send the whole batch without retry" },
+    .{ "StagedBatchStale", "a file of the kept batch changed on disk since it was kept; send the whole batch again without retry" },
     .{ "SymbolNotFound", "call emetgate_symbols with this file for the exact symbol refs" },
     .{ "NoSymbolsWithin", "no symbol ref starts with within; emetgate_symbols without within lists the names" },
     .{ "AmbiguousSymbol", "qualify the ref, e.g. Class.method; emetgate_symbols lists them" },
@@ -1996,5 +2014,33 @@ test "a result says which tree the gate used: kept with its private copies, or a
         var expected_buf: [96]u8 = undefined;
         const expected = try std.fmt.bufPrint(&expected_buf, "\"gate_tree\":{{\"kind\":\"full_copy\",\"reason\":\"{t}\"}}", .{reason});
         try testing.expect(std.mem.indexOf(u8, buffer.written(), expected) != null);
+    }
+}
+
+test "a committed reply says the tests ran on a mirror only when they ran and were not skipped" {
+    const base: ShadowNote = .{ .root = "r", .dotted = false, .linked_files = 0, .copied_files = 0, .skipped_links = 0 };
+    const cases = [_]struct { note: ?ShadowNote, want: bool }{
+        .{ .note = null, .want = false },
+        .{ .note = base, .want = false },
+        .{ .note = blk: {
+            var n = base;
+            n.tested = true;
+            break :blk n;
+        }, .want = true },
+        .{ .note = blk: {
+            var n = base;
+            n.tested = true;
+            n.baseline.skipped = true;
+            break :blk n;
+        }, .want = false },
+    };
+    for (cases) |case| {
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        var js: std.json.Stringify = .{ .writer = &out.writer };
+        try js.beginObject();
+        try writeNote(&js, case.note, false);
+        try js.endObject();
+        try std.testing.expectEqual(case.want, std.mem.indexOf(u8, out.written(), verified_text) != null);
     }
 }
