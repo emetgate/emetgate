@@ -13,10 +13,24 @@ const max_manifest_bytes = 1024 * 1024;
 const npm_placeholder = "no test specified";
 
 threadlocal var unverified: bool = false;
+threadlocal var late: ?[]const u8 = null;
 
 pub fn takeUnverified() bool {
     defer unverified = false;
     return unverified;
+}
+
+pub fn takeLate() ?[]const u8 {
+    defer late = null;
+    return late;
+}
+
+pub fn redetect(gpa: Allocator, io: std.Io, command: []const u8, tree_abs: []const u8) ![]const u8 {
+    if (!unverified or !std.mem.eql(u8, command, unverified_command)) return command;
+    const found = (try detectIn(gpa, io, tree_abs)) orelse return command;
+    unverified = false;
+    late = found;
+    return found;
 }
 
 pub fn detects(given: []const u8) bool {

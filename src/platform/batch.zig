@@ -7,6 +7,7 @@ const baseline = @import("baseline.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
+const test_command_mod = @import("test_command.zig");
 const rules = @import("rules.zig");
 const create = @import("create.zig");
 const batch_plan = @import("batch_plan.zig");
@@ -314,5 +315,6 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source() });
     }
     for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });
-    return baseline.run(gpa, io, &workspace, changes.items, .{ .root = root, .gate_dir = runner.gateDir(location, session), .typecheck_command = options.typecheck_command, .test_command = options.test_command, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null });
+    const tests = try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));
+    return baseline.run(gpa, io, &workspace, changes.items, .{ .root = root, .gate_dir = runner.gateDir(location, session), .typecheck_command = options.typecheck_command, .test_command = tests, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null });
 }

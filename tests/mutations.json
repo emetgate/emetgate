@@ -16980,6 +16980,25 @@
       "kills": [
         "sweep leaves a stale workspace whose lease a live process holds, and removes it with the lease once let go"
       ]
+    },
+    {
+      "id": "REDET1-batch-detects-on-disk-only",
+      "file": "src/platform/batch.zig",
+      "from": "    const tests = try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));\n",
+      "to": "    const tests = options.test_command;\n",
+      "kills": [
+        "test detection: a batch that creates the project file runs the test command it names",
+        "test detection: a batch that creates the project file with a failing test is rejected and writes nothing"
+      ]
+    },
+    {
+      "id": "REDET2-late-command-not-reported",
+      "file": "src/protocol/handlers.zig",
+      "from": "    const gated = test_command_mod.takeLate() orelse resolved;\n",
+      "to": "    const gated = resolved;\n",
+      "kills": [
+        "test detection: a batch that creates the project file with a failing test is rejected and writes nothing"
+      ]
     }
   ]
 }
