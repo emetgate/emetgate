@@ -2,6 +2,7 @@ const std = @import("std");
 const commit_intent = @import("../platform/commit_intent.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const telemetry = @import("telemetry.zig");
+const json_input = @import("json_input.zig");
 const handlers = @import("handlers.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
@@ -373,7 +374,7 @@ pub fn handleMessage(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []cons
 }
 
 pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line: []const u8, out: *Writer, observer: ?*telemetry.Observer, policy: Policy) !bool {
-    var parsed = std.json.parseFromSlice(Value, gpa, line, .{}) catch {
+    var parsed = json_input.parse(Value, gpa, line, .{}) catch {
         try writeRpcError(out, .null, -32700, "Parse error");
         return true;
     };

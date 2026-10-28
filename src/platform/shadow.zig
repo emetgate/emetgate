@@ -162,6 +162,7 @@ pub const TreeUse = struct {
     private_copies: usize = 0,
     source: TreeSource = .working,
     left_behind: ?anyerror = null,
+    stale_left: ?anyerror = null,
 };
 
 pub const Committed = struct {
@@ -245,10 +246,8 @@ pub const Shadow = struct {
         try ensureInsideWorkspace(options.base_abs, options.shadow_abs);
         try Dir.cwd().createDirPath(io, options.shadow_abs);
         try ensureNoLinks(options.base_abs, options.shadow_abs);
-        const held = (try own_dir.hold(io, options.shadow_abs, .create)) orelse return error.WorkspaceOpenFailed;
+        const held = try labelOrReplace(own_dir.Held, KeptShadow{ .io = io, .options = options });
         errdefer held.close();
-        try writeRootMarker(io, options.shadow_abs, options.root_abs);
-        try labelWithoutPropagation(options.shadow_abs);
 
         const root = (dir_scan.openRoot(options.root_abs) catch |err| return rootRefused(options.blocked, err)) orelse return error.FileNotFound;
         defer dir_scan.close(root);
@@ -360,6 +359,7 @@ pub const Shadow = struct {
         var root = try Dir.openDirAbsolute(io, options.root_abs, .{});
         defer root.close(io);
         try Dir.cwd().createDirPath(io, options.shadow_abs);
+        errdefer remove(io, options.base_abs, options.shadow_abs) catch {};
         try ensureNoLinks(options.base_abs, options.shadow_abs);
         try writeRootMarker(io, options.shadow_abs, options.root_abs);
         try grantLowIntegrityWrite(options.shadow_abs);
@@ -451,6 +451,53 @@ pub const Shadow = struct {
     }
 };
 
+fn labelOrReplace(comptime T: type, owned: anytype) !T {
+    if (try owned.attempt()) |done| return done;
+    try owned.replace();
+    return (try owned.attempt()) orelse error.LabelDenied;
+}
+
+fn deniedAsNull(label: LabelError!void) LabelError!?void {
+    label catch |err| return if (err == error.LabelDenied) null else err;
+}
+
+const KeptShadow = struct {
+    io: std.Io,
+    options: Shadow.Options,
+
+    fn attempt(self: KeptShadow) !?own_dir.Held {
+        const held = (try own_dir.hold(self.io, self.options.shadow_abs, .create)) orelse return error.WorkspaceOpenFailed;
+        errdefer held.close();
+        try writeRootMarker(self.io, self.options.shadow_abs, self.options.root_abs);
+        if (try deniedAsNull(labelWithoutPropagation(self.options.shadow_abs)) == null) {
+            held.close();
+            return null;
+        }
+        return held;
+    }
+
+    fn replace(self: KeptShadow) !void {
+        try remove(self.io, self.options.base_abs, self.options.shadow_abs);
+        try Dir.cwd().createDirPath(self.io, self.options.shadow_abs);
+        try ensureNoLinks(self.options.base_abs, self.options.shadow_abs);
+    }
+};
+
+const RebuiltDir = struct {
+    io: std.Io,
+    dir_abs: []const u8,
+    label: *const fn ([]const u8) LabelError!void,
+
+    fn attempt(self: RebuiltDir) !?void {
+        return deniedAsNull(self.label(self.dir_abs));
+    }
+
+    fn replace(self: RebuiltDir) !void {
+        try clearTemp(self.io, self.dir_abs);
+        try Dir.cwd().createDirPath(self.io, self.dir_abs);
+    }
+};
+
 fn mirrorLinks(io: std.Io, options: Shadow.Options, links: []const []const u8, stats: *link_tree.Stats) !void {
     var link_buf: [std.fs.max_path_bytes]u8 = undefined;
     var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -490,21 +537,16 @@ fn unlinkAll(base_abs: []const u8, shadow_abs: []const u8) !void {
 }
 
 pub fn freshTemp(io: std.Io, temp_abs: []const u8) !void {
-    try clearTemp(io, temp_abs);
-    try Dir.cwd().createDirPath(io, temp_abs);
-    try grantLowIntegrityWrite(temp_abs);
+    const temp: RebuiltDir = .{ .io = io, .dir_abs = temp_abs, .label = grantLowIntegrityWrite };
+    try temp.replace();
+    try labelOrReplace(void, temp);
 }
 
 pub fn ensureCache(io: std.Io, cache_abs: []const u8) !void {
     if (builtin.os.tag != .windows) return;
     if (try isReparsePoint(cache_abs)) try clearTemp(io, cache_abs);
-    Dir.cwd().access(io, cache_abs, .{}) catch |err| switch (err) {
-        error.FileNotFound => {
-            try Dir.cwd().createDirPath(io, cache_abs);
-            try grantLowIntegrityWrite(cache_abs);
-        },
-        else => |e| return e,
-    };
+    try Dir.cwd().createDirPath(io, cache_abs);
+    try labelOrReplace(void, RebuiltDir{ .io = io, .dir_abs = cache_abs, .label = labelWithoutPropagation });
 }
 
 pub fn clearTemp(io: std.Io, temp_abs: []const u8) !void {
@@ -522,20 +564,45 @@ pub fn clearTemp(io: std.Io, temp_abs: []const u8) !void {
 
 pub fn remove(io: std.Io, base_abs: []const u8, shadow_abs: []const u8) !void {
     try ensureInsideWorkspace(base_abs, shadow_abs);
+    const workspace = std.fs.path.dirname(shadow_abs) orelse return error.ShadowOutsideWorkspace;
+    if (try clearUnderHold(io, base_abs, shadow_abs, workspace)) try deleteEmptyDir(io, workspace);
+}
+
+fn clearUnderHold(io: std.Io, base_abs: []const u8, shadow_abs: []const u8, workspace_abs: []const u8) !bool {
     const held = try holdWorkspace(io, shadow_abs);
-    errdefer if (held) |h| h.close();
+    defer if (held) |h| h.close();
     try unlinkAll(base_abs, shadow_abs);
     try ensureNoLinks(base_abs, shadow_abs);
     try Dir.cwd().deleteTree(io, shadow_abs);
-    var cache_buf: [std.fs.max_path_bytes]u8 = undefined;
-    try clearTemp(io, try std.fmt.bufPrint(&cache_buf, "{s}-cache", .{shadow_abs}));
-    if (held) |h| h.close();
+    var sibling_buf: [std.fs.max_path_bytes]u8 = undefined;
+    for (shadow_siblings) |suffix| try clearTemp(io, try std.fmt.bufPrint(&sibling_buf, "{s}{s}", .{ shadow_abs, suffix }));
+    return dropMarkerIfAlone(io, workspace_abs);
+}
 
-    const workspace = std.fs.path.dirname(shadow_abs) orelse return;
-    var marker_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const marker = std.fmt.bufPrint(&marker_buf, "{s}\\{s}", .{ workspace, shadow_root.marker_name }) catch return;
-    Dir.cwd().deleteFile(io, marker) catch {};
-    Dir.cwd().deleteDir(io, workspace) catch {};
+const shadow_siblings = [_][]const u8{ "-cache", "-tmp" };
+
+fn dropMarkerIfAlone(io: std.Io, workspace_abs: []const u8) !bool {
+    var dir = Dir.openDirAbsolute(io, workspace_abs, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => |e| return e,
+    };
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (!std.ascii.eqlIgnoreCase(entry.name, shadow_root.marker_name)) return false;
+    }
+    dir.deleteFile(io, shadow_root.marker_name) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| return e,
+    };
+    return true;
+}
+
+fn deleteEmptyDir(io: std.Io, dir_abs: []const u8) !void {
+    Dir.cwd().deleteDir(io, dir_abs) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| return e,
+    };
 }
 
 pub const committed_dir = "committed";
@@ -550,6 +617,11 @@ pub fn removeWorkspace(io: std.Io, base_abs: []const u8, workspace_abs: []const 
     try ensureNoLinks(base_abs, committed);
     try Dir.cwd().deleteTree(io, committed);
     try remove(io, base_abs, try std.fmt.bufPrint(&shadow_buf, "{s}\\shadow", .{workspace_abs}));
+    Dir.cwd().access(io, workspace_abs, .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => |e| return e,
+    };
+    return error.WorkspaceNotEmpty;
 }
 
 fn holdWorkspace(io: std.Io, shadow_abs: []const u8) !?own_dir.Held {
@@ -619,19 +691,79 @@ pub fn ensureNoLinks(base_abs: []const u8, shadow_abs: []const u8) error{ Worksp
     }
 }
 
-pub fn grantLowIntegrityWrite(dir_abs: []const u8) error{ LabelFailed, NameTooLong, InvalidWtf8 }!void {
-    if (builtin.os.tag != .windows) return;
+pub const LabelError = error{ LabelFailed, LabelDenied, NameTooLong, InvalidWtf8 };
+
+pub const label_denied_fix = "emetgate cannot label {s} for the sandbox: this account may not change its owner or permissions (it is owned by another account, e.g. Administrators after an elevated run); delete that folder from the account that created it, or pass --shadow-root <a folder you own>";
+
+threadlocal var denied_buf: [std.fs.max_path_bytes]u8 = undefined;
+threadlocal var denied_len: usize = 0;
+
+pub fn takeLabelDeniedFix(buffer: []u8) ?[]const u8 {
+    if (denied_len == 0) return null;
+    defer denied_len = 0;
+    return std.fmt.bufPrint(buffer, label_denied_fix, .{denied_buf[0..denied_len]}) catch null;
+}
+
+fn noteLabelDenied(dir_abs: []const u8) LabelError {
+    denied_len = @min(dir_abs.len, denied_buf.len);
+    @memcpy(denied_buf[0..denied_len], dir_abs[0..denied_len]);
+    return error.LabelDenied;
+}
+
+fn openForLabel(dir_abs: []const u8) LabelError!std.os.windows.HANDLE {
     var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
-    const handle = win.CreateFileW(
-        try toExtendedWide(&path_w, dir_abs),
-        win.read_control | win.write_owner,
-        win.file_share_all,
-        null,
-        win.open_existing,
-        win.flag_backup_semantics | win.flag_open_reparse_point,
-        null,
-    );
-    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.LabelFailed;
+    const wide = try toExtendedWide(&path_w, dir_abs);
+    if (openSecurity(wide, win.read_control | win.write_owner)) |handle| return handle;
+    if (win.GetLastError() != win.error_access_denied) return error.LabelFailed;
+    grantOwnWriteOwner(wide) catch |err| return if (err == error.LabelDenied) noteLabelDenied(dir_abs) else err;
+    return openSecurity(wide, win.read_control | win.write_owner) orelse noteLabelDenied(dir_abs);
+}
+
+fn openSecurity(wide: [*:0]const u16, access: std.os.windows.DWORD) ?std.os.windows.HANDLE {
+    const handle = win.CreateFileW(wide, access, win.file_share_all, null, win.open_existing, win.flag_backup_semantics | win.flag_open_reparse_point, null);
+    return if (handle == std.os.windows.INVALID_HANDLE_VALUE) null else handle;
+}
+
+fn grantOwnWriteOwner(wide: [*:0]const u16) error{ LabelFailed, LabelDenied }!void {
+    const handle = openSecurity(wide, win.read_control | win.write_dac) orelse
+        return if (win.GetLastError() == win.error_access_denied) error.LabelDenied else error.LabelFailed;
+    defer std.os.windows.CloseHandle(handle);
+    var user_buf: [256]u8 align(@alignOf(usize)) = undefined;
+    const user = try currentUserSid(&user_buf);
+
+    var dacl: ?*anyopaque = null;
+    var descriptor: ?*anyopaque = null;
+    if (win.GetSecurityInfo(handle, win.se_file_object, win.dacl_security_information, null, null, &dacl, null, &descriptor) != 0) return error.LabelFailed;
+    defer _ = win.LocalFree(descriptor);
+
+    var access: win.ExplicitAccess = .{ .access_permissions = win.read_control | win.write_owner, .access_mode = win.grant_access, .inheritance = 0, .trustee = .{ .trustee_form = win.trustee_is_sid, .trustee_type = win.trustee_is_user, .name = user } };
+    var merged: ?*anyopaque = null;
+    if (win.SetEntriesInAclW(1, &access, dacl, &merged) != 0) return error.LabelFailed;
+    defer _ = win.LocalFree(merged);
+
+    var control: u16 = 0;
+    var revision: std.os.windows.DWORD = 0;
+    if (win.GetSecurityDescriptorControl(descriptor.?, &control, &revision) == .FALSE) return error.LabelFailed;
+    var absolute: win.SecurityDescriptor = undefined;
+    if (win.InitializeSecurityDescriptor(&absolute, win.security_descriptor_revision) == .FALSE) return error.LabelFailed;
+    if (win.SetSecurityDescriptorDacl(&absolute, .TRUE, merged, .FALSE) == .FALSE) return error.LabelFailed;
+    if (win.SetSecurityDescriptorControl(&absolute, win.dacl_inheritance_bits, control & win.dacl_inheritance_bits) == .FALSE) return error.LabelFailed;
+    if (win.SetKernelObjectSecurity(handle, win.dacl_security_information, &absolute) == .FALSE) return error.LabelFailed;
+}
+
+fn currentUserSid(buffer: []align(@alignOf(usize)) u8) error{LabelFailed}!*anyopaque {
+    var token: std.os.windows.HANDLE = undefined;
+    if (win.OpenProcessToken(win.GetCurrentProcess(), win.token_query, &token) == .FALSE) return error.LabelFailed;
+    defer std.os.windows.CloseHandle(token);
+    var returned: std.os.windows.DWORD = 0;
+    if (win.GetTokenInformation(token, win.token_user, buffer.ptr, @intCast(buffer.len), &returned) == .FALSE) return error.LabelFailed;
+    const user: *const win.TokenUser = @ptrCast(buffer.ptr);
+    return user.sid orelse error.LabelFailed;
+}
+
+pub fn grantLowIntegrityWrite(dir_abs: []const u8) LabelError!void {
+    if (builtin.os.tag != .windows) return;
+    const handle = try openForLabel(dir_abs);
     defer std.os.windows.CloseHandle(handle);
 
     var descriptor: ?*anyopaque = null;
@@ -646,19 +778,9 @@ pub fn grantLowIntegrityWrite(dir_abs: []const u8) error{ LabelFailed, NameTooLo
     if (win.SetSecurityInfo(handle, win.se_file_object, win.label_security_information, null, null, null, sacl) != 0) return error.LabelFailed;
 }
 
-pub fn labelWithoutPropagation(dir_abs: []const u8) error{ LabelFailed, NameTooLong, InvalidWtf8 }!void {
+pub fn labelWithoutPropagation(dir_abs: []const u8) LabelError!void {
     if (builtin.os.tag != .windows) return;
-    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
-    const handle = win.CreateFileW(
-        try toExtendedWide(&path_w, dir_abs),
-        win.read_control | win.write_owner,
-        win.file_share_all,
-        null,
-        win.open_existing,
-        win.flag_backup_semantics | win.flag_open_reparse_point,
-        null,
-    );
-    if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.LabelFailed;
+    const handle = try openForLabel(dir_abs);
     defer std.os.windows.CloseHandle(handle);
 
     var descriptor: ?*anyopaque = null;
@@ -741,6 +863,72 @@ const win = struct {
     const sddl_revision_1: windows.DWORD = 1;
     const se_file_object: c_int = 1;
     const label_security_information: windows.DWORD = 0x00000010;
+    const write_dac: windows.DWORD = 0x00040000;
+    const dacl_security_information: windows.DWORD = 0x00000004;
+    const token_query: windows.DWORD = 0x0008;
+    const token_user: c_int = 1;
+    const grant_access: c_int = 1;
+    const trustee_is_sid: c_int = 0;
+    const trustee_is_user: c_int = 1;
+    const security_descriptor_revision: windows.DWORD = 1;
+    const dacl_inheritance_bits: u16 = 0x0400 | 0x1000;
+
+    const SecurityDescriptor = extern struct {
+        revision: u8,
+        sbz1: u8,
+        control: u16,
+        owner: ?*anyopaque,
+        group: ?*anyopaque,
+        sacl: ?*anyopaque,
+        dacl: ?*anyopaque,
+    };
+
+    const Trustee = extern struct {
+        multiple_trustee: ?*anyopaque = null,
+        multiple_trustee_operation: c_int = 0,
+        trustee_form: c_int = 0,
+        trustee_type: c_int = 0,
+        name: ?*anyopaque = null,
+    };
+
+    const ExplicitAccess = extern struct {
+        access_permissions: windows.DWORD,
+        access_mode: c_int,
+        inheritance: windows.DWORD,
+        trustee: Trustee,
+    };
+
+    const token_adjust_privileges: windows.DWORD = 0x0020;
+    const se_privilege_enabled: windows.DWORD = 0x00000002;
+
+    const Luid = extern struct {
+        low: windows.DWORD,
+        high: windows.LONG,
+    };
+
+    const TokenPrivileges = extern struct {
+        count: windows.DWORD,
+        luid: Luid,
+        attributes: windows.DWORD,
+    };
+
+    extern "advapi32" fn LookupPrivilegeValueW(system: ?[*:0]const u16, name: [*:0]const u16, luid: *Luid) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn AdjustTokenPrivileges(token: windows.HANDLE, disable_all: windows.BOOL, new: *TokenPrivileges, length: windows.DWORD, previous: ?*TokenPrivileges, returned: ?*windows.DWORD) callconv(.winapi) windows.BOOL;
+
+    const TokenUser = extern struct {
+        sid: ?*anyopaque,
+        attributes: windows.DWORD,
+    };
+
+    extern "advapi32" fn GetSecurityInfo(handle: windows.HANDLE, object_type: c_int, info: windows.DWORD, owner: ?*?*anyopaque, group: ?*?*anyopaque, dacl: ?*?*anyopaque, sacl: ?*?*anyopaque, descriptor: *?*anyopaque) callconv(.winapi) windows.DWORD;
+    extern "advapi32" fn SetEntriesInAclW(count: windows.ULONG, list: *ExplicitAccess, old: ?*anyopaque, new: *?*anyopaque) callconv(.winapi) windows.DWORD;
+    extern "advapi32" fn InitializeSecurityDescriptor(descriptor: *SecurityDescriptor, revision: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn SetSecurityDescriptorDacl(descriptor: *SecurityDescriptor, present: windows.BOOL, dacl: ?*anyopaque, defaulted: windows.BOOL) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn GetSecurityDescriptorControl(descriptor: *anyopaque, control: *u16, revision: *windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn SetSecurityDescriptorControl(descriptor: *SecurityDescriptor, mask: u16, bits: u16) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn OpenProcessToken(process: windows.HANDLE, access: windows.DWORD, token: *windows.HANDLE) callconv(.winapi) windows.BOOL;
+    extern "advapi32" fn GetTokenInformation(token: windows.HANDLE, class: c_int, info: *anyopaque, length: windows.DWORD, returned: *windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn GetCurrentProcess() callconv(.winapi) windows.HANDLE;
 
     extern "advapi32" fn ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl: [*:0]const u16, revision: windows.DWORD, descriptor: *?*anyopaque, size: ?*windows.DWORD) callconv(.winapi) windows.BOOL;
     extern "advapi32" fn GetSecurityDescriptorSacl(descriptor: *anyopaque, present: *windows.BOOL, sacl: *?*anyopaque, defaulted: *windows.BOOL) callconv(.winapi) windows.BOOL;
@@ -1009,6 +1197,82 @@ test "a full copy that cannot be removed after the call is named in the report, 
     try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
 }
 
+fn siblingPath(buf: []u8, shadow_abs: []const u8, suffix: []const u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{s}{s}", .{ shadow_abs, suffix });
+}
+
+fn workspaceEntry(buf: []u8, shadow_abs: []const u8, name: []const u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "{s}\\{s}", .{ std.fs.path.dirname(shadow_abs).?, name });
+}
+
+test "removing a full copy also removes the TEMP and cache left next to it, and then the whole workspace" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .full_copy;
+
+    var used: TreeUse = .{};
+    var shadow = try Shadow.prepare(testing.io, options);
+    shadow.reportTo(&used);
+    var temp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var cache_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var file_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const siblings = [_][]const u8{ try siblingPath(&temp_buf, options.shadow_abs, "-tmp"), try siblingPath(&cache_buf, options.shadow_abs, "-cache") };
+    for (siblings) |sibling| {
+        try Dir.cwd().createDirPath(testing.io, sibling);
+        try Dir.cwd().writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&file_buf, "{s}\\left.txt", .{sibling}), .data = "left\n" });
+    }
+    shadow.finish();
+    try testing.expectEqual(@as(?anyerror, null), used.left_behind);
+    for (siblings) |sibling| try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, sibling, .{}));
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, std.fs.path.dirname(options.shadow_abs).?, .{}));
+}
+
+test "a workspace that still holds something else keeps its marker, so a later sweep can still tell whose it is" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .full_copy;
+
+    var shadow = try Shadow.prepare(testing.io, options);
+    var other_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var marker_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const other = try workspaceEntry(&other_buf, options.shadow_abs, "other.txt");
+    const marker = try workspaceEntry(&marker_buf, options.shadow_abs, shadow_root.marker_name);
+    try Dir.cwd().writeFile(testing.io, .{ .sub_path = other, .data = "not ours\n" });
+    shadow.finish();
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, options.shadow_abs, .{}));
+    try expectFileContent(Dir.cwd(), marker, project.root_abs);
+    try expectFileContent(Dir.cwd(), other, "not ours\n");
+
+    const workspace = std.fs.path.dirname(options.shadow_abs).?;
+    try testing.expectError(error.WorkspaceNotEmpty, removeWorkspace(testing.io, options.base_abs, workspace));
+    try expectFileContent(Dir.cwd(), marker, project.root_abs);
+    try expectFileContent(Dir.cwd(), other, "not ours\n");
+
+    try Dir.cwd().deleteFile(testing.io, other);
+    try removeWorkspace(testing.io, options.base_abs, workspace);
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, workspace, .{}));
+}
+
+test "a full copy that fails while it is being made is removed before the error is returned" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .full_copy;
+    options.files = &.{ "a.ts", "a.ts/b.ts" };
+
+    if (Shadow.prepare(testing.io, options)) |prepared| {
+        var opened = prepared;
+        opened.finish();
+        return error.TestUnexpectedResult;
+    } else |_| {}
+    try testing.expectError(error.FileNotFound, Dir.cwd().access(testing.io, std.fs.path.dirname(options.shadow_abs).?, .{}));
+}
+
 test "a path under a private prefix is a private copy in the kept tree and is counted" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var project = try Project.init();
@@ -1200,6 +1464,170 @@ test "prepare fails instead of carrying on when a stale shadow cannot be removed
         const expected = if (direct) |_| return error.TestUnexpectedResult else |e| e;
         try testing.expectEqual(expected, err);
     }
+}
+
+const owner_privileges = [_][*:0]const u16{
+    std.unicode.utf8ToUtf16LeStringLiteral("SeRestorePrivilege"),
+    std.unicode.utf8ToUtf16LeStringLiteral("SeTakeOwnershipPrivilege"),
+};
+
+const PrivilegeStates = [owner_privileges.len]win.TokenPrivileges;
+
+fn adjustOwnerPrivileges(wanted: *PrivilegeStates, previous: ?*PrivilegeStates) void {
+    var token: std.os.windows.HANDLE = undefined;
+    if (win.OpenProcessToken(win.GetCurrentProcess(), win.token_adjust_privileges | win.token_query, &token) == .FALSE) return;
+    defer std.os.windows.CloseHandle(token);
+    for (wanted, 0..) |*privilege, index| {
+        if (privilege.count == 0) continue;
+        var returned: std.os.windows.DWORD = 0;
+        const before: ?*win.TokenPrivileges = if (previous) |states| &states[index] else null;
+        _ = win.AdjustTokenPrivileges(token, .FALSE, privilege, @sizeOf(win.TokenPrivileges), before, &returned);
+    }
+}
+
+fn enableOwnerPrivileges() PrivilegeStates {
+    var wanted: PrivilegeStates = @splat(.{ .count = 0, .luid = .{ .low = 0, .high = 0 }, .attributes = win.se_privilege_enabled });
+    for (owner_privileges, &wanted) |name, *privilege| {
+        if (win.LookupPrivilegeValueW(null, name, &privilege.luid) != .FALSE) privilege.count = 1;
+    }
+    var previous: PrivilegeStates = @splat(.{ .count = 0, .luid = .{ .low = 0, .high = 0 }, .attributes = 0 });
+    adjustOwnerPrivileges(&wanted, &previous);
+    return previous;
+}
+
+fn applyOwner(dir_abs: []const u8, sddl: [*:0]const u16) !bool {
+    var previous = enableOwnerPrivileges();
+    defer adjustOwnerPrivileges(&previous, null);
+    return applySecurity(dir_abs, sddl, owner_security_information | win.dacl_security_information);
+}
+
+fn applySecurity(dir_abs: []const u8, sddl: [*:0]const u16, info: std.os.windows.DWORD) !bool {
+    var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const handle = openSecurity(try toExtendedWide(&path_w, dir_abs), win.read_control | win.write_dac | win.write_owner) orelse return false;
+    defer std.os.windows.CloseHandle(handle);
+    var descriptor: ?*anyopaque = null;
+    if (win.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, win.sddl_revision_1, &descriptor, null) == .FALSE) return error.Unexpected;
+    defer _ = win.LocalFree(descriptor);
+    return win.SetKernelObjectSecurity(handle, info, descriptor.?) != .FALSE;
+}
+
+const owner_security_information: std.os.windows.DWORD = 0x00000001;
+const modify_without_owner_rights = "(A;OICI;0x1301bf;;;AU)(A;OICI;FA;;;SY)";
+
+fn expectSandboxConfined(project: *Project, shadow_abs: []const u8) !void {
+    const runner = @import("runner.zig");
+    const made = try runner.runCommand(testing.allocator, testing.io, shadow_abs, "echo ok> made.txt", .{ .timeout_ms = 20_000 });
+    defer made.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ made.stdout, made.stderr });
+    try testing.expect(made.passed());
+    var dir = try Dir.openDirAbsolute(testing.io, shadow_abs, .{});
+    defer dir.close(testing.io);
+    try expectFileContent(dir, "made.txt", "ok\r\n");
+
+    var escape_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const escape = try std.fmt.bufPrint(&escape_buf, "echo x> \"{s}\\escape.txt\"", .{project.root_abs});
+    const escaped = try runner.runCommand(testing.allocator, testing.io, shadow_abs, escape, .{ .timeout_ms = 20_000 });
+    defer escaped.deinit(testing.allocator);
+    try testing.expect(!escaped.passed());
+    try testing.expectError(error.FileNotFound, project.tmp.dir.access(testing.io, "project/escape.txt", .{}));
+}
+
+test "a kept shadow owned by Administrators is replaced by one this account can label and the sandbox runs confined in it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .kept;
+    try Dir.cwd().createDirPath(testing.io, options.shadow_abs);
+    const sddl = std.unicode.utf8ToUtf16LeStringLiteral("O:BAD:P(A;OICI;FA;;;BA)" ++ modify_without_owner_rights);
+    if (!try applyOwner(options.shadow_abs, sddl)) {
+        std.debug.print("skipped: this process may not make BUILTIN\\Administrators the owner of a folder (needs elevation or SeRestorePrivilege)\n", .{});
+        return error.SkipZigTest;
+    }
+
+    var shadow = try Shadow.prepare(testing.io, options);
+    defer shadow.finish();
+    try testing.expectEqual(TreeMode.kept, shadow.use.mode);
+    try expectSandboxConfined(&project, options.shadow_abs);
+}
+
+test "a kept shadow whose owner rights withhold relabelling from this account is replaced and the sandbox runs confined in it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .kept;
+    try Dir.cwd().createDirPath(testing.io, options.shadow_abs);
+    const sddl = std.unicode.utf8ToUtf16LeStringLiteral("D:P(A;;0x1301bf;;;OW)" ++ modify_without_owner_rights);
+    try testing.expect(try applySecurity(options.shadow_abs, sddl, win.dacl_security_information));
+    var probe_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    try testing.expectEqual(null, openSecurity(try toExtendedWide(&probe_w, options.shadow_abs), win.write_owner | win.write_dac));
+
+    var shadow = try Shadow.prepare(testing.io, options);
+    defer shadow.finish();
+    try testing.expectEqual(TreeMode.kept, shadow.use.mode);
+    try expectSandboxConfined(&project, options.shadow_abs);
+}
+
+test "an existing cache whose owner rights withhold relabelling is rebuilt and the sandbox writes into it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{project.base_abs});
+    defer testing.allocator.free(work);
+    const cache = try std.fmt.allocPrint(testing.allocator, "{s}-cache", .{work});
+    defer testing.allocator.free(cache);
+    try Dir.cwd().createDirPath(testing.io, work);
+    try grantLowIntegrityWrite(work);
+    try Dir.cwd().createDirPath(testing.io, cache);
+    var stale_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try Dir.cwd().writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&stale_buf, "{s}\\stale.txt", .{cache}), .data = "old" });
+    const sddl = std.unicode.utf8ToUtf16LeStringLiteral("D:P(A;;0x1301bf;;;OW)" ++ modify_without_owner_rights);
+    try testing.expect(try applySecurity(cache, sddl, win.dacl_security_information));
+
+    const runner = @import("runner.zig");
+    var command_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const command = try std.fmt.bufPrint(&command_buf, "echo ok> {s}\\made.txt", .{cache});
+    const report = try runner.runCommandWith(testing.allocator, testing.io, work, command, .{ .timeout_ms = 20_000 }, cache);
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expect(report.passed());
+    var dir = try Dir.openDirAbsolute(testing.io, cache, .{});
+    defer dir.close(testing.io);
+    try expectFileContent(dir, "made.txt", "ok\r\n");
+    try testing.expectError(error.FileNotFound, dir.access(testing.io, "stale.txt", .{}));
+}
+
+test "a folder this account owns but whose permissions withhold relabelling gets a write-owner grant and is labelled" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{project.base_abs});
+    defer testing.allocator.free(work);
+    try Dir.cwd().createDirPath(testing.io, work);
+    const sddl = std.unicode.utf8ToUtf16LeStringLiteral("D:P" ++ modify_without_owner_rights);
+    try testing.expect(try applySecurity(work, sddl, win.dacl_security_information));
+
+    try grantLowIntegrityWrite(work);
+    try expectSandboxConfined(&project, work);
+}
+
+test "a shadow root that never lets this account relabel is refused with LabelDenied and a fix naming the folder" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var project = try Project.init();
+    defer project.deinit();
+    var options = try project.options();
+    options.tree = .kept;
+    try Dir.cwd().createDirPath(testing.io, project.base_abs);
+    const sddl = std.unicode.utf8ToUtf16LeStringLiteral("D:P(A;OICI;0x1301bf;;;OW)" ++ modify_without_owner_rights);
+    try testing.expect(try applySecurity(project.base_abs, sddl, win.dacl_security_information));
+
+    try testing.expectError(error.LabelDenied, Shadow.prepare(testing.io, options));
+    var fix_buf: [1024]u8 = undefined;
+    const fix = takeLabelDeniedFix(&fix_buf) orelse return error.TestExpectedFix;
+    try testing.expect(std.mem.indexOf(u8, fix, options.shadow_abs) != null);
+    try testing.expect(std.mem.indexOf(u8, fix, "--shadow-root") != null);
+    try testing.expectEqual(null, takeLabelDeniedFix(&fix_buf));
 }
 
 test "shadow paths outside <shadow root>\\<repo key>\\ are refused before anything is deleted" {

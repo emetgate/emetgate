@@ -66,6 +66,7 @@ pub const Session = struct {
     runtime: *Runtime,
     root: []const u8,
     arena_state: std.heap.ArenaAllocator,
+    tables_state: std.heap.ArenaAllocator,
     real: io_seam.Real,
     store_path: ?[]u8 = null,
     repo: ?*fact_store.Repo = null,
@@ -82,10 +83,12 @@ pub const Session = struct {
     worker: ?std.Thread = null,
     failure: ?anyerror = null,
     waited: bool = false,
+    tables_stale: bool = false,
+    names_builds: u32 = 0,
 
     pub fn create(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8) !*Session {
         const self = try gpa.create(Session);
-        self.* = .{ .gpa = gpa, .io = io, .runtime = runtime, .root = root, .arena_state = .init(std.heap.page_allocator), .real = .init(gpa, io) };
+        self.* = .{ .gpa = gpa, .io = io, .runtime = runtime, .root = root, .arena_state = .init(std.heap.page_allocator), .tables_state = .init(std.heap.page_allocator), .real = .init(gpa, io) };
         return self;
     }
 
@@ -95,6 +98,7 @@ pub const Session = struct {
         if (self.repo) |r| r.deinit();
         if (self.store_path) |p| self.gpa.free(p);
         self.real.deinit();
+        self.tables_state.deinit();
         self.arena_state.deinit();
         self.gpa.destroy(self);
     }
@@ -134,11 +138,21 @@ pub const Session = struct {
     }
 
     fn load(self: *Session) !void {
-        const arena = self.arena_state.allocator();
         self.store_path = if (self.store_override) |p| try self.gpa.dupe(u8, p) else fact_store.defaultStorePath(self.gpa, self.root) catch null;
         const repo = try fact_store.Repo.open(self.gpa, self.seam_override orelse self.real.seam(), self.runtime, .{ .root_abs = self.root, .store_path = self.store_path, .cancel = &self.cancel });
         self.repo = repo;
         _ = try repo.refresh();
+        try self.indexNames();
+    }
+
+    fn indexNames(self: *Session) !void {
+        _ = self.tables_state.reset(.retain_capacity);
+        self.names = .empty;
+        self.symbols = .empty;
+        self.part_df = .empty;
+        const arena = self.tables_state.allocator();
+        const repo = self.repo.?;
+        self.names_builds += 1;
         for (repo.store.files.items) |state| {
             if (state.status != .indexed) continue;
             const path = try arena.dupe(u8, state.path);
@@ -226,6 +240,7 @@ pub const Session = struct {
         if (self.store_path) |p| self.gpa.free(p);
         self.store_path = null;
         _ = self.arena_state.reset(.free_all);
+        _ = self.tables_state.reset(.free_all);
         self.names = .empty;
         self.symbols = .empty;
         self.part_df = .empty;
@@ -235,6 +250,15 @@ pub const Session = struct {
         self.failure = null;
         self.phase.store(.building, .release);
         run(self);
+    }
+
+    fn sync(self: *Session) void {
+        if (self.repo.?.refresh()) |report| {
+            if (report.extracted != 0 or report.removed != 0 or report.full_link) self.tables_stale = true;
+        } else |_| self.tables_stale = true;
+        if (!self.tables_stale) return;
+        self.indexNames() catch return;
+        self.tables_stale = false;
     }
 
     fn addName(self: *Session, arena: Allocator, name: []const u8, path: []const u8) !void {
@@ -312,7 +336,7 @@ pub const Session = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         if (!self.ready()) return plain(gpa, "explore is unavailable: the repository could not be read", true);
-        _ = self.repo.?.refresh() catch {};
+        self.sync();
         const names = try namesOf(arena, args);
         return plain(gpa, try self.dense(arena, question, names, reply_budget), false);
     }
@@ -326,7 +350,7 @@ pub const Session = struct {
         defer arena_state.deinit();
         const arena = arena_state.allocator();
         if (!self.ready()) return plain(gpa, "evidence is unavailable: the repository could not be read", true);
-        _ = self.repo.?.refresh() catch {};
+        self.sync();
         const names = try namesOf(arena, args);
         if (names.len == 0) return plain(gpa, "no names were given", false);
         const wanted = names[0..@min(names.len, max_evidence_names)];

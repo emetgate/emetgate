@@ -145,6 +145,7 @@ pub const rule_command = src.rule_command;
 pub const rule_catalog = src.rule_catalog;
 pub const prompt_words = src.prompt_words;
 pub const prompt_hook = src.prompt_hook;
+pub const json_input = src.json_input;
 pub const facts_command = src.facts_command;
 pub const map_command = src.map_command;
 pub const map_tools = src.map_tools;
@@ -189,6 +190,7 @@ test {
     _ = @import("tests/scan.zig");
     _ = @import("tests/change_watch.zig");
     _ = @import("tests/search_fresh.zig");
+    _ = @import("tests/find_fresh.zig");
     _ = @import("tests/search_answers.zig");
     _ = @import("tests/search_text.zig");
     _ = @import("tests/git_index.zig");

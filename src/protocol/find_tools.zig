@@ -23,6 +23,7 @@ pub const Job = enum { load, build };
 const max_changed = 256;
 const max_changed_bytes = 4 << 20;
 const patch_wait_ms = 250;
+const fence_timeout_ms = 1000;
 
 pub fn indexDir(gpa: Allocator, root_abs: []const u8) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -132,7 +133,7 @@ const Patch = struct {
     }
 };
 
-const Wait = enum { patch, all };
+const Wait = enum { patch, settle, all };
 
 pub const Session = struct {
     gpa: Allocator,
@@ -165,6 +166,8 @@ pub const Session = struct {
     cancel: std.atomic.Value(bool) = .init(false),
     failure: ?anyerror = null,
     waited: bool = false,
+    stale: std.atomic.Value(bool) = .init(false),
+    patch_failure: ?anyerror = null,
 
     pub fn create(gpa: Allocator, io: std.Io, root: []const u8) !*Session {
         const self = try gpa.create(Session);
@@ -210,8 +213,18 @@ pub const Session = struct {
         if (self.base == null) return self.failure orelse error.Unexpected;
     }
 
+    pub fn invalidate(self: *Session) void {
+        self.stale.store(true, .release);
+    }
+
     pub fn find(self: *Session, pattern: []const u8) !emet_file.Answer {
-        self.refresh(.patch);
+        if (self.stale.swap(false, .acq_rel)) {
+            self.refresh(.settle);
+            if (self.patch_failure) |err| {
+                self.stale.store(true, .release);
+                return err;
+            }
+        } else self.refresh(.patch);
         return self.search(pattern);
     }
 
@@ -240,17 +253,21 @@ pub const Session = struct {
     }
 
     fn refresh(self: *Session, wait: Wait) void {
-        self.absorb();
+        self.patch_failure = null;
+        self.absorb(wait == .settle);
         self.want_build = self.want_build or self.retry;
         self.retry = false;
         const deadline = std.Io.Clock.Timestamp.fromNow(self.io, .{ .raw = .fromMilliseconds(patch_wait_ms), .clock = .awake });
         while (true) {
             self.ready.reset();
             self.collect();
+            if (wait == .settle and self.patch_failure != null) return;
             self.schedule();
             if (!self.builder.busy() and !self.patcher.busy()) return;
             if (self.base == null or wait == .all) {
                 if (self.base == null) self.waited = true;
+                self.ready.waitUncancelable(self.io);
+            } else if (wait == .settle and self.patcher.busy()) {
                 self.ready.waitUncancelable(self.io);
             } else if (self.patcher.busy()) {
                 self.ready.waitTimeout(self.io, .{ .deadline = deadline }) catch return;
@@ -258,11 +275,13 @@ pub const Session = struct {
         }
     }
 
-    fn absorb(self: *Session) void {
-        const w = self.watcher orelse return;
-        const dirty = w.drain() catch {
-            self.incoming.all = true;
-            if (self.builder.busy()) self.pending.all = true;
+    fn absorb(self: *Session, fence: bool) void {
+        const w = self.watcher orelse {
+            if (fence) self.dirtyAll();
+            return;
+        };
+        const dirty = (if (fence) w.sync(fence_timeout_ms) else w.drain()) catch {
+            self.dirtyAll();
             return;
         };
         defer dirty.deinit(self.gpa);
@@ -272,6 +291,11 @@ pub const Session = struct {
         if (self.builder.busy()) self.pending.absorb(self.gpa, dirty) catch {
             self.pending.all = true;
         };
+    }
+
+    fn dirtyAll(self: *Session) void {
+        self.incoming.all = true;
+        if (self.builder.busy()) self.pending.all = true;
     }
 
     fn collect(self: *Session) void {
@@ -296,6 +320,7 @@ pub const Session = struct {
                 self.apply(patch, job.swap);
             } else |err| {
                 self.failure = err;
+                self.patch_failure = err;
                 self.incoming.merge(self.gpa, &job.dirt) catch {
                     self.incoming.all = true;
                 };

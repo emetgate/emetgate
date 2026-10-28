@@ -133,6 +133,7 @@ pub fn hint(err: anyerror) ?[]const u8 {
         error.UntrustedRepoConfig => ".emetgaterc.json came with the repo; trust it with --allow-repo-config or pass --test \"<command>\"",
         error.InvalidConfig => ".emetgaterc.json is not valid JSON; e.g. {\"test_cmd\": \"npm test\"}",
         error.SandboxUnavailable => "the Windows sandbox could not start a low-integrity process; run: emetgate doctor",
+        error.LabelDenied => "a sandbox folder is owned by another account (e.g. Administrators after an elevated run) and this account may not relabel it; delete it from the account that created it, or pass --shadow-root <a folder you own>",
         error.AccessDenied, error.PermissionDenied => "access denied; run from a folder you own (not Program Files or a protected folder), then: emetgate doctor",
         error.FileOutsideRepo => "the path is outside the git repository; cd into the repository first",
         else => null,

@@ -3,6 +3,7 @@ const rule_command = @import("rule_command.zig");
 const rule_catalog = @import("rule_catalog.zig");
 const prompt_words = @import("prompt_words.zig");
 const lockdown_slash = @import("../platform/lockdown_slash.zig");
+const json_input = @import("json_input.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -17,8 +18,9 @@ pub const max_input_bytes = 4 * 1024 * 1024;
 const whitespace = " \t\r\n";
 const byte_order_mark = "\xef\xbb\xbf";
 
-pub fn ruleText(arena: Allocator, input: []const u8) error{ HookInputInvalid, OutOfMemory }!?[]const u8 {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, input, .{}) catch |err| switch (err) {
+pub fn ruleText(arena: Allocator, input: []const u8) error{ HookInputEmpty, HookInputInvalid, OutOfMemory }!?[]const u8 {
+    if (std.mem.trim(u8, input, whitespace ++ byte_order_mark).len == 0) return error.HookInputEmpty;
+    const parsed = json_input.parseLeaky(std.json.Value, arena, input, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.HookInputInvalid,
     };

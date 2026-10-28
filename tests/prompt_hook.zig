@@ -229,8 +229,24 @@ test "prompt hook: input that carries no prompt text is refused by name" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const inputs = [_][]const u8{ "", "not json", "[]", "\"/rule list\"", "{}", "{\"prompt\":7}", "{\"prompt\":null}", "{\"user_prompt\":\"/rule list\"}", "{\"prompt\":\"/rule list\"" };
+    const inputs = [_][]const u8{ "not json", "[]", "\"/rule list\"", "{}", "{\"prompt\":7}", "{\"prompt\":null}", "{\"user_prompt\":\"/rule list\"}", "{\"prompt\":\"/rule list\"" };
     for (inputs) |input| try testing.expectError(error.HookInputInvalid, prompt_hook.ruleText(arena, input));
+}
+
+test "prompt hook: empty input is refused as empty, so the hook still blocks and says why" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const inputs = [_][]const u8{ "", " \r\n", "\xef\xbb\xbf\n" };
+    for (inputs) |input| try testing.expectError(error.HookInputEmpty, prompt_hook.ruleText(arena_state.allocator(), input));
+}
+
+test "prompt hook: a prompt with a lone surrogate escape is read, and a /rule in it is still answered" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqualStrings(" list \u{FFFD}", (try prompt_hook.ruleText(arena, "{\"prompt\":\"/rule list \\uD83D\"}")).?);
+    try testing.expectEqualStrings(" list \u{FFFD}", (try prompt_hook.ruleText(arena, "{\"prompt\":\"/rule list \\uDE00\"}")).?);
+    try testing.expect((try prompt_hook.ruleText(arena, "{\"prompt\":\"half an emoji \\uD83D\"}")) == null);
 }
 
 test "prompt hook: /rule add adopts the rule and answers with its id" {

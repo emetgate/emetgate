@@ -695,6 +695,41 @@ test "purple recover: no shadow at all is a clean recover with exit 0" {
     try testing.expect(std.mem.indexOf(u8, err_out.written(), "could not remove shadow") == null);
 }
 
+test "purple recover: a stale shadow of a removed repository that cannot be removed exits 16 and is named" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "repo");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var gone_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var base_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try std.fmt.bufPrint(&root_buf, "{s}\\repo", .{top});
+    const gone = try std.fmt.bufPrint(&gone_buf, "{s}\\gone", .{top});
+    const base = try std.fmt.bufPrint(&base_buf, "{s}\\base", .{top});
+    const key = shadow_root.repoKey(gone);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    try tmp.dir.createDirPath(testing.io, try std.fmt.bufPrint(&buf, "base/{s}/shadow", .{&key}));
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = try std.fmt.bufPrint(&buf, "base/{s}/{s}", .{ &key, shadow_root.marker_name }), .data = gone });
+    var unknown_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const unknown = try std.fmt.bufPrint(&unknown_buf, "base/{s}/unknown.txt", .{&key});
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = unknown, .data = "not ours\n" });
+
+    const lock = try shadow.Lock.acquire(testing.io, root);
+    defer lock.release();
+    var err_out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer err_out.deinit();
+    try testing.expectEqual(@as(u8, 16), try disk.recoverWorkspace(testing.allocator, testing.io, root, base, &err_out.writer));
+    try testing.expect(std.mem.indexOf(u8, err_out.written(), "could not remove 1 stale shadow(s) of removed repositories: WorkspaceNotEmpty") != null);
+    try tmp.dir.access(testing.io, unknown, .{});
+
+    try tmp.dir.deleteFile(testing.io, unknown);
+    err_out.clearRetainingCapacity();
+    try testing.expectEqual(@as(u8, 0), try disk.recoverWorkspace(testing.allocator, testing.io, root, base, &err_out.writer));
+    try testing.expect(std.mem.indexOf(u8, err_out.written(), "stale shadow") == null);
+}
+
 fn respond(runtime: *Runtime, line: []const u8) ![]u8 {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();

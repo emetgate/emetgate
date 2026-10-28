@@ -73,6 +73,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = commit_plan.takeFound();
     _ = commit_refusal.take();
     _ = test_command_mod.takeUnverified();
+    defer if (!readOnly(name)) policy.invalidate();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
         if (try receipt_note.unverified(gpa, result.text, test_command_mod.unverified_status, unverified_note, args)) |text| {
@@ -92,6 +93,26 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     gpa.free(result.text);
     result.text = text;
     return result;
+}
+
+const read_only_tools = [_][]const u8{
+    "emetgate_symbols",
+    "emetgate_skeleton",
+    "emetgate_read_symbol",
+    "emetgate_mutate",
+    "emetgate_read_file",
+    "emetgate_list",
+    "emetgate_search",
+    "emetgate_find",
+    "emetgate_scan",
+    "emetgate_git",
+};
+
+pub fn readOnly(name: []const u8) bool {
+    for (read_only_tools) |tool| {
+        if (std.mem.eql(u8, tool, name)) return true;
+    }
+    return false;
 }
 
 fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u8, given_args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
