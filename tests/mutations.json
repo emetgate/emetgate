@@ -9606,8 +9606,8 @@
     {
       "id": "GC5-hand-edited-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "            if (!std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;\n",
-      "to": "            if (false and !std.mem.eql(u8, head_entry.oid, stored)) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and !pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "git commit: a target edited by hand is refused, and an edit to another file is not in the way",
         "commit on write: a target edited by hand is refused and keeps the hand edit",
@@ -10579,8 +10579,8 @@
     {
       "id": "P1f-staged-entry-in-the-index-copy-not-compared",
       "file": "src/platform/git_commit.zig",
-      "from": "            if (!std.mem.eql(u8, found.oid, oid) or !std.mem.eql(u8, found.mode, &mode)) return error.TargetHasUncommittedChanges;\n",
-      "to": "            if (false and (!std.mem.eql(u8, found.oid, oid) or !std.mem.eql(u8, found.mode, &mode))) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!std.mem.eql(u8, found.oid, was.oid.?) or !std.mem.eql(u8, found.mode, &mode)) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and (!std.mem.eql(u8, found.oid, was.oid.?) or !std.mem.eql(u8, found.mode, &mode))) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "redteam2 commit: a change staged on the target between its last measurement and the lock is still staged afterwards"
       ]
@@ -13958,8 +13958,8 @@
     {
       "id": "B19-temp-env-dropped",
       "file": "src/platform/runner.zig",
-      "from": ".limits = limits, .temp = temp, .env = env });",
-      "to": ".limits = limits, .env = env });",
+      "from": ".limits = limits, .temp = temp, .env = env.items });",
+      "to": ".limits = limits, .env = env.items });",
       "kills": [
         "a gated command gets its own writable TEMP and TMP next to its directory, removed after the run"
       ]
@@ -14561,7 +14561,7 @@
     {
       "id": "TC2-toolchain-write-flags-accepted",
       "file": "src/platform/toolchain.zig",
-      "from": "    if (hasArg(command, &forbidden_args)) return null;\n",
+      "from": "    if (!isPip(tool, tokens) and hasArg(command, &forbidden_args)) return null;\n",
       "to": "",
       "kills": [
         "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands",
@@ -14581,7 +14581,7 @@
     {
       "id": "TC4-toolchain-metachar-accepted",
       "file": "src/platform/run_command.zig",
-      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes) return false;\n    var tokens",
+      "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes or argumentsEscape(command)) return false;\n    var tokens",
       "to": "    var tokens",
       "kills": [
         "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
@@ -14627,8 +14627,8 @@
     {
       "id": "CACHE1-gate-run-without-cache-env",
       "file": "src/platform/runner.zig",
-      "from": "        break :blk try sandbox.cacheEnvironment(arena_state.allocator(), dir);",
-      "to": "        break :blk &.{};",
+      "from": "        try env.appendSlice(arena, try sandbox.cacheEnvironment(arena, dir));\n",
+      "to": "",
       "kills": [
         "a gated command gets writable package caches next to its directory that survive the run"
       ]
@@ -15119,8 +15119,8 @@
     {
       "id": "SBX2-daemon-flags-dropped",
       "file": "src/platform/sandbox.zig",
-      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
-      "to": "        _ = flag;",
+      "from": "    for (daemon_flags) |flag| {\n        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "    for (daemon_flags) |flag| {\n        _ = flag;",
       "kills": [
         "every sandboxed command turns off build-server reuse but keeps a value the caller set"
       ]
@@ -15128,8 +15128,8 @@
     {
       "id": "SBX3-daemon-flags-override-caller",
       "file": "src/platform/sandbox.zig",
-      "from": "        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
-      "to": "        try vars.append(arena, flag);",
+      "from": "    for (daemon_flags) |flag| {\n        if (!namedIn(flag.name, vars.items)) try vars.append(arena, flag);",
+      "to": "    for (daemon_flags) |flag| {\n        try vars.append(arena, flag);",
       "kills": [
         "every sandboxed command turns off build-server reuse but keeps a value the caller set"
       ]
@@ -15709,8 +15709,8 @@
     {
       "id": "L5A-venv-interpreter-without-pyvenv",
       "file": "src/platform/run_command.zig",
-      "from": "        return inVenv(io, a, real);",
-      "to": "        return true;",
+      "from": "    const real = realInRoot(io, a, root_abs, token, &.{ \"\", \".exe\" }) orelse return false;\n    return inVenv(io, a, real);",
+      "to": "    _ = realInRoot(io, a, root_abs, token, &.{ \"\", \".exe\" }) orelse return false;\n    return true;",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15718,8 +15718,8 @@
     {
       "id": "L5B-interpreter-outside-project",
       "file": "src/platform/run_command.zig",
-      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return false;\n",
-      "to": "",
+      "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return null;\n",
+      "to": "        _ = real_root;\n",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15727,8 +15727,8 @@
     {
       "id": "L5C-any-venv-binary",
       "file": "src/platform/run_command.zig",
-      "from": "    if (!listed) return false;",
-      "to": "",
+      "from": "    if (!listed) return false;\n    var storage",
+      "to": "    var storage",
       "kills": [
         "run tool: a project venv interpreter is a toolchain command, a path outside the project or another binary is not"
       ]
@@ -15763,8 +15763,8 @@
     {
       "id": "L5G-requirements-project-ignored",
       "file": "src/platform/test_command.zig",
-      "from": "    if (try requirementsProject(gpa, io, dir)) |run| return pythonCommand(io, dir, run);",
-      "to": "",
+      "from": "    if (!marked and (listed == null or !hasPythonTests(io, dir))) return null;",
+      "to": "    if (!marked) return null;",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15772,8 +15772,8 @@
     {
       "id": "L5H-requirements-without-tests",
       "file": "src/platform/test_command.zig",
-      "from": "    if (!any or !hasPythonTests(io, dir)) return null;",
-      "to": "    if (!any) return null;",
+      "from": "    if (!marked and (listed == null or !hasPythonTests(io, dir))) return null;",
+      "to": "    if (!marked and listed == null) return null;",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15781,8 +15781,8 @@
     {
       "id": "L5I-venv-pytest-unseen",
       "file": "src/platform/test_command.zig",
-      "from": "    if (listed_pytest or venvHasPytest(io, dir)) return pytest_run;",
-      "to": "    if (listed_pytest) return pytest_run;",
+      "from": "        if (siteHasPytest(arena, io, dir, site)) return true;\n",
+      "to": "        _ = site;\n",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15799,8 +15799,8 @@
     {
       "id": "L5K-python-marker-ignores-venv",
       "file": "src/platform/test_command.zig",
-      "from": "        if (dir.access(io, marker, .{})) |_| return pythonCommand(io, dir, pytest_run) else |_| {}",
-      "to": "        if (dir.access(io, marker, .{})) |_| return \"python -m pytest\" else |_| {}",
+      "from": "    return pythonCommand(io, dir, if (pytest) pytest_run else unittestRun(io, dir));",
+      "to": "    if (marked and pytest) return \"python \" ++ pytest_run;\n    return pythonCommand(io, dir, if (pytest) pytest_run else unittestRun(io, dir));",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
