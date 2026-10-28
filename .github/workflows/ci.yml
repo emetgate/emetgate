@@ -76,6 +76,7 @@ jobs:
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
+        shell: bash
         run: |
           python tools/verification_page.py --check
           python tools/readme_facts.py --check
