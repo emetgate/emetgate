@@ -18,7 +18,7 @@ Los LLM son rápidos y capaces: horas de trabajo en minutos. Pero si siguen tus 
 
 La respuesta habitual es un mejor prompt, un `AGENTS.md` más largo: reglas que al modelo se le *pide* obedecer. Emetgate toma el otro camino: una capa entre el modelo y tu árbol de fuentes. No una instrucción que pueda saltarse, sino una puerta que tiene que pasar. El modelo propone un cambio; el núcleo lo verifica; nada llega al disco salvo que pase.
 
-Funciona como servidor MCP, en Windows, para TypeScript, JavaScript y Zig. Abajo, cada capacidad se descompone en sus partes: qué es cada parte y qué hace aquí. Ninguna afirmación sin el código y la salida real debajo.
+Funciona como servidor MCP, en Windows, para TypeScript, JavaScript, Python, C# y Zig. Abajo, cada capacidad se descompone en sus partes: qué es cada parte y qué hace aquí. Ninguna afirmación sin el código y la salida real debajo.
 
 ## La puerta
 
@@ -139,11 +139,31 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 ## Instalación
 
+¿Primera vez? Sigue [docs/QUICKSTART.md](../docs/QUICKSTART.md): instala, ejecuta `emetgate doctor` y después `emetgate lockdown`.
+
+Descarga el binario de Windows de la [última versión](https://github.com/emetgate/emetgate/releases/latest) y añade su carpeta al `PATH` (PowerShell; abre una terminal nueva después):
+
 ```
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` arranca el agente solo con las herramientas de emetgate, en fallo-cerrado.
+Después, en la carpeta del proyecto:
+
+```
+emetgate lockdown --test "npm test"
+```
+
+Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown` arranca el agente solo con las herramientas de emetgate, en fallo-cerrado. Si omites `--test`, el comando de pruebas se detecta en cada escritura (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, un `.sln` o un `.csproj`). En una carpeta vacía lockdown ejecuta `git init`, y las escrituras quedan como `unverified_no_tests` hasta que el proyecto tenga un comando de pruebas.
+
+Lockdown lee solo el `.mcp.json` del propio proyecto, nunca un servidor registrado a nivel de usuario. Para usar emetgate como servidor junto a las demás herramientas, o para dar a lockdown tus propios argumentos de servidor, regístralo para el proyecto:
+
+```
+claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+```
+
+Con ese `.mcp.json` en su sitio, lockdown toma de él el comando de pruebas, y `emetgate lockdown --test` se rechaza.
 
 ## Profundiza
 
@@ -154,7 +174,7 @@ Windows · TypeScript / JavaScript / Zig. `emetgate lockdown` arranca el agente 
 
 ## Límites
 
-Solo Windows; TypeScript, JavaScript y Zig. El sandbox bloquea las escrituras, no las lecturas ni la red. Pasar la puerta prueba que un cambio se analiza y pasa *tus* pruebas: es solo tan fuerte como esas pruebas. Los benchmarks son nuestros, de una sola máquina, y reproducibles.
+Solo Windows; TypeScript, JavaScript, Python, C# y Zig. El sandbox bloquea las escrituras, no las lecturas ni la red. Pasar la puerta prueba que un cambio se analiza y pasa *tus* pruebas: es solo tan fuerte como esas pruebas. Los benchmarks son nuestros, de una sola máquina, y reproducibles.
 
 ## De dónde viene el nombre
 

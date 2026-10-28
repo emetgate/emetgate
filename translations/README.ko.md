@@ -18,7 +18,7 @@ LLM은 빠르고 유능합니다 — 몇 시간의 작업을 몇 분 만에. 하
 
 흔한 해답은 더 나은 프롬프트, 더 긴 `AGENTS.md` — 모델에게 지키라고 *요청하는* 규칙입니다. Emetgate는 다른 길을 택합니다: 모델과 당신의 소스 트리 사이의 한 계층. 건너뛸 수 있는 지시가 아니라 — 반드시 통과해야 하는 게이트. 모델이 변경을 제안하고, 커널이 그것을 검증하며, 통과하지 못하면 아무것도 디스크에 도달하지 않습니다.
 
-MCP 서버로 실행되며, Windows에서 TypeScript, JavaScript, Zig을 지원합니다. 아래에서는 각 기능을 부분으로 나눕니다 — 각 부분이 무엇이며, 여기서 무엇을 하는지. 코드와 그 아래의 실제 출력 없이는 어떤 주장도 하지 않습니다.
+MCP 서버로 실행되며, Windows에서 TypeScript, JavaScript, Python, C#, Zig을 지원합니다. 아래에서는 각 기능을 부분으로 나눕니다 — 각 부분이 무엇이며, 여기서 무엇을 하는지. 코드와 그 아래의 실제 출력 없이는 어떤 주장도 하지 않습니다.
 
 ## 게이트
 
@@ -139,11 +139,31 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 ## 설치
 
+처음이신가요? [docs/QUICKSTART.md](../docs/QUICKSTART.md)를 따르세요: 설치하고, `emetgate doctor`를 실행한 뒤, `emetgate lockdown`을 실행합니다.
+
+[최신 릴리스](https://github.com/emetgate/emetgate/releases/latest)에서 Windows 바이너리를 내려받고 그 폴더를 `PATH`에 넣으세요 (PowerShell; 이후 새 터미널을 여세요):
+
 ```
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`은 에이전트를 emetgate 도구만으로, 실패-시-닫힘으로 시작합니다.
+그다음 프로젝트 폴더에서:
+
+```
+emetgate lockdown --test "npm test"
+```
+
+Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown`은 에이전트를 emetgate 도구만으로, 실패-시-닫힘으로 시작합니다. `--test`를 빼면 테스트 명령은 쓰기마다 감지됩니다 (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `.sln` 또는 `.csproj`). 빈 폴더에서는 lockdown이 `git init`을 실행하고, 프로젝트에 테스트 명령이 생길 때까지 쓰기는 `unverified_no_tests`로 기록됩니다.
+
+Lockdown은 프로젝트 자체의 `.mcp.json`만 읽으며, 사용자 범위에 등록된 서버는 절대 읽지 않습니다. emetgate를 다른 도구들 옆에서 서버로 쓰거나 lockdown에 직접 서버 인자를 주려면 프로젝트에 등록하세요:
+
+```
+claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+```
+
+그 `.mcp.json`이 있으면 lockdown은 테스트 명령을 거기서 가져오고, `emetgate lockdown --test`는 거부됩니다.
 
 ## 더 깊이
 
@@ -154,7 +174,7 @@ Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`은 에이전트를
 
 ## 한계
 
-Windows 전용; TypeScript, JavaScript, Zig. 샌드박스는 읽기나 네트워크가 아니라 쓰기를 막습니다. 게이트를 통과한다는 것은 변경이 파싱되고 *당신의* 테스트를 통과함을 증명합니다 — 그 테스트만큼만 강합니다. 벤치마크는 우리 자신의 것이며, 한 대의 기계에서, 재현 가능합니다.
+Windows 전용; TypeScript, JavaScript, Python, C#, Zig. 샌드박스는 읽기나 네트워크가 아니라 쓰기를 막습니다. 게이트를 통과한다는 것은 변경이 파싱되고 *당신의* 테스트를 통과함을 증명합니다 — 그 테스트만큼만 강합니다. 벤치마크는 우리 자신의 것이며, 한 대의 기계에서, 재현 가능합니다.
 
 ## 이름의 유래
 

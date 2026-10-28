@@ -18,7 +18,7 @@ LLM'ler hızlı ve yeteneklidir — saatlerce sürecek iş dakikalar içinde. Am
 
 Alışılmış cevap daha iyi bir istem, daha uzun bir `AGENTS.md`'dir — modelden uymasının *istendiği* kurallar. Emetgate başka bir yol tutar: model ile kaynak ağacınız arasında bir katman. Atlayabileceği bir yönerge değil — geçmek zorunda olduğu bir kapı. Model bir değişiklik önerir; çekirdek onu doğrular; geçmediği sürece hiçbir şey diske ulaşmaz.
 
-Bir MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript, JavaScript ve Zig için. Aşağıda her yetenek parçalarına ayrılıyor — her parçanın ne olduğu ve burada ne yaptığı. Altında kodu ve gerçek çıktısı olmayan hiçbir iddia yok.
+Bir MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript, JavaScript, Python, C# ve Zig için. Aşağıda her yetenek parçalarına ayrılıyor — her parçanın ne olduğu ve burada ne yaptığı. Altında kodu ve gerçek çıktısı olmayan hiçbir iddia yok.
 
 ## Kapı
 
@@ -139,11 +139,31 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 ## Kurulum
 
+Yeni misiniz? [docs/QUICKSTART.md](../docs/QUICKSTART.md) adımlarını izleyin: kurun, `emetgate doctor` çalıştırın, sonra `emetgate lockdown`.
+
+Windows ikilisini [son sürümden](https://github.com/emetgate/emetgate/releases/latest) indirin ve klasörünü `PATH`'e ekleyin (PowerShell; ardından yeni bir terminal açın):
+
 ```
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp --test "npm test"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
+Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`, ajanı yalnızca emetgate araçlarıyla, kapalı-güvenli olarak başlatır.
+Sonra proje klasöründe:
+
+```
+emetgate lockdown --test "npm test"
+```
+
+Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown`, ajanı yalnızca emetgate araçlarıyla, kapalı-güvenli olarak başlatır. `--test` verilmezse test komutu her yazmada bulunur (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, bir `.sln` ya da `.csproj`). Boş bir klasörde lockdown `git init` çalıştırır ve projenin bir test komutu olana dek yazmalar `unverified_no_tests` olarak kaydedilir.
+
+Lockdown yalnızca projenin kendi `.mcp.json` dosyasını okur, kullanıcı kapsamında kayıtlı bir sunucuyu asla okumaz. emetgate'i diğer araçların yanında bir sunucu olarak kullanmak ya da lockdown'a kendi sunucu argümanlarınızı vermek için onu proje için kaydedin:
+
+```
+claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+```
+
+Bu `.mcp.json` yerindeyken lockdown test komutunu oradan alır ve `emetgate lockdown --test` reddedilir.
 
 ## Daha derine
 
@@ -154,7 +174,7 @@ Windows · TypeScript / JavaScript / Zig. `emetgate lockdown`, ajanı yalnızca 
 
 ## Sınırlar
 
-Yalnızca Windows; TypeScript, JavaScript ve Zig. Korumalı alan yazmaları engeller, okumaları ya da ağı değil. Kapıdan geçmek, bir değişikliğin ayrıştığını ve *sizin* testlerinizi geçtiğini kanıtlar — yalnızca o testler kadar güçlüdür. Kıyaslamalar bizim kendi kıyaslamalarımız, tek bir makineden ve yeniden üretilebilir.
+Yalnızca Windows; TypeScript, JavaScript, Python, C# ve Zig. Korumalı alan yazmaları engeller, okumaları ya da ağı değil. Kapıdan geçmek, bir değişikliğin ayrıştığını ve *sizin* testlerinizi geçtiğini kanıtlar — yalnızca o testler kadar güçlüdür. Kıyaslamalar bizim kendi kıyaslamalarımız, tek bir makineden ve yeniden üretilebilir.
 
 ## İsim nereden geliyor
 
