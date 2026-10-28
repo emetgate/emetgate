@@ -620,3 +620,26 @@ test "whole-file blame over the raw output cap answers in ranges under the budge
     try testing.expectEqualStrings("GitCommandFailed", missing_body.value.object.get("error").?.string);
     try testing.expect(missing_body.value.object.get("message").?.string.len != 0);
 }
+
+test "git log on a repository with no commits answers no commits yet, show refuses with NoCommitYet" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("a.txt", "one\n");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, repo.root_abs, .{ .sub = "log", .path = repo.root_abs });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqual(@as(usize, 0), body.value.object.get("commits").?.array.items.len);
+    try testing.expectEqualStrings("no commits yet", body.value.object.get("note").?.string);
+
+    var shown = try callTool(runtime, repo.root_abs, .{ .sub = "show", .commit = "HEAD", .path = repo.root_abs });
+    defer shown.deinit();
+    try testing.expect(shown.is_error);
+    try testing.expect(std.mem.indexOf(u8, shown.text, "NoCommitYet") != null);
+}

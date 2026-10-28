@@ -125,6 +125,7 @@ const Options = struct {
     cursor: ?[]const u8,
     clamped: usize = 0,
     rev: ?[]const u8 = null,
+    unborn: bool = false,
 };
 
 fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub: []const u8, args: ?Value, w: *Writer, budget: usize) !void {
@@ -255,8 +256,16 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         else => false,
     };
     if (!ok) {
-        noteReason(result.stderr);
-        return error.GitCommandFailed;
+        if (std.mem.eql(u8, sub, "status") or std.mem.eql(u8, sub, "diff") or opts.cursor != null or opts.rev != null or !try unbornHead(gpa, io, git, place.root)) {
+            noteReason(result.stderr);
+            return error.GitCommandFailed;
+        }
+        if (!std.mem.eql(u8, sub, "log")) return error.NoCommitYet;
+        opts.unborn = true;
+        var js: std.json.Stringify = .{ .writer = w };
+        try writeLog(gpa, &js, path, "", &.{}, opts);
+        try w.writeByte('\n');
+        return;
     }
 
     const annotated: []const []const u8 = if (std.mem.eql(u8, sub, "log"))
@@ -294,6 +303,34 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     if (is_blame) blame = git_symbols.analyzeBlame(gpa, io, runtime, git, place.root, place.rel, opts.rev, result.stdout) catch null;
 
     try writeResult(gpa, w, sub, path, result.stdout, annotated, if (summary) |*s| s else null, if (blame) |*b| b else null, opts);
+}
+
+fn unbornHead(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8) !bool {
+    const probe = bounded_run.run(gpa, io, .{
+        .argv = &.{ git, "rev-parse", "--verify", "-q", "HEAD^{commit}" },
+        .cwd = .{ .path = root },
+        .stdout_limit = .limited(max_git_output_bytes),
+        .stderr_limit = .limited(max_git_output_bytes),
+    }) catch return false;
+    defer gpa.free(probe.stdout);
+    defer gpa.free(probe.stderr);
+    const status = switch (probe.term) {
+        .exited => |code| code,
+        else => return false,
+    };
+    if (status == 0) return false;
+    const inside = bounded_run.run(gpa, io, .{
+        .argv = &.{ git, "rev-parse", "--git-dir" },
+        .cwd = .{ .path = root },
+        .stdout_limit = .limited(max_git_output_bytes),
+        .stderr_limit = .limited(max_git_output_bytes),
+    }) catch return false;
+    defer gpa.free(inside.stdout);
+    defer gpa.free(inside.stderr);
+    return switch (inside.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
 }
 
 fn noteReason(stderr: []const u8) void {
@@ -463,6 +500,10 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
     try js.write(shown);
     try js.objectField("verification_note");
     try js.write("receipt means a receipt note is attached, not that it holds; emetgate verify <commit> checks it");
+    if (opts.unborn) {
+        try js.objectField("note");
+        try js.write("no commits yet");
+    }
     if (next_cursor) |c| {
         try js.objectField("next_cursor");
         try js.write(c);
