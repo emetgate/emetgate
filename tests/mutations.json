@@ -16544,6 +16544,15 @@
       "kills": [
         "a committed reply says the tests ran on a mirror only when they ran and were not skipped"
       ]
+    },
+    {
+      "id": "RO1-short-run-output-digested",
+      "file": "src/protocol/output_digest.zig",
+      "from": "pub const verbatim_under: usize = cap;",
+      "to": "pub const verbatim_under: usize = 512;",
+      "kills": [
+        "run output past the old 512 byte cut and under the cap comes back verbatim with its pass lines"
+      ]
     }
   ]
 }

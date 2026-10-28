@@ -7,7 +7,7 @@ const test_outcome = @import("../platform/test_outcome.zig");
 const Allocator = std.mem.Allocator;
 
 pub const cap: usize = 2048;
-pub const verbatim_under: usize = 512;
+pub const verbatim_under: usize = cap;
 const max_line: usize = 240;
 const max_summaries = 3;
 const footer_reserve: usize = 360;
@@ -447,15 +447,15 @@ pub fn writeLog(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8
 
 pub fn writeRunOutput(gpa: Allocator, io: std.Io, root_abs: []const u8, report: sandbox.Report, js: *std.json.Stringify) !void {
     const raw = report.stdout.len + report.stderr.len;
-    const line = try passLine(gpa, report);
-    defer if (line) |l| gpa.free(l);
-    if (line == null and raw <= verbatim_under and !report.truncated) {
+    if (raw <= verbatim_under and !report.truncated) {
         try js.objectField("stdout");
         try js.write(report.stdout);
         try js.objectField("stderr");
         try js.write(report.stderr);
         return;
     }
+    const line = try passLine(gpa, report);
+    defer if (line) |l| gpa.free(l);
     if (line) |l| {
         try js.objectField("output");
         try js.write(l);
@@ -623,6 +623,21 @@ test "a passing run with a count line is one line with its duration, a run witho
     try testing.expectEqualStrings("ok: Tests:       42 passed, 42 total, 3.1s", line);
     try testing.expect((try passLine(testing.allocator, reportOf(0, "hello\n", ""))) == null);
     try testing.expect((try passLine(testing.allocator, reportOf(1, "Tests: 1 failed, 1 total\n", ""))) == null);
+}
+
+test "run output past the old 512 byte cut and under the cap comes back verbatim with its pass lines" {
+    const small = "PASS src/a.test.js\n" ++ "  \u{2713} a\n" ** 120 ++ "Tests:       120 passed, 120 total\nTime:        3.1 s\n";
+    try testing.expect(small.len > 512 and small.len <= cap);
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    try writeRunOutput(testing.allocator, testing.io, ".", reportOf(0, small, ""), &js);
+    try js.endObject();
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.written(), .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings(small, parsed.value.object.get("stdout").?.string);
+    try testing.expect(parsed.value.object.get("output") == null);
 }
 
 test "a cargo panic keeps the panic location and left and right, drops passing tests and the backtrace note" {
