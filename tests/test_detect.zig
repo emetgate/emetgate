@@ -215,13 +215,13 @@ test "test detection: the run allowlist carries the given or detected test comma
     try testing.expectEqual(@as(usize, 2), listed.len);
     try testing.expectEqualStrings("npm test", listed[1].string);
 
-    var detect_policy = run_fixture.policyWith(repo.root_abs, &.{});
+    var detect_policy = run_fixture.policyWith(repo.root_abs, &.{"npm run lint"});
     detect_policy.detect_test = true;
     var detected = try run_fixture.call(detect_policy, .{});
     defer detected.deinit();
     const found = (try detected.field("commands")).?.array.items;
-    try testing.expectEqual(@as(usize, 1), found.len);
-    try testing.expectEqualStrings("zig build test", found[0].string);
+    try testing.expectEqual(@as(usize, 2), found.len);
+    try testing.expectEqualStrings("zig build test", found[1].string);
 
     var plain = try run_fixture.call(run_fixture.policyWith(repo.root_abs, &.{}), .{});
     defer plain.deinit();
