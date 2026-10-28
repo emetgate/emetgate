@@ -13,7 +13,7 @@
       "id": "SO2-outline-ignores-budget",
       "file": "src/protocol/wire.zig",
       "from": "        if (shown != 0 and text.written().len + line.written().len > budget) break;",
-      "to": "",
+      "to": "        if (shown != 0 and text.written().len + line.written().len > budget and false) break;",
       "kills": [
         "symbol listings whose outline still exceeds the read budget say how many names were left out and from which line"
       ]
@@ -131,7 +131,7 @@
       "id": "SC2-symbols-compact-ignores-detail-full",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!full and table.symbols.len",
-      "to": "    if (table.symbols.len",
+      "to": "    if ((full or !full) and table.symbols.len",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
       ]
@@ -1199,27 +1199,6 @@
       "from": "if (list.items.len == 0) return .ok;",
       "to": "if (list.items.len == 99999) return .ok;",
       "kills": [
-        "purple C3: a hanging test command times out and nothing commits",
-        "purple C4: a rejected mutation leaves no temp, backup, or shadow artifacts",
-        "purple C4: a committed mutation leaves no temp or backup artifacts",
-        "purple C7: only the user's policy decides whether an edit can commit",
-        "purple C6: an MCP batch frees every resolved path with its real size",
-        "fail-soft: a broken event log never changes a tool result or what reaches disk",
-        "gate-consistency: the footer shows exactly the gate the runner chose",
-        "a committed batch counts every edit in the footer and logs the full gate",
-        "a failure after the commit began is reported as commit phase, never disk untouched",
-        "a batch commits every file when the shared test passes",
-        "a batch whose shared test fails writes nothing",
-        "gate: a body-only change to an exported symbol runs the full command even with a scoped one",
-        "gate: a BOUNDED mutation runs the scoped command against {file}, not the full command",
-        "a passing test commits the mutation to disk",
-        "a failing test leaves the file on disk untouched",
-        "test command defaults from .emetgaterc.json when the caller omits it",
-        "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched",
-        "typecheck: it checks the patched shadow copy and only then runs the test command",
-        "typecheck: a failing typecheck rejects a whole batch and leaves disk untouched",
-        "rules: a clean body still commits under an enforced rule",
-        "rules: unenforced, checkless and forgotten rules never block an edit",
         "a clean span and an empty rule list both report nothing"
       ]
     },
@@ -1956,8 +1935,8 @@
     {
       "id": "NS2-insert-existing-symbol-accepted",
       "file": "src/engine/cas.zig",
-      "from": "        return error.SymbolExists;\n    } else |err| switch (err) {",
-      "to": "    } else |err| switch (err) {",
+      "from": "    if (before.item(insertion.ref)) |_| return error.SymbolExists else",
+      "to": "    if (before.item(insertion.ref)) |_| {} else",
       "kills": [
         "insert refuses a symbol that already exists, even as a duplicate",
         "absent: a symbol that already exists is refused and the repository is untouched"
@@ -1966,8 +1945,8 @@
     {
       "id": "NS3-insert-duplicate-symbol-accepted",
       "file": "src/engine/cas.zig",
-      "from": "        error.AmbiguousSymbol => return error.SymbolExists,\n",
-      "to": "        error.AmbiguousSymbol => {},\n",
+      "from": " |err| if (err == error.AmbiguousSymbol) return error.SymbolExists;",
+      "to": " |err| if (err == error.AmbiguousSymbol) {}",
       "kills": [
         "insert refuses a symbol that already exists, even as a duplicate"
       ]
@@ -2060,7 +2039,7 @@
       "id": "NS16-insert-untouched-outside-call-removed",
       "file": "src/engine/cas.zig",
       "from": "    try expectUntouchedOutside(before.*, after.*, end, slot);\n",
-      "to": "    _ = end;\n",
+      "to": "",
       "filter": [
         "insert names the one top-level symbol the body declares",
         "insert appends after the last newline",
@@ -2748,7 +2727,8 @@
       "from": "if (isKind(part, shape.substitution)) return false;",
       "to": "if (isKind(part, shape.substitution) and false) return false;",
       "kills": [
-        "no_literal leaves budgeted, named, computed and shorthand values alone"
+        "no_literal leaves budgeted, named, computed and shorthand values alone",
+        "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
       "filter": [
         "no_literal"
@@ -2863,8 +2843,9 @@
       "from": "if (isNegatedLiteral(shape, tree, value)) return true;",
       "to": "if (isNegatedLiteral(shape, tree, value) and false) return true;",
       "kills": [
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal counts a negated number as a literal but not other unary values",
-        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
       ],
       "filter": [
         "no_literal"
@@ -3204,7 +3185,6 @@
       "from": "        if (!self.coversFile(rel)) return false;\n",
       "to": "        if (!self.base.coversFile(rel)) return false;\n",
       "kills": [
-        "scope: at the gate an excluded file is not blocked and a file left in scope is",
         "exclusions apply to the file part of a symbol where"
       ]
     },
@@ -4974,7 +4954,7 @@
       "id": "ZIG2-visibility-hook-not-consulted",
       "file": "src/engine/boundedness.zig",
       "from": "if (profile.hasVisibilityKeyword(tree, sym.node)) return true;\n    var current = sym.node.parent();",
-      "to": "var current = sym.node.parent();",
+      "to": "if (profile.hasVisibilityKeyword(tree, sym.node) and false) return true;\n    var current = sym.node.parent();",
       "kills": [
         "zig: a pub top-level function is unbounded, a private one called in-file is bounded"
       ]
@@ -5801,15 +5781,6 @@
       "kills": [
         "insert and create accept a variable, class, interface, type alias or enum as the one new declaration",
         "create kinds: a batch adds an exported const and a new file with an interface, both classified as symmetry"
-      ]
-    },
-    {
-      "id": "CR2-existing-declaration-overwritten",
-      "file": "src/engine/cas.zig",
-      "from": "    if (before.hasDeclaration(insertion.ref)) return error.SymbolExists;\n",
-      "to": "",
-      "kills": [
-        "insert and create accept a variable, class, interface, type alias or enum as the one new declaration"
       ]
     },
     {
@@ -10470,8 +10441,7 @@
         "frozen: a node edit of a frozen file is refused",
         "frozen: write_doc on a frozen file is refused with and without commits, and another doc is written",
         "frozen: a rename that would rewrite a frozen file in another module is refused",
-        "frozen: a move is refused when the file it leaves or the file it enters is frozen",
-        "frozen: a batch that deletes a frozen file is refused whole, and the same batch lands when the scope is elsewhere"
+        "frozen: a move is refused when the file it leaves or the file it enters is frozen"
       ]
     },
     {
@@ -14630,7 +14600,6 @@
       "from": "        if (isOverridden(entry, vars)) continue;\n",
       "to": "",
       "kills": [
-        "the cache environment points every package cache under the given directory and overrides inherited values",
         "the temp environment replaces every TEMP and TMP entry, whatever its case, and keeps the rest"
       ]
     },
@@ -15773,7 +15742,7 @@
       "id": "L5J-pytest-prefix-is-pytest",
       "file": "src/platform/test_command.zig",
       "from": "        if (std.mem.indexOfScalar(u8, \" \\t=<>!~;[@\", next) != null) return true;",
-      "to": "        return true;",
+      "to": "        if (std.mem.indexOfScalar(u8, \" \\t=<>!~;[@\", next) != null or true) return true;",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -15957,7 +15926,7 @@
       "id": "L6D-region-alpha-new-spans-dropped",
       "file": "src/engine/rename.zig",
       "from": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans);",
-      "to": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), &.{});",
+      "to": "        const b = try alpha.hashDistinct(gpa, next, nodeSpan(twin), next_spans[0..0]);",
       "kills": [
         "rename: renaming one of two same-named properties keeps the other apart in the alpha hash"
       ]
@@ -16230,7 +16199,7 @@
       "id": "GB2-bisect-first-bad-without-good",
       "file": "src/protocol/git_write.zig",
       "from": "    if (goods.len == 0) return null;",
-      "to": "",
+      "to": "    if (goods.len == 0 and false) return null;",
       "kills": [
         "git parity: a bad root commit with no good commit marked is not reported as the first bad commit"
       ]
@@ -16416,7 +16385,7 @@
       "id": "SRC7-undefined-script",
       "file": "src/platform/run_command.zig",
       "from": "    return scripts.object.get(script) != null;\n",
-      "to": "    return true;\n",
+      "to": "    return scripts.object.get(script) != null or true;\n",
       "kills": [
         "package scripts and project tools inside the root run as project commands, other commands do not"
       ],
