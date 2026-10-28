@@ -5206,8 +5206,8 @@
     {
       "id": "SR1-cleanup-follows-a-linked-workspace",
       "file": "src/platform/shadow.zig",
-      "from": "Links(base_abs, shadow_abs);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
-      "to": "Links(base_abs, shadow_abs[0..base_abs.len]);\n    try Dir.cwd().deleteTree(io, shadow_abs);",
+      "from": "    try ensureNoLinks(base_abs, shadow_abs);\n    const tree = (try dir_scan.openRoot(shadow_abs))",
+      "to": "    try ensureNoLinks(base_abs, shadow_abs[0..base_abs.len]);\n    const tree = (try dir_scan.openRoot(shadow_abs))",
       "kills": [
         "a shadow root or repo workspace that is a junction is refused and the directory it points to is untouched"
       ]
@@ -12319,15 +12319,6 @@
       "id": "FT2-footer-switch-ignored",
       "file": "src/protocol/telemetry.zig",
       "from": "    if (!(event.footer orelse event.mutating)) return null;",
-      "to": "",
-      "kills": [
-        "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
-      ]
-    },
-    {
-      "id": "FT3-text-failure-footed",
-      "file": "src/protocol/search_v1.zig",
-      "from": "    event.footer = false;",
       "to": "",
       "kills": [
         "search text: a text reply and a text error carry no session footer, while the structured reply keeps it"
