@@ -1183,26 +1183,29 @@ test "re-preparing replaces a stale shadow completely" {
 
 test "prepare fails instead of carrying on when a stale shadow cannot be removed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var project = try Project.init();
-    defer project.deinit();
+    for ([_]TreeMode{ .kept, .full_copy }) |tree| {
+        var project = try Project.init();
+        defer project.deinit();
 
-    const options = try project.options();
-    var first = try Shadow.prepare(testing.io, options);
-    try first.writeFile("held.ts", "held open\n");
-    first.close();
-    var held_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const held = try FileLock.acquire(try std.fmt.bufPrint(&held_buf, "{s}\\held.ts", .{options.shadow_abs}));
+        var options = try project.options();
+        options.tree = tree;
+        var first = try Shadow.prepare(testing.io, options);
+        try first.writeFile("held.ts", "held open\n");
+        first.close();
+        var held_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const held = try FileLock.acquire(try std.fmt.bufPrint(&held_buf, "{s}\\held.ts", .{options.shadow_abs}));
 
-    const direct = remove(testing.io, options.base_abs, options.shadow_abs);
-    const second = Shadow.prepare(testing.io, options);
-    held.release();
-    if (second) |prepared| {
-        var leaked = prepared;
-        leaked.close();
-        return error.TestUnexpectedResult;
-    } else |err| {
-        const expected = if (direct) |_| return error.TestUnexpectedResult else |e| e;
-        try testing.expectEqual(expected, err);
+        const direct = remove(testing.io, options.base_abs, options.shadow_abs);
+        const second = Shadow.prepare(testing.io, options);
+        held.release();
+        if (second) |prepared| {
+            var leaked = prepared;
+            leaked.close();
+            return error.TestUnexpectedResult;
+        } else |err| {
+            const expected = if (direct) |_| return error.TestUnexpectedResult else |e| e;
+            try testing.expectEqual(expected, err);
+        }
     }
 }
 
