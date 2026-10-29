@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const symbol = @import("../engine/symbol.zig");
 const ts = @import("../engine/tree_sitter.zig");
 const batch_plan = @import("../platform/batch_plan.zig");
@@ -100,7 +101,10 @@ fn replaceFailed(err: anyerror, index: usize, file: []const u8, matches: usize) 
 fn labeled(err: anyerror, index: usize, file: []const u8) anyerror {
     if (err == error.OutOfMemory) return err;
     const hint = wire.fixFor(@errorName(err)) orelse "read the file again and resend the items for it";
-    wire.setFix("edits[{d}] on {s}: {s}", .{ index, file, hint });
+    var buffer: [1024]u8 = undefined;
+    var qualified: std.Io.Writer = .fixed(&buffer);
+    tool_names.write(&qualified, hint) catch {};
+    wire.setFix("edits[{d}] on {s}: {s}", .{ index, file, qualified.buffered() });
     return err;
 }
 

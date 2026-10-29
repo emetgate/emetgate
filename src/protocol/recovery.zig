@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const symbol = @import("../engine/symbol.zig");
 const node_cas = @import("../engine/node_cas.zig");
 const repo = @import("../platform/repo.zig");
@@ -36,7 +37,7 @@ pub fn staleSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const
     const current = symbolHash(gpa, io, runtime, root, file, sym) orelse return false;
     const hex = symbol.formatHash(current);
     if (std.mem.eql(u8, &hex, given)) return false;
-    wire.setFix("{s}the current hash of {s} is {s}; re-read it with emetgate_read_symbol if you have not seen this version, then retry with that hash", .{ label, sym, &hex });
+    wire.setFix("{s}the current hash of {s} is {s}; re-read it with {s}emetgate_read_symbol if you have not seen this version, then retry with that hash", .{ label, sym, &hex, tool_names.prefix() });
     return true;
 }
 
@@ -128,7 +129,7 @@ fn nodeHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, la
         for (pairs) |pair| for (table.symbols) |*entry| {
             const hex = symbol.formatHash(entry.hash);
             if (pair.node.len < node_cas.min_address_len or !std.mem.startsWith(u8, &hex, pair.node)) continue;
-            wire.setFix("{s}{s}{s} is the symbol hash of {f}, not a node id; node ids come from emetgate_read_symbol nodes:true, or edit the whole symbol with symbol+hash+body", .{ label, pair.label, pair.node, entry.ref });
+            wire.setFix("{s}{s}{s} is the symbol hash of {f}, not a node id; node ids come from {s}emetgate_read_symbol nodes:true, or edit the whole symbol with symbol+hash+body", .{ label, pair.label, pair.node, entry.ref, tool_names.prefix() });
             return;
         };
     } else |_| {}
@@ -136,7 +137,7 @@ fn nodeHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, la
     defer gpa.free(annotated);
     for (pairs) |pair| {
         if (std.mem.indexOf(u8, annotated, pair.node) != null) continue;
-        wire.setFix("{s}{s}node {s} is not in {s} now; node ids change after every edit, so read them again with emetgate_read_symbol nodes:true and resend only this one", .{ label, pair.label, pair.node, file });
+        wire.setFix("{s}{s}node {s} is not in {s} now; node ids change after every edit, so read them again with {s}emetgate_read_symbol nodes:true and resend only this one", .{ label, pair.label, pair.node, file, tool_names.prefix() });
         return;
     }
 }
@@ -189,14 +190,14 @@ fn wholeFileHint(gpa: Allocator, io: std.Io, root: ?[]const u8, items: []const V
     return false;
 }
 
-const write_doc_absent_fix = "write_doc only edits an existing file with the hash read by emetgate_read_file; create a new file with emetgate_write";
+const write_doc_absent_fix = "write_doc only edits an existing file with the hash read by {[p]s}emetgate_read_file; create a new file with {[p]s}emetgate_write";
 
 fn absentSectionHint(items: []const Value) bool {
     for (items, 0..) |item, i| {
         const given = tool_result.getString(item, "hash") orelse continue;
         if (!std.mem.eql(u8, given, symbol.absent_text)) continue;
         if (tool_result.getField(item, "line_start") == null and tool_result.getField(item, "pointer") == null and tool_result.getField(item, "heading") == null) continue;
-        wire.setFix("edits[{d}]: " ++ write_doc_absent_fix, .{i});
+        wire.setFix("edits[{[i]d}]: " ++ write_doc_absent_fix, .{ .i = i, .p = tool_names.prefix() });
         return true;
     }
     return false;
@@ -205,5 +206,5 @@ fn absentSectionHint(items: []const Value) bool {
 pub fn afterWriteDoc(hash_hex: []const u8, err: anyerror) void {
     if (err != error.InvalidHash) return;
     if (!std.mem.eql(u8, hash_hex, symbol.absent_text)) return;
-    wire.setFix(write_doc_absent_fix, .{});
+    wire.setFix(write_doc_absent_fix, .{ .p = tool_names.prefix() });
 }
