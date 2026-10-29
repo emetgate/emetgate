@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const bounded_run = @import("../platform/bounded_run.zig");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
@@ -691,7 +692,7 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
         try out.writer.writeAll(l);
     }
     if (keep != 0) try out.writer.writeByte('\n');
-    try out.writer.print(ellipsis ++ " {d} lines in {d} hunks elided; pass detail:\"full\" for the full diff, or read a changed symbol with emetgate_read_symbol", .{ remaining, hunks_elided });
+    try out.writer.print(ellipsis ++ " {d} lines in {d} hunks elided; pass detail:\"full\" for the full diff, or read a changed symbol with {s}emetgate_read_symbol", .{ remaining, hunks_elided, tool_names.prefix() });
 
     return .{
         .text = try gpa.dupe(u8, out.written()),

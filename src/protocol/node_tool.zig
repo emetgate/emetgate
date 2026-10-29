@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const symbol = @import("../engine/symbol.zig");
 const node_cas = @import("../engine/node_cas.zig");
@@ -54,7 +55,7 @@ pub fn parse(gpa: Allocator, item: Value) ![]node_cas.Edit {
 
 fn one(item: Value) error{MissingArgument}!node_cas.Edit {
     return .{
-        .address = tool_result.getString(item, "node") orelse return tool_result.missing("node (string id from emetgate_read_symbol nodes:true)", .{}),
+        .address = tool_result.getString(item, "node") orelse return tool_result.missing("node (string id from {s}emetgate_read_symbol nodes:true)", .{tool_names.prefix()}),
         .text = tool_result.getString(item, "text") orelse return tool_result.missing("text (string; empty deletes the node)", .{}),
     };
 }

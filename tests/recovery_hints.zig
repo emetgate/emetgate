@@ -5,6 +5,7 @@ const handlers = @import("emetgate").handlers;
 const server = @import("emetgate").server;
 const telemetry = @import("emetgate").telemetry;
 const recovery = @import("emetgate").recovery;
+const tool_names = @import("emetgate").tool_names;
 const Runtime = @import("emetgate").runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
@@ -235,4 +236,61 @@ test "recovery hints: a hint left from an earlier call never reaches the next er
     @import("emetgate").wire.setFix("left over", .{});
     const fix = try case.fix("emetgate_symbols", try case.args("{{\"file\":\"{s}\"}}", .{try case.escaped("src/missing.ts")}));
     try testing.expect(!std.mem.eql(u8, "left over", fix));
+}
+
+fn expectNoBareToolName(text: []const u8) !void {
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, text, at, "emetgate_")) |start| : (at = start + 1) {
+        errdefer std.debug.print("bare tool name at {d} in {s}\n", .{ start, text });
+        try testing.expect(start != 0 and (std.ascii.isAlphanumeric(text[start - 1]) or text[start - 1] == '_'));
+    }
+}
+
+fn rpcResult(line: []const u8) !std.json.Parsed(Value) {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    _ = try server.handleMessage(testing.allocator, testing.io, undefined, line, &out.writer);
+    return std.json.parseFromSlice(Value, testing.allocator, out.written(), .{});
+}
+
+test "recovery hints: with a tool prefix every tool named in instructions and descriptions is the name the client calls" {
+    try tool_names.setPrefix("mcp__emetgate__");
+    defer tool_names.setPrefix("") catch unreachable;
+    const init = try rpcResult("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}");
+    defer init.deinit();
+    const instructions = init.value.object.get("result").?.object.get("instructions").?.string;
+    try expectContains(instructions, "mcp__emetgate__emetgate_try_batch");
+    try expectNoBareToolName(instructions);
+
+    const list = try rpcResult("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
+    defer list.deinit();
+    const tools = list.value.object.get("result").?.object.get("tools").?.array.items;
+    try testing.expectEqual(tool_names.all.len, tools.len);
+    for (tools) |tool| {
+        const name = tool.object.get("name").?.string;
+        var listed = false;
+        for (tool_names.all) |known| listed = listed or std.mem.eql(u8, known, name);
+        errdefer std.debug.print("{s}\n", .{name});
+        try testing.expect(listed);
+        try expectNoBareToolName(tool.object.get("description").?.string);
+        var props = tool.object.get("inputSchema").?.object.get("properties").?.object.iterator();
+        while (props.next()) |prop| if (prop.value_ptr.object.get("description")) |desc| try expectNoBareToolName(desc.string);
+    }
+}
+
+test "recovery hints: with a tool prefix computed and static fix lines name tools by the name the client calls" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try tool_names.setPrefix("mcp__emetgate__");
+    defer tool_names.setPrefix("") catch unreachable;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    const computed = try case.fix("emetgate_write_doc", try case.args("{{\"file\":\"{s}\",\"hash\":\"absent\",\"content\":\"# Notes\\n\",\"heading\":\"Notes\"}}", .{try case.escaped("notes.md")}));
+    try expectContains(computed, "create a new file with mcp__emetgate__emetgate_write");
+    try expectNoBareToolName(computed);
+    const fixed = try case.fix("emetgate_try", try case.args("{{\"file\":\"{s}\",\"symbol\":\"nope\",\"hash\":\"absent\",\"body\":\"x\"}}", .{try case.escaped("src/math.ts")}));
+    try expectNoBareToolName(fixed);
+    const unknown = try case.fix("emetgate_symbols", try case.args("{{\"file\":\"{s}\",\"within\":\"zzz\"}}", .{try case.escaped("src/math.ts")}));
+    try expectContains(unknown, "mcp__emetgate__emetgate_symbols");
+    try expectNoBareToolName(unknown);
 }

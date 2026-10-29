@@ -189,7 +189,7 @@ test "lockdown gives a project emetgate server without a test flag --detect-test
     ;
     const marked = (try lockdown.alwaysLoadConfig(gpa, bare)).?;
     defer gpa.free(marked);
-    try testing.expect(std.mem.indexOf(u8, marked, "[\"mcp\",\"--detect-test\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, marked, "[\"mcp\",\"--detect-test\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
     const tested = (try lockdown.alwaysLoadConfig(gpa, emetgate_config)).?;
     defer gpa.free(tested);
     try testing.expect(std.mem.indexOf(u8, tested, "--detect-test") == null);
@@ -245,7 +245,7 @@ test "every emetgate tool is either pre-allowed by lockdown or left to the permi
 }
 
 const loaded_config =
-    \\{"mcpServers":{"gate":{"command":"C:/tools/emetgate.exe","args":["mcp","--test","npm test"],"alwaysLoad":true}}}
+    \\{"mcpServers":{"gate":{"command":"C:/tools/emetgate.exe","args":["mcp","--test","npm test","--tool-prefix","mcp__gate__"],"alwaysLoad":true}}}
 ;
 
 const emetgate_config =
@@ -376,10 +376,10 @@ test "lockdown's own config hands the server --test with a given command and --d
     const gpa = testing.allocator;
     const given = try lockdown.ownMcpConfigJson(gpa, "C:\\e.exe", "npm test");
     defer gpa.free(given);
-    try testing.expect(std.mem.indexOf(u8, given, "\"args\":[\"mcp\",\"--test\",\"npm test\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, given, "\"args\":[\"mcp\",\"--test\",\"npm test\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
     const detect = try lockdown.ownMcpConfigJson(gpa, "C:\\e.exe", null);
     defer gpa.free(detect);
-    try testing.expect(std.mem.indexOf(u8, detect, "\"args\":[\"mcp\",\"--detect-test\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, detect, "\"args\":[\"mcp\",\"--detect-test\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
     try testing.expect(server.parsePolicy(&[_][]const u8{lockdown.detect_flag}).?.detect_test);
 }
 
@@ -423,3 +423,57 @@ test "lockdown makes a folder outside any repository a git repository once, and 
 const other_test_config =
     \\{"mcpServers":{"gate":{"command":"C:/tools/Emetgate.EXE","args":["mcp","--test","npm run other"]}}}
 ;
+
+fn policyOf(gpa: std.mem.Allocator, server_entry: std.json.Value) !server.Policy {
+    const args = server_entry.object.get("args").?.array.items;
+    const strings = try gpa.alloc([]const u8, args.len - 1);
+    defer gpa.free(strings);
+    for (args[1..], strings) |arg, *s| s.* = arg.string;
+    return server.parsePolicy(strings).?;
+}
+
+test "lockdown tells its own server the prefix Claude Code puts before every allowed tool name" {
+    const gpa = testing.allocator;
+    const own = try lockdown.ownMcpConfigJson(gpa, "C:/tools/emetgate.exe", null);
+    defer gpa.free(own);
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, own, .{});
+    defer parsed.deinit();
+    const policy = try policyOf(gpa, parsed.value.object.get("mcpServers").?.object.get(lockdown.own_server_name).?);
+    const name = try lockdown.emetgateServer(gpa, own);
+    defer gpa.free(name);
+    const allowed_tools = try lockdown.allowedTools(gpa, name);
+    defer gpa.free(allowed_tools);
+    var tools = std.mem.tokenizeScalar(u8, allowed_tools, ' ');
+    var count: usize = 0;
+    while (tools.next()) |tool| : (count += 1) try testing.expect(std.mem.startsWith(u8, tool, policy.tool_prefix));
+    try testing.expectEqual(lockdown.read_only_tools.len, count);
+    try testing.expectEqualStrings("mcp__emetgate__", policy.tool_prefix);
+}
+
+test "lockdown gives each project emetgate server the prefix of its own name and keeps a prefix the project set" {
+    const gpa = testing.allocator;
+    const config =
+        \\{"mcpServers":{"my gate":{"command":"C:/tools/emetgate.exe","args":["mcp","--detect-test"]},"set":{"command":"emetgate","args":["serve","--detect-test","--tool-prefix","mine__"]},"docs":{"command":"node","args":["docs.js"]}}}
+    ;
+    const marked = (try lockdown.alwaysLoadConfig(gpa, config)).?;
+    defer gpa.free(marked);
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, marked, .{});
+    defer parsed.deinit();
+    const servers = parsed.value.object.get("mcpServers").?.object;
+    const part = try lockdown.toolNamePart(gpa, "my gate");
+    defer gpa.free(part);
+    const expected = try std.fmt.allocPrint(gpa, "mcp__{s}__", .{part});
+    defer gpa.free(expected);
+    try testing.expectEqualStrings(expected, (try policyOf(gpa, servers.get("my gate").?)).tool_prefix);
+    try testing.expectEqualStrings("mine__", (try policyOf(gpa, servers.get("set").?)).tool_prefix);
+    try testing.expectEqual(@as(usize, 1), servers.get("docs").?.object.get("args").?.array.items.len);
+}
+
+test "the server takes one valid --tool-prefix and refuses a second or one a tool name cannot hold" {
+    try testing.expectEqualStrings("mcp__gate__", server.parsePolicy(&[_][]const u8{ "--tool-prefix", "mcp__gate__" }).?.tool_prefix);
+    try testing.expectEqualStrings("", server.parsePolicy(&[_][]const u8{}).?.tool_prefix);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--tool-prefix", "a__", "--tool-prefix", "b__" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--tool-prefix", "mcp gate" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--tool-prefix", "" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{"--tool-prefix"}) == null);
+}

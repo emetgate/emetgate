@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const repo = @import("../platform/repo.zig");
@@ -880,7 +881,7 @@ fn writeRefused(w: *Writer, reason: []const u8, arg: []const u8) !void {
         try js.write(arg);
     }
     try js.objectField("fix");
-    try js.write(fixFor(reason));
+    try tool_names.writeJson(&js, fixFor(reason));
     try js.endObject();
     try w.writeByte('\n');
 }

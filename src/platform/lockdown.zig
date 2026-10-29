@@ -3,6 +3,7 @@ const bounded_run = @import("bounded_run.zig");
 const exe_path = @import("exe_path.zig");
 const lockdown_marks = @import("lockdown_marks.zig");
 const lockdown_slash = @import("lockdown_slash.zig");
+const tool_names = @import("../engine/tool_names.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -16,6 +17,8 @@ pub const own_server_name = "emetgate";
 pub const own_server_args = [_][]const u8{"mcp"};
 pub const detect_flag = "--detect-test";
 pub const test_flag = "--test";
+pub const tool_prefix_flag = "--tool-prefix";
+pub const own_tool_prefix = "mcp__" ++ own_server_name ++ "__";
 pub const setting_sources_flag = "--setting-sources";
 pub const setting_sources = "project";
 const user_settings_off = [_][]const u8{ setting_sources_flag, setting_sources };
@@ -119,6 +122,14 @@ pub fn alwaysLoadConfig(gpa: Allocator, mcp_config: []const u8) !?[]u8 {
             try args.append(.{ .string = detect_flag });
             changed = true;
         }
+        if (!namesFlag(args.items, tool_prefix_flag)) {
+            const arena = parsed.arena.allocator();
+            const prefix = try std.fmt.allocPrint(arena, "mcp__{s}__", .{try toolNamePart(arena, entry.key_ptr.*)});
+            if (tool_names.validPrefix(prefix)) {
+                try args.appendSlice(&.{ .{ .string = tool_prefix_flag }, .{ .string = prefix } });
+                changed = true;
+            }
+        }
         if (entry.value_ptr.object.get(always_load_field)) |present| {
             if (present == .bool and present.bool) continue;
         }
@@ -137,6 +148,14 @@ fn namesTest(args: []const std.json.Value) bool {
         if (arg != .string) continue;
         if (std.mem.eql(u8, arg.string, test_flag) or std.mem.eql(u8, arg.string, detect_flag)) return true;
         if (std.mem.startsWith(u8, arg.string, test_flag ++ "=")) return true;
+    }
+    return false;
+}
+
+fn namesFlag(args: []const std.json.Value, flag: []const u8) bool {
+    for (args) |arg| {
+        if (arg != .string) continue;
+        if (std.mem.eql(u8, arg.string, flag)) return true;
     }
     return false;
 }
@@ -223,6 +242,8 @@ pub fn ownMcpConfigJson(gpa: Allocator, exe_abs: []const u8, test_command: ?[]co
         try js.write(test_flag);
         try js.write(command);
     } else try js.write(detect_flag);
+    try js.write(tool_prefix_flag);
+    try js.write(own_tool_prefix);
     try js.endArray();
     try js.objectField(always_load_field);
     try js.write(true);

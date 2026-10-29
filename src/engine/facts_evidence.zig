@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("tool_names.zig");
 const ts = @import("tree_sitter.zig");
 const facts = @import("facts.zig");
 const facts_query = @import("facts_query.zig");
@@ -42,7 +43,7 @@ pub const Rendered = struct {
 
 pub const open_footer = "An edge not in this list does not mean there is none; unresolved references: ";
 pub const closed_footer = "No edge is missing from this list: every reference in scope is resolved; unresolved references: 0";
-pub const callers_note = "Callers are shown by signature and call line; the rest of each caller is not shown (emetgate_read_symbol reads it).";
+pub const callers_note = "Callers are shown by signature and call line; the rest of each caller is not shown ({s}emetgate_read_symbol reads it).";
 
 fn shortHash(hash: facts.Hash) [8]u8 {
     const hex = symbol.formatHash(hash);
@@ -123,7 +124,7 @@ const Renderer = struct {
     }
 
     fn elisionLine(self: *Renderer, first: u32, last: u32, path: []const u8, qname: []const u8) ![]const u8 {
-        return std.fmt.allocPrint(self.arena, "        ... {d} lines elided ({d}-{d}); read them with emetgate_read_symbol {{\"file\":\"{s}\",\"symbol\":\"{s}\"}}", .{ last - first + 1, first, last, path, qname });
+        return std.fmt.allocPrint(self.arena, "        ... {d} lines elided ({d}-{d}); read them with {s}emetgate_read_symbol {{\"file\":\"{s}\",\"symbol\":\"{s}\"}}", .{ last - first + 1, first, last, tool_names.prefix(), path, qname });
     }
 
     fn function(self: *Renderer, subject: facts_query.Subject, relevant: []const u32, allot: usize) !void {
@@ -305,7 +306,7 @@ pub fn render(arena: Allocator, out: *Writer, a: FactsAnswer, source: Source, bu
     }
 
     const shown_sites = try siteLines(&r, arena, value);
-    if (shown_sites != 0 and (value.relation == .callers or value.relation == .refs)) _ = try r.push(callers_note);
+    if (shown_sites != 0 and (value.relation == .callers or value.relation == .refs)) _ = try r.push(try std.fmt.allocPrint(arena, callers_note, .{tool_names.prefix()}));
     for (value.sites[shown_sites..]) |site| {
         r.cut += 1;
         try r.markElided(site.path);

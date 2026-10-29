@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const shadow = @import("../platform/shadow.zig");
 const run_command = @import("../platform/run_command.zig");
@@ -471,9 +472,9 @@ pub fn writeRunOutput(gpa: Allocator, io: std.Io, root_abs: []const u8, report: 
     try js.write(raw);
     if (raw > verbatim_under) {
         if (try storeLog(gpa, io, root_abs, report)) |id| {
-            var buf: [64]u8 = undefined;
+            var buf: [64 + tool_names.max_prefix]u8 = undefined;
             try js.objectField("full_log");
-            try js.write(try std.fmt.bufPrint(&buf, "emetgate_run command=\"{s}{s}\"", .{ log_prefix, &id }));
+            try js.write(try std.fmt.bufPrint(&buf, "{s}emetgate_run command=\"{s}{s}\"", .{ tool_names.prefix(), log_prefix, &id }));
         }
     }
 }

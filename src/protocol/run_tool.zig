@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const shadow = @import("../platform/shadow.zig");
 const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
@@ -187,7 +188,7 @@ fn writeRefused(w: *Writer, command: []const u8, reason: []const u8, allowed: []
     try js.write(allowed);
     if (std.mem.eql(u8, reason, "not_allowed")) {
         try js.objectField("fix");
-        try js.write(if (isGit(command)) git_fix else toolchain_fix);
+        try tool_names.writeJson(&js, if (isGit(command)) git_fix else toolchain_fix);
     }
     try js.endObject();
     try w.writeByte('\n');
