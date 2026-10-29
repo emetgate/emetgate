@@ -15400,8 +15400,8 @@
     {
       "id": "RT1-git-refusal-gets-toolchain-fix",
       "file": "src/protocol/run_tool.zig",
-      "from": "        try js.write(if (isGit(command)) git_fix else toolchain_fix);",
-      "to": "        try js.write(toolchain_fix);",
+      "from": "        try tool_names.writeJson(&js, if (isGit(command)) git_fix else toolchain_fix);",
+      "to": "        try tool_names.writeJson(&js, toolchain_fix);",
       "kills": [
         "run tool: a refused git command points at the git tools"
       ]
@@ -16218,7 +16218,7 @@
     {
       "id": "RS1-rename-service-failure-not-named",
       "file": "src/protocol/rename_tool.zig",
-      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with emetgate_try_batch old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym });",
+      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with {s}emetgate_try_batch old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym, tool_names.prefix() });",
       "to": "",
       "kills": [
         "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
@@ -16977,6 +16977,60 @@
       "to": "    _ = &frozenEnds;\n",
       "kills": [
         "frozen: a file move with a frozen end is refused before the language service is asked, so a silent service cannot hide it"
+      ]
+    },
+    {
+      "id": "TN1-tool-names-never-match",
+      "file": "src/engine/tool_names.zig",
+      "from": "        if ((start == 0 or !isIdent(prose[start - 1])) and known(prose[start..end])) return .{ .start = start, .end = end };\n",
+      "to": "        if (false) return .{ .start = start, .end = end };\n",
+      "kills": [
+        "tool names: every known tool name is prefixed, the longest name wins and other words stay"
+      ]
+    },
+    {
+      "id": "TN2-tool-names-inside-words",
+      "file": "src/engine/tool_names.zig",
+      "from": "        if ((start == 0 or !isIdent(prose[start - 1])) and known(prose[start..end])) return .{ .start = start, .end = end };\n",
+      "to": "        if (known(prose[start..end])) return .{ .start = start, .end = end };\n",
+      "kills": [
+        "tool names: every known tool name is prefixed, the longest name wins and other words stay"
+      ]
+    },
+    {
+      "id": "TN3-static-fix-not-prefixed",
+      "file": "src/protocol/wire.zig",
+      "from": "    if (fix.dynamic) try js.write(fix.text) else try tool_names.writeJson(js, fix.text);\n",
+      "to": "    try js.write(fix.text);\n",
+      "kills": [
+        "recovery hints: with a tool prefix computed and static fix lines name tools by the name the client calls"
+      ]
+    },
+    {
+      "id": "TN4-instructions-not-prefixed",
+      "file": "src/protocol/server.zig",
+      "from": "    try tool_names.writeJson(&js, instructions);\n",
+      "to": "    try js.write(instructions);\n",
+      "kills": [
+        "recovery hints: with a tool prefix every tool named in instructions and descriptions is the name the client calls"
+      ]
+    },
+    {
+      "id": "LD1-own-config-without-tool-prefix",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try js.write(tool_prefix_flag);\n    try js.write(own_tool_prefix);\n",
+      "to": "",
+      "kills": [
+        "lockdown tells its own server the prefix Claude Code puts before every allowed tool name"
+      ]
+    },
+    {
+      "id": "LD2-project-config-without-tool-prefix",
+      "file": "src/platform/lockdown.zig",
+      "from": "        if (!namesFlag(args.items, tool_prefix_flag)) {\n",
+      "to": "        if (namesFlag(args.items, tool_prefix_flag)) {\n",
+      "kills": [
+        "lockdown gives each project emetgate server the prefix of its own name and keeps a prefix the project set"
       ]
     }
   ]

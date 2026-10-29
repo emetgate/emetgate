@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const symbol = @import("../engine/symbol.zig");
 const symmetry = @import("../engine/symmetry.zig");
 const node_cas = @import("../engine/node_cas.zig");
@@ -129,7 +130,7 @@ pub fn writeSymbolsCompact(gpa: Allocator, writer: *Writer, file: []const u8, ta
     try js.objectField("file");
     try js.write(file);
     try js.objectField("hashes");
-    try js.write("emetgate_read_symbol returns the hash, or pass detail:\"full\"");
+    try tool_names.writeJson(&js, "emetgate_read_symbol returns the hash, or pass detail:\"full\"");
     try js.objectField("symbols");
     try js.write(lines.written());
     if (table.declarations.len != 0) {
@@ -186,7 +187,7 @@ fn writeSymbolsOutline(gpa: Allocator, writer: *Writer, file: []const u8, table:
     try js.objectField("file");
     try js.write(file);
     try js.objectField("hashes");
-    try js.write("emetgate_read_symbol returns the hash, or pass detail:\"full\"");
+    try tool_names.writeJson(&js, "emetgate_read_symbol returns the hash, or pass detail:\"full\"");
     try js.objectField("outline");
     try js.write(text.written());
     try js.objectField("members");
@@ -262,7 +263,7 @@ fn writeDocs(js: *std.json.Stringify, docs: []const doc_fold.LineSpan, hint: []c
     try js.writer.writeAll("\"folded lines ");
     for (docs, 0..) |span, i| try js.writer.print("{s}{d}-{d}", .{ if (i == 0) "" else ",", span.first, span.last });
     try js.writer.writeAll("; ");
-    try std.json.Stringify.encodeJsonStringChars(hint, .{}, js.writer);
+    try tool_names.writeJsonChars(js.writer, hint);
     try js.writer.writeByte('"');
     js.endWriteRaw();
 }
@@ -386,7 +387,7 @@ pub fn writeSymbolBodyFolded(writer: *Writer, file: []const u8, ref: []const u8,
     try js.write(hex[0..]);
     try writeFoldedFields(&js, folded);
     try js.objectField("note");
-    try js.write(folded_note);
+    try tool_names.writeJson(&js, folded_note);
     try js.objectField("body");
     try js.write(folded.view.text);
     try js.endObject();
@@ -477,7 +478,7 @@ pub fn writeSymbolBodies(writer: *Writer, file: []const u8, entries: []const Sym
         if (entry.folded) |folded| {
             try writeFoldedFields(&js, folded);
             try js.objectField("note");
-            try js.write(folded_note);
+            try tool_names.writeJson(&js, folded_note);
             try js.objectField("body");
             try js.write(folded.view.text);
         } else if (entry.body) |body| {
@@ -526,7 +527,7 @@ pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32,
         if (entry.folded) |folded| {
             try writeFoldedFields(&js, folded);
             try js.objectField("note");
-            try js.write(folded_note);
+            try tool_names.writeJson(&js, folded_note);
             try js.objectField("text");
             try js.write(folded.view.text);
         } else if (entry.text) |text| {
@@ -1415,22 +1416,24 @@ pub fn takeFixForTest() []const u8 {
     return given;
 }
 
-fn takeFix(name: []const u8) ?[]const u8 {
+const Fix = struct { text: []const u8, dynamic: bool };
+
+fn takeFix(name: []const u8) ?Fix {
     if (fix_len > 0) {
         const given = fix_buffer[0..fix_len];
         fix_len = 0;
-        return given;
+        return .{ .text = given, .dynamic = true };
     }
     if (std.mem.eql(u8, name, "LabelDenied")) {
-        if (shadow.takeLabelDeniedFix(&fix_buffer)) |text| return text;
+        if (shadow.takeLabelDeniedFix(&fix_buffer)) |text| return .{ .text = text, .dynamic = true };
     }
-    return fixFor(name);
+    return .{ .text = fixFor(name) orelse return null, .dynamic = false };
 }
 
 fn writeFix(js: *std.json.Stringify, name: []const u8) !void {
     const fix = takeFix(name) orelse return;
     try js.objectField("fix");
-    try js.write(fix);
+    if (fix.dynamic) try js.write(fix.text) else try tool_names.writeJson(js, fix.text);
 }
 
 fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, command_field: []const u8, command: []const u8, report: sandbox.Report, note: ?ShadowNote) !void {

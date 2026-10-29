@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("tool_names.zig");
 const facts = @import("facts.zig");
 const facts_store = @import("facts_store.zig");
 const symbol = @import("symbol.zig");
@@ -359,7 +360,7 @@ pub fn explore(fs: *const evidence.FactStore, m: *const map.Map, wanted: []const
             },
         }
     } else if (targets.items.len != 0) {
-        code_note = try std.fmt.allocPrint(arena, "code not shown: {d} characters left of the explore budget {d}; emetgate_evidence reads the ranked functions\n", .{ code_budget, budget });
+        code_note = try std.fmt.allocPrint(arena, "code not shown: {d} characters left of the explore budget {d}; {s}emetgate_evidence reads the ranked functions\n", .{ code_budget, budget, tool_names.prefix() });
         for (targets.items) |t| try elided_paths.put(arena, t.hit.path, {});
     }
 

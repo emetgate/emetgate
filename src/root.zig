@@ -126,6 +126,7 @@ pub const commit_group = @import("platform/commit_group.zig");
 pub const commit_intent = @import("platform/commit_intent.zig");
 pub const own_dir = @import("platform/own_dir.zig");
 pub const text_checks = @import("engine/text_checks.zig");
+pub const tool_names = @import("engine/tool_names.zig");
 pub const batch_plan = @import("platform/batch_plan.zig");
 pub const doc_writer = @import("platform/doc_writer.zig");
 pub const rules = @import("platform/rules.zig");

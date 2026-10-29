@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const commit_intent = @import("../platform/commit_intent.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const telemetry = @import("telemetry.zig");
@@ -353,6 +354,7 @@ pub const Served = struct {
 };
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
+    try tool_names.setPrefix(policy.tool_prefix);
     var served: Served = undefined;
     served.open(gpa, io, runtime, policy, .{});
     defer served.close();
@@ -490,7 +492,7 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
     try js.write(server_version);
     try js.endObject();
     try js.objectField("instructions");
-    try js.write(instructions);
+    try tool_names.writeJson(&js, instructions);
     try js.endObject();
     try js.endObject();
 }
@@ -530,7 +532,7 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
         try js.objectField("name");
         try js.write(tool.name);
         try js.objectField("description");
-        try js.write(tool.description);
+        try tool_names.writeJson(&js, tool.description);
         try js.objectField("inputSchema");
         try js.beginObject();
         try js.objectField("type");
@@ -544,7 +546,7 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
             try js.write(prop.ty);
             if (prop.desc.len > 0) {
                 try js.objectField("description");
-                try js.write(prop.desc);
+                try tool_names.writeJson(&js, prop.desc);
             }
             try js.endObject();
         }
@@ -584,7 +586,7 @@ fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.objectField("name");
     try js.write("emetgate_try_batch");
     try js.objectField("description");
-    try js.write(batch_description);
+    try tool_names.writeJson(js, batch_description);
     try js.objectField("inputSchema");
     try js.beginObject();
     try js.objectField("type");

@@ -1,4 +1,5 @@
 const std = @import("std");
+const tool_names = @import("../engine/tool_names.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const tool_result = @import("tool_result.zig");
 const mirror_mod = @import("mirror.zig");
@@ -46,6 +47,7 @@ pub const Policy = struct {
     shadow_private: [max_private][]const u8 = undefined,
     shadow_private_len: usize = 0,
     cache: cache_gc.Flags = .{},
+    tool_prefix: []const u8 = "",
 
     pub fn invalidate(self: *const Policy) void {
         if (self.find_session) |session| session.invalidate();
@@ -116,6 +118,12 @@ pub fn parsePolicy(args: anytype) ?Policy {
         } else if (std.mem.eql(u8, arg, "--commit")) {
             if (policy.commit) return null;
             policy.commit = true;
+        } else if (std.mem.eql(u8, arg, "--tool-prefix")) {
+            if (policy.tool_prefix.len != 0 or i + 1 >= args.len) return null;
+            i += 1;
+            const text: []const u8 = args[i];
+            if (!tool_names.validPrefix(text)) return null;
+            policy.tool_prefix = text;
         } else if (std.mem.eql(u8, arg, "--search-internals")) {
             if (policy.search_internals) return null;
             policy.search_internals = true;
