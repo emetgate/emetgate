@@ -17,16 +17,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Zig
-        shell: pwsh
-        run: |
-          $zip = "zig-x86_64-windows-$env:ZIG_VERSION.zip"
-          $url = "https://ziglang.org/download/$env:ZIG_VERSION/$zip"
-          Invoke-WebRequest $url -OutFile $zip
-          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
-          Remove-Item $zip
-          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
-      - run: zig version
       - name: Tag matches the manifest version
         shell: pwsh
         run: |
@@ -34,12 +24,7 @@ jobs:
           if (-not $m) { throw "build.zig.zon has no .version" }
           $want = "v" + $m.Matches[0].Groups[1].Value
           if ($env:GITHUB_REF_NAME -ne $want) { throw "tag $env:GITHUB_REF_NAME does not match build.zig.zon version $want" }
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - name: Install ripgrep
-        run: choco install ripgrep -y --no-progress
+      - uses: ./.github/actions/setup
       - run: zig build test -Doptimize=ReleaseSafe -Dcpu=baseline --summary all
       - run: zig build -Doptimize=ReleaseSafe -Dcpu=baseline
       - name: Smoke-test the built binary
