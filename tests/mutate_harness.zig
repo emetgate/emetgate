@@ -229,6 +229,37 @@ test "harness: every mutation's from text occurs in its file as the harness woul
     try testing.expectEqual(@as(usize, 0), stale);
 }
 
+test "harness: every Zig mutation still passes Zig's own unused, unreachable and never-mutated checks" {
+    const Entry = struct { id: []const u8, file: []const u8, from: []const u8, to: []const u8, all: bool = false, expect_status: []const u8 = "killed" };
+    const Spec = struct { mutations: []const Entry };
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const cwd = std.Io.Dir.cwd();
+    const spec_bytes = try cwd.readFileAlloc(testing.io, "tests/mutations.json", arena, .limited(1024 * 1024));
+    const spec = try std.json.parseFromSliceLeaky(Spec, arena, spec_bytes, .{ .ignore_unknown_fields = true });
+
+    var broken: usize = 0;
+    for (spec.mutations) |m| {
+        if (!std.mem.endsWith(u8, m.file, ".zig") or std.mem.eql(u8, m.expect_status, "compile_error")) continue;
+        const source = try cwd.readFileAlloc(testing.io, m.file, arena, .limited(core.max_source_bytes));
+        const mutated = core.applyMutation(arena, source, m.from, m.to, m.all) catch continue;
+        if (try passesAstGen(testing.allocator, try arena.dupeZ(u8, mutated))) continue;
+        std.debug.print("mutation {s} in {s} does not compile, run it alone to see the error\n", .{ m.id, m.file });
+        broken += 1;
+    }
+    try testing.expectEqual(@as(usize, 0), broken);
+}
+
+fn passesAstGen(gpa: std.mem.Allocator, source: [:0]const u8) !bool {
+    var tree = try std.zig.Ast.parse(gpa, source, .zig);
+    defer tree.deinit(gpa);
+    if (tree.errors.len != 0) return false;
+    var zir = try std.zig.AstGen.generate(gpa, tree);
+    defer zir.deinit(gpa);
+    return !zir.hasCompileErrors();
+}
+
 const test_roots = [_][]const u8{ "src/root.zig", "test_root.zig" };
 
 fn namesReachedFrom(arena: std.mem.Allocator, dir: std.Io.Dir, roots: []const []const u8) !std.StringHashMapUnmanaged(void) {

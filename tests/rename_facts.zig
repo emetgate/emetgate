@@ -825,7 +825,7 @@ test "rename facts: a Python absolute import inside a package reaches the root m
 
     var ambiguous = try Case.init(&.{
         .{ .rel = "m.py", .text = "def helper():\n    return 1\n" },
-        .{ .rel = "tools/m.py", .text = "VALUE = 2\n" },
+        .{ .rel = "tools/m.py", .text = "def helper():\n    return 2\n" },
         .{ .rel = "tools/run.py", .text = "from m import helper\n" },
     });
     defer ambiguous.deinit();

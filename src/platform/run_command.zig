@@ -530,6 +530,18 @@ test "toolchain commands are accepted for the repo run while shells, git and met
     }
 }
 
+test "the repo run refuses a toolchain command that carries a metacharacter or an argument escaping the root" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    try testing.expect(isToolchainIn(testing.io, root, "npm install"));
+    for ([_][]const u8{ "npm install & del x", "pytest -q | more", "go test ./... > out.txt", "pip wheel . -w C:\\out", "pip install src\\..\\..\\x" }) |command| {
+        errdefer std.debug.print("accepted: {s}\n", .{command});
+        try testing.expect(!isToolchainIn(testing.io, root, command));
+    }
+}
+
 fn makeFile(dir: std.Io.Dir, sub_path: []const u8, data: []const u8) !void {
     if (std.fs.path.dirname(sub_path)) |parent| try dir.createDirPath(testing.io, parent);
     try dir.writeFile(testing.io, .{ .sub_path = sub_path, .data = data });
