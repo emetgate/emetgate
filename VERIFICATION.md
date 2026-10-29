@@ -7,8 +7,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **2414**
-- Mutations declared in `tests/mutations.json`: **1761**
-  - killed: **1712**
+- Mutations declared in `tests/mutations.json`: **1767**
+  - killed: **1718**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -195,7 +195,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-178 mutation(s).
+180 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -377,6 +377,8 @@ python tools/verification_page.py --check
 | `SL9-trace-drops-stale-failure` | `src/platform/runner.zig` | `t.tree.?.stale_left = stale_left;` -> `` | a stale shadow that the sweep could not remove is named in the trace of the nex... | killed |
 | `SL12-temp-clear-error-swallowed` | `src/platform/runner.zig` | `shadow.clearTemp(io, temp) catch \|err\| {         report.deini...` -> `` | a gated command gets its own writable TEMP and TMP next to its directory, remov... | killed |
 | `REDET1-batch-detects-on-disk-only` | `src/platform/batch.zig` | `const tests = try test_command_mod.redetect(gpa, io, options.te...` -> `const tests = options.test_command;` | test detection: a batch that creates the project file runs the test command it ...; test ... | killed |
+| `LD1-own-config-without-tool-prefix` | `src/platform/lockdown.zig` | `try js.write(tool_prefix_flag);     try js.write(own_tool_prefi...` -> `` | lockdown tells its own server the prefix Claude Code puts before every allowed ... | killed |
+| `LD2-project-config-without-tool-prefix` | `src/platform/lockdown.zig` | `if (!namesFlag(args.items, tool_prefix_flag)) {` -> `if (namesFlag(args.items, tool_prefix_flag)) {` | lockdown gives each project emetgate server the prefix of its own name and keep... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -753,7 +755,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1107 mutation(s).
+1111 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1712,7 +1714,7 @@ python tools/verification_page.py --check
 | `BR1-output-limit-unchecked` | `src/platform/bounded_run.zig` | `if (options.stdout_limit.toInt()) \|limit\| if (reader.reader(0...` -> `_ = options.stdout_limit;` | output over the limit stops the child instead of hanging | killed |
 | `GB1-blame-capped-at-the-raw-output-limit` | `src/protocol/git_tools.zig` | `.stdout_limit = .limited(if (is_blame) max_blame_bytes else max...` -> `.stdout_limit = .limited(max_git_output_bytes),` | whole-file blame over the raw output cap answers in ranges under the budget and... | killed |
 | `CG1-restored-file-counts-as-drift` | `src/platform/commit_group.zig` | `if (try equalsHead(arena, io, root, item.rel, bytes)) continue;` -> `_ = &equalsHead;` | emetgate_commit: a gated file that git put back to HEAD is skipped, not refused... | killed |
-| `RT1-git-refusal-gets-toolchain-fix` | `src/protocol/run_tool.zig` | `try js.write(if (isGit(command)) git_fix else toolchain_fix);` -> `try js.write(toolchain_fix);` | run tool: a refused git command points at the git tools | killed |
+| `RT1-git-refusal-gets-toolchain-fix` | `src/protocol/run_tool.zig` | `try tool_names.writeJson(&js, if (isGit(command)) git_fix else ...` -> `try tool_names.writeJson(&js, toolchain_fix);` | run tool: a refused git command points at the git tools | killed |
 | `RT2-empty-allowlist-no-hint` | `src/protocol/run_tool.zig` | `try js.write(empty_fix);` -> `try js.write(if (empty_fix.len == 0) toolchain_fix else toolcha...` | run tool: an empty allowlist says how to get a test command and that toolchain ... | killed |
 | `RT3-empty-allowlist-ignores-detection` | `src/protocol/run_tool.zig` | `try writeAllowlist(w, allowed, if (policy.detect_test) undetect...` -> `try writeAllowlist(w, allowed, empty_allowlist_fix);` | run tool: with test detection on and no project file yet, an empty call says a ... | killed |
 | `HS1-commit-shortstat-dropped` | `src/protocol/handlers.zig` | `if (try commitShortstat(gpa, io, root, c.base, c.oid)) \|stat\|...` -> `if (@as(?[]u8, null)) \|stat\| {` | emetgate_commit: the MCP tool commits the pending gated writes | killed |
@@ -1864,6 +1866,10 @@ python tools/verification_page.py --check
 | `SL10-sweep-ignores-lease` | `src/platform/shadow_root.zig` | `error.Busy => return,` -> `error.Busy => return shadow.removeWorkspace(io, base_abs, works...` | sweep leaves a stale workspace whose lease a live process holds, and removes it... | killed |
 | `REDET2-late-command-not-reported` | `src/protocol/handlers.zig` | `const gated = test_command_mod.takeLate() orelse resolved;` -> `const gated = resolved;` | test detection: a batch that creates the project file with a failing test is re... | killed |
 | `FZ8-move-frozen-ends-checked-after-planning` | `src/platform/file_move.zig` | `if (try frozenEnds(gpa, io, root, options.request)) \|refused\|...` -> `_ = &frozenEnds;` | frozen: a file move with a frozen end is refused before the language service is... | killed |
+| `TN1-tool-names-never-match` | `src/engine/tool_names.zig` | `if ((start == 0 or !isIdent(prose[start - 1])) and known(prose[...` -> `if (false) return .{ .start = start, .end = end };` | tool names: every known tool name is prefixed, the longest name wins and other ... | killed |
+| `TN2-tool-names-inside-words` | `src/engine/tool_names.zig` | `if ((start == 0 or !isIdent(prose[start - 1])) and known(prose[...` -> `if (known(prose[start..end])) return .{ .start = start, .end = ...` | tool names: every known tool name is prefixed, the longest name wins and other ... | killed |
+| `TN3-static-fix-not-prefixed` | `src/protocol/wire.zig` | `if (fix.dynamic) try js.write(fix.text) else try tool_names.wri...` -> `try js.write(fix.text);` | recovery hints: with a tool prefix computed and static fix lines name tools by ... | killed |
+| `TN4-instructions-not-prefixed` | `src/protocol/server.zig` | `try tool_names.writeJson(&js, instructions);` -> `try js.write(instructions);` | recovery hints: with a tool prefix every tool named in instructions and descrip... | killed |
 
 ## What this system does not prove
 
