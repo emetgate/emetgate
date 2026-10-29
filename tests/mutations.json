@@ -11306,8 +11306,8 @@
     {
       "id": "LB4-left-behind-not-written",
       "file": "src/protocol/wire.zig",
-      "from": "        try js.write(@errorName(err));\n    }\n    try js.endObject();\n}\n\nfn writeNote",
-      "to": "        try js.write(@errorName(err)[0..0]);\n    }\n    try js.endObject();\n}\n\nfn writeNote",
+      "from": "        try js.objectField(\"left_behind\");\n        try js.write(@errorName(err));\n",
+      "to": "        try js.objectField(\"left_behind\");\n        try js.write(@errorName(err)[0..0]);\n",
       "kills": [
         "gate tree replies: a full copy that could not be removed after the call is named in the reply, a compact committed one included"
       ]
@@ -15837,7 +15837,7 @@
       "from": "    try workspace.track(module_files);",
       "to": "",
       "kills": [
-        "rename facts: a Python absolute import inside a package reaches the root module, and two candidate roots refuse"
+        "rename facts: a Python import that a same-named module never loaded for the rename could answer is refused"
       ]
     },
     {
@@ -16554,8 +16554,7 @@
       "to": "        if (false) {",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
-        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
       ]
     },
     {

@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2404**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2405**
 - Mutations declared in `tests/mutations.json`: **1761**
   - killed: **1712**
   - equivalent: **9**
@@ -1358,7 +1358,7 @@ python tools/verification_page.py --check
 | `CF3-store-checkout-replaces-a-file-that-is-there` | `src/platform/git_commit.zig` | `"checkout-index", "-q", "-a", prefix });` -> `"checkout-index", "-f", "-q", "-a", prefix });` | commit defense: a junction put inside the store between the link check and the ... | killed |
 | `CF4-stored-file-removed-through-a-link` | `src/platform/commit_store.zig` | `error.UnsafePath => return error.WorkspaceIsLink,` -> `error.UnsafePath => return,` | commit defense: a junction that stands inside the store where a changed file be... | killed |
 | `LB3-run-does-not-report-the-tree` | `src/platform/run_command.zig` | `if (options.used) \|used\| workspace.reportTo(used);` -> `if (options.used) \|used\| used.* = workspace.use;` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
-| `LB4-left-behind-not-written` | `src/protocol/wire.zig` | `try js.write(@errorName(err));     }     try js.endObject(); } ...` -> `try js.write(@errorName(err)[0..0]);     }     try js.endObject...` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
+| `LB4-left-behind-not-written` | `src/protocol/wire.zig` | `try js.objectField("left_behind");         try js.write(@errorN...` -> `try js.objectField("left_behind");         try js.write(@errorN...` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
 | `LB5-compact-committed-reply-hides-left-behind` | `src/protocol/wire.zig` | `if (tree.left_behind != null or tree.stale_left != null) try wr...` -> `if ((tree.left_behind != null or tree.stale_left != null) and f...` | gate tree replies: a full copy that could not be removed after the call is name... | killed |
 | `EP9-share-final-name-not-recognized` | `src/platform/exe_path.zig` | `if (std.mem.startsWith(u8, verbatim, verbatim_unc_prefix)) {` -> `if (false and std.mem.startsWith(u8, verbatim, verbatim_unc_pre...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
 | `EP10-final-name-without-its-prefix-accepted` | `src/platform/exe_path.zig` | `if (!std.mem.startsWith(u8, verbatim, verbatim_prefix)) return ...` -> `if (false and !std.mem.startsWith(u8, verbatim, verbatim_prefix...` | exe path: a final name becomes a drive or share path, and any other form gives ... | killed |
@@ -1759,7 +1759,7 @@ python tools/verification_page.py --check
 | `L5P-python-roots-ambiguity-ignored` | `src/platform/fact_modules.zig` | `if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, ...` -> `if (!std.mem.eql(u8, hit_root, root) and !sameTarget(previous, ...` | rename facts: a Python absolute import inside a package reaches the root module... | killed |
 | `L5Q-script-dir-not-a-root` | `src/platform/fact_modules.zig` | `const roots = [_][]const u8{ self.scriptRoot(importer_dir), "",...` -> `const roots = [_][]const u8{ importer_dir[0..0], "", python_sou...` | rename facts: a Python absolute import inside a package reaches the root module... | killed |
 | `L5R-package-dir-is-script-root` | `src/platform/fact_modules.zig` | `if (!lookup.has(init)) return dir;` -> `if (!lookup.has(init) or true) return dir;` | rename facts: a Python absolute import inside a package reaches the root module... | killed |
-| `L5S-unloaded-modules-untracked` | `src/platform/rename_graph.zig` | `try workspace.track(module_files);` -> `` | rename facts: a Python absolute import inside a package reaches the root module... | killed |
+| `L5S-unloaded-modules-untracked` | `src/platform/rename_graph.zig` | `try workspace.track(module_files);` -> `` | rename facts: a Python import that a same-named module never loaded for the ren... | killed |
 | `L5T-fact-file-drops-submodule` | `src/platform/fact_file.zig` | `b.submodule = if (submodule == 0) facts.none else submodule - 1;` -> `b.submodule = if (submodule == 0) facts.none else facts.none;` | fact store: a saved store keeps the submodule a Python from-import may name | killed |
 | `L5U-fact-file-submodule-off-by-one` | `src/platform/fact_file.zig` | `try e.varint(if (b.submodule == facts.none) 0 else b.submodule ...` -> `try e.varint(if (b.submodule == facts.none) 0 else b.submodule);` | fact store: a saved store keeps the submodule a Python from-import may name | killed |
 | `L5V-csharp-initializer-members-not-bound` | `src/engine/facts_extract.zig` | `if (std.mem.eql(u8, kind, initializer.entry)) try self.initiali...` -> `if (std.mem.eql(u8, kind, initializer.entry)) {}` | rename facts: a C# property set in an object initializer or a with expression i... | killed |
