@@ -137,7 +137,7 @@ test "harness: a timeout kills the grandchildren a command leaves behind" {
     try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const started = std.Io.Timestamp.now(testing.io, .awake);
-    try testing.expectError(error.Timeout, job.run(testing.allocator, testing.io, &.{ "cmd", "/c", "start /b ping -n 100 127.0.0.77 & ping -n 100 127.0.0.1" }, null, 1024 * 1024, 1));
+    try testing.expectError(error.Timeout, job.run(testing.allocator, testing.io, &.{ "cmd", "/c", "start /b ping -n 100 127.0.0.77 & ping -n 100 127.0.0.1" }, null, 1024 * 1024, 1, null));
     const elapsed_ns = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).nanoseconds;
     try testing.expect(elapsed_ns < 20 * std.time.ns_per_s);
 
@@ -214,9 +214,14 @@ test "harness: every mutation's from text occurs in its file as the harness woul
     const spec = try std.json.parseFromSlice(Spec, testing.allocator, spec_bytes, .{ .ignore_unknown_fields = true });
     defer spec.deinit();
     try testing.expect(spec.value.mutations.len > 0);
+    var env_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer env_arena.deinit();
+    const env = try std.process.Environ.createMap(testing.environ, env_arena.allocator());
+    const applied = env.get(core.applied_env) orelse "";
 
     var stale: usize = 0;
     for (spec.value.mutations) |m| {
+        if (std.mem.eql(u8, m.id, applied)) continue;
         const source = try cwd.readFileAlloc(testing.io, m.file, testing.allocator, .limited(core.max_source_bytes));
         defer testing.allocator.free(source);
         const mutated = core.applyMutation(testing.allocator, source, m.from, m.to, m.all) catch |err| {

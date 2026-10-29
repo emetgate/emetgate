@@ -3,6 +3,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const max_source_bytes = 64 * 1024 * 1024;
+pub const applied_env = "EMETGATE_MUTATION_APPLIED";
 
 pub const Kind = enum { unit, e2e };
 

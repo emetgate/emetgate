@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const windows = std.os.windows;
 
-pub fn run(gpa: Allocator, io: std.Io, argv: []const []const u8, cwd: ?[]const u8, output_limit: usize, timeout_s: u64) !std.process.RunResult {
+pub fn run(gpa: Allocator, io: std.Io, argv: []const []const u8, cwd: ?[]const u8, output_limit: usize, timeout_s: u64, env: ?*const std.process.Environ.Map) !std.process.RunResult {
     const timeout: std.Io.Timeout = .{ .duration = .{
         .raw = .{ .nanoseconds = @as(i96, timeout_s) * std.time.ns_per_s },
         .clock = .awake,
@@ -13,6 +13,7 @@ pub fn run(gpa: Allocator, io: std.Io, argv: []const []const u8, cwd: ?[]const u
         return std.process.run(gpa, io, .{
             .argv = argv,
             .cwd = if (cwd) |path| .{ .path = path } else .inherit,
+            .environ_map = env,
             .stdout_limit = .limited(output_limit),
             .stderr_limit = .limited(output_limit),
             .timeout = timeout,
@@ -25,6 +26,7 @@ pub fn run(gpa: Allocator, io: std.Io, argv: []const []const u8, cwd: ?[]const u
     var child = try std.process.spawn(io, .{
         .argv = argv,
         .cwd = if (cwd) |path| .{ .path = path } else .inherit,
+        .environ_map = env,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,

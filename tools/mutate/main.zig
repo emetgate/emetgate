@@ -399,7 +399,7 @@ fn buildSchema(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const S
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(arena, &.{ "zig", "build", "test-bin", "--summary", "none" });
         if (options.jobs) |n| try argv.append(arena, try std.fmt.allocPrint(arena, "-j{d}", .{n}));
-        const built = job.run(arena, io, argv.items, tree_dir, max_output, options.timeout_s);
+        const built = job.run(arena, io, argv.items, tree_dir, max_output, options.timeout_s, null);
         try restoreAll(arena, io, tree, backups.items);
         stats.build_seconds += secondsSince(io, started);
         const result = try built;
@@ -495,7 +495,7 @@ fn schemaBaseline(arena: Allocator, io: std.Io, exe: []const u8, chosen: []const
         while (end < failed.items.len and (end == start or bytes + failed.items[end].len < max_filter_bytes)) : (end += 1) bytes += failed.items[end].len + 12;
         const argv = try schemaArgv(arena, exe, 0, failed.items[start..end], &.{}, options.jobs orelse 4);
         start = end;
-        const result = job.run(arena, io, argv, tree_dir, max_output, options.timeout_s) catch |err| {
+        const result = job.run(arena, io, argv, tree_dir, max_output, options.timeout_s, null) catch |err| {
             std.debug.print("schema: baseline did not finish: {s}\n", .{@errorName(err)});
             return null;
         };
@@ -596,7 +596,7 @@ fn runSchemaMutant(gpa: Allocator, io: std.Io, exe: []const u8, m: Mutation, num
     const started = std.Io.Timestamp.now(io, .awake);
     while (true) {
         const argv = try schemaArgv(gpa, exe, number, filtersOf(m), skips.items, shards);
-        const result = job.run(gpa, io, argv, tree_dir, max_output, limitFor(m, options)) catch |err| switch (err) {
+        const result = job.run(gpa, io, argv, tree_dir, max_output, limitFor(m, options), null) catch |err| switch (err) {
             error.Timeout => {
                 outcome.status = "timeout";
                 outcome.ok = std.mem.eql(u8, m.expect_status, "timeout");
@@ -912,17 +912,24 @@ fn runBuild(arena: Allocator, io: std.Io, kind: core.Kind, m: Mutation, options:
         try argv.appendSlice(arena, &.{ "zig", "build", "e2e-lockdown", "--summary", "all" });
         if (m.optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
         if (options.jobs) |n| try argv.append(arena, try std.fmt.allocPrint(arena, "-j{d}", .{n}));
-        return job.run(arena, io, argv.items, tree_dir, max_output, core.timeoutFor(m.timeout_s, options.timeout_s));
+        return job.run(arena, io, argv.items, tree_dir, max_output, core.timeoutFor(m.timeout_s, options.timeout_s), try appliedEnv(arena, m.id));
     }
     const filters = if (options.full) &.{} else if (m.filter.len != 0) m.filter else m.kills;
-    return runFiltered(arena, io, filters, m.optimize, .{
+    return runFiltered(arena, io, filters, m.optimize, try appliedEnv(arena, m.id), .{
         .full = options.full,
         .timeout_s = limitFor(m, options),
         .jobs = options.jobs,
     });
 }
 
-fn runFiltered(arena: Allocator, io: std.Io, filters: []const []const u8, optimize: ?[]const u8, options: Options) !std.process.RunResult {
+fn appliedEnv(arena: Allocator, id: []const u8) !*const std.process.Environ.Map {
+    const env = try arena.create(std.process.Environ.Map);
+    env.* = try std.process.Environ.createMap(.{ .block = .global }, arena);
+    try env.put(core.applied_env, id);
+    return env;
+}
+
+fn runFiltered(arena: Allocator, io: std.Io, filters: []const []const u8, optimize: ?[]const u8, env: ?*const std.process.Environ.Map, options: Options) !std.process.RunResult {
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{ "zig", "build", "test", "--summary", "all", "-Dslow=true" });
     if (optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
@@ -930,7 +937,7 @@ fn runFiltered(arena: Allocator, io: std.Io, filters: []const []const u8, optimi
     if (!options.full) {
         for (filters) |f| try argv.append(arena, try std.fmt.allocPrint(arena, "-Dtest-filter={s}", .{f}));
     }
-    return job.run(arena, io, argv.items, tree_dir, max_output, options.timeout_s);
+    return job.run(arena, io, argv.items, tree_dir, max_output, options.timeout_s, env);
 }
 
 fn knownToGitAndClean(arena: Allocator, io: std.Io, path: []const u8) !bool {
