@@ -8,6 +8,7 @@ const shadow = @import("shadow.zig");
 const tsserver = @import("tsserver.zig");
 const batch = @import("batch.zig");
 const commit_plan = @import("commit_plan.zig");
+const rules = @import("rules.zig");
 const batch_plan = @import("batch_plan.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
@@ -523,6 +524,20 @@ pub const Outcome = struct {
     }
 };
 
+const empty_plan: Plan = .{ .prepared = &.{}, .edits = &.{}, .created_dirs = &.{}, .resolver = .text, .fallback = null, .users = 0, .rewritten = 0, .interface_change = false };
+
+fn frozenEnds(gpa: Allocator, io: std.Io, root: []const u8, request: Request) !?batch.BatchResult {
+    const from_rel = try repo.relativeUnder(gpa, root, request.from_abs);
+    defer gpa.free(from_rel);
+    const to_rel = try repo.relativeUnder(gpa, root, request.to_abs);
+    defer gpa.free(to_rel);
+    return switch (try rules.frozenGate(gpa, io, root, &.{ from_rel, to_rel })) {
+        .ok => null,
+        .violated => |report| .{ .rule_violation = report },
+        .failed => |failure| .{ .rule_check_failed = failure },
+    };
+}
+
 pub fn tryMoveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Outcome {
     if (options.test_command.len == 0) return error.NoTestCommand;
     const dir = std.fs.path.dirname(options.request.from_abs) orelse return error.InvalidPath;
@@ -530,6 +545,7 @@ pub fn tryMoveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Optio
     defer gpa.free(root);
     const lock = try shadow.Lock.acquire(io, root);
     defer lock.release();
+    if (try frozenEnds(gpa, io, root, options.request)) |refused| return .{ .plan = empty_plan, .result = refused };
     const planned = try plan(gpa, io, runtime, root, options.request, options.language_service);
     errdefer planned.deinit(gpa);
     const created: []const []const u8 = @ptrCast(planned.created_dirs);

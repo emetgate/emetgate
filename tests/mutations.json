@@ -16970,6 +16970,15 @@
       "kills": [
         "test detection: a batch that creates the project file with a failing test is rejected and writes nothing"
       ]
+    },
+    {
+      "id": "FZ8-move-frozen-ends-checked-after-planning",
+      "file": "src/platform/file_move.zig",
+      "from": "    if (try frozenEnds(gpa, io, root, options.request)) |refused| return .{ .plan = empty_plan, .result = refused };\n",
+      "to": "    _ = &frozenEnds;\n",
+      "kills": [
+        "frozen: a file move with a frozen end is refused before the language service is asked, so a silent service cannot hide it"
+      ]
     }
   ]
 }

@@ -242,8 +242,12 @@ test "frozen: a move is refused when the file it leaves or the file it enters is
 }
 
 fn moveFileCall(served: *Served) !Reply {
-    const env = &served.env;
     try move_file_case.plan(&served.case, &move_file_case.changes);
+    return moveFileCallUnplanned(served);
+}
+
+fn moveFileCallUnplanned(served: *Served) !Reply {
+    const env = &served.env;
     return env.call("emetgate_move_file", .{ .from = try env.abs("src/util.ts"), .to = try env.abs("src/core/tools/util.ts"), .from_hash = try env.fileHash("src/util.ts"), .message = message }, green, true);
 }
 
@@ -264,6 +268,18 @@ test "frozen: a file move out of a frozen path and a file move into a frozen dir
         try testing.expect(served.case.repo.exists("src/util.ts"));
         try testing.expect(!served.case.repo.exists("src/core/tools/util.ts"));
     }
+}
+
+test "frozen: a file move with a frozen end is refused before the language service is asked, so a silent service cannot hide it" {
+    try skipOffWindows();
+    var served: Served = undefined;
+    try move_file_case.initFiles(&served.case, &.{ignore}, true);
+    served.env = Env.init(&served.case.repo, served.case.runtime, &served.case.session);
+    defer served.deinit();
+    try freeze(served.case.repo.root_abs, "src/util.ts");
+    const before = try served.env.head();
+    try expectFrozen(&served.env, try moveFileCallUnplanned(&served), before, "src/util.ts");
+    try testing.expect(served.case.repo.exists("src/util.ts"));
 }
 
 fn runRule(root: []const u8, args: []const [:0]const u8) !void {
