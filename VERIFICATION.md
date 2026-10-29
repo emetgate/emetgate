@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2403**
-- Mutations declared in `tests/mutations.json`: **1760**
-  - killed: **1711**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2404**
+- Mutations declared in `tests/mutations.json`: **1761**
+  - killed: **1712**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -753,7 +753,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1106 mutation(s).
+1107 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1863,6 +1863,7 @@ python tools/verification_page.py --check
 | `GC16-tombstones-left-behind` | `src/platform/cache_gc.zig` | `for (names.items) \|name\| settleTombstone(io, family, family_a...` -> `_ = report;` | an entry with a file held open and no lease survives the age rule and the size ... | killed |
 | `SL10-sweep-ignores-lease` | `src/platform/shadow_root.zig` | `error.Busy => return,` -> `error.Busy => return shadow.removeWorkspace(io, base_abs, works...` | sweep leaves a stale workspace whose lease a live process holds, and removes it... | killed |
 | `REDET2-late-command-not-reported` | `src/protocol/handlers.zig` | `const gated = test_command_mod.takeLate() orelse resolved;` -> `const gated = resolved;` | test detection: a batch that creates the project file with a failing test is re... | killed |
+| `FZ8-move-frozen-ends-checked-after-planning` | `src/platform/file_move.zig` | `if (try frozenEnds(gpa, io, root, options.request)) \|refused\|...` -> `_ = &frozenEnds;` | frozen: a file move with a frozen end is refused before the language service is... | killed |
 
 ## What this system does not prove
 
