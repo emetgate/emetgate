@@ -121,7 +121,7 @@ branch broken: 1 commit(s)
 | fuzz & kırmızı takım | rastgele mutasyon artı saldırı derlemleri | beklenmedik veya düşmanca girdide çökme ya da kaçış yok |
 | ripgrep eşitlik kapısı | her koşuda isabet kümesini rg ile karşılaştırır | arama "hızlı ama yanlış" olamaz; satır satır denetlenir |
 
-Motor için: bugün 68 mutant: 59 öldürüldü, 6'sının eşdeğer olduğu kanıtlandı, 2'si derinlemesine savunma olarak tutulan fazladan koruma, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
+Motor için: bugün 69 mutant: 58 öldürüldü, 6'sının eşdeğer olduğu kanıtlandı, 4'ü derinlemesine savunma olarak tutulan fazladan koruma, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
 
 ## Ölçülen
 

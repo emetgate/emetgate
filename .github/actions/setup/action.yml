@@ -1,8 +1,19 @@
 name: setup
-description: Install the pinned Zig, Python with pytest, and ripgrep
+description: Enable 8.3 short names and install the pinned Zig, Python with pytest, and ripgrep
 runs:
   using: composite
   steps:
+    - name: Enable 8.3 short names on the work and temp volumes
+      shell: pwsh
+      run: |
+        fsutil 8dot3name set 2
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+        $drives = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, $env:TEMP) | ForEach-Object { Split-Path -Qualifier $_ } | Sort-Object -Unique
+        foreach ($drive in $drives) {
+          fsutil 8dot3name set $drive 0
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          fsutil 8dot3name query $drive
+        }
     - name: Install Zig
       shell: pwsh
       run: |

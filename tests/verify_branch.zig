@@ -126,6 +126,27 @@ test "verify --branch: a missing receipt makes the branch partial, not green" {
     try testing.expect(verify_branch.exitCode(result.verdict) != 0);
 }
 
+test "verify --branch: a clean merge of gated commits carries no receipt, so the branch is partial, not green" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    const base = try case.head();
+    try support.Repo.git(case.repo.root_abs, &.{ "checkout", "-q", "-b", "side" });
+    try case.gatedCommit("{\n  return b + a;\n}", "gated");
+    try support.Repo.git(case.repo.root_abs, &.{ "checkout", "-q", "-b", "trunk", base });
+    try support.Repo.git(case.repo.root_abs, &.{ "merge", "-q", "--no-ff", "-m", "merge side", "side" });
+
+    const result = try case.verify(base);
+    try testing.expectEqual(@as(usize, 2), result.count);
+    try testing.expectEqual(checker.Verdict.verified, result.links[0].verdict);
+    try testing.expect(result.links[0].has_receipt);
+    try testing.expectEqual(checker.Verdict.merged, result.links[1].verdict);
+    try testing.expect(!result.links[1].has_receipt);
+    try testing.expectEqual(verify_branch.BranchVerdict.partial, result.verdict);
+    try testing.expect(verify_branch.exitCode(result.verdict) != 0);
+}
+
 test "verify --branch: a forged receipt note makes the branch broken and shifts the chain tip" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

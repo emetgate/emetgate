@@ -66,6 +66,7 @@ fn runWith(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: ?
     while (reader.fill(options.reserve_amount, deadline)) |_| {
         if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) return error.StreamTooLong;
         if (options.stderr_limit.toInt()) |limit| if (reader.reader(1).buffered().len > limit) return error.StreamTooLong;
+        if (deadline.toDurationFromNow(io)) |left| if (left.raw.nanoseconds <= 0) return error.Timeout;
     } else |err| switch (err) {
         error.EndOfStream => {},
         else => |e| return e,
@@ -180,13 +181,26 @@ test "a child that outlives its timeout is killed and the call returns" {
     try std.testing.expect(elapsed < 10 * std.time.ns_per_s);
 }
 
+test "a child that floods its output with no limit is still stopped at its timeout" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const started = std.Io.Timestamp.now(std.testing.io, .awake);
+    const result = run(std.testing.allocator, std.testing.io, .{
+        .argv = &.{ "powershell.exe", "-NoProfile", "-Command", "while ($true) { [Console]::Out.Write(('x' * 65536)) }" },
+        .stdout_limit = .unlimited,
+        .timeout = timeoutMs(500),
+    });
+    try std.testing.expectError(error.Timeout, result);
+    const elapsed = started.durationTo(std.Io.Timestamp.now(std.testing.io, .awake)).nanoseconds;
+    try std.testing.expect(elapsed < 15 * std.time.ns_per_s);
+}
+
 test "output over the limit stops the child instead of hanging" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const started = std.Io.Timestamp.now(std.testing.io, .awake);
     const result = run(std.testing.allocator, std.testing.io, .{
         .argv = &.{ "powershell.exe", "-NoProfile", "-Command", "while ($true) { [Console]::Out.Write(('x' * 65536)) }" },
         .stdout_limit = .limited(1024 * 1024),
-        .timeout = timeoutMs(20_000),
+        .timeout = timeoutMs(5_000),
     });
     try std.testing.expectError(error.StreamTooLong, result);
     const elapsed = started.durationTo(std.Io.Timestamp.now(std.testing.io, .awake)).nanoseconds;

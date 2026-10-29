@@ -493,6 +493,39 @@ test "read tools refuse a file of a nested repository, worktree or bare reposito
     try testing.expectEqualStrings("plain\n", body.value.object.get("content").?.string);
 }
 
+extern "kernel32" fn SetEnvironmentVariableW(name: [*:0]const u16, value: ?[*:0]const u16) callconv(.winapi) std.os.windows.BOOL;
+
+test "with a git discovery variable set for the server, read tools still refuse a nested repository and serve the served one" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "dirrepo/a");
+    const dirrepo = try tmp.dir.realPathFileAlloc(testing.io, "dirrepo", testing.allocator);
+    defer testing.allocator.free(dirrepo);
+    try git_fixture.initRepo(dirrepo);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "dirrepo/a/note.txt", .data = "nested\n" });
+    try tmp.dir.createDirPath(testing.io, "plain");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "plain/note.txt", .data = "plain\n" });
+    const nested = try tmp.dir.realPathFileAlloc(testing.io, "dirrepo/a/note.txt", testing.allocator);
+    defer testing.allocator.free(nested);
+    const plain = try tmp.dir.realPathFileAlloc(testing.io, "plain/note.txt", testing.allocator);
+    defer testing.allocator.free(plain);
+
+    const name = std.unicode.utf8ToUtf16LeStringLiteral("GIT_CEILING_DIRECTORIES");
+    try testing.expect(SetEnvironmentVariableW(name, std.unicode.utf8ToUtf16LeStringLiteral("C:\\emetgate-no-such-ceiling")) != .FALSE);
+    defer _ = SetEnvironmentVariableW(name, null);
+    try expectToolError(runtime, "emetgate_read_file", .{ .file = nested }, "FileOutsideRepo");
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = plain });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("plain\n", body.value.object.get("content").?.string);
+}
+
 test "read tools refuse .git internals" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");

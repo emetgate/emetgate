@@ -4,7 +4,7 @@
       "id": "SO1-symbols-over-budget-not-outlined",
       "file": "src/protocol/wire.zig",
       "from": "    if (lines.written().len + declared.written().len > budget) return writeSymbolsOutline(gpa, writer, file, table, prefix, budget);",
-      "to": "",
+      "to": "    _ = .{ prefix, budget };",
       "kills": [
         "symbol listings over the read budget fold members under their class with a count and a within hint"
       ]
@@ -122,7 +122,7 @@
       "id": "SC1-symbols-never-compact",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);",
-      "to": "",
+      "to": "    _ = .{ full, budget };",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
       ]
@@ -1373,7 +1373,7 @@
       "note": "defense in depth for body replacement: a 594-case differential spike (ASI, regex/division, template, comment, U+2028, shared declarators, class and object members) found no body that passes every other guard and fails only this one; it is the load-bearing guard for the planned insertion target",
       "file": "src/engine/cas.zig",
       "from": "    try expectUntouchedOutside(before.*, after.*, cut, slot);\n",
-      "to": "",
+      "to": "    _ = before;\n",
       "filter": [
         "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour",
         "replacement bodies are normalised: a BOM and surrounding whitespace are ignored",
@@ -1757,7 +1757,7 @@
       "from": "if (!std.ascii.eqlIgnoreCase(own, root)) return error.FileOutsideRepo;",
       "to": "if (!std.ascii.eqlIgnoreCase(own, root) and false) return error.FileOutsideRepo;",
       "kills": [
-        "purple V7: no MCP tool reaches a repository other than the one being served"
+        "with a git discovery variable set for the server, read tools still refuse a nested repository and serve the served one"
       ]
     },
     {
@@ -1972,8 +1972,8 @@
     {
       "id": "NS6-insert-blank-line-always-added",
       "file": "src/engine/cas.zig",
-      "from": ".lead = if (grouped) \"\" else eol };",
-      "to": ".lead = eol };",
+      "from": "    return .{ .cut = .{ .start = kept, .end = @intCast(base.source.len) }, .lead = if (grouped) \"\" else eol };",
+      "to": "    _ = grouped;\n    return .{ .cut = .{ .start = kept, .end = @intCast(base.source.len) }, .lead = eol };",
       "kills": [
         "insert appends after the last newline with exactly one blank line added only when none is there"
       ]
@@ -1981,8 +1981,8 @@
     {
       "id": "NS7-insert-blank-line-never-added",
       "file": "src/engine/cas.zig",
-      "from": ".lead = if (grouped) \"\" else eol };",
-      "to": ".lead = \"\" };",
+      "from": "    return .{ .cut = .{ .start = kept, .end = @intCast(base.source.len) }, .lead = if (grouped) \"\" else eol };",
+      "to": "    _ = .{ grouped, eol };\n    return .{ .cut = .{ .start = kept, .end = @intCast(base.source.len) }, .lead = \"\" };",
       "kills": [
         "insert appends after the last newline with exactly one blank line added only when none is there",
         "absent: a new top-level symbol is appended, committed, parses and joins the symbol table"
@@ -2065,7 +2065,6 @@
       "from": "    try repo.addToIndex(gpa, io, root, rel);\n",
       "to": "",
       "kills": [
-        "new file: a later proposal to another file runs in a shadow that contains the created file",
         "new file: absent on a missing file creates it, the shadow sees it, and it is committed, parsed, listed and indexed"
       ]
     },
@@ -2164,7 +2163,7 @@
       "id": "NF11-create-body-rules-skipped",
       "file": "src/engine/cas.zig",
       "from": "    const declared = try expectSoleDeclaration(profile, next.tree.root(), after.*, slot, insertion.ref);\n",
-      "to": "    const declared = try soleTopLevelSymbol(after.*, slot);\n",
+      "to": "    const declared = try soleTopLevelSymbol(after.*, slot, insertion.ref);\n",
       "kills": [
         "create applies the same body rules as insert"
       ]
@@ -2483,9 +2482,7 @@
       "from": "        return scoped.eql(ref);",
       "to": "        return scoped.eql(ref) or true;",
       "kills": [
-        "a symbol where covers only proposals to that symbol",
-        "scope: a symbol-scoped rule blocks only a proposal to that symbol",
-        "scope: a batch applies a symbol-scoped rule only to the edit of that symbol"
+        "a symbol where covers only proposals to that symbol"
       ]
     },
     {
@@ -2548,7 +2545,7 @@
       "id": "SP22-scan-rule-where-not-rechecked",
       "file": "src/platform/scan.zig",
       "from": "                if (!w.coversFile(file)) continue;\n",
-      "to": "",
+      "to": "                _ = w;\n",
       "kills": [
         "scope: each rule in one scan keeps its own where"
       ]
@@ -2824,7 +2821,8 @@
       "to": "if (!isKind(key, shape.quoted_key) or true) return tree.text(key);",
       "kills": [
         "no_literal matches a quoted key but not a computed one",
-        "conformance: no_literal flags only literal values of the named option, spanning the whole pair"
+        "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
+        "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
       ],
       "filter": [
         "no_literal"
@@ -5188,8 +5186,7 @@
       "from": "if (try lowWriteBlocked(source_wide)) {",
       "to": "if (true) {",
       "kills": [
-        "a file whose label lets a low-integrity process write is copied, never linked",
-        "redteam link tree: writing, appending, truncating or changing attributes through a hardlink leaves the real file as it was"
+        "a file whose label lets a low-integrity process write is copied, never linked"
       ]
     },
     {
@@ -5207,8 +5204,7 @@
       "from": "                .directory => {",
       "to": "                .directory, .sym_link => {",
       "kills": [
-        "build hardlinks every file, recreates every directory and mirrors a reparse point as a junction to the same target",
-        "redteam link tree: a junction inside a linked directory is mirrored read-only, and writes through it never reach its target"
+        "build hardlinks every file, recreates every directory and mirrors a reparse point as a junction to the same target"
       ]
     },
     {
@@ -5259,10 +5255,10 @@
     {
       "id": "GT1-fsmonitor-override-removed",
       "file": "src/protocol/git_tools.zig",
-      "from": "    \"core.fsmonitor=false\",\n",
+      "from": "    \"-c\",\n    \"core.fsmonitor=false\",\n",
       "to": "",
       "expect_status": "survived",
-      "note": "open: the redteam repo sets core.fsmonitor to a shell command, but git's fsmonitor is a versioned hook protocol, not a bare exec like pager or diff.external; removing the override did not make any test observably run the hostile command, so this mutant survives without a hook-protocol-aware redteam fixture"
+      "note": "open: removing the override leaves the redteam fsmonitor command unrun because git asks the fsmonitor hook only once the index carries an fsmonitor extension, and every emetgate git call runs with --no-optional-locks, which never writes one; a fixture that plants that extension would kill it"
     },
     {
       "id": "GT2-commit-id-check-removed",
@@ -5295,9 +5291,9 @@
       "id": "VB1-branch-missing-receipt-not-floored",
       "file": "src/platform/verify_branch.zig",
       "from": "    const floored = if (!has_receipt) contribution.worse(.partial) else contribution;",
-      "to": "    const floored = contribution;",
+      "to": "    _ = has_receipt;\n    const floored = contribution;",
       "kills": [
-        "verify --branch: a missing receipt makes the branch partial, not green"
+        "verify --branch: a clean merge of gated commits carries no receipt, so the branch is partial, not green"
       ]
     },
     {
@@ -6379,8 +6375,9 @@
       "file": "src/platform/change_watch.zig",
       "from": "        while (!self.cookie_seen) {",
       "to": "        while (false and !self.cookie_seen) {",
-      "expect_status": "survived",
-      "note": "equivalent on a local NTFS volume today: NTFS reports a change inside the writer's own call, before that call returns, so the drain after the loop already collects every write that finished before sync began; the 200-write and parallel-writer tests pass without the wait. The cookie wait is kept for paths that report later than the call (filter drivers, other file systems), where draining what is queued would not be a barrier"
+      "kills": [
+        "change watch: a sync that runs out of time says Timeout and never hands out a clean set"
+      ]
     },
     {
       "id": "CW3-timeout-hands-out-a-clean-set",
@@ -9180,7 +9177,7 @@
       "id": "GT4-link-limit-not-copied",
       "file": "src/platform/gate_tree.zig",
       "from": "nt.status_too_many_links => {},",
-      "to": "nt.status_too_many_links => return ctx.blocked(&.{want.rel}),",
+      "to": "nt.status_too_many_links => return ctx.blocked(.blocked, &.{want.rel}),",
       "kills": [
         "a working file that already has the most names a file can have is given a private copy"
       ]
@@ -10468,7 +10465,7 @@
       "from": "        if (p.source_rel) |from| try rels.append(arena, from);\n",
       "to": "",
       "kills": [
-        "frozen: a file move out of a frozen path and a file move into a frozen directory are both refused"
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
       ]
     },
     {
@@ -11329,10 +11326,8 @@
       "file": "src/platform/repo.zig",
       "from": "    const final = try finalOf(gpa, opened);\n    defer gpa.free(final);\n    return gpa.dupeZ(u8, final);",
       "to": "    return gpa.dupeZ(u8, opened);",
-      "kills": [
-        "a repository reached through its 8.3 short path is read, listed and gated like the same repository by its long path",
-        "through a short-spelled root a path outside, a junction, a nested repository, .git and the workspace are still refused"
-      ]
+      "expect_status": "survived",
+      "note": "equivalent: open_nowait.realPath already returns GetFinalPathNameByHandleW's DOS name with the verbatim prefix stripped, so finalOf over it yields the same long name; the 8.3 tests pass through the realPath step alone"
     },
     {
       "id": "SP2-unreadable-final-name-compared-as-spelled",
@@ -14019,7 +14014,7 @@
       "id": "FE1-repeated-old-string-accepted",
       "file": "src/platform/file_edit.zig",
       "from": "    if (matches > 1 and !all) return error.OldStringNotUnique;",
-      "to": "",
+      "to": "    _ = all;",
       "kills": [
         "replaceUnique replaces one exact match and refuses a missing or repeated old string with its count",
         "emetgate_edit refuses an old_string that is missing or repeated and states the match count"
@@ -14434,15 +14429,22 @@
       "file": "src/engine/cas.zig",
       "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;",
       "to": "    if (false) return error.BodyEscape;",
-      "kills": [
-        "a replaced item that grows into its neighbour or changes its name is refused"
-      ]
+      "expect_status": "survived",
+      "note": "defense in depth: the item span check and expectSameShape each refuse every escape the other does, since the shape walk pins the item's enclosing node and the span check pins the item; JS2 removes the other guard and JS1B removes both"
     },
     {
       "id": "JS2-item-shape-unchecked",
       "file": "src/engine/cas.zig",
       "from": "    try expectSameShape(base.tree, next.tree, cut, slot);",
       "to": "",
+      "expect_status": "survived",
+      "note": "defense in depth: the item span check and expectSameShape each refuse every escape the other does, since the shape walk pins the item's enclosing node and the span check pins the item; JS1 removes the other guard and JS1B removes both"
+    },
+    {
+      "id": "JS1B-item-span-and-shape-unchecked",
+      "file": "src/engine/cas.zig",
+      "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;\n    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n    try expectSameShape(base.tree, next.tree, cut, slot);\n",
+      "to": "    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n",
       "kills": [
         "a replaced item that grows into its neighbour or changes its name is refused"
       ]
@@ -14460,7 +14462,7 @@
       "id": "JS4-node-separator-doubled",
       "file": "src/engine/node_cas.zig",
       "from": "    if ((last == ',' or last == ';') and source[end] == last) return text[0 .. text.len - 1];",
-      "to": "    if (false) return text[0 .. text.len - 1];",
+      "to": "    _ = last;",
       "kills": [
         "a separator the text repeats from right after its node is dropped instead of doubled"
       ]
@@ -14518,9 +14520,8 @@
       "file": "src/platform/toolchain.zig",
       "from": "    if (std.mem.indexOfAny(u8, first, \"\\\\/:\") != null) return null;\n",
       "to": "",
-      "kills": [
-        "git, shells, arbitrary runners, explicit paths and file-rewriting flags are not toolchain commands"
-      ]
+      "expect_status": "survived",
+      "note": "equivalent: classify splits on space, tab and quote and matches the first token by exact name, so a token holding a backslash, a slash or a colon never names a tool; the line keeps that true if matching ever widens"
     },
     {
       "id": "TC2-toolchain-write-flags-accepted",
@@ -14548,7 +14549,7 @@
       "from": "    if (hasShellMetacharacter(command) or command.len > max_entry_bytes or argumentsEscape(command)) return false;\n    var tokens",
       "to": "    var tokens",
       "kills": [
-        "toolchain commands are accepted for the repo run while shells, git and metacharacters are not"
+        "the repo run refuses a toolchain command that carries a metacharacter or an argument escaping the root"
       ]
     },
     {
@@ -14778,7 +14779,7 @@
       "from": "                    if ((frame_kept and !python) or isVendorFrame(text)) {",
       "to": "                    if (frame_kept and !python) {",
       "kills": [
-        "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing"
+        "a traceback that starts in library code keeps the first project frame and its source line, not the library ones"
       ]
     },
     {
@@ -14868,7 +14869,7 @@
       "id": "DG11-summary-dropped-from-digest",
       "file": "src/protocol/output_digest.zig",
       "from": "        if (out.items.len + summary.len + 1 > cap) break;",
-      "to": "        break;",
+      "to": "        if (true) break;",
       "kills": [
         "a jest failure keeps the test name, expected and received and the first project frame, drops passes, vendor frames and timing",
         "a pytest failure keeps the assertion and the location, drops the session header, rules and progress",
@@ -14917,7 +14918,7 @@
       "id": "DOCF1-jsdoc-never-folded",
       "file": "src/engine/doc_fold.zig",
       "from": "    if (std.mem.startsWith(u8, comment, \"/**/\")) return null;\n",
-      "to": "    return null;\n",
+      "to": "    if (true) return null;\n",
       "kills": [
         "a multi-line JSDoc folds to its first sentence and reports the original lines",
         "a fold limited to a byte range returns only that range"
@@ -14945,7 +14946,7 @@
       "id": "DOCF4-docstring-not-recognised",
       "file": "src/engine/doc_fold.zig",
       "from": "    if (!wrapped and !isString(profile, node.kind())) return false;\n",
-      "to": "    return false;\n",
+      "to": "    _ = wrapped;\n    if (true) return false;\n",
       "kills": [
         "a python docstring folds to a one-line docstring with the same quotes",
         "read_symbol folds a python docstring to its first sentence"
@@ -14964,7 +14965,7 @@
       "id": "DOCF6-docs-field-dropped",
       "file": "src/protocol/wire.zig",
       "from": "    if (docs.len == 0) return;\n",
-      "to": "    return;\n",
+      "to": "    if (true) return;\n",
       "kills": [
         "a skeleton with folded docs names the original lines and how to get them",
         "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
@@ -14983,7 +14984,7 @@
       "id": "DOCR1-folded-doc-not-restored",
       "file": "src/engine/doc_fold.zig",
       "from": "        restored = true;\n",
-      "to": "",
+      "to": "        _ = &restored;\n",
       "kills": [
         "a body sent back with its docs folded as read keeps the full docs, a dropped doc stays dropped"
       ]
@@ -14991,8 +14992,8 @@
     {
       "id": "LKC1-shared-lockdown-config-path",
       "file": "src/platform/lockdown.zig",
-      "from": "std.hash.Wyhash.hash(0, json)",
-      "to": "@as(u64, 0)",
+      "from": "    const name = try std.fmt.bufPrint(&name_buf, \"{s}-{x:0>16}.json\", .{ base, std.hash.Wyhash.hash(0, json) });",
+      "to": "    _ = json;\n    const name = try std.fmt.bufPrint(&name_buf, \"{s}-{x:0>16}.json\", .{ base, @as(u64, 0) });",
       "kills": [
         "without a .mcp.json lockdown serves the running emetgate from its own config"
       ]
@@ -15073,7 +15074,7 @@
       "id": "SBX1-daemon-name-needs-exact-path",
       "file": "src/platform/sandbox.zig",
       "from": "        if (std.ascii.eqlIgnoreCase(base, name)) return true;",
-      "to": "        if (std.mem.eql(u8, image_path, name)) return true;",
+      "to": "        _ = base;\n        if (std.mem.eql(u8, image_path, name)) return true;",
       "kills": [
         "toolchain build daemons left in the job are recognized by image name, whatever the path or case"
       ]
@@ -15535,8 +15536,8 @@
     {
       "id": "L4L-written-binders-keep-type",
       "file": "src/engine/facts_extract.zig",
-      "from": "if (written.contains(start.*) or ",
-      "to": "if (",
+      "from": "if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "to": "_ = written;\n            if (binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "kills": [
         "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
       ]
@@ -15544,8 +15545,8 @@
     {
       "id": "L4M-module-binders-keep-type",
       "file": "src/engine/facts_extract.zig",
-      "from": "binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or ",
-      "to": "",
+      "from": "if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "to": "_ = .{ binder, root };\n            if (written.contains(start.*) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "kills": [
         "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
       ]
@@ -15964,7 +15965,7 @@
       "id": "L6G-name-list-prefixed-string",
       "file": "src/engine/name_list.zig",
       "from": "        if (byte != '\"' and byte != '\\'') return false;",
-      "to": "        if (false) return false;",
+      "to": "        _ = byte;",
       "kills": [
         "rename facts: a string naming the function outside a top-level __all__ is still a dynamic reference"
       ]
@@ -16000,7 +16001,7 @@
       "id": "L6K-name-list-nested-binding",
       "file": "src/engine/rename.zig",
       "from": "        if (region.start == top.startByte() and region.end == top.endByte() and std.mem.eql(u8, region.kind, top.kind())) return true;",
-      "to": "        return true;",
+      "to": "        _ = .{ region, top };\n        return true;",
       "kills": [
         "rename facts: a top-level __all__ entry naming a nested function of the same name is still a dynamic reference"
       ]
@@ -16054,7 +16055,7 @@
       "id": "GB3-blame-symbols-from-working-tree",
       "file": "src/protocol/git_symbols.zig",
       "from": "    const read = if (rev) |r| readRev(gpa, io, git, root, r, rel) else readWorking(gpa, io, root, rel);",
-      "to": "    const read = if (rev) |_| readWorking(gpa, io, root, rel) else readWorking(gpa, io, root, rel);",
+      "to": "    _ = git;\n    const read = if (rev) |_| readWorking(gpa, io, root, rel) else readWorking(gpa, io, root, rel);",
       "kills": [
         "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
       ]
@@ -16200,7 +16201,7 @@
       "id": "GB1-bisect-first-bad-without-convergence",
       "file": "src/protocol/git_write.zig",
       "from": "    if (!std.mem.eql(u8, left, bad)) return null;",
-      "to": "",
+      "to": "    _ = left;",
       "kills": [
         "git parity: bisect walks to the first bad commit and resets"
       ]
@@ -16290,7 +16291,7 @@
       "id": "SCR7-pytest-mention-any-substring",
       "file": "src/platform/test_command.zig",
       "from": "            if ((at == 0 or !isNameByte(line[at - 1])) and (end == line.len or !isNameByte(line[end]))) return true;",
-      "to": "            return true;",
+      "to": "            _ = end;\n            return true;",
       "kills": [
         "test detection: a unittest project picks unittest discover with the right start dir, venv or not"
       ]
@@ -16415,7 +16416,7 @@
       "id": "SRC9-tool-outside-root",
       "file": "src/platform/run_command.zig",
       "from": "        if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCase(real, real_root) or real[real_root.len] != '\\\\') return null;\n",
-      "to": "        if (false) return null;\n",
+      "to": "        _ = real_root;\n",
       "kills": [
         "package scripts and project tools inside the root run as project commands, other commands do not"
       ],
@@ -16561,7 +16562,7 @@
       "id": "FW6-write-leaves-find-session-fresh",
       "file": "src/protocol/policy.zig",
       "from": "        if (self.find_session) |session| session.invalidate();\n",
-      "to": "",
+      "to": "        _ = self;\n",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
         "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
@@ -16656,7 +16657,7 @@
       "id": "SL2-marker-dropped-beside-other-entries",
       "file": "src/platform/shadow.zig",
       "from": "        if (!std.ascii.eqlIgnoreCase(entry.name, shadow_root.marker_name)) return false;",
-      "to": "",
+      "to": "        _ = entry;",
       "kills": [
         "a workspace that still holds something else keeps its marker, so a later sweep can still tell whose it is"
       ]
@@ -16730,7 +16731,7 @@
       "id": "SL10-reply-hides-stale-failure",
       "file": "src/protocol/wire.zig",
       "from": "    if (tree.stale_left) |err| {\n        try js.objectField(\"stale_left\");",
-      "to": "    if (false) |err| {\n        try js.objectField(\"stale_left\");",
+      "to": "    if (@as(?anyerror, null)) |err| {\n        try js.objectField(\"stale_left\");",
       "kills": [
         "a result names a stale shadow the sweep could not remove, in a compact reply too"
       ]
@@ -16739,7 +16740,7 @@
       "id": "SL11-recover-exits-0-on-stale-failure",
       "file": "src/platform/disk.zig",
       "from": "    return if (stale_failed or report.failed > 0",
-      "to": "    return if (report.failed > 0",
+      "to": "    _ = stale_failed;\n    return if (report.failed > 0",
       "kills": [
         "purple recover: a stale shadow of a removed repository that cannot be removed exits 16 and is named"
       ]
