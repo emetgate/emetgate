@@ -325,7 +325,7 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     try w.writeByte('\n');
     try writeBody(w, region, files, rows.items, p);
     if (value.next) |next| {
-        try w.print("... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate_region r{d} offset {d}\n", .{ next + 1, total, total, budget, region_id + 1, next });
+        try w.print("... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate map region r{d} --offset {d}\n", .{ next + 1, total, total, budget, region_id + 1, next });
     }
     switch (result) {
         .complete => |*c| c.value.text = out.written(),

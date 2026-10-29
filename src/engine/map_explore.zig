@@ -182,7 +182,7 @@ fn truncated(arena: Allocator, region: *const map.Region, files: []const rank.Re
         } else try w.writeAll(chunk.written());
         i = j;
     }
-    if (cut_files != 0) try w.print("... {d} more directories with {d} files not listed (explore budget); emetgate_region r{d} lists every symbol\n", .{ cut_dirs, cut_files, region.id + 1 });
+    if (cut_files != 0) try w.print("... {d} more directories with {d} files not listed (explore budget); emetgate map region r{d} lists every symbol\n", .{ cut_dirs, cut_files, region.id + 1 });
     return .{ .text = out.written(), .level = .dirs, .cut = cut };
 }
 
