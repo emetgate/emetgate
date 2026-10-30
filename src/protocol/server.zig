@@ -191,7 +191,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_commit",
-        .description = "Commits pending gated changes; refused if a file changed outside the gate or a test added or broken this session fails.",
+        .description = "Commits pending gated changes; refused on outside edits or tests broken this session.",
         .props = &.{.{ .name = "message", .desc = "" }},
     },
     .{

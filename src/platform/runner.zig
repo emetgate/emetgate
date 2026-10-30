@@ -163,6 +163,8 @@ pub fn runCommandWith(gpa: Allocator, io: std.Io, cwd: []const u8, command: []co
         try env.appendSlice(arena, try sandbox.cacheEnvironment(arena, dir));
     }
     if (try test_command_mod.pythonPath(arena, io, cwd)) |path| try env.append(arena, path);
+    try env.append(arena, .{ .name = "PYTHONDONTWRITEBYTECODE", .value = "1" });
+    try env.append(arena, .{ .name = "PYTHONPYCACHEPREFIX", .value = try std.fmt.allocPrint(arena, "{s}\\pycache", .{temp}) });
     try shadow.freshTemp(io, temp);
     const report = startCommand(gpa, io, .{ .argv = &argv, .cwd = cwd, .limits = limits, .temp = temp, .env = env.items }) catch |err| {
         shadow.clearTemp(io, temp) catch {};
@@ -496,6 +498,26 @@ test "a gated command in a Python src layout imports the src packages through PY
     const src = try std.fmt.allocPrint(testing.allocator, "{s}\\src", .{work});
     defer testing.allocator.free(src);
     try testing.expect(std.mem.startsWith(u8, report.stdout, src));
+}
+
+test "a gated command runs Python with bytecode writes off and its bytecode cache under the fresh temp directory" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(top);
+    const work = try std.fmt.allocPrint(testing.allocator, "{s}\\work", .{top});
+    defer testing.allocator.free(work);
+    try shadow.grantLowIntegrityWrite(work);
+
+    const report = try runCommand(testing.allocator, testing.io, work, "echo %PYTHONDONTWRITEBYTECODE% %PYTHONPYCACHEPREFIX%", .{ .timeout_ms = 20_000 });
+    defer report.deinit(testing.allocator);
+    errdefer std.debug.print("stdout: {s}\nstderr: {s}\n", .{ report.stdout, report.stderr });
+    try testing.expect(report.passed());
+    const expected = try std.fmt.allocPrint(testing.allocator, "1 {s}-tmp\\pycache", .{work});
+    defer testing.allocator.free(expected);
+    try testing.expect(std.mem.startsWith(u8, report.stdout, expected));
 }
 
 test "a stale temp directory that is a junction is removed without touching its target" {
