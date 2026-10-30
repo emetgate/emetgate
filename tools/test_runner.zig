@@ -517,7 +517,7 @@ fn runTests(gpa: std.mem.Allocator, init: std.process.Init.Minimal, indices: []c
         if (why) |reason| {
             results[n].status = .fail;
             failed.append(gpa, test_fn.name) catch @panic("oom");
-            if (options.verbose) std.debug.print("FAIL ({s})\n", .{reason});
+            if (options.verbose) std.debug.print("FAIL ({s}, {d} ms)\n", .{ reason, ns / std.time.ns_per_ms });
             std.debug.print("error: '{s}' failed: {s}\n", .{ test_fn.name, reason });
         } else if (results[n].status == .skip) {
             skip += 1;
