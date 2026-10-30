@@ -176,6 +176,8 @@ pub const doc_fold = src.doc_fold;
 pub const output_digest = src.output_digest;
 pub const diff_digest = src.diff_digest;
 pub const baseline = src.baseline;
+pub const test_results = src.test_results;
+pub const test_debt = src.test_debt;
 pub const batch_stage = src.batch_stage;
 pub const batch_merge = src.batch_merge;
 
@@ -291,6 +293,7 @@ test {
     _ = @import("tests/lockdown_slash.zig");
     _ = @import("tests/doctor.zig");
     _ = @import("tests/test_detect.zig");
+    _ = @import("tests/regression_gate.zig");
     _ = @import("tests/prompt_hook.zig");
     _ = @import("tests/launch_path.zig");
     _ = @import("tests/symbol.zig");

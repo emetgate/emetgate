@@ -63,7 +63,21 @@ const markers = [_]Marker{
     .{ .file = "go.mod", .command = "go test ./..." },
 };
 
+threadlocal var chosen_buffer: [640]u8 = undefined;
+threadlocal var chosen_len: usize = 0;
+
+pub fn chosen(command: []const u8) bool {
+    return chosen_len != 0 and std.mem.eql(u8, command, chosen_buffer[0..chosen_len]);
+}
+
 pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
+    const found = (try detectRaw(gpa, io, root_abs)) orelse return null;
+    chosen_len = if (found.len <= chosen_buffer.len) found.len else 0;
+    @memcpy(chosen_buffer[0..chosen_len], found[0..chosen_len]);
+    return found;
+}
+
+fn detectRaw(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
     var dir = std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true }) catch return null;
     defer dir.close(io);
     if (try packageTestScript(gpa, io, dir)) return "npm test";

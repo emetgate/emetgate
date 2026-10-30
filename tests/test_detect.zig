@@ -401,15 +401,15 @@ test "test detection: a batch that creates the project file runs the test comman
 
 test "test detection: a batch that creates the project file with a failing test is rejected and writes nothing" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var repo = try fixture.TsRepo.init(&.{.{ .rel = "a.txt", .text = "x\n" }});
+    var repo = try fixture.TsRepo.init(&.{ .{ .rel = "a.txt", .text = "x\n" }, .{ .rel = "test_ok.py", .text = "import os\n\ndef test_ok():\n    assert not os.path.exists(\"broken.flag\")\n" } });
     defer repo.deinit();
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var reply = try createBatch(&repo, runtime, &.{ .{ "pytest.ini", "" }, .{ "test_bad.py", "def test_bad():\n    assert False\n" } });
+    var reply = try createBatch(&repo, runtime, &.{ .{ "pytest.ini", "" }, .{ "broken.flag", "x\n" } });
     defer reply.deinit();
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(reply.is_error);
     try testing.expectEqualStrings("python -m pytest", reply.value.object.get("test_cmd").?.string);
-    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, try repo.abs(reply.arena_state.allocator(), "test_bad.py"), .{}));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, try repo.abs(reply.arena_state.allocator(), "broken.flag"), .{}));
 }

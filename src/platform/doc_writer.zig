@@ -122,7 +122,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
         };
     }
 
-    const staged = try baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = applied.source }}, .{ .root = root, .gate_dir = runner.gateDir(location, &session), .typecheck_command = options.typecheck_command, .test_command = options.test_command, .limits = options.limits, .note = if (trace) |t| &t.gate.baseline else null });
+    const staged = try baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = applied.source }}, .{ .root = root, .gate_dir = runner.gateDir(location, &session), .typecheck_command = options.typecheck_command, .test_command = options.test_command, .limits = options.limits, .note = if (trace) |t| &t.gate.baseline else null, .commits = session.committing() });
     switch (staged) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation, .rule_check_failed => unreachable,

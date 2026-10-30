@@ -316,5 +316,5 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
     }
     for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });
     const tests = try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));
-    return baseline.run(gpa, io, &workspace, changes.items, .{ .root = root, .gate_dir = runner.gateDir(location, session), .typecheck_command = options.typecheck_command, .test_command = tests, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null });
+    return baseline.run(gpa, io, &workspace, changes.items, .{ .root = root, .gate_dir = runner.gateDir(location, session), .typecheck_command = options.typecheck_command, .test_command = tests, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null, .commits = session.committing() });
 }
