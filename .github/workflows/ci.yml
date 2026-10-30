@@ -73,6 +73,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      - shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AMRunningMode, OnAccessProtectionEnabled | Format-List
+          Get-MpPreference | Select-Object -ExpandProperty ExclusionPath
+          Get-CimInstance Win32_ComputerSystem | Select-Object NumberOfLogicalProcessors, TotalPhysicalMemory | Format-List
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
